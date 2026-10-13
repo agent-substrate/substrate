@@ -30,7 +30,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apiauthn"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
@@ -40,6 +39,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
+	"github.com/agent-substrate/substrate/internal/oidcjwt"
 	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
@@ -96,7 +96,7 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
-	snapshotPluginSocket = pflag.String("snapshot-plugin-socket", "/run/snapshot-plugin/control.sock", "Unix socket of the control snapshot plugin that external snapshots are deleted and copied through.")
+	objectStorePluginSocket = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/control.sock", "Unix socket of the control object-store plugin that external snapshots are deleted and copied through.")
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
@@ -119,7 +119,7 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
 	}
 	if err := rejectStorageEnv(); err != nil {
-		serverboot.Fatal(ctx, "Storage settings moved to the snapshot-plugin sidecar", err)
+		serverboot.Fatal(ctx, "Storage settings moved to the objectstore-plugin sidecar", err)
 	}
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
@@ -259,18 +259,18 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
 	}
 
-	snapshotPluginConn, err := pluginsocket.Dial(*snapshotPluginSocket, pluginsocket.ReadyWait)
+	objectStorePluginConn, err := pluginsocket.Dial(*objectStorePluginSocket, pluginsocket.ReadyWait)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to set up the snapshot plugin client", err)
+		serverboot.Fatal(ctx, "Failed to set up the object-store plugin client", err)
 	}
-	defer snapshotPluginConn.Close()
+	defer objectStorePluginConn.Close()
 	// A plugin that never serves would fail every call. Fail at startup
 	// instead, giving the sidecar time to come up.
 	readyCtx, cancelReady := context.WithTimeout(ctx, time.Minute)
-	err = pluginsocket.WaitReady(readyCtx, snapshotPluginConn)
+	err = pluginsocket.WaitReady(readyCtx, objectStorePluginConn)
 	cancelReady()
 	if err != nil {
-		serverboot.Fatal(ctx, "Snapshot plugin is not serving", err)
+		serverboot.Fatal(ctx, "Object-store plugin is not serving", err)
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
@@ -296,7 +296,7 @@ func main() {
 		instruments,
 		*defaultEgressGatewayAddress,
 		volPlugins,
-		objectstorev1.NewControlProviderClient(snapshotPluginConn),
+		objectstorev1.NewControlProviderClient(objectStorePluginConn),
 		*actorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		actorIDCAPool,
@@ -432,7 +432,7 @@ func loadFlagsFromEnv() error {
 // sets AWS_* in every container.
 func rejectStorageEnv() error {
 	if v, ok := os.LookupEnv("ATE_STORAGE_BACKEND"); ok {
-		return fmt.Errorf("ATE_STORAGE_BACKEND=%q is set on ate-api-server, which no longer reads it; set the storage backend on its snapshot-plugin sidecar", v)
+		return fmt.Errorf("ATE_STORAGE_BACKEND=%q is set on ate-api-server, which no longer reads it; set the storage backend on its objectstore-plugin sidecar", v)
 	}
 	return nil
 }

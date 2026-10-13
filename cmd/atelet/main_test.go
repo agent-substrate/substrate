@@ -349,6 +349,7 @@ func TestCheckpointSnapshotFiles(t *testing.T) {
 	}{
 		{name: "required and present", files: []string{"checkpoint.img"}, required: true},
 		{name: "data subset", files: []string{"checkpoint.img", "data.tar"}, data: []string{"data.tar"}, required: true},
+		{name: "fs subdir data subset", files: []string{"checkpoint.img", "fs/fscheckpoint.pb", "fs/multitar.img"}, data: []string{"fs/fscheckpoint.pb", "fs/multitar.img"}, required: true},
 		{name: "data not a snapshot file", files: []string{"checkpoint.img"}, data: []string{"data.tar"}, required: true, wantErr: true},
 		{name: "optional and empty", required: false},
 		{name: "required and empty", required: true, wantErr: true},
@@ -963,7 +964,7 @@ func TestBuildAteomWorkloadSpecForwardsWakeupProbe(t *testing.T) {
 				Name:  "with-probe",
 				Image: "main",
 				WakeupProbe: &ateletpb.WakeupProbe{
-					HttpGet:        &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
+					HttpGet:        &ateletpb.HttpGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},
 			},
@@ -977,7 +978,7 @@ func TestBuildAteomWorkloadSpecForwardsWakeupProbe(t *testing.T) {
 			{
 				Name: "with-probe",
 				WakeupProbe: &ateompb.WakeupProbe{
-					HttpGet:        &ateompb.HTTPGetAction{Path: "/health", Port: 8080},
+					HttpGet:        &ateompb.HttpGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},
 			},

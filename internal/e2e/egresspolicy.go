@@ -34,8 +34,8 @@ import (
 // rule on every port would tie with the http rule, which the API rejects.
 func EgressAllowAll() []*ateapipb.EgressRule {
 	return []*ateapipb.EgressRule{
-		{Http: &ateapipb.HTTPRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
-		{Https: &ateapipb.HTTPSRule{Hostnames: []string{"*"}}},
+		{Http: &ateapipb.HttpRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
+		{Https: &ateapipb.HttpsRule{Hostnames: []string{"*"}}},
 	}
 }
 
@@ -43,20 +43,20 @@ func EgressAllowAll() []*ateapipb.EgressRule {
 // hosts matching patterns (exact names, or "*." plus a name for one leftmost
 // label) on port 80.
 func EgressAllowHTTP(patterns ...string) *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{Http: &ateapipb.HTTPRule{Hostnames: patterns}}
+	return &ateapipb.EgressRule{Http: &ateapipb.HttpRule{Hostnames: patterns}}
 }
 
 // EgressAllowHTTPS is a rule that lets an actor send HTTPS, intercepted by the
 // gateway, to the hosts matching patterns on port 443.
 func EgressAllowHTTPS(patterns ...string) *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{Hostnames: patterns}}
+	return &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{Hostnames: patterns}}
 }
 
 // EgressAllowPassthrough is a rule that lets an actor send TLS to the hosts
 // matching patterns on any port, relayed by the gateway without decryption.
 func EgressAllowPassthrough(patterns ...string) *ateapipb.EgressRule {
 	return &ateapipb.EgressRule{
-		TlsPassthrough: &ateapipb.TLSPassthroughRule{
+		TlsPassthrough: &ateapipb.TlsPassthroughRule{
 			Hostnames: patterns,
 			Ports:     &ateapipb.Ports{All: &ateapipb.AllPorts{}},
 		},
@@ -67,7 +67,7 @@ func EgressAllowPassthrough(patterns ...string) *ateapipb.EgressRule {
 // given ports.
 func EgressAllowPassthroughOnPorts(ports []int32, patterns ...string) *ateapipb.EgressRule {
 	return &ateapipb.EgressRule{
-		TlsPassthrough: &ateapipb.TLSPassthroughRule{
+		TlsPassthrough: &ateapipb.TlsPassthroughRule{
 			Hostnames: patterns,
 			Ports:     &ateapipb.Ports{Numbers: ports},
 		},

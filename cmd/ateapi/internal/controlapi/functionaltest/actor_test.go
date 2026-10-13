@@ -5220,7 +5220,7 @@ func TestMintActorJWT_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
-	mintResp, err := tc.client.MintActorJWT(t.Context(), &ateapipb.MintActorJWTRequest{
+	mintResp, err := tc.client.MintActorJwt(t.Context(), &ateapipb.MintActorJwtRequest{
 		Actor: &ateapipb.ObjectRef{
 			Atespace: createResp.GetMetadata().GetAtespace(),
 			Name:     createResp.GetMetadata().GetName(),
@@ -5229,7 +5229,7 @@ func TestMintActorJWT_Success(t *testing.T) {
 		ExpirationSeconds: 1800,
 	})
 	if err != nil {
-		t.Fatalf("Error while calling MintActorJWT: %v", err)
+		t.Fatalf("Error while calling MintActorJwt: %v", err)
 	}
 
 	segments := strings.Split(mintResp.GetActorJwt(), ".")
@@ -5259,7 +5259,7 @@ func TestMintActorJWT_Success(t *testing.T) {
 
 // assertActorJWTLifetime checks that expires_at matches the exp claim and that
 // the token is valid for want after it was issued.
-func assertActorJWTLifetime(t *testing.T, resp *ateapipb.MintActorJWTResponse, claims actoridjwt.WireClaims, want time.Duration) {
+func assertActorJWTLifetime(t *testing.T, resp *ateapipb.MintActorJwtResponse, claims actoridjwt.WireClaims, want time.Duration) {
 	t.Helper()
 	if got, exp := resp.GetExpiresAt().AsTime(), time.Unix(int64(claims.Expiration), 0); !got.Equal(exp) {
 		t.Errorf("expires_at = %v, want the exp claim %v", got, exp)
@@ -5791,7 +5791,7 @@ func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defau
 		got, err := tc.workerCache.Worker(workerName)
 		return err == nil &&
 			proto.Equal(got.GetStatus().GetDefaultRuntime(), defaultRT) &&
-			slices.EqualFunc(got.GetStatus().GetRestorableRuntimes(), restorableRTs, proto.Equal), nil
+			slices.EqualFunc(got.GetStatus().GetRestorableRuntimes(), restorableRTs, func(a, b *ateapipb.SandboxRuntime) bool { return proto.Equal(a, b) }), nil
 	}); err != nil {
 		t.Fatalf("worker %s runtime never reached worker cache: %v", workerName, err)
 	}

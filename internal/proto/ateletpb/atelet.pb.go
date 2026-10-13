@@ -1236,7 +1236,11 @@ func (x *EgressGateway) GetAddress() string {
 // (e.g. the gVisor release tarball).
 type AssetFile struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// gs:// URL to download the asset from.
+	// URL to download the asset from. atelet fetches every URL through the
+	// node's object-store plugin, and reads a gs:// URL anonymously only when
+	// the plugin cannot serve it.
+	// Masked in logged requests, since a signed URL carries its credential in
+	// the query.
 	Url string `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
 	// Lower-case hex SHA256; names the cached file and verifies its integrity.
 	Sha256        string `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
@@ -2384,7 +2388,7 @@ func (x *EnvEntry) GetValue() string {
 // Only HTTP is supported today.
 type WakeupProbe struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
-	HttpGet *HTTPGetAction         `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
+	HttpGet *HttpGetAction         `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
 	// How long to keep polling before giving up and failing the actor start.
 	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	unknownFields  protoimpl.UnknownFields
@@ -2421,7 +2425,7 @@ func (*WakeupProbe) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{35}
 }
 
-func (x *WakeupProbe) GetHttpGet() *HTTPGetAction {
+func (x *WakeupProbe) GetHttpGet() *HttpGetAction {
 	if x != nil {
 		return x.HttpGet
 	}
@@ -2435,8 +2439,8 @@ func (x *WakeupProbe) GetTimeoutSeconds() int32 {
 	return 0
 }
 
-// HTTPGetAction performs an HTTP GET against the container.
-type HTTPGetAction struct {
+// HttpGetAction performs an HTTP GET against the container.
+type HttpGetAction struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Path to access on the HTTP server.
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
@@ -2446,20 +2450,20 @@ type HTTPGetAction struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *HTTPGetAction) Reset() {
-	*x = HTTPGetAction{}
+func (x *HttpGetAction) Reset() {
+	*x = HttpGetAction{}
 	mi := &file_atelet_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *HTTPGetAction) String() string {
+func (x *HttpGetAction) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*HTTPGetAction) ProtoMessage() {}
+func (*HttpGetAction) ProtoMessage() {}
 
-func (x *HTTPGetAction) ProtoReflect() protoreflect.Message {
+func (x *HttpGetAction) ProtoReflect() protoreflect.Message {
 	mi := &file_atelet_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2471,19 +2475,19 @@ func (x *HTTPGetAction) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use HTTPGetAction.ProtoReflect.Descriptor instead.
-func (*HTTPGetAction) Descriptor() ([]byte, []int) {
+// Deprecated: Use HttpGetAction.ProtoReflect.Descriptor instead.
+func (*HttpGetAction) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{36}
 }
 
-func (x *HTTPGetAction) GetPath() string {
+func (x *HttpGetAction) GetPath() string {
 	if x != nil {
 		return x.Path
 	}
 	return ""
 }
 
-func (x *HTTPGetAction) GetPort() int32 {
+func (x *HttpGetAction) GetPort() int32 {
 	if x != nil {
 		return x.Port
 	}
@@ -3312,9 +3316,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\fmemory_bytes\x18\v \x01(\x03R\vmemoryBytesB\x11\n" +
 	"\x0f_egress_gateway\")\n" +
 	"\rEgressGateway\x12\x18\n" +
-	"\aaddress\x18\x01 \x01(\tR\aaddress\"5\n" +
-	"\tAssetFile\x12\x10\n" +
-	"\x03url\x18\x01 \x01(\tR\x03url\x12\x16\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\":\n" +
+	"\tAssetFile\x12\x15\n" +
+	"\x03url\x18\x01 \x01(\tB\x03\x80\x01\x01R\x03url\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\tR\x06sha256\"\x8e\x01\n" +
 	"\n" +
 	"ArchAssets\x123\n" +
@@ -3401,9 +3405,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
 	"\x05value\x18\x02 \x01(\tB\x03\x80\x01\x01R\x05value\"h\n" +
 	"\vWakeupProbe\x120\n" +
-	"\bhttp_get\x18\x01 \x01(\v2\x15.atelet.HTTPGetActionR\ahttpGet\x12'\n" +
+	"\bhttp_get\x18\x01 \x01(\v2\x15.atelet.HttpGetActionR\ahttpGet\x12'\n" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
-	"\rHTTPGetAction\x12\x12\n" +
+	"\rHttpGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\r\n" +
 	"\vRunResponse\"C\n" +
@@ -3541,7 +3545,7 @@ var file_atelet_proto_goTypes = []any{
 	(*ResourceLimits)(nil),                  // 36: atelet.ResourceLimits
 	(*EnvEntry)(nil),                        // 37: atelet.EnvEntry
 	(*WakeupProbe)(nil),                     // 38: atelet.WakeupProbe
-	(*HTTPGetAction)(nil),                   // 39: atelet.HTTPGetAction
+	(*HttpGetAction)(nil),                   // 39: atelet.HttpGetAction
 	(*RunResponse)(nil),                     // 40: atelet.RunResponse
 	(*LocalCheckpointConfiguration)(nil),    // 41: atelet.LocalCheckpointConfiguration
 	(*ExternalCheckpointConfiguration)(nil), // 42: atelet.ExternalCheckpointConfiguration
@@ -3590,7 +3594,7 @@ var file_atelet_proto_depIdxs = []int32{
 	34, // 29: atelet.Container.security_context:type_name -> atelet.SecurityContext
 	36, // 30: atelet.Container.resources:type_name -> atelet.ResourceLimits
 	35, // 31: atelet.SecurityContext.capabilities:type_name -> atelet.Capabilities
-	39, // 32: atelet.WakeupProbe.http_get:type_name -> atelet.HTTPGetAction
+	39, // 32: atelet.WakeupProbe.http_get:type_name -> atelet.HttpGetAction
 	22, // 33: atelet.CheckpointRequest.spec:type_name -> atelet.WorkloadSpec
 	1,  // 34: atelet.CheckpointRequest.type:type_name -> atelet.CheckpointType
 	41, // 35: atelet.CheckpointRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration

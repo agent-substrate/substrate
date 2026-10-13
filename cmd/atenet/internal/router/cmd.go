@@ -70,6 +70,16 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the router dataplane")
 	fs.StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file.")
 
+	// Flags for client authentication and authorization in ingress mode.
+	fs.StringVar(&cfg.IngressAuth.ClientCAFile, "ingress-client-ca-file", "", "PEM bundle of the CAs allowed to sign ingress client certificates. Envoy reads the file, so it must be mounted at this path in the Envoy container as well. Required whenever a TLS ingress listener is enabled")
+	fs.StringSliceVar(&cfg.IngressAuth.AllowedSPIFFEIDs, "ingress-allowed-spiffe-ids", nil, "SPIFFE IDs (exact match) allowed to connect to actors through the ingress dataplane. Comma-separated or repeated. Required whenever a TLS ingress listener is enabled")
+	fs.StringVar(
+		(*string)(&cfg.IngressAuth.Mode),
+		"ingress-auth-mode",
+		string(IngressAuthDeprecatedInsecure),
+		"Ingress authentication and authorization mode.  `deprecated-insecure` (both http and https served, client certificates optional on https) or `static-mtls` (only https served, client certificates required).",
+	)
+
 	fs.StringVar(&cfg.UpstreamCredentialBundlePath, "upstream-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle (cert+key) the router presents as the client cert when dialing the actor's atunnel ingress server over mTLS. Empty disables upstream mTLS (legacy plaintext pod-IP:80).")
 	fs.StringVar(&cfg.UpstreamTrustBundlePath, "upstream-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to validate the actor's atunnel ingress server certificate.")
 	fs.StringVar(&cfg.UpstreamSpiffePrefix, "upstream-spiffe-prefix", "spiffe://cluster.local/", "SPIFFE URI SAN prefix (trust domain) the actor's atunnel server cert must match. Empty falls back to default SAN check against the dialed pod IP (which SPIFFE-only certs never match).")

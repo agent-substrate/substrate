@@ -65,7 +65,7 @@ service Control {
   // Create a Substrate-issued JWT asserting the actor identity.
   //
   // * Called by the egress gateway when actor JWT injection is configured for outbound requests.
-  rpc MintActorJWT(MintActorJWTRequest) returns (MintActorJWTResponse) {}
+  rpc MintActorJwt(MintActorJwtRequest) returns (MintActorJwtResponse) {}
 
   // Create a Substrate-issued SPIFFE certificate asserting the actor identity.
   //
@@ -528,7 +528,7 @@ message EgressRule {
   //
   // +k8s:optional
   // +k8s:unionMember
-  HTTPRule http = 1;
+  HttpRule http = 1;
 
   // HTTPS to the named hosts, intercepted (man-in-the-middle) so the gateway
   // can authorize and modify each request. HTTP/1.1 and HTTP/2 inside the
@@ -536,19 +536,19 @@ message EgressRule {
   //
   // +k8s:optional
   // +k8s:unionMember
-  HTTPSRule https = 2;
+  HttpsRule https = 2;
 
   // TLS to the named servers, forwarded without decryption.
   //
   // +k8s:optional
   // +k8s:unionMember
-  TLSPassthroughRule tls_passthrough = 3;
+  TlsPassthroughRule tls_passthrough = 3;
 }
 
-// HTTPRule allows cleartext HTTP and is evaluated per request on the request
+// HttpRule allows cleartext HTTP and is evaluated per request on the request
 // authority (Host or :authority) and port. The gateway resolves the name and
 // dials it.
-message HTTPRule {
+message HttpRule {
   // Hostname patterns: a DNS name, or a DNS name with "*" as its leftmost
   // label. The rule matches when any pattern matches.
   //
@@ -586,7 +586,7 @@ message HTTPRule {
   HttpRuleEffects effects = 3;
 }
 
-// HTTPSRule allows HTTPS that the gateway intercepts (MITM). Every Actor behind such
+// HttpsRule allows HTTPS that the gateway intercepts (MITM). Every Actor behind such
 // a rule must trust the gateway CA. Without it, TLS to these names fails in the
 // Actor.
 //
@@ -597,9 +597,9 @@ message HTTPRule {
 //
 // Interception is for HTTP. A connection that sends no SNI does not match,
 // and a non-HTTP protocol inside an intercepted connection fails.
-message HTTPSRule {
+message HttpsRule {
   // Server names matched against the SNI, in the pattern syntax of
-  // HTTPRule.hostnames.
+  // HttpRule.hostnames.
   //
   // +k8s:required
   // +k8s:maxItems=256
@@ -619,16 +619,16 @@ message HTTPSRule {
   HttpRuleEffects effects = 3;
 }
 
-// TLSPassthroughRule allows TLS that the gateway forwards without decryption.
+// TlsPassthroughRule allows TLS that the gateway forwards without decryption.
 // It is evaluated once per connection at the ClientHello, on the SNI and
 // port, for any protocol carried over TLS. A connection that sends no SNI
 // does not match. Protocols that upgrade to TLS after a cleartext exchange
 // (STARTTLS) do not match. Because the gateway reads nothing after the
 // ClientHello, a passthrough rule has no effects, and a policy change reaches
 // an open connection only when it ends.
-message TLSPassthroughRule {
+message TlsPassthroughRule {
   // Server names matched against the SNI, in the pattern syntax of
-  // HTTPRule.hostnames.
+  // HttpRule.hostnames.
   //
   // +k8s:required
   // +k8s:maxItems=256
@@ -726,14 +726,14 @@ message CredentialHeader {
   //
   // +k8s:optional
   // +k8s:unionMember
-  ActorJWTSource actor_jwt = 4;
+  ActorJwtSource actor_jwt = 4;
 }
 
-// ActorJWTSource has the gateway mint a JWT for the Actor that sent the
+// ActorJwtSource has the gateway mint a JWT for the Actor that sent the
 // request. Relying parties verify it with OpenID Connect Discovery against its
 // issuer. The gateway reuses a JWT across requests while enough of its
 // lifetime remains, so its jti does not identify a single request.
-message ActorJWTSource {
+message ActorJwtSource {
   // The audiences the JWT is bound to, which become its aud claim.
   //
   // +k8s:required
@@ -1298,7 +1298,7 @@ message ContainerWakeupProbe {
   // http_get is the request to poll.
   //
   // +k8s:required
-  HTTPGetAction http_get = 1;
+  HttpGetAction http_get = 1;
 
   // timeout_seconds is how long to keep polling before giving up.
   // Defaults to 30 when unset.
@@ -1309,8 +1309,8 @@ message ContainerWakeupProbe {
   int32 timeout_seconds = 2;
 }
 
-// HTTPGetAction describes the HTTP GET the probe polls.
-message HTTPGetAction {
+// HttpGetAction describes the HTTP GET the probe polls.
+message HttpGetAction {
   // path must be a URL path starting with "/", using only RFC 3986
   // path-segment characters, without query or fragment.
   // Defaults to "/" when unset.
@@ -1794,8 +1794,8 @@ message GetTagRequest {
   ObjectRef tag = 1;
 }
 
-// Request message for MintActorJWT.
-message MintActorJWTRequest {
+// Request message for MintActorJwt.
+message MintActorJwtRequest {
   // The actor for which the JWT should be issued.
   //
   // Must be a valid actor that currently exists according to the actor store.
@@ -1820,8 +1820,8 @@ message MintActorJWTRequest {
   int64 expiration_seconds = 8;
 }
 
-// Response message for MintActorJWT.
-message MintActorJWTResponse {
+// Response message for MintActorJwt.
+message MintActorJwtResponse {
   // The signed actor JWT. Relying parties verify it with OpenID Connect
   // Discovery against its issuer.
   //

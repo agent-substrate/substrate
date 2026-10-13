@@ -25,12 +25,14 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
 
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
 )
 
@@ -83,6 +85,7 @@ func (r *runsc) writeSpec(containerName string) error {
 	spec := ocispec.Build(ocispec.Options{ActorUID: r.actorUID, ActorDirs: r.actorDirs, Container: container})
 	ocispec.ShapeGVisor(spec, ocispec.GVisorOptions{
 		ActorUID:       r.actorUID,
+		ActorDirs:      r.actorDirs,
 		ContainerName:  containerName,
 		DurableVolumes: r.durableVolumes,
 		Size:           r.size,
@@ -163,12 +166,10 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 	return nil
 }
 
-func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath string) error {
-	slog.InfoContext(ctx, "About to run runsc checkpoint", slog.String("container", containerName))
-
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+// checkpointArgs builds the argv for `runsc checkpoint <container>`. Factored
+// out so the argument construction can be unit-tested without executing runsc.
+func (r *runsc) checkpointArgs(containerName, checkpointPath string, fsCheckpointPaths []string) []string {
+	args := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
@@ -179,8 +180,18 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 		"-root", runscStateDir(r.actorDirs),
 		"checkpoint",
 		"-image-path", checkpointPath,
-		containerName, // Name of the container
-	)
+	}
+	if len(fsCheckpointPaths) > 0 {
+		args = append(args, "-fs-checkpoint-paths", strings.Join(fsCheckpointPaths, ","))
+	}
+	args = append(args, containerName)
+	return args
+}
+
+func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath string, fsCheckpointPaths []string) error {
+	slog.InfoContext(ctx, "About to run runsc checkpoint", slog.String("container", containerName))
+
+	cmd := exec.CommandContext(ctx, r.path, r.checkpointArgs(containerName, checkpointPath, fsCheckpointPaths)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := reaper.RunCommand(cmd)
@@ -190,10 +201,10 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 	return nil
 }
 
-//nolint:unused
-func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPath string, durableDirMounts []string) error {
-	slog.InfoContext(ctx, "About to run runsc fscheckpoint", slog.String("container", containerName))
-
+// fsCheckpointArgs builds the argv for `runsc fscheckpoint <container>`.
+// Factored out so the argument construction can be unit-tested without
+// executing runsc.
+func (r *runsc) fsCheckpointArgs(containerName, checkpointPath string, fsCheckpointPaths []string) []string {
 	args := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
@@ -204,75 +215,26 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 		// "-strace",
 		"-root", runscStateDir(r.actorDirs),
 		"fscheckpoint",
-		"-image-path", checkpointPath,
+		"-image-path", filepath.Join(checkpointPath, resources.FSCheckpointSubdir),
 	}
-	for _, ddv := range durableDirMounts {
+	for _, ddv := range fsCheckpointPaths {
 		args = append(args, "-path", ddv)
 	}
 
 	// name of the container must be the last parameter.
 	args = append(args, containerName)
+	return args
+}
 
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
-		args...,
-	)
+func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPath string, fsCheckpointPaths []string) error {
+	slog.InfoContext(ctx, "About to run runsc fscheckpoint", slog.String("container", containerName))
+
+	cmd := exec.CommandContext(ctx, r.path, r.fsCheckpointArgs(containerName, checkpointPath, fsCheckpointPaths)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := reaper.RunCommand(cmd)
 	if err != nil {
 		return fmt.Errorf("while running `runsc fscheckpoint`: %w", err)
-	}
-	return nil
-}
-
-// pauseArgs builds the argv for `runsc pause <container>`. Factored out so the
-// argument construction can be unit-tested without executing runsc.
-func (r *runsc) pauseArgs(containerName string) []string {
-	return []string{
-		"-log-format", "json",
-		"--alsologtostderr",
-		"-root", runscStateDir(r.actorDirs),
-		"pause",
-		containerName,
-	}
-}
-
-// cmdPause pauses all processes in the container (or sandbox, if pause).
-func (r *runsc) cmdPause(ctx context.Context, containerName string) error {
-	slog.InfoContext(ctx, "About to run runsc pause", slog.String("container", containerName))
-
-	cmd := exec.CommandContext(ctx, r.path, r.pauseArgs(containerName)...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := reaper.RunCommand(cmd); err != nil {
-		return fmt.Errorf("while running `runsc pause`: %w", err)
-	}
-	return nil
-}
-
-// resumeArgs builds the argv for `runsc resume <container>`. Factored out so the
-// argument construction can be unit-tested without executing runsc.
-func (r *runsc) resumeArgs(containerName string) []string {
-	return []string{
-		"-log-format", "json",
-		"--alsologtostderr",
-		"-root", runscStateDir(r.actorDirs),
-		"resume",
-		containerName,
-	}
-}
-
-// cmdResume unpauses a paused container (or sandbox, if pause).
-func (r *runsc) cmdResume(ctx context.Context, containerName string) error {
-	slog.InfoContext(ctx, "About to run runsc resume", slog.String("container", containerName))
-
-	cmd := exec.CommandContext(ctx, r.path, r.resumeArgs(containerName)...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := reaper.RunCommand(cmd); err != nil {
-		return fmt.Errorf("while running `runsc resume`: %w", err)
 	}
 	return nil
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package objectstoreplugin implements the snapshot plugin API on GCS or S3
+// Package objectstoreplugin implements the object-store plugin API on GCS or S3
 // object storage, using the plugin's own credentials.
 //
 // Snapshot files are stored as zstd-compressed objects named <file>.zstd
@@ -82,6 +82,11 @@ func (p *NodePlugin) FetchSnapshot(ctx context.Context, req *objectstorev1.Fetch
 			objectURI, err := uri.ObjectURI(fileName + ".zstd")
 			if err != nil {
 				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
+			}
+			if dir := filepath.Dir(fileName); dir != "." {
+				if err := root.MkdirAll(dir, 0o700); err != nil {
+					return fmt.Errorf("while creating %s in restore directory: %w", dir, err)
+				}
 			}
 			local, err := root.OpenFile(fileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 			if err != nil {

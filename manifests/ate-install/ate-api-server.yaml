@@ -83,25 +83,25 @@ spec:
       # the readinessProbe below reaching NotReady, plus propagation) +
       # --drain-timeout.
       terminationGracePeriodSeconds: 40
-      # The control snapshot plugin deletes and copies external snapshots for
-      # ate-api-server, over a Unix socket in a pod-local emptyDir. A native
+      # The control object-store plugin deletes and copies external snapshots
+      # for ate-api-server, over a Unix socket in a pod-local emptyDir. A native
       # sidecar starts before ate-api-server and stops after it. ate-api-server
       # starts only once the startup probe sees the plugin serving.
       initContainers:
-      - name: snapshot-plugin
-        image: ko://github.com/agent-substrate/substrate/cmd/snapshot-plugin
+      - name: objectstore-plugin
+        image: ko://github.com/agent-substrate/substrate/cmd/objectstore-plugin
         restartPolicy: Always
         args:
         - control
-        - --socket=/run/snapshot-plugin/control.sock
+        - --socket=/run/objectstore-plugin/control.sock
         # The plugin listens on a Unix socket, which a gRPC probe cannot
         # reach, and the image has no shell, so the binary checks itself.
         startupProbe:
           exec:
             command:
-            - /ko-app/snapshot-plugin
+            - /ko-app/objectstore-plugin
             - healthcheck
-            - --socket=/run/snapshot-plugin/control.sock
+            - --socket=/run/objectstore-plugin/control.sock
           periodSeconds: 2
           failureThreshold: 30
         securityContext:
@@ -122,8 +122,8 @@ spec:
         - configMapRef:
             name: ate-otel-config
         volumeMounts:
-        - name: snapshot-plugin
-          mountPath: /run/snapshot-plugin
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
       containers:
       - name: ate-api-server
         image: ko://github.com/agent-substrate/substrate/cmd/ateapi
@@ -149,7 +149,7 @@ spec:
           # Graceful shutdown knobs. The sum must fit within terminationGracePeriodSeconds.
           - --drain-delay=13s
           - --drain-timeout=15s
-          - --snapshot-plugin-socket=/run/snapshot-plugin/control.sock
+          - --objectstore-plugin-socket=/run/objectstore-plugin/control.sock
         env:
         - name: POD_NAME
           valueFrom:
@@ -185,8 +185,8 @@ spec:
             name: ate-api-server-secret-envvars
             optional: true
         volumeMounts:
-        - name: snapshot-plugin
-          mountPath: /run/snapshot-plugin
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
         # servicedns: the apiserver's own gRPC serving cert (DNS SAN api.ate-system.svc).
         - name: "servicedns"
           mountPath: "/run/servicedns.podcert.ate.dev"
@@ -252,7 +252,7 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
       volumes:
-      - name: snapshot-plugin
+      - name: objectstore-plugin
         emptyDir: {}
       - name: "servicedns"
         projected:

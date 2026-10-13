@@ -159,7 +159,7 @@ func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *atea
 	ctx, done := stepSpan(ctx, "ReleaseTagSnapshot")
 	defer func() { err = done(err) }()
 
-	if w.snapshotPlugin == nil {
+	if w.objectStorePlugin == nil {
 		markSkipped(ctx, "no object store configured")
 		return nil
 	}
@@ -324,7 +324,7 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 	ctx, done := stepSpan(ctx, "CopyTagSnapshot")
 	defer func() { err = done(err) }()
 
-	if w.snapshotPlugin == nil {
+	if w.objectStorePlugin == nil {
 		markSkipped(ctx, "no object store configured")
 		return nil
 	}
