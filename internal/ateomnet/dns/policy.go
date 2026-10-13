@@ -17,6 +17,7 @@ package dns
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	"golang.org/x/net/dns/dnsmessage"
 
@@ -38,21 +39,31 @@ func egressPolicyCheck(ctx context.Context, source PolicySource) queryPolicy {
 	if source == nil {
 		return func(dnsmessage.Question) bool { return false }
 	}
+	var (
+		mu     sync.Mutex
+		cached *ateletpb.EgressPolicy
+		eval   *evaluator
+	)
 	return func(q dnsmessage.Question) bool {
 		policy, err := source.EgressPolicy(ctx)
 		if err != nil {
 			slog.DebugContext(ctx, "dns relay refused a query; the actor's egress policy is unavailable", slog.Any("err", err))
 			return false
 		}
-		return allowQuery(policy, q)
+		mu.Lock()
+		if policy != cached || eval == nil {
+			cached = policy
+			eval = newEvaluator(policy)
+		}
+		e := eval
+		mu.Unlock()
+		return e.allowsHostname(q.Name.String())
 	}
 }
 
 // allowQuery reports whether policy lets the actor ask q. An actor without a
 // policy may resolve nothing, as it may reach nothing through the egress
 // gateway.
-//
-// TODO: allow only the names that policy's rules can reach.
-func allowQuery(policy *ateletpb.EgressPolicy, _ dnsmessage.Question) bool {
-	return policy != nil
+func allowQuery(policy *ateletpb.EgressPolicy, q dnsmessage.Question) bool {
+	return newEvaluator(policy).allowsHostname(q.Name.String())
 }

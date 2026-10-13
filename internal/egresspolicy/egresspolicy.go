@@ -389,11 +389,22 @@ func NormalizeAuthority(authority string) (Destination, error) {
 		return Destination{IP: addr.Unmap(), Port: port}, nil
 	}
 
-	name := lowerASCII(strings.TrimSuffix(host, "."))
-	if !isHostname(name) {
+	name, ok := NormalizeHostname(host)
+	if !ok {
 		return Destination{}, fmt.Errorf("authority %q is neither a DNS hostname nor an IP literal", authority)
 	}
 	return Destination{Hostname: name, Port: port}, nil
+}
+
+// NormalizeHostname turns raw into the canonical form HostnamePattern.Matches
+// expects: ASCII lowercased, one trailing dot removed, and checked as a
+// DNS-1123 subdomain whose last label is not all digits.
+func NormalizeHostname(raw string) (string, bool) {
+	name := lowerASCII(strings.TrimSuffix(raw, "."))
+	if !isHostname(name) {
+		return "", false
+	}
+	return name, true
 }
 
 // isHostname reports whether name is a lowercase DNS-1123 subdomain whose last

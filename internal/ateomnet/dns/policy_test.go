@@ -39,8 +39,10 @@ func (p staticPolicy) EgressPolicy(context.Context) (*ateletpb.EgressPolicy, err
 	return p.policy, p.err
 }
 
-// withPolicy supplies an egress policy, so the actor's queries are allowed.
-var withPolicy = staticPolicy{policy: &ateletpb.EgressPolicy{}}
+// withPolicy supplies an egress policy that allows every hostname.
+var withPolicy = staticPolicy{policy: &ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{
+	Http: &ateletpb.EgressDestinations{Hostnames: []string{"*"}},
+}}}}
 
 // switchablePolicy supplies whichever policy was stored last.
 type switchablePolicy struct {
@@ -78,6 +80,11 @@ var namesAsStrings = cmp.Transformer("Name", func(n dnsmessage.Name) string { re
 // checkAnswer fails the test unless answer answers dnsQuery(id) with rcode.
 func checkAnswer(t *testing.T, answer []byte, id uint16, rcode dnsmessage.RCode) {
 	t.Helper()
+	checkAnswerForQuestion(t, answer, id, exampleQuestion, rcode)
+}
+
+func checkAnswerForQuestion(t *testing.T, answer []byte, id uint16, wantQ dnsmessage.Question, rcode dnsmessage.RCode) {
+	t.Helper()
 	var p dnsmessage.Parser
 	h, err := p.Start(answer)
 	if err != nil {
@@ -90,9 +97,23 @@ func checkAnswer(t *testing.T, answer []byte, id uint16, rcode dnsmessage.RCode)
 	if err != nil {
 		t.Fatalf("parsing the question of the relay's answer: %v", err)
 	}
-	if diff := cmp.Diff(exampleQuestion, q, namesAsStrings); diff != "" {
+	if diff := cmp.Diff(wantQ, q, namesAsStrings); diff != "" {
 		t.Errorf("answer question mismatch (-want +got):\n%s", diff)
 	}
+}
+
+func dnsQueryForName(t *testing.T, id uint16, name string) ([]byte, dnsmessage.Question) {
+	t.Helper()
+	q := dnsmessage.Question{
+		Name:  dnsmessage.MustNewName(name),
+		Type:  dnsmessage.TypeA,
+		Class: dnsmessage.ClassINET,
+	}
+	raw := buildTestMessage(t, dnsmessage.Header{
+		ID:               id,
+		RecursionDesired: true,
+	}, []dnsmessage.Question{q})
+	return raw, q
 }
 
 // newTCPResolver answers each DNS message on its TCP connections with
@@ -263,10 +284,16 @@ func TestRelayFollowsPolicyChanges(t *testing.T) {
 			conn := dialRelay(t, tc.network, addr)
 
 			checkAnswer(t, tc.ask(t, conn, dnsQuery(1)), 1, dnsmessage.RCodeRefused)
-			policy.policy.Store(&ateletpb.EgressPolicy{})
+			policy.policy.Store(&ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{
+				Http: &ateletpb.EgressDestinations{Hostnames: []string{"example.com", "*.wild.example"}},
+			}}})
 			checkAnswer(t, tc.ask(t, conn, dnsQuery(2)), 2, dnsmessage.RCodeSuccess)
+			wildQuery, wildQ := dnsQueryForName(t, 3, "api.wild.example.")
+			checkAnswerForQuestion(t, tc.ask(t, conn, wildQuery), 3, wildQ, dnsmessage.RCodeSuccess)
+			unlistedQuery, unlistedQ := dnsQueryForName(t, 4, "other.example.com.")
+			checkAnswerForQuestion(t, tc.ask(t, conn, unlistedQuery), 4, unlistedQ, dnsmessage.RCodeRefused)
 			policy.policy.Store(nil)
-			checkAnswer(t, tc.ask(t, conn, dnsQuery(3)), 3, dnsmessage.RCodeRefused)
+			checkAnswer(t, tc.ask(t, conn, dnsQuery(5)), 5, dnsmessage.RCodeRefused)
 		})
 	}
 }
@@ -307,23 +334,64 @@ func TestStopCancelsAPolicyFetchInProgress(t *testing.T) {
 }
 
 func TestAllowQuery(t *testing.T) {
+	question := func(name string) dnsmessage.Question {
+		return dnsmessage.Question{
+			Name:  dnsmessage.MustNewName(name),
+			Type:  dnsmessage.TypeA,
+			Class: dnsmessage.ClassINET,
+		}
+	}
 	for _, tc := range []struct {
 		name   string
 		policy *ateletpb.EgressPolicy
+		q      dnsmessage.Question
 		want   bool
 	}{
-		{name: "no policy", policy: nil, want: false},
-		{name: "policy without rules", policy: &ateletpb.EgressPolicy{}, want: true},
+		{name: "no policy", policy: nil, q: exampleQuestion, want: false},
+		{name: "policy without rules", policy: &ateletpb.EgressPolicy{}, q: exampleQuestion, want: false},
 		{
-			name: "policy with rules",
+			name: "matching exact host",
 			policy: &ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{
 				Https: &ateletpb.EgressDestinations{Hostnames: []string{"example.com"}},
 			}}},
+			q:    exampleQuestion,
 			want: true,
+		},
+		{
+			name: "unlisted host",
+			policy: &ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{
+				Https: &ateletpb.EgressDestinations{Hostnames: []string{"example.com"}},
+			}}},
+			q:    question("other.example.com."),
+			want: false,
+		},
+		{
+			name: "matching wildcard host",
+			policy: &ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{
+				Https: &ateletpb.EgressDestinations{Hostnames: []string{"*.example.com"}},
+			}}},
+			q:    question("api.example.com."),
+			want: true,
+		},
+		{
+			name: "wildcard does not match apex",
+			policy: &ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{
+				Https: &ateletpb.EgressDestinations{Hostnames: []string{"*.example.com"}},
+			}}},
+			q:    exampleQuestion,
+			want: false,
+		},
+		{
+			name: "wildcard does not match nested subdomain",
+			policy: &ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{
+				Https: &ateletpb.EgressDestinations{Hostnames: []string{"*.example.com"}},
+			}}},
+			q:    question("a.b.example.com."),
+			want: false,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := allowQuery(tc.policy, exampleQuestion); got != tc.want {
+			if got := allowQuery(tc.policy, tc.q); got != tc.want {
 				t.Errorf("allowQuery = %t, want %t", got, tc.want)
 			}
 		})
