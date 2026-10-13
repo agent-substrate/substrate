@@ -365,7 +365,8 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 // in the golden tag. A suspend that was aborted and rolled back, leaving the
 // actor RUNNING, fails the golden snapshot instead of being retried, as a
 // golden actor that crashes in its suspend does: the abort, a failed MSHV
-// guest freeze, is not known to clear on its own. See failAborted.
+// guest freeze or a Cloud Hypervisor API failure before it, is not known to
+// clear on its own. See failAborted.
 func (r *ActorTemplateReconciler) suspendAndTagGoldenActor(ctx context.Context, tmpl *ateapipb.ActorTemplate, goldenRef *ateapipb.ObjectRef) error {
 	err := r.suspendActor(ctx, goldenRef)
 	if isCheckpointRolledBack(err) {

@@ -61,7 +61,20 @@ import (
 //
 // Whatever the fidelity the guest is paused first, which is what makes the tar coherent: the
 // durable share is served write-through, so every completed guest write is already on
-// the host and no further ones can arrive.
+// the host and no further ones can arrive. On MSHV a MEMORY snapshot first freezes the
+// actor's containers, so they stay frozen in the snapshot until the restore has
+// refreshed the guest clock and CRNG (guestQuiesce, activateRestoredGuest). The freeze
+// runs before the actor's tunnel is deactivated, so a freeze that fails without
+// changing anything (Cloud Hypervisor's API not answering in time or its VM
+// state read failing, or a failed freeze that thaws every container it froze)
+// returns a checkpointabort error with the actor still running and reachable.
+// That holds unless an earlier attempt of this checkpoint already deactivated
+// the tunnel, or Cloud Hypervisor is gone (its process has exited, or its
+// api-socket has no listener), so no guest runs. Any other failed freeze,
+// including one whose rollback cannot thaw every container, deactivates the
+// tunnel and fails the checkpoint like any other failure. Once the freeze
+// succeeds the containers stay frozen, even if the checkpoint fails later, and
+// a retry skips it.
 //
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
@@ -103,12 +116,36 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 			})
 	}()
 
-	if err := s.tunnel.Deactivate(ctx, attribution); err != nil {
-		return nil, err
-	}
-
 	actorUID := req.GetActorUid()
 	actorDirs := req.GetActorDirs()
+
+	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
+	// either way ateworker owns it and tracks its api-socket.
+	ra := s.runningVM(actorUID)
+	chSocket := kata.CLHSocketPath(actorUID)
+	if ra != nil && ra.apiSocket != "" {
+		chSocket = ra.apiSocket
+	}
+	client := ch.NewClient(chSocket)
+
+	// Freeze before anything else touches the actor (see guestQuiesce.begin).
+	// The containers RunWorkload or RestoreWorkload started, the same list the
+	// restore thaws.
+	quiesce := &guestQuiesce{h: s.hypervisor, scope: scope, ac: s.guestAgentOf(ra), tunnelDeactivated: new(bool), containersFrozen: new(bool)}
+	if ra != nil {
+		quiesce.ids = ra.workloadIDs
+		quiesce.tunnelDeactivated = &ra.checkpointDeactivatedTunnel
+		quiesce.containersFrozen = &ra.checkpointFrozeContainers
+	}
+	probe := vmmProbe{client: client, apiSocket: chSocket, readyTimeout: 10 * time.Second}
+	if ra != nil {
+		probe.cmd = ra.chCmd
+	}
+	if err := quiesce.begin(ctx, probe.ready, probe.paused, func(ctx context.Context) error {
+		return s.tunnel.Deactivate(ctx, attribution)
+	}); err != nil {
+		return nil, err
+	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
 
@@ -138,17 +175,6 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	// waits for the teardown.
 	hosted := s.lookupActor(actorUID)
 
-	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
-	// either way ateworker owns it and tracks its api-socket.
-	ra := s.runningVM(actorUID)
-	chSocket := kata.CLHSocketPath(actorUID)
-	if ra != nil && ra.apiSocket != "" {
-		chSocket = ra.apiSocket
-	}
-	client := ch.NewClient(chSocket)
-	if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
-		return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
-	}
 	// Read before the pause: a paused guest cannot answer.
 	if hosted != nil {
 		s.readFinal(ctx, hosted)
@@ -156,10 +182,14 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	tPause := time.Now()
 	dPrep = tPause.Sub(tStart)
-	pauseErr := client.Pause(ctx)
-	dPause = time.Since(tPause)
-	if pauseErr != nil {
-		return nil, fmt.Errorf("while pausing guest: %w", pauseErr)
+	pauseVM := func(ctx context.Context) error {
+		t := time.Now()
+		err := client.Pause(ctx)
+		dPause = time.Since(t)
+		return err
+	}
+	if err := quiesce.pause(ctx, pauseVM); err != nil {
+		return nil, err
 	}
 
 	checkpointDir := actorDirs.GetCheckpointDir()

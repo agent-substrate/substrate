@@ -69,13 +69,16 @@ func (c *Client) Ping(ctx context.Context) (VMMInfo, error) {
 }
 
 // WaitReady blocks until the api-socket answers vmm.ping or the deadline passes,
-// returning what that answer said. Callers get the VMM's version for free this way:
+// returning what that answer said. The deadline also cuts short a ping that a
+// connected VMM never answers. Callers get the VMM's version for free this way:
 // the handshake already happens before every boot and restore, so nothing has to
 // run the binary again to ask.
 func (c *Client) WaitReady(ctx context.Context, deadline time.Duration) (VMMInfo, error) {
 	end := time.Now().Add(deadline)
 	for {
-		info, err := c.Ping(ctx)
+		pingCtx, cancel := context.WithDeadline(ctx, end)
+		info, err := c.Ping(pingCtx)
+		cancel()
 		if err == nil {
 			return info, nil
 		}
