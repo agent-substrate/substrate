@@ -60,7 +60,7 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 					t.Fatal(err)
 				}
 				ref := resources.ActorRefFromActor(actor).ToObjectRef()
-				if _, err := svc.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref}); apierror.Code(err) != codes.NotFound {
+				if _, err := svc.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName}); apierror.Code(err) != codes.NotFound {
 					t.Fatalf("ordinary actor inherited golden policy: %v, want NotFound", err)
 				}
 				if _, err := svc.CreateActorEgressPolicy(ctx, &ateapipb.CreateActorEgressPolicyRequest{
@@ -116,7 +116,7 @@ func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
 				if ref.GetAtespace() != resources.GoldenActorAtespace || ref.GetName() != tmpl.GetMetadata().GetUid() {
 					t.Fatalf("unexpected golden actor: %v", ref)
 				}
-				policy, err := svc.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref})
+				policy, err := svc.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName})
 				if tt.policy == nil {
 					if apierror.Code(err) != codes.NotFound {
 						t.Fatalf("golden without configured policy: %v, want NotFound", err)
