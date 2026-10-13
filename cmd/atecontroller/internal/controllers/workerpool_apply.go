@@ -99,7 +99,7 @@ const (
 // Deployment managed by a WorkerPool. Only fields owned by this controller
 // are declared here. otel, when it carries an endpoint, is propagated to the
 // ateom container so it pushes telemetry to that collector.
-func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettings, systemNamespace, ateletServiceAccount, routerServiceAccount string) *appsv1ac.DeploymentApplyConfiguration {
+func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettings, systemNamespace, ateletServiceAccount, routerServiceAccount, dnsEgressPolicy string) *appsv1ac.DeploymentApplyConfiguration {
 	labels := map[string]string{}
 	annotations := map[string]string{}
 	if wp.Spec.Template != nil {
@@ -142,6 +142,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 	args = append(args,
 		"--atunnel-egress-listen-address=0.0.0.0:15001",
 		"--atunnel-egress-trust-bundle="+atunnelEgressTrustMountPath+"/trust-bundle.pem",
+		"--dns-egress-policy="+dnsEgressPolicy,
 	)
 
 	containerAC := corev1ac.Container().

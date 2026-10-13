@@ -33,6 +33,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
@@ -49,6 +50,7 @@ func TestRegisterFlags(t *testing.T) {
 		"--atunnel-broker-identity=broker",
 		"--atunnel-egress-listen-address=0.0.0.0:3",
 		"--atunnel-egress-trust-bundle=egress-trust",
+		"--dns-egress-policy=enforce-in-atunnel",
 	}
 	want := Config{
 		ListenAddress:        ":1",
@@ -59,6 +61,7 @@ func TestRegisterFlags(t *testing.T) {
 		BrokerIdentity:       "broker",
 		EgressListenAddress:  "0.0.0.0:3",
 		EgressTrustBundle:    "egress-trust",
+		DNSEgressPolicy:      egresspolicy.DNSEgressPolicyEnforceInAtunnel,
 	}
 
 	std := flag.NewFlagSet("std", flag.ContinueOnError)
@@ -79,6 +82,9 @@ func TestRegisterFlags(t *testing.T) {
 			}
 			if tc.cfg.CredentialBundle == "" || tc.cfg.TrustBundle == "" || tc.cfg.ClientIdentity == "" || tc.cfg.BrokerIdentity == "" || tc.cfg.EgressTrustBundle == "" {
 				t.Errorf("unset default: %+v", *tc.cfg)
+			}
+			if tc.cfg.DNSEgressPolicy != "" {
+				t.Errorf("DNSEgressPolicy default = %q, want empty", tc.cfg.DNSEgressPolicy)
 			}
 			if err := tc.parse(args); err != nil {
 				t.Fatal(err)
@@ -172,6 +178,7 @@ func testConfigAndCA(t *testing.T) (Config, testCA) {
 		BrokerIdentity:       "spiffe://cluster.local/ns/ate-system/sa/atelet",
 		EgressListenAddress:  "0.0.0.0:15001",
 		EgressTrustBundle:    trust,
+		DNSEgressPolicy:      egresspolicy.DNSEgressPolicyEnforceInAtunnel,
 	}, testCA{cert: cert, key: key}
 }
 
@@ -233,6 +240,14 @@ func TestStartErrors(t *testing.T) {
 		edit    func(t *testing.T, cfg *Config)
 		wantErr bool
 	}{
+		"missing dns egress policy": {
+			edit:    func(_ *testing.T, cfg *Config) { cfg.DNSEgressPolicy = "" },
+			wantErr: true,
+		},
+		"invalid dns egress policy": {
+			edit:    func(_ *testing.T, cfg *Config) { cfg.DNSEgressPolicy = "invalid" },
+			wantErr: true,
+		},
 		"no resolvers": {
 			edit: func(t *testing.T, _ *Config) {
 				empty := filepath.Join(t.TempDir(), "resolv.conf")

@@ -497,3 +497,20 @@ func TestSNIRules(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateDNSEgressPolicy(t *testing.T) {
+	tests := []struct {
+		mode    string
+		wantErr bool
+	}{
+		{mode: DNSEgressPolicyEnforceInAtunnel, wantErr: false},
+		{mode: "", wantErr: true},
+		{mode: "unknown", wantErr: true},
+	}
+	for _, tc := range tests {
+		err := ValidateDNSEgressPolicy(tc.mode)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("ValidateDNSEgressPolicy(%q) error = %v, wantErr = %v", tc.mode, err, tc.wantErr)
+		}
+	}
+}

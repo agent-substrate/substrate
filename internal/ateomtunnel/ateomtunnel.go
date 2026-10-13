@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateletdial"
 	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
 	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -68,6 +69,8 @@ type Config struct {
 	EgressListenAddress string
 	// EgressTrustBundle verifies the remote egress gateway's serving cert.
 	EgressTrustBundle string
+	// DNSEgressPolicy selects the DNS egress policy enforcement mode.
+	DNSEgressPolicy string
 }
 
 // RegisterFlags registers the atunnel flags on fs and returns the Config they
@@ -84,6 +87,7 @@ func RegisterFlags(fs FlagSet) *Config {
 	fs.StringVar(&c.BrokerIdentity, "atunnel-broker-identity", installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "SPIFFE identity the node-local atelet must present on the credential broker connection. Override when atelet runs outside the default namespace.")
 	fs.StringVar(&c.EgressListenAddress, "atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
 	fs.StringVar(&c.EgressTrustBundle, "atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
+	fs.StringVar(&c.DNSEgressPolicy, "dns-egress-policy", "", "DNS egress policy enforcement mode (must be "+egresspolicy.DNSEgressPolicyEnforceInAtunnel+")")
 	return c
 }
 
@@ -108,6 +112,9 @@ type Tunnel struct {
 // to upstream inside each sandbox. Egress binds only in sandbox namespaces, so
 // nothing listens for it here.
 func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
+	if err := egresspolicy.ValidateDNSEgressPolicy(cfg.DNSEgressPolicy); err != nil {
+		return nil, err
+	}
 	upstreamURL, err := url.Parse(upstream)
 	if err != nil {
 		return nil, fmt.Errorf("while parsing atunnel upstream: %w", err)

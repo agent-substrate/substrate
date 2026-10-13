@@ -429,3 +429,19 @@ func lowerASCII(s string) string {
 	}
 	return string(b)
 }
+
+// DNSEgressPolicyEnforceInAtunnel is the --dns-egress-policy mode that
+// enforces an Actor's EgressPolicy on DNS queries in the ateom DNS relay.
+const DNSEgressPolicyEnforceInAtunnel = "enforce-in-atunnel"
+
+// ValidateDNSEgressPolicy checks the --dns-egress-policy flag value.
+func ValidateDNSEgressPolicy(mode string) error {
+	switch mode {
+	case "":
+		return errors.New("--dns-egress-policy is required")
+	case DNSEgressPolicyEnforceInAtunnel:
+		return nil
+	default:
+		return fmt.Errorf("unsupported --dns-egress-policy %q (must be %q)", mode, DNSEgressPolicyEnforceInAtunnel)
+	}
+}
