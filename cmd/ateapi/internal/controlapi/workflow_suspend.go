@@ -99,6 +99,23 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	return actor, nil
 }
 
+// suspendPausedActor runs the paused-origin suspend steps for a PAUSED actor
+// and returns the SUSPENDED actor. A failure leaves the actor SUSPENDING, for
+// SuspendActor to finish. The caller holds the actor lease.
+func (w *ActorWorkflow) suspendPausedActor(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (*ateapipb.Actor, error) {
+	marked, err := w.ensureMarkedSuspending(ctx, actorRef, actor, actorTemplate)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := w.ensurePausedSnapshotUploaded(ctx, actorRef, marked, actorTemplate); err != nil {
+		return nil, err
+	}
+	if err := w.ensureVolumesDetached(ctx, marked, actorTemplate, "DetachVolumes", ateattr.OperationSuspend); err != nil {
+		return nil, err
+	}
+	return w.ensureSuspendedFinalized(ctx, actorRef)
+}
+
 // loadActorForSuspend fetches the current actor record and its template.
 func (w *ActorWorkflow) loadActorForSuspend(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForSuspend")

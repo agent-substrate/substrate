@@ -4931,21 +4931,77 @@ func TestCheckpointFailureCrashes(t *testing.T) {
 	}
 }
 
-// TestResumeActor_RelocatesAfterSuspendFromPaused covers the capacity-recovery
-// flow: a PAUSED actor is pinned to the node holding its local snapshot, so it
-// cannot resume while that node is full. Suspending it uploads the snapshot and
-// drops the node pinning, after which it is scheduled onto a worker on a different
-// node.
-func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
+// TestResumeActor_SuspendsPausedActorWhenItsNodeIsFull covers the
+// capacity-recovery flow: a PAUSED actor restores from the local snapshot on
+// its node, so a resume tries that node first. When the node is full the
+// resume suspends the actor, making the snapshot durable, and restores it
+// onto a worker on another node.
+func TestResumeActor_SuspendsPausedActorWhenItsNodeIsFull(t *testing.T) {
 	ns := namespaceForTest("ns-resume-relocate")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
+	pinned, pausedLS := pauseOnFullNode(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+	setupAteletOnNode(t, tc, "atelet-node2", "node2")
+	tc.fakeAtelet.Reset()
+
+	resumed, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor(%s) with its node full failed: %v", pinned, err)
+	}
+
+	// The promote names the pause snapshot and where its durable copy goes.
+	if !tc.fakeAtelet.PromoteCalled {
+		t.Fatal("expected atelet PromoteSnapshot to be called")
+	}
+	promote := tc.fakeAtelet.PromoteRequest.GetSnapshot()
+	if got, want := promote.GetSnapshotUuid(), pausedLS.GetUuid(); got != want {
+		t.Errorf("promote snapshot uuid = %q, want the pause snapshot's %q", got, want)
+	}
+
+	// The restore reads the copy the promote uploaded.
+	restore := tc.fakeAtelet.lastRestoreRequest().GetSnapshot()
+	if restore.GetSnapshotUuid() != pausedLS.GetUuid() {
+		t.Errorf("restore snapshot_uuid = %q, want the pause snapshot %q", restore.GetSnapshotUuid(), pausedLS.GetUuid())
+	}
+	if got, want := restore.GetObject().GetSnapshotUri(), promote.GetObject().GetSnapshotUri(); got != want {
+		t.Errorf("restore snapshot uri = %q, want the promote destination %q", got, want)
+	}
+
+	actor := resumed.GetActor()
+	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("state = %v, want RUNNING", got)
+	}
+	if got := actor.GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "worker-2" {
+		t.Errorf("resumed onto worker %q, want worker-2 (the worker on node2)", got)
+	}
+	if got := actor.GetStatus().GetAssignedNode(); got != "node2" {
+		t.Errorf("assigned node = %q, want node2", got)
+	}
+	if ls := localSnapshot(actor.GetStatus()); ls != nil {
+		t.Errorf("local snapshot = %v, want cleared by the suspend", ls)
+	}
+	if got, want := durableSnapshotURI(actor.GetStatus()), promote.GetObject().GetSnapshotUri(); got != want {
+		t.Errorf("durable snapshot uri = %q, want the promote destination %q", got, want)
+	}
+}
+
+// squatter is the actor pauseOnFullNode runs on node1's only worker.
+const squatter = "actor-squatter"
+
+// pauseOnFullNode creates a template and node1's only worker, pauses an actor
+// on node1, and has squatter take node1's worker. It returns the paused
+// actor's name and its local snapshot.
+func pauseOnFullNode(t *testing.T, tc *testContext, ns string) (pinned string, pausedLS *ateapipb.Snapshot) {
+	t.Helper()
 	createTemplate(t, tc, ns)
 	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
-	const pinned, relocated = "actor-pinned", "actor-squatter"
-	for _, name := range []string{pinned, relocated} {
+	pinned = "actor-pinned"
+	for _, name := range []string{pinned, squatter} {
 		if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
 			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
@@ -4955,7 +5011,7 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	}
 
 	// The actor under test runs on node1's only worker, then pauses — which
-	// frees that worker but pins the actor to node1 via LocalSnapshot.
+	// frees that worker but pins the actor to node1 via its local snapshot.
 	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
 	}); err != nil {
@@ -4975,53 +5031,260 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	if got := paused.GetStatus().GetAssignedNode(); got != "node1" {
 		t.Fatalf("paused actor pinned to %q, want node1", got)
 	}
+	pausedLS = localSnapshot(paused.GetStatus())
+	if pausedLS == nil {
+		t.Fatal("paused actor has no local snapshot")
+	}
 	waitForWorkerAvailable(t, tc, workerName)
 
-	// Another actor takes node1's only worker, so the pinned actor's node is full
-	// while free capacity exists elsewhere.
+	// Another actor takes node1's only worker, so the pinned actor's node is full.
 	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: relocated},
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: squatter},
 	}); err != nil {
-		t.Fatalf("ResumeActor(%s) failed: %v", relocated, err)
+		t.Fatalf("ResumeActor(%s) failed: %v", squatter, err)
 	}
+	return pinned, pausedLS
+}
+
+// TestResumeActor_PausedActorOnFullNodeNotResumed: a resume that cannot move
+// a PAUSED actor off its full node fails, and leaves the actor where a retry
+// can pick it up:
+//   - With no room on any node, the actor stays PAUSED on its node, and the
+//     resume fails with ResourceExhausted, which a parked routed request
+//     retries.
+//   - When atelet is unavailable mid-upload, the actor stays SUSPENDING with
+//     its local snapshot on the node, for SuspendActor to finish.
+//   - When the upload fails, the actor is CRASHED, as a suspend's would be.
+func TestResumeActor_PausedActorOnFullNodeNotResumed(t *testing.T) {
+	tests := []struct {
+		name string
+		// node2 adds a worker with room on another node.
+		node2       bool
+		failPromote error
+		wantCode    codes.Code
+		wantMsg     string
+		wantPromote bool
+		wantState   ateapipb.ActorState
+	}{{
+		// A suspend would upload the snapshot and still find no worker.
+		name:      "no node has room",
+		wantCode:  codes.ResourceExhausted,
+		wantMsg:   "no worker has room for the actor",
+		wantState: ateapipb.ActorState_ACTOR_STATE_PAUSED,
+	}, {
+		name:        "atelet unavailable",
+		node2:       true,
+		failPromote: status.Error(codes.Unavailable, "injected atelet restart"),
+		wantCode:    codes.Unavailable,
+		wantMsg:     "injected atelet restart",
+		wantPromote: true,
+		wantState:   ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+	}, {
+		name:        "promote fails",
+		node2:       true,
+		failPromote: status.Error(codes.Internal, "injected upload failure"),
+		wantCode:    codes.Internal,
+		wantMsg:     "injected upload failure",
+		wantPromote: true,
+		wantState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
+	}}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest(fmt.Sprintf("ns-resume-full-node-%d", i))
+			tc := setupTest(t, ns)
+			defer tc.cleanup()
+
+			pinned, pausedLS := pauseOnFullNode(t, tc, ns)
+			if tt.node2 {
+				createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+				setupAteletOnNode(t, tc, "atelet-node2", "node2")
+			}
+			tc.fakeAtelet.Reset()
+			tc.fakeAtelet.Lock.Lock()
+			tc.fakeAtelet.FailPromote = tt.failPromote
+			tc.fakeAtelet.Lock.Unlock()
+
+			ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned}
+			_, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref})
+			assertGrpcErrorRegex(t, err, tt.wantCode, tt.wantMsg)
+			if got := tc.fakeAtelet.PromoteCalled; got != tt.wantPromote {
+				t.Errorf("atelet PromoteSnapshot called = %v, want %v", got, tt.wantPromote)
+			}
+
+			actor, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: ref})
+			if err != nil {
+				t.Fatalf("GetActor failed: %v", err)
+			}
+			if got := actor.GetStatus().GetState(); got != tt.wantState {
+				t.Fatalf("state = %v, want %v", got, tt.wantState)
+			}
+			if tt.wantState == ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				return
+			}
+			if got := actor.GetStatus().GetAssignedNode(); got != "node1" {
+				t.Errorf("assigned node = %q, want node1", got)
+			}
+			if ls := localSnapshot(actor.GetStatus()); ls.GetUuid() != pausedLS.GetUuid() || ls.GetLocality() != "node1" {
+				t.Errorf("local snapshot = %v, want the pause snapshot %q still on node1", ls, pausedLS.GetUuid())
+			}
+		})
+	}
+}
+
+// TestResumeActor_RejectsInterruptedSuspend: once a resume or a SuspendActor
+// has begun uploading a PAUSED actor's local snapshot, the actor is
+// SUSPENDING. Resume rejects it, even though the actor's node has room again,
+// since atelet may already have deleted the local snapshot. SuspendActor
+// finishes the suspend, committing the durable copy rather than leaving it
+// PENDING, and the actor then resumes from it.
+func TestResumeActor_RejectsInterruptedSuspend(t *testing.T) {
+	tests := []struct {
+		name string
+		// interrupt starts the suspend that the injected promote failure
+		// interrupts.
+		interrupt func(tc *testContext, ref *ateapipb.ObjectRef) error
+	}{{
+		name: "interrupted resume",
+		interrupt: func(tc *testContext, ref *ateapipb.ObjectRef) error {
+			_, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref})
+			return err
+		},
+	}, {
+		name: "interrupted suspend",
+		interrupt: func(tc *testContext, ref *ateapipb.ObjectRef) error {
+			_, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: ref})
+			return err
+		},
+	}}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest(fmt.Sprintf("ns-resume-interrupted-suspend-%d", i))
+			tc := setupTest(t, ns)
+			defer tc.cleanup()
+
+			pinned, pausedLS := pauseOnFullNode(t, tc, ns)
+			createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+			setupAteletOnNode(t, tc, "atelet-node2", "node2")
+			ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned}
+
+			// The first call records the durable copy, then the promote fails.
+			tc.fakeAtelet.Reset()
+			tc.fakeAtelet.Lock.Lock()
+			tc.fakeAtelet.FailPromote = status.Error(codes.Unavailable, "injected atelet restart")
+			tc.fakeAtelet.Lock.Unlock()
+			if err := tt.interrupt(tc, ref); status.Code(err) != codes.Unavailable {
+				t.Fatalf("interrupted call status code = %v, want Unavailable (err: %v)", status.Code(err), err)
+			}
+			interrupted, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: ref})
+			if err != nil {
+				t.Fatalf("GetActor failed: %v", err)
+			}
+			if got := interrupted.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+				t.Fatalf("state after the interrupted call = %v, want SUSPENDING", got)
+			}
+			pendingURI := localSnapshot(interrupted.GetStatus()).GetDurableSnapshot().GetObject().GetSnapshotUri()
+			if pendingURI == "" {
+				t.Fatal("interrupted suspend recorded no durable copy on the local snapshot")
+			}
+
+			// node1 has room again.
+			if _, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+				Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: squatter},
+			}); err != nil {
+				t.Fatalf("SuspendActor(%s) failed: %v", squatter, err)
+			}
+			waitForWorkerAvailable(t, tc, "worker-1")
+			tc.fakeAtelet.Reset()
+
+			_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref})
+			assertGrpcErrorRegex(t, err, codes.FailedPrecondition, "call SuspendActor to finish the suspend")
+			if tc.fakeAtelet.PromoteCalled {
+				t.Error("resume called atelet PromoteSnapshot on a SUSPENDING actor, want none")
+			}
+
+			suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: ref})
+			if err != nil {
+				t.Fatalf("SuspendActor after the interrupted suspend failed: %v", err)
+			}
+			if got := tc.fakeAtelet.PromoteRequest.GetSnapshot().GetObject().GetSnapshotUri(); got != pendingURI {
+				t.Errorf("promote snapshot uri = %q, want the recorded %q", got, pendingURI)
+			}
+			if got := suspended.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+				t.Fatalf("state after SuspendActor = %v, want SUSPENDED", got)
+			}
+
+			resumed, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref})
+			if err != nil {
+				t.Fatalf("ResumeActor after SuspendActor failed: %v", err)
+			}
+			if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetObject().GetSnapshotUri(); got != pendingURI {
+				t.Errorf("restore snapshot uri = %q, want the uploaded copy %q", got, pendingURI)
+			}
+			actor := resumed.GetActor()
+			if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+				t.Errorf("state = %v, want RUNNING", got)
+			}
+			if ls := localSnapshot(actor.GetStatus()); ls != nil {
+				t.Errorf("local snapshot = %v, want cleared by the suspend", ls)
+			}
+			durable := durableSnapshot(actor.GetStatus())
+			if durable.GetUuid() != pausedLS.GetUuid() || durable.GetDurableSnapshot().GetObject().GetSnapshotUri() != pendingURI {
+				t.Errorf("durable snapshot = %v, want the pause snapshot %q at %q", durable, pausedLS.GetUuid(), pendingURI)
+			}
+		})
+	}
+}
+
+// TestResumeActor_PausedActorStaysOnItsNode: while the node holding a PAUSED
+// actor's local snapshot has room, the resume restores it there from the
+// local snapshot and detaches nothing, even with room on other nodes.
+func TestResumeActor_PausedActorStaysOnItsNode(t *testing.T) {
+	ns := namespaceForTest("ns-resume-same-node")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	const name = "id1"
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	if _, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("PauseActor failed: %v", err)
+	}
+	paused, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	pausedLS := localSnapshot(paused.GetStatus())
+	if pausedLS == nil {
+		t.Fatal("paused actor has no local snapshot")
+	}
+	waitForWorkerAvailable(t, tc, workerName)
 	createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
 	setupAteletOnNode(t, tc, "atelet-node2", "node2")
+	tc.fakeAtelet.Reset()
 
-	// Capacity exhaustion is ResourceExhausted.
-	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
-	})
-	assertGrpcError(t, err, codes.ResourceExhausted, "no worker has room for the actor")
-
-	suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
-	})
+	resumed, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef})
 	if err != nil {
-		t.Fatalf("SuspendActor(%s) failed: %v", pinned, err)
+		t.Fatalf("ResumeActor failed: %v", err)
 	}
-	if got := suspended.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Fatalf("state after suspend = %v, want SUSPENDED", got)
+	if tc.fakeAtelet.PromoteCalled {
+		t.Errorf("atelet PromoteSnapshot called with room on the actor's node: %v", tc.fakeAtelet.PromoteRequest)
 	}
-	if ls := localSnapshot(suspended.GetActor().GetStatus()); ls != nil {
-		t.Fatalf("local snapshot = %v, want cleared so the actor can be scheduled anywhere", ls)
+	if got := resumed.GetActor().GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "worker-1" {
+		t.Errorf("resumed onto worker %q, want worker-1 (the worker on node1)", got)
 	}
-
-	// Resume should succeed now and the actor scheduled on node2.
-	resumed, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
-	})
-	if err != nil {
-		t.Fatalf("ResumeActor(%s) after suspend failed: %v", pinned, err)
-	}
-	if got := resumed.GetActor().GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "worker-2" {
-		t.Errorf("resumed onto worker %q, want worker-2 (the worker on node2)", got)
-	}
-	worker, err := tc.persistence.GetWorker(context.Background(), resumed.GetActor().GetStatus().GetWorkerAssignment().GetWorker().GetName())
-	if err != nil {
-		t.Fatalf("GetWorker(worker-2) failed: %v", err)
-	}
-	if got := worker.GetNodeName(); got != "node2" {
-		t.Errorf("worker-2 node = %q, want node2", got)
+	if got, want := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetSnapshotUuid(), pausedLS.GetUuid(); got != want {
+		t.Errorf("restore snapshot_uuid = %q, want the pause snapshot %q", got, want)
 	}
 }
 
