@@ -5,8 +5,9 @@
 > to a dedicated repository in the near future.
 
 This plugin implements substrate's `objectstore.v1` node and control
-services with Azure Blob Storage. It runs in `node` mode beside atelet and in
-`control` mode beside ate-api-server. The module imports only substrate's
+services with Azure Blob Storage, and its `AssetProvider` for sandbox assets.
+It runs in `node` mode beside atelet and in `control` mode beside
+ate-api-server. The module imports only substrate's
 public `pkg/` packages so it can move to a repository of its own.
 
 The plugin stores each requested snapshot file as one block blob. Uploads use
@@ -48,6 +49,47 @@ prefix in every container, allowing all substrate data to live below one
 directory. A bare container, a query or fragment, `\`, and `.`, `..` or other
 path segments made only of dots and spaces are rejected.
 
+## Sandbox assets
+
+In `node` mode with `--asset-containers` set (the `config/assets` component
+sets it), the plugin also serves
+`AssetProvider.FetchAsset`, which atelet calls for every sandbox asset URL
+that is not `gs://` (for example the micro-VM kernel, rootfs,
+`cloud-hypervisor` and `virtiofsd` in a `SandboxConfig`). Asset URLs use the
+blob's native URL in the plugin's account:
+
+```text
+https://<account>.blob.core.windows.net/<container>/<blob>
+```
+
+`<container>` must be one of `--asset-containers`; it may also be a snapshot
+container. The blob name is used as is: `--prefix` does not apply. A URL on
+another host, with a query (such as a SAS token), user info or a fragment, or
+with a non-canonical blob name (empty, `.`-terminated or space-padded
+segments, `\`) is rejected with `InvalidArgument`.
+
+The plugin applies the same two checks as the in-tree plugin, through
+substrate's `pkg/assetfetch`:
+
+- It refuses, with `PermissionDenied` and before any download, any blob
+  stored under a snapshot or tag location
+  (`.../atespaces/<atespace>/actors/<uid>/snapshots/<name>/...` or
+  `.../atespaces/<atespace>/tags/<uid>/...`) in any container, so the node
+  identity's read access to snapshots cannot be used to read them as assets.
+- It downloads into `--asset-staging-dir`, which only the plugin container
+  mounts, stops at `max_bytes`, verifies the requested sha256, and only then
+  atomically replaces atelet's existing file with the bytes. atelet verifies
+  the sha256 again.
+
+Downloads in flight hold at most `--asset-staging-capacity` bytes in the
+staging directory together: each reserves its blob's size, and one that does
+not fit waits for the others. A blob larger than the capacity is refused with
+`FailedPrecondition`. The default, `8Gi`, matches atelet's per-asset cap and
+the base manifest's `asset-staging` volume.
+
+The node identity needs `Storage Blob Data Reader` on each asset container
+that is not also a snapshot container.
+
 ## Configuration
 
 | Flag | Environment fallback | Default | Purpose |
@@ -56,7 +98,10 @@ path segments made only of dots and spaces are rejected.
 | `--containers` | `AZURE_STORAGE_CONTAINERS` | required | Comma-separated blob containers that snapshot URIs may name; a name that breaks Azure's container naming rules fails startup |
 | `--prefix` | `AZURE_STORAGE_PREFIX` | empty | Prefix prepended to every snapshot key |
 | `--socket` | none | required | Unix socket to serve |
-| `--root` | none | `/var/lib/ate` | Node mode's allowed local snapshot tree |
+| `--root` | none | `/var/lib/ate` | Node mode's allowed local snapshot and asset tree |
+| `--asset-containers` | `AZURE_STORAGE_ASSET_CONTAINERS` | empty | Node mode: comma-separated blob containers that sandbox asset URLs may name; empty serves no assets (atelet then gets `Unimplemented`) |
+| `--asset-staging-dir` | none | `/var/lib/objectstore-plugin/asset-staging` | Node mode: private directory assets are downloaded into and verified in; must not be below `--root` |
+| `--asset-staging-capacity` | none | `8Gi` | Node mode: the most asset downloads in `--asset-staging-dir` may hold at once, as a Kubernetes quantity |
 
 `healthcheck` mode takes `--socket` and `--timeout` (default `5s`) and exits
 non-zero unless the plugin at `--socket` reports `SERVING` within the timeout.
@@ -209,6 +254,11 @@ snapshotConfig:
 | Context canceled or deadline exceeded | `Canceled` / `DeadlineExceeded` |
 | SHA-256 metadata absent, invalid, or mismatched | `DataLoss` |
 | Other local or Azure failures | `Internal` |
+
+`FetchAsset` differs where its codes carry a narrower meaning:
+`PermissionDenied` means a refused snapshot location, so an Azure 401 or 403
+is `Internal`; an absent asset container is `NotFound`; and a size or sha256
+mismatch is `FailedPrecondition`.
 
 ## Limitations and open edges
 

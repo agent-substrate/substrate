@@ -112,7 +112,7 @@ func (f *fakeStore) Download(ctx context.Context, name string) (blobstore.Downlo
 	if f.readErr != nil {
 		body = io.MultiReader(io.LimitReader(body, 1), &errReader{err: f.readErr})
 	}
-	return blobstore.Download{Body: io.NopCloser(body), Metadata: maps.Clone(blob.metadata)}, nil
+	return blobstore.Download{Body: io.NopCloser(body), Size: int64(len(blob.data)), Metadata: maps.Clone(blob.metadata)}, nil
 }
 
 func (f *fakeStore) List(ctx context.Context, prefix string) ([]string, error) {

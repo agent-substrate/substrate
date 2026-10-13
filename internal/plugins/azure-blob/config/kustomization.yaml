@@ -14,9 +14,12 @@
 
 # Add this component to a substrate install overlay after replacing the
 # image, client-id, tenant-id, account, and containers placeholders below. It
-# replaces the objectstore-plugin sidecars that the install manifests run next to
-# ate-api-server and atelet, including their startup probes. The caller
+# replaces the objectstore-plugin sidecars that the install manifests run next
+# to ate-api-server and atelet, including their startup probes. The caller
 # containers and the shared socket volume stay as the base defines them.
+#
+# On its own it serves snapshots only. Add the assets component after it to
+# serve sandbox assets from blob containers too.
 #
 # The plugin authenticates only with Microsoft Entra workload identity
 # federation, from the service account token projected below.
@@ -95,6 +98,11 @@ patches:
             - --account-url=https://REPLACE_WITH_ACCOUNT.blob.core.windows.net
             - --containers=REPLACE_WITH_CONTAINERS
             - --prefix=substrate
+            # The base manifest's asset-staging volume and its capacity. The
+            # plugin serves sandbox assets only once the config/assets
+            # component names the containers they may be read from.
+            - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
+            - --asset-staging-capacity=8Gi
             startupProbe:
               exec:
                 command:

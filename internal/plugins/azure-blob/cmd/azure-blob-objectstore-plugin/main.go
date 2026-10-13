@@ -13,8 +13,10 @@
 // limitations under the License.
 
 // Command azure-blob-objectstore-plugin serves objectstore.v1 over a
-// Unix socket using Azure Blob Storage. "healthcheck" reports whether a
-// running plugin is serving, for the sidecar's startup probe.
+// Unix socket using Azure Blob Storage: snapshot transfers in node and control
+// mode, and sandbox assets in node mode when --asset-containers is set.
+// "healthcheck" reports whether a running plugin is serving, for the sidecar's
+// startup probe.
 package main
 
 import (
@@ -41,6 +43,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 func main() {
@@ -108,7 +111,10 @@ func run(ctx context.Context, args []string, newStore storeFactory) error {
 	accountURL := flags.String("account-url", os.Getenv("AZURE_STORAGE_ACCOUNT_URL"), "Azure Blob account URL (or AZURE_STORAGE_ACCOUNT_URL)")
 	containerList := flags.String("containers", os.Getenv("AZURE_STORAGE_CONTAINERS"), "comma-separated Azure Blob containers snapshot URIs may name (or AZURE_STORAGE_CONTAINERS)")
 	prefix := flags.String("prefix", os.Getenv("AZURE_STORAGE_PREFIX"), "optional key prefix (or AZURE_STORAGE_PREFIX)")
-	root := flags.String("root", "/var/lib/ate", "node mode: local snapshot root")
+	root := flags.String("root", "/var/lib/ate", "node mode: the only directory tree local snapshot and asset files may be read from or written to")
+	assetContainerList := flags.String("asset-containers", os.Getenv("AZURE_STORAGE_ASSET_CONTAINERS"), "node mode: comma-separated Azure Blob containers sandbox asset URLs may name (or AZURE_STORAGE_ASSET_CONTAINERS); unset serves no assets")
+	assetStagingDir := flags.String("asset-staging-dir", "/var/lib/objectstore-plugin/asset-staging", "node mode: directory sandbox assets are downloaded into and verified before they are copied below --root; must not be below --root or readable by the caller")
+	assetStagingCapacity := flags.String("asset-staging-capacity", "8Gi", "node mode: the most sandbox asset downloads in --asset-staging-dir may hold at once, as a Kubernetes quantity; downloads wait for space, and an asset larger than this is refused")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -118,16 +124,40 @@ func run(ctx context.Context, args []string, newStore storeFactory) error {
 	if *accountURL == "" {
 		return errors.New("--account-url or AZURE_STORAGE_ACCOUNT_URL is required")
 	}
-	containers, err := parseContainers(*containerList)
+	if *containerList == "" {
+		return errors.New("--containers or AZURE_STORAGE_CONTAINERS is required")
+	}
+	containers, err := parseContainers("--containers", *containerList)
 	if err != nil {
 		return err
+	}
+	var assetContainers []string
+	var stagingCapacity int64
+	if *assetContainerList != "" {
+		if mode != "node" {
+			return errors.New("--asset-containers is only served in node mode")
+		}
+		if assetContainers, err = parseContainers("--asset-containers", *assetContainerList); err != nil {
+			return err
+		}
+		if stagingCapacity, err = parseCapacity(*assetStagingCapacity); err != nil {
+			return fmt.Errorf("--asset-staging-capacity: %w", err)
+		}
 	}
 
-	stores, err := newStore(*accountURL, containers)
+	// One store per distinct container: an asset container may also hold
+	// snapshots, under prefixes FetchAsset refuses.
+	all := slices.Clone(containers)
+	for _, c := range assetContainers {
+		if !slices.Contains(all, c) {
+			all = append(all, c)
+		}
+	}
+	stores, err := newStore(*accountURL, all)
 	if err != nil {
 		return err
 	}
-	server, err := provider.New(stores, *prefix, *root)
+	server, err := provider.New(pick(stores, containers), *prefix, *root)
 	if err != nil {
 		return err
 	}
@@ -135,6 +165,16 @@ func run(ctx context.Context, args []string, newStore storeFactory) error {
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(logRPC))
 	if mode == "node" {
 		objectstorev1.RegisterNodeProviderServer(grpcServer, server)
+		if len(assetContainers) > 0 {
+			if err := os.MkdirAll(*assetStagingDir, 0o700); err != nil {
+				return fmt.Errorf("creating --asset-staging-dir: %w", err)
+			}
+			assets, err := provider.NewAssetServer(*accountURL, pick(stores, assetContainers), *root, *assetStagingDir, stagingCapacity)
+			if err != nil {
+				return err
+			}
+			objectstorev1.RegisterAssetProviderServer(grpcServer, assets)
+		}
 	} else {
 		objectstorev1.RegisterControlProviderServer(grpcServer, server)
 	}
@@ -160,22 +200,46 @@ func run(ctx context.Context, args []string, newStore storeFactory) error {
 	return nil
 }
 
-func parseContainers(list string) ([]string, error) {
+// parseContainers parses the comma-separated container list given to the
+// flag called name.
+func parseContainers(name, list string) ([]string, error) {
 	if list == "" {
-		return nil, errors.New("--containers or AZURE_STORAGE_CONTAINERS is required")
+		return nil, fmt.Errorf("%s is required", name)
 	}
 	var containers []string
 	for container := range strings.SplitSeq(list, ",") {
 		container = strings.TrimSpace(container)
 		if err := blobstore.ValidateContainerName(container); err != nil {
-			return nil, fmt.Errorf("--containers %q: %w", list, err)
+			return nil, fmt.Errorf("%s %q: %w", name, list, err)
 		}
 		if slices.Contains(containers, container) {
-			return nil, fmt.Errorf("--containers %q names container %q twice", list, container)
+			return nil, fmt.Errorf("%s %q names container %q twice", name, list, container)
 		}
 		containers = append(containers, container)
 	}
 	return containers, nil
+}
+
+// parseCapacity parses a Kubernetes quantity of bytes, such as 8Gi.
+func parseCapacity(s string) (int64, error) {
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
+		return 0, err
+	}
+	n, ok := q.AsInt64()
+	if !ok || n <= 0 {
+		return 0, fmt.Errorf("%q is not a positive whole number of bytes", s)
+	}
+	return n, nil
+}
+
+// pick returns the stores of the named containers.
+func pick(stores map[string]blobstore.Store, containers []string) map[string]blobstore.Store {
+	picked := make(map[string]blobstore.Store, len(containers))
+	for _, c := range containers {
+		picked[c] = stores[c]
+	}
+	return picked
 }
 
 // runHealthcheck is what the sidecar's startup probe runs: the image has no
