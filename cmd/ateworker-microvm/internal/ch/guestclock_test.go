@@ -16,7 +16,7 @@ package ch
 
 import "testing"
 
-func TestAdvancesGuestClockOnRestore(t *testing.T) {
+func TestKVMAdvancesGuestClockOnRestore(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		info VMMInfo
@@ -42,8 +42,8 @@ func TestAdvancesGuestClockOnRestore(t *testing.T) {
 		{"partial garbage", VMMInfo{Version: "53.x.0"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.info.AdvancesGuestClockOnRestore(); got != tc.want {
-				t.Errorf("AdvancesGuestClockOnRestore() = %v, want %v", got, tc.want)
+			if got := tc.info.KVMAdvancesGuestClockOnRestore(); got != tc.want {
+				t.Errorf("KVMAdvancesGuestClockOnRestore() = %v, want %v", got, tc.want)
 			}
 		})
 	}
