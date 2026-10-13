@@ -264,12 +264,12 @@ spec:
             - ALL
             add:
             - DAC_OVERRIDE
-        # Keep per-node reservations small; omit limits to allow usage to grow
-        # with the number of hosted actors.
+        # Reserve enough CPU to answer probes on a node packed with sandboxes;
+        # omit limits to allow usage to grow with the number of hosted actors.
         resources:
           requests:
-            cpu: 50m
-            memory: 128Mi
+            cpu: "1"
+            memory: 256Mi
         env:
         - name: NODE_NAME
           valueFrom:
@@ -309,7 +309,8 @@ spec:
             port: health
           initialDelaySeconds: 5
           periodSeconds: 2
-          failureThreshold: 3
+          timeoutSeconds: 5
+          failureThreshold: 6
         # /healthz stays 200 while a terminating pod drains; /readyz turns 503,
         # so liveness and readiness diverge correctly during shutdown.
         livenessProbe:
@@ -318,6 +319,8 @@ spec:
             port: health
           initialDelaySeconds: 10
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
         volumeMounts:
         # HostToContainer so we also see mounts made under /var/lib/ate after
         # the pod starts, e.g. a snapshots disk or CSI volumes.
