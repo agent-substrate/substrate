@@ -42,6 +42,10 @@ const (
 
 	// egressPolicyFetchTimeout bounds one fetch.
 	egressPolicyFetchTimeout = 2 * time.Second
+
+	// egressPolicyStaleWarnInterval is the minimum interval between warning
+	// logs while a stale cached policy is used because atelet is unreachable.
+	egressPolicyStaleWarnInterval = 5 * time.Minute
 )
 
 // actorEgressPolicy supplies an actor's egress policy to its DNS relay.
@@ -60,9 +64,10 @@ type actorEgressPolicy struct {
 	fetched bool
 	policy  *ateletpb.EgressPolicy
 	expires time.Time
-	// failing is set while fetches fail, so that each run of failures is
-	// logged once.
-	failing bool
+	// failing is set while fetches fail, so that the first failure in a run is
+	// logged at error level and subsequent stale-cache warnings are rate-limited.
+	failing       bool
+	nextStaleWarn time.Time
 }
 
 // ActorEgressPolicy returns the source of actor's egress policy for its DNS
@@ -101,8 +106,7 @@ func (p *actorEgressPolicy) EgressPolicy(ctx context.Context) (*ateletpb.EgressP
 		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), egressPolicyFetchTimeout)
 		defer cancel()
 		policy, err := p.fetch(fetchCtx)
-		p.record(ctx, policy, err)
-		return policy, err
+		return p.record(ctx, policy, err)
 	})
 	select {
 	case res := <-results:
@@ -126,20 +130,39 @@ func (p *actorEgressPolicy) cached() (*ateletpb.EgressPolicy, bool) {
 	return p.policy, true
 }
 
-// record keeps a fetch's result. It logs when the actor gains or loses its
-// policy, and when fetches start failing.
-func (p *actorEgressPolicy) record(ctx context.Context, policy *ateletpb.EgressPolicy, err error) {
+// record updates the cache with a fetch's result and returns the policy and
+// error EgressPolicy should report. When a refresh fails after a policy has
+// already been fetched, record keeps and returns the stale entry (fail static),
+// logging an error on the first failure and a warning every
+// egressPolicyStaleWarnInterval while stale entries are used.
+func (p *actorEgressPolicy) record(ctx context.Context, policy *ateletpb.EgressPolicy, err error) (*ateletpb.EgressPolicy, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	now := p.now()
 	if err != nil {
-		level := slog.LevelDebug
-		if !p.failing {
-			level = slog.LevelWarn
+		if !p.fetched {
+			level := slog.LevelDebug
+			if !p.failing {
+				level = slog.LevelError
+			}
+			p.failing = true
+			p.log.LogAttrs(ctx, level, "Could not fetch the actor's egress policy; refusing its DNS queries", slog.Any("err", err))
+			return nil, err
 		}
-		p.failing = true
-		p.log.LogAttrs(ctx, level, "Could not fetch the actor's egress policy; refusing its DNS queries", slog.Any("err", err))
-		return
+
+		level := slog.LevelDebug
+		switch {
+		case !p.failing:
+			level = slog.LevelError
+			p.failing = true
+			p.nextStaleWarn = now.Add(egressPolicyStaleWarnInterval)
+		case !now.Before(p.nextStaleWarn):
+			level = slog.LevelWarn
+			p.nextStaleWarn = now.Add(egressPolicyStaleWarnInterval)
+		}
+		p.log.LogAttrs(ctx, level, "Could not refresh the actor's egress policy; using stale cached policy", slog.Any("err", err))
+		return p.policy, nil
 	}
 
 	if p.failing || !p.fetched || (policy == nil) != (p.policy == nil) {
@@ -151,9 +174,11 @@ func (p *actorEgressPolicy) record(ctx context.Context, policy *ateletpb.EgressP
 	}
 
 	p.failing = false
+	p.nextStaleWarn = time.Time{}
 	p.fetched = true
 	p.policy = policy
-	p.expires = p.now().Add(p.ttl)
+	p.expires = now.Add(p.ttl)
+	return policy, nil
 }
 
 // getEgressPolicy asks atelet for actor's egress policy, returning nil if the
