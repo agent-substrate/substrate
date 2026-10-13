@@ -253,7 +253,7 @@ spec:
         # omit limits to allow usage to grow with the number of hosted actors.
         resources:
           requests:
-            cpu: 250m
+            cpu: 100m
             memory: 256Mi
         env:
         - name: NODE_NAME
