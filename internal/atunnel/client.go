@@ -160,6 +160,8 @@ func (c *Client) Close() error {
 
 // Open a CONNECT tunnel to destination. destination becomes the
 // request authority, so it must include an explicit port.
+// TODO(yanavlasov): update .md file with the description of this machinery.
+// TODO(yanavlasov): consider simplifying this code by dropping support for H/1.
 func (c *Client) DialContext(ctx context.Context, destination string) (net.Conn, error) {
 	if err := validateDestination(destination); err != nil {
 		return nil, err
