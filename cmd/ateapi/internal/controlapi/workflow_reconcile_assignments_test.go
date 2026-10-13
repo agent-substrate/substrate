@@ -573,6 +573,7 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 		WorkerPool:      "pool",
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    name,
+		NodeName:        "node-1",
 		SandboxClass:    "gvisor",
 		Epoch:           1,
 		Status: &ateapipb.WorkerStatus{

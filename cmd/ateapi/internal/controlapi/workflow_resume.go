@@ -468,7 +468,7 @@ func (w *ActorWorkflow) workerHoldingStaleClaim(ctx context.Context, actor *atea
 	}
 
 	// The Actor's allocation makes HasRoom unsuitable for an existing claim.
-	if w.appliesWithFallback(worker, constraints, relaxable) {
+	if worker.GetNodeName() != "" && w.appliesWithFallback(worker, constraints, relaxable) {
 		return worker, nil
 	}
 
@@ -535,16 +535,15 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		constraints.RequiredRuntime = hardware.Requirement{}
 	}
 
-	ref := &ateapipb.ObjectRef{
-		Atespace: actor.GetMetadata().GetAtespace(),
-		Name:     actor.GetMetadata().GetName(),
-	}
-	if assignedWorker.GetNodeName() == "" && len(getMountedActorVolumes(ctx, ref, actor.GetStatus().GetExternalVolumes().GetVolumes(), actorTemplate)) > 0 {
-		return nil, nil, apierror.FailedPrecondition("worker %s has no node name to attach the actor's volumes to", assignedWorker.GetMetadata().GetName())
+	if assignedWorker.GetNodeName() == "" {
+		return nil, nil, apierror.FailedPrecondition("worker %s has no node name", assignedWorker.GetMetadata().GetName())
 	}
 
 	assignment := &ateapipb.ActorAssignment{
-		Actor:    ref,
+		Actor: &ateapipb.ObjectRef{
+			Atespace: actor.GetMetadata().GetAtespace(),
+			Name:     actor.GetMetadata().GetName(),
+		},
 		ActorUid: actor.GetMetadata().GetUid(),
 		// Record what this claim reserves so release returns the same amount.
 		Resources: admittedResources(constraints),

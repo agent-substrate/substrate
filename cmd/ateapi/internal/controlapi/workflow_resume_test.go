@@ -268,6 +268,7 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 		WorkerPool:      "pool-a",
 		WorkerPod:       "stale-pod",
 		WorkerPodUid:    testWorkerUID("stale-pod"),
+		NodeName:        "node-1",
 		SandboxClass:    "gvisor",
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
@@ -281,6 +282,7 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 		WorkerPool:      "pool-b",
 		WorkerPod:       "free-pod",
 		WorkerPodUid:    testWorkerUID("free-pod"),
+		NodeName:        "node-1",
 		SandboxClass:    "gvisor",
 		Labels:          map[string]string{"pool": "b"},
 		Status: &ateapipb.WorkerStatus{
@@ -342,6 +344,7 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		WorkerPool:      "pool",
 		WorkerPod:       "contested-pod",
 		WorkerPodUid:    testWorkerUID("contested-pod"),
+		NodeName:        "node-1",
 		SandboxClass:    "gvisor",
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
@@ -355,6 +358,7 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		WorkerPool:      "pool",
 		WorkerPod:       "fallback-pod",
 		WorkerPodUid:    testWorkerUID("fallback-pod"),
+		NodeName:        "node-1",
 		SandboxClass:    "gvisor",
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
@@ -450,6 +454,7 @@ func seedAssignFixture(t *testing.T, ctx context.Context, persistence store.Inte
 		WorkerPool:      "pool",
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    testWorkerUID("pod-1"),
+		NodeName:        "node-1",
 		SandboxClass:    "gvisor",
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
@@ -2142,6 +2147,7 @@ func contendedWorker(podName string) *ateapipb.Worker {
 		WorkerPool:      "pool",
 		WorkerPod:       podName,
 		WorkerPodUid:    testWorkerUID(podName),
+		NodeName:        "node-1",
 		SandboxClass:    "gvisor",
 		Status: &ateapipb.WorkerStatus{
 			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
@@ -2859,7 +2865,6 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 			actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{Snapshots: tc.snapshots}}
 			if diff := cmp.Diff(tc.want, requiredSnapshotRuntime(actor, tmpl), protocmp.Transform()); diff != "" {
 				t.Errorf("requiredSnapshotRuntime mismatch (-want +got):\n%s", diff)
-
 			}
 		})
 	}
@@ -2870,12 +2875,11 @@ func mockVolume(name, storageID string) *ateapipb.ExternalVolumeStatus {
 	return &ateapipb.ExternalVolumeStatus{Name: name, StorageVolumeId: storageID, VolumeType: "mock"}
 }
 
-// volumeTemplate returns a gvisor template that declares the volumes named in
+// volumeTemplate returns a template that declares the volumes named in
 // declared and mounts those named in mounted.
 func volumeTemplate(declared []string, mounted ...string) *ateapipb.ActorTemplate {
 	tmpl := &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
-		Containers:    []*ateapipb.Container{{Name: "main", Image: "img"}},
+		Containers: []*ateapipb.Container{{Name: "main", Image: "img"}},
 	}
 	for _, name := range declared {
 		tmpl.Volumes = append(tmpl.Volumes, &ateapipb.Volume{Name: name, External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}}})
@@ -2938,6 +2942,7 @@ func newVolumeAssignWorkflow(st store.Interface, wc *workercache.Cache, plugin v
 // FailedPrecondition before any publish call, even when a valid volume
 // precedes it.
 func TestResume_ChecksMountedVolumesBeforeAttach(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
 	tests := []struct {
 		name string
 		// last is the second mounted volume, placed after every other volume.
@@ -2960,8 +2965,8 @@ func TestResume_ChecksMountedVolumesBeforeAttach(t *testing.T) {
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 			actor, wc := seedVolumeAssignFixture(t, ctx, persistence, "node-1",
 				mockVolume("a", "id-a"),
-				mockVolume("u", "id-u"),
-				mockVolume("o", "id-o"),
+				mockVolume("u", ""),
+				mockVolume("o", ""),
 				tt.last,
 			)
 			plugin := &publishContextVolumePlugin{}
@@ -3117,18 +3122,15 @@ func TestToAteletSandboxRuntime(t *testing.T) {
 }
 
 // TestAssignWorkerAttempt_WorkerWithoutNodeRejectsVolumes verifies a worker
-// with no node name is not claimed for an actor with volumes to attach: the
-// attempt fails with FailedPrecondition before the bind, leaving no worker
-// claim and no actor write. With no volume to attach the worker is still
-// assigned.
+// with no node name is not claimed: the attempt fails with FailedPrecondition
+// before the bind, leaving no worker claim and no actor write.
 func TestAssignWorkerAttempt_WorkerWithoutNodeRejectsVolumes(t *testing.T) {
 	tests := []struct {
 		name    string
 		mounted []string
-		wantErr bool
 	}{
-		{name: "mounted volume", mounted: []string{"vol"}, wantErr: true},
-		{name: "unmounted volume", mounted: nil, wantErr: false},
+		{name: "mounted volume", mounted: []string{"vol"}},
+		{name: "unmounted volume", mounted: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3148,18 +3150,6 @@ func TestAssignWorkerAttempt_WorkerWithoutNodeRejectsVolumes(t *testing.T) {
 				t.Fatalf("GetActor: %v", gerr)
 			}
 			claim := firstAssignment(t, persistence, testWorkerUID("pod-1"))
-			if !tt.wantErr {
-				if err != nil {
-					t.Fatalf("assignWorkerAttempt: %v", err)
-				}
-				if claim == nil {
-					t.Error("worker claim = nil, want the actor claimed")
-				}
-				if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RESUMING {
-					t.Errorf("stored state = %v, want RESUMING", got)
-				}
-				return
-			}
 			if got := apierror.Code(err); got != codes.FailedPrecondition {
 				t.Fatalf("assignWorkerAttempt error = %v (code %v), want FailedPrecondition", err, got)
 			}
