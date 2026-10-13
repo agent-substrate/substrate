@@ -18,10 +18,10 @@
 # for what each placeholder means.
 #
 # The differences between those servers are the placeholders below: a name, an
-# image, a port, a readiness probe, and whatever credentials the server has to
-# mount. Everything else was identical in every copy of this manifest that
-# existed before it was shared, so a per-server file only offered somewhere for
-# the copies to drift apart.
+# image, a port and optionally an HTTPS one, a readiness probe, and whatever
+# credentials the server has to mount. Everything else was identical in every
+# copy of this manifest that existed before it was shared, so a per-server file
+# only offered somewhere for the copies to drift apart.
 #
 # A plain Pod, not an actor. These servers are scaffolding around the code under
 # test, and running one inside an actor would make its snapshot or restore
@@ -43,6 +43,8 @@ ${ARGS}
     ports:
     - name: serve
       containerPort: ${TARGET_PORT}
+    # The HTTPS listener, present when the ServerPod sets TLSPort.
+${TLS_CONTAINER_PORT}
     # The suite starts dialing as soon as it has an address, so without a
     # readiness gate the first connection can land before the listener exists
     # and come back refused -- which reads as a failure of whatever sits between
@@ -83,3 +85,4 @@ spec:
   - name: serve
     port: ${PORT}
     targetPort: ${TARGET_PORT}
+${TLS_SERVICE_PORT}

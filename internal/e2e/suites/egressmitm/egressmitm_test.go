@@ -21,11 +21,12 @@ package egressmitm
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 	"testing"
 	"time"
@@ -33,69 +34,27 @@ import (
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	corev1 "k8s.io/api/core/v1"
 )
 
 const probeTemplate = "probe"
 
 var probeNamespace string
 
-// servingBundle is the echo-https pod's certificate chain and key, in one file.
-const servingBundle = "/run/servicedns.podcert.ate.dev/credential-bundle.pem"
-
-// The origins the intercepted fetches reach, one per scheme. They run in the
-// cluster so the lane does not depend on a public origin answering.
-var (
-	// echoHTTPSServer serves the certificate kubelet requests for it from the
-	// cluster's service-DNS signer, which names the Services selecting the pod
-	// as <name>.<namespace>.svc. The egress gateway trusts that signer once
-	// hack/setup-e2e-egress-tls-kind.sh has run.
-	echoHTTPSServer = e2e.ServerPod{
-		Name:         "echo-https",
-		ImportPath:   "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
-		Args:         []string{"http", "--tls-cert=" + servingBundle, "--tls-key=" + servingBundle},
-		Port:         443,
-		TargetPort:   8443,
-		HealthScheme: corev1.URISchemeHTTPS,
-		Volumes: []corev1.Volume{{
-			Name: "servicedns",
-			VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
-				Sources: []corev1.VolumeProjection{{PodCertificate: &corev1.PodCertificateProjection{
-					SignerName:           "servicedns.podcert.ate.dev/identity",
-					KeyType:              "ECDSAP256",
-					CredentialBundlePath: path.Base(servingBundle),
-				}}},
-			}},
-		}},
-		VolumeMounts: []corev1.VolumeMount{{Name: "servicedns", MountPath: path.Dir(servingBundle), ReadOnly: true}},
-	}
-	echoHTTPServer = e2e.ServerPod{
-		Name:       "echo-http",
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
-		Args:       []string{"http"},
-		Port:       80,
-		TargetPort: 8080,
-	}
-)
-
 // TestActorEgressMITMTrust proves an actor can do TLS through the MITM
-// egress gateway using only the projected trust bundle:
+// egress gateway using only the projected trust bundle. The origins run in the
+// cluster and serve certificates from the service-DNS signer, which the
+// gateway trusts once hack/setup-e2e-egress-tls-kind.sh has run and the
+// probe's bundle does not:
 //
-//   - positive: /fetch of the in-cluster echo origin with roots=bundle
-//     succeeds — the gateway's per-SNI minted leaf (signed from the
-//     egress-mitm-ca-pool) validates against the anchors atelet projected
-//     from the reconciler-published bundle. The bundle holds neither a public
-//     CA nor the signer of the origin's own certificate, so a pass certifies
-//     interception is on.
-//   - negative: /fetch with roots=system fails certificate verification —
-//     the minted leaf chains to no public CA, so the positive case trusted
-//     the projected bundle and nothing else.
-//
-// Only TLS passthrough reaches a public origin: the proof that the relay did
-// not intercept is the origin's own certificate validating against the system
-// roots, which no in-cluster certificate does. The echo origins' certificates
-// come from the service-DNS signer, which the gateway trusts once
-// hack/setup-e2e-egress-tls-kind.sh has run after the install.
+//   - positive: /fetch with roots=bundle succeeds — the gateway's per-SNI
+//     minted leaf (signed from the egress-mitm-ca-pool) validates against
+//     the anchors atelet projected from the reconciler-published bundle.
+//     The bundle holds no service-DNS CA, so a pass certifies interception
+//     is on.
+//   - negative: /fetch trusting only the service-DNS CA fails certificate
+//     verification — the actor saw the minted leaf, not the origin's own
+//     certificate (were the traffic relayed, this fetch would succeed, and
+//     the positive case would be meaningless).
 //
 // CI runs this in both lanes (see pr-workflow.yaml) — once per sandbox class,
 // since trust delivery differs per class (gVisor RO bind vs the micro-VM
@@ -115,14 +74,6 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	echoHTTPS := e2e.DeployServerPod(t, ctx, echoHTTPSServer)
-	httpSpec := echoHTTPServer
-	httpSpec.Namespace = echoHTTPS.Namespace
-	echoHTTP := e2e.DeployServerPod(t, ctx, httpSpec)
-	// The names the service-DNS signer certifies.
-	httpsHost := echoHTTPSServer.Name + "." + echoHTTPS.Namespace + ".svc"
-	httpHost := echoHTTPServer.Name + "." + echoHTTP.Namespace + ".svc"
-
 	// Ensure, never replace: the gateway signs with the pool mounted into its
 	// pod, and kubelet propagates Secret updates into that mount on
 	// its own schedule — replacing the pool here would race the propagation
@@ -133,10 +84,18 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	// missing.)
 	e2e.EnsureEgressTrustBundle(t, ctx, clients)
 
-	probeNamespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egressmitm", e2e.WithTrustBundle())
+	// One pod answers http and https for the intercepted name; passthrough is
+	// decided by name, so it needs an origin of its own.
+	mitm := e2e.DeployServerPod(t, ctx, originSpec("mitm-origin"))
+	passthroughSpec := originSpec("passthrough-origin")
+	passthroughSpec.Namespace = mitm.Namespace
+	passthrough := e2e.DeployServerPod(t, ctx, passthroughSpec)
+	originRoots := "ca=" + url.QueryEscape(e2e.ServiceDNSTrustBundle(t, ctx, clients))
+
+	probeNamespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egressmitm", e2e.WithTrustBundle(), e2e.WithSystemRoots())
 
 	const id = "probe-mitm"
-	createAndResumeActor(t, ctx, clients, id, httpsHost, httpHost)
+	createAndResumeActor(t, ctx, clients, id, mitm, passthrough)
 	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	rc, err := e2e.NewRouterClient(ctx)
@@ -145,29 +104,29 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	}
 	defer rc.Close()
 
-	origin := "https://" + httpsHost + "/healthz"
+	origin := "https://" + mitm.SvcName() + "/healthz"
 
 	pos := fetchUntilReached(t, ctx, rc, id, origin, "bundle")
 	if pos.Error != "" {
 		t.Fatalf("TLS through the MITM egress gateway with the projected trust bundle failed: %s — the projected anchors did not validate the gateway's minted leaf (or interception/minting is broken)", pos.Error)
 	}
 	if pos.Status != "200" {
-		t.Fatalf("fetch %s via projected bundle: status %s, want 200 (a 5xx is the gateway failing to reach or trust the echo origin; has hack/setup-e2e-egress-tls-kind.sh run?) body %q", origin, pos.Status, pos.Body)
+		t.Fatalf("fetch %s via projected bundle: status %s, want 200 (a 5xx is the gateway failing to reach or trust the origin; has hack/setup-e2e-egress-tls-kind.sh run?) body %q", origin, pos.Status, pos.Body)
 	}
 
-	neg := probeFetch(t, ctx, rc, id, origin, "system")
+	neg := probeFetch(t, ctx, rc, id, origin, "pem", originRoots)
 	if neg.Error == "" {
-		t.Errorf("fetch with system roots unexpectedly succeeded (status %s): the minted leaf should chain to no public CA — is the egress gateway actually terminating TLS?", neg.Status)
+		t.Errorf("fetch trusting only the origin's CA unexpectedly succeeded (status %s): the actor saw the origin's own certificate — is the egress gateway actually terminating TLS?", neg.Status)
 	} else if !strings.Contains(neg.Error, "certificate") && !strings.Contains(neg.Error, "x509") {
-		t.Errorf("fetch with system roots failed, but not with a certificate-verification error: %s", neg.Error)
+		t.Errorf("fetch trusting only the origin's CA failed, but not with a certificate-verification error: %s", neg.Error)
 	}
 
 	// A port in the Host is never dialed: no rule checked it. The gateway
 	// dials the Host's name on the port the actor dialed, and nothing answers
 	// on port 1.
 	for _, tc := range []struct{ origin, dial string }{
-		{origin: "https://" + httpsHost + ":1/healthz", dial: echoHTTPS.Address()},
-		{origin: "http://" + httpHost + ":1/healthz", dial: echoHTTP.Address()},
+		{origin: "https://" + mitm.SvcName() + ":1/healthz", dial: mitm.TLSAddress()},
+		{origin: "http://" + mitm.SvcName() + ":1/healthz", dial: mitm.Address()},
 	} {
 		res := probeFetch(t, ctx, rc, id, tc.origin, "bundle", "dial="+url.QueryEscape(tc.dial))
 		switch {
@@ -178,20 +137,20 @@ func TestActorEgressMITMTrust(t *testing.T) {
 		}
 	}
 
-	// The gateway relays passthrough TLS unread, so the origin's own certificate
-	// must validate with the system roots. That is also the proof it was not
-	// intercepted.
-	const passthroughOrigin = "https://" + egressOriginPassthroughHost + "/"
-	pt := fetchUntilReached(t, ctx, rc, id, passthroughOrigin, "system")
+	// The gateway relays passthrough TLS unread, so the origin's own
+	// certificate must validate against its CA alone. That is also the proof it
+	// was not intercepted.
+	passthroughOrigin := "https://" + passthrough.SvcName() + "/healthz"
+	pt := fetchUntilReached(t, ctx, rc, id, passthroughOrigin, "pem", originRoots)
 	if pt.Error != "" {
-		t.Fatalf("TLS passthrough to %s failed: %s — the origin's certificate did not validate against the system roots, so the connection was intercepted, misrouted, or closed", passthroughOrigin, pt.Error)
+		t.Fatalf("TLS passthrough to %s failed: %s — the origin's certificate did not validate against its CA, so the connection was intercepted, misrouted, or closed", passthroughOrigin, pt.Error)
 	}
 	if pt.Status != "200" {
 		t.Fatalf("passthrough fetch %s: status %s, want 200; body %q", passthroughOrigin, pt.Status, pt.Body)
 	}
 
 	// The gateway dials the name the SNI claims.
-	bySNI := fetchUntilReached(t, ctx, rc, id, passthroughOrigin, "system", "dial="+url.QueryEscape(unreachableAddress))
+	bySNI := fetchUntilReached(t, ctx, rc, id, passthroughOrigin, "pem", originRoots, "dial="+url.QueryEscape(unreachableAddress))
 	switch {
 	case bySNI.Error != "":
 		t.Errorf("TLS passthrough to %s dialed at %s failed: %s — the gateway dialed the actor's address instead of resolving the SNI", passthroughOrigin, unreachableAddress, bySNI.Error)
@@ -202,12 +161,17 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	// Envoy closes denied connections at the ClientHello; agentgateway
 	// terminates TLS to return 403. Trust the gateway's CA so a certificate
 	// failure cannot masquerade as either policy-denial response.
-	for _, tc := range []struct{ name, origin string }{
-		{"passthrough rule excludes port 443", "https://" + egressOriginPassthroughWrongPortHost + "/"},
-		{"host outside the policy", "https://example.org/"},
+	//
+	// Each name is an origin's fully qualified alias: rules match names
+	// exactly, so only the wrong-port rule lists the first and none the
+	// second. A gateway that relayed either would hand the actor a
+	// certificate the bundle rejects, and the dial keeps the actor off DNS.
+	for _, tc := range []struct{ name, origin, dial string }{
+		{"passthrough rule excludes port 443", "https://" + passthrough.SvcName() + ".cluster.local/healthz", passthrough.TLSAddress()},
+		{"host outside the policy", "https://" + mitm.SvcName() + ".cluster.local/healthz", mitm.TLSAddress()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			denied := probeFetch(t, ctx, rc, id, tc.origin, "bundle")
+			denied := probeFetch(t, ctx, rc, id, tc.origin, "bundle", "dial="+url.QueryEscape(tc.dial))
 			switch {
 			case denied.Status == "403" && denied.Error == "":
 				// An explicit denial after completing TLS with the actor.
@@ -220,19 +184,32 @@ func TestActorEgressMITMTrust(t *testing.T) {
 			}
 		})
 	}
+
+	// With every origin in the cluster, no fetch here verifies a public
+	// certificate, so check that atelet merged its WebPKI roots into the
+	// projected bundle, as the egress demo's template asks it to.
+	t.Run("projected bundle holds the system roots", func(t *testing.T) {
+		if !holdsCertificate(t, probeTrust(t, ctx, rc, id), systemRoot) {
+			t.Errorf("the probe's projected trust bundle has no certificate for %q; atelet did not merge %s into it", systemRoot, "system-roots.ate.dev")
+		}
+	})
 }
 
-// The public hosts of the passthrough cases.
+// originSpec is an origin answering /healthz over https and http alike.
+func originSpec(name string) e2e.ServerPod {
+	return e2e.ServiceDNSTLS(e2e.ServerPod{
+		Name:       name,
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"http"},
+	})
+}
+
 const (
-	// egressOriginPassthroughHost is relayed unread, so the certificate the
-	// probe sees is the origin's own and validates against the system roots.
-	egressOriginPassthroughHost = "example.edu"
-	// egressOriginPassthroughWrongPortHost is allowed by passthrough on 8443
-	// only, while the probe dials 443.
-	egressOriginPassthroughWrongPortHost = "example.net"
 	// unreachableAddress is in the reserved 240/4 block: a gateway that dialed
 	// it instead of the resolved SNI would reach nothing.
 	unreachableAddress = "240.0.0.1:443"
+	// systemRoot is the common name of a WebPKI root atelet's image ships.
+	systemRoot = "ISRG Root X1"
 )
 
 type fetchResponse struct {
@@ -255,13 +232,11 @@ const reachWindow = 2 * time.Minute
 //     but a LOCAL rerun can recreate the pool moments before this fetch (a
 //     prior run's cleanup deleted it), leaving the gateway briefly signing
 //     with the old CA;
-//   - any other transport error, and a 5xx: the actor's route is still
-//     propagating, or the public passthrough origin reset, timed out or
-//     answered 5xx.
+//   - any other transport error, and a 5xx: the actor's route, or the
+//     gateway's path to the origin, is still propagating.
 //
-// It never skips. The passthrough origin's reachability is part of what the
-// lane proves, and a skip would report that as a pass
-// (docs/dev/best-practices/ci-fail-closed.md).
+// It never skips. Reaching the origins is part of what the lane proves, and a
+// skip would report that as a pass (docs/dev/best-practices/ci-fail-closed.md).
 func fetchUntilReached(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, origin, roots string, extraParams ...string) fetchResponse {
 	t.Helper()
 	deadline := time.Now().Add(reachWindow)
@@ -318,11 +293,53 @@ func probeFetch(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, ori
 	}
 }
 
+// probeTrust returns the trust bundle the probe's /whoami reads from its
+// projected trust file.
+func probeTrust(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id string) string {
+	t.Helper()
+	ref := resources.ActorRef{Atespace: probeNamespace, Name: id}
+	resp, err := rc.Get(ctx, ref, "/whoami")
+	if err != nil {
+		t.Fatalf("GET /whoami for %q: %v", id, err)
+	}
+	defer resp.Body.Close()
+	var who struct {
+		Trust string `json:"trust"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&who); err != nil {
+		t.Fatalf("decoding /whoami for %q (status %d): %v", id, resp.StatusCode, err)
+	}
+	if who.Trust == "" {
+		t.Fatalf("/whoami for %q returned no trust bundle; error: %s", id, who.Error)
+	}
+	return who.Trust
+}
+
+// holdsCertificate reports whether bundle has a certificate whose subject
+// common name is commonName.
+func holdsCertificate(t *testing.T, bundle, commonName string) bool {
+	t.Helper()
+	for rest := []byte(bundle); ; {
+		var block *pem.Block
+		if block, rest = pem.Decode(rest); block == nil {
+			return false
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("parsing a certificate in the trust bundle: %v", err)
+		}
+		if cert.Subject.CommonName == commonName {
+			return true
+		}
+	}
+}
+
 // createAndResumeActor mirrors the identity suite's self-healing actor
 // lifecycle (actor records outlive the fixture namespace); DeployProbe has
-// already waited for the template's golden snapshot. httpsHost and httpHost
-// are the echo origins' names, the hosts the actor's policy intercepts.
-func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id, httpsHost, httpHost string) {
+// already waited for the template's golden snapshot.
+
+func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string, mitm, passthrough e2e.Server) {
 	t.Helper()
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
 	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
@@ -334,12 +351,14 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
 	// The gateway refuses every tunnel for an actor without a policy. Naming
-	// only the origins also lets the same actor show a denial.
+	// only the origins also lets the same actor show a denial. The
+	// passthrough origin's fully qualified alias is allowed on 8443 only,
+	// while the probe dials 443.
 	e2e.EnsureEgressPolicy(t, ctx, clients, ref,
-		e2e.EgressAllowHTTP(httpHost),
-		e2e.EgressAllowHTTPS(httpsHost),
-		e2e.EgressAllowPassthrough(egressOriginPassthroughHost),
-		e2e.EgressAllowPassthroughOnPorts([]int32{8443}, egressOriginPassthroughWrongPortHost),
+		e2e.EgressAllowHTTP(mitm.SvcName()),
+		e2e.EgressAllowHTTPS(mitm.SvcName()),
+		e2e.EgressAllowPassthrough(passthrough.SvcName()),
+		e2e.EgressAllowPassthroughOnPorts([]int32{8443}, passthrough.SvcName()+".cluster.local"),
 	)
 	t.Cleanup(func() {
 		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
