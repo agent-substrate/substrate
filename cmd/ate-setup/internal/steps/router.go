@@ -17,6 +17,7 @@ package steps
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,12 +31,13 @@ import (
 // terminationGracePeriodSeconds is sized for: the router default.
 const manifestParkedRequestBudget = 5 * time.Second
 
-// configureAtenetRouter sets --route-timeout and --parked-request-budget on
-// the atenet-router container and grows terminationGracePeriodSeconds with the
-// budget, since the router's drain deadline follows it. A no-op when unset.
+// configureAtenetRouter sets --route-timeout, --parked-request-budget and
+// --extproc-max-requests on the atenet-router container and grows
+// terminationGracePeriodSeconds with the budget, since the router's drain
+// deadline follows it. A no-op when unset.
 func (e *Env) configureAtenetRouter(objs []*unstructured.Unstructured) error {
-	routeTimeout, budget := e.Cfg.RouterRouteTimeout, e.Cfg.RouterParkedRequestBudget
-	if routeTimeout <= 0 && budget <= 0 {
+	routeTimeout, budget, maxRequests := e.Cfg.RouterRouteTimeout, e.Cfg.RouterParkedRequestBudget, e.Cfg.RouterExtProcMaxRequests
+	if routeTimeout <= 0 && budget <= 0 && maxRequests <= 0 {
 		return nil
 	}
 	var dep *unstructured.Unstructured
@@ -86,6 +88,10 @@ func (e *Env) configureAtenetRouter(objs []*unstructured.Unstructured) error {
 				return fmt.Errorf("%s: %w", kube.Describe(dep), err)
 			}
 		}
+	}
+	if maxRequests > 0 {
+		log.Infof("Setting the router's --extproc-max-requests to %d", maxRequests)
+		args = setFlag(args, "--extproc-max-requests", strconv.Itoa(maxRequests))
 	}
 	container["args"] = args
 	containers[idx] = container
