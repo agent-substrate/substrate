@@ -15,7 +15,7 @@ Router has several responsibilities:
 * Parks requests whose actor cannot be served immediately due to transient
   worker-pool saturation, retrying the resume until the actor is routable or a
   bounded wait elapses, instead of failing fast. See
-  [docs/request-parking.md](../../../../../docs/request-parking.md).
+  [docs/request-parking.md](../../../../docs/request-parking.md).
 * Drains gracefully on SIGTERM: flips `/readyz` so the Service stops sending
   new connections, waits out endpoint propagation (`--drain-delay`), drains the
   dataplane's established connections (Envoy only — driven over its admin API;
@@ -83,14 +83,16 @@ and the port the actor dialed: the `http` rules on the cleartext chain, the
 describes. On the MITM chain the connection's SNI and port must fall under an
 `https` rule first, which is the half of that rule the API evaluates at the
 ClientHello. The answer (`dev.ate.egress:dial`) picks the route, and there is
-only one today: the `Host` that was policed is resolved and dialed by name
-through `dynamic_forward_proxy`, with TLS re-originated to it on the TLS
-leg. There is no route without an answer.
+only one today: the name that was policed, answered as `dev.ate.egress:host`,
+is resolved and dialed through `dynamic_forward_proxy`, with TLS
+re-originated to it on the TLS leg. There is no route without an answer, and
+no by-name route without the name.
 
-The port a rule names is the one the actor dialed, never a port in the
-request's `Host`. The outer chain shares the CONNECT authority with the inner
-listener as `dev.ate.connect.authority`, and the request legs match `ports`
-against it; a dataplane that does not share it gets no port enforcement.
+The port a rule names, and the port the gateway dials, is the one the actor
+dialed, never a port in the request's `Host`. The outer chain shares the
+CONNECT authority with the inner listener as `dev.ate.connect.authority`, and
+the request legs match `ports` against it; a dataplane that does not share it
+gets no port enforcement.
 
 The CONNECT leg decides per connection: it refuses an actor without a policy
 with rules, and for the rest hands the inner listener the port the actor
@@ -105,12 +107,11 @@ port; the address the actor dialed plays no part (see
 
 Identity on the request legs is `dev.ate.actor.identity`, the actor's SPIFFE
 ID that the outer chain set from the verified peer certificate and shares with
-the inner listener. Because Envoy keys its connection pools without string
-filter-state objects, the outer chain also sets
-`envoy.network.upstream_server_name` from the same certificate — not shared
-upstream — so the inner hop's pool is per actor and two actors dialing the same
-address never inherit each other's identity. Nothing inside the tunnel can
-write any of this; a callout without an identity is refused.
+the inner listener. Envoy builds every inner connection from the filter state
+of the tunnel that created its pool, so `mitm_internal` keeps one pool per
+downstream connection, which on the HTTP/1 egress listener is one per tunnel:
+no tunnel inherits another's identity, authority or rules. Nothing inside the
+tunnel can write any of this; a callout without an identity is refused.
 
 Policies are read through a per-actor cache (`--egress-policy-cache-ttl`, 10s
 by default; 0 disables it). The TTL is exactly how stale a decision can be: a
@@ -174,24 +175,42 @@ state rather than a client header.
 
 ## modes
 
-One binary serves both directions. `--mode` selects which:
+One binary serves both directions, one per instance. `--mode` (required)
+selects which:
 
 | `--mode` | ext_proc handlers | xDS server | Kubernetes access |
 | --- | --- | --- | --- |
 | `ingress` | ingress | yes | yes |
 | `egress` | egress | no | none |
-| `all` (default) | both | yes | yes |
 
 The mux refuses a direction this instance was not started to serve (404) rather
 than falling back to the other handler, which would run the request through the
 wrong trust model.
 
-Ingress and egress are deployed separately today — `atenet-router` fronts the
-ingress dataplane, `atenet-egress` the egress gateway — because the two scale
-independently, not because they need separate binaries.
+Ingress and egress are deployed separately — `atenet-router` fronts the
+ingress dataplane, `atenet-egress` the egress gateway.
 
 `--atenet-dataplane` selects the dataplane for both Deployments. Each gateway has
 its own static configuration because ingress and egress scale independently.
+
+## Ingress client authentication and authorization
+
+The ingress router is migrating to require clients to present a SPIFFE certificate.
+* With `--ingress-auth-mode=static-mtls`, the ingress router no longer offers any
+  plaintext listeners, and all clients *must* present a SPIFFE certificate.
+* With `--ingress-auth-mode=deprecated-insecure`, the ingress router offers both
+  plaintext and secure listeners.  If a client presents a SPIFFE certificate, it
+  must be valid.
+
+Configure the CA that is used to validate client certificates with the
+`--ingress-client-ca-file` flag, which points at a PEM file containing root
+certificates.
+
+Right now the only "authorization" policy is to check the client's SPIFFE ID
+against a static allowlist.  Any ID on the allowlist may use the ingress router
+to contact any actor.  Richer authorization policies may be added post-GA.  Use
+the `--ingress-allowed-spiffe-ids` flag to set the allowlist (comma-separated
+list).
 
 ## status page
 

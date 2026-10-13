@@ -34,38 +34,38 @@ func TestRouterConfigValidate(t *testing.T) {
 	}{
 		{
 			name: "defaults are valid (auto breaker, atenet-router defaults to envoy)",
-			cfg:  routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
+			cfg:  routerConfig{Mode: ModeIngress, ExtProcMaxRequests: 0, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
 		},
 		{
 			name: "atenet-router set to envoy is valid",
-			cfg:  routerConfig{AtenetRouter: string(atenetRouterEnvoy), ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
+			cfg:  routerConfig{Mode: ModeIngress, AtenetRouter: string(atenetRouterEnvoy), ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
 		},
 		{
 			name: "atenet-router set to agentgateway is valid",
-			cfg:  routerConfig{AtenetRouter: string(atenetRouterAgentgateway), ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
+			cfg:  routerConfig{Mode: ModeIngress, AtenetRouter: string(atenetRouterAgentgateway), ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
 		},
 		{
 			name:    "unknown router rejected",
-			cfg:     routerConfig{AtenetRouter: "blah"},
+			cfg:     routerConfig{Mode: ModeIngress, AtenetRouter: "blah"},
 			wantErr: "--atenet-dataplane must be",
 		},
 		{
 			name:    "negative extproc-max-requests rejected",
-			cfg:     routerConfig{ExtProcMaxRequests: -1, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}},
+			cfg:     routerConfig{Mode: ModeIngress, ExtProcMaxRequests: -1, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}},
 			wantErr: "must not be negative",
 		},
 		{
 			name:    "explicit breaker below the lot rejected",
-			cfg:     routerConfig{ExtProcMaxRequests: 512, ParkedRequest: ingress.ParkedRequestConfig{Max: 1024}},
+			cfg:     routerConfig{Mode: ModeIngress, ExtProcMaxRequests: 512, ParkedRequest: ingress.ParkedRequestConfig{Max: 1024}},
 			wantErr: "must be >= --parked-request-max",
 		},
 		{
 			name: "explicit breaker equal to the lot accepted",
-			cfg:  routerConfig{ExtProcMaxRequests: 1024, ParkedRequest: ingress.ParkedRequestConfig{Max: 1024}},
+			cfg:  routerConfig{Mode: ModeIngress, ExtProcMaxRequests: 1024, ParkedRequest: ingress.ParkedRequestConfig{Max: 1024}},
 		},
 		{
 			name: "parking disabled ignores the relation",
-			cfg:  routerConfig{ExtProcMaxRequests: 8, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}},
+			cfg:  routerConfig{Mode: ModeIngress, ExtProcMaxRequests: 8, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}},
 		},
 		{
 			name: "explicit ingress mode accepted",
@@ -76,45 +76,237 @@ func TestRouterConfigValidate(t *testing.T) {
 			cfg:  routerConfig{Mode: ModeEgress},
 		},
 		{
-			name: "explicit all mode accepted",
-			cfg:  routerConfig{Mode: ModeAll},
+			name:    "missing mode rejected",
+			cfg:     routerConfig{},
+			wantErr: `--mode must be "ingress" or "egress"`,
 		},
 		{
-			name:    "unknown mode rejected",
-			cfg:     routerConfig{Mode: "both"},
-			wantErr: `--mode must be one of`,
+			name:    "all mode rejected",
+			cfg:     routerConfig{Mode: "all"},
+			wantErr: `--mode must be "ingress" or "egress"`,
 		},
 		{
 			name:    "drain-timeout below the parking budget rejected",
-			cfg:     routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 2 * time.Second},
+			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 2 * time.Second},
 			wantErr: "must be >= --parked-request-budget",
 		},
 		{
 			name: "drain-timeout equal to the parking budget accepted",
-			cfg:  routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 5 * time.Second},
+			cfg:  routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 5 * time.Second},
 		},
 		{
 			name: "drain-timeout above the parking budget accepted",
-			cfg:  routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 30 * time.Second},
+			cfg:  routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 30 * time.Second},
 		},
 		{
 			name: "short drain-timeout with parking disabled accepted",
-			cfg:  routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Max: 0}, DrainTimeout: time.Second},
+			cfg:  routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}, DrainTimeout: time.Second},
 		},
 		{
 			name:    "negative drain-timeout rejected",
-			cfg:     routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainTimeout: -time.Second},
+			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainTimeout: -time.Second},
 			wantErr: "--drain-timeout must not be negative",
 		},
 		{
 			name:    "negative drain-delay rejected",
-			cfg:     routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainDelay: -time.Second},
+			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainDelay: -time.Second},
 			wantErr: "--drain-delay must not be negative",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.cfg.validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected valid, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// staticMTLSConfig returns a valid static-mtls ingress configuration for
+// TestRouterConfigValidateIngressAuth to break one field at a time.
+func staticMTLSConfig() routerConfig {
+	return routerConfig{
+		Mode:           ModeIngress,
+		ParkedRequest:  ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax},
+		HttpsPort:      8443,
+		ConnectTLSPort: 8444,
+		EnvoyCertPath:  "/run/servicedns.podcert.ate.dev/credential-bundle.pem",
+		IngressAuth: ingressAuthConfig{
+			Mode:             IngressAuthStaticMTLS,
+			ClientCAFile:     "/run/podidentity.podcert.ate.dev/trust-bundle.pem",
+			AllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/demo/sa/client"},
+		},
+	}
+}
+
+func TestRouterConfigValidateIngressAuth(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*routerConfig)
+		wantErr string // substring; empty means valid
+	}{
+		{
+			name:   "static-mtls with only TLS listeners accepted",
+			mutate: func(*routerConfig) {},
+		},
+		{
+			name:   "static-mtls with only the HTTPS listener accepted",
+			mutate: func(c *routerConfig) { c.ConnectTLSPort = 0 },
+		},
+		{
+			name:   "static-mtls with only the CONNECT-TLS listener accepted",
+			mutate: func(c *routerConfig) { c.HttpsPort = 0 },
+		},
+		{
+			name:    "unknown mode rejected",
+			mutate:  func(c *routerConfig) { c.IngressAuth.Mode = "mtls" },
+			wantErr: "--ingress-auth-mode must be",
+		},
+		{
+			name:    "old insecure mode name rejected",
+			mutate:  func(c *routerConfig) { c.IngressAuth.Mode = "insecure" },
+			wantErr: "--ingress-auth-mode must be",
+		},
+		{
+			name: "egress-only instance ignores the ingress settings",
+			mutate: func(c *routerConfig) {
+				c.Mode = ModeEgress
+				c.HttpPort = 8080
+				c.IngressAuth.ClientCAFile = ""
+				c.IngressAuth.AllowedSPIFFEIDs = nil
+			},
+		},
+		{
+			name: "deprecated-insecure accepts plaintext listeners alongside mTLS ones",
+			mutate: func(c *routerConfig) {
+				c.IngressAuth.Mode = IngressAuthDeprecatedInsecure
+				c.HttpPort = 8080
+				c.ConnectPlainTextPort = 8081
+			},
+		},
+		{
+			name: "empty mode means deprecated-insecure",
+			mutate: func(c *routerConfig) {
+				c.IngressAuth.Mode = ""
+				c.HttpPort = 8080
+			},
+		},
+		{
+			name: "deprecated-insecure with only plaintext listeners needs no client auth",
+			mutate: func(c *routerConfig) {
+				c.IngressAuth = ingressAuthConfig{Mode: IngressAuthDeprecatedInsecure, AllowedSPIFFEIDs: []string{"not a spiffe id"}}
+				c.HttpPort = 8080
+				c.HttpsPort = 0
+				c.ConnectTLSPort = 0
+			},
+		},
+		{
+			name: "deprecated-insecure without a serving cert needs no client auth",
+			mutate: func(c *routerConfig) {
+				c.IngressAuth = ingressAuthConfig{Mode: IngressAuthDeprecatedInsecure}
+				c.HttpPort = 8080
+				c.EnvoyCertPath = ""
+			},
+		},
+		{
+			name: "deprecated-insecure on agentgateway needs no client auth",
+			mutate: func(c *routerConfig) {
+				c.IngressAuth = ingressAuthConfig{Mode: IngressAuthDeprecatedInsecure}
+				c.AtenetRouter = string(atenetRouterAgentgateway)
+				c.HttpPort = 8080
+			},
+		},
+		{
+			name: "deprecated-insecure TLS listener without client CA rejected",
+			mutate: func(c *routerConfig) {
+				c.IngressAuth.Mode = IngressAuthDeprecatedInsecure
+				c.IngressAuth.ClientCAFile = ""
+				c.HttpPort = 8080
+			},
+			wantErr: "require --ingress-client-ca-file",
+		},
+		{
+			name: "deprecated-insecure TLS listener without allowlist rejected",
+			mutate: func(c *routerConfig) {
+				c.IngressAuth.Mode = IngressAuthDeprecatedInsecure
+				c.IngressAuth.AllowedSPIFFEIDs = nil
+				c.HttpPort = 8080
+			},
+			wantErr: "require at least one --ingress-allowed-spiffe-ids",
+		},
+		{
+			name: "deprecated-insecure non-SPIFFE ID rejected",
+			mutate: func(c *routerConfig) {
+				c.IngressAuth.Mode = IngressAuthDeprecatedInsecure
+				c.IngressAuth.AllowedSPIFFEIDs = []string{"https://cluster.local/ns/demo/sa/client"}
+			},
+			wantErr: "is not a valid SPIFFE ID",
+		},
+		{
+			name:    "agentgateway rejected",
+			mutate:  func(c *routerConfig) { c.AtenetRouter = string(atenetRouterAgentgateway) },
+			wantErr: "requires --atenet-dataplane=envoy",
+		},
+		{
+			name:    "plaintext HTTP listener rejected",
+			mutate:  func(c *routerConfig) { c.HttpPort = 8080 },
+			wantErr: "requires --port-http=0",
+		},
+		{
+			name:    "plaintext CONNECT listener rejected",
+			mutate:  func(c *routerConfig) { c.ConnectPlainTextPort = 8081 },
+			wantErr: "requires --port-connect=0",
+		},
+		{
+			name:    "missing serving cert rejected",
+			mutate:  func(c *routerConfig) { c.EnvoyCertPath = "" },
+			wantErr: "requires --envoy-cert-path",
+		},
+		{
+			name: "no TLS listener rejected",
+			mutate: func(c *routerConfig) {
+				c.HttpsPort = 0
+				c.ConnectTLSPort = 0
+			},
+			wantErr: "requires --port-https or --port-connect-tls",
+		},
+		{
+			name:    "missing client CA rejected",
+			mutate:  func(c *routerConfig) { c.IngressAuth.ClientCAFile = "" },
+			wantErr: "require --ingress-client-ca-file",
+		},
+		{
+			name:    "empty allowlist rejected",
+			mutate:  func(c *routerConfig) { c.IngressAuth.AllowedSPIFFEIDs = nil },
+			wantErr: "require at least one --ingress-allowed-spiffe-ids",
+		},
+		{
+			name: "non-SPIFFE ID rejected",
+			mutate: func(c *routerConfig) {
+				c.IngressAuth.AllowedSPIFFEIDs = append(c.IngressAuth.AllowedSPIFFEIDs, "https://cluster.local/ns/demo/sa/client")
+			},
+			wantErr: "is not a valid SPIFFE ID",
+		},
+		{
+			name: "trailing slash rejected",
+			mutate: func(c *routerConfig) {
+				c.IngressAuth.AllowedSPIFFEIDs = []string{"spiffe://cluster.local/ns/demo/sa/client/"}
+			},
+			wantErr: "is not a valid SPIFFE ID",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := staticMTLSConfig()
+			tc.mutate(&cfg)
+			err := cfg.validate()
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("expected valid, got %v", err)
@@ -147,16 +339,14 @@ func TestRouterConfigAtenetRouter(t *testing.T) {
 	}
 }
 
-// The empty mode is what a routerConfig built in code (rather than from flags)
-// carries, and it must behave as ModeAll so nothing silently stops serving.
+// Each mode serves exactly one direction, and an unset mode serves neither.
 func TestModeServes(t *testing.T) {
 	tests := []struct {
 		mode        Mode
 		wantIngress bool
 		wantEgress  bool
 	}{
-		{mode: "", wantIngress: true, wantEgress: true},
-		{mode: ModeAll, wantIngress: true, wantEgress: true},
+		{mode: "", wantIngress: false, wantEgress: false},
 		{mode: ModeIngress, wantIngress: true, wantEgress: false},
 		{mode: ModeEgress, wantIngress: false, wantEgress: true},
 	}

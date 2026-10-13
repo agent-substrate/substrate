@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -87,13 +88,13 @@ func IsValidResourceName(name string) bool {
 	return len(content.IsDNS1123Label(name)) == 0
 }
 
-// ValidateAteomUID rejects a target ateom pod UID that could escape the host
+// ValidateWorkerPodUID rejects a worker pod UID that could escape the host
 // path built from it: the ateom control socket (.../ateoms/<uid>/ateom.sock).
 // Kubernetes pod UIDs are UUIDs, which are valid DNS-1123 labels, so a label
 // check accepts every legitimate value while rejecting separators and "..".
-func ValidateAteomUID(targetAteomUID string) error {
-	if errs := content.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
-		return fmt.Errorf("invalid target ateom UID %q: %s", targetAteomUID, strings.Join(errs, "; "))
+func ValidateWorkerPodUID(workerPodUID string) error {
+	if errs := content.IsDNS1123Label(workerPodUID); len(errs) > 0 {
+		return fmt.Errorf("invalid worker pod UID %q: %s", workerPodUID, strings.Join(errs, "; "))
 	}
 	return nil
 }
@@ -119,12 +120,55 @@ func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.
 	return errs
 }
 
+// ValidateSnapshotFidelity rejects a checkpoint or restore request whose
+// fidelity the calling sandbox runtime cannot serve. Each runtime passes the
+// levels it implements; anything else, including an unset fidelity, is
+// refused before the request touches the guest.
+func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, supported []ateompb.SnapshotFidelity, fldPath *field.Path) field.ErrorList {
+	if fidelity == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+		return field.ErrorList{field.Required(fldPath, "")}
+	}
+	names := make([]string, 0, len(supported))
+	for _, f := range supported {
+		if f == fidelity {
+			return nil
+		}
+		names = append(names, f.String())
+	}
+	return field.ErrorList{field.NotSupported(fldPath, fidelity, names)}
+}
+
 func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
 	if dir == "" {
 		return field.ErrorList{field.Required(fldPath, "")}
 	}
 	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
 		return field.ErrorList{field.Invalid(fldPath, dir, "must be an absolute, clean path")}
+	}
+	return nil
+}
+
+// ValidateRuntimeAssetPath ensures p is a regular file under root, with no symlinks
+// ateom runs these as root, so they must be assets atelet fetched into root
+func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorList {
+	if p == "" {
+		return field.ErrorList{field.Required(fldPath, "")}
+	}
+	if !filepath.IsAbs(p) || filepath.Clean(p) != p {
+		return field.ErrorList{field.Invalid(fldPath, p, "must be an absolute, clean path")}
+	}
+	if rel, err := filepath.Rel(root, p); err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return field.ErrorList{field.Invalid(fldPath, p, fmt.Sprintf("must be inside %s", root))}
+	}
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath, p, err.Error())}
+	}
+	if resolved != p {
+		return field.ErrorList{field.Invalid(fldPath, p, "must not traverse a symlink")}
+	}
+	if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() {
+		return field.ErrorList{field.Invalid(fldPath, p, "must be a regular file")}
 	}
 	return nil
 }
@@ -173,10 +217,7 @@ func ValidateRunscHash(sha256Hash string) error {
 // is a well-formed URI with a bucket, so a bad location fails fast instead of
 // deep inside an object-storage call. It deliberately does not restrict the
 // scheme: the storage layer only uses the host (bucket) and path, and which
-// schemes are acceptable is a storage-backend policy, not a per-RPC one. The
-// local paths used for snapshot upload/download are derived from the
-// separately validated actor ref, not from this URI, so this is a sanity check
-// rather than a path-traversal guard.
+// schemes are acceptable is a storage-backend policy, not a per-RPC one.
 //
 // This validates the base that many snapshots share, not any one snapshot's
 // URI; SnapshotURI is the type for the latter, and it applies this check when
@@ -196,6 +237,18 @@ func ValidateSnapshotLocation(location string) error {
 	// different object.
 	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("invalid snapshot location %q: must contain only a scheme, bucket, and path", location)
+	}
+	// url.JoinPath cleans dot segments, and some backends trim spaces from
+	// segments (or windows, trailing dots) and treat '\' as a separator, so
+	// these could move snapshots outside of the location, e.g. into another
+	// atespace's prefix
+	if strings.Contains(u.Path, `\`) {
+		return fmt.Errorf(`invalid snapshot location %q: must not contain '\'`, location)
+	}
+	for segment := range strings.SplitSeq(u.Path, "/") {
+		if segment != "" && strings.Trim(segment, ". ") == "" {
+			return fmt.Errorf("invalid snapshot location %q: must not contain path segments of only '.' and ' '", location)
+		}
 	}
 	return nil
 }

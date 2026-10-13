@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command podcertcontroller is a pod certificate controller that implements two signers.
-//   - servicedns.ate.dev/identity: Issues certificate for Kubernetes service DNS names, backed by a
-//     local CA.
-//   - podid.ate.dev/identity: Issues certificates equivalent to KSA tokens, backed by a local CA.
+// Command podcertcontroller is a pod certificate controller that implements three signers.
 //
-// These signers are not unique to Agent Substrate, and will eventually be replaced by signers that
-// are being developed as part of upstream Kubernetes.
+//   - servicedns.podcert.ate.dev/identity: Issues certificate for Kubernetes service DNS names, backed by a
+//     local CA.
+//
+//   - podidentity.podcert.ate.dev/identity: Issues certificates equivalent to KSA tokens, backed by a local CA.
+//
+//   - postgres.podcert.ate.dev/identity: Issues PostgreSQL login certificates to ate-api-server.
 package main
 
 import (
@@ -32,10 +33,12 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podcertificate"
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podidentitysigner"
+	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/postgressigner"
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/rendezvous"
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/servicednssigner"
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/signercontroller"
 	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/spf13/pflag"
@@ -74,6 +77,18 @@ var (
 		"pod-identity-ca-pool",
 		"",
 		"File that contains the CA pool state for "+podidentitysigner.Name,
+	)
+
+	postgresCAPoolFile = pflag.String(
+		"postgres-ca-pool",
+		"",
+		"File that contains the CA pool state for "+postgressigner.Name,
+	)
+
+	postgresClientNamespace = pflag.String(
+		"postgres-client-namespace",
+		installdefaults.SystemNamespace,
+		"Namespace whose ate-api-server service account may request PostgreSQL login certificates",
 	)
 
 	workersPerSigner = pflag.Int(
@@ -164,10 +179,10 @@ func main() {
 	)
 	go hasher.Run(ctx)
 
-	// Create a signer for servicedns.ate.dev/identity
+	// Create a signer for servicedns.podcert.ate.dev/identity
 	serviceDNSCAPool, err := localca.NewRefreshingPool(*serviceDNSCAPoolFile)
 	if err != nil {
-		slog.ErrorContext(ctx, "Error loading servicedns.ate.dev/identity CA pool state", slog.Any("err", err))
+		slog.ErrorContext(ctx, "Error loading servicedns.podcert.ate.dev/identity CA pool state", slog.Any("err", err))
 		os.Exit(1)
 	}
 	serviceDNSSignerController := signercontroller.New(clock.RealClock{}, servicednssigner.NewImpl(kc, serviceDNSCAPool, pcrClient), hasher, pcrClient, trustBundles)
@@ -179,6 +194,13 @@ func main() {
 		os.Exit(1)
 	}
 	podIdentitySignerController := signercontroller.New(clock.RealClock{}, podidentitysigner.NewImpl(kc, podIdentityCAPool, pcrClient), hasher, pcrClient, trustBundles)
+	postgresCAPool, err := localca.NewRefreshingPool(*postgresCAPoolFile)
+	if err != nil {
+		slog.ErrorContext(ctx, "Error loading PostgreSQL CA pool state", slog.Any("err", err))
+		os.Exit(1)
+	}
+	postgresSignerController := signercontroller.New(clock.RealClock{}, postgressigner.NewImpl(*postgresClientNamespace, postgresCAPool, pcrClient), hasher, pcrClient, trustBundles)
+	go postgresSignerController.Run(ctx, *workersPerSigner)
 	go pcrClient.Informer().Run(ctx.Done())
 	go serviceDNSSignerController.Run(ctx, *workersPerSigner)
 	go podIdentitySignerController.Run(ctx, *workersPerSigner)

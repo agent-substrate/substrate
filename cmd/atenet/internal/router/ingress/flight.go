@@ -15,6 +15,8 @@
 package ingress
 
 import (
+	"sync/atomic"
+
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -34,21 +36,35 @@ type resumeActorFlight struct {
 	// retryingSignaled guards the single close of retrying; only the flight
 	// goroutine touches it.
 	retryingSignaled bool
-	done             chan struct{}
-	result           *resumeCallResult
+	// lastRetryErr is the latest retryable failure. The flight goroutine
+	// writes it and a caller that is shed reads it.
+	lastRetryErr atomic.Pointer[error]
+	done         chan struct{}
+	result       *resumeCallResult
 }
 
 func newResumeActorFlight() *resumeActorFlight {
 	return &resumeActorFlight{retrying: make(chan struct{}), done: make(chan struct{})}
 }
 
-// signalRetrying is idempotent; only the flight goroutine calls it.
-func (f *resumeActorFlight) signalRetrying() {
+// signalRetrying records err as the latest retryable failure, then closes
+// retrying. The store comes first, so a caller that sees retrying closed also
+// sees err. It is idempotent; only the flight goroutine calls it.
+func (f *resumeActorFlight) signalRetrying(err error) {
+	f.lastRetryErr.Store(&err)
 	if f.retryingSignaled {
 		return
 	}
 	f.retryingSignaled = true
 	close(f.retrying)
+}
+
+// retryErr returns the latest retryable failure, or nil if there is none.
+func (f *resumeActorFlight) retryErr() error {
+	if p := f.lastRetryErr.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 // callerResult classifies f's completed outcome for one caller. It must only

@@ -61,14 +61,24 @@ func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 	return Validate_ActorTemplate(ctx, op, fldPath, newVal, oldVal)
 }
 
-// ValidateCustom_CreateActorTemplateRequest_ActorTemplate rejects container
-// volume mounts that reference volumes the template does not declare.
+// ValidateCustom_CreateActorTemplateRequest_ActorTemplate holds the rules
+// that span more than one field of a template: container volume mounts must
+// reference volumes the template declares, and a ROOTFS preferred fidelity
+// needs a sandbox class that can capture rootfs changes without memory, which
+// today is the micro-VM class alone.
 func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
+	var errs field.ErrorList
+	if value.GetSnapshotConfig().GetPreferredFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS &&
+		value.GetSandboxConfig().GetSandboxClass() != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
+		errs = append(errs, field.Invalid(
+			fldPath.Child("snapshot_config", "preferred_fidelity"),
+			value.GetSnapshotConfig().GetPreferredFidelity().String(),
+			"ROOTFS fidelity requires sandbox_config.sandbox_class SANDBOX_CLASS_MICROVM"))
+	}
 	declared := make(map[string]bool, len(value.GetVolumes()))
 	for _, vol := range value.GetVolumes() {
 		declared[vol.GetName()] = true
 	}
-	var errs field.ErrorList
 	for i, ctr := range value.GetContainers() {
 		for j, mount := range ctr.GetVolumeMounts() {
 			name := mount.GetName()
@@ -233,15 +243,6 @@ func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operati
 func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if err := resources.ValidateSnapshotLocation(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
-	}
-	return nil
-}
-
-// ValidateCustom_SnapshotConfig requires on_commit to be a subset of on_pause.
-func ValidateCustom_SnapshotConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotConfig) field.ErrorList {
-	if value.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
-		value.GetOnCommit() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
-		return field.ErrorList{field.Invalid(fldPath.Child("on_commit"), value.GetOnCommit().String(), "must be a subset of on_pause")}
 	}
 	return nil
 }

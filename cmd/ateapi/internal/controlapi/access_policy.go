@@ -36,7 +36,7 @@ func (s *RPCService) CreateGlobalAccessPolicy(ctx context.Context, req *ateapipb
 		defaults.Apply(policy)
 	}
 	if errs := apivalidation.ValidateCreateGlobalAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.CreateGlobalAccessPolicy(ctx, policy)
 }
@@ -48,7 +48,7 @@ func (s *ServiceImpl) CreateGlobalAccessPolicy(ctx context.Context, policy *atea
 
 func (s *RPCService) GetGlobalAccessPolicy(ctx context.Context, req *ateapipb.GetGlobalAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
 	if errs := apivalidation.ValidateGetGlobalAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.GetGlobalAccessPolicy(ctx)
 }
@@ -70,7 +70,7 @@ func (s *RPCService) UpdateGlobalAccessPolicy(ctx context.Context, req *ateapipb
 		scrubResourceMetadataForUpdate(policy.Metadata)
 	}
 	if errs := apivalidation.ValidateUpdateGlobalAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.UpdateGlobalAccessPolicy(ctx, store.PreconditionFrom(policy), replaceAccessPolicy(policy))
 }
@@ -82,7 +82,7 @@ func (s *ServiceImpl) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 			return err
 		}
 		if errs := apivalidation.ValidateGlobalAccessPolicyUpdate(ctx, field.NewPath("access_policy"), toUpdate, oldVal); len(errs) > 0 {
-			return resources.ToGRPCStatusError(errs)
+			return resources.ToAPIError(errs)
 		}
 		return nil
 	})
@@ -96,7 +96,7 @@ func (s *RPCService) CreateAtespaceAccessPolicy(ctx context.Context, req *ateapi
 		defaults.Apply(policy)
 	}
 	if errs := apivalidation.ValidateCreateAtespaceAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.CreateAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), policy)
 }
@@ -108,7 +108,7 @@ func (s *ServiceImpl) CreateAtespaceAccessPolicy(ctx context.Context, name strin
 
 func (s *RPCService) GetAtespaceAccessPolicy(ctx context.Context, req *ateapipb.GetAtespaceAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
 	if errs := apivalidation.ValidateGetAtespaceAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.GetAtespaceAccessPolicy(ctx, req.GetAtespace().GetName())
 }
@@ -130,7 +130,7 @@ func (s *RPCService) UpdateAtespaceAccessPolicy(ctx context.Context, req *ateapi
 		scrubResourceMetadataForUpdate(policy.Metadata)
 	}
 	if errs := apivalidation.ValidateUpdateAtespaceAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.UpdateAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), store.PreconditionFrom(policy), replaceAccessPolicy(policy))
 }
@@ -142,7 +142,7 @@ func (s *ServiceImpl) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 			return err
 		}
 		if errs := apivalidation.ValidateAtespaceAccessPolicyUpdate(ctx, field.NewPath("access_policy"), toUpdate, oldVal); len(errs) > 0 {
-			return resources.ToGRPCStatusError(errs)
+			return resources.ToAPIError(errs)
 		}
 		return nil
 	})
@@ -151,7 +151,7 @@ func (s *ServiceImpl) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 
 func (s *RPCService) DeleteAtespaceAccessPolicy(ctx context.Context, req *ateapipb.DeleteAtespaceAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
 	if errs := apivalidation.ValidateDeleteAtespaceAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.DeleteAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), toDeletePreconditions(req.GetOptions()))
 }

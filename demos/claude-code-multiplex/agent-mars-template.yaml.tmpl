@@ -34,8 +34,7 @@ containers:
   - name: ANTHROPIC_API_KEY
     value: "${ANTHROPIC_API_KEY}"
 snapshotConfig:
-  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/claude-multiplex-demo/
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR

@@ -22,7 +22,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net"
-	"os"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -47,13 +46,9 @@ func TLSConfig(credentialBundlePath, trustBundlePath, ateletSPIFFEID string) (*t
 	if err != nil || localIdentity == nil {
 		return nil, fmt.Errorf("worker certificate has no valid Pod identity")
 	}
-	trustPEM, err := os.ReadFile(trustBundlePath)
-	if err != nil {
-		return nil, fmt.Errorf("read atelet trust bundle: %w", err)
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(trustPEM) {
-		return nil, fmt.Errorf("atelet trust bundle contains no certificates")
+	loadRoots := credbundle.PoolLoader(trustBundlePath)
+	if _, err := loadRoots(); err != nil {
+		return nil, fmt.Errorf("load atelet trust bundle: %w", err)
 	}
 	return &tls.Config{
 		MinVersion:           tls.VersionTLS13,
@@ -65,6 +60,10 @@ func TLSConfig(credentialBundlePath, trustBundlePath, ateletSPIFFEID string) (*t
 			// incarnation. This is why InsecureSkipVerify is set above.
 			if len(state.PeerCertificates) == 0 {
 				return fmt.Errorf("atelet certificate is required")
+			}
+			roots, err := loadRoots()
+			if err != nil {
+				return err
 			}
 			intermediates := x509.NewCertPool()
 			for _, cert := range state.PeerCertificates[1:] {

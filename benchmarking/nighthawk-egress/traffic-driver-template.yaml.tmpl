@@ -1,0 +1,66 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Substrate ActorTemplate resource (protojson-shaped ateapipb.ActorTemplate,
+# NOT the ate.dev/v1alpha1 CRD) for the Nighthawk egress traffic-driver actor.
+# Applied with `kubectl-ate create actor-template -f -` by
+# deploy-traffic-driver.sh; the `nighthawk` atespace must exist.
+#
+# Runs Envoy's `nighthawk_service` gRPC server on port 80 (the default actor
+# ingress port forwarded by atunnel) so benchmark runners can invoke
+# ExecutionStream through atenet-router to drive HTTP/HTTPS egress load from
+# inside the gVisor actor sandbox.
+metadata:
+  atespace: nighthawk
+  name: traffic-driver
+workerSelector:
+  matchLabels:
+    workload: traffic-driver
+containers:
+- name: nighthawk-service
+  # Same envoyproxy/nighthawk-dev digest as nighthawk-server.yaml and
+  # benchmarking/nighthawk-ingress/Dockerfile.
+  image: envoyproxy/nighthawk-dev@sha256:7729902afea9d83f593b240690ba7d6e8fff04f6215ada538cfb4c1452b2553e
+  command:
+  - /usr/local/bin/nighthawk_service
+  args:
+  - --listen
+  - 0.0.0.0:80
+  - --service
+  - traffic-generator-service
+  env:
+  - name: SSL_CERT_FILE
+    value: /run/ate/egress-trust-bundle/trust-bundle.pem
+  - name: SSL_CERT_DIR
+    value: /run/ate/egress-trust-bundle/
+  volumeMounts:
+  - name: system-info
+    mountPath: /run/ate
+volumes:
+- name: system-info
+  systemInfo:
+    dataSources:
+    # Trust anchors for per-SNI leaf certificates minted by the egress gateway
+    # when terminating HTTPS egress traffic.
+    - trustBundle:
+        names:
+        - egress-mitm.ate.dev
+        - system-roots.ate.dev
+        path: egress-trust-bundle/trust-bundle.pem
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default
+snapshotConfig:
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
+  storageLocation: gs://${BUCKET_NAME}/nighthawk/traffic-driver/

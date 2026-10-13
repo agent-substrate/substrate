@@ -35,13 +35,14 @@ const (
 	SecretActorIDCACerts   = "actor-id-ca-certs"
 	SecretServiceDNSCA     = "service-dns-ca-pool"
 	SecretPodIdentityCA    = "pod-identity-ca-pool"
+	SecretPostgresCA       = "postgres-ca-pool"
 	SecretEgressMITMCAPool = "egress-mitm-ca-pool"
 	SecretAPIEnvVars       = "ate-api-server-secret-envvars"
 	SecretPostgresServerCA = "postgres-server-ca"
 	ConfigMapAPIEnvVars    = "ate-api-server-envvars"
 	ConfigMapAPIAuthn      = "ate-api-authentication"
-	// poolKeyID is the identifier given to the first CA and JWT key in a new
-	// pool, matching the --ca-id/--key-id the shell scripts passed.
+	// poolKeyID is the identifier given to the first CA in a new pool,
+	// matching the --ca-id the shell scripts passed.
 	poolKeyID = "1"
 )
 
@@ -89,7 +90,7 @@ func (e *Env) EnsureEgressMITMCAPoolSecret(ctx context.Context) error {
 	return e.ensureSecret(ctx, e.Namespace(), SecretEgressMITMCAPool, e.CreateEgressMITMCAPoolSecret)
 }
 
-// CreatePodCertificateControllerCAs generates the two signer pools the
+// CreatePodCertificateControllerCAs generates the signer pools the
 // podcertificate controller issues from.
 func (e *Env) CreatePodCertificateControllerCAs(ctx context.Context) error {
 	log.Step("create_podcertificate_controller_cas")
@@ -99,7 +100,10 @@ func (e *Env) CreatePodCertificateControllerCAs(ctx context.Context) error {
 	if err := e.createCAPool(ctx, NamespacePodCert, SecretServiceDNSCA); err != nil {
 		return err
 	}
-	return e.createCAPool(ctx, NamespacePodCert, SecretPodIdentityCA)
+	if err := e.createCAPool(ctx, NamespacePodCert, SecretPodIdentityCA); err != nil {
+		return err
+	}
+	return e.createCAPool(ctx, NamespacePodCert, SecretPostgresCA)
 }
 
 // CreateActorIDCACertsSecret derives a certificate-only trust bundle from the
@@ -259,18 +263,21 @@ func (e *Env) createJWTPool(ctx context.Context, namespace, name string) error {
 		return nil
 	}
 
-	authority, err := localjwtauthority.GenerateECDSAP256Authority(poolKeyID)
+	data, err := newJWTPoolSecretData(e.Cfg.ActorJWTAlgorithm)
 	if err != nil {
-		return fmt.Errorf("while generating the JWT authority for %s/%s: %w", namespace, name, err)
+		return fmt.Errorf("while building the JWT pool for %s/%s: %w", namespace, name, err)
 	}
-	poolBytes, err := localjwtauthority.Marshal(&localjwtauthority.ConcretePool{
-		Authorities:      []*localjwtauthority.Authority{authority},
-		ActiveForSigning: poolKeyID,
-	})
+	return e.createPoolSecret(ctx, namespace, name, corev1.SecretTypeOpaque, data)
+}
+
+// newJWTPoolSecretData generates a pool with one active authority for
+// algorithm, keyed by its thumbprint.
+func newJWTPoolSecretData(algorithm string) (map[string][]byte, error) {
+	poolBytes, _, err := localjwtauthority.GeneratePool(algorithm, "")
 	if err != nil {
-		return fmt.Errorf("while marshaling the JWT pool for %s/%s: %w", namespace, name, err)
+		return nil, fmt.Errorf("while generating the JWT pool: %w", err)
 	}
-	return e.createPoolSecret(ctx, namespace, name, corev1.SecretTypeOpaque, map[string][]byte{"pool": poolBytes})
+	return map[string][]byte{"pool": poolBytes}, nil
 }
 
 // createPoolSecret writes pool state.

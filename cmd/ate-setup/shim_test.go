@@ -31,6 +31,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/cmd"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
 	// Registers every bundled demo, so demos.All() is the real list.
 	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/all"
@@ -424,4 +425,122 @@ func shimUsage(t *testing.T) string {
 		t.Fatalf("install-ate.sh --help: %v", err)
 	}
 	return string(out)
+}
+
+// Settings register from each command package's init, so the merged set only
+// exists in a binary that links the whole command tree. Package config cannot
+// check it: the commands that register are the ones config does not import.
+// This package does import them, which is what makes the check possible here
+// and nowhere below it.
+func TestSettingRegistryIsValidAcrossEveryCommand(t *testing.T) {
+	if err := config.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Command-scoped settings exist so a flag appears only where it applies. A
+// setting that named a command nobody built would silently never bind.
+func TestEveryScopedSettingNamesARealCommand(t *testing.T) {
+	for _, s := range config.All() {
+		for _, path := range s.Commands {
+			t.Run(s.Key+" on "+path, func(t *testing.T) {
+				target, _, err := cmd.Root().Find(strings.Fields(path))
+				if err != nil {
+					t.Fatalf("Find(%q): %v", path, err)
+				}
+				if target.CommandPath() != "ate-setup "+path {
+					t.Fatalf("%q resolved to %q, which is not that command", path, target.CommandPath())
+				}
+				if target.Flags().Lookup(s.Flag) == nil {
+					t.Errorf("--%s is not bound to %q", s.Flag, path)
+				}
+			})
+		}
+	}
+}
+
+// docPath resolves a repository path from this package's directory.
+func docPath(t *testing.T, rel string) string {
+	t.Helper()
+	root, err := config.RepoRoot()
+	if err != nil {
+		t.Fatalf("RepoRoot: %v", err)
+	}
+	return filepath.Join(root, rel)
+}
+
+// The worked example is the first thing an operator copies, so a renamed or
+// removed key has to break the build rather than their install.
+func TestExampleConfigurationParses(t *testing.T) {
+	path := docPath(t, "docs/examples/substrate-install.yaml")
+	f, err := config.ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile(%s) = %v", path, err)
+	}
+	if len(f.Keys()) == 0 {
+		t.Error("the example sets no settings, so it demonstrates nothing")
+	}
+}
+
+// The settings table is generated from the registry, so a setting added
+// without documenting it is the drift this catches.
+func TestOperatorDocListsEverySetting(t *testing.T) {
+	path := docPath(t, "docs/operator-install.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	doc := string(raw)
+
+	for _, s := range config.All() {
+		t.Run(s.Key, func(t *testing.T) {
+			want := []string{"`" + s.Key + "`", "`" + s.Env + "`"}
+			// A secret has no flag, so the docs have none to name.
+			if s.Flag != "" {
+				want = append(want, "`--"+s.Flag+"`")
+			}
+			for _, want := range want {
+				if !strings.Contains(doc, want) {
+					t.Errorf("docs/operator-install.md does not mention %s", want)
+				}
+			}
+		})
+	}
+}
+
+// The operator documentation must not name a setting that no longer exists:
+// following it would configure nothing and the install would silently use a
+// default.
+func TestDocsNameNoRemovedSetting(t *testing.T) {
+	// The two controls that select how configuration is read and reported.
+	// They are not settings themselves, so no registry entry declares them.
+	notSettings := map[string]bool{
+		"ATE_CONFIG":             true,
+		"ATE_NO_REPORT_DEFAULTS": true,
+	}
+
+	declared := map[string]bool{}
+	for _, s := range config.All() {
+		declared[s.Env] = true
+	}
+
+	root, err := config.RepoRoot()
+	if err != nil {
+		t.Fatalf("RepoRoot: %v", err)
+	}
+	for _, rel := range []string{"docs/operator-install.md", "docs/examples/substrate-install.yaml"} {
+		raw, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", rel, err)
+		}
+		seen := map[string]bool{}
+		for _, m := range regexp.MustCompile(`\b(ATE_[A-Z0-9_]{3,})\b`).FindAllStringSubmatch(string(raw), -1) {
+			name := m[1]
+			if declared[name] || notSettings[name] || seen[name] {
+				continue
+			}
+			seen[name] = true
+			t.Errorf("%s names %s, which no setting declares", rel, name)
+		}
+	}
 }

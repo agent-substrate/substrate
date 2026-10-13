@@ -34,6 +34,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -346,19 +347,41 @@ func gatheredNames(t *testing.T, reg prometheus.Gatherer) map[string]bool {
 }
 
 func TestMetricsPushEnabled(t *testing.T) {
-	for value, wantPush := range map[string]bool{"": true, "otlp": true, " OTLP ": true, "none": false, " None ": false, "prometheus": true} {
-		var buf bytes.Buffer
-		prev := slog.Default()
-		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-		t.Setenv(metricsExporterEnv, value)
-		push := metricsPushEnabled(t.Context())
-		slog.SetDefault(prev)
+	type want struct{ push, warn bool }
+	tests := []struct {
+		value      string
+		pullServed want
+		pushOnly   want
+	}{
+		{"", want{true, false}, want{true, false}},
+		{"otlp", want{true, false}, want{true, false}},
+		{" OTLP ", want{true, false}, want{true, false}},
+		{"none", want{false, false}, want{false, false}},
+		{" None ", want{false, false}, want{false, false}},
+		{"prometheus", want{false, false}, want{true, true}},
+		{" Prometheus ", want{false, false}, want{true, true}},
+		{"console", want{true, true}, want{true, true}},
+		{"otlp,prometheus", want{true, false}, want{true, true}},
+		{"prometheus, otlp", want{true, false}, want{true, true}},
+		{"prometheus,console", want{false, true}, want{true, true}},
+		{"none,otlp", want{true, true}, want{true, true}},
+		{"none,prometheus", want{true, true}, want{false, true}},
+	}
+	for _, tt := range tests {
+		for pullServed, w := range map[bool]want{true: tt.pullServed, false: tt.pushOnly} {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Setenv(metricsExporterEnv, tt.value)
+			push := metricsPushEnabled(t.Context(), pullServed)
+			slog.SetDefault(prev)
 
-		if push != wantPush {
-			t.Errorf("%s=%q: push = %t, want %t", metricsExporterEnv, value, push, wantPush)
-		}
-		if warned, wantWarn := strings.Contains(buf.String(), "level=WARN"), value == "prometheus"; warned != wantWarn {
-			t.Errorf("%s=%q: warned = %t, want %t:\n%s", metricsExporterEnv, value, warned, wantWarn, buf.String())
+			if push != w.push {
+				t.Errorf("%s=%q, pullServed %t: push = %t, want %t", metricsExporterEnv, tt.value, pullServed, push, w.push)
+			}
+			if warned := strings.Contains(buf.String(), "level=WARN"); warned != w.warn {
+				t.Errorf("%s=%q, pullServed %t: warned = %t, want %t:\n%s", metricsExporterEnv, tt.value, pullServed, warned, w.warn, buf.String())
+			}
 		}
 	}
 }
@@ -558,5 +581,105 @@ func TestSetLogLevel(t *testing.T) {
 	}
 	if got := logLevel.Level(); got != slog.LevelWarn {
 		t.Errorf("SetLogLevel(\"\") changed the level to %v", got)
+	}
+}
+
+func TestTracesPushEnabled(t *testing.T) {
+	tests := []struct {
+		value      string
+		push, warn bool
+	}{
+		{"", true, false},
+		{"otlp", true, false},
+		{" OTLP ", true, false},
+		{"none", false, false},
+		{" None ", false, false},
+		{"console", true, true},
+		{"otlp,console", true, true},
+		{"none,otlp", true, true},
+	}
+	for _, tt := range tests {
+		var buf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+		t.Setenv(tracesExporterEnv, tt.value)
+		push := tracesPushEnabled(t.Context())
+		slog.SetDefault(prev)
+
+		if push != tt.push {
+			t.Errorf("%s=%q: push = %t, want %t", tracesExporterEnv, tt.value, push, tt.push)
+		}
+		if warned := strings.Contains(buf.String(), "level=WARN"); warned != tt.warn {
+			t.Errorf("%s=%q: warned = %t, want %t:\n%s", tracesExporterEnv, tt.value, warned, tt.warn, buf.String())
+		}
+	}
+}
+
+type traceCollector struct {
+	coltracepb.UnimplementedTraceServiceServer
+	spans atomic.Int64
+}
+
+func (c *traceCollector) Export(_ context.Context, req *coltracepb.ExportTraceServiceRequest) (*coltracepb.ExportTraceServiceResponse, error) {
+	for _, rs := range req.GetResourceSpans() {
+		for _, ss := range rs.GetScopeSpans() {
+			c.spans.Add(int64(len(ss.GetSpans())))
+		}
+	}
+	return &coltracepb.ExportTraceServiceResponse{}, nil
+}
+
+// startTraceCollector serves a traceCollector on a loopback port, points
+// OTEL_EXPORTER_OTLP_ENDPOINT at it, and sets OTEL_TRACES_EXPORTER.
+func startTraceCollector(t *testing.T, exporter string) *traceCollector {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	collector := &traceCollector{}
+	srv := grpc.NewServer()
+	coltracepb.RegisterTraceServiceServer(srv, collector)
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(srv.Stop)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+ln.Addr().String())
+	t.Setenv(tracesExporterEnv, exporter)
+	return collector
+}
+
+// endOneSpan ends a sampled span, then flushes and shuts the provider down, so
+// a span exporter, if there is one, has exported it.
+func endOneSpan(t *testing.T, serviceName string) {
+	t.Helper()
+	tp, err := InitTracing(t.Context(), TracingOptions{ServiceName: serviceName, Sampling: ParentRatioSampling(1)})
+	if err != nil {
+		t.Fatalf("InitTracing: %v", err)
+	}
+	_, span := tp.Tracer("test").Start(t.Context(), "test")
+	if !span.SpanContext().IsSampled() {
+		t.Fatal("the span was not sampled")
+	}
+	span.End()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_ = tp.ForceFlush(ctx)
+	_ = tp.Shutdown(ctx)
+}
+
+func TestInitTracingExportsOverOTLPByDefault(t *testing.T) {
+	collector := startTraceCollector(t, "")
+	endOneSpan(t, "test-traces-default")
+	if got := collector.spans.Load(); got != 1 {
+		t.Errorf("the collector received %d span(s), want 1", got)
+	}
+}
+
+// With OTEL_TRACES_EXPORTER=none the span is still sampled, so the context a
+// component propagates keeps its sampled flag, and nothing is exported.
+func TestInitTracingExporterNoneExportsNothing(t *testing.T) {
+	collector := startTraceCollector(t, "none")
+	endOneSpan(t, "test-traces-none")
+	if got := collector.spans.Load(); got != 0 {
+		t.Errorf("OTEL_TRACES_EXPORTER=none still exported %d span(s)", got)
 	}
 }

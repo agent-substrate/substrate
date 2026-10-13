@@ -1,0 +1,846 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# An always-on personal assistant (the OpenClaw / Hermes Agent shape): one
+# gateway process per user that answers chat messages, runs a heartbeat
+# turn every 30 minutes while the user is awake, fires scheduled jobs, and
+# consolidates its memory at night. One lap is one day, 00:00 to 24:00, in
+# real time: every think gap is the real idle gap before the event, so the
+# script is meant to run with a fractional --agentsession-think-scale
+# (0.02 plays a day in about 30 minutes). Steps are named by their time of
+# day; heartbeats are skipped at the half hours where the user is active.
+#
+# What one step emulates comes from reading the OpenClaw and Hermes source
+# and docs and from a strace/RSS profile of OpenClaw 2026.9.8 on Node 24
+# driven through its gateway API by a scripted model (2026-10-05):
+#
+#   - The gateway sits at 1.2 GiB resident after start and 1.45 to 1.54 GiB
+#     after one conversation (Hermes: 0.1 to 0.3 GiB); modeled as the
+#     640Mi gateway_heap plus growth from the catalog refresh, the browser
+#     (Chrome stays resident once launched) and the nightly sweep.
+#   - A chat turn reads 5 to 7 MiB of its SQLite session store, ships a
+#     50 to 110 KiB model request (the context; read_disk_data of
+#     context_window so the bytes leave the sandbox through the router),
+#     waits on the model, and appends 1 to 4 MiB of WAL. Under strace it
+#     cost 0.6 to 1.0 CPU-seconds; strace inflates syscall-heavy code
+#     1.5 to 3x, so the script burns 0.5 s. A tool-loop turn (memory
+#     search with embeddings) read 36 MiB, wrote 9.6 MiB and made three
+#     model calls. A heartbeat turn is a chat turn with no user.
+#   - The model round trip itself is wall time with the actor resident and
+#     idle: dwell. The profile used a zero-latency model, so the dwell
+#     values are field numbers (3 to 15 s per call, longer for compaction
+#     and the nightly sweep), not measured ones.
+#   - Day shape: about 30 user messages in 7 clusters, 26 heartbeats, 15
+#     hourly system-event crons folded into the on-the-hour heartbeats,
+#     one morning briefing, four model-catalog refreshes, one context
+#     compaction, one nightly memory sweep. Autonomous turns outnumber
+#     user turns, as they do on a default OpenClaw install.
+#
+# Per lap: 61 wakes, about 65 CPU-seconds, about 440 s of resident idle,
+# about 150 MiB written, 11 MiB ingested. Declared RAM 960Mi plus about
+# 120Mi of files; min_actor_memory 1536Mi leaves the guest the headroom
+# the coding script found necessary.
+name: personal-assistant
+min_actor_memory: 1536Mi
+steps:
+  - name: 0000_gateway_start
+    agent: "Gateway starts: loads config, skills and the session store, settles its heap"
+    think: 55m
+    ops:
+      - fill_ram: {key: gateway_heap, size: 640Mi}
+      - write_disk: {key: bootstrap_files, size: 32Ki}
+      - write_disk: {key: context_window, size: 96Ki}
+      - write_disk: {key: session_db, size: 6Mi}
+      - write_disk: {key: memory_notes, size: 8Ki}
+      - write_disk: {key: memory_index, size: 4Mi}
+      - burn_cpu: {millis: 3000, parallel: 1}
+      - ping: {}
+  - name: 0300_dreaming
+    agent: "Nightly memory consolidation: rereads the day, rewrites MEMORY.md, reindexes"
+    think: 3h
+    ops:
+      - read_disk_data: {key: memory_index}
+      - read_disk_digest: {key: session_db}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 15000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 15000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 15000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: memory_notes, size: 32Ki}
+      - write_disk: {key: memory_index, size: 4Mi}
+      - fill_ram: {key: dream_retained, size: 96Mi}
+  - name: 0505_catalog_refresh
+    agent: Model catalog refresh, no model call
+    think: 2h5m
+    ops:
+      - ingest: {key: model_catalog, size: 2Mi}
+      - burn_cpu: {millis: 800, parallel: 1}
+      - fill_ram: {key: catalog_cache, size: 32Mi}
+  - name: 0730_morning_hello
+    agent: First message of the day, quick reply
+    think: 2h25m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 500, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 5000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - churn_ram: {key: gateway_heap, size: 8Mi}
+  - name: 0732_whats_today
+    agent: Asks what is on today; agent reads memory
+    think: 2m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - read_disk_data: {key: memory_index}
+      - burn_cpu: {millis: 1500, parallel: 1}
+      - write_disk: {key: index_snapshot, size: 3Mi}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 700, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 6000}
+      - write_disk: {key: session_wal, size: 2Mi}
+  - name: 0735_quick_followup
+    agent: Short follow-up, quick reply
+    think: 3m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 500, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - churn_ram: {key: gateway_heap, size: 8Mi}
+  - name: 0800_briefing
+    agent: "Scheduled morning briefing: three web fetches, one message out"
+    think: 25m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 6000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - ingest: {key: web_fetch, size: 128Ki}
+      - ingest: {key: web_fetch, size: 128Ki}
+      - ingest: {key: web_fetch, size: 128Ki}
+      - burn_cpu: {millis: 500, parallel: 1}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 800, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 10000}
+      - write_disk: {key: session_wal, size: 2Mi}
+  - name: 0830_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 0900_heartbeat_and_cron
+    agent: "Heartbeat turn: rereads context, one model call, usually silent plus an hourly system-event cron"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: state_row, size: 64Ki}
+  - name: 0930_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 1000_heartbeat_and_cron
+    agent: "Heartbeat turn: rereads context, one model call, usually silent plus an hourly system-event cron"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: state_row, size: 64Ki}
+  - name: 1015_question
+    agent: Question with a one-command answer
+    think: 15m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 5000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - burn_cpu: {millis: 1200, parallel: 1}
+      - write_disk: {key: tool_output, size: 64Ki}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 700, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 7000}
+      - write_disk: {key: session_wal, size: 2Mi}
+      - churn_ram: {key: gateway_heap, size: 16Mi}
+  - name: 1017_followup
+    agent: Follow-up, quick reply
+    think: 2m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 500, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 6000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - churn_ram: {key: gateway_heap, size: 8Mi}
+  - name: 1020_remember_this
+    agent: "Remember-that request: memory file write and reindex"
+    think: 3m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 5000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: memory_notes, size: 16Ki}
+      - burn_cpu: {millis: 700, parallel: 1}
+      - write_disk: {key: memory_index, size: 4Mi}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 2Mi}
+  - name: 1022_thanks
+    agent: Closing message, quick reply
+    think: 2m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 500, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 3000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - churn_ram: {key: gateway_heap, size: 8Mi}
+  - name: 1030_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 8m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 1100_heartbeat_and_cron
+    agent: "Heartbeat turn: rereads context, one model call, usually silent plus an hourly system-event cron"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: state_row, size: 64Ki}
+  - name: 1105_catalog_refresh
+    agent: Model catalog refresh, no model call
+    think: 5m
+    ops:
+      - ingest: {key: model_catalog, size: 2Mi}
+      - burn_cpu: {millis: 800, parallel: 1}
+      - fill_ram: {key: catalog_cache, size: 32Mi}
+  - name: 1130_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 25m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 1200_heartbeat_and_cron
+    agent: "Heartbeat turn: rereads context, one model call, usually silent plus an hourly system-event cron"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: state_row, size: 64Ki}
+  - name: 1230_lunch_question
+    agent: Question needing a web search
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 5000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - ingest: {key: web_fetch, size: 256Ki}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 700, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 9000}
+      - write_disk: {key: session_wal, size: 2Mi}
+      - churn_ram: {key: gateway_heap, size: 16Mi}
+  - name: 1233_dig_deeper
+    agent: Asks for more detail on one result
+    think: 3m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 5000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - ingest: {key: web_fetch, size: 256Ki}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 700, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 9000}
+      - write_disk: {key: session_wal, size: 2Mi}
+      - churn_ram: {key: gateway_heap, size: 16Mi}
+  - name: 1236_run_check
+    agent: Asks the agent to run a check on the machine
+    think: 3m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 5000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - burn_cpu: {millis: 1200, parallel: 1}
+      - write_disk: {key: tool_output, size: 64Ki}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 700, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 7000}
+      - write_disk: {key: session_wal, size: 2Mi}
+      - churn_ram: {key: gateway_heap, size: 16Mi}
+  - name: 1240_what_did_i_say
+    agent: "Recall question: memory search"
+    think: 4m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - read_disk_data: {key: memory_index}
+      - burn_cpu: {millis: 1500, parallel: 1}
+      - write_disk: {key: index_snapshot, size: 3Mi}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 700, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 6000}
+      - write_disk: {key: session_wal, size: 2Mi}
+  - name: 1243_quick_reply
+    agent: Quick reply
+    think: 3m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 500, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 5000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - churn_ram: {key: gateway_heap, size: 8Mi}
+  - name: 1245_bye
+    agent: Closing message
+    think: 2m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 500, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 3000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - churn_ram: {key: gateway_heap, size: 8Mi}
+  - name: 1300_heartbeat_and_cron
+    agent: "Heartbeat turn: rereads context, one model call, usually silent plus an hourly system-event cron"
+    think: 15m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: state_row, size: 64Ki}
+  - name: 1330_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 1400_heartbeat_and_cron
+    agent: "Heartbeat turn: rereads context, one model call, usually silent plus an hourly system-event cron"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: state_row, size: 64Ki}
+  - name: 1430_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 1500_heartbeat_and_cron
+    agent: "Heartbeat turn: rereads context, one model call, usually silent plus an hourly system-event cron"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: state_row, size: 64Ki}
+  - name: 1510_task_request
+    agent: "Multi-step task: command, file, second command"
+    think: 10m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 5000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - burn_cpu: {millis: 1200, parallel: 1}
+      - write_disk: {key: tool_output, size: 64Ki}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 700, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 7000}
+      - write_disk: {key: session_wal, size: 2Mi}
+      - churn_ram: {key: gateway_heap, size: 16Mi}
+      - burn_cpu: {millis: 900, parallel: 1}
+      - write_disk: {key: tool_output, size: 128Ki}
+      - dwell: {millis: 8000}
+      - write_disk: {key: turn_log, size: 64Ki}
+  - name: 1514_task_followup
+    agent: Correction to the task, another command
+    think: 4m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 5000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - burn_cpu: {millis: 1200, parallel: 1}
+      - write_disk: {key: tool_output, size: 64Ki}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 700, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 7000}
+      - write_disk: {key: session_wal, size: 2Mi}
+      - churn_ram: {key: gateway_heap, size: 16Mi}
+  - name: 1518_web_check
+    agent: Checks a fact on the web
+    think: 4m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 5000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - ingest: {key: web_fetch, size: 256Ki}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 700, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 9000}
+      - write_disk: {key: session_wal, size: 2Mi}
+      - churn_ram: {key: gateway_heap, size: 16Mi}
+  - name: 1521_done
+    agent: Closing message
+    think: 3m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 500, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 3000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - churn_ram: {key: gateway_heap, size: 8Mi}
+  - name: 1530_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 9m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 1600_heartbeat_and_cron
+    agent: "Heartbeat turn: rereads context, one model call, usually silent plus an hourly system-event cron"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: state_row, size: 64Ki}
+  - name: 1630_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 1700_heartbeat_and_cron
+    agent: "Heartbeat turn: rereads context, one model call, usually silent plus an hourly system-event cron"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: state_row, size: 64Ki}
+  - name: 1705_catalog_refresh
+    agent: Model catalog refresh, no model call
+    think: 5m
+    ops:
+      - ingest: {key: model_catalog, size: 2Mi}
+      - burn_cpu: {millis: 800, parallel: 1}
+      - fill_ram: {key: catalog_cache, size: 32Mi}
+  - name: 1730_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 25m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 1800_heartbeat_and_cron
+    agent: "Heartbeat turn: rereads context, one model call, usually silent plus an hourly system-event cron"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: state_row, size: 64Ki}
+  - name: 1820_open_site
+    agent: "First browser use of the day: Chrome launches and stays resident"
+    think: 20m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 5000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - fill_ram: {key: browser, size: 192Mi}
+      - burn_cpu: {millis: 2500, parallel: 2}
+      - ingest: {key: page_load, size: 1Mi}
+      - write_disk: {key: browser_cache, size: 8Mi}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 900, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 8000}
+      - write_disk: {key: session_wal, size: 3Mi}
+  - name: 1824_click_through
+    agent: Browser actions on the page
+    think: 4m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - burn_cpu: {millis: 600, parallel: 2}
+      - ingest: {key: page_load, size: 512Ki}
+      - churn_ram: {key: browser, size: 32Mi}
+      - write_disk: {key: browser_cache, size: 4Mi}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 800, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 6000}
+      - write_disk: {key: session_wal, size: 2Mi}
+  - name: 1828_fill_form
+    agent: More browser actions
+    think: 4m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - burn_cpu: {millis: 600, parallel: 2}
+      - ingest: {key: page_load, size: 512Ki}
+      - churn_ram: {key: browser, size: 32Mi}
+      - write_disk: {key: browser_cache, size: 4Mi}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 800, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 6000}
+      - write_disk: {key: session_wal, size: 2Mi}
+  - name: 1830_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 2m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 1832_summarize_page
+    agent: Summarize what was found
+    think: 2m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 9000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - churn_ram: {key: gateway_heap, size: 8Mi}
+  - name: 1836_save_it
+    agent: "Saves the result: file write and memory note"
+    think: 4m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 5000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: memory_notes, size: 16Ki}
+      - burn_cpu: {millis: 700, parallel: 1}
+      - write_disk: {key: memory_index, size: 4Mi}
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 2Mi}
+  - name: 1838_bye
+    agent: Closing message
+    think: 2m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 500, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 3000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - churn_ram: {key: gateway_heap, size: 8Mi}
+  - name: 1900_heartbeat_and_cron
+    agent: "Heartbeat turn: rereads context, one model call, usually silent plus an hourly system-event cron"
+    think: 22m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: state_row, size: 64Ki}
+  - name: 1905_compaction
+    agent: "Context compaction with a memory flush: rereads the transcript, two long model calls"
+    think: 5m
+    ops:
+      - read_disk_data: {key: session_db}
+      - burn_cpu: {millis: 1000, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 25000}
+      - burn_cpu: {millis: 600, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 20000}
+      - write_disk: {key: memory_notes, size: 24Ki}
+      - write_disk: {key: session_db, size: 6Mi}
+      - write_disk: {key: session_wal, size: 4Mi}
+      - churn_ram: {key: gateway_heap, size: 64Mi}
+  - name: 1930_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 25m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 2000_heartbeat_and_cron
+    agent: "Heartbeat turn: rereads context, one model call, usually silent plus an hourly system-event cron"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: state_row, size: 64Ki}
+  - name: 2030_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 2100_evening_chat
+    agent: Evening question, quick reply
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 500, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 7000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - churn_ram: {key: gateway_heap, size: 8Mi}
+  - name: 2103_evening_followup
+    agent: Follow-up, quick reply
+    think: 3m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 500, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 6000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - churn_ram: {key: gateway_heap, size: 8Mi}
+  - name: 2106_goodnight
+    agent: Last message of the day
+    think: 3m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 500, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 3000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - churn_ram: {key: gateway_heap, size: 8Mi}
+  - name: 2130_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 24m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 2200_heartbeat_and_cron
+    agent: "Heartbeat turn: rereads context, one model call, usually silent plus an hourly system-event cron"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+      - write_disk: {key: state_row, size: 64Ki}
+  - name: 2230_heartbeat
+    agent: "Heartbeat turn: rereads context, one model call, usually silent"
+    think: 30m
+    ops:
+      - read_disk_digest: {key: bootstrap_files}
+      - read_disk_digest: {key: session_db}
+      - burn_cpu: {millis: 400, parallel: 1}
+      - read_disk_data: {key: context_window}
+      - dwell: {millis: 4000}
+      - write_disk: {key: session_wal, size: 1Mi}
+  - name: 2305_catalog_refresh
+    agent: Model catalog refresh and the daily version check
+    think: 35m
+    ops:
+      - ingest: {key: model_catalog, size: 2Mi}
+      - burn_cpu: {millis: 800, parallel: 1}
+      - fill_ram: {key: catalog_cache, size: 32Mi}

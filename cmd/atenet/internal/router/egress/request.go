@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -28,6 +29,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
+const websocketDeniedBody = "WebSocket egress is not supported"
+
 // handleRequest authorizes one request the gateway can read: cleartext HTTP,
 // or HTTPS the gateway terminated. It runs per request, because the
 // Host can change between requests on one connection.
@@ -35,8 +38,14 @@ import (
 // The request is decided on the Host it named and the port the actor dialed,
 // by the http rules on the cleartext leg and the https rules on the MITM leg,
 // where the connection's SNI must fall under an https rule too. An allowed
-// request is dialed by the name it was decided on.
+// request is dialed by the name it was decided on, on the port the actor
+// dialed.
 func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
+	if isWebSocketUpgrade(md) {
+		slog.WarnContext(ctx, "egress denied: WebSocket upgrades are not supported", slog.String("leg", leg), slog.String("host", md.Host))
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, websocketDeniedBody)
+	}
+
 	ref, err := actorFromFilterState(md)
 	if err != nil {
 		slog.WarnContext(ctx, "egress denied: request carries no actor identity", slog.String("leg", leg), slog.Any("err", err))
@@ -85,7 +94,7 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 		slog.WarnContext(ctx, "egress denied: no rule allows the destination", attrs(decision)...)
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
 	}
-	injected, err := h.applyEffects(ctx, ref, dest, leg, md.Headers, decision.Effects)
+	injected, err := h.applyEffects(ctx, ref, dest, md.Headers, decision.Effects)
 	if err != nil {
 		return extproc.Result{}, err
 	}
@@ -98,8 +107,39 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 	// empty one goes along — carrying any injected credential headers.
 	res.Response.Response.ClearRouteCache = true
 	res.Response.Response.HeaderMutation = &extprocv3.HeaderMutation{SetHeaders: injected}
-	res.DynamicMetadata = metadataAnswer(extproc.EgressDialKey, extproc.EgressDialName)
+	res.DynamicMetadata = metadataAnswer(map[string]string{
+		extproc.EgressDialKey:     extproc.EgressDialName,
+		extproc.EgressDialHostKey: dialHost(dest),
+	})
 	return res, nil
+}
+
+// dialHost is the name dest was decided on, for Envoy's forward proxy to dial
+// on the port the actor dialed. Envoy would dial a port written in the name
+// instead, so it carries none, and it would read an unbracketed IPv6
+// literal's last group as a port.
+func dialHost(dest egresspolicy.Destination) string {
+	switch {
+	case dest.Hostname != "":
+		return dest.Hostname
+	case dest.IP.Is6():
+		return "[" + dest.IP.String() + "]"
+	default:
+		return dest.IP.String()
+	}
+}
+
+func isWebSocketUpgrade(md *extproc.RequestMetadata) bool {
+	return md.Method == "GET" && hasHTTPToken(md.Header("connection"), "upgrade") && hasHTTPToken(md.Header("upgrade"), "websocket")
+}
+
+func hasHTTPToken(value, want string) bool {
+	for _, token := range strings.Split(value, ",") {
+		if strings.EqualFold(strings.TrimSpace(token), want) {
+			return true
+		}
+	}
+	return false
 }
 
 // connectionDestination is the SNI a decrypted connection presented, on the

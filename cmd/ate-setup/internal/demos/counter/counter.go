@@ -20,8 +20,7 @@ package counter
 import (
 	"context"
 
-	"github.com/spf13/pflag"
-
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -35,10 +34,7 @@ const (
 )
 
 func (d *demo) externalVolumeValues(e *steps.Env) map[string]string {
-	sc := defaultStorageClass
-	if d.storageClass != "" {
-		sc = d.storageClass
-	}
+	sc := e.Cfg.Resolved().String("demo.counter.storageClass")
 	return map[string]string{
 		"VALIDATE_EXISTING_FILE_PATH_ARG": "  - --validate-existing-file-path=/external-data/test.txt",
 		"EXTERNAL_VOLUME_MOUNTS": "  - name: external-data\n" +
@@ -54,9 +50,6 @@ func (d *demo) externalVolumeValues(e *steps.Env) map[string]string {
 // volume attached.
 type demo struct {
 	demos.Substrate
-
-	withExternalVolume bool
-	storageClass       string
 }
 
 func init() {
@@ -75,17 +68,27 @@ func init() {
 	demos.Register(d)
 }
 
-func (d *demo) Flags(fs *pflag.FlagSet) {
-	fs.BoolVar(&d.withExternalVolume, "with-external-volume", false,
-		"Attach an external volume and validate a pre-seeded file on it (run \"setup csi\" first)")
-	fs.StringVar(&d.storageClass, "storage-class", defaultStorageClass,
-		"StorageClass backing the external volume, e.g. csi-nfs-sc or csi-hostpath-sc. Must be used --with-external-volume=true.")
+// Settings declares the demo's configuration. Commands is left empty:
+// demos.Register fills in the demo's own deploy command path.
+func (d *demo) Settings() []config.Setting {
+	return []config.Setting{
+		{
+			Key: "demo.counter.withExternalVolume", Env: "ATE_DEMO_COUNTER_WITH_EXTERNAL_VOLUME",
+			Flag: "with-external-volume", Kind: config.KindBool, Default: "false",
+			Usage: "Attach an external volume and validate a pre-seeded file on it (run \"setup csi\" first)",
+		},
+		{
+			Key: "demo.counter.storageClass", Env: "STORAGE_CLASS",
+			Flag: "storage-class", Kind: config.KindString, Default: defaultStorageClass,
+			Usage: "StorageClass backing the external volume, e.g. csi-nfs-sc or csi-hostpath-sc. Must be used --with-external-volume=true.",
+		},
+	}
 }
 
 // renderValues opts the template's external-volume lines in when the flag is
 // set; with no values they are dropped.
 func (d *demo) renderValues(_ context.Context, e *steps.Env) (map[string]string, error) {
-	if !d.withExternalVolume {
+	if !e.Cfg.Resolved().Bool("demo.counter.withExternalVolume") {
 		return nil, nil
 	}
 	return d.externalVolumeValues(e), nil

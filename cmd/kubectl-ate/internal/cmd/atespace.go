@@ -24,8 +24,8 @@ import (
 )
 
 var getAtespacesCmd = &cobra.Command{
-	Use:     "atespaces [name ...]",
-	Aliases: []string{"atespace"},
+	Use:     "atespace [name ...]",
+	Aliases: []string{"atespaces"},
 	Short:   "List all atespaces or get one or more atespaces",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()

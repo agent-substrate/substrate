@@ -19,13 +19,26 @@ import (
 	"testing"
 )
 
-func TestWithAgentDebug(t *testing.T) {
-	got := WithAgentDebug("root=/dev/vda1")
-	if !strings.Contains(got, "agent.log=debug") {
-		t.Errorf("WithAgentDebug did not append agent.log=debug: %q", got)
+func TestBaseKernelParamsNoDebugConsole(t *testing.T) {
+	for _, forbidden := range []string{"agent.debug_console", "agent.debug_console_vport", "1026"} {
+		if strings.Contains(BaseKernelParams, forbidden) {
+			t.Errorf("expected BaseKernelParams %q not to contain %q", BaseKernelParams, forbidden)
+		}
 	}
-	// Idempotent: a second call must not append agent.log again.
+}
+
+func TestWithAgentDebug(t *testing.T) {
+	got := WithAgentDebug(BaseKernelParams)
+	for _, want := range []string{
+		"agent.log=debug",
+		"agent.debug_console",
+		"agent.debug_console_vport=1026",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected WithAgentDebug(%q) to contain %q, but got %q", BaseKernelParams, want, got)
+		}
+	}
 	if again := WithAgentDebug(got); again != got {
-		t.Errorf("WithAgentDebug not idempotent:\n first = %q\nsecond = %q", got, again)
+		t.Errorf("expected WithAgentDebug to be idempotent, but got %q then %q", got, again)
 	}
 }

@@ -52,7 +52,7 @@ func (s *RPCService) CreateTag(ctx context.Context, req *ateapipb.CreateTagReque
 	tag, err := s.actorWorkflow.TagActorSnapshot(ctx, req.GetTag())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
+			return nil, apierror.FailedPrecondition("Actor %s not found", actorRef)
 		}
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapipb.UpdateTagReque
 		// A tag whose create never finished names a partial copy. Publishing it
 		// — or changing its scope at all — would hand out content that is still
 		// being written, or may never be.
-		if toUpdate.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
+		if tagDurableSnapshotURI(toUpdate, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == "" {
 			return errTagPending
 		}
 		// Metadata and status are server-owned fields.

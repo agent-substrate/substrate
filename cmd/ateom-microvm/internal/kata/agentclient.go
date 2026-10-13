@@ -39,7 +39,7 @@ const debugConsoleVsockPort = 1026
 
 // DebugConsoleDump connects to the guest's kata debug console (vsock 1026) and
 // runs cmd, returning its combined output. Diagnostic only (requires the guest to
-// have booted with the WithDebugConsole kernel params). Best-effort: returns the
+// have booted with the WithAgentDebug kernel params). Best-effort: returns the
 // error text on failure rather than failing the caller.
 func DebugConsoleDump(ctx context.Context, vsockPath, cmd string) string {
 	d := net.Dialer{}

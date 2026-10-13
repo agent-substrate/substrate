@@ -15,17 +15,68 @@
 package steps
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
+
+// Each bundled connection presents a certificate for its own login user.
+func bundledPostgresDSN(user string) string {
+	bundle := "/run/postgres.podcert.ate.dev/" + user + ".pem"
+	return fmt.Sprintf("postgresql://%s@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=%s&sslkey=%s", user, bundle, bundle)
+}
+
+func (e *Env) postgresReadWriteConnectionStrings() (string, string, error) {
+	if e.Cfg.PostgresReadWriteRole != config.DefaultPostgresReadWriteRole ||
+		e.Cfg.PostgresOwnerRole != config.DefaultPostgresOwnerRole ||
+		e.Cfg.PostgresSchemaName() != config.DefaultPostgresSchema {
+		return "", "", fmt.Errorf("bundled PostgreSQL requires roles %q and %q and schema %q",
+			config.DefaultPostgresReadWriteRole, config.DefaultPostgresOwnerRole, config.DefaultPostgresSchema)
+	}
+	readWriteDSN := bundledPostgresDSN(postgressetup.ReadWriteUser)
+	if e.Cfg.Size10() {
+		readWriteDSN += config.Size10PostgresPoolParams
+	}
+	return readWriteDSN, bundledPostgresDSN(postgressetup.OwnerUser), nil
+}
+
+// setupBundledPostgres creates the fixed development identities before ateapi
+// starts. Administrator credentials stay inside the PostgreSQL pod.
+func (e *Env) setupBundledPostgres(ctx context.Context) error {
+	log.Step("setup_bundled_postgres")
+	var stdout, stderr bytes.Buffer
+	command := []string{
+		"psql", "--no-psqlrc", "--set=ON_ERROR_STOP=1", "--username", "postgres", "--dbname", "atepg",
+	}
+	command = append(command, postgressetup.DefaultConfig().PSQLArgs()...)
+	err := e.Kube.Exec(ctx, e.Namespace(), "postgres-0", "postgres", command,
+		strings.NewReader(postgressetup.Script()), &stdout, &stderr)
+	if err != nil {
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			return fmt.Errorf("setting up bundled PostgreSQL identities: %w: %s", err, detail)
+		}
+		return fmt.Errorf("setting up bundled PostgreSQL identities: %w", err)
+	}
+	return nil
+}
+
+func (e *Env) waitAndSetupBundledPostgres(ctx context.Context) error {
+	if err := e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.Cfg.RolloutTimeout); err != nil {
+		return err
+	}
+	return e.setupBundledPostgres(ctx)
+}
 
 // The size10 PostgreSQL container. Deliberately no CPU limit: under
 // --cordon-control-plane the dedicated ate-postgres pool keeps the pod alone
@@ -76,14 +127,17 @@ func (e *Env) planPostgres(ctx context.Context) (postgresPlan, error) {
 	return postgresPlan{bundled: true}, nil
 }
 
-// applyBundledPostgres applies the bundled PostgreSQL StatefulSet, or logs that
-// it was skipped in favor of an external database.
-func (e *Env) applyBundledPostgres(ctx context.Context, plan postgresPlan) error {
+// deployPostgres applies, waits for, and sets up bundled PostgreSQL, or logs
+// that it was skipped in favor of an external database.
+func (e *Env) deployPostgres(ctx context.Context, plan postgresPlan) error {
 	if !plan.bundled {
 		log.Stepf("Skipping bundled PostgreSQL: external database configured (%s)", plan.external)
 		return nil
 	}
-	return e.applyPostgres(ctx)
+	if err := e.applyPostgres(ctx); err != nil {
+		return err
+	}
+	return e.waitAndSetupBundledPostgres(ctx)
 }
 
 // postgresManifestPath is the bundled PostgreSQL manifest for the environment:
@@ -98,35 +152,82 @@ func (e *Env) postgresManifestPath() string {
 
 // applyPostgres renders and applies the bundled PostgreSQL StatefulSet at the
 // selected cluster size.
-//
-// The size10 changes are made to the rendered objects rather than patched onto
-// the cluster after a base apply: one apply means one rollout, and the pod the
-// rollout wait sees is the resized one. It also means a later server-side
-// apply of the same objects cannot half-revert them, which a post-apply patch
-// under a different field manager would be exposed to.
 func (e *Env) applyPostgres(ctx context.Context) error {
 	if err := e.requirePostgresPool(ctx); err != nil {
 		return err
 	}
-	manifest, err := e.render(e.postgresManifestPath())
+	objs, err := e.postgresObjects()
 	if err != nil {
 		return err
 	}
+	return e.Kube.Apply(ctx, objs)
+}
+
+// postgresObjects renders the bundled PostgreSQL objects with the configured
+// StorageClass and cluster size applied.
+//
+// The changes are made to the rendered objects rather than patched onto the
+// cluster after a base apply: one apply means one rollout, and the pod the
+// rollout wait sees is the resized one. It also means a later server-side
+// apply of the same objects cannot half-revert them, which a post-apply patch
+// under a different field manager would be exposed to.
+func (e *Env) postgresObjects() ([]*unstructured.Unstructured, error) {
+	manifest, err := e.render(e.postgresManifestPath())
+	if err != nil {
+		return nil, err
+	}
 	objs, err := kube.DecodeManifestBytes(manifest)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if class := e.Cfg.PostgresStorageClass; class != "" {
+		log.Stepf("Using StorageClass %s for the bundled PostgreSQL volume", class)
+		if err := setPostgresStorageClass(objs, class); err != nil {
+			return nil, err
+		}
 	}
 	if e.Cfg.Size10() {
 		log.Step("apply_postgres_size10_overrides")
 		conf, err := os.ReadFile(e.Cfg.Manifest("postgres-size10", "postgres-config-patch.yaml"))
 		if err != nil {
-			return fmt.Errorf("while reading the size10 postgres config: %w", err)
+			return nil, fmt.Errorf("while reading the size10 postgres config: %w", err)
 		}
 		if err := applyPostgresSize10Overrides(objs, conf); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return e.Kube.Apply(ctx, objs)
+	return objs, nil
+}
+
+// setPostgresStorageClass sets the StorageClass of the StatefulSet's data
+// volume claim. A claim without one gets the cluster default, which some
+// machine series cannot attach.
+func setPostgresStorageClass(objs []*unstructured.Unstructured, class string) error {
+	for _, obj := range objs {
+		if obj.GetKind() != "StatefulSet" || obj.GetName() != "postgres" {
+			continue
+		}
+		claims, _, err := unstructured.NestedSlice(obj.Object, "spec", "volumeClaimTemplates")
+		if err != nil {
+			return fmt.Errorf("while reading the volume claims of %s: %w", kube.Describe(obj), err)
+		}
+		for i, c := range claims {
+			claim, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			if name, _, _ := unstructured.NestedString(claim, "metadata", "name"); name != "data" {
+				continue
+			}
+			if err := unstructured.SetNestedField(claim, class, "spec", "storageClassName"); err != nil {
+				return fmt.Errorf("while setting the StorageClass on %s: %w", kube.Describe(obj), err)
+			}
+			claims[i] = claim
+			return unstructured.SetNestedSlice(obj.Object, claims, "spec", "volumeClaimTemplates")
+		}
+		return fmt.Errorf("%s has no data volume claim to set the StorageClass on", kube.Describe(obj))
+	}
+	return fmt.Errorf("the postgres manifest has no statefulset/postgres to set the StorageClass on")
 }
 
 // requirePostgresPool refuses to apply the bundled PostgreSQL under
@@ -243,8 +344,5 @@ func (e *Env) DeployPostgres(ctx context.Context) error {
 		return err
 	}
 
-	if err := e.applyPostgres(ctx); err != nil {
-		return err
-	}
-	return e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.Cfg.RolloutTimeout)
+	return e.deployPostgres(ctx, postgresPlan{bundled: true})
 }

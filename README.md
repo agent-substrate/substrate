@@ -1,6 +1,19 @@
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="logo/ate-logo-with-border.svg">
+  <img src="logo/ate-logo.svg" alt="Agent Substrate logo: a green octopus with agent puppets" width="260">
+</picture>
+
 # Agent Substrate
 
+**A secure-by-default runtime for running millions of agent sandboxes on Kubernetes.**
+
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+[Quickstart](#quickstart-development) · [Architecture](docs/architecture.md) · [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md)
+
+</div>
 
 ## What is Agent Substrate?
 
@@ -257,7 +270,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Enabling man-in-the-middle (MITM) interception for Actor Egress policy](docs/egress-trust-bundle.md): Egress policies such as header injection depend on MITM interception of Actor traffic. This guide explains how an Actor should be configured to enable interception.
 * [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.
 * [Rolling Upgrade Runbook](docs/upgrade.md): Upgrade a running substrate node by node without losing actor state.
-* [Threat Model](docs/threat-model.md): Trust boundaries, assumptions, and known risks.
+* [Security Guide](docs/security.md): Security overview, security principles, and threat modeling.
 * [Roadmap](docs/roadmap.md): Current limitations and what is planned next.
 * [Benchmarking Guide](benchmarking/README.md): Locust-based load tests, monitoring stack, and the orchestrated benchmark harness.
 

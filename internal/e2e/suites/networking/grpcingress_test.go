@@ -48,7 +48,7 @@ var grpcEchoFixtureManifests = e2e.SubstrateFixtureManifests{
 
 // TestIngressProtocolDowngrade pins the ingress protocol contract end to end:
 // a client that negotiates HTTP/2 with the router must still be able to reach
-// an HTTP/1.1-only actor (the counter demo), because the atunnel leg
+// an HTTP/1.1-only actor (the counter demo), because ingress
 // downgrades non-gRPC traffic to HTTP/1.1. A gRPC-shaped request, by
 // contrast, is carried to the actor as real HTTP/2 — so against this
 // non-gRPC actor it must fail loudly rather than silently fall back to
@@ -57,9 +57,6 @@ var grpcEchoFixtureManifests = e2e.SubstrateFixtureManifests{
 // TestIngressGRPC below is the positive counterpart: the same path, against an
 // actor that really does speak gRPC.
 func TestIngressProtocolDowngrade(t *testing.T) {
-	if !e2e.CurrentAtenetDataplane().SupportsIngressProtocolDowngrade() {
-		t.Skip("TODO: is HTTP/2-to-HTTP/1 downgrade, and rejecting gRPC for HTTP/1-only actors, an AgentGateway ingress contract?")
-	}
 	ctx := context.Background()
 	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "protodowngrade", e2e.SubstrateCounterFixture())
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -112,10 +109,14 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		// atunnel forwards gRPC as real h2c, which the HTTP/1.1-only counter
-		// cannot speak — a 502 from atunnel, not a silently-downgraded 200.
-		if resp.StatusCode != http.StatusBadGateway {
-			t.Fatalf("gRPC-shaped POST = %d (body %q), want 502: gRPC must not be silently downgraded to HTTP/1.1", resp.StatusCode, body)
+		// The counter cannot speak h2c. Envoy returns HTTP 502; agentgateway
+		// reports the upstream failure with gRPC's Unavailable status.
+		grpcStatus := resp.Header.Get("Grpc-Status")
+		if grpcStatus == "" {
+			grpcStatus = resp.Trailer.Get("Grpc-Status")
+		}
+		if resp.StatusCode != http.StatusBadGateway && !(resp.StatusCode == http.StatusOK && grpcStatus == "14") {
+			t.Fatalf("gRPC-shaped POST = %d, grpc-status %q (body %q), want HTTP 502 or gRPC Unavailable: gRPC must not be silently downgraded to HTTP/1.1", resp.StatusCode, grpcStatus, body)
 		}
 	})
 }

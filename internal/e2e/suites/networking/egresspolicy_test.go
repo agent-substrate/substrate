@@ -137,9 +137,6 @@ func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
 // TestActorEgressHTTPSByHostnamePassthrough: the gateway acts as TCP proxy fetching
 // allowed SNI.
 func TestActorEgressHTTPSByHostnamePassthrough(t *testing.T) {
-	if !e2e.CurrentAtenetDataplane().SupportsTLSPassthroughEgressPolicy() {
-		t.Skip("TODO: AgentGateway must enforce substrateEgress for TLS passthrough")
-	}
 	ctx := context.Background()
 	dataplane := e2e.CurrentAtenetDataplane()
 	router, actorRef := hostnamePolicyActor(t, ctx)

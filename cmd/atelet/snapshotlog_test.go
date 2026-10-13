@@ -106,7 +106,7 @@ func TestSnapshotLogAttrsSeconds(t *testing.T) {
 		templateNamespace: testTemplateNamespace,
 		templateName:      testTemplateName,
 		kind:              ateattr.SnapshotKindLatest,
-		scope:             ateattr.SnapshotScopeFull,
+		fidelity:          ateattr.SnapshotFidelityMemory,
 		sandboxClass:      "gvisor",
 	}
 	attrs := snapshotLogAttrs(testAttribution(), op, restoreDurationMetric, nil,
@@ -125,7 +125,7 @@ func TestSnapshotLogAttrs(t *testing.T) {
 		templateNamespace: testTemplateNamespace,
 		templateName:      testTemplateName,
 		kind:              ateattr.SnapshotKindLatest,
-		scope:             ateattr.SnapshotScopeFull,
+		fidelity:          ateattr.SnapshotFidelityMemory,
 		sandboxClass:      "gvisor",
 	}
 
@@ -157,7 +157,7 @@ func TestSnapshotLogAttrs(t *testing.T) {
 				"ate.template.atespace": testTemplateNamespace,
 				"ate.template.name":     testTemplateName,
 				"ate.snapshot.kind":     ateattr.SnapshotKindLatest,
-				"ate.snapshot.scope":    ateattr.SnapshotScopeFull,
+				"ate.snapshot.fidelity": ateattr.SnapshotFidelityMemory,
 				"ate.sandbox.class":     "gvisor",
 			},
 			wantNumbers: map[string]float64{
@@ -229,7 +229,7 @@ func TestSnapshotLogAttrs(t *testing.T) {
 			op: snapshotOp{
 				templateNamespace: testTemplateNamespace,
 				templateName:      testTemplateName,
-				scope:             ateattr.SnapshotScopeFull,
+				fidelity:          ateattr.SnapshotFidelityMemory,
 			},
 			phases: []phase{{ateattr.SnapshotPhaseTotal, 700 * time.Millisecond}},
 			wantStrings: map[string]string{
@@ -245,7 +245,7 @@ func TestSnapshotLogAttrs(t *testing.T) {
 			op: snapshotOp{
 				templateNamespace: testTemplateNamespace,
 				templateName:      testTemplateName,
-				scope:             ateattr.SnapshotScopeFull,
+				fidelity:          ateattr.SnapshotFidelityMemory,
 				sandboxClass:      "../../etc/passwd",
 			},
 			phases: []phase{{ateattr.SnapshotPhaseTotal, time.Second}},

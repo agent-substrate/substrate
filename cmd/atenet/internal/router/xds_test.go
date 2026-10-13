@@ -38,6 +38,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	streamaccesslogv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
 	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
@@ -61,14 +62,14 @@ func TestActorRoutingFilterStateFilter(t *testing.T) {
 		{
 			name: "ordinary ingress",
 			want: map[string]string{
-				extproc.TargetActorFilterStateKey: "%REQ(ate-target-actor)%",
+				extproc.TargetActorFilterStateKey: "%CEL(request.headers['ate-target-actor'])%",
 			},
 		},
 		{
 			name:             "CONNECT termination",
 			captureAuthority: true,
 			want: map[string]string{
-				extproc.TargetActorFilterStateKey:      "%REQ(ate-target-actor)%",
+				extproc.TargetActorFilterStateKey:      "%CEL(request.headers['ate-target-actor'])%",
 				extproc.ConnectAuthorityFilterStateKey: "%REQ(:authority)%",
 			},
 		},
@@ -482,6 +483,57 @@ func TestXdsServer_UpdateSnapshot_WithConnect(t *testing.T) {
 	secretsMap := snap.GetResources(resourcev3.SecretType)
 	if _, exists := secretsMap[HTTPSCertSecretName]; !exists {
 		t.Error("cert secret missing even though connect_terminate_tls needs it")
+	}
+}
+
+// Actor traffic can carry credentials in the query string, so no HCM may log
+// the request path with its query.
+func TestXdsServer_AccessLogsOmitQueryString(t *testing.T) {
+	server := NewXdsServer(18000)
+	server.SetConfig(8085, 50053, "127.0.0.1")
+	server.SetConnectPorts(8081, 8444)
+	server.SetTlsConfig(8443, "/run/servicedns.podcert.ate.dev/credential-bundle.pem")
+
+	if err := server.UpdateSnapshot(); err != nil {
+		t.Fatalf("UpdateSnapshot failed: %v", err)
+	}
+	res, err := server.snapshot.GetSnapshot(NodeID)
+	if err != nil {
+		t.Fatalf("Failed to get snapshot: %v", err)
+	}
+	snap := res.(*cachev3.Snapshot)
+
+	hcms := 0
+	for name, raw := range snap.GetResources(resourcev3.ListenerType) {
+		for _, fc := range raw.(*listenerv3.Listener).GetFilterChains() {
+			for _, f := range fc.GetFilters() {
+				if f.GetName() != "envoy.filters.network.http_connection_manager" {
+					continue
+				}
+				hcms++
+				hcm := &hcmv3.HttpConnectionManager{}
+				if err := f.GetTypedConfig().UnmarshalTo(hcm); err != nil {
+					t.Fatalf("listener %s: unmarshal HCM: %v", name, err)
+				}
+				if len(hcm.GetAccessLog()) == 0 {
+					t.Errorf("listener %s: HCM has no access log", name)
+				}
+				for _, al := range hcm.GetAccessLog() {
+					stdout := &streamaccesslogv3.StdoutAccessLog{}
+					if err := al.GetTypedConfig().UnmarshalTo(stdout); err != nil {
+						t.Fatalf("listener %s: unmarshal access log: %v", name, err)
+					}
+					// An unset format means Envoy's default, which logs the query.
+					format := stdout.GetLogFormat().GetTextFormatSource().GetInlineString()
+					if !strings.Contains(format, "%PATH(NQ:") {
+						t.Errorf("listener %s: access log format %q does not strip the query string", name, format)
+					}
+				}
+			}
+		}
+	}
+	if hcms == 0 {
+		t.Fatal("snapshot has no HTTP connection managers")
 	}
 }
 
@@ -1448,4 +1500,150 @@ func TestXdsServer_ALPN(t *testing.T) {
 	if hcm.GetCodecType() != hcmv3.HttpConnectionManager_AUTO {
 		t.Errorf("HTTPS listener HCM codec = %v, want AUTO so the negotiated protocol is honored", hcm.GetCodecType())
 	}
+}
+
+// snapshotListeners builds the snapshot and returns its listeners by name.
+func snapshotListeners(t *testing.T, server *XdsServer) map[string]*listenerv3.Listener {
+	t.Helper()
+	if err := server.UpdateSnapshot(); err != nil {
+		t.Fatalf("UpdateSnapshot failed: %v", err)
+	}
+	res, err := server.snapshot.GetSnapshot(NodeID)
+	if err != nil {
+		t.Fatalf("Failed to get snapshot: %v", err)
+	}
+	snap, ok := res.(*cachev3.Snapshot)
+	if !ok {
+		t.Fatalf("Snapshot doesn't conform to type *cachev3.Snapshot, got %T", res)
+	}
+	listeners := make(map[string]*listenerv3.Listener)
+	for name, raw := range snap.GetResources(resourcev3.ListenerType) {
+		l, ok := raw.(*listenerv3.Listener)
+		if !ok {
+			t.Fatalf("Listener '%s' doesn't conform to type *listenerv3.Listener, got %T", name, raw)
+		}
+		listeners[name] = l
+	}
+	return listeners
+}
+
+// downstreamTlsContext returns the DownstreamTlsContext of a listener's only
+// filter chain.
+func downstreamTlsContext(t *testing.T, l *listenerv3.Listener) *tlsv3.DownstreamTlsContext {
+	t.Helper()
+	chains := l.GetFilterChains()
+	if len(chains) != 1 {
+		t.Fatalf("Listener '%s': expected 1 filter chain, got %d", l.GetName(), len(chains))
+	}
+	dtc := &tlsv3.DownstreamTlsContext{}
+	if err := chains[0].GetTransportSocket().GetTypedConfig().UnmarshalTo(dtc); err != nil {
+		t.Fatalf("Listener '%s': failed to unmarshal DownstreamTlsContext: %v", l.GetName(), err)
+	}
+	return dtc
+}
+
+func TestXdsServer_UpdateSnapshot_DownstreamClientAuth(t *testing.T) {
+	const (
+		certPath  = "/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+		caPath    = "/run/podidentity.podcert.ate.dev/trust-bundle.pem"
+		bundleDir = "/run/podidentity.podcert.ate.dev"
+	)
+	allowed := []string{
+		"spiffe://cluster.local/ns/demo/sa/client",
+		"spiffe://cluster.local/ns/other/sa/client",
+	}
+	tlsListeners := []string{IngressHTTPSListener, "connect_terminate_tls"}
+
+	for _, tc := range []struct {
+		name    string
+		require bool
+	}{
+		{name: "Required", require: true},
+		{name: "RequestedNotRequired", require: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := NewXdsServer(18000)
+			server.SetConfig(0, 50053, "127.0.0.1")
+			server.SetConnectPorts(0, 8444)
+			server.SetTlsConfig(8443, certPath)
+			server.SetDownstreamClientAuth(caPath, allowed, tc.require)
+
+			listeners := snapshotListeners(t, server)
+			for _, plaintext := range []string{IngressHTTPListener, "connect_terminate"} {
+				if _, exists := listeners[plaintext]; exists {
+					t.Errorf("Plaintext listener '%s' must not be built when its port is 0", plaintext)
+				}
+			}
+			for _, name := range tlsListeners {
+				l, exists := listeners[name]
+				if !exists {
+					t.Fatalf("TLS listener '%s' is missing from snapshot listeners", name)
+				}
+				dtc := downstreamTlsContext(t, l)
+				if got := dtc.GetRequireClientCertificate().GetValue(); got != tc.require {
+					t.Errorf("Listener '%s': require_client_certificate = %v, want %v", name, got, tc.require)
+				}
+				combined := dtc.GetCommonTlsContext().GetCombinedValidationContext()
+				if combined == nil {
+					t.Fatalf("Listener '%s': expected a combined validation context", name)
+				}
+				if got := combined.GetValidationContextSdsSecretConfig().GetName(); got != IngressClientTrustSecretName {
+					t.Errorf("Listener '%s': validation SDS secret = '%s', want '%s'", name, got, IngressClientTrustSecretName)
+				}
+				if combined.GetValidationContextSdsSecretConfig().GetSdsConfig().GetAds() == nil {
+					t.Errorf("Listener '%s': expected the validation SDS config to use the ADS config source", name)
+				}
+				matchers := combined.GetDefaultValidationContext().GetMatchTypedSubjectAltNames()
+				if len(matchers) != len(allowed) {
+					t.Fatalf("Listener '%s': expected %d SAN matchers, got %d", name, len(allowed), len(matchers))
+				}
+				for i, m := range matchers {
+					if m.GetSanType() != tlsv3.SubjectAltNameMatcher_URI {
+						t.Errorf("Listener '%s': matcher %d SAN type = %v, want URI", name, i, m.GetSanType())
+					}
+					if got := m.GetMatcher().GetExact(); got != allowed[i] {
+						t.Errorf("Listener '%s': matcher %d exact = '%s', want '%s'", name, i, got, allowed[i])
+					}
+				}
+			}
+
+			secrets := snapshotSecrets(t, server)
+			trust, exists := secrets[IngressClientTrustSecretName]
+			if !exists {
+				t.Fatalf("Secret '%s' is missing from snapshot secrets", IngressClientTrustSecretName)
+			}
+			validation := trust.GetValidationContext()
+			if got := validation.GetTrustedCa().GetFilename(); got != caPath {
+				t.Errorf("Expected trusted CA filename '%s', got '%s'", caPath, got)
+			}
+			if got := validation.GetWatchedDirectory().GetPath(); got != bundleDir {
+				t.Errorf("Expected client CA watched directory '%s', got '%s'", bundleDir, got)
+			}
+		})
+	}
+
+	t.Run("NotRequiredByDefault", func(t *testing.T) {
+		server := NewXdsServer(18000)
+		server.SetConfig(8085, 50053, "127.0.0.1")
+		server.SetConnectPorts(8081, 8444)
+		server.SetTlsConfig(8443, certPath)
+
+		listeners := snapshotListeners(t, server)
+		for _, name := range tlsListeners {
+			l, exists := listeners[name]
+			if !exists {
+				t.Fatalf("TLS listener '%s' is missing from snapshot listeners", name)
+			}
+			dtc := downstreamTlsContext(t, l)
+			if dtc.GetRequireClientCertificate().GetValue() {
+				t.Errorf("Listener '%s': client certificate required without client auth configured", name)
+			}
+			if dtc.GetCommonTlsContext().GetValidationContextType() != nil {
+				t.Errorf("Listener '%s': unexpected client validation context", name)
+			}
+		}
+		if _, exists := snapshotSecrets(t, server)[IngressClientTrustSecretName]; exists {
+			t.Errorf("Secret '%s' must not be published without client auth configured", IngressClientTrustSecretName)
+		}
+	})
 }

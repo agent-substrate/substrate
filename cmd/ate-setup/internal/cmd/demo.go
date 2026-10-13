@@ -19,6 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
 	// Registers every bundled demo; see the package doc.
 	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/all"
@@ -31,8 +32,9 @@ func demoArg(d demos.Demo) string {
 }
 
 var deployDemoCmd = &cobra.Command{
-	Use:   "demo",
-	Short: "Deploy a bundled demo",
+	Annotations: map[string]string{recordAnnotation: "no"},
+	Use:         "demo",
+	Short:       "Deploy a bundled demo",
 }
 
 var deleteDemoCmd = &cobra.Command{
@@ -57,9 +59,10 @@ func init() {
 				return demo.Deploy(cmd.Context(), env)
 			},
 		}
-		// Demo flags bind to the demo value itself, so they must be registered
-		// on the deploy command only: the delete path never reads them.
-		demo.Flags(deploy.Flags())
+		// demos.Register already registered the settings; only the flag
+		// binding needs the command, and it goes on deploy alone because the
+		// delete path never reads it.
+		config.BindCommandFlags(demos.DeployCommandPath(demo), deploy.Flags())
 		deployDemoCmd.AddCommand(deploy)
 
 		deleteDemoCmd.AddCommand(&cobra.Command{

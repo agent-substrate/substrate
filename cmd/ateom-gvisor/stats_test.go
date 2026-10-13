@@ -17,20 +17,24 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"github.com/agent-substrate/substrate/internal/actorlock"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -46,6 +50,9 @@ var testActor = resources.ActorAttribution{
 	TemplateAtespace: "ns-a",
 	TemplateName:     "template-a",
 }
+
+// healthyCPUUsec is the usage_usec in healthyCgroup.
+const healthyCPUUsec = 1234567
 
 var healthyCgroup = map[string]string{
 	"memory.current": "157286400\n",
@@ -92,7 +99,7 @@ func setHostedActor(s *AteomService, attribution *resources.ActorAttribution) {
 	defer s.actorsMu.Unlock()
 	s.actors = map[string]*hostedActor{}
 	if attribution != nil {
-		s.actors[attribution.UID] = &hostedActor{attribution: *attribution}
+		s.actors[attribution.UID] = &hostedActor{attribution: *attribution, usage: testActivation()}
 	}
 }
 
@@ -239,7 +246,7 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
 	setHostedActor(s, &testActor)
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
@@ -267,7 +274,7 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() on an available ateom: error = %v, want nil", err)
 	}
@@ -290,21 +297,19 @@ func pendingFor(attr resources.ActorAttribution) *ateompb.WorkloadStatsSample {
 	}
 }
 
-// TestGetActiveWorkloadStatsBooting: executing but nothing to measure yet is
+// TestGetActiveWorkloadStatsNoCgroup: a hosted actor with no cgroup to read is
 // a pending entry -- attribution without measurements -- not an error, unlike
-// the keyed read's FAILED_PRECONDITION. A blind caller finds boots as
-// routinely as idle workers, and the entry keeps a workload that dies during
-// boot attributable.
-func TestGetActiveWorkloadStatsBooting(t *testing.T) {
-	s := newStatsService(t, nil) // no cgroup directory: a poll landing mid-boot
+// the keyed read's FAILED_PRECONDITION.
+func TestGetActiveWorkloadStatsNoCgroup(t *testing.T) {
+	s := newStatsService(t, nil) // no cgroup directory: the sandbox is gone
 	setHostedActor(s, &testActor)
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
-		t.Fatalf("GetActiveWorkloadStats() mid-boot: error = %v, want nil", err)
+		t.Fatalf("GetActiveWorkloadStats() with no cgroup: error = %v, want nil", err)
 	}
 	if len(got.GetSamples()) != 1 {
-		t.Fatalf("GetActiveWorkloadStats() mid-boot = %v, want one pending entry", got)
+		t.Fatalf("GetActiveWorkloadStats() with no cgroup = %v, want one pending entry", got)
 	}
 	entry := got.GetSamples()[0]
 	if entry.GetObservedAtUnixNano() == 0 {
@@ -332,35 +337,34 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 	tests := []struct {
 		name string
 		to   *resources.ActorAttribution
-		// want is the expected samples, observed_at zeroed.
-		want []*ateompb.WorkloadStatsSample
 	}{
 		// Resumed on another template under the same UID: the numbers belong
-		// to the new activation, so they are withheld and it is pending.
-		{name: "re-hosted on another template", to: &otherTemplate, want: []*ateompb.WorkloadStatsSample{pendingFor(otherTemplate)}},
+		// to the new activation, which starts with its own initial reading.
+		{name: "re-hosted on another template", to: &otherTemplate},
 		// Gone, or replaced by an actor this read did not snapshot.
-		{name: "to another actor", to: &otherActor, want: nil},
-		{name: "to available", to: nil, want: nil},
+		{name: "to another actor", to: &otherActor},
+		{name: "to available", to: nil},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStatsService(t, healthyCgroup)
+			rec := withUsageRecorder(s)
 			setHostedActor(s, &testActor)
 			s.readSandboxCgroup = func(dir string) (cgroupstats.Sample, error) {
 				setHostedActor(s, tc.to)
 				return cgroupstats.Read(dir)
 			}
 
-			got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
-			if err != nil {
-				t.Fatalf("GetActiveWorkloadStats() during transition: error = %v, want nil", err)
+			s.sweepUsage(context.Background())
+			if got := rec.Kinds(); len(got) != 0 {
+				t.Errorf("records during transition = %v, want none", got)
 			}
-			for _, sample := range got.GetSamples() {
-				sample.ObservedAtUnixNano = 0
-			}
-			if diff := cmp.Diff(tc.want, got.GetSamples(), protocmp.Transform(), cmpopts.EquateEmpty()); diff != "" {
-				t.Errorf("GetActiveWorkloadStats() during transition mismatch (-want +got):\n%s", diff)
+			// Nothing read for the old activation is served for the new one.
+			if tc.to != nil {
+				if latest := s.lookupActor(tc.to.UID).usage.Latest(); latest != nil {
+					t.Errorf("new activation serves %v, want nothing until its own sample", latest)
+				}
 			}
 		})
 	}
@@ -393,12 +397,12 @@ func TestGetActiveWorkloadStatsSeveralActors(t *testing.T) {
 
 	s.actorsMu.Lock()
 	s.actors = map[string]*hostedActor{
-		testActor.UID: {attribution: testActor},
-		second.UID:    {attribution: second},
+		testActor.UID: {attribution: testActor, usage: testActivation()},
+		second.UID:    {attribution: second, usage: testActivation()},
 	}
 	s.actorsMu.Unlock()
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
@@ -416,22 +420,22 @@ func TestGetActiveWorkloadStatsSeveralActors(t *testing.T) {
 	}
 }
 
-// One actor booting does not stop the rest being measured: it answers as a
-// pending entry alongside their samples.
-func TestGetActiveWorkloadStatsOneBooting(t *testing.T) {
-	booting := testActor
-	booting.UID = "uid-booting"
+// One actor with no cgroup does not stop the rest being measured: it answers as
+// a pending entry alongside their samples.
+func TestGetActiveWorkloadStatsOneNoCgroup(t *testing.T) {
+	gone := testActor
+	gone.UID = "uid-gone"
 
 	s := newStatsService(t, healthyCgroup)
 	s.actorsMu.Lock()
 	s.actors = map[string]*hostedActor{
-		testActor.UID: {attribution: testActor},
-		// No cgroup leaf: accepted, but runsc has not created it yet.
-		booting.UID: {attribution: booting},
+		testActor.UID: {attribution: testActor, usage: testActivation()},
+		// No cgroup leaf: the sandbox is gone.
+		gone.UID: {attribution: gone, usage: testActivation()},
 	}
 	s.actorsMu.Unlock()
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
@@ -462,12 +466,12 @@ func TestGetActiveWorkloadStatsOneUnreadable(t *testing.T) {
 	}
 	s.actorsMu.Lock()
 	s.actors = map[string]*hostedActor{
-		testActor.UID: {attribution: testActor},
-		broken.UID:    {attribution: broken},
+		testActor.UID: {attribution: testActor, usage: testActivation()},
+		broken.UID:    {attribution: broken, usage: testActivation()},
 	}
 	s.actorsMu.Unlock()
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
@@ -478,6 +482,195 @@ func TestGetActiveWorkloadStatsOneUnreadable(t *testing.T) {
 		measured := sample.GetSource() != ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED
 		if want := sample.GetActorUid() == testActor.UID; measured != want {
 			t.Errorf("actor %q measured = %v, want %v", sample.GetActorUid(), measured, want)
+		}
+	}
+}
+
+// testActivation is a running actor's activation: its initial reading is done,
+// so the sweep samples it. It starts at the unix epoch, so a sample's epoch is
+// zero and the expected samples here need not name it; the epoch has tests of
+// its own.
+func testActivation() *ateomstats.Activation {
+	a := ateomstats.NewActivation(time.Unix(0, 0), false)
+	a.Initial(nil, nil)
+	return a
+}
+
+// sweepAndList runs one sampler sweep, then the discovery read that serves it.
+func sweepAndList(s *AteomService) (*ateompb.GetActiveWorkloadStatsResponse, error) {
+	s.sweepUsage(context.Background())
+	return s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+}
+
+// deadCgroup is a sandbox leaf after the kernel OOM-killed the sentry: the leaf
+// and its counters remain, the processes do not.
+var deadCgroup = map[string]string{
+	"memory.current": "16384\n",
+	"memory.events":  "oom 5334\noom_kill 3\n",
+	"cgroup.events":  "populated 0\nfrozen 0\n",
+}
+
+// captureWarnings routes the default logger to a buffer for the test.
+func captureWarnings(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+const deadSandboxMsg = "Sandbox has no processes left while the actor is hosted"
+
+// TestSweepUsageDeadSandbox: a hosted actor whose sandbox cgroup
+// is empty is warned about once per activation, and not at all while a
+// lifecycle RPC is tearing it down.
+func TestSweepUsageDeadSandbox(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		files     map[string]string
+		busy      bool
+		wantWarns int
+	}{
+		{name: "dead sandbox warns once", files: deadCgroup, wantWarns: 1},
+		{name: "teardown in progress is skipped", files: deadCgroup, busy: true},
+		{name: "live sandbox does not warn", files: healthyCgroup},
+		{name: "booting sandbox with no cgroup yet does not warn", files: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureWarnings(t)
+			s := newStatsService(t, tc.files)
+			setHostedActor(s, &testActor)
+			if tc.busy {
+				if !s.locks.Lock(context.Background(), testActor.UID) {
+					t.Fatal("could not take the actor lock")
+				}
+				defer s.locks.Unlock(testActor.UID)
+			}
+
+			// Two sweeps: the second must not repeat the warning.
+			for range 2 {
+				got, err := sweepAndList(s)
+				if err != nil {
+					t.Fatalf("sweepAndList() error = %v, want nil", err)
+				}
+				if len(got.GetSamples()) != 1 {
+					t.Fatalf("sweepAndList() = %v, want one sample", got)
+				}
+			}
+
+			if n := strings.Count(logs.String(), deadSandboxMsg); n != tc.wantWarns {
+				t.Fatalf("got %d dead-sandbox warnings, want %d; logs:\n%s", n, tc.wantWarns, logs)
+			}
+			if tc.wantWarns > 0 {
+				for _, want := range []string{`"ate.actor.uid":"uid-a"`, `"ate.actor.name":"actor-a"`, `"ate.atespace":"space-a"`, `"ate.template.name":"template-a"`, `"ate.sandbox.oom_kills":3`} {
+					if !strings.Contains(logs.String(), want) {
+						t.Errorf("warning missing %s; logs:\n%s", want, logs)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A record that is no longer the hosted one -- the actor was unhosted or
+// re-hosted after the cgroup was read -- is never reported.
+func TestWarnDeadSandboxStaleRecord(t *testing.T) {
+	logs := captureWarnings(t)
+	s := newStatsService(t, deadCgroup)
+	setHostedActor(s, &testActor)
+	stale := &hostedActor{attribution: testActor}
+
+	s.warnDeadSandbox(context.Background(), stale, cgroupstats.Sample{Empty: true})
+
+	if strings.Contains(logs.String(), deadSandboxMsg) {
+		t.Fatalf("warned about a stale record; logs:\n%s", logs)
+	}
+	if stale.deadReported.Load() {
+		t.Error("stale record marked as reported")
+	}
+}
+
+// The once-per-activation guarantee is per hostedActor: a new activation of
+// the same actor that dies again is reported again.
+func TestSweepUsageDeadSandboxNewActivation(t *testing.T) {
+	logs := captureWarnings(t)
+	s := newStatsService(t, deadCgroup)
+	for range 2 {
+		setHostedActor(s, &testActor) // a fresh hostedActor, as hostActor makes
+		s.sweepUsage(context.Background())
+	}
+	if n := strings.Count(logs.String(), deadSandboxMsg); n != 2 {
+		t.Fatalf("got %d dead-sandbox warnings over two activations, want 2; logs:\n%s", n, logs)
+	}
+}
+
+// Concurrent sweeps of one dead sandbox still warn once.
+func TestSweepUsageDeadSandboxConcurrentSweeps(t *testing.T) {
+	logs := captureWarnings(t)
+	s := newStatsService(t, deadCgroup)
+	setHostedActor(s, &testActor)
+
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Go(func() {
+			s.sweepUsage(context.Background())
+		})
+	}
+	wg.Wait()
+	if n := strings.Count(logs.String(), deadSandboxMsg); n != 1 {
+		t.Fatalf("got %d dead-sandbox warnings from concurrent sweeps, want 1; logs:\n%s", n, logs)
+	}
+}
+
+// drainedCgroup is the sandbox leaf after a drain has killed the app
+// containers: the sentry and gofers stay in the pause leaf, so it is still
+// populated.
+var drainedCgroup = map[string]string{
+	"memory.current": "31457280\n",
+	"memory.events":  "oom 0\noom_kill 0\n",
+	"cgroup.events":  "populated 1\nfrozen 0\n",
+}
+
+// TestDeadSandboxCheckDuringDrain pins what the check does while
+// gracefulShutdown runs. The drain kills the app containers without taking
+// actor locks or unhosting, but it never stops the sandbox, so the leaf stays
+// populated and nothing is logged. A sandbox that dies during the drain is
+// still reported.
+func TestDeadSandboxCheckDuringDrain(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		files     map[string]string
+		wantWarns int
+	}{
+		{name: "app containers killed, sentry alive", files: drainedCgroup},
+		{name: "sandbox died during the drain", files: deadCgroup, wantWarns: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureWarnings(t)
+			s := newStatsService(t, tc.files)
+			setHostedActor(s, &testActor)
+			s.shuttingDown.Store(true)
+
+			s.sweepUsage(context.Background())
+			if n := strings.Count(logs.String(), deadSandboxMsg); n != tc.wantWarns {
+				t.Fatalf("got %d dead-sandbox warnings, want %d; logs:\n%s", n, tc.wantWarns, logs)
+			}
+		})
+	}
+}
+
+// TestDrainNeverKillsPauseContainer: gracefulShutdown kills the names
+// containerNames takes from the spec. atelet rejects a spec that names the
+// pause container, so the drain cannot stop the sandbox itself.
+func TestDrainNeverKillsPauseContainer(t *testing.T) {
+	if err := resources.ValidateContainerNames([]string{ocispec.PauseContainer}); err == nil {
+		t.Fatalf("ValidateContainerNames accepted %q; a spec could then put it on the drain's kill list", ocispec.PauseContainer)
+	}
+	spec := []*ateompb.Container{{Name: "app"}, {Name: "sidecar"}}
+	for _, name := range containerNames(spec) {
+		if name == ocispec.PauseContainer {
+			t.Fatalf("containerNames(%v) includes %q", spec, ocispec.PauseContainer)
 		}
 	}
 }

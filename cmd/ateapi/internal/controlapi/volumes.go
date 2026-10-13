@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -47,7 +47,7 @@ func initialActorVolumes(ctx context.Context, scLister storagev1listers.StorageC
 			}
 
 			volumes = append(volumes, &ateapipb.ExternalVolume{
-				VolumeName: vol.GetName(),
+				Name:       vol.GetName(),
 				VolumeType: sc.Provisioner,
 				Status:     ateapipb.ExternalVolume_STATUS_PENDING,
 			})
@@ -75,7 +75,7 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 		currentIdx = idx
 
 		var specVol *ateapipb.Volume
-		volName := vol.GetVolumeName()
+		volName := vol.GetName()
 		for _, tVol := range template.GetVolumes() {
 			if tVol.GetName() == volName {
 				specVol = tVol
@@ -103,6 +103,9 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 		scName := specVol.GetExternalVolumeTemplate().GetStorageClassName()
 		sc, err := scLister.Get(scName)
 		if err != nil {
+			if k8serrors.IsNotFound(err) {
+				return resultVolumes, apierror.FailedPrecondition("StorageClass %q not found", scName)
+			}
 			return resultVolumes, apierror.Internal("failed to get StorageClass %q: %v", scName, err)
 		}
 
@@ -115,17 +118,21 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			return resultVolumes, apierror.FailedPrecondition("failed to get volume plugin for driver %q (StorageClass %q): %v", sc.Provisioner, scName, err)
 		}
 
-		storageVolumeID, volCtx, volErr := plugin.CreateVolume(ctx, actVolID, specVol.GetExternalVolumeTemplate().GetCapacity(), sc.Provisioner, sc.Parameters)
+		resp, volErr := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{
+			Name:       actVolID,
+			Capacity:   specVol.GetExternalVolumeTemplate().GetCapacity(),
+			Parameters: sc.Parameters,
+		})
 		if volErr != nil {
 			return resultVolumes, apierror.Internal("failed to create volume %q: %v", specVol.GetName(), volErr)
 		}
 
 		resultVolumes = append(resultVolumes, &ateapipb.ExternalVolume{
-			VolumeName:      volName,
-			StorageVolumeId: storageVolumeID,
+			Name:            volName,
+			StorageVolumeId: resp.VolumeID,
 			VolumeType:      sc.Provisioner,
 			Status:          ateapipb.ExternalVolume_STATUS_CREATED,
-			VolumeContext:   volCtx,
+			VolumeContext:   resp.VolumeContext,
 		})
 	}
 	return resultVolumes, nil
@@ -143,7 +150,7 @@ func deleteActorVolumes(ctx context.Context, registry VolumePluginRegistry, acto
 			// If the volume hasn't been successfully created yet, it's possible
 			// that it doesn't have a storage volume ID. In that case, fallback
 			// to the original requested volID.
-			volID = actorVolumeID(actorUID, vol.GetVolumeName())
+			volID = actorVolumeID(actorUID, vol.GetName())
 		}
 		// TODO: Standardize volume plugin lookup and error handling across control plane
 		// and worker plane (e.g. via a shared helper).
@@ -170,7 +177,7 @@ func getMountedActorVolumes(ctx context.Context, ref *ateapipb.ObjectRef, volume
 		// Find the corresponding volume in the ActorTemplate to check if it's mounted
 		var matchedTemplateVol *ateapipb.Volume
 		for _, tVol := range template.GetVolumes() {
-			if vol.GetVolumeName() == tVol.GetName() {
+			if vol.GetName() == tVol.GetName() {
 				matchedTemplateVol = tVol
 				break
 			}
@@ -194,26 +201,11 @@ func actorVolumeID(actorUID string, volumeName string) string {
 	return fmt.Sprintf("substrate-%s-%s", actorUID, volumeName)
 }
 
-// detachActorVolumes detaches all mounted external volumes for an actor from its worker node.
-func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registry VolumePluginRegistry, actor *ateapipb.Actor, template *ateapipb.ActorTemplate, action string) error {
-	assignment := actor.GetStatus().GetWorkerAssignment()
-	if assignment == nil {
-		slog.WarnContext(ctx, fmt.Sprintf("Actor has no assigned worker pod during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
-		return nil
-	}
-
-	worker, err := st.GetWorker(ctx, assignment.GetWorker().GetName())
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			slog.WarnContext(ctx, fmt.Sprintf("Worker not found in store during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
-			return nil
-		}
-		return fmt.Errorf("failed to get worker: %w", err)
-	}
-
-	node := worker.GetNodeName()
+// detachActorVolumes detaches all mounted external volumes for an actor from its assigned node.
+func detachActorVolumes(ctx context.Context, registry VolumePluginRegistry, actor *ateapipb.Actor, template *ateapipb.ActorTemplate, action string) error {
+	node := actor.GetStatus().GetAssignedNode()
 	if node == "" {
-		slog.WarnContext(ctx, fmt.Sprintf("Worker has no assigned node name during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
+		slog.WarnContext(ctx, fmt.Sprintf("Actor has no assigned node during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
 		return nil
 	}
 
@@ -222,9 +214,9 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 	// in the template's containers. If the template is missing/deleted, fall back to
 	// attempting detachment for all external volumes recorded on the actor so we do
 	// not orphan attached disks on the worker node.
-	volumesToDetach := actor.GetStatus().GetActorVolumes()
+	volumesToDetach := actor.GetStatus().GetExternalVolumes()
 	if template != nil {
-		volumesToDetach = getMountedActorVolumes(ctx, ref, actor.GetStatus().GetActorVolumes(), template)
+		volumesToDetach = getMountedActorVolumes(ctx, ref, actor.GetStatus().GetExternalVolumes(), template)
 	}
 	// Collect errors for all volumes to detach, but continue processing so we attempt to detach all volumes.
 	var errs []error
@@ -232,7 +224,7 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 		// StorageVolumeId is only populated once the volume is provisioned.
 		// Skip volumes that were never created (e.g. failed during PENDING state).
 		if vol.GetStorageVolumeId() == "" {
-			slog.WarnContext(ctx, "Volume has no storage volume ID, skipping detach", slog.String("volume_name", vol.GetVolumeName()), slog.String("actor_id", actor.GetMetadata().GetName()))
+			slog.WarnContext(ctx, "Volume has no storage volume ID, skipping detach", slog.String("volume_name", vol.GetName()), slog.String("actor_id", actor.GetMetadata().GetName()))
 			continue
 		}
 		slog.InfoContext(ctx, "Detaching volume from node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
@@ -250,10 +242,4 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// detachActorVolumesStore enumerates the subset of store methods needed to
-// detach actor volumes.
-type detachActorVolumesStore interface {
-	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
 }

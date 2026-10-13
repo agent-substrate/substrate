@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // Where a run's record goes. Success overwrites one file per context, because
@@ -62,10 +64,11 @@ func RecordDir(configured string) (string, error) {
 // RecordSuccess writes the configuration a completed run used, replacing the
 // previous record for that context. It returns the path and the secret
 // settings it left out.
-func RecordSuccess(dir, context string, r *Resolved) (string, []string, error) {
+func RecordSuccess(dir, context, substrateVersion string, r *Resolved) (string, []string, error) {
 	d, omitted := NewDocument(r, DocumentMetadata{
-		Context: context,
-		Outcome: Succeeded,
+		Context:          context,
+		Outcome:          Succeeded,
+		SubstrateVersion: substrateVersion,
 	})
 	path := filepath.Join(dir, installsDir, recordName(context)+".yaml")
 	return path, omitted, write(path, d)
@@ -78,16 +81,60 @@ func RecordSuccess(dir, context string, r *Resolved) (string, []string, error) {
 // a botched value would otherwise become the default and reach the cluster on
 // the next success -- so recovering it is an explicit act: pass the path to
 // --config.
-func RecordFailure(dir, context string, r *Resolved, failedAt string) (string, []string, error) {
+func RecordFailure(dir, context, substrateVersion string, r *Resolved, failedAt string) (string, []string, error) {
 	d, omitted := NewDocument(r, DocumentMetadata{
-		Context:  context,
-		Outcome:  Failed,
-		FailedAt: failedAt,
+		Context:          context,
+		Outcome:          Failed,
+		FailedAt:         failedAt,
+		SubstrateVersion: substrateVersion,
 	})
 	stamp := time.Now().UTC().Format("20060102T150405Z")
 	base := filepath.Join(dir, failedDir, recordName(context)+"-"+stamp)
 	path, err := writeNew(base, d)
 	return path, omitted, err
+}
+
+// ClusterKey identifies the cluster a run targeted, for naming its record.
+//
+// The context setting is empty for most installs: the documented deploys do
+// not pass --context, and the cluster is then whichever one the kubeconfig
+// already selects. Naming the record from the setting alone would put every
+// such install in one file, where a second cluster silently replaces the
+// first. An unset context is therefore resolved the same way the run itself
+// resolves it.
+func (r *Resolved) ClusterKey() string {
+	if ctx := r.String("context"); ctx != "" {
+		return ctx
+	}
+	// A Kind install derives its context from the cluster name, and does so
+	// before there is a cluster in the kubeconfig to read it from.
+	if r.Bool(kindEnabledKey) {
+		return "kind-" + r.String("kindCluster.name")
+	}
+	return currentContext(r.String("kubeconfig"))
+}
+
+// currentContext is the context the kubeconfig selects, or "" when there is
+// none to read. Failing to name the cluster is not an error here: it costs
+// the record its name, which is better than failing a run that worked.
+func currentContext(kubeconfig string) string {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	// $KUBECONFIG is a PATH-style list. A single entry is the explicit file;
+	// several are a precedence chain, which is how client-go merges them.
+	// An unset setting leaves the default rules, which find the kubeconfig
+	// the same way kubectl does.
+	switch paths := filepath.SplitList(kubeconfig); {
+	case len(paths) == 1:
+		rules.ExplicitPath = paths[0]
+	case len(paths) > 1:
+		rules.Precedence = paths
+	}
+
+	cfg, err := rules.Load()
+	if err != nil {
+		return ""
+	}
+	return cfg.CurrentContext
 }
 
 // recordName is the file name for a context, made safe for a path. Context

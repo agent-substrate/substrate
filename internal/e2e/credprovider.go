@@ -58,7 +58,7 @@ const (
 // it; the next run re-applies it.
 //
 // The provider itself and the gateway's side of the connection — the
-// --credential-provider-* flags on its ext_proc sidecar — are the install's
+// credential-provider configuration — are the install's
 // (hack/install-ate.sh --credential-provider='{"name":"k8s.io"}'), not
 // something this helper can retrofit: the rollout wait below fails on a
 // cluster installed without them.

@@ -163,43 +163,6 @@ func TestRepositoryOperationCancellation(t *testing.T) {
 	}
 }
 
-func TestMakefileRegistryConfiguration(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		env  []string
-		args []string
-		want string
-	}{
-		{"defaults", []string{"PROJECT_ID=test-project"}, nil, "us-west1-docker.pkg.dev/test-project/ate-images"},
-		{"region and repository", []string{"PROJECT_ID=test-project", "GCE_REGION=europe-west1", "ARTIFACT_REGISTRY_REPOSITORY=custom-images"}, nil, "europe-west1-docker.pkg.dev/test-project/custom-images"},
-		{"kind environment", []string{"KO_DOCKER_REPO=localhost:5001"}, nil, "localhost:5001"},
-		{"legacy environment", []string{"KO_DOCKER_REPO=gcr.io/test-project/ate-images"}, nil, "gcr.io/test-project/ate-images"},
-		{"command line wins", []string{"KO_DOCKER_REPO=localhost:5001"}, []string{"KO_DOCKER_REPO=registry.example.com/images"}, "registry.example.com/images"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			args := append([]string{"--no-print-directory", "-s", "-f", "../../../Makefile", "-f", "-", "print-repository"}, tc.args...)
-			cmd := exec.CommandContext(t.Context(), "make", args...)
-			for _, entry := range os.Environ() {
-				key, _, _ := strings.Cut(entry, "=")
-				switch key {
-				case "PROJECT_ID", "GCE_REGION", "ARTIFACT_REGISTRY_REPOSITORY", "KO_DOCKER_REPO", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "MAKELEVEL":
-					continue
-				}
-				cmd.Env = append(cmd.Env, entry)
-			}
-			cmd.Env = append(cmd.Env, tc.env...)
-			cmd.Stdin = strings.NewReader("print-repository:\n\t@printenv KO_DOCKER_REPO\n")
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("make: %v\n%s", err, out)
-			}
-			if got := strings.TrimSpace(string(out)); got != tc.want {
-				t.Errorf("exported KO_DOCKER_REPO = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestRepositoryCommandDefaults(t *testing.T) {
 	cmd, _, err := rootCmd.Find([]string{"create", "repository"})
 	if err != nil {

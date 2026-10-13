@@ -17,6 +17,8 @@ package objectstore_test
 import (
 	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -24,6 +26,7 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/google/go-cmp/cmp"
+	"google.golang.org/api/option"
 )
 
 // emulatorStore returns a Store bound to a GCS emulator, or skips. The Go
@@ -92,6 +95,35 @@ func TestGCSStore(t *testing.T) {
 	want = []string{prefix + "copy/memory.zst", prefix + "manifest.json"}
 	if diff := cmp.Diff(want, objects); diff != "" {
 		t.Errorf("List() after the delete differs (-want +got):\n%s", diff)
+	}
+}
+
+func TestGCSDeletePrefixBucketErrors(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, `{"error":{"message":"storage failure"}}`)
+			}))
+			t.Cleanup(srv.Close)
+			client, err := storage.NewClient(t.Context(), option.WithEndpoint(srv.URL), option.WithoutAuthentication())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { client.Close() })
+			store := objectstore.NewGCS(client)
+			src := mustActorSnapshotURI(t, testLocation, "space", "actor-1", "current").Prefix()
+			dst := mustTagSnapshotURI(t, testLocation, "space", "tag-1").Prefix()
+			err = objectstore.DeletePrefix(t.Context(), store, src)
+			wantErr := status != http.StatusNotFound
+			if (err != nil) != wantErr {
+				t.Errorf("DeletePrefix() = %v, want an error: %v", err, wantErr)
+			}
+			if err := objectstore.CopyPrefix(t.Context(), store, src, dst); err == nil {
+				t.Error("CopyPrefix() = nil, want an error")
+			}
+		})
 	}
 }
 

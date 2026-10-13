@@ -23,7 +23,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -126,38 +125,42 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
-	assignment := actor.GetStatus().GetWorkerAssignment()
-	if assignment == nil {
-		slog.InfoContext(ctx, "actor has no worker assignment, skipping atlet terminate request", slog.Any("actor", actorRef))
+	nodeName := actor.GetStatus().GetAssignedNode()
+	if nodeName == "" {
+		slog.InfoContext(ctx, "actor has no assigned node, skipping atelet terminate request", slog.Any("actor", actorRef))
 		return nil
 	}
 
-	if workerName := assignment.GetWorker().GetName(); workerName != "" {
-		// Ask whether the worker still HOSTS this actor, not whether its one
-		// assignment happens to be this actor: a worker hosting several is the
-		// ordinary case, and the others are none of this delete's business.
-		hosted, err := workerHostsActor(ctx, w.store, workerName, actor.GetMetadata().GetUid())
-		if err != nil {
-			return err
-		}
-		if !hosted {
-			slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping atelet terminate request",
-				slog.String("worker", workerName),
-				slog.Any("actor", actorRef))
-			return nil
+	workerPodUID := ""
+	if assignment := actor.GetStatus().GetWorkerAssignment(); assignment != nil {
+		workerPodUID = assignment.GetWorkerPodUid()
+		if workerName := assignment.GetWorker().GetName(); workerName != "" {
+			// Ask whether the worker still HOSTS this actor, not whether its one
+			// assignment happens to be this actor: a worker hosting several is the
+			// ordinary case, and the others are none of this delete's business.
+			hosted, err := workerHostsActor(ctx, w.store, workerName, actor.GetMetadata().GetUid())
+			if err != nil {
+				return err
+			}
+			if !hosted {
+				slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping ateom workload termination",
+					slog.String("worker", workerName),
+					slog.Any("actor", actorRef))
+				workerPodUID = ""
+			}
 		}
 	}
 
-	conn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
+	conn, err := w.dialer.DialForAteletOnNode(nodeName)
 	if err != nil {
-		return fmt.Errorf("while connecting to atelet on node %q: %w", assignment.GetNodeName(), err)
+		return fmt.Errorf("while connecting to atelet on node %q: %w", nodeName, err)
 	}
 
 	client := ateletpb.NewAteomHerderClient(conn)
 
 	var workloadSpec *ateletpb.WorkloadSpec
 	if actorTemplate != nil {
-		spec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
+		spec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 		if err != nil {
 			return err
 		}
@@ -170,12 +173,12 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
 			slog.String("templateName", actor.GetActorTemplate().GetName()))
 		workloadSpec = &ateletpb.WorkloadSpec{}
-		for _, vol := range actor.GetStatus().GetActorVolumes() {
+		for _, vol := range actor.GetStatus().GetExternalVolumes() {
 			// StorageVolumeId is only populated once the volume is provisioned.
 			// Skip volumes that were never created (e.g. failed during PENDING state).
 			if vol.GetStorageVolumeId() != "" {
 				workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
-					Name: vol.GetVolumeName(),
+					Name: vol.GetName(),
 					Source: &ateletpb.Volume_External{
 						External: &ateletpb.ExternalVolumeSource{
 							StorageVolumeId: vol.GetStorageVolumeId(),
@@ -189,7 +192,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	}
 
 	req := &ateletpb.TerminateRequest{
-		TargetAteomUid:        assignment.GetWorkerPodUid(),
+		WorkerPodUid:          workerPodUID,
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
 		ActorUid:              actor.GetMetadata().GetUid(),
@@ -214,7 +217,7 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 	ctx, done := stepSpan(ctx, "DetachVolumesForDelete")
 	defer func() { err = done(err) }()
 
-	return detachActorVolumes(ctx, w.store, w.pluginRegistry, actor, actorTemplate, "delete")
+	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, "delete")
 }
 
 // ensureWorkerReleased releases the worker assigned to the actor.
@@ -286,7 +289,8 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 
 		updatedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(dbActor *ateapipb.Actor) error {
 			if dbActor.Status != nil {
-				dbActor.Status.LocalSnapshot = nil
+				clearLocalSnapshots(dbActor.Status)
+				dbActor.Status.AssignedNode = ""
 				dbActor.Status.WorkerAssignment = nil
 			}
 			return nil
@@ -329,7 +333,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
-		for _, vol := range toUpdate.GetStatus().GetActorVolumes() {
+		for _, vol := range toUpdate.GetStatus().GetExternalVolumes() {
 			vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
 		}
 		return nil
@@ -355,7 +359,7 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 		return apierror.FailedPrecondition("DeleteVolumes prerequisite not met for Actor: %s (got: %v, want %s)", actor.GetMetadata().GetName(), st, ateapipb.ActorState_ACTOR_STATE_DELETING)
 	}
 
-	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetActorVolumes()); err != nil {
+	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetExternalVolumes()); err != nil {
 		return apierror.Internal("while deleting actor volumes: %v", err)
 	}
 	return nil
@@ -371,7 +375,7 @@ func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, act
 	ctx, done := stepSpan(ctx, "ReleaseExternalSnapshots")
 	defer func() { err = done(err) }()
 
-	if w.objectStore == nil {
+	if w.snapshotPlugin == nil {
 		markSkipped(ctx, "no object store configured")
 		return nil
 	}
@@ -384,7 +388,7 @@ func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, act
 		markSkipped(ctx, "the actor owns no external snapshot")
 		return nil
 	}
-	return objectstore.DeletePrefix(ctx, w.objectStore, prefix)
+	return w.cleanupSnapshot(ctx, prefix)
 }
 
 // actorSnapshotStoragePrefix returns the prefix holding every object the actor wrote:
@@ -393,7 +397,8 @@ func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, act
 // wrote anything.
 func actorSnapshotStoragePrefix(actor *ateapipb.Actor) (resources.StoragePrefix, error) {
 	actorOwner := actorSnapshotOwner(actor)
-	if snapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); snapshotURI != "" {
+	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
+		snapshotURI := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 		uri, err := resources.ParseSnapshotURI(snapshotURI)
 		if err != nil {
 			return resources.StoragePrefix{}, fmt.Errorf("while parsing the external snapshot %q: %w", snapshotURI, err)
@@ -408,7 +413,8 @@ func actorSnapshotStoragePrefix(actor *ateapipb.Actor) (resources.StoragePrefix,
 	// Nothing of the actor's own is recorded. Unless a suspend died partway,
 	// nothing was ever written under its prefix: the in-progress URI is
 	// recorded before atelet uploads the first object.
-	inProgress := actor.GetStatus().GetInProgressSnapshotUri()
+	inProgressSnap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+	inProgress := inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if inProgress == "" {
 		return resources.StoragePrefix{}, nil
 	}

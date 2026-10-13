@@ -406,3 +406,32 @@ func TestNewReseedNonce(t *testing.T) {
 		t.Fatal("two nonces are identical; reseed would not make clones diverge")
 	}
 }
+
+func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
+	s := &AteomService{}
+	ctx := context.Background()
+	dirs := &ateompb.ActorDirs{
+		RootDir:                   "/node/actors/actor-a",
+		OciBundleDir:              "/node/actors/actor-a/bundle",
+		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
+		RestoreDir:                "/node/actors/actor-a/restore",
+		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
+		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
+		VolumesDir:                "/node/actors/actor-a/volumes",
+	}
+	assets := map[string]string{assetCH: "/bin/sh"}
+	for name, call := range map[string]func() error{
+		"RunWorkload": func() error {
+			_, err := s.RunWorkload(ctx, &ateompb.RunWorkloadRequest{ActorDirs: dirs, RuntimeAssetPaths: assets})
+			return err
+		},
+		"RestoreWorkload": func() error {
+			_, err := s.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{ActorDirs: dirs, RuntimeAssetPaths: assets})
+			return err
+		},
+	} {
+		if got := apierror.Code(call()); got != codes.InvalidArgument {
+			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
+		}
+	}
+}

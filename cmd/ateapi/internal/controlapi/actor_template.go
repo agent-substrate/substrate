@@ -165,13 +165,3 @@ func resolveActorTemplate(ctx context.Context, st actorTemplateGetter, actor *at
 	}
 	return template, nil
 }
-
-// actorTemplateObjectRef returns a fresh copy of the actor's template
-// reference — fresh so records built from it never alias the actor message.
-func actorTemplateObjectRef(actor *ateapipb.Actor) *ateapipb.ObjectRef {
-	ref := actor.GetActorTemplate()
-	if ref == nil {
-		return nil
-	}
-	return &ateapipb.ObjectRef{Atespace: ref.GetAtespace(), Name: ref.GetName()}
-}

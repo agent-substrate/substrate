@@ -43,6 +43,27 @@ type ObjectStorage interface {
 	PutObject(ctx context.Context, bucket, object string, reader io.Reader) error
 }
 
+// SizedReader is implemented by the readers GetObject returns when the
+// backend reported the object's size as it opened it. The GCS and S3 clients
+// in this package return one whenever the response carries the size.
+type SizedReader interface {
+	io.ReadCloser
+	// ObjectSize is the whole object's size in bytes, as the backend reported
+	// it, or a negative number if it is unknown.
+	ObjectSize() int64
+}
+
+// ObjectSize returns the size of the object r, a reader GetObject returned,
+// reads, and false if its backend did not report one.
+func ObjectSize(r io.Reader) (int64, bool) {
+	s, ok := r.(SizedReader)
+	if !ok {
+		return 0, false
+	}
+	n := s.ObjectSize()
+	return n, n >= 0
+}
+
 func FetchFromGCS(ctx context.Context, client ObjectStorage, gsURL string) ([]byte, error) {
 	ctx, span := tracer.Start(ctx, "fetchFromGCS")
 	defer span.End()
