@@ -402,14 +402,32 @@ func TestPrewarmDefaultVersionOnly(t *testing.T) {
 // fake clientset flows through the informer into the prewarm worker, which
 // lands the asset in the static-files cache without any Run/Restore request.
 func TestSandboxAssetPrewarmDownloads(t *testing.T) {
-	origDir, origJitter := nodepath.StaticFilesDir, prewarmMaxJitter
+	origDir, origJitter, origFinished := nodepath.StaticFilesDir, prewarmMaxJitter, prewarmFinished
 	nodepath.StaticFilesDir = t.TempDir()
 	prewarmMaxJitter = 0
-	t.Cleanup(func() { nodepath.StaticFilesDir, prewarmMaxJitter = origDir, origJitter })
+	// The worker's own prewarm call returns only when the asset has landed
+	// and the pause-image pull has finished: it waits for the pull on a live
+	// context, while the pull runs detached from that context (see
+	// imagecache.Store.EnsureImage). Waiting for the call, rather than for
+	// the asset file or an image lookup, keeps the pull's last writes from
+	// racing the TempDir cleanup: a lookup already hits once the last layer
+	// dir lands, while the pull still rewrites the image record.
+	prewarmed := make(chan error, 1)
+	prewarmFinished = func(_ string, err error) {
+		// Non-blocking: a failed attempt is retried, and the worker must not
+		// block on a result nobody reads.
+		select {
+		case prewarmed <- err:
+		default:
+		}
+	}
+	t.Cleanup(func() {
+		nodepath.StaticFilesDir, prewarmMaxJitter, prewarmFinished = origDir, origJitter, origFinished
+	})
 
 	host := imageVolumeTestRegistry(t)
 	pauseRef := host + "/pause:3.10"
-	pauseDigest := pushPauseImage(t, pauseRef)
+	pushPauseImage(t, pauseRef)
 
 	content := []byte("runsc binary bytes")
 	sha := fmt.Sprintf("%x", sha256.Sum256(content))
@@ -443,25 +461,16 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	defer close(stopCh)
 	factory.Start(stopCh)
 
-	wantPath := ateletpath.RunSCBinaryPath(sha)
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if _, err := os.Stat(wantPath); err == nil {
-			break
-		} else if !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("stat %s: %v", wantPath, err)
+	select {
+	case err := <-prewarmed:
+		if err != nil {
+			t.Fatalf("prewarm: %v", err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("asset never prewarmed to %s", wantPath)
-		}
-		time.Sleep(10 * time.Millisecond)
+	case <-time.After(30 * time.Second):
+		t.Fatal("prewarm never finished")
 	}
-	// The pause-image pull runs detached from the worker's context (see
-	// imagecache.Store.EnsureImage), so it can still be writing into the
-	// store after the asset has landed and the worker has exited. Looking
-	// the image up by digest joins that pull, so no write outlives the
-	// test's TempDir.
-	if _, err := store.EnsureImage(ctx, host+"/pause@"+pauseDigest.String()); err != nil {
-		t.Fatalf("pause image not prewarmed: %v", err)
+	wantPath := ateletpath.RunSCBinaryPath(sha)
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Fatalf("asset not prewarmed to %s: %v", wantPath, err)
 	}
 }
