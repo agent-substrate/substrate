@@ -257,7 +257,6 @@ func validCheckpointWorkloadRequest(mutate ...func(*ateompb.CheckpointWorkloadRe
 		ActorTemplateName:     "template-1",
 		RunscPath:             "/opt/runsc",
 		Spec:                  fullSpec(),
-		SnapshotUri:           "gs://bucket/root/atespaces/team-a/actors/uid/snapshots/1",
 		RuntimeAssetPaths:     map[string]string{"kata-kernel": "/opt/kernel"},
 		Fidelity:              ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		ActorDirs:             fullActorDirs(),
@@ -270,7 +269,7 @@ func validCheckpointWorkloadRequest(mutate ...func(*ateompb.CheckpointWorkloadRe
 
 // Checkpoint shares its identity and asset fields with Run, which the Run
 // table covers; this table holds the shared gates at one case each and
-// covers what only Checkpoint has: snapshot_uri, fidelity, and actor_dirs.
+// covers what only Checkpoint has: fidelity and actor_dirs.
 func TestValidateCheckpointWorkloadRequest(t *testing.T) {
 	valid := validCheckpointWorkloadRequest
 
@@ -307,14 +306,6 @@ func TestValidateCheckpointWorkloadRequest(t *testing.T) {
 		name: "missing spec",
 		obj:  valid(func(r *ateompb.CheckpointWorkloadRequest) { r.Spec = nil }),
 		want: field.ErrorList{field.Required(field.NewPath("spec"), "")},
-	}, {
-		name: "missing snapshot_uri",
-		obj:  valid(func(r *ateompb.CheckpointWorkloadRequest) { r.SnapshotUri = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("snapshot_uri"), "")},
-	}, {
-		name: "invalid snapshot_uri: fragment",
-		obj:  valid(func(r *ateompb.CheckpointWorkloadRequest) { r.SnapshotUri = "gs://bucket/snapshots/1#frag" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_uri"), nil, "")},
 	}, {
 		name: "too many runtime_asset_paths",
 		obj: valid(func(r *ateompb.CheckpointWorkloadRequest) {
@@ -593,7 +584,6 @@ func validRestoreWorkloadRequest(mutate ...func(*ateompb.RestoreWorkloadRequest)
 		ActorTemplateName:     "template-1",
 		RunscPath:             "/opt/runsc",
 		Spec:                  fullSpec(),
-		SnapshotUri:           "gs://bucket/root/atespaces/team-a/actors/uid/snapshots/1",
 		RuntimeAssetPaths:     map[string]string{"kata-kernel": "/opt/kernel"},
 		Fidelity:              ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 		EgressGateway:         &ateompb.EgressGateway{Address: "gateway:443"},
@@ -664,22 +654,6 @@ func TestValidateRestoreWorkloadRequest(t *testing.T) {
 			r.RuntimeAssetPaths = map[string]string{"kata-kernel": "/" + strings.Repeat("x", 4096)}
 		}),
 		want: field.ErrorList{field.TooLong(field.NewPath("runtime_asset_paths").Key("kata-kernel"), nil, 4096).WithOrigin("maxLength")},
-	}, {
-		name: "missing snapshot_uri",
-		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.SnapshotUri = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("snapshot_uri"), "")},
-	}, {
-		name: "snapshot_uri too long",
-		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.SnapshotUri = "gs://bucket/" + strings.Repeat("x", 2048) }),
-		want: field.ErrorList{field.TooLong(field.NewPath("snapshot_uri"), nil, 2048).WithOrigin("maxLength")},
-	}, {
-		name: "invalid snapshot_uri: no bucket",
-		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.SnapshotUri = "snapshots/1" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_uri"), nil, "")},
-	}, {
-		name: "invalid snapshot_uri: query string",
-		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.SnapshotUri = "gs://bucket/snapshots/1?x=1" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_uri"), nil, "")},
 	}, {
 		name: "egress_gateway address without port",
 		obj:  valid(func(r *ateompb.RestoreWorkloadRequest) { r.EgressGateway.Address = "gateway" }),

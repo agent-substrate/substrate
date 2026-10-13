@@ -494,22 +494,6 @@ message CheckpointWorkloadRequest {
   // +k8s:required
   WorkloadSpec spec = 7;
 
-  // The object storage URI of the snapshot to write. Object names are appended
-  // to it, so it addresses the snapshot as a whole rather than any one object.
-  //
-  // The structure of the checkpoint should generally be treated as opaque. For
-  // gVisor, the checkpoint consists of a checkpoint.img file that contains the
-  // memory, sentry state, and filesystem deltas.
-  //
-  // The control plane sends an ActorSnapshot's snapshot_uri, which sits under
-  // the prefix of the resource that owns the snapshot. For example:
-  // "gs://bucket/root/atespaces/team-a/actors/<actor uid>/snapshots/5678".
-  //
-  // +k8s:required
-  // +k8s:maxLength=2048
-  // +k8s:customValidation # a scheme, a bucket, and a path, nothing else
-  string snapshot_uri = 8;
-
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
   //
@@ -566,14 +550,6 @@ message RestoreWorkloadRequest {
   // +k8s:required
   // +k8s:customValidation # at least one container; only Terminate's fallback spec may have none
   WorkloadSpec spec = 7;
-
-  // The object storage URI of the snapshot to restore. Object names are
-  // appended to it; it addresses the snapshot, not any one object.
-  //
-  // +k8s:required
-  // +k8s:maxLength=2048
-  // +k8s:customValidation # a scheme, a bucket, and a path, nothing else
-  string snapshot_uri = 8;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.

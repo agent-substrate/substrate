@@ -24,9 +24,9 @@ import (
 )
 
 // Each wrapper validates its request at the RPC edge. A non-nil return is the
-// InvalidArgument error the handler responds with, built by resources.ToAPIError. Requests are validated as
-// creates: no Ateom RPC updates prior state, so there is nothing to ratchet
-// against.
+// InvalidArgument error the handler responds with, built by
+// resources.ToAPIError. Requests are validated as creates: no Ateom RPC
+// updates prior state, so there is nothing to ratchet against.
 
 // ValidateRunWorkloadRequest validates req at the RPC edge.
 func ValidateRunWorkloadRequest(ctx context.Context, req *ateompb.RunWorkloadRequest) error {
@@ -94,20 +94,6 @@ func requireContainers(fldPath *field.Path, spec *ateompb.WorkloadSpec) field.Er
 
 // GetActiveWorkloadStatsRequest has no fields, so validation-gen emits
 // nothing for it and there is no wrapper.
-
-// ValidateCustom_RestoreWorkloadRequest_SnapshotUri holds snapshot_uri to
-// the shape the storage layer appends object names to: a scheme, a bucket,
-// and a path. The rule is the control plane's, shared through
-// internal/resources.
-func ValidateCustom_RestoreWorkloadRequest_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return validateSnapshotURI(fldPath, *value)
-}
-
-// ValidateCustom_CheckpointWorkloadRequest_SnapshotUri applies the
-// snapshot_uri rule to the URI a checkpoint is written to.
-func ValidateCustom_CheckpointWorkloadRequest_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return validateSnapshotURI(fldPath, *value)
-}
 
 // ValidateCustom_EgressGateway_Address holds the gateway address to the
 // host:port shape the tunnel dials. The rule is atelet's, shared through
@@ -191,13 +177,6 @@ func ValidateCustom_Container(_ context.Context, _ operation.Operation, fldPath 
 // binaries applied by hand before, shared through internal/resources.
 func ValidateCustom_ActorDirs(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateompb.ActorDirs) field.ErrorList {
 	return resources.ValidateActorDirs(value, fldPath)
-}
-
-func validateSnapshotURI(fldPath *field.Path, uri string) field.ErrorList {
-	if err := resources.ValidateSnapshotLocation(uri); err != nil {
-		return field.ErrorList{field.Invalid(fldPath, uri, err.Error())}
-	}
-	return nil
 }
 
 func createOp() operation.Operation {

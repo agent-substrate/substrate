@@ -1471,21 +1471,6 @@ type CheckpointWorkloadRequest struct {
 	RunscPath string `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
 	// +k8s:required
 	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	// The object storage URI of the snapshot to write. Object names are appended
-	// to it, so it addresses the snapshot as a whole rather than any one object.
-	//
-	// The structure of the checkpoint should generally be treated as opaque. For
-	// gVisor, the checkpoint consists of a checkpoint.img file that contains the
-	// memory, sentry state, and filesystem deltas.
-	//
-	// The control plane sends an ActorSnapshot's snapshot_uri, which sits under
-	// the prefix of the resource that owns the snapshot. For example:
-	// "gs://bucket/root/atespaces/team-a/actors/<actor uid>/snapshots/5678".
-	//
-	// +k8s:required
-	// +k8s:maxLength=2048
-	// +k8s:customValidation # a scheme, a bucket, and a path, nothing else
-	SnapshotUri string `protobuf:"bytes,8,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
 	//
@@ -1583,13 +1568,6 @@ func (x *CheckpointWorkloadRequest) GetSpec() *WorkloadSpec {
 		return x.Spec
 	}
 	return nil
-}
-
-func (x *CheckpointWorkloadRequest) GetSnapshotUri() string {
-	if x != nil {
-		return x.SnapshotUri
-	}
-	return ""
 }
 
 func (x *CheckpointWorkloadRequest) GetRuntimeAssetPaths() map[string]string {
@@ -1695,13 +1673,6 @@ type RestoreWorkloadRequest struct {
 	// +k8s:required
 	// +k8s:customValidation # at least one container; only Terminate's fallback spec may have none
 	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	// The object storage URI of the snapshot to restore. Object names are
-	// appended to it; it addresses the snapshot, not any one object.
-	//
-	// +k8s:required
-	// +k8s:maxLength=2048
-	// +k8s:customValidation # a scheme, a bucket, and a path, nothing else
-	SnapshotUri string `protobuf:"bytes,8,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
 	//
@@ -1820,13 +1791,6 @@ func (x *RestoreWorkloadRequest) GetSpec() *WorkloadSpec {
 		return x.Spec
 	}
 	return nil
-}
-
-func (x *RestoreWorkloadRequest) GetSnapshotUri() string {
-	if x != nil {
-		return x.SnapshotUri
-	}
-	return ""
 }
 
 func (x *RestoreWorkloadRequest) GetRuntimeAssetPaths() map[string]string {
@@ -2367,7 +2331,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\rHttpGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\x15\n" +
-	"\x13RunWorkloadResponse\"\xdb\x04\n" +
+	"\x13RunWorkloadResponse\"\xb8\x04\n" +
 	"\x19CheckpointWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2377,8 +2341,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12\x1d\n" +
 	"\n" +
 	"runsc_path\x18\x06 \x01(\tR\trunscPath\x12'\n" +
-	"\x04spec\x18\a \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12!\n" +
-	"\fsnapshot_uri\x18\b \x01(\tR\vsnapshotUri\x12g\n" +
+	"\x04spec\x18\a \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12g\n" +
 	"\x13runtime_asset_paths\x18\t \x03(\v27.ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x123\n" +
 	"\bfidelity\x18\n" +
 	" \x01(\x0e2\x17.ateom.SnapshotFidelityR\bfidelity\x12/\n" +
@@ -2389,7 +2352,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"s\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
 	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\x12.\n" +
-	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\x9c\x06\n" +
+	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\xf9\x05\n" +
 	"\x16RestoreWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2399,8 +2362,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12\x1d\n" +
 	"\n" +
 	"runsc_path\x18\x06 \x01(\tR\trunscPath\x12'\n" +
-	"\x04spec\x18\a \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12!\n" +
-	"\fsnapshot_uri\x18\b \x01(\tR\vsnapshotUri\x12d\n" +
+	"\x04spec\x18\a \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12d\n" +
 	"\x13runtime_asset_paths\x18\t \x03(\v24.ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x123\n" +
 	"\bfidelity\x18\n" +
 	" \x01(\x0e2\x17.ateom.SnapshotFidelityR\bfidelity\x12@\n" +
