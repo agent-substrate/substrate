@@ -14,23 +14,23 @@
 
 //! Global store for egress policies shared across filters in the dynamic module.
 
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::thread::LocalKey;
+
+use thread_local::ThreadLocal;
 
 use crate::egress_policy::EgressPolicy;
-
-thread_local! {
-  static LOCAL_EGRESS_POLICY_STORE: RefCell<EgressPolicyStore> =
-    RefCell::new(EgressPolicyStore::new());
-}
 
 /// Per-thread store for egress policies.
 #[derive(Debug, Default)]
 pub struct EgressPolicyStore {
   pub policies: HashMap<u64, Rc<EgressPolicy>>,
 }
+
+// SAFETY: Each `EgressPolicyStore` and its `Rc<EgressPolicy>` entries are created and accessed
+// exclusively on the owning worker thread via `ThreadLocal`.
+unsafe impl Send for EgressPolicyStore {}
 
 impl EgressPolicyStore {
   /// Creates a new [`EgressPolicyStore`].
@@ -44,26 +44,34 @@ impl EgressPolicyStore {
   pub fn lookup(&self, key: u64) -> Option<Rc<EgressPolicy>> {
     self.policies.get(&key).cloned()
   }
+
+  /// Stores a cloned [`Rc<EgressPolicy>`] under `key`.
+  pub fn store(&mut self, key: u64, policy: &Rc<EgressPolicy>) {
+    self.policies.insert(key, Rc::clone(policy));
+  }
 }
 
 /// Global store for egress policies holding a thread-local [`EgressPolicyStore`].
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct GlobalEgressPolicyStore {
-  pub store: &'static LocalKey<RefCell<EgressPolicyStore>>,
+  pub store: ThreadLocal<RefCell<EgressPolicyStore>>,
 }
 
 impl GlobalEgressPolicyStore {
   /// Creates a new [`GlobalEgressPolicyStore`].
   pub const fn new() -> Self {
     Self {
-      store: &LOCAL_EGRESS_POLICY_STORE,
+      store: ThreadLocal::new(),
     }
   }
-}
 
-impl Default for GlobalEgressPolicyStore {
-  fn default() -> Self {
-    Self::new()
+  /// Returns a mutable reference to the current thread's [`EgressPolicyStore`],
+  /// initializing it on first access.
+  pub fn get_local_store() -> RefMut<'static, EgressPolicyStore> {
+    GLOBAL_EGRESS_POLICY_STORE
+      .store
+      .get_or(|| RefCell::new(EgressPolicyStore::new()))
+      .borrow_mut()
   }
 }
 
@@ -83,12 +91,10 @@ mod tests {
         mode: "mitm".to_string(),
       }],
     });
-    GLOBAL_EGRESS_POLICY_STORE.store.with(|store| {
-      store.borrow_mut().policies.insert(1, Rc::clone(&policy));
-      let looked_up = store.borrow().lookup(1);
-      assert_eq!(looked_up, Some(Rc::clone(&policy)));
-      assert!(Rc::ptr_eq(&looked_up.unwrap(), &policy));
-      assert_eq!(store.borrow().lookup(2), None);
-    });
+    GlobalEgressPolicyStore::get_local_store().store(1, &policy);
+    let looked_up = GlobalEgressPolicyStore::get_local_store().lookup(1);
+    assert_eq!(looked_up, Some(Rc::clone(&policy)));
+    assert!(Rc::ptr_eq(&looked_up.unwrap(), &policy));
+    assert_eq!(GlobalEgressPolicyStore::get_local_store().lookup(2), None);
   }
 }

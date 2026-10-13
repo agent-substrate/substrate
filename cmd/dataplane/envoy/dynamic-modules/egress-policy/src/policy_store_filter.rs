@@ -24,6 +24,7 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   envoy_log_trace, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
 };
 use crate::egress_policy::EgressPolicy;
+use crate::egress_policy_store::GlobalEgressPolicyStore;
 
 /// Configuration for the egress-policy-store HTTP filter.
 pub struct EgressPolicyStoreFilterConfig;
@@ -52,7 +53,14 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyStoreFilter {
       return envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue;
     };
     envoy_log_trace!("egress policy store: policy={:?}", policy);
-    self.policy = Some(policy);
+    let hash = policy.hash();
+    let mut local_store = GlobalEgressPolicyStore::get_local_store();
+    if let Some(existing_policy) = local_store.lookup(hash) {
+      self.policy = Some(existing_policy);
+    } else {
+      local_store.store(hash, &policy);
+      self.policy = Some(policy);
+    }
     envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
   }
 
@@ -121,6 +129,37 @@ mod tests {
         ],
       }))
     );
+
+    let first_rc = filter.policy.as_ref().unwrap().clone();
+    let hash = first_rc.hash();
+    assert!(Rc::ptr_eq(
+      &GlobalEgressPolicyStore::get_local_store()
+        .lookup(hash)
+        .unwrap(),
+      &first_rc
+    ));
+
+    // A second filter receiving the same policy reuses the stored Rc<EgressPolicy>.
+    let mut second_filter = EgressPolicyStoreFilter::default();
+    mock_filter
+      .expect_get_metadata_string()
+      .withf(|source, namespace, key| {
+        *source == envoy_dynamic_module_type_metadata_source::Dynamic
+          && namespace == ATE_POLICY_EGRESS_NAMESPACE
+          && key == ATE_POLICY_JSON_KEY
+      })
+      .returning(|_, _, _| {
+        Some(EnvoyBuffer::new(
+          br#"{"rules":[{"pattern":"api.example.com","mode":"mitm"},{"pattern":"*.example.com","mode":"passthrough"}]}"#,
+        ))
+      })
+      .once();
+
+    assert_eq!(
+      second_filter.on_request_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+    assert!(Rc::ptr_eq(second_filter.policy.as_ref().unwrap(), &first_rc));
   }
 
   #[test]
