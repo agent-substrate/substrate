@@ -167,6 +167,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	var waits []rollout
 	waits = append(waits,
 		rollout{kube.KindDeployment, "ate-api-server"},
+		rollout{kube.KindDeployment, "ate-idp-server"},
 		rollout{kube.KindDeployment, "ate-controller"},
 		rollout{kube.KindDeployment, "atenet-router"},
 		rollout{kube.KindDeployment, "atenet-egress"},
@@ -315,6 +316,11 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	}
 	// After the manifest, which resets the pod template to the sidecar-free base.
 	if err := e.reconcileCloudSQLProxySidecar(ctx); err != nil {
+		return err
+	}
+	// The environment this run rewrote also feeds ate-idp-server, which the
+	// manifest does not carry.
+	if err := e.annotateAPIServerEnvHash(ctx); err != nil {
 		return err
 	}
 	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), "ate-api-server", e.Cfg.RolloutTimeout)

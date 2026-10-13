@@ -522,6 +522,30 @@ func TestAnnotateAPIServerEnvHash(t *testing.T) {
 			t.Errorf("%s = %q, want %q", envHashAnnotation, got, want)
 		}
 	})
+
+	t.Run("stamps ate-idp-server too", func(t *testing.T) {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Namespace: NamespaceAteSystem, Name: ConfigMapAPIEnvVars},
+			Data:       map[string]string{"ATE_API_ACTOR_JWT_ISSUER": "https://idp.example.com"},
+		}
+		idp := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: NamespaceAteSystem, Name: "ate-idp-server"}}
+		e := &Env{Cfg: &config.Config{}, Kube: fakeKube(t, apiServerDeployment(SecretAPIEnvVars), idp, cm)}
+
+		if err := e.annotateAPIServerEnvHash(t.Context()); err != nil {
+			t.Fatalf("annotateAPIServerEnvHash() error = %v", err)
+		}
+
+		want := envHash(cm.Data, nil)
+		for _, name := range []string{"ate-api-server", "ate-idp-server"} {
+			dep, err := e.Kube.GetDeployment(t.Context(), NamespaceAteSystem, name)
+			if err != nil {
+				t.Fatalf("GetDeployment(%s) error = %v", name, err)
+			}
+			if got := dep.Spec.Template.Annotations[envHashAnnotation]; got != want {
+				t.Errorf("%s: %s = %q, want %q", name, envHashAnnotation, got, want)
+			}
+		}
+	})
 }
 
 // CreateAPIServerEnvVars only writes the environment. The deploy that runs
@@ -590,6 +614,15 @@ metadata:
 spec:
   template:
     metadata: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-idp-server
+  namespace: ate-system
+spec:
+  template:
+    metadata: {}
 `))
 	if err != nil {
 		t.Fatalf("DecodeManifestBytes() error = %v", err)
@@ -606,6 +639,9 @@ spec:
 	}
 	if got := annotations(objs[1]); got[envHashAnnotation] != "" {
 		t.Errorf("ate-controller pod template annotations = %v, want no digest", got)
+	}
+	if got := annotations(objs[2]); got[envHashAnnotation] != "digest" {
+		t.Errorf("ate-idp-server pod template annotations = %v, want the digest", got)
 	}
 	if err := stampAPIServerEnvHash(objs[1:], "digest"); err == nil {
 		t.Errorf("stampAPIServerEnvHash() without ate-api-server error = nil, want an error")

@@ -36,11 +36,15 @@ import (
 // is what turns a new DSN into a restart.
 const envHashAnnotation = "ate.dev/env-hash"
 
+// envHashDeployments read ConfigMapAPIEnvVars: ate-api-server its whole
+// environment, ate-idp-server the actor JWT issuer. A change to it rolls both.
+var envHashDeployments = []string{"ate-api-server", "ate-idp-server"}
+
 // CreateAPIServerEnvVars reconciles how ate-api-server reaches its PostgreSQL
 // store: both DSNs and the schema into the ate-api-server-secret-envvars Secret,
 // stable roles and Cloud SQL settings into the ConfigMap,
 // and an external server CA into postgres-server-ca. The ConfigMap also
-// carries the actor JWT issuer.
+// carries the actor JWT issuer, which ate-idp-server reads as well.
 //
 // ate-api-server.yaml pulls both in through optional envFrom sources and
 // resolves the PostgreSQL connection, role, and schema flags from
@@ -278,25 +282,31 @@ func (e *Env) EnsureEnvVarsSafeStandalone(ctx context.Context) error {
 		"Run `ate-setup deploy ate-apiserver` instead, which also updates the Deployment", SecretAPIEnvVars)
 }
 
-// annotateAPIServerEnvHash stamps the running Deployment's pod template with
-// the digest, so that a changed DSN starts a rollout. Kubernetes does not
-// restart pods when an envFrom ConfigMap or Secret changes.
+// annotateAPIServerEnvHash stamps the pod template of each running
+// envHashDeployments member with the digest, so that a changed DSN or issuer
+// starts a rollout. Kubernetes does not restart pods when a ConfigMap or Secret
+// they read changes.
 func (e *Env) annotateAPIServerEnvHash(ctx context.Context) error {
-	dep, err := e.Kube.GetDeployment(ctx, e.Namespace(), "ate-api-server")
-	if err != nil {
-		return err
-	}
-	if dep == nil {
-		// Nothing runs yet; the deploy that creates it stamps the digest.
-		return nil
-	}
 	hash, err := e.apiServerEnvHash(ctx)
 	if err != nil {
 		return err
 	}
 	patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{%q:%q}}}}}`,
 		envHashAnnotation, hash)
-	return e.Kube.PatchDeployment(ctx, e.Namespace(), "ate-api-server", []byte(patch))
+	for _, name := range envHashDeployments {
+		dep, err := e.Kube.GetDeployment(ctx, e.Namespace(), name)
+		if err != nil {
+			return err
+		}
+		if dep == nil {
+			// Nothing runs yet; the deploy that creates it stamps the digest.
+			continue
+		}
+		if err := e.Kube.PatchDeployment(ctx, e.Namespace(), name, []byte(patch)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // applyWithAPIServerEnvHash applies a manifest that carries the ate-api-server
@@ -378,19 +388,26 @@ func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, enabled bool, boot
 	return fmt.Errorf("%s has no ate-api-server container", kube.Describe(dep))
 }
 
-// stampAPIServerEnvHash sets the digest on the ate-api-server Deployment's pod
-// template and leaves every other object alone. A manifest without that
-// Deployment is an error: applying it unstamped would stop a changed
-// environment from rolling.
+// stampAPIServerEnvHash sets the digest on the pod template of each
+// envHashDeployments member in objs and leaves every other object alone. A
+// manifest without ate-api-server is an error: applying it unstamped would stop
+// a changed environment from rolling.
 func stampAPIServerEnvHash(objs []*unstructured.Unstructured, hash string) error {
+	stampedAPIServer := false
 	for _, obj := range objs {
-		if obj.GetKind() != "Deployment" || obj.GetName() != "ate-api-server" {
+		if obj.GetKind() != "Deployment" || !slices.Contains(envHashDeployments, obj.GetName()) {
 			continue
 		}
-		return unstructured.SetNestedField(obj.Object, hash,
-			"spec", "template", "metadata", "annotations", envHashAnnotation)
+		if err := unstructured.SetNestedField(obj.Object, hash,
+			"spec", "template", "metadata", "annotations", envHashAnnotation); err != nil {
+			return err
+		}
+		stampedAPIServer = stampedAPIServer || obj.GetName() == "ate-api-server"
 	}
-	return fmt.Errorf("the manifest has no deployment/ate-api-server to stamp with %s", envHashAnnotation)
+	if !stampedAPIServer {
+		return fmt.Errorf("the manifest has no deployment/ate-api-server to stamp with %s", envHashAnnotation)
+	}
+	return nil
 }
 
 // apiServerEnvHash digests the apiserver's environment as it is in the cluster.
