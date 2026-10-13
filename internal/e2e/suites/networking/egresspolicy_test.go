@@ -25,6 +25,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // The EgressPolicy half of egress: the other TestActorEgress* tests give their
@@ -168,7 +169,7 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 		TargetPort: 8443,
 	}, true)
 
-	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-passthrough-refresh", e2e.EgressFixture(), e2e.EgressAllowPassthrough("*"))
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-passthrough-refresh", e2e.EgressFixture(), e2e.EgressAllowPassthrough("*"))
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -186,6 +187,7 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 		status int
 		body   []byte
 	}
+	since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
 	firstResult := make(chan postResult, 1)
 	go func() {
 		status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/post", postPayload, notTransient)
@@ -193,10 +195,12 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 	}()
 
 	// Allow connection to be fully established before changing the policy.
-	time.Sleep(1 * time.Second)
-	e2e.EnsureEgressPolicy(t, ctx, e2e.GetClients(), actorRef.ToObjectRef())
+	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, "443")
+
+	e2e.EnsureEgressPolicy(t, ctx, e2e.GetClients(), actorRef.ToObjectRef(), e2e.EgressAllowPassthrough("foo.bar.baz"))
 	// Wait for the policy cached in ext_proc server to expire, so it will fetch the new one.
-	time.Sleep(10 * time.Second)
+	// ext_proc cache freshness interval is 10 seconds.
+	time.Sleep(11 * time.Second)
 
 	status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/post", postPayload, notTransient)
 	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
@@ -211,7 +215,7 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 
 func TestActorEgressPendingPlaintextHeadersDoNotBlockMITM(t *testing.T) {
 	ctx := t.Context()
-	_, actorName, _ := createAndResumeActorWithEgress(
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(
 		t, ctx, "egress-slow-headers", e2e.EgressFixture(),
 		e2e.EgressAllowHTTPS("example.com"),
 		e2e.EgressAllowHTTP("example.net"),
@@ -230,6 +234,7 @@ func TestActorEgressPendingPlaintextHeadersDoNotBlockMITM(t *testing.T) {
 		status int
 		body   []byte
 	}
+	since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
 	pendingResult := make(chan postResult, 1)
 	go func() {
 		status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/slow-headers", slowPayload, notTransient)
@@ -237,7 +242,7 @@ func TestActorEgressPendingPlaintextHeadersDoNotBlockMITM(t *testing.T) {
 	}()
 
 	// Allow the plaintext request to send its incomplete headers before issuing the MITM request.
-	time.Sleep(1 * time.Second)
+	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, "80")
 
 	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.com/", notTransient)
 	if status != http.StatusOK {

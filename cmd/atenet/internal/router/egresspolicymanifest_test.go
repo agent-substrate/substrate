@@ -713,15 +713,46 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.
 		t.Fatalf("%s is set by %d filters, want exactly the CONNECT leg's copy of its answer", extproc.EgressPolicyMetadataNamespace, len(writers))
 	}
 	entry := writers[0]
+	var gotKeys []string
+	actionsByKey := map[string]node{}
 	at := -1
 	for i, f := range filters {
 		if str(f, "name") != setFilterStateFilter {
 			continue
 		}
 		for _, v := range list(child(f, "typed_config"), "on_request_headers") {
-			if str(v, "object_key") == extproc.EgressPolicyMetadataNamespace {
+			key := str(v, "object_key")
+			gotKeys = append(gotKeys, key)
+			actionsByKey[key] = v
+			if key == extproc.EgressPolicyMetadataNamespace {
 				at = i
 			}
+			if got := str(v, "shared_with_upstream"); got != "ONCE" {
+				t.Errorf("%s has shared_with_upstream %q, want ONCE", key, got)
+			}
+		}
+	}
+	// Verify that expected state is shared with the upstream.
+	wantKeys := []string{
+		extproc.ActorIdentityFilterStateKey,
+		extproc.ConnectAuthorityFilterStateKey,
+		extproc.UpstreamDynamicPortFilterStateKey,
+		extproc.EgressPolicyMetadataNamespace,
+	}
+	if !slices.Equal(gotKeys, wantKeys) {
+		t.Errorf("outer chain set_filter_state actions write keys %v, want %v", gotKeys, wantKeys)
+	}
+	// These keys determine pool selection and their values are bound to the pool at the
+	// time of pool creation. All CONNECT tunnels that have the same values for these filter
+	// state keys will share to pool.
+	for _, key := range []string{
+		extproc.ActorIdentityFilterStateKey,
+		extproc.ConnectAuthorityFilterStateKey,
+		extproc.EgressPolicyMetadataNamespace,
+	} {
+		// Make sure factory creates hashable filter state objects, so it impacts pool selection.
+		if got := str(actionsByKey[key], "factory_key"); got != "envoy.hashable_string" {
+			t.Errorf("%s uses factory %q, want envoy.hashable_string", key, got)
 		}
 	}
 	if at < 0 {
@@ -734,14 +765,8 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.
 	if got := str(child(format, "text_format_source"), "inline_string"); got != extproc.EgressPolicyMetadataFormat {
 		t.Errorf("%s is set from %q, want %q", extproc.EgressPolicyMetadataNamespace, got, extproc.EgressPolicyMetadataFormat)
 	}
-	if got := str(entry, "factory_key"); got != "envoy.hashable_string" {
-		t.Errorf("%s uses factory %q, want envoy.string, the string accessor the module reads", extproc.EgressPolicyMetadataNamespace, got)
-	}
 	if skip, _ := entry["skip_if_empty"].(bool); !skip {
 		t.Errorf("%s is not skip_if_empty; an absent answer would be written as unparseable JSON", extproc.EgressPolicyMetadataNamespace)
-	}
-	if str(entry, "shared_with_upstream") == "" {
-		t.Errorf("%s is not shared with upstream; the inner listener would never see it", extproc.EgressPolicyMetadataNamespace)
 	}
 }
 
