@@ -23,10 +23,16 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// renderManifest substitutes placeholders into the manifest template at relPath
-// (repo-relative), writes the result into the test's temp dir and returns that
-// path. Both an apply and a later delete can then consume the same file, with
-// no shell involved.
+// renderManifest substitutes placeholders into the manifest template at relPath,
+// writes the result into the test's temp dir and returns that path.
+func renderManifest(t *testing.T, relPath string, inline, blocks map[string]string) string {
+	t.Helper()
+	name := strings.TrimSuffix(filepath.Base(relPath), ".tmpl")
+	return writeManifest(t, name, renderManifestText(t, relPath, inline, blocks))
+}
+
+// renderManifestText is renderManifest without the file, for a caller that
+// concatenates several rendered templates into one manifest before applying it.
 //
 // Templates carry two kinds of ${...} placeholder:
 //
@@ -36,7 +42,7 @@ import (
 //     the whole line with it — the same trick the installer's renderer plays
 //     with its drop list. Requiring the placeholder to be the whole line
 //     is what lets a comment mention one without being deleted.
-func renderManifest(t *testing.T, relPath string, inline, blocks map[string]string) string {
+func renderManifestText(t *testing.T, relPath string, inline, blocks map[string]string) string {
 	t.Helper()
 	root, err := FindRepoRoot()
 	if err != nil {
@@ -60,12 +66,18 @@ func renderManifest(t *testing.T, relPath string, inline, blocks map[string]stri
 		}
 		out = append(out, line)
 	}
+	return strings.Join(out, "\n")
+}
 
-	rendered := strings.TrimSuffix(filepath.Join(t.TempDir(), filepath.Base(relPath)), ".tmpl")
-	if err := os.WriteFile(rendered, []byte(strings.Join(out, "\n")), 0o644); err != nil {
-		t.Fatalf("writing rendered manifest %s: %v", rendered, err)
+// writeManifest writes content into a fresh temp dir under name and returns the
+// path.
+func writeManifest(t *testing.T, name, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing rendered manifest %s: %v", path, err)
 	}
-	return rendered
+	return path
 }
 
 // yamlListBlock renders items as `key:` followed by their YAML, every line
@@ -82,12 +94,24 @@ func yamlListBlock[T any](t *testing.T, key string, items []T, indent int) strin
 	if len(items) == 0 {
 		return ""
 	}
+	pad := strings.Repeat(" ", indent)
+	return pad + key + ":\n" + yamlItemsBlock(t, items, indent)
+}
+
+// yamlItemsBlock is yamlListBlock without the `key:` line, for a block
+// placeholder that extends a list the template has already opened — where the
+// key is spelled in the template beside the entries that are always there.
+func yamlItemsBlock[T any](t *testing.T, items []T, indent int) string {
+	t.Helper()
+	if len(items) == 0 {
+		return ""
+	}
 	raw, err := yaml.Marshal(items)
 	if err != nil {
-		t.Fatalf("marshaling %s for the manifest: %v", key, err)
+		t.Fatalf("marshaling manifest list entries: %v", err)
 	}
 	pad := strings.Repeat(" ", indent)
-	out := []string{pad + key + ":"}
+	var out []string
 	for line := range strings.SplitSeq(strings.TrimRight(string(raw), "\n"), "\n") {
 		out = append(out, pad+line)
 	}
