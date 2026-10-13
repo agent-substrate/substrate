@@ -106,7 +106,7 @@ spec:
         # pod almost no CPU.
         resources:
           requests:
-            cpu: 500m
+            cpu: 100m
             memory: 256Mi
         args:
         - --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
