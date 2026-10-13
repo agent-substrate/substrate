@@ -27,7 +27,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/volume"
+	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
 	"github.com/google/go-cmp/cmp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type mountCall struct {
@@ -45,14 +48,14 @@ type fakeWorkerPlugin struct {
 	mountCalls  []mountCall
 }
 
-func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, volumeID string, targetPath string, attributes map[string]string) error {
+func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest) error {
 	f.mountCalls = append(f.mountCalls, mountCall{
-		volumeID:   volumeID,
-		targetPath: targetPath,
-		attributes: attributes,
+		volumeID:   req.VolumeID,
+		targetPath: req.TargetPath,
+		attributes: req.VolumeContext,
 	})
 	if f.mountErrs != nil {
-		if err, ok := f.mountErrs[volumeID]; ok {
+		if err, ok := f.mountErrs[req.VolumeID]; ok {
 			return err
 		}
 	}
@@ -73,7 +76,7 @@ var _ volume.VolumePluginWorkerPlane = (*fakeWorkerPlugin)(nil)
 
 // withTempActorsDir redirects nodepath.ActorsDir at a temp dir for the
 // duration of the test. Every path derived from ActorsDir moves with it,
-// including the ones resetActorDirs and the OCI spec builder compute
+// including the ones resetActorDirs and the bundle preparation compute
 // independently of the volume mount code.
 func withTempActorsDir(t *testing.T) {
 	t.Helper()
@@ -88,27 +91,21 @@ func TestUnmountExternalVolumes(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-1",
-				VolumeType:      "mock-driver",
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-1",
+			VolumeType:      "mock-driver",
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-2",
-				VolumeType:      "mock-driver",
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-2",
+			VolumeType:      "mock-driver",
 		},
 	}
 	durableVol := &ateletpb.Volume{
-		Name: "durable-1",
-		Source: &ateletpb.Volume_DurableDir{
-			DurableDir: &ateletpb.DurableDirVolume{},
-		},
+		Name:       "durable-1",
+		DurableDir: &ateletpb.DurableDirVolume{},
 	}
 
 	t.Run("success", func(t *testing.T) {
@@ -174,29 +171,23 @@ func TestMountExternalVolumes(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-1",
-				VolumeType:      "mock-driver",
-				VolumeContext:   map[string]string{"key": "val1"},
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-1",
+			VolumeType:      "mock-driver",
+			VolumeContext:   map[string]string{"key": "val1"},
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-2",
-				VolumeType:      "mock-driver",
-				VolumeContext:   map[string]string{"key": "val2"},
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-2",
+			VolumeType:      "mock-driver",
+			VolumeContext:   map[string]string{"key": "val2"},
 		},
 	}
 	durableVol := &ateletpb.Volume{
-		Name: "durable-1",
-		Source: &ateletpb.Volume_DurableDir{
-			DurableDir: &ateletpb.DurableDirVolume{},
-		},
+		Name:       "durable-1",
+		DurableDir: &ateletpb.DurableDirVolume{},
 	}
 
 	t.Run("success mounts external volumes and creates mount directory", func(t *testing.T) {
@@ -272,11 +263,9 @@ func TestMountExternalVolumes(t *testing.T) {
 
 		unknownVol := &ateletpb.Volume{
 			Name: "vol-unknown",
-			Source: &ateletpb.Volume_External{
-				External: &ateletpb.ExternalVolumeSource{
-					StorageVolumeId: "mock-vol-unknown",
-					VolumeType:      "unknown-driver",
-				},
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: "mock-vol-unknown",
+				VolumeType:      "unknown-driver",
 			},
 		}
 
@@ -391,20 +380,16 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-1",
-				VolumeType:      "mock-driver",
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-1",
+			VolumeType:      "mock-driver",
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-2",
-				VolumeType:      "mock-driver",
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-2",
+			VolumeType:      "mock-driver",
 		},
 	}
 
@@ -537,4 +522,33 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 			t.Errorf("expected volumes dir %q to be created, stat err = %v", volumesDir, err)
 		}
 	})
+}
+
+func TestDirectCSIDriverConfigGetter(t *testing.T) {
+	fakeClient := fake.NewSimpleClientset(&v1alpha1.CSIDriverConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test.csi.k8s.io",
+		},
+		Spec: v1alpha1.CSIDriverConfigSpec{
+			DriverName:         "test.csi.k8s.io",
+			ControllerEndpoint: "tcp://127.0.0.1:9000",
+		},
+	})
+
+	getter := &directCSIDriverConfigGetter{client: fakeClient}
+
+	// Existing config
+	cfg, err := getter.Get("test.csi.k8s.io")
+	if err != nil {
+		t.Fatalf("getter.Get failed: %v", err)
+	}
+	if cfg.Spec.DriverName != "test.csi.k8s.io" {
+		t.Errorf("expected driver name %q, got %q", "test.csi.k8s.io", cfg.Spec.DriverName)
+	}
+
+	// Missing config
+	_, err = getter.Get("missing.csi.k8s.io")
+	if err == nil {
+		t.Fatalf("expected error for missing driver, got nil")
+	}
 }

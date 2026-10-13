@@ -48,7 +48,7 @@ func newTestWorker(ns string) *ateapipb.Worker {
 		WorkerPod:       "worker-api-1",
 		WorkerPodUid:    testWorkerName,
 		NodeName:        "node1",
-		Ip:              "10.1.2.3",
+		Ips:             []string{"10.1.2.3"},
 		SandboxClass:    "gvisor",
 	}
 }
@@ -161,7 +161,7 @@ func TestListWorkers(t *testing.T) {
 			WorkerPod:       "worker-1",
 			WorkerPodUid:    podUID,
 			NodeName:        "node1",
-			Ip:              "127.0.0.1",
+			Ips:             []string{"127.0.0.1"},
 			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"foo": "bar"},
 			Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
@@ -263,9 +263,10 @@ func TestDrainWorker(t *testing.T) {
 		t.Fatalf("DrainWorker failed: %v", err)
 	}
 
-	want := newTestWorker(ns)
-	want.Metadata.Version = 2
-	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
+	wantWorker := newTestWorker(ns)
+	wantWorker.Metadata.Version = 2
+	wantWorker.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
+	want := &ateapipb.DrainWorkerResponse{Worker: wantWorker}
 	if diff := cmp.Diff(want, drained, protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("DrainWorker response mismatch (-want +got):\n%s", diff)
 	}

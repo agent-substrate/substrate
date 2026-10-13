@@ -15,10 +15,14 @@
 package resources
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -33,6 +37,16 @@ func TestToGRPCStatusError(t *testing.T) {
 	}
 	if !strings.Contains(status.Convert(err).Message(), "actor_name") {
 		t.Errorf("message %q does not name the field", status.Convert(err).Message())
+	}
+}
+
+func TestToAPIError(t *testing.T) {
+	err := ToAPIError(field.ErrorList{field.Required(field.NewPath("actor_name"), "")})
+	if got := apierror.Code(err); got != codes.InvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", got)
+	}
+	if !strings.Contains(err.Error(), "actor_name") {
+		t.Errorf("message %q does not name the field", err.Error())
 	}
 }
 
@@ -88,57 +102,7 @@ func TestIsValidResourceName(t *testing.T) {
 	}
 }
 
-func TestValidateGlobalObjectRef(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   *ateapipb.ObjectRef
-		wantMsg string // empty means no error is expected
-	}{{
-		"valid global ref",
-		&ateapipb.ObjectRef{Name: "team-a"},
-		"",
-	}, {
-		// A nil global ref is an error: it names the resource the request
-		// acts on.
-		"missing ref",
-		nil,
-		"path: Required value",
-	}, {
-		"atespace must be empty",
-		&ateapipb.ObjectRef{Atespace: "ns1", Name: "team-a"},
-		"atespace: Invalid value",
-	}, {
-		"missing name",
-		&ateapipb.ObjectRef{},
-		"name: Required value",
-	}, {
-		"invalid name",
-		&ateapipb.ObjectRef{Name: "TEAM-A"},
-		"name: Invalid value",
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			errs := ValidateGlobalObjectRef(tt.input, field.NewPath("path"))
-			if tt.wantMsg == "" {
-				if len(errs) != 0 {
-					t.Fatalf("expected no errors, got %v", errs)
-				}
-				return
-			}
-			if len(errs) != 1 {
-				t.Fatalf("expected 1 error, got %v", errs)
-			}
-			got := errs[0].Error()
-			if matched, matchErr := regexp.MatchString(tt.wantMsg, got); matchErr != nil {
-				t.Fatalf("failed to compile regex %q: %v", tt.wantMsg, matchErr)
-			} else if !matched {
-				t.Errorf("expected message %q, got %q", tt.wantMsg, got)
-			}
-		})
-	}
-}
-
-func TestValidateAteomUID(t *testing.T) {
+func TestValidateWorkerPodUID(t *testing.T) {
 	tests := []struct {
 		name    string
 		uid     string
@@ -153,34 +117,8 @@ func TestValidateAteomUID(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := ValidateAteomUID(tt.uid); (err != nil) != tt.wantErr {
-				t.Errorf("ValidateAteomUID(%q) err = %v, wantErr %v", tt.uid, err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestValidateContainerNames(t *testing.T) {
-	tests := []struct {
-		name    string
-		names   []string
-		wantErr bool
-	}{
-		{"no containers", nil, false},
-		{"single valid", []string{"worker"}, false},
-		{"multiple valid", []string{"worker", "sidecar"}, false},
-		{"separator", []string{"a/b"}, true},
-		{"traversal", []string{".."}, true},
-		{"empty name", []string{""}, true},
-		{"uppercase", []string{"Worker"}, true},
-		{"reserved pause", []string{"pause"}, true},
-		{"reserved pause among valid", []string{"worker", "pause"}, true},
-		{"duplicate", []string{"worker", "worker"}, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := ValidateContainerNames(tt.names); (err != nil) != tt.wantErr {
-				t.Errorf("ValidateContainerNames(%v) err = %v, wantErr %v", tt.names, err, tt.wantErr)
+			if err := ValidateWorkerPodUID(tt.uid); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateWorkerPodUID(%q) err = %v, wantErr %v", tt.uid, err, tt.wantErr)
 			}
 		})
 	}
@@ -232,6 +170,16 @@ func TestValidateSnapshotLocation(t *testing.T) {
 		// Opaque form (no //) parses with an empty host, so it is rejected
 		// on either the bucket or the opaque check.
 		{"opaque", "gs:bucket/path", true},
+		{"dot dot", "gs://bucket/team-a/../team-b", true},
+		{"trailing dot dot", "gs://bucket/path/..", true},
+		{"escaped dot dot", "gs://bucket/%2e%2e/path", true},
+		{"dot", "gs://bucket/./path", true},
+		{"triple dot", "gs://bucket/.../path", true},
+		{"space padded dot dot", "gs://bucket/a/%20..%20/b", true},
+		{"trailing space dot dot", "gs://bucket/a/..%20/b", true},
+		{"backslash", `gs://bucket/team-a\..\team-b`, true},
+		{"escaped backslash", "gs://bucket/a%5Cb", true},
+		{"dots in a name", "gs://bucket/a..b/.c/d.", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -323,14 +271,20 @@ func TestValidateLimit(t *testing.T) {
 		want     field.ErrorList
 	}{
 		{name: "cpu below the bound", limit: "cpu", quantity: "999"},
+		{name: "cpu at the millicore bound", limit: "cpu", quantity: "999.999"},
 		{name: "memory", limit: "memory", quantity: "1Gi"},
-		{name: "memory has no upper bound", limit: "memory", quantity: "1000"},
+		{name: "memory at the int64 bound", limit: "memory", quantity: "9223372036854775807"},
 		{name: "missing quantity left to tags", limit: "cpu"},
 		{name: "unsupported name", limit: "gpu", quantity: "1", want: field.ErrorList{field.NotSupported[string](path.Child("name"), nil, nil)}},
 		{name: "malformed quantity", limit: "cpu", quantity: "x", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
 		{name: "zero quantity", limit: "memory", quantity: "0", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
 		{name: "negative quantity", limit: "memory", quantity: "-1", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "cpu at the bound", limit: "cpu", quantity: "1000", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "cpu at 1000 cores", limit: "cpu", quantity: "1000", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "cpu rounds up to 1000 cores in millicores", limit: "cpu", quantity: "999.9995", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "cpu far beyond int64 millicores", limit: "cpu", quantity: "1e30", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "memory past the int64 bound", limit: "memory", quantity: "9223372036854775808", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "memory rounds up past the int64 bound", limit: "memory", quantity: "9223372036854775807.5", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "memory far beyond int64 bytes", limit: "memory", quantity: "1e30", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -348,6 +302,39 @@ func testActorDirs() *ateompb.ActorDirs {
 		DurableDirVolumeMountsDir: "/node/actors/a/durable-dir",
 		SystemInfoVolumeRootsDir:  "/node/actors/a/system-info",
 		VolumesDir:                "/node/actors/a/volumes",
+	}
+}
+
+func TestValidateSnapshotFidelity(t *testing.T) {
+	volumes := ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	rootfs := ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	memory := ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	all := []ateompb.SnapshotFidelity{volumes, rootfs, memory}
+	noRootfs := []ateompb.SnapshotFidelity{volumes, memory}
+	for _, tc := range []struct {
+		name      string
+		fidelity  ateompb.SnapshotFidelity
+		supported []ateompb.SnapshotFidelity
+		wantErr   bool
+	}{
+		{"volumes", volumes, all, false},
+		{"memory", memory, all, false},
+		{"rootfs where supported", rootfs, all, false},
+		{"rootfs where unsupported", rootfs, noRootfs, true},
+		{"unspecified", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, all, true},
+		{"outside the enum", ateompb.SnapshotFidelity(99), all, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ValidateSnapshotFidelity(tc.fidelity, tc.supported, field.NewPath("fidelity"))
+			if gotErr := len(errs) != 0; gotErr != tc.wantErr {
+				t.Fatalf("ValidateSnapshotFidelity(%v) = %v, wantErr %t", tc.fidelity, errs, tc.wantErr)
+			}
+			for _, e := range errs {
+				if e.Field != "fidelity" {
+					t.Errorf("error names field %q, want %q", e.Field, "fidelity")
+				}
+			}
+		})
 	}
 }
 
@@ -387,4 +374,258 @@ func TestValidateActorDirs(t *testing.T) {
 			}
 		})
 	}
+}
+
+const testPinnedImage = "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+// stringRuleCase is one input to a single-string rule and whether it fails.
+type stringRuleCase struct {
+	name    string
+	value   string
+	wantErr bool
+}
+
+func runStringRule(t *testing.T, rule func(*field.Path, string) field.ErrorList, tests []stringRuleCase) {
+	t.Helper()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := rule(field.NewPath("f"), tt.value)
+			if (len(errs) > 0) != tt.wantErr {
+				t.Errorf("value %q: errs = %v, wantErr %v", tt.value, errs, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateRuntimeAssetPath(t *testing.T) {
+	// on macOS the temp dir is behind the /var symlink
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := filepath.Join(root, "runsc-abc")
+	if err := os.WriteFile(asset, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "gvisor-abc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(root, "gvisor-abc", "runsc")
+	if err := os.WriteFile(nested, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "evil")
+	if err := os.WriteFile(outside, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "runsc-link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	linkedDir := filepath.Join(root, "gvisor-link")
+	if err := os.Symlink(filepath.Dir(outside), linkedDir); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"asset", asset, false},
+		{"release dir asset", nested, false},
+		{"empty", "", true},
+		{"relative", "runsc-abc", true},
+		{"unclean", root + "/gvisor-abc/../runsc-abc", true},
+		{"outside root", outside, true},
+		{"root itself", root, true},
+		{"directory", filepath.Join(root, "gvisor-abc"), true},
+		{"sibling with root prefix", root + "-other/runsc", true},
+		{"host binary", "/bin/sh", true},
+		{"symlink out of root", link, true},
+		{"symlinked directory", filepath.Join(linkedDir, "evil"), true},
+		{"missing", filepath.Join(root, "runsc-missing"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ValidateRuntimeAssetPath(root, tc.path, field.NewPath("runsc_path"))
+			if gotErr := len(errs) > 0; gotErr != tc.wantErr {
+				t.Errorf("ValidateRuntimeAssetPath(%q) = %v, want error: %v", tc.path, errs, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidatePinnedImage(t *testing.T) {
+	runStringRule(t, ValidatePinnedImage, []stringRuleCase{
+		{"empty is left to tags", "", false},
+		{"pinned", testPinnedImage, false},
+		{"tag only", "example.com/app:v1", true},
+		{"malformed digest", "example.com/app@sha256:abc", true},
+		{"malformed reference", "Example.com/App", true},
+	})
+}
+
+func TestValidateMountPath(t *testing.T) {
+	runStringRule(t, ValidateMountPath, []stringRuleCase{
+		{"empty is left to tags", "", false},
+		{"clean absolute", "/data/cache", false},
+		{"relative", "data", true},
+		{"root", "/", true},
+		{"trailing slash", "/data/", true},
+		{"double slash", "/data//x", true},
+		{"colon", "/data:x", true},
+		{"dot segment", "/data/./x", true},
+		{"dot-dot segment", "/data/../x", true},
+		{"control character", "/data\x01", true},
+	})
+}
+
+func TestValidateHTTPGetPath(t *testing.T) {
+	runStringRule(t, ValidateHTTPGetPath, []stringRuleCase{
+		{"empty is left to tags", "", false},
+		{"simple", "/healthz", false},
+		{"percent escape", "/a%20b", false},
+		{"no leading slash", "healthz", true},
+		{"query", "/healthz?x=1", true},
+		{"fragment", "/healthz#x", true},
+		{"bad percent escape", "/a%2", true},
+	})
+}
+
+func TestValidateEnvVarName(t *testing.T) {
+	runStringRule(t, ValidateEnvVarName, []stringRuleCase{
+		{"empty is left to tags", "", false},
+		{"conventional", "HOME_DIR", false},
+		{"printable punctuation", "a.b-c", false},
+		{"equals sign", "A=B", true},
+		{"control character", "A\tB", true},
+		{"non-ASCII", "é", true},
+	})
+}
+
+func TestValidateProjectedPath(t *testing.T) {
+	runStringRule(t, ValidateProjectedPath, []stringRuleCase{
+		{"empty is left to tags", "", false},
+		{"relative file", "identity/name", false},
+		{"absolute", "/etc/name", true},
+		{"escape", "../name", true},
+	})
+}
+
+func TestValidateStorageVolumeID(t *testing.T) {
+	runStringRule(t, ValidateStorageVolumeID, []stringRuleCase{
+		{"empty", "", false},
+		{"plain", "projects/p/disks/d-1", false},
+		{"newline is allowed", "a\nb", false},
+		{"NUL", "a\x00b", true},
+		{"DEL", "a\x7fb", true},
+		{"C1 control", "a\u0085b", true},
+	})
+}
+
+func TestValidateVolumeType(t *testing.T) {
+	runStringRule(t, ValidateVolumeType, []stringRuleCase{
+		{"empty", "", false},
+		{"dns subdomain", "pd.csi.storage.gke.io", false},
+		{"substrate prefix", "substrate.io/gcs", false},
+		{"uppercase", "PD", true},
+		{"other prefix", "example.io/gcs", true},
+	})
+}
+
+func TestValidateCapabilities(t *testing.T) {
+	tests := []struct {
+		name     string
+		caps     []string
+		allowAll bool
+		wantErrs int
+	}{
+		{"valid names", []string{"NET_BIND_SERVICE", "SYS_PTRACE"}, false, 0},
+		{"ALL rejected for add", []string{"ALL"}, false, 1},
+		{"ALL accepted for drop", []string{"ALL"}, true, 0},
+		{"CAP_ prefix", []string{"CAP_NET_ADMIN"}, false, 1},
+		{"lowercase", []string{"net_admin"}, false, 1},
+		{"too long", []string{strings.Repeat("A", 64)}, false, 1},
+		{"each bad entry reported", []string{"CAP_X", "ok", "NET_ADMIN"}, false, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if errs := ValidateCapabilities(field.NewPath("add"), tt.caps, tt.allowAll); len(errs) != tt.wantErrs {
+				t.Errorf("errs = %v, want %d", errs, tt.wantErrs)
+			}
+		})
+	}
+}
+
+func TestValidateNestedMountPaths(t *testing.T) {
+	path := field.NewPath("volume_mounts")
+	tests := []struct {
+		name  string
+		paths []string
+		want  field.ErrorList
+	}{
+		{name: "siblings", paths: []string{"/a", "/b", "/ab"}},
+		{name: "identical paths are left to the list key", paths: []string{"/a", "/a"}},
+		{name: "empty paths are skipped", paths: []string{"", "/a"}},
+		{
+			name:  "nested under an earlier mount",
+			paths: []string{"/a", "/a/b"},
+			want:  field.ErrorList{field.Invalid(path.Index(1).Child("mount_path"), nil, "")},
+		},
+		{
+			name:  "nested over an earlier mount",
+			paths: []string{"/a/b", "/a"},
+			want:  field.ErrorList{field.Invalid(path.Index(1).Child("mount_path"), nil, "")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateNestedMountPaths(path, tt.paths))
+		})
+	}
+}
+
+func TestValidateCSIMap(t *testing.T) {
+	path := field.NewPath("publish_context")
+	many := make(map[string]string, 100)
+	for i := range 100 {
+		many[fmt.Sprintf("key-%03d", i)] = "v"
+	}
+	tests := []struct {
+		name string
+		m    map[string]string
+		want field.ErrorList
+	}{
+		{name: "nil"},
+		{name: "one long value", m: map[string]string{"token": strings.Repeat("x", 4000)}},
+		{name: "many small entries", m: many},
+		{name: "over the CSI spec limit, within the headroom", m: map[string]string{"k": strings.Repeat("x", 8*1024)}},
+		{name: "exactly the bound", m: map[string]string{"k": strings.Repeat("x", 40*1024-1)}},
+		{name: "one byte over", m: map[string]string{"k": strings.Repeat("x", 40*1024)}, want: field.ErrorList{field.TooLong(path, nil, 40*1024)}},
+		{name: "over across entries", m: map[string]string{"a": strings.Repeat("x", 20*1024), "b": strings.Repeat("y", 20*1024)}, want: field.ErrorList{field.TooLong(path, nil, 40*1024)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateCSIMap(path, tt.m))
+		})
+	}
+}
+
+func TestValidateHostPort(t *testing.T) {
+	runStringRule(t, ValidateHostPort, []stringRuleCase{
+		{name: "empty is left to presence tags", value: ""},
+		{name: "dns name", value: "atenet-egress.ate-system.svc:443"},
+		{name: "fully qualified dns name", value: "atenet-egress.ate-system.svc.cluster.local.:443"},
+		{name: "ipv4", value: "10.0.0.1:8080"},
+		{name: "ipv6", value: "[fd00::1]:443"},
+		{name: "missing port", value: "atenet-egress.ate-system.svc", wantErr: true},
+		{name: "empty host", value: ":443", wantErr: true},
+		{name: "bare dot host", value: ".:443", wantErr: true},
+		{name: "uppercase host", value: "Egress.Example:443", wantErr: true},
+		{name: "host with a path", value: "egress/../x:443", wantErr: true},
+		{name: "port zero", value: "egress.example:0", wantErr: true},
+		{name: "port too large", value: "egress.example:65536", wantErr: true},
+		{name: "named port", value: "egress.example:https", wantErr: true},
+		{name: "unbracketed ipv6", value: "fd00::1:443", wantErr: true},
+	})
 }

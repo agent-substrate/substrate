@@ -147,11 +147,80 @@ spec:
       - key: ate.dev/sandboxClass
         operator: Exists
         effect: NoSchedule
+      # The node object-store plugin moves external snapshots between this
+      # node and object storage and fetches sandbox assets for atelet, over a
+      # Unix socket in a pod-local emptyDir.
+      # A native sidecar (restartPolicy: Always) starts before atelet and stops
+      # after it, so uploads still in flight during atelet's drain finish.
+      # atelet starts only once the startup probe sees the plugin serving.
+      initContainers:
+      - name: objectstore-plugin
+        image: ko://github.com/agent-substrate/substrate/cmd/objectstore-plugin
+        restartPolicy: Always
+        args:
+        - node
+        - --socket=/run/objectstore-plugin/node.sock
+        - --root=/var/lib/ate
+        - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
+        # atelet's 8 GiB per-asset cap, so any asset fits. Each download
+        # reserves its object's size; ones past the capacity wait their turn,
+        # so the asset-staging volume below never fills up.
+        - --asset-staging-capacity=8Gi
+        # The plugin listens on a Unix socket, which a gRPC probe cannot
+        # reach, and the image has no shell, so the binary checks itself.
+        startupProbe:
+          exec:
+            command:
+            - /ko-app/objectstore-plugin
+            - healthcheck
+            - --socket=/run/objectstore-plugin/node.sock
+          periodSeconds: 2
+          failureThreshold: 30
+        # Reads and writes snapshot and asset files under the /var/lib/ate
+        # hostPath as root, like atelet; needs no capabilities.
+        securityContext:
+          runAsUser: 0
+          runAsGroup: 0
+          capabilities:
+            drop:
+            - ALL
+        # Same reservation as atelet and no limits: the plugin now does the
+        # zstd work atelet used to, and must not get less CPU for it.
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        env:
+        # Object storage settings for snapshot transfers and sandbox assets.
+        # Unset or "gcs" selects GCS with ambient credentials; "s3" with the
+        # AWS_* variables selects S3 (see the kind overlay). atelet has no
+        # storage settings of its own and exits if ATE_STORAGE_BACKEND is set
+        # on it.
+        - name: ATE_STORAGE_BACKEND
+          value: "gcs"
+        envFrom:
+        - configMapRef:
+            name: ate-otel-config
+        volumeMounts:
+        - name: run-ateom
+          mountPath: /var/lib/ate
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
+        # Sandbox assets are downloaded here and verified against their sha256
+        # before the plugin copies them below /var/lib/ate. Only this container
+        # mounts it, so atelet never sees bytes it did not pin.
+        - name: asset-staging
+          mountPath: /var/lib/objectstore-plugin/asset-staging
       containers:
       - name: atelet
         image: ko://github.com/agent-substrate/substrate/cmd/atelet
         args:
-        - --gcp-auth-for-image-pulls=true
+        # Pull credentials come from the node's own kubelet credential provider
+        # plugin (mounted read-only below) rather than a cloud SDK compiled into
+        # atelet, so the same atelet authenticates to Artifact Registry on GKE
+        # and to ECR on EKS.
+        - --image-credential-provider-config=/run/image-credential-provider/config.yaml
+        - --image-credential-provider-bin-dir=/run/image-credential-provider/bin
         - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
         - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
         - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
@@ -159,6 +228,7 @@ spec:
         # terminationGracePeriodSeconds above.
         - --drain-delay=0s
         - --drain-timeout=5m
+        - --objectstore-plugin-socket=/run/objectstore-plugin/node.sock
         # atelet does no mounts, netlink, device, or namespace operations (those
         # live in the ateom worker pod) — it only reads/writes the
         # /var/lib/ate hostPath as root. CAP_DAC_OVERRIDE is for one thing:
@@ -200,8 +270,6 @@ spec:
               fieldPath: metadata.uid
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),k8s.node.name=$(NODE_NAME),service.instance.id=$(POD_UID)
-        - name: ATE_STORAGE_BACKEND
-          value: "gcs"
         # OTLP exporter settings are shared by every control plane component;
         # see manifests/ate-install/ate-otel-config.yaml.
         envFrom:
@@ -213,12 +281,14 @@ spec:
           hostPort: 8085
         - name: prometheus
           containerPort: 9090
-          hostPort: 9090
+          protocol: TCP
+        - name: health
+          containerPort: 9091
           protocol: TCP
         readinessProbe:
           httpGet:
             path: /readyz
-            port: 9090
+            port: health
           initialDelaySeconds: 5
           periodSeconds: 2
           failureThreshold: 3
@@ -227,12 +297,14 @@ spec:
         livenessProbe:
           httpGet:
             path: /healthz
-            port: 9090
+            port: health
           initialDelaySeconds: 10
           periodSeconds: 10
         volumeMounts:
         - name: run-ateom
           mountPath: /var/lib/ate
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
         - name: servicedns-ca
@@ -245,7 +317,21 @@ spec:
         - name: host-dev
           mountPath: /host/dev
           readOnly: true
+        - name: image-credential-provider-bin
+          mountPath: /run/image-credential-provider/bin
+          readOnly: true
+        - name: image-credential-provider-config
+          mountPath: /run/image-credential-provider/config.yaml
+          readOnly: true
       volumes:
+      - name: objectstore-plugin
+        emptyDir: {}
+      # Holds asset downloads until they are verified. The plugin keeps them
+      # within --asset-staging-capacity; the limit adds 1Gi for filesystem
+      # overhead, since kubelet evicts the pod if the volume exceeds it.
+      - name: asset-staging
+        emptyDir:
+          sizeLimit: 9Gi
       - name: run-ateom
         hostPath:
           path: /var/lib/ate
@@ -271,6 +357,19 @@ spec:
         hostPath:
           path: /dev
           type: Directory
+      # The kubelet's own credential provider bin dir and config; these paths
+      # are GKE's, other node distributions differ. The bin dir also holds the
+      # node's other kubelet-installed binaries -- the plugin contract is
+      # directory-scoped, so a narrower mount would have to hard-code the
+      # provider name and give up being cloud-agnostic.
+      - name: image-credential-provider-bin
+        hostPath:
+          path: /home/kubernetes/bin
+          type: DirectoryOrCreate
+      - name: image-credential-provider-config
+        hostPath:
+          path: /etc/srv/kubernetes/cri_auth_config.yaml
+          type: FileOrCreate
       # Identity for mutual TLS with the ate-apiserver. atelet is not behind a
       # Service, so it uses a podidentity (SPIFFE) cert rather than a servicedns
       # serving cert (which requires DNS SANs it would not have); the

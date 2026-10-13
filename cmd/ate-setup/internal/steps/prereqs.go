@@ -27,6 +27,7 @@ import (
 var trustBundleNames = []string{
 	"podidentity.podcert.ate.dev:identity:primary-bundle",
 	"servicedns.podcert.ate.dev:identity:primary-bundle",
+	"postgres.podcert.ate.dev:identity:primary-bundle",
 }
 
 // EnsureAPIServerPrerequisites creates the secrets and config ate-api-server
@@ -44,11 +45,11 @@ func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDCACerts, e.CreateActorIDCACertsSecret); err != nil {
 		return err
 	}
-	if err := e.ensureSecret(ctx, NamespacePodCert, SecretServiceDNSCA, e.CreatePodCertificateControllerCAs); err != nil {
+	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
 		return err
 	}
 	// Always reconcile the PostgreSQL connection settings, so that a changed
-	// ATE_API_POSTGRES_CONNECTION_STRING reaches an existing install.
+	// ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING reaches an existing install.
 	if err := e.CreateAPIServerEnvVars(ctx); err != nil {
 		return err
 	}
@@ -63,10 +64,10 @@ func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 	return nil
 }
 
-// EnsurePodCertificateCAs creates the podcertificate signer pools if either is
+// EnsurePodCertificateCAs creates the podcertificate signer pools if any is
 // missing.
 func (e *Env) EnsurePodCertificateCAs(ctx context.Context) error {
-	for _, name := range []string{SecretServiceDNSCA, SecretPodIdentityCA} {
+	for _, name := range []string{SecretServiceDNSCA, SecretPodIdentityCA, SecretPostgresCA} {
 		exists, err := e.Kube.SecretExists(ctx, NamespacePodCert, name)
 		if err != nil {
 			return err
@@ -79,7 +80,7 @@ func (e *Env) EnsurePodCertificateCAs(ctx context.Context) error {
 }
 
 // WaitForPodCertificateTrustBundles blocks until the podcertificate controller
-// has published both identity bundles.
+// has published all signer bundles.
 func (e *Env) WaitForPodCertificateTrustBundles(ctx context.Context) error {
 	log.Infof("Waiting for podcertificate ClusterTrustBundles to be ready...")
 	err := e.Kube.WaitClusterTrustBundles(ctx, trustBundleNames, e.Cfg.WaitTimeout(TrustBundleTimeout))

@@ -1,0 +1,151 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The default agent-session script: a coding agent told to fetch a
+# repository, get it building, fix a failing test, extend the test suite,
+# refactor, and package the result, with an LLM round-trip (seconds of
+# suspension) before every step. Each op is one glutton RPC; see
+# scriptfile.go for the op kinds and their arguments.
+#
+# The script declares ~96Mi of resident RAM and ~110Mi of files (tmpfs, so
+# also memory). The guest peak on top of that (kernel, kata-agent, Go
+# allocator transients) has been observed around 320Mi, and 512Mi actors
+# OOM under allocator churn, hence min_actor_memory: 1Gi.
+name: coding-session
+min_actor_memory: 1Gi
+steps:
+  - name: 01_read_task
+    agent: Boots, reads the task prompt, loads its context window
+    think: 2s
+    ops:
+      - fill_ram: {key: agent_context, size: 32Mi}
+      - ping: {}
+  - name: 02_clone_repo
+    agent: git clone of the target repository
+    think: 3s
+    ops:
+      - ingest: {key: repo_tarball, size: 16Mi}
+      - burn_cpu: {millis: 500, parallel: 1}
+  - name: 03_explore_tree
+    agent: Lists directories, greps for entry points
+    think: 4s
+    ops:
+      - read_disk_digest: {key: repo_tarball}
+      - burn_cpu: {millis: 200, parallel: 1}
+  - name: 04_read_key_files
+    agent: Opens the files it plans to change; they enter the LLM context
+    think: 3s
+    ops:
+      - read_disk_data: {key: repo_tarball}
+      - churn_ram: {key: agent_context, size: 8Mi}
+  - name: 05_install_deps
+    agent: Installs dependencies (pip install / go mod download)
+    think: 2s
+    ops:
+      - ingest: {key: deps_cache, size: 32Mi}
+      - burn_cpu: {millis: 1500, parallel: 2}
+  - name: 06_first_build
+    agent: First full build of the project
+    think: 3s
+    ops:
+      - fill_ram: {key: compiler_ws, size: 64Mi}
+      - burn_cpu: {millis: 3000, parallel: 2}
+      - write_disk: {key: build_artifacts, size: 24Mi}
+  - name: 07_run_unit_tests
+    agent: Runs the existing unit tests; one fails
+    think: 2s
+    ops:
+      - read_disk_digest: {key: build_artifacts}
+      - burn_cpu: {millis: 2500, parallel: 2}
+  - name: 08_reason_about_failure
+    agent: Re-reads the failing test and traces the bug (mostly thinking)
+    think: 8s
+    ops:
+      - walk_ram: {key: agent_context}
+      - ping: {}
+  - name: 09_edit_source
+    agent: Applies the LLM's fix to the source files
+    think: 5s
+    ops:
+      - ingest: {key: patch, size: 64Ki}
+      - write_disk: {key: repo_tarball, size: 4Mi}
+  - name: 10_incremental_build
+    agent: Rebuilds just the changed packages
+    think: 2s
+    ops:
+      - burn_cpu: {millis: 1200, parallel: 2}
+      - write_disk: {key: build_artifacts, size: 8Mi}
+  - name: 11_rerun_failed_test
+    agent: Re-runs the previously failing test; it passes
+    think: 2s
+    ops:
+      - burn_cpu: {millis: 800, parallel: 1}
+  - name: 12_write_new_tests
+    agent: Writes regression tests for the fix
+    think: 6s
+    ops:
+      - ingest: {key: patch, size: 128Ki}
+      - write_disk: {key: test_fixtures, size: 2Mi}
+  - name: 13_run_new_tests
+    agent: Runs the new tests in isolation
+    think: 2s
+    ops:
+      - read_disk_digest: {key: test_fixtures}
+      - burn_cpu: {millis: 1000, parallel: 1}
+  - name: 14_full_test_suite
+    agent: Runs the entire test suite to check for regressions
+    think: 3s
+    ops:
+      - burn_cpu: {millis: 4000, parallel: 2}
+      - read_disk_digest: {key: build_artifacts}
+      - churn_ram: {key: agent_context, size: 8Mi}
+  - name: 15_lint_format
+    agent: Runs the linter and formatter over the tree
+    think: 2s
+    ops:
+      - read_disk_digest: {key: repo_tarball}
+      - burn_cpu: {millis: 900, parallel: 1}
+  - name: 16_refactor
+    agent: Applies the LLM's multi-file cleanup refactor
+    think: 8s
+    ops:
+      - ingest: {key: patch, size: 512Ki}
+      - write_disk: {key: repo_tarball, size: 6Mi}
+      - burn_cpu: {millis: 600, parallel: 1}
+  - name: 17_rebuild
+    agent: Full rebuild after the refactor
+    think: 2s
+    ops:
+      - churn_ram: {key: compiler_ws, size: 32Mi}
+      - burn_cpu: {millis: 2000, parallel: 2}
+      - write_disk: {key: build_artifacts, size: 16Mi}
+  - name: 18_final_test_suite
+    agent: Final full-suite run before shipping
+    think: 2s
+    ops:
+      - burn_cpu: {millis: 3500, parallel: 2}
+  - name: 19_package_artifact
+    agent: Builds the release package / container image
+    think: 3s
+    ops:
+      - read_disk_digest: {key: build_artifacts}
+      - burn_cpu: {millis: 1000, parallel: 1}
+      - write_disk: {key: release_package, size: 24Mi}
+  - name: 20_commit_and_summarize
+    agent: Commits, writes the summary, hands the session back
+    think: 5s
+    ops:
+      - write_disk: {key: repo_tarball, size: 256Ki}
+      - read_disk_data: {key: release_package}
+      - walk_ram: {key: agent_context}

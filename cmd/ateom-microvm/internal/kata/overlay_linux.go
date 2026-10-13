@@ -35,14 +35,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -70,11 +69,28 @@ func VirtiofsdSocketPath(id string) string { return filepath.Join(VMDir(id), "vi
 // UpperWorkDirs returns the HOST overlay upperdir and workdir for one container
 // under the actor's rootfs-upper base dir: SIBLING directories, <cid>/fs and
 // <cid>/work. Both properties are load-bearing — the kernel requires upperdir
-// and workdir on the same filesystem and rejects a nested workdir — and the
-// layout is also the snapshot tar's entry layout, so a change here breaks both
-// every overlay mount and every existing snapshot. Covered by regression tests.
+// and workdir on the same filesystem and rejects a nested workdir. The
+// snapshot only carries each upperdir's contents (see
+// cmd/ateom-microvm/rootfsupper.go); ateom creates this layout itself.
+// Covered by regression tests.
 func UpperWorkDirs(upperBase, containerID string) (upper, work string) {
 	return filepath.Join(upperBase, containerID, "fs"), filepath.Join(upperBase, containerID, "work")
+}
+
+// MkdirUpperWorkDirs creates UpperWorkDirs under upperBase, which must exist.
+// Only root uses <cid> and the workdir, so they are 0700. The upperdir is
+// 0755: overlayfs presents its mode as the container's /.
+func MkdirUpperWorkDirs(upperBase, containerID string) (upper, work string, err error) {
+	upper, work = UpperWorkDirs(upperBase, containerID)
+	for _, d := range []struct {
+		path string
+		mode os.FileMode
+	}{{filepath.Dir(upper), 0o700}, {upper, 0o755}, {work, 0o700}} {
+		if err := os.Mkdir(d.path, d.mode); err != nil && !errors.Is(err, fs.ErrExist) {
+			return "", "", fmt.Errorf("creating %q: %w", d.path, err)
+		}
+	}
+	return upper, work, nil
 }
 
 // GuestSharedRootfs is the in-guest path the kataShared mount exposes a container's
@@ -178,6 +194,31 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 	}
 }
 
+// Unmount drops a mount at dst, falling back to lazy unmount if busy.
+func Unmount(dst string) {
+	if err := unix.Unmount(dst, 0); err != nil {
+		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOENT) {
+			return
+		}
+		_ = unix.Unmount(dst, unix.MNT_DETACH)
+	}
+}
+
+// RemountReadOnly remounts a bind mount at dst as read-only, preserving existing
+// per-mount flags (nosuid, nodev, noexec, etc.) like libmount's remount,bind,ro.
+func RemountReadOnly(dst string) error {
+	var st unix.Statfs_t
+	if err := unix.Statfs(dst, &st); err != nil {
+		return fmt.Errorf("statfs %q: %w", dst, err)
+	}
+	flags := unix.MS_BIND | unix.MS_REMOUNT | unix.MS_RDONLY |
+		int(st.Flags&(unix.ST_NOSUID|unix.ST_NODEV|unix.ST_NOEXEC|unix.ST_NOATIME|unix.ST_NODIRATIME))
+	if err := unix.Mount("", dst, "", uintptr(flags), ""); err != nil {
+		return err
+	}
+	return nil
+}
+
 // StageImageVolume bind-mounts one composed image volume read-only at
 // <cid>/volumes/<name> under SharedDir(id), so virtiofsd exposes it to the
 // guest.
@@ -191,11 +232,8 @@ func StageImageVolume(ctx context.Context, src, id, cid, volumeName string) erro
 	// Read-only is this volume type's contract (the image is someone else's,
 	// mounted for its contents); the other subtree consumers stay writable.
 	dst := SharedVolumeDir(id, cid, volumeName)
-	ro := exec.CommandContext(ctx, "mount", "-o", "remount,bind,ro", dst)
-	var roErr strings.Builder
-	ro.Stderr = &roErr
-	if err := reaper.Run(ro); err != nil {
-		return fmt.Errorf("remounting image volume %q read-only: %w (%s)", dst, err, strings.TrimSpace(roErr.String()))
+	if err := RemountReadOnly(dst); err != nil {
+		return fmt.Errorf("remounting image volume %q read-only: %w", dst, err)
 	}
 	return nil
 }
@@ -215,20 +253,20 @@ func StageMergedRootfs(ctx context.Context, bundleRootfs, upperBase, restoreID, 
 		return fmt.Errorf("StageMergedRootfs: empty container id")
 	}
 	dst := filepath.Join(SharedDir(restoreID), cid, "rootfs")
-	upper, work := UpperWorkDirs(upperBase, cid)
+	_, work := UpperWorkDirs(upperBase, cid)
 	// Drop any stale mount first (lazy if busy), then ensure clean mountpoints.
-	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
-		_ = reaper.Run(exec.Command("umount", "-l", dst))
-	}
+	Unmount(dst)
 	// The workdir is scratch: wipe it so a volatile mount is never refused by a
 	// dirty marker left behind by the previous activation.
 	if err := os.RemoveAll(work); err != nil {
 		return fmt.Errorf("clearing overlay workdir %q: %w", work, err)
 	}
-	for _, d := range []string{dst, upper, work} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return fmt.Errorf("creating %q: %w", d, err)
-		}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return fmt.Errorf("creating %q: %w", dst, err)
+	}
+	upper, work, err := MkdirUpperWorkDirs(upperBase, cid)
+	if err != nil {
+		return err
 	}
 	// metacopy=off,index=off: pinned rather than inherited from the host's
 	// overlay module defaults. Both features record file-handle references to
@@ -245,13 +283,14 @@ func StageMergedRootfs(ctx context.Context, bundleRootfs, upperBase, restoreID, 
 	// snapshot and then deleted — so the durability volatile gives up is
 	// durability we do not use. It refuses to mount over a workdir left dirty by
 	// a previous volatile mount, hence the wipe above.
+	// nosuid,nodev: the upper is restored from a snapshot, and nothing on the
+	// host should honor a setuid bit or device node in it. The guest sees the
+	// tree over virtio-fs under its own mount flags, so this changes nothing
+	// for it.
 	opts := "lowerdir=" + bundleRootfs + ",upperdir=" + upper + ",workdir=" + work +
 		",metacopy=off,index=off,volatile"
-	cmd := exec.CommandContext(ctx, "mount", "-t", "overlay", "overlay", "-o", opts, dst)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := reaper.Run(cmd); err != nil {
-		return fmt.Errorf("mounting merged rootfs overlay at %q: %w (%s)", dst, err, strings.TrimSpace(stderr.String()))
+	if err := unix.Mount("overlay", dst, "overlay", unix.MS_NOSUID|unix.MS_NODEV, opts); err != nil {
+		return fmt.Errorf("mounting merged rootfs overlay at %q: %w", dst, err)
 	}
 	// Ensure the standard OCI mountpoints exist even for minimal images: the container
 	// mounts /proc,/sys,/dev over them, and find-paths re-opens the tree by path on
@@ -288,9 +327,7 @@ func ensureOCIMountpoints(rootfs string) error {
 // CleanupSandboxState's sweep catches stragglers on the next boot.
 func UnmountMergedRootfs(restoreID, cid string) {
 	dst := filepath.Join(SharedDir(restoreID), cid, "rootfs")
-	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
-		_ = reaper.Run(exec.Command("umount", "-l", dst))
-	}
+	Unmount(dst)
 }
 
 // BindIntoShare bind-mounts a host directory at SharedDir(id)/<name>, so the
@@ -319,20 +356,29 @@ func BindIntoShare(ctx context.Context, src, id, rel string) error {
 	}
 	dst := filepath.Join(SharedDir(id), rel)
 	// Drop any stale bind first (lazy if busy), then ensure a clean mountpoint.
-	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
-		_ = reaper.Run(exec.Command("umount", "-l", dst))
-	}
+	Unmount(dst)
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("creating share subdir %q: %w", dst, err)
 	}
 	// --rbind, not --bind: a source that is itself a mount (a composed image
 	// volume) comes along either way, but only rbind carries mounts nested
 	// beneath it; for the plain-directory sources it is the same operation.
-	cmd := exec.CommandContext(ctx, "mount", "--rbind", src, dst)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := reaper.Run(cmd); err != nil {
-		return fmt.Errorf("bind-mounting %q into the shared tree at %q: %w (%s)", src, dst, err, strings.TrimSpace(stderr.String()))
+	if err := unix.Mount(src, dst, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return fmt.Errorf("bind-mounting %q into the shared tree at %q: %w", src, dst, err)
+	}
+	return setNosuidNodev(dst)
+}
+
+// setNosuidNodev adds nosuid and nodev to the mount at dst and every mount
+// beneath it, keeping their other flags (a read-only image volume stays
+// read-only). Shared trees hold workload-written and snapshot-restored files
+// that nothing on the host should honor a setuid bit or device node in; the
+// guest sees them over virtio-fs under its own mount flags, so this changes
+// nothing for it.
+func setNosuidNodev(dst string) error {
+	attr := &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_NOSUID | unix.MOUNT_ATTR_NODEV}
+	if err := unix.MountSetattr(unix.AT_FDCWD, dst, unix.AT_RECURSIVE, attr); err != nil {
+		return fmt.Errorf("setting nosuid,nodev on %q: %w", dst, err)
 	}
 	return nil
 }
@@ -350,17 +396,12 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 	dst := filepath.Join(SharedDir(restoreID), cid, "rootfs")
 	// Drop any stale bind first (lazy if busy), then ensure a clean mountpoint. Not
 	// RemoveAll: that would chase a live bind into bundleRootfs.
-	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
-		_ = reaper.Run(exec.Command("umount", "-l", dst))
-	}
+	Unmount(dst)
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("creating shared dir %q: %w", dst, err)
 	}
-	cmd := exec.CommandContext(ctx, "mount", "--bind", bundleRootfs, dst)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := reaper.Run(cmd); err != nil {
-		return fmt.Errorf("bind-mounting image rootfs %q -> %q: %w (%s)", bundleRootfs, dst, err, strings.TrimSpace(stderr.String()))
+	if err := unix.Mount(bundleRootfs, dst, "", unix.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind-mounting image rootfs %q -> %q: %w", bundleRootfs, dst, err)
 	}
 	// Ensure the standard OCI mountpoints exist even for minimal images: the container
 	// mounts /proc,/sys,/dev over them, and find-paths re-opens the lower by path on
@@ -370,11 +411,8 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 	}
 	// Remount read-only: the lower is immutable, so all writes go to the overlay upper
 	// and it stays byte-identical across reconstructions (required by find-paths migration).
-	ro := exec.CommandContext(ctx, "mount", "-o", "remount,bind,ro", dst)
-	var roErr strings.Builder
-	ro.Stderr = &roErr
-	if err := reaper.Run(ro); err != nil {
-		return fmt.Errorf("remounting overlay lower read-only %q: %w (%s)", dst, err, strings.TrimSpace(roErr.String()))
+	if err := RemountReadOnly(dst); err != nil {
+		return fmt.Errorf("remounting overlay lower read-only %q: %w", dst, err)
 	}
 	return nil
 }

@@ -15,6 +15,7 @@
 package counter
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -46,8 +47,18 @@ func TestExternalVolumeRenders(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// The storage class is a setting now, so steer it the way an
+			// operator would rather than by reaching into the demo. Unset,
+			// not blanked, for the case that wants the default: an exported
+			// empty value is a storage class the operator asked for.
+			if tc.storageClass == "" {
+				t.Setenv("STORAGE_CLASS", "x")
+				_ = os.Unsetenv("STORAGE_CLASS")
+			} else {
+				t.Setenv("STORAGE_CLASS", tc.storageClass)
+			}
 			e := demotest.Env(t)
-			d := &demo{storageClass: tc.storageClass}
+			d := &demo{}
 
 			manifest, err := demos.Render(e, template, d.externalVolumeValues(e), nil)
 			if err != nil {

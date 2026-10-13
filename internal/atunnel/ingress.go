@@ -18,7 +18,6 @@ package atunnel
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +33,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/atenet"
+	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -53,15 +53,11 @@ const (
 	TargetPortHeader = "X-Ate-Target-Port"
 )
 
-// errDeactivated is the cancellation cause of a request cut off because its
-// actor was deactivated, for example by a suspend.
-var errDeactivated = errors.New("atunnel: actor deactivated")
-
 // writeUpstreamError answers a request whose actor leg failed. A request cut
 // off by deactivation is retryable, since the actor is healthy and will be
 // resumed on demand; anything else is a bad gateway.
 func writeUpstreamError(ctx context.Context, w http.ResponseWriter) {
-	if errors.Is(context.Cause(ctx), errDeactivated) {
+	if errors.Is(context.Cause(ctx), errActorDeactivated) {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "actor is suspending, retry", http.StatusServiceUnavailable)
 		return
@@ -135,13 +131,9 @@ func NewServer(cfg Config) (*Server, error) {
 	if _, err := loadCredentialBundle(cfg.CredentialBundlePath); err != nil {
 		return nil, err
 	}
-	trustPEM, err := os.ReadFile(cfg.TrustBundlePath)
-	if err != nil {
-		return nil, fmt.Errorf("atunnel: reading trust bundle: %w", err)
-	}
-	clientCAs := x509.NewCertPool()
-	if !clientCAs.AppendCertsFromPEM(trustPEM) {
-		return nil, fmt.Errorf("atunnel: trust bundle %q contains no certificates", cfg.TrustBundlePath)
+	loadClientCAs := credbundle.PoolLoader(cfg.TrustBundlePath)
+	if _, err := loadClientCAs(); err != nil {
+		return nil, fmt.Errorf("atunnel: loading trust bundle: %w", err)
 	}
 
 	s := &Server{
@@ -152,28 +144,40 @@ func NewServer(cfg Config) (*Server, error) {
 	s.newProxy = func(dial DialFunc) *httputil.ReverseProxy {
 		return newActorProxy(cfg.Upstream, dial)
 	}
+	verifyConnection := func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return fmt.Errorf("atunnel: client certificate is required")
+		}
+		for _, uri := range cs.PeerCertificates[0].URIs {
+			if uri.String() == cfg.AllowedClientID {
+				return nil
+			}
+		}
+		return fmt.Errorf("atunnel: client is not %q", cfg.AllowedClientID)
+	}
 	s.tlsConfig = &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return loadCredentialBundle(s.credentialBundlePath)
-		},
-		ClientAuth: tls.RequireAndVerifyClientCert,
-		// TODO(liorlieberman): reload the trust bundle per connection via
-		// GetConfigForClient, mirroring GetCertificate above. kubelet keeps the
-		// projected ClusterTrustBundle in sync with the signer, but this pool is
-		// frozen at process start, so after a CA rotation a long-lived worker
-		// rejects the router until its pod restarts.
-		ClientCAs: clientCAs,
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return fmt.Errorf("atunnel: client certificate is required")
+		// GetConfigForClient reloads the trust bundle per connection: kubelet
+		// keeps the projected ClusterTrustBundle in sync with the signer, and
+		// this is what lets a long-lived worker see a CA rotation without a
+		// pod restart. Its returned Config replaces this one entirely for the
+		// handshake, so NextProtos must be repeated here rather than left to
+		// the outer Config.
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			clientCAs, err := loadClientCAs()
+			if err != nil {
+				return nil, err
 			}
-			for _, uri := range cs.PeerCertificates[0].URIs {
-				if uri.String() == cfg.AllowedClientID {
-					return nil
-				}
-			}
-			return fmt.Errorf("atunnel: client is not %q", cfg.AllowedClientID)
+			return &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				NextProtos: []string{"h2", "http/1.1"},
+				GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+					return loadCredentialBundle(s.credentialBundlePath)
+				},
+				ClientAuth:       tls.RequireAndVerifyClientCert,
+				ClientCAs:        clientCAs,
+				VerifyConnection: verifyConnection,
+			}, nil
 		},
 	}
 	return s, nil
@@ -195,6 +199,12 @@ func newActorProxy(upstream *url.URL, dial DialFunc) *httputil.ReverseProxy {
 				pr.Out.URL.Host = net.JoinHostPort(upstream.Hostname(), strconv.Itoa(p))
 			}
 			pr.SetXForwarded()
+		},
+		// Prevent untrusted actor responses from spoofing routing rejections
+		// to trigger cache evictions and stream restarts in the ingress router.
+		ModifyResponse: func(resp *http.Response) error {
+			resp.Header.Del(StaleAssignmentHeader)
+			return nil
 		},
 		Transport: newProtocolMirrorTransport(dial),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -286,20 +296,16 @@ func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
 
 // ServeConnect serves the mTLS CONNECT endpoint. CONNECT is deliberately on a
 // separate listener so ordinary actor ingress remains a request proxy, while
-// the router can use this listener for a bidirectional tunnel.
+// the router can use this listener for a bidirectional tunnel. The router's
+// actor cluster mirrors the downstream protocol, so either can arrive here.
+// The tunnel itself relays opaque bytes, so protocolMirrorTransport's
+// gRPC-only gate does not apply to CONNECT traffic — and that is the point:
+// this listener is the basis of the planned tunnel-based ingress, where
+// ordinary actor traffic arrives here as a spliced tunnel and all protocol
+// decisions move to the router's route config, leaving atunnel with no
+// request parsing at all.
 func (s *Server) ServeConnect(ctx context.Context, lis net.Listener) error {
-	// Offer both protocols explicitly, matching the ingress listener (whose
-	// ServeTLS advertises h2 and http/1.1 by default). The router's actor
-	// cluster mirrors the downstream protocol, so either can arrive here.
-	// The tunnel itself relays opaque bytes, so protocolMirrorTransport's
-	// gRPC-only gate does not apply to CONNECT traffic — and that is the
-	// point: this listener is the basis of the planned tunnel-based ingress,
-	// where ordinary actor traffic arrives here as a spliced tunnel and all
-	// protocol decisions move to the router's route config, leaving atunnel
-	// with no request parsing at all.
-	tlsConfig := s.tlsConfig.Clone()
-	tlsConfig.NextProtos = []string{"h2", "http/1.1"}
-	return s.serve(ctx, lis, http.HandlerFunc(s.ServeConnectHTTP), tlsConfig)
+	return s.serve(ctx, lis, http.HandlerFunc(s.ServeConnectHTTP), s.tlsConfig)
 }
 
 func (s *Server) serve(ctx context.Context, lis net.Listener, handler http.Handler, tlsConfig *tls.Config) error {
@@ -333,6 +339,7 @@ func (s *Server) ServeConnectHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	active, ctx, release, ok := s.authorize(r)
 	if !ok {
+		slog.DebugContext(r.Context(), "atunnel CONNECT rejected", slog.Any("actor_header", r.Header.Values(atenet.TargetActorHeader)))
 		s.reject(w)
 		return
 	}
@@ -340,10 +347,12 @@ func (s *Server) ServeConnectHTTP(w http.ResponseWriter, r *http.Request) {
 
 	_, port, err := net.SplitHostPort(r.Host)
 	if err != nil {
+		slog.DebugContext(r.Context(), "atunnel CONNECT rejected: no port", slog.Any("actor", active.ref), slog.String("authority", r.Host))
 		http.Error(w, "CONNECT authority must include a port", http.StatusBadRequest)
 		return
 	}
 	if _, ok := ParsePort(port); !ok {
+		slog.DebugContext(r.Context(), "atunnel CONNECT rejected: invalid port", slog.Any("actor", active.ref), slog.String("authority", r.Host))
 		http.Error(w, "invalid CONNECT port", http.StatusBadRequest)
 		return
 	}
@@ -352,30 +361,32 @@ func (s *Server) ServeConnectHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancelDial()
 	upstream, err := active.dial(dialCtx, "tcp", net.JoinHostPort(s.upstream.Hostname(), port))
 	if err != nil {
-		slog.WarnContext(r.Context(), "atunnel CONNECT upstream failed", slog.Any("actor", active.ref), slog.Any("err", err))
+		slog.WarnContext(r.Context(), "atunnel CONNECT upstream failed", slog.Any("actor", active.ref), slog.String("port", port), slog.Any("err", err))
 		writeUpstreamError(ctx, w)
 		return
 	}
 	defer upstream.Close()
 
+	log := slog.With(slog.Any("actor", active.ref), slog.String("port", port), slog.String("proto", r.Proto))
+	log.DebugContext(ctx, "atunnel CONNECT opened")
 	if r.ProtoMajor == 2 {
-		s.serveH2Connect(w, r, upstream, ctx)
+		s.serveH2Connect(w, r, upstream, ctx, log)
 		return
 	}
-	s.serveH1Connect(w, upstream, ctx)
+	s.serveH1Connect(w, upstream, ctx, log)
 }
 
-func (s *Server) serveH1Connect(w http.ResponseWriter, upstream net.Conn, ctx context.Context) {
+func (s *Server) serveH1Connect(w http.ResponseWriter, upstream net.Conn, ctx context.Context, log *slog.Logger) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "CONNECT hijacking unsupported", http.StatusInternalServerError)
 		return
 	}
-	client, rw, err := hj.Hijack()
+	downstream, rw, err := hj.Hijack()
 	if err != nil {
 		return
 	}
-	defer client.Close()
+	defer downstream.Close()
 	if _, err := rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
@@ -383,10 +394,10 @@ func (s *Server) serveH1Connect(w http.ResponseWriter, upstream net.Conn, ctx co
 		return
 	}
 
-	relayIngressWithHalfClose(ctx, upstream, rw, client, client)
+	relayIngressWithHalfClose(ctx, log, upstream, rw, downstream, downstream)
 }
 
-func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream net.Conn, ctx context.Context) {
+func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream net.Conn, ctx context.Context, log *slog.Logger) {
 	// A HTTP/2 CONNECT tunnel is a pair of streams, not a hijackable TCP
 	// socket. Send the response headers before copying so the peer can start
 	// sending DATA frames, then flush each upstream write promptly.
@@ -395,32 +406,33 @@ func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream
 		return
 	}
 
-	relayIngressWithHalfClose(ctx, upstream, r.Body, flushingWriter{ResponseWriter: w}, r.Body)
+	relayIngressWithHalfClose(ctx, log, upstream, r.Body, flushingWriter{ResponseWriter: w}, r.Body)
 }
 
-// relayIngressWithHalfClose copies a CONNECT stream. When the client request
-// stream ends, it half-closes the actor connection and continues forwarding
-// actor output until that stream ends too.
-func relayIngressWithHalfClose(ctx context.Context, upstream net.Conn, clientReader io.Reader, clientWriter io.Writer, clientCloser io.Closer) {
-	done := make(chan struct{}, 2)
+// relayIngressWithHalfClose copies a CONNECT stream between the router
+// (downstream) and the actor (upstream). It half-closes the actor connection
+// when the router stops sending, and closes the downstream when the actor
+// does, so a router that reuses tunnels doesn't send into a dead one.
+func relayIngressWithHalfClose(ctx context.Context, log *slog.Logger, upstream net.Conn, downstreamReader io.Reader, downstreamWriter io.Writer, downstreamCloser io.Closer) {
+	start := time.Now()
 	go func() {
-		_, _ = io.Copy(upstream, clientReader)
+		n, err := io.Copy(upstream, downstreamReader)
+		log.DebugContext(ctx, "atunnel CONNECT router stopped sending", slog.Int64("bytes", n), slog.Any("err", err), slog.Duration("after", time.Since(start)))
 		closeWrite(upstream)
-		done <- struct{}{}
 	}()
+	actorDone := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(clientWriter, upstream)
-		done <- struct{}{}
+		n, err := io.Copy(downstreamWriter, upstream)
+		log.DebugContext(ctx, "atunnel CONNECT actor stopped sending", slog.Int64("bytes", n), slog.Any("err", err), slog.Duration("after", time.Since(start)))
+		close(actorDone)
 	}()
-	for range 2 {
-		select {
-		case <-ctx.Done():
-			_ = upstream.Close()
-			_ = clientCloser.Close()
-			return
-		case <-done:
-		}
+	select {
+	case <-ctx.Done():
+		log.DebugContext(ctx, "atunnel CONNECT canceled", slog.Any("cause", context.Cause(ctx)), slog.Duration("after", time.Since(start)))
+		_ = upstream.Close()
+	case <-actorDone:
 	}
+	_ = downstreamCloser.Close()
 }
 
 type flushingWriter struct {
@@ -544,7 +556,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authorize(r *http.Request) (*activation, context.Context, func(), bool) {
-	ref, err := atenet.ParseTargetActor(r.Header.Get(atenet.TargetActorHeader))
+	vals := r.Header.Values(atenet.TargetActorHeader)
+	if len(vals) != 1 {
+		return nil, nil, nil, false
+	}
+	ref, err := atenet.ParseTargetActor(vals[0])
 	if err != nil {
 		return nil, nil, nil, false
 	}
@@ -558,7 +574,7 @@ func (s *Server) authorize(r *http.Request) (*activation, context.Context, func(
 	active.wg.Add(1)
 	s.mu.Unlock()
 	requestCtx, cancel := context.WithCancelCause(r.Context())
-	stop := context.AfterFunc(active.ctx, func() { cancel(errDeactivated) })
+	stop := context.AfterFunc(active.ctx, func() { cancel(errActorDeactivated) })
 	release := func() {
 		active.wg.Done()
 		stop()
@@ -566,6 +582,10 @@ func (s *Server) authorize(r *http.Request) (*activation, context.Context, func(
 	}
 	return active, requestCtx, release, true
 }
+
+// errActorDeactivated is the cancel cause of a request whose actor was
+// deactivated, which tells a suspend apart from the router hanging up.
+var errActorDeactivated = errors.New("atunnel: actor deactivated")
 
 func (s *Server) reject(w http.ResponseWriter) {
 	w.Header().Set(StaleAssignmentHeader, "true")

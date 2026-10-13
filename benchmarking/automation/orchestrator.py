@@ -198,6 +198,22 @@ def sanitize(name: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")
 
 
+# Kubernetes copies a Job's name into the job-name label on the Job and its
+# pods, and a label value holds at most 63 bytes.
+MAX_JOB_NAME_LEN = 63
+
+
+def job_name(name: str, commit: str) -> str:
+    """Return a unique Job name for a test run that fits a Kubernetes label.
+
+    The commit and random suffix always survive; a long test name is cut to
+    make room, so two runs of the same test never collide.
+    """
+    suffix = f"-{commit[:7]}-{uuid.uuid4().hex[:6]}"
+    prefix = f"runner-{sanitize(name)}"
+    return prefix[: MAX_JOB_NAME_LEN - len(suffix)].rstrip("-") + suffix
+
+
 def render_template(path: str, subs: dict[str, Any], extra_args: Iterable[str] = ()) -> str:
     text = Path(path).read_text()
     for k, v in subs.items():
@@ -332,6 +348,7 @@ def deploy_workloads(
     sandbox_class: str = "gvisor",
     actor_memory: str = "",
     wait_timeout_secs: int | str = "",
+    worker_memory: str = "",
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -345,6 +362,10 @@ def deploy_workloads(
     # minimum); RAM-consuming suites set actorMemory in tests.yaml.
     if actor_memory:
         cmd += ["--actor-memory", actor_memory]
+    # Empty leaves the worker pods unsized; set workerMemory in tests.yaml to
+    # control how many workers the scheduler packs onto a node.
+    if worker_memory:
+        cmd += ["--worker-memory", worker_memory]
     # Empty keeps deploy.sh's own default; large fleets set workerWaitTimeout
     # (whole seconds).
     if wait_timeout_secs != "":
@@ -365,9 +386,9 @@ def run_test(
     manifests_dir: str = MANIFESTS_DIR,
 ) -> str:
     name = test["name"]
-    job_name = f"runner-{sanitize(name)}-{commit[:7]}-{uuid.uuid4().hex[:6]}"
+    job = job_name(name, commit)
     subs = {
-        "JOB_NAME": job_name,
+        "JOB_NAME": job,
         "IMAGE": image,
         "TAG": commit,
         "NAME": name,
@@ -378,17 +399,17 @@ def run_test(
     subs.update(mod.job_subs(test))
     manifest = render_template(tmpl, subs, test.get("flags", []))
     wait_for_no_active_runners()
-    print(f"Submitting Job {job_name}", flush=True)
+    print(f"Submitting Job {job}", flush=True)
     subprocess.run(
         ["kubectl", "apply", "-f", "-"], input=manifest, text=True, check=True
     )
     timeout = parse_duration_seconds(test["duration"]) + 1800
-    result = wait_for_job(job_name, timeout)
-    print(f"Job {job_name} result: {result}", flush=True)
+    result = wait_for_job(job, timeout)
+    print(f"Job {job} result: {result}", flush=True)
     run_no_check(
-        ["kubectl", "logs", f"job/{job_name}", "-n", NAMESPACE, "--tail=500"]
+        ["kubectl", "logs", f"job/{job}", "-n", NAMESPACE, "--tail=500"]
     )
-    run_no_check(["kubectl", "delete", "job", job_name, "-n", NAMESPACE])
+    run_no_check(["kubectl", "delete", "job", job, "-n", NAMESPACE])
     return result
 
 
@@ -524,6 +545,7 @@ def main() -> None:
                     sandbox_class,
                     test.get("actorMemory", ""),
                     test.get("workerWaitTimeout", ""),
+                    test.get("workerMemory", ""),
                 )
                 try:
                     status = run_test(

@@ -96,23 +96,8 @@ EOF
 # 6. Create NFS StorageClass (pointing to the in-cluster NFS server)
 # We wait for the NFS server service to get an IP first, but we can use its DNS name
 # since kube-dns should resolve it. The CSI driver will resolve it when provisioning.
-# The share is "/" because hack/csi/nfs-server.yaml exports a single directory with
-# fsid=0, which NFSv4 presents as the pseudo-root.
 echo "Creating csi-nfs-sc StorageClass..."
-cat <<EOF | kubectl apply -f -
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: csi-nfs-sc
-provisioner: nfs.csi.k8s.io
-parameters:
-  server: nfs-server.default.svc.cluster.local
-  share: /
-reclaimPolicy: Delete
-volumeBindingMode: Immediate
-mountOptions:
-  - nfsvers=4.1
-EOF
+kubectl apply -f "${ROOT}/hack/third_party/csi-driver-nfs/deploy/example/storageclass-nfs.yaml"
 
 # 7. Wait for deployments to be ready
 echo "Waiting for NFS server and CSI driver to be ready..."

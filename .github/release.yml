@@ -1,0 +1,84 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Categories for GitHub's automatically generated release notes. See
+# docs/dev/release-notes.md.
+#
+# GitHub places each PR in the FIRST category it matches, and the labels
+# within a category are OR'd. Order is therefore significant:
+#   - Breaking Changes first, so a breaking PR is never listed elsewhere.
+#   - Bug Fixes and Documentation before the feature sections, so a kind/bug
+#     or kind/docs PR with an area label is not listed as a feature.
+#   - Feature sections from the most specific area to the broadest. Workers
+#     and Actors is last because area/node and area/api appear on many PRs
+#     as secondary areas. This order reproduced the most placements of the
+#     hand-written v0.2.0 notes. Each feature section excludes the
+#     non-feature kinds, which fall through to Other Changes.
+changelog:
+  exclude:
+    labels:
+      - release-note/none
+      - DO NOT MERGE
+  categories:
+    - title: "⚠️ Breaking Changes"
+      labels:
+        - breaking-change
+    - title: Bug Fixes
+      labels:
+        - kind/bug
+    - title: "Features: Networking and Egress"
+      labels:
+        - area/network
+      exclude:
+        labels: [kind/cleanup, kind/docs, dependencies]
+    - title: "Features: Security and Identity"
+      labels:
+        - area/security
+        - area/identity
+      exclude:
+        labels: [kind/cleanup, kind/docs, dependencies]
+    - title: "Features: Observability"
+      labels:
+        - area/observability
+      exclude:
+        labels: [kind/cleanup, kind/docs, dependencies]
+    - title: "Features: Workers and Actors"
+      labels:
+        - area/node
+        - area/gvisor
+        - area/microVM
+        - area/scheduling
+        - area/storage
+        - area/api
+        - area/api-machinery
+      exclude:
+        labels: [kind/cleanup, kind/docs, dependencies]
+    - title: "Features: Install and Operations"
+      labels:
+        - area/dev-infra
+        - area/cli
+        - area/reliability
+        - area/demos
+        - area/benchmarking
+      exclude:
+        labels: [kind/cleanup, kind/docs, dependencies]
+    - title: Dependencies
+      labels:
+        - dependencies
+    - title: Documentation
+      labels:
+        - kind/docs
+    - title: Other Changes
+      labels:
+        - "*"

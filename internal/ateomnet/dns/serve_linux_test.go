@@ -18,28 +18,12 @@ package dns
 
 import (
 	"context"
-	"net"
 	"testing"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 	"github.com/agent-substrate/substrate/internal/roottest"
 )
-
-// stoppableDNS records that its serving contexts were canceled.
-type stoppableDNS struct{ packet, stream chan struct{} }
-
-func (d *stoppableDNS) ServePacket(ctx context.Context, pc net.PacketConn) error {
-	<-ctx.Done()
-	close(d.packet)
-	return pc.Close()
-}
-
-func (d *stoppableDNS) Serve(ctx context.Context, l net.Listener) error {
-	<-ctx.Done()
-	close(d.stream)
-	return l.Close()
-}
 
 func TestClosingSandboxDNSStopsServing(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
@@ -53,26 +37,17 @@ func TestClosingSandboxDNSStopsServing(t *testing.T) {
 		_ = netns.RemoveNamed(nsName)
 	}()
 
-	relay := &stoppableDNS{packet: make(chan struct{}), stream: make(chan struct{})}
-	closers, serve, err := Serve(context.Background(), relay, ns, 53)
+	relay, err := NewRelayForUpstreams([]string{"127.0.0.1:53"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fn := range serve {
-		go fn()
+	srv, err := relay.Serve(context.Background(), ns)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, c := range closers {
-		_ = c.Close()
-	}
-
-	for _, tc := range []struct {
-		name    string
-		stopped chan struct{}
-	}{{"UDP", relay.packet}, {"TCP", relay.stream}} {
-		select {
-		case <-tc.stopped:
-		case <-time.After(5 * time.Second):
-			t.Errorf("%s serving outlived the sandbox's sockets", tc.name)
-		}
+	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Stop(stopCtx); err != nil {
+		t.Fatalf("DNS serving did not stop cleanly: %v", err)
 	}
 }

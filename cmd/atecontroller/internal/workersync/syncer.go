@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"time"
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -28,15 +29,13 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 )
-
-// syncerWorkerCount is the number of goroutines draining the work queue. The
-// queue never hands the same key to two workers concurrently, so per-key
-// ordering is preserved.
-const syncerWorkerCount = 2
 
 // workerPodLabel names the WorkerPool a worker pod belongs to. Its presence is
 // also what marks a pod as a worker pod at all, so it doubles as the selector
@@ -92,12 +91,16 @@ func (k workerKey) logAttrs() []any {
 //
 // Informer event handlers only enqueue keys; worker goroutines reconcile each
 // key against the current informer cache state, requeuing with rate-limited
-// backoff on transient failures such as a lost version precondition.
+// backoff on transient failures such as a lost version precondition. The queue
+// never hands the same key to two workers concurrently, so per-key ordering is
+// preserved regardless of workerCount.
 type WorkerPoolSyncer struct {
 	client             ateapipb.ControlClient
+	pods               corev1client.PodsGetter
 	workerInformer     cache.SharedIndexInformer
 	workerPoolInformer cache.SharedIndexInformer
 	queue              workqueue.TypedRateLimitingInterface[workerKey]
+	workerCount        int
 
 	// Exponential backoff schedule for retrying a failed page of the startup
 	// registered-worker scan. Per-syncer rather than package-level so a test
@@ -106,13 +109,16 @@ type WorkerPoolSyncer struct {
 	listCap     time.Duration
 }
 
-// NewWorkerPoolSyncer creates a new WorkerPoolSyncer.
-func NewWorkerPoolSyncer(client ateapipb.ControlClient, workerInformer, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
+// NewWorkerPoolSyncer creates a new WorkerPoolSyncer. pods is used to delete
+// worker pods that have reached a terminal phase.
+func NewWorkerPoolSyncer(client ateapipb.ControlClient, pods corev1client.PodsGetter, workerInformer, workerPoolInformer cache.SharedIndexInformer, workerCount int) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		client:             client,
+		pods:               pods,
 		workerInformer:     workerInformer,
 		workerPoolInformer: workerPoolInformer,
 		queue:              workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
+		workerCount:        workerCount,
 		listBackoff:        defaultListBackoff,
 		listCap:            defaultListCap,
 	}
@@ -169,7 +175,7 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 			slog.ErrorContext(ctx, "Syncer: failed to sync informer cache")
 			return
 		}
-		for range syncerWorkerCount {
+		for range s.workerCount {
 			go wait.UntilWithContext(ctx, s.runWorker, time.Second)
 		}
 
@@ -269,6 +275,12 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		// Deleted event.
 		return s.markWorkerDraining(ctx, key)
 	}
+	// Checked before eligibility for the same reason: a terminal pod is never
+	// Ready, so the eligibility gate would leave its Worker, and the Actors bound
+	// to it, registered for as long as the pod object lingers.
+	if isPodTerminal(pod) {
+		return s.deleteTerminalPod(ctx, key, pod)
+	}
 	if !isWorkerEligible(pod) {
 		// The pod has no IP or is not Ready yet; a later update event re-enqueues
 		// it. A registered Worker still takes a raised epoch: an ateom that is
@@ -341,10 +353,10 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			WorkerNamespace: pod.Namespace,
 			WorkerPool:      poolName,
 			WorkerPod:       pod.Name,
-			Ip:              pod.Status.PodIP,
+			Ips:             podIPs(pod),
 			WorkerPodUid:    string(pod.UID),
 			NodeName:        pod.Spec.NodeName,
-			SandboxClass:    string(pool.Spec.SandboxClass),
+			SandboxClass:    string(pool.Spec.DefaultSandboxClass()),
 			Labels:          pool.GetLabels(),
 			Epoch:           podEpoch(pod),
 			// Capacity is the Worker's to report, not the syncer's to infer
@@ -382,7 +394,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		w.Labels = pool.GetLabels()
 		changed = true
 	}
-	if w.GetSandboxClass() != string(pool.Spec.SandboxClass) {
+	if w.GetSandboxClass() != string(pool.Spec.DefaultSandboxClass()) {
 		// Expected mid-rollout: sandboxClass drives the worker pod's shape, so
 		// editing it on the pool replaces every pod rather than reclassifying
 		// any. This pod predates that edit and is on its way out; its successor
@@ -390,15 +402,15 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		// back would be rejected, and would misreport this pod's shape to the
 		// scheduler if it were not.
 		slog.DebugContext(ctx, "Syncer: registered worker sandbox class predates its pool",
-			append(key.logAttrs(), slog.String("registered", w.GetSandboxClass()), slog.String("pool", string(pool.Spec.SandboxClass)))...)
+			append(key.logAttrs(), slog.String("registered", w.GetSandboxClass()), slog.String("pool", string(pool.Spec.DefaultSandboxClass())))...)
 	}
-	if w.GetIp() != pod.Status.PodIP {
+	if ips := podIPs(pod); !slices.Equal(w.GetIps(), ips) {
 		// TODO: I don't think this is possible, but handling this case so we can
 		// log it just in case we can reproduce it. It is logged rather than
-		// repaired because ip is immutable on a registered Worker: writing the
+		// repaired because ips is immutable on a registered Worker: writing the
 		// pod's value back would be rejected rather than applied.
-		slog.WarnContext(ctx, "Syncer: registered worker IP disagrees with its pod",
-			append(key.logAttrs(), slog.String("registered", w.GetIp()), slog.String("pod_ip", pod.Status.PodIP))...)
+		slog.WarnContext(ctx, "Syncer: registered worker IPs disagree with its pod",
+			append(key.logAttrs(), slog.Any("registered", w.GetIps()), slog.Any("pod_ips", ips))...)
 	}
 	if !changed {
 		return nil
@@ -412,7 +424,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 }
 
 func isWorkerEligible(pod *corev1.Pod) bool {
-	if pod.Status.PodIP == "" {
+	if len(pod.Status.PodIPs) == 0 {
 		return false
 	}
 	for _, condition := range pod.Status.Conditions {
@@ -421,6 +433,50 @@ func isWorkerEligible(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// isPodTerminal reports whether every container in the pod has stopped for
+// good: a terminal phase is never left, so the pod will not serve again.
+func isPodTerminal(pod *corev1.Pod) bool {
+	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
+}
+
+// deleteTerminalPod deletes a worker pod that has reached a terminal phase.
+// The API server deletes a terminal pod without a grace period, and the
+// resulting Pod Deleted event deregisters the Worker and releases its Actors
+// through reconcileDeadWorker. The Worker is marked DRAINING first so the
+// scheduler stops routing to it even while a failed delete is being retried.
+//
+// The delete is preconditioned on the key's UID so it can never remove a
+// same-named replacement. A pod already gone, or replaced, is the state this
+// drives towards, so NotFound and Conflict are success.
+func (s *WorkerPoolSyncer) deleteTerminalPod(ctx context.Context, key workerKey, pod *corev1.Pod) error {
+	if err := s.markWorkerDraining(ctx, key); err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "Syncer: deleting worker pod (terminal phase)",
+		append(key.logAttrs(), slog.String("phase", string(pod.Status.Phase)))...)
+	uid := pod.UID
+	err := s.pods.Pods(key.namespace).Delete(ctx, key.name, metav1.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &uid},
+	})
+	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("deleting terminal pod: %w", err)
+	}
+	return nil
+}
+
+// podIPs returns the pod's IP addresses, one per IP family, in the order
+// Kubernetes reports them.
+func podIPs(pod *corev1.Pod) []string {
+	ips := make([]string, 0, len(pod.Status.PodIPs))
+	for _, ip := range pod.Status.PodIPs {
+		ips = append(ips, ip.IP)
+	}
+	return ips
 }
 
 // markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler

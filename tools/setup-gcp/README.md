@@ -69,10 +69,11 @@ required Kubernetes beta APIs, and Managed OpenTelemetry enabled, and the
 Filestore CSI driver disabled).
 
 > [!WARNING]
-> Agent Substrate requires two Kubernetes beta APIs —
-> `certificates.k8s.io/v1beta1/podcertificaterequests` and
-> `certificates.k8s.io/v1beta1/clustertrustbundles` — which constrains the
-> supported GKE versions to exactly two configurations:
+> Agent Substrate requires PodCertificateRequest and ClusterTrustBundle APIs.
+> ClusterTrustBundle discovery prefers `certificates.k8s.io/v1`, falling back
+> to `certificates.k8s.io/v1beta1` only when the stable resource is not served.
+> PodCertificateRequest discovery independently prefers `v1` over `v1beta1`.
+> For GKE deployments, the supported configurations are:
 >
 > * **GKE 1.36 with the beta APIs enabled at cluster creation.** GKE only
 >   honors `enableK8sBetaApis` **at creation time**. Enabling the APIs later
@@ -94,34 +95,6 @@ Filestore CSI driver disabled).
 > The symptom of a cluster without the APIs: the install hangs at "Waiting for
 > podcertificate ClusterTrustBundles to be ready" and `kubectl get
 > clustertrustbundles` reports the resource type is not served.
-
-> [!WARNING]
-> **Turn node auto-upgrade off on any node pool that runs workers, and do not
-> use spot or preemptible nodes for them.** When a worker pod is deleted,
-> `SIGTERM` is forwarded into the actor's containers and the control plane keeps
-> accepting a suspend for 30 minutes. An actor suspended inside that
-> window keeps its state. One still awake when the window closes is moved to
-> `ACTOR_STATE_CRASHED` with its worker assignment cleared, and `CRASHED` is
-> terminal: `resume` and `suspend` are both refused, there is no recover verb,
-> and the snapshot the actor still holds cannot be used to start it. The only
-> way out is to delete the actor and create a new one, which loses its state.
->
-> Auto-upgrade is the trigger to plan for, because GKE enables it by default and
-> it fires on Google's maintenance schedule rather than yours. `create cluster`
-> does not disable it, so do it yourself on every pool that runs workers:
->
-> ```bash
-> gcloud container node-pools update "${NODE_POOL}" \
->   --cluster "${CLUSTER_NAME}" --location "${CLUSTER_LOCATION}" \
->   --no-enable-autoupgrade
-> ```
->
-> This is a management setting, so it takes effect without recreating nodes and
-> is safe to apply to a serving cluster. Node auto-repair, preemption and OOM
-> kills reach the same path and cannot be configured away, so treat the setting
-> as removing the scheduled risk rather than all of it. Change versions through
-> the [rolling upgrade runbook](../../docs/upgrade.md), which has you suspend
-> every actor on a node at your own pace before the node moves.
 
 ```bash
 go run ./tools/setup-gcp create cluster [flags]

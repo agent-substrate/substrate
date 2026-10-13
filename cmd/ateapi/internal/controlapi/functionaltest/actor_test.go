@@ -22,16 +22,21 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"go.opentelemetry.io/otel/attribute"
@@ -73,8 +78,11 @@ func TestCreateActor_Success(t *testing.T) {
 		Metadata:      &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 1},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
-			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
+			},
 		},
 		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
 	}
@@ -133,12 +141,12 @@ func TestCreateActor_WithExternalVolumes(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	if len(createResp.GetStatus().GetActorVolumes()) != 1 {
-		t.Fatalf("expected 1 volume in CreateActor response, got %d", len(createResp.GetStatus().GetActorVolumes()))
+	if len(createResp.GetStatus().GetExternalVolumes()) != 1 {
+		t.Fatalf("expected 1 volume in CreateActor response, got %d", len(createResp.GetStatus().GetExternalVolumes()))
 	}
-	vol := createResp.GetStatus().GetActorVolumes()[0]
-	if vol.GetVolumeName() != "ext-vol-1" {
-		t.Errorf("volume name = %q, want %q", vol.GetVolumeName(), "ext-vol-1")
+	vol := createResp.GetStatus().GetExternalVolumes()[0]
+	if vol.GetName() != "ext-vol-1" {
+		t.Errorf("volume name = %q, want %q", vol.GetName(), "ext-vol-1")
 	}
 	if vol.GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
 		t.Errorf("volume status = %v, want %v", vol.GetStatus(), ateapipb.ExternalVolume_STATUS_PENDING)
@@ -154,11 +162,11 @@ func TestCreateActor_WithExternalVolumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if len(getResp.GetStatus().GetActorVolumes()) != 1 {
-		t.Fatalf("expected 1 volume in GetActor response, got %d", len(getResp.GetStatus().GetActorVolumes()))
+	if len(getResp.GetStatus().GetExternalVolumes()) != 1 {
+		t.Fatalf("expected 1 volume in GetActor response, got %d", len(getResp.GetStatus().GetExternalVolumes()))
 	}
-	if getResp.GetStatus().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
-		t.Errorf("GetActor status = %v, want %v", getResp.GetStatus().GetActorVolumes()[0].GetStatus(), ateapipb.ExternalVolume_STATUS_PENDING)
+	if getResp.GetStatus().GetExternalVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
+		t.Errorf("GetActor status = %v, want %v", getResp.GetStatus().GetExternalVolumes()[0].GetStatus(), ateapipb.ExternalVolume_STATUS_PENDING)
 	}
 }
 
@@ -289,7 +297,7 @@ func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
 	createTemplateWithSelector(t, tc, "tmpl2", nil)
 
 	seedTag(t, tc, "data-source", "data-snapshot", func(tag *ateapipb.Tag) {
-		tag.Status.Snapshot.ContentScope = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+		tag.Status.Snapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		tag.Status.ActorTemplateUid = tmpl.GetMetadata().GetUid()
 	})
 
@@ -300,8 +308,8 @@ func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
 			SourceTag:     &ateapipb.ObjectRef{Atespace: testAtespace, Name: "data-snapshot"},
 		},
 	})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("CreateActor status = %v, want FailedPrecondition", status.Code(err))
+	if apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("CreateActor status = %v, want FailedPrecondition", apierror.Code(err))
 	}
 }
 
@@ -344,8 +352,8 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 			SourceTag:     tagRef,
 		},
 	})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("CreateActor status = %v, want FailedPrecondition", status.Code(err))
+	if apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("CreateActor status = %v, want FailedPrecondition", apierror.Code(err))
 	}
 }
 
@@ -359,11 +367,10 @@ func TestCreateActor_PendingTag(t *testing.T) {
 	ctx := context.Background()
 	tmpl := createTemplate(t, tc, ns)
 
-	// Simulates a tag creation that failed in while writing the snapshot to
+	// Simulates a tag creation that failed while writing the snapshot to
 	// external storage.
 	pending := seedTag(t, tc, "pending-source", "pending", func(tag *ateapipb.Tag) {
-		tag.Status.StorageLocation = testStorageLocation
-		tag.Status.Snapshot = nil
+		tag.Status.Snapshot.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
 		tag.Status.ActorTemplateUid = tmpl.GetMetadata().GetUid()
 	})
 	tagRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pending"}
@@ -377,17 +384,11 @@ func TestCreateActor_PendingTag(t *testing.T) {
 	assertGrpcError(t, err, codes.FailedPrecondition, "source Tag is still being created or failed creation")
 
 	// Finishing the tag creation, so now the tag is qualified to be a tag source.
-	snapshotURI, err := resources.NewTagSnapshotURI(pending.GetStatus().GetStorageLocation(), pending.GetMetadata().GetAtespace(), pending.GetMetadata().GetUid())
-	if err != nil {
-		t.Fatalf("NewTagSnapshotURI: %v", err)
-	}
+	snapshotURI := pending.GetStatus().GetSnapshot().GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if _, err := tc.persistence.UpdateTag(ctx,
 		resources.TagRefFromTag(pending), store.PreconditionFrom(pending),
 		func(toUpdate *ateapipb.Tag) error {
-			toUpdate.Status.Snapshot = &ateapipb.ExternalSnapshot{
-				SnapshotUri:  snapshotURI.String(),
-				ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			}
+			toUpdate.Status.Snapshot.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 			return nil
 		}); err != nil {
 		t.Fatalf("finalizing the tag: %v", err)
@@ -404,7 +405,7 @@ func TestCreateActor_PendingTag(t *testing.T) {
 	}
 	// The clone points at the tag's snapshot, under the tag's own prefix: the
 	// tag still owns those objects.
-	if got := clone.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != snapshotURI.String() {
+	if got := durableSnapshotURI(clone.GetStatus()); got != snapshotURI {
 		t.Errorf("clone external snapshot = %q, want the tag's %q", got, snapshotURI)
 	}
 }
@@ -694,8 +695,11 @@ func TestUpdateActor_Success(t *testing.T) {
 		Metadata:      &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 2},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
-			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
+			},
 		},
 		WorkerSelector: &ateapipb.Selector{
 			MatchLabels: map[string]string{"tier": "paid"},
@@ -840,8 +844,11 @@ func TestUpdateActor(t *testing.T) {
 		Metadata:      &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 2},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
-			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
+			},
 		},
 		WorkerSelector: &ateapipb.Selector{
 			MatchLabels: map[string]string{"tier": "paid"},
@@ -1031,7 +1038,7 @@ func TestUpdateActor_FailedLookupStampsRefIdentityOnly(t *testing.T) {
 				Uid:     "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
 				Version: 1,
 			}},
-		}); status.Code(err) != codes.NotFound {
+		}); apierror.Code(err) != codes.NotFound {
 			t.Fatalf("UpdateActor(missing) error = %v, want code NotFound", err)
 		}
 	})
@@ -1080,6 +1087,78 @@ func TestDeleteActor_Success(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
 
+func TestDeleteActor_MissingSnapshotBucket(t *testing.T) {
+	for _, provider := range []struct {
+		name string
+		err  error
+	}{
+		{name: "S3", err: &types.NoSuchBucket{}},
+		{name: "GCS", err: storage.ErrBucketNotExist},
+	} {
+		for _, state := range []ateapipb.ActorState{
+			ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			ateapipb.ActorState_ACTOR_STATE_DELETING,
+		} {
+			t.Run(provider.name+"/"+state.String(), func(t *testing.T) {
+				ns := namespaceForTest("ns-delete-missing-bucket")
+				tc := setupTest(t, ns)
+				defer tc.cleanup()
+				createTemplate(t, tc, ns)
+				ctx := t.Context()
+				ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: testActorID}
+				actor, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+					Metadata:      &ateapipb.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
+					ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+				}})
+				if err != nil {
+					t.Fatalf("CreateActor: %v", err)
+				}
+				uri, err := resources.NewActorSnapshotURI(testStorageLocation, testAtespace, actor.GetMetadata().GetUid(), "snapshot")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := tc.persistence.UpdateActor(ctx, resources.ActorRefFromActor(actor), store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+					toUpdate.Status.State = state
+					snap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", uri.Name(), uri.String())
+					if state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+						// A failed upload leaves only the in-progress URI, even
+						// when a prior deletion already marked the actor DELETING.
+						snap.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+					}
+					toUpdate.Status.Snapshots = []*ateapipb.Snapshot{snap}
+					return nil
+				}); err != nil {
+					t.Fatalf("UpdateActor: %v", err)
+				}
+				bucket, prefix, err := objectstore.BucketPrefix(uri.OwnerPrefix())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var listCalls atomic.Int32
+				tc.objectStore.OnList = func(gotBucket, gotPrefix string) error {
+					listCalls.Add(1)
+					if gotBucket != bucket || gotPrefix != prefix {
+						return fmt.Errorf("unexpected cleanup prefix: %s/%s", gotBucket, gotPrefix)
+					}
+					return fmt.Errorf("snapshot bucket removed: %w", provider.err)
+				}
+				deleted, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref})
+				if err != nil {
+					t.Fatalf("DeleteActor with missing snapshot bucket: %v", err)
+				}
+				if deleted.GetMetadata().GetUid() != actor.GetMetadata().GetUid() {
+					t.Errorf("DeleteActor returned a different actor: %v", deleted)
+				}
+				if got := listCalls.Load(); got != 1 {
+					t.Errorf("snapshot cleanup list calls = %d, want 1", got)
+				}
+				_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+				assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
+			})
+		}
+	}
+}
+
 func TestDeleteActor_NotSuspended(t *testing.T) {
 	ns := namespaceForTest("ns-delete-notsuspended")
 	tc := setupTest(t, ns)
@@ -1115,25 +1194,44 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	defer tc.cleanup()
 
 	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
-	created, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+	ctx := context.Background()
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
-	}})
-	if err != nil {
+	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	actorRef := resources.ActorRef{Atespace: testAtespace, Name: "id1"}
-	if _, err := tc.persistence.UpdateActor(context.Background(), actorRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
-		return nil
-	}); err != nil {
-		t.Fatalf("UpdateActor failed: %v", err)
+	// Resume onto worker-1 so AssignedNode is set to "node1", then delete
+	// worker-1 so the actor crashes and loses its WorkerAssignment.
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	deleteWorkerPod(t, tc, ns, "worker-1")
+
+	crashed, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := crashed.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Fatalf("state = %v, want CRASHED", got)
+	}
+	if got := crashed.GetStatus().GetAssignedNode(); got != "node1" {
+		t.Fatalf("assigned node = %q, want node1", got)
+	}
+	if got := crashed.GetStatus().GetWorkerAssignment(); got != nil {
+		t.Fatalf("worker assignment = %v, want nil", got)
 	}
 
-	deleted, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.TerminateCalled = false
+	tc.fakeAtelet.Lock.Unlock()
+
+	deleted, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+		Actor: actorRef,
 	})
 	if err != nil {
 		t.Fatalf("DeleteActor of crashed actor failed: %v", err)
@@ -1141,9 +1239,14 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	if got := deleted.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
 		t.Errorf("deleted actor state = %v, want %v", got, ateapipb.ActorState_ACTOR_STATE_DELETING)
 	}
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Errorf("expected Terminate call to clean up assigned node for crashed actor")
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetWorkerPodUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.WorkerPodUid = %q, want empty for crashed actor", gotUID)
+	}
 
-	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: actorRef,
 	})
 	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
@@ -1269,9 +1372,9 @@ func TestDeleteActor_MultipleVolumeDeletionFailures(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ActorVolumes: []*ateapipb.ExternalVolume{
-				{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
-				{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
+			ExternalVolumes: []*ateapipb.ExternalVolume{
+				{Name: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
+				{Name: "vol2", StorageVolumeId: "storage-vol-2", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
 			},
 		},
 	}
@@ -1345,8 +1448,8 @@ func TestDeleteActor_VolumeDeletionFailure_RetrySuccess(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ActorVolumes: []*ateapipb.ExternalVolume{
-				{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
+			ExternalVolumes: []*ateapipb.ExternalVolume{
+				{Name: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
 			},
 		},
 	}
@@ -1372,8 +1475,8 @@ func TestDeleteActor_VolumeDeletionFailure_RetrySuccess(t *testing.T) {
 	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_DELETING {
 		t.Errorf("actor state = %v, want ACTOR_STATE_DELETING", getResp.GetStatus().GetState())
 	}
-	if len(getResp.GetStatus().GetActorVolumes()) != 1 || getResp.GetStatus().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_DELETING {
-		t.Errorf("actor volume status = %v, want STATUS_DELETING", getResp.GetStatus().GetActorVolumes())
+	if len(getResp.GetStatus().GetExternalVolumes()) != 1 || getResp.GetStatus().GetExternalVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_DELETING {
+		t.Errorf("actor volume status = %v, want STATUS_DELETING", getResp.GetStatus().GetExternalVolumes())
 	}
 
 	// 4. Recover the CSI plugin to simulate backend recovery.
@@ -1393,7 +1496,7 @@ func TestDeleteActor_VolumeDeletionFailure_RetrySuccess(t *testing.T) {
 	_, err = tc.service.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "delete-retry-actor"},
 	})
-	if status.Code(err) != codes.NotFound {
+	if apierror.Code(err) != codes.NotFound {
 		t.Errorf("GetActor after successful delete retry = %v, want NotFound", err)
 	}
 }
@@ -1505,8 +1608,8 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	if createResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Fatalf("expected initial state ACTOR_STATE_SUSPENDED, got %v", createResp.GetStatus().GetState())
 	}
-	if len(createResp.GetStatus().GetActorVolumes()) != 1 || createResp.GetStatus().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
-		t.Fatalf("expected 1 pending volume after CreateActor, got %v", createResp.GetStatus().GetActorVolumes())
+	if len(createResp.GetStatus().GetExternalVolumes()) != 1 || createResp.GetStatus().GetExternalVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
+		t.Fatalf("expected 1 pending volume after CreateActor, got %v", createResp.GetStatus().GetExternalVolumes())
 	}
 
 	// 2. ResumeActor
@@ -1519,10 +1622,10 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	if resumeResp.GetActor().GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		t.Fatalf("expected state ACTOR_STATE_RUNNING after resume, got %v", resumeResp.GetActor().GetStatus().GetState())
 	}
-	if len(resumeResp.GetActor().GetStatus().GetActorVolumes()) != 1 || resumeResp.GetActor().GetStatus().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED {
-		t.Fatalf("expected 1 created volume after ResumeActor, got %v", resumeResp.GetActor().GetStatus().GetActorVolumes())
+	if len(resumeResp.GetActor().GetStatus().GetExternalVolumes()) != 1 || resumeResp.GetActor().GetStatus().GetExternalVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED {
+		t.Fatalf("expected 1 created volume after ResumeActor, got %v", resumeResp.GetActor().GetStatus().GetExternalVolumes())
 	}
-	if resumeResp.GetActor().GetStatus().GetActorVolumes()[0].GetStorageVolumeId() == "" {
+	if resumeResp.GetActor().GetStatus().GetExternalVolumes()[0].GetStorageVolumeId() == "" {
 		t.Fatalf("expected non-empty storageVolumeId after ResumeActor")
 	}
 
@@ -1586,15 +1689,15 @@ type partialFailVolumePlugin struct {
 	deleted []string
 }
 
-func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	if strings.HasSuffix(name, "fail-vol2") {
-		return "", nil, fmt.Errorf("simulated volume creation failure")
+func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	if strings.HasSuffix(req.Name, "fail-vol2") {
+		return volume.CreateVolumeResponse{}, fmt.Errorf("simulated volume creation failure")
 	}
-	return "storage-" + name, parameters, nil
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
-	return nil
+func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (f *partialFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -1675,12 +1778,12 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 	}
 
 	// Verify that succ-vol1 was updated to CREATED with a storageVolumeId, and fail-vol2 is still PENDING
-	if len(getResp.GetStatus().GetActorVolumes()) != 2 {
-		t.Fatalf("expected 2 volumes on actor, got %d", len(getResp.GetStatus().GetActorVolumes()))
+	if len(getResp.GetStatus().GetExternalVolumes()) != 2 {
+		t.Fatalf("expected 2 volumes on actor, got %d", len(getResp.GetStatus().GetExternalVolumes()))
 	}
 	volsByName := make(map[string]*ateapipb.ExternalVolume)
-	for _, v := range getResp.GetStatus().GetActorVolumes() {
-		volsByName[v.GetVolumeName()] = v
+	for _, v := range getResp.GetStatus().GetExternalVolumes() {
+		volsByName[v.GetName()] = v
 	}
 	if v1, ok := volsByName["succ-vol1"]; !ok || v1.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || v1.GetStorageVolumeId() == "" {
 		t.Errorf("succ-vol1 unexpected state: %v", v1)
@@ -1722,20 +1825,20 @@ type retrySuccessVolumePlugin struct {
 	deleted  []string
 }
 
-func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
+func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if strings.HasSuffix(name, "retry-vol2") {
+	if strings.HasSuffix(req.Name, "retry-vol2") {
 		r.attempts++
 		if r.attempts == 1 {
-			return "", nil, fmt.Errorf("simulated temporary volume creation failure")
+			return volume.CreateVolumeResponse{}, fmt.Errorf("simulated temporary volume creation failure")
 		}
 	}
-	return "storage-" + name, parameters, nil
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
-	return nil
+func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (r *retrySuccessVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -1813,8 +1916,8 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 	}
 
 	volsByName := make(map[string]*ateapipb.ExternalVolume)
-	for _, v := range getResp.GetStatus().GetActorVolumes() {
-		volsByName[v.GetVolumeName()] = v
+	for _, v := range getResp.GetStatus().GetExternalVolumes() {
+		volsByName[v.GetName()] = v
 	}
 	if v1, ok := volsByName["succ-vol1"]; !ok || v1.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || v1.GetStorageVolumeId() == "" {
 		t.Errorf("succ-vol1 unexpected state after first resume: %v", v1)
@@ -1841,9 +1944,9 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("actor state after second resume = %v, want %v", getResp.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	}
-	for _, v := range getResp.GetStatus().GetActorVolumes() {
+	for _, v := range getResp.GetStatus().GetExternalVolumes() {
 		if v.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || v.GetStorageVolumeId() == "" {
-			t.Errorf("volume %s unexpected state after second resume: %v", v.GetVolumeName(), v)
+			t.Errorf("volume %s unexpected state after second resume: %v", v.GetName(), v)
 		}
 	}
 
@@ -1872,19 +1975,19 @@ type attachFailVolumePlugin struct {
 	deleted        []string
 }
 
-func (a *attachFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	return "storage-" + name, parameters, nil
+func (a *attachFailVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (a *attachFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+func (a *attachFailVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.attachAttempts++
 	if a.attachAttempts <= a.failUntil {
-		return fmt.Errorf("simulated volume attach failure on attempt %d", a.attachAttempts)
+		return volume.AttachVolumeResponse{}, fmt.Errorf("simulated volume attach failure on attempt %d", a.attachAttempts)
 	}
-	a.attachedNodes = append(a.attachedNodes, node)
-	return nil
+	a.attachedNodes = append(a.attachedNodes, req.Node)
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (a *attachFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -1963,10 +2066,10 @@ func TestResumeActor_VolumeAttachFailureAndRetry(t *testing.T) {
 	if getResp.GetStatus().GetWorkerAssignment() == nil || getResp.GetStatus().GetWorkerAssignment().GetWorkerPod() != "worker-1" {
 		t.Errorf("worker assignment = %v, want worker-1", getResp.GetStatus().GetWorkerAssignment())
 	}
-	if len(getResp.GetStatus().GetActorVolumes()) != 1 {
-		t.Fatalf("expected 1 volume on actor, got %d", len(getResp.GetStatus().GetActorVolumes()))
+	if len(getResp.GetStatus().GetExternalVolumes()) != 1 {
+		t.Fatalf("expected 1 volume on actor, got %d", len(getResp.GetStatus().GetExternalVolumes()))
 	}
-	vol := getResp.GetStatus().GetActorVolumes()[0]
+	vol := getResp.GetStatus().GetExternalVolumes()[0]
 	if vol.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || vol.GetStorageVolumeId() == "" {
 		t.Errorf("vol1 unexpected state after failed attach: %v", vol)
 	}
@@ -2117,19 +2220,19 @@ func newMultiVolAttachPlugin(failVol string, failUntil int) *multiVolAttachPlugi
 	}
 }
 
-func (m *multiVolAttachPlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	return "storage-" + name, parameters, nil
+func (m *multiVolAttachPlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (m *multiVolAttachPlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+func (m *multiVolAttachPlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.attachAttempts[volumeID]++
-	if strings.Contains(volumeID, m.failVol) && m.attachAttempts[volumeID] <= m.failUntil {
-		return fmt.Errorf("simulated volume attach failure for %s on attempt %d", volumeID, m.attachAttempts[volumeID])
+	m.attachAttempts[req.VolumeID]++
+	if strings.Contains(req.VolumeID, m.failVol) && m.attachAttempts[req.VolumeID] <= m.failUntil {
+		return volume.AttachVolumeResponse{}, fmt.Errorf("simulated volume attach failure for %s on attempt %d", req.VolumeID, m.attachAttempts[req.VolumeID])
 	}
-	m.attachedNodes[volumeID] = append(m.attachedNodes[volumeID], node)
-	return nil
+	m.attachedNodes[req.VolumeID] = append(m.attachedNodes[req.VolumeID], req.Node)
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (m *multiVolAttachPlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -2288,15 +2391,15 @@ type detachFailVolumePlugin struct {
 	deleted        []string
 }
 
-func (d *detachFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	return "storage-" + name, parameters, nil
+func (d *detachFailVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (d *detachFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+func (d *detachFailVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.attachedNodes = append(d.attachedNodes, node)
-	return nil
+	d.attachedNodes = append(d.attachedNodes, req.Node)
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (d *detachFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -2804,15 +2907,19 @@ func TestResumeActor(t *testing.T) {
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
-			State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
+			State:                  ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			AssignedNode:           "node1",
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
+			},
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				Worker:          &ateapipb.ObjectRef{Name: podUID},
 				WorkerNamespace: ns,
 				WorkerPool:      "pool1",
 				WorkerPod:       "worker-1",
 				WorkerPodUid:    podUID,
-				WorkerPodIp:     "127.0.0.1",
+				WorkerPodIps:    []string{"127.0.0.1"},
 				NodeName:        "node1",
 			},
 		},
@@ -2843,7 +2950,7 @@ func TestResumeActor(t *testing.T) {
 		WorkerPool:      "pool1",
 		WorkerPod:       "worker-1",
 		WorkerPodUid:    podUID,
-		Ip:              "127.0.0.1",
+		Ips:             []string{"127.0.0.1"},
 		NodeName:        "node1",
 		SandboxClass:    "gvisor",
 		Labels:          map[string]string{poolLabelKey: ns},
@@ -2917,11 +3024,10 @@ func TestResumeActorPassesLiteralEnv(t *testing.T) {
 	}
 }
 
-// createGoldenDataTemplate creates "tmpl1" like createTemplate, but with
-// onCommit DATA and onResume.fromData GOLDEN, so a resumed-after-suspend
-// actor takes the DATA_ON_GOLDEN path: its data snapshot combined with the
-// template's golden.
-func createGoldenDataTemplate(t *testing.T, tc *testContext, ns string) *ateapipb.ActorTemplate {
+// createDataFidelityTemplate creates "tmpl1" like createTemplate, but with
+// preferredFidelity DATA, so a resumed-after-suspend actor restores from a DATA
+// snapshot while the template also has a golden snapshot.
+func createDataFidelityTemplate(t *testing.T, tc *testContext, ns string) *ateapipb.ActorTemplate {
 	t.Helper()
 	ensureDefaultGvisorSandboxConfig(t, tc)
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
@@ -2933,10 +3039,8 @@ func createGoldenDataTemplate(t *testing.T, tc *testContext, ns string) *ateapip
 				Name:     "tmpl1",
 			},
 			SnapshotConfig: &ateapipb.SnapshotConfig{
-				StorageLocation: testStorageLocation,
-				OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-				OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				OnResume:        &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN},
+				StorageLocation:   testStorageLocation,
+				PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
 				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
@@ -2964,8 +3068,7 @@ func createGoldenDataTemplate(t *testing.T, tc *testContext, ns string) *ateapip
 		SourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapipb.TagStatus{
-			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
-			StorageLocation:  testStorageLocation,
+			Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, created.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
 			ActorTemplateUid: created.GetMetadata().GetUid(),
 		},
 	})
@@ -2988,15 +3091,15 @@ func createGoldenDataTemplate(t *testing.T, tc *testContext, ns string) *ateapip
 	return updated
 }
 
-// TestResumeActor_GoldenDataResumeSetsBaseConfig drives the DATA_ON_GOLDEN
-// resume end to end and pins the wire request: the actor's data snapshot in
-// config and the template's golden snapshot in base_config.
-func TestResumeActor_GoldenDataResumeSetsBaseConfig(t *testing.T) {
-	ns := namespaceForTest("ns-resume-golden-data")
+// TestResumeActor_DataSnapshotIgnoresGolden drives a resume from a DATA
+// snapshot end to end and pins the wire request: a plain DATA restore of the
+// actor's own snapshot, even though the template has a golden snapshot.
+func TestResumeActor_DataSnapshotIgnoresGolden(t *testing.T) {
+	ns := namespaceForTest("ns-resume-data")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	createGoldenDataTemplate(t, tc, ns)
+	createDataFidelityTemplate(t, tc, ns)
 	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	const name = "id1"
@@ -3009,7 +3112,7 @@ func TestResumeActor_GoldenDataResumeSetsBaseConfig(t *testing.T) {
 	}
 
 	// First resume runs fresh from the golden; the suspend then commits a
-	// DATA snapshot per onCommit.
+	// DATA snapshot per preferredFidelity.
 	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("ResumeActor (first) failed: %v", err)
 	}
@@ -3018,13 +3121,12 @@ func TestResumeActor_GoldenDataResumeSetsBaseConfig(t *testing.T) {
 		t.Fatalf("SuspendActor failed: %v", err)
 	}
 	waitForWorkerAvailable(t, tc, workerName)
-	actorSnapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	actorSnapshotURI := durableSnapshotURI(suspended.GetActor().GetStatus())
 	if actorSnapshotURI == "" {
 		t.Fatal("SuspendActor recorded no external snapshot")
 	}
 
-	// Second resume: the actor's DATA snapshot rides on the template's
-	// golden.
+	// Second resume restores the actor's DATA snapshot on its own.
 	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("ResumeActor (second) failed: %v", err)
 	}
@@ -3032,15 +3134,11 @@ func TestResumeActor_GoldenDataResumeSetsBaseConfig(t *testing.T) {
 	if restoreReq == nil {
 		t.Fatal("second resume sent no Restore request to atelet")
 	}
-	if got := restoreReq.GetScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-		t.Fatalf("restore scope = %v, want SNAPSHOT_SCOPE_DATA_ON_GOLDEN", got)
+	if got := restoreReq.GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		t.Fatalf("restore scope = %v, want SNAPSHOT_FIDELITY_VOLUMES", got)
 	}
 	if got := restoreReq.GetExternalConfig().GetSnapshotUri(); got != actorSnapshotURI {
 		t.Errorf("restore config snapshot uri = %q, want the actor's data snapshot %q", got, actorSnapshotURI)
-	}
-	golden := goldenSnapshotURI(t)
-	if got := restoreReq.GetBaseConfig().GetSnapshotUri(); got != golden {
-		t.Errorf("restore base_config uri = %q, want the template's golden %q", got, golden)
 	}
 }
 
@@ -3076,7 +3174,7 @@ func TestSuspendActor_ReplacedSnapshotReleaseFailure(t *testing.T) {
 		t.Fatalf("SuspendActor (first) failed: %v", err)
 	}
 	waitForWorkerAvailable(t, tc, workerName)
-	replacedURI := first.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	replacedURI := durableSnapshotURI(first.GetActor().GetStatus())
 	assertSnapshotOwnedByActor(t, first.GetActor(), replacedURI)
 
 	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
@@ -3094,7 +3192,7 @@ func TestSuspendActor_ReplacedSnapshotReleaseFailure(t *testing.T) {
 	if got := second.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state after the second suspend = %v, want SUSPENDED", got)
 	}
-	freshURI := second.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	freshURI := durableSnapshotURI(second.GetActor().GetStatus())
 	if freshURI == "" || freshURI == replacedURI {
 		t.Errorf("external snapshot after the second suspend = %q, want a new one replacing %q", freshURI, replacedURI)
 	}
@@ -3116,7 +3214,7 @@ func TestSuspendActor_ReplacedSnapshotReleaseFailure(t *testing.T) {
 		t.Fatalf("SuspendActor (third) failed: %v", err)
 	}
 	waitForWorkerAvailable(t, tc, workerName)
-	lastURI := third.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	lastURI := durableSnapshotURI(third.GetActor().GetStatus())
 	assertSnapshotCollected(t, tc, freshURI)
 	assertSnapshotPresent(t, tc, replacedURI)
 
@@ -3127,7 +3225,7 @@ func TestSuspendActor_ReplacedSnapshotReleaseFailure(t *testing.T) {
 	assertSnapshotCollected(t, tc, lastURI)
 }
 
-// TestResumeActor_NoWorkers tests that resuming an actor fails when no free workers are available.
+// TestResumeActor_NoWorkers tests that resuming an actor fails when no worker has room for it.
 // Workflow:
 // 1. Creates a mock ActorTemplate.
 // 2. Creates an actor.
@@ -3153,7 +3251,7 @@ func TestResumeActor_NoWorkers(t *testing.T) {
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
-	assertGrpcError(t, err, codes.ResourceExhausted, "no free workers available")
+	assertGrpcError(t, err, codes.ResourceExhausted, "no worker has room for the actor")
 }
 
 // TestResumeActor_MultiPoolSelector exercises the AND-of-two-selectors path
@@ -3248,8 +3346,9 @@ func TestResumeActor_RequiresBothSelectorsToMatch(t *testing.T) {
 }
 
 // TestResumeActor_AteletFailureCrashesActor verifies the default crash
-// behavior: any atelet error during resume crashes the actor and releases its
-// worker, and the crashed actor cannot be resumed again.
+// behavior: an atelet error a retry cannot clear crashes the actor during
+// resume and releases its worker, and the crashed actor cannot be resumed
+// again.
 func TestResumeActor_AteletFailureCrashesActor(t *testing.T) {
 	ns := namespaceForTest("ns-resume-atelet-crash")
 	tc := setupTest(t, ns)
@@ -3267,7 +3366,7 @@ func TestResumeActor_AteletFailureCrashesActor(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 	// STEP 1: Make Atelet FAIL on Restore!
-	tc.fakeAtelet.FailRestore = status.Error(codes.Unavailable, "mock atelet failure")
+	tc.fakeAtelet.FailRestore = status.Error(codes.Internal, "mock atelet failure")
 
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
@@ -3275,9 +3374,9 @@ func TestResumeActor_AteletFailureCrashesActor(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected ResumeActor to fail due to atelet error")
 	}
-	// The caller sees atelet's own status, not a synthetic crash status.
-	if got := status.Code(err); got != codes.Unavailable {
-		t.Errorf("status code = %v, want %v (err: %v)", got, codes.Unavailable, err)
+	// Atelet's code does not reach the caller.
+	if got := status.Code(err); got != codes.Internal {
+		t.Errorf("status code = %v, want %v (err: %v)", got, codes.Internal, err)
 	}
 
 	// Verify actor state is CRASHED in the store.
@@ -3299,6 +3398,90 @@ func TestResumeActor_AteletFailureCrashesActor(t *testing.T) {
 	}
 	if n := worker.GetStatus().GetAllocated().GetActors(); n != 0 {
 		t.Errorf("expected worker to be released after crash, still holds %d actors", n)
+	}
+}
+
+// A transient atelet failure, or a caller whose deadline passes during the
+// restore, leaves the actor RESUMING on its worker, and the next resume finishes.
+// Only Unavailable and the caller's own deadline reach the caller with their
+// code. Atelet's own Canceled or DeadlineExceeded reach it as Internal.
+func TestResumeActor_AteletTransportErrorLeavesActorResuming(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		fail     error
+		delay    time.Duration
+		deadline time.Duration
+		wantCode codes.Code
+	}{
+		{name: "Unavailable", fail: status.Error(codes.Unavailable, "restore reply lost"), wantCode: codes.Unavailable},
+		{name: "atelet Canceled", fail: status.Error(codes.Canceled, "restore reply lost"), wantCode: codes.Internal},
+		{name: "atelet DeadlineExceeded", fail: status.Error(codes.DeadlineExceeded, "restore reply lost"), wantCode: codes.Internal},
+		{name: "caller deadline", delay: time.Second, deadline: 200 * time.Millisecond, wantCode: codes.DeadlineExceeded},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest("ns-resume-atelet-" + strings.ReplaceAll(strings.ToLower(tt.name), " ", "-"))
+			tc := setupTest(t, ns)
+			defer tc.cleanup()
+
+			createTemplate(t, tc, ns)
+			podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+			name := "id1"
+			ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+			actorRef := resources.ActorRef{Atespace: testAtespace, Name: name}
+			if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			}}); err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
+
+			tc.fakeAtelet.FailRestore = tt.fail
+			tc.fakeAtelet.RestoreDelay = tt.delay
+			ctx := context.Background()
+			if tt.deadline > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tt.deadline)
+				defer cancel()
+			}
+			_, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref})
+			if got := status.Code(err); got != tt.wantCode {
+				t.Fatalf("ResumeActor status code = %v, want %v (err: %v)", got, tt.wantCode, err)
+			}
+
+			actor, err := tc.persistence.GetActor(context.Background(), actorRef)
+			if err != nil {
+				t.Fatalf("failed to get actor from store: %v", err)
+			}
+			if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RESUMING {
+				t.Fatalf("state after %s = %v, want RESUMING", tt.name, got)
+			}
+			if crash := actor.GetStatus().GetCrash(); crash != nil {
+				t.Errorf("crash recorded after %s: %v", tt.name, crash)
+			}
+			if got := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != podUID {
+				t.Errorf("assigned worker = %q, want %q kept for the retry", got, podUID)
+			}
+
+			// The fake still holds its lock while a delayed restore sleeps.
+			tc.fakeAtelet.Lock.Lock()
+			tc.fakeAtelet.FailRestore = nil
+			tc.fakeAtelet.RestoreDelay = 0
+			tc.fakeAtelet.Lock.Unlock()
+			if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+				t.Fatalf("retried ResumeActor failed: %v", err)
+			}
+			actor, err = tc.persistence.GetActor(context.Background(), actorRef)
+			if err != nil {
+				t.Fatalf("failed to get actor from store: %v", err)
+			}
+			if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+				t.Errorf("state after retry = %v, want RUNNING", got)
+			}
+			if got := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != podUID {
+				t.Errorf("assigned worker after retry = %q, want %q", got, podUID)
+			}
+		})
 	}
 }
 
@@ -3328,9 +3511,9 @@ func TestResumeActor_LocalRestoreFailureCrashesActor(t *testing.T) {
 	}
 
 	tc.fakeAtelet.Reset()
-	tc.fakeAtelet.FailRestore = status.Error(codes.Unavailable, "injected restore failure")
-	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref}); err == nil {
-		t.Fatal("ResumeActor succeeded despite failing restore")
+	tc.fakeAtelet.FailRestore = status.Error(codes.Internal, "injected restore failure")
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref}); status.Code(err) != codes.Internal {
+		t.Fatalf("ResumeActor status code = %v, want Internal (err: %v)", status.Code(err), err)
 	}
 	if got := tc.fakeAtelet.RestoreRequest.GetType(); got != ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
 		t.Fatalf("restore type = %v, want LOCAL", got)
@@ -3426,7 +3609,7 @@ func TestSuspendActor(t *testing.T) {
 	}
 
 	sourceActor := suspended.GetActor()
-	snapshotURI := sourceActor.GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	snapshotURI := durableSnapshotURI(sourceActor.GetStatus())
 	if snapshotURI == "" {
 		t.Fatalf("SuspendActor wrote no external snapshot: %v", suspended)
 	}
@@ -3450,21 +3633,21 @@ func TestSuspendActor(t *testing.T) {
 
 	// The tag owns a copy of its own, so the Actor's later suspends and its
 	// deletion cannot collect the tag's snapshot copy.
-	tagSnapshotURI := tagged.GetStatus().GetSnapshot().GetSnapshotUri()
-	if tagSnapshotURI == snapshotURI || tagSnapshotURI == "" {
-		t.Fatalf("tag snapshot uri = %q, want an external snapshot of its own", tagSnapshotURI)
+	taggedSnapshotURI := tagSnapshotURI(tagged)
+	if taggedSnapshotURI == snapshotURI || taggedSnapshotURI == "" {
+		t.Fatalf("tag snapshot uri = %q, want an external snapshot of its own", taggedSnapshotURI)
 	}
 	assertSnapshotPresent(t, tc, snapshotURI)
-	assertSnapshotPresent(t, tc, tagSnapshotURI)
+	assertSnapshotPresent(t, tc, taggedSnapshotURI)
 
+	wantTagSnap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, durableSnapshot(sourceActor.GetStatus()).GetFidelity(), "", snapshotName(t, taggedSnapshotURI), taggedSnapshotURI)
 	wantTag := &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 		Status: &ateapipb.TagStatus{
-			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI, ContentScope: sourceActor.GetStatus().GetExternalSnapshot().GetContentScope()},
+			Snapshot:         wantTagSnap,
 			ActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			StorageLocation:  tmpl.GetSnapshotConfig().GetStorageLocation(),
 		},
 	}
 	stored, err := tc.client.GetTag(context.Background(), &ateapipb.GetTagRequest{Tag: tagRef})
@@ -3499,8 +3682,8 @@ func TestSuspendActor(t *testing.T) {
 	if err != nil || updated.GetScope() != ateapipb.TagScope_TAG_SCOPE_PUBLISHED {
 		t.Fatalf("UpdateTag = (%v, %v), want published", updated, err)
 	}
-	if updated.GetStatus().GetSnapshot().GetSnapshotUri() != tagSnapshotURI {
-		t.Errorf("tag snapshot uri after publication = %q, want %q", updated.GetStatus().GetSnapshot().GetSnapshotUri(), tagSnapshotURI)
+	if tagSnapshotURI(updated) != taggedSnapshotURI {
+		t.Errorf("tag snapshot uri after publication = %q, want %q", tagSnapshotURI(updated), taggedSnapshotURI)
 	}
 	if _, err := tc.client.CreateActor(context.Background(), crossAtespaceClone); err != nil {
 		t.Fatalf("CreateActor from published tag failed: %v", err)
@@ -3519,11 +3702,11 @@ func TestSuspendActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateActor from tag failed: %v", err)
 	}
-	if got := clone.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != tagSnapshotURI {
-		t.Errorf("clone snapshot uri = %q, want the tag's %q", got, tagSnapshotURI)
+	if got := durableSnapshotURI(clone.GetStatus()); got != taggedSnapshotURI {
+		t.Errorf("clone snapshot uri = %q, want the tag's %q", got, taggedSnapshotURI)
 	}
-	if snapshotOwnedByActor(t, clone, tagSnapshotURI) {
-		t.Errorf("clone snapshot %s sits under the clone's own prefix, want it left under the tag's", tagSnapshotURI)
+	if snapshotOwnedByActor(t, clone, taggedSnapshotURI) {
+		t.Errorf("clone snapshot %s sits under the clone's own prefix, want it left under the tag's", taggedSnapshotURI)
 	}
 	if !proto.Equal(clone.GetSourceTag(), tagRef) {
 		t.Errorf("clone source tag = %v, want %v", clone.GetSourceTag(), tagRef)
@@ -3541,13 +3724,13 @@ func TestSuspendActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SuspendActor clone failed: %v", err)
 	}
-	cloneSnapshotURI := cloneSuspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
-	if cloneSnapshotURI == tagSnapshotURI || cloneSnapshotURI == "" {
+	cloneSnapshotURI := durableSnapshotURI(cloneSuspended.GetActor().GetStatus())
+	if cloneSnapshotURI == taggedSnapshotURI || cloneSnapshotURI == "" {
 		t.Errorf("clone snapshot uri after suspension = %q, want an external snapshot of its own", cloneSnapshotURI)
 	}
 	assertSnapshotOwnedByActor(t, cloneSuspended.GetActor(), cloneSnapshotURI)
 	// It stopped borrowing without releasing what it had borrowed.
-	assertSnapshotPresent(t, tc, tagSnapshotURI)
+	assertSnapshotPresent(t, tc, taggedSnapshotURI)
 	assertSnapshotPresent(t, tc, cloneSnapshotURI)
 	// The untagged suspend created no tag.
 	listed, err = tc.client.ListTags(context.Background(), &ateapipb.ListTagsRequest{Atespace: testAtespace})
@@ -3561,15 +3744,15 @@ func TestSuspendActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
+	wantActorSnap := newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, durableSnapshot(sourceActor.GetStatus()).GetFidelity(), tmpl.GetMetadata().GetUid(), snapshotName(t, snapshotURI), snapshotURI)
 	want := &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
-			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{
-				SnapshotUri:      snapshotURI,
-				ContentScope:     sourceActor.GetStatus().GetExternalSnapshot().GetContentScope(),
-				ActorTemplateUid: tmpl.GetMetadata().GetUid(),
+			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			LastAssignedGeneration: 2,
+			Snapshots: []*ateapipb.Snapshot{
+				wantActorSnap,
 			},
 		},
 	}
@@ -3592,7 +3775,7 @@ func TestSuspendActor(t *testing.T) {
 	}
 	// The Actor took only what it owned with it.
 	assertSnapshotCollected(t, tc, snapshotURI)
-	assertSnapshotPresent(t, tc, tagSnapshotURI)
+	assertSnapshotPresent(t, tc, taggedSnapshotURI)
 
 	if deleted, err := tc.client.DeleteTag(context.Background(), &ateapipb.DeleteTagRequest{Tag: tagRef}); err != nil || deleted.GetMetadata().GetName() != tagRef.GetName() {
 		t.Fatalf("DeleteTag = (%v, %v)", deleted, err)
@@ -3602,7 +3785,7 @@ func TestSuspendActor(t *testing.T) {
 	}
 	// Deleting the tag is what ends its snapshot's life. The clone that
 	// borrowed it has one of its own by now and is unaffected.
-	assertSnapshotCollected(t, tc, tagSnapshotURI)
+	assertSnapshotCollected(t, tc, taggedSnapshotURI)
 	assertSnapshotPresent(t, tc, cloneSnapshotURI)
 }
 
@@ -3620,19 +3803,19 @@ func TestResumeActor_RepointTemplateBeforeResume(t *testing.T) {
 		// after it is created but before its first resume.
 		moveActorToAnotherTemplate bool
 		wantTemplate               string
-		wantScope                  ateletpb.SnapshotScope
+		wantScope                  ateletpb.SnapshotFidelity
 	}{
 		{
 			name:                       "clone left on the tag's template",
 			moveActorToAnotherTemplate: false,
 			wantTemplate:               "tmpl1",
-			wantScope:                  ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+			wantScope:                  ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 		{
 			name:                       "clone repointed before its first resume",
 			moveActorToAnotherTemplate: true,
 			wantTemplate:               "tmpl2",
-			wantScope:                  ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+			wantScope:                  ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 		},
 	}
 	for _, tt := range tests {
@@ -3715,16 +3898,13 @@ func TestResumeActor_RepointTemplateBeforeResume(t *testing.T) {
 			if got := restoreReq.GetActorTemplateName(); got != tt.wantTemplate {
 				t.Errorf("restore request to atelet had actor template = %q, want %q", got, tt.wantTemplate)
 			}
-			if got := restoreReq.GetScope(); got != tt.wantScope {
+			if got := restoreReq.GetFidelity(); got != tt.wantScope {
 				t.Errorf("restore request to atelet had scope = %v, want %v", got, tt.wantScope)
 			}
 			// Either way the restore reads the snapshot the clone borrowed
 			// from the tag, not the template's golden image.
-			if got := restoreReq.GetExternalConfig().GetSnapshotUri(); got != cloneActor.GetStatus().GetExternalSnapshot().GetSnapshotUri() {
-				t.Errorf("restore request to atelet had snapshot uri = %q, want the clone's borrowed %q", got, cloneActor.GetStatus().GetExternalSnapshot().GetSnapshotUri())
-			}
-			if restoreReq.GetBaseConfig() != nil {
-				t.Errorf("restore request to atelet had base_config = %v, want unset", restoreReq.GetBaseConfig())
+			if got := restoreReq.GetExternalConfig().GetSnapshotUri(); got != durableSnapshotURI(cloneActor.GetStatus()) {
+				t.Errorf("restore request to atelet had snapshot uri = %q, want the clone's borrowed %q", got, durableSnapshotURI(cloneActor.GetStatus()))
 			}
 		})
 	}
@@ -3780,7 +3960,7 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("ResumeActor(v2 from v1 snapshot) failed: %v", err)
 	}
-	if got := tc.fakeAtelet.lastRestoreRequest().GetScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA {
+	if got := tc.fakeAtelet.lastRestoreRequest().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
 		t.Fatalf("first resume on v2 had scope = %v, want DATA", got)
 	}
 	if _, err := tc.client.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: actorRef}); err != nil {
@@ -3797,7 +3977,7 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 	if got := restoreReq.GetType(); got != ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
 		t.Errorf("restore request type = %v, want LOCAL", got)
 	}
-	if got := restoreReq.GetScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
+	if got := restoreReq.GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		t.Errorf("restore request scope = %v, want FULL (local checkpoint was captured on v2)", got)
 	}
 }
@@ -3856,16 +4036,21 @@ func TestPauseActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
+	ls := localSnapshot(getResp.GetStatus())
+	if ls.GetUuid() == "" {
+		t.Error("Snapshot.Uuid is empty, want the name the pause checkpointed under")
+	}
 	want := &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
-			State: ateapipb.ActorState_ACTOR_STATE_PAUSED,
-			LocalSnapshot: &ateapipb.LocalSnapshot{
-				NodeVmsWithLocalSnapshots: []string{"node1"},
-				ContentScope:              ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			State:                  ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			AssignedNode:           "node1",
+			LastAssignedGeneration: 2,
+			Snapshots: []*ateapipb.Snapshot{
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
+				newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "ignored", "node1"),
 			},
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
 	}
 
@@ -3874,12 +4059,9 @@ func TestPauseActor(t *testing.T) {
 		ignoreUID,
 		ignoreVersion,
 		ignoreTimestamps,
-		protocmp.IgnoreFields(&ateapipb.LocalSnapshot{}, "snapshot_name"),
+		protocmp.IgnoreFields(&ateapipb.Snapshot{}, "uuid"),
 	); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
-	}
-	if getResp.GetStatus().GetLocalSnapshot().GetSnapshotName() == "" {
-		t.Error("LocalSnapshot.SnapshotName is empty, want the name the pause checkpointed under")
 	}
 }
 
@@ -3927,8 +4109,8 @@ func TestResumeActor_PausedLocalSnapshotMissing_Crashes(t *testing.T) {
 	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
 		t.Fatalf("actor state = %v, want ACTOR_STATE_PAUSED", getResp.GetStatus().GetState())
 	}
-	if getResp.GetStatus().GetLocalSnapshot() == nil {
-		t.Fatal("expected LocalSnapshot to be present on paused actor")
+	if ls := localSnapshot(getResp.GetStatus()); ls == nil {
+		t.Fatal("expected local snapshot to be present on paused actor")
 	}
 	waitForWorkerAvailable(t, tc, workerName)
 
@@ -3936,16 +4118,16 @@ func TestResumeActor_PausedLocalSnapshotMissing_Crashes(t *testing.T) {
 	tc.fakeAtelet.Reset()
 	tc.fakeAtelet.FailRestore = status.Error(codes.NotFound, "local checkpoint files missing on node: directory not found")
 
-	// A failed restore crashes the actor, and the caller sees atelet's own
-	// status rather than a synthetic crash status.
+	// A failed restore crashes the actor, and atelet's code does not reach the
+	// caller.
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
 	if err == nil {
 		t.Fatal("expected ResumeActor to fail due to missing local snapshot, but it succeeded")
 	}
-	if got := status.Code(err); got != codes.NotFound {
-		t.Errorf("ResumeActor err code = %v, want %v", got, codes.NotFound)
+	if got := status.Code(err); got != codes.Internal {
+		t.Errorf("ResumeActor err code = %v, want %v", got, codes.Internal)
 	}
 
 	// Assert actor transitioned to ACTOR_STATE_CRASHED
@@ -3982,7 +4164,7 @@ func TestPauseActor_FailedLookupStampsRefIdentityOnly(t *testing.T) {
 	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
 		if _, err := tc.service.PauseActor(ctx, &ateapipb.PauseActorRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: testActorID},
-		}); status.Code(err) != codes.NotFound {
+		}); apierror.Code(err) != codes.NotFound {
 			t.Fatalf("PauseActor(missing) error = %v, want code NotFound", err)
 		}
 	})
@@ -4127,9 +4309,8 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 		t.Fatalf("GetActor failed: %v", err)
 	}
 	if err := tc.persistence.BindActorToWorker(context.Background(), podA, &ateapipb.ActorAssignment{
-		Actor:            &ateapipb.ObjectRef{Atespace: testAtespace, Name: id},
-		ActorUid:         suspended.GetMetadata().GetUid(),
-		ActorTemplateRef: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		Actor:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: id},
+		ActorUid: suspended.GetMetadata().GetUid(),
 	}, nil); err != nil {
 		t.Fatalf("BindActorToWorker failed: %v", err)
 	}
@@ -4141,7 +4322,7 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-a",
 			WorkerPodUid:    podA,
-			WorkerPodIp:     "127.0.0.1",
+			WorkerPodIps:    []string{"127.0.0.1"},
 		}
 		return nil
 	}); err != nil {
@@ -4379,9 +4560,8 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 		t.Fatalf("GetActor failed: %v", err)
 	}
 	if err := tc.persistence.BindActorToWorker(context.Background(), podA, &ateapipb.ActorAssignment{
-		Actor:            &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
-		ActorUid:         suspended.GetMetadata().GetUid(),
-		ActorTemplateRef: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		Actor:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+		ActorUid: suspended.GetMetadata().GetUid(),
 	}, nil); err != nil {
 		t.Fatalf("BindActorToWorker failed: %v", err)
 	}
@@ -4393,7 +4573,7 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-a",
 			WorkerPodUid:    podA,
-			WorkerPodIp:     "127.0.0.1",
+			WorkerPodIps:    []string{"127.0.0.1"},
 		}
 		return nil
 	}); err != nil {
@@ -4554,28 +4734,40 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 		t.Error("atelet Checkpoint called for a paused actor; there is no workload to checkpoint")
 	}
 	upload := tc.fakeAtelet.UploadRequest
-	if got, want := upload.GetLocalSnapshotName(), paused.GetStatus().GetLocalSnapshot().GetSnapshotName(); got != want {
+	pausedLS := localSnapshot(paused.GetStatus())
+	if pausedLS == nil {
+		t.Fatal("paused actor has no local snapshot")
+	}
+	if got, want := upload.GetLocalSnapshotName(), pausedLS.GetUuid(); got != want {
 		t.Errorf("upload local_snapshot_name = %q, want the pause snapshot %q", got, want)
+	}
+	if got, want := snapshotName(t, upload.GetDestinationSnapshotUri()), pausedLS.GetUuid(); got != want {
+		t.Errorf("upload destination snapshot name = %q, want the pause snapshot uuid %q", got, want)
 	}
 	if got, want := upload.GetAtespace(), testAtespace; got != want {
 		t.Errorf("upload atespace = %q, want %q", got, want)
 	}
-	if got := upload.GetDesiredScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
-		t.Errorf("upload desired_scope = %v, want FULL (template default)", got)
+	if got := upload.GetDesiredFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		t.Errorf("upload desired_fidelity = %v, want MEMORY (template default)", got)
 	}
 
 	actor := suspended.GetActor()
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", actor.GetStatus().GetState())
 	}
-	if actor.GetStatus().GetLocalSnapshot() != nil {
-		t.Errorf("LocalSnapshot = %v, want cleared (node pinning must not survive suspend)", actor.GetStatus().GetLocalSnapshot())
+	if ls := localSnapshot(actor.GetStatus()); ls != nil {
+		t.Errorf("local snapshot = %v, want cleared (node pinning must not survive suspend)", ls)
 	}
-	if got, want := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(), upload.GetDestinationSnapshotUri(); got != want {
+	if got, want := durableSnapshotURI(actor.GetStatus()), upload.GetDestinationSnapshotUri(); got != want {
 		t.Errorf("snapshot URI = %q, want the upload destination %q", got, want)
 	}
-	if got := actor.GetStatus().GetExternalSnapshot().GetContentScope(); got != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {
-		t.Errorf("snapshot ContentScope = %v, want FULL", got)
+	// The suspend promotes the pause snapshot rather than taking a new one.
+	durable := durableSnapshot(actor.GetStatus())
+	if durable.GetGeneration() != pausedLS.GetGeneration() || durable.GetUuid() != pausedLS.GetUuid() {
+		t.Errorf("durable snapshot = generation %d, uuid %q; want the pause snapshot's generation %d, uuid %q", durable.GetGeneration(), durable.GetUuid(), pausedLS.GetGeneration(), pausedLS.GetUuid())
+	}
+	if got := durable.GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		t.Errorf("snapshot Fidelity = %v, want FULL", got)
 	}
 }
 
@@ -4610,16 +4802,16 @@ func TestSuspendActor_FromPaused_UploadFailureCrashes(t *testing.T) {
 	}
 
 	tc.fakeAtelet.Reset()
-	tc.fakeAtelet.FailUpload = status.Error(codes.Unavailable, "injected upload failure")
+	tc.fakeAtelet.FailUpload = status.Error(codes.Internal, "injected upload failure")
 	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
 	if err == nil {
 		t.Fatal("SuspendActor succeeded despite failing upload")
 	}
-	// The caller sees atelet's own status, not a synthetic crash status.
-	if got := status.Code(err); got != codes.Unavailable {
-		t.Errorf("status code = %v, want %v (err: %v)", got, codes.Unavailable, err)
+	// Atelet's code does not reach the caller.
+	if got := status.Code(err); got != codes.Internal {
+		t.Errorf("status code = %v, want %v (err: %v)", got, codes.Internal, err)
 	}
 
 	crashed, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
@@ -4704,7 +4896,7 @@ func TestCheckpointFailureCrashes(t *testing.T) {
 			}
 
 			tc.fakeAtelet.Reset()
-			tc.fakeAtelet.FailCheckpoint = status.Error(codes.Unavailable, "injected checkpoint failure")
+			tc.fakeAtelet.FailCheckpoint = status.Error(codes.Internal, "injected checkpoint failure")
 			err := tt.call(tc, ref)
 			if err == nil {
 				t.Fatalf("%s succeeded despite failing checkpoint", tt.name)
@@ -4777,8 +4969,8 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor(%s) failed: %v", pinned, err)
 	}
-	if got := paused.GetStatus().GetLocalSnapshot().GetNodeVmsWithLocalSnapshots(); len(got) != 1 || got[0] != "node1" {
-		t.Fatalf("paused actor pinned to %v, want [node1]", got)
+	if got := paused.GetStatus().GetAssignedNode(); got != "node1" {
+		t.Fatalf("paused actor pinned to %q, want node1", got)
 	}
 	waitForWorkerAvailable(t, tc, workerName)
 
@@ -4796,7 +4988,7 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
 	})
-	assertGrpcError(t, err, codes.ResourceExhausted, "no free workers available")
+	assertGrpcError(t, err, codes.ResourceExhausted, "no worker has room for the actor")
 
 	suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
@@ -4807,8 +4999,8 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	if got := suspended.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Fatalf("state after suspend = %v, want SUSPENDED", got)
 	}
-	if got := suspended.GetActor().GetStatus().GetLocalSnapshot(); got != nil {
-		t.Fatalf("LocalSnapshot = %v, want cleared so the actor can be scheduled anywhere", got)
+	if ls := localSnapshot(suspended.GetActor().GetStatus()); ls != nil {
+		t.Fatalf("local snapshot = %v, want cleared so the actor can be scheduled anywhere", ls)
 	}
 
 	// Resume should succeed now and the actor scheduled on node2.
@@ -4981,9 +5173,8 @@ func TestDeleteActor_ReleasesAnAssignmentTheActorDoesNotReference(t *testing.T) 
 	// Bind straight through the store, leaving the Actor's backlink unset:
 	// exactly the state a crash between the two writes leaves behind.
 	if err := tc.persistence.BindActorToWorker(ctx, podUID, &ateapipb.ActorAssignment{
-		Actor:            &ateapipb.ObjectRef{Atespace: testAtespace, Name: "orphaned"},
-		ActorUid:         actorUID,
-		ActorTemplateRef: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		Actor:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "orphaned"},
+		ActorUid: actorUID,
 	}, nil); err != nil {
 		t.Fatalf("BindActorToWorker failed: %v", err)
 	}
@@ -5028,17 +5219,16 @@ func TestMintActorJWT_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
-	mintResp, err := tc.client.MintActorJWT(t.Context(), &ateapipb.MintActorJWTRequest{
+	mintResp, err := tc.client.MintActorJwt(t.Context(), &ateapipb.MintActorJwtRequest{
 		Actor: &ateapipb.ObjectRef{
 			Atespace: createResp.GetMetadata().GetAtespace(),
 			Name:     createResp.GetMetadata().GetName(),
 		},
-		ActorUid:          createResp.GetMetadata().GetUid(),
-		Audience:          []string{"foo"},
+		Audiences:         []string{"foo"},
 		ExpirationSeconds: 1800,
 	})
 	if err != nil {
-		t.Fatalf("Error while calling MintActorJWT: %v", err)
+		t.Fatalf("Error while calling MintActorJwt: %v", err)
 	}
 
 	segments := strings.Split(mintResp.GetActorJwt(), ".")
@@ -5060,12 +5250,15 @@ func TestMintActorJWT_Success(t *testing.T) {
 	if want := "actor/" + testAtespace + "/id1"; claims.Subject != want {
 		t.Errorf("sub = %q, want %q", claims.Subject, want)
 	}
+	if want := createResp.GetMetadata().GetUid(); claims.Substrate.ActorUID != want {
+		t.Errorf("ate.dev.actorUID = %q, want the stored actor's %q", claims.Substrate.ActorUID, want)
+	}
 	assertActorJWTLifetime(t, mintResp, claims, 30*time.Minute)
 }
 
 // assertActorJWTLifetime checks that expires_at matches the exp claim and that
 // the token is valid for want after it was issued.
-func assertActorJWTLifetime(t *testing.T, resp *ateapipb.MintActorJWTResponse, claims actoridjwt.WireClaims, want time.Duration) {
+func assertActorJWTLifetime(t *testing.T, resp *ateapipb.MintActorJwtResponse, claims actoridjwt.WireClaims, want time.Duration) {
 	t.Helper()
 	if got, exp := resp.GetExpiresAt().AsTime(), time.Unix(int64(claims.Expiration), 0); !got.Equal(exp) {
 		t.Errorf("expires_at = %v, want the exp claim %v", got, exp)
@@ -5117,7 +5310,7 @@ func TestRevertActor(t *testing.T) {
 		t.Fatalf("SuspendActor failed: %v", err)
 	}
 	waitForWorkerAvailable(t, tc, workerName)
-	snapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	snapshotURI := durableSnapshotURI(suspended.GetActor().GetStatus())
 	if snapshotURI == "" {
 		t.Fatalf("SuspendActor wrote no external snapshot: %v", suspended)
 	}
@@ -5140,7 +5333,7 @@ func TestRevertActor(t *testing.T) {
 	if got.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", got.GetState())
 	}
-	if uri := got.GetExternalSnapshot().GetSnapshotUri(); uri != snapshotURI {
+	if uri := durableSnapshotURI(got); uri != snapshotURI {
 		t.Errorf("external snapshot = %q, want it untouched at %q", uri, snapshotURI)
 	}
 	assertSnapshotPresent(t, tc, snapshotURI)
@@ -5185,7 +5378,7 @@ func TestRevertActor_FromPaused(t *testing.T) {
 		t.Fatalf("SuspendActor failed: %v", err)
 	}
 	waitForWorkerAvailable(t, tc, workerName)
-	snapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	snapshotURI := durableSnapshotURI(suspended.GetActor().GetStatus())
 	if snapshotURI == "" {
 		t.Fatalf("SuspendActor wrote no external snapshot: %v", suspended)
 	}
@@ -5211,18 +5404,23 @@ func TestRevertActor_FromPaused(t *testing.T) {
 	if got.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", got.GetState())
 	}
-	if uri := got.GetExternalSnapshot().GetSnapshotUri(); uri != snapshotURI {
+	if uri := durableSnapshotURI(got); uri != snapshotURI {
 		t.Errorf("external snapshot = %q, want it untouched at %q", uri, snapshotURI)
 	}
 	assertSnapshotPresent(t, tc, snapshotURI)
-	if got.GetLocalSnapshot() != nil {
-		t.Errorf("local snapshot info = %v, want nil", got.GetLocalSnapshot())
+	if ls := localSnapshot(got); ls != nil {
+		t.Errorf("local snapshot info = %v, want nil", ls)
 	}
 	if got.GetWorkerAssignment() != nil {
 		t.Errorf("worker assignment = %v, want nil", got.GetWorkerAssignment())
 	}
-	if tc.fakeAtelet.TerminateCalled {
-		t.Errorf("unexpected Terminate call for paused actor")
+	if got.GetAssignedNode() != "" {
+		t.Errorf("assigned node = %q, want empty", got.GetAssignedNode())
+	}
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Errorf("expected Terminate call to clean up assigned node for paused actor")
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetWorkerPodUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.WorkerPodUid = %q, want empty for paused actor", gotUID)
 	}
 	if tc.fakeAtelet.CheckpointCalled {
 		t.Errorf("RevertActor checkpointed the workload, want the execution discarded")
@@ -5258,7 +5456,7 @@ func TestRevertActor_FromCrashed(t *testing.T) {
 		t.Fatalf("SuspendActor failed: %v", err)
 	}
 	waitForWorkerAvailable(t, tc, workerName)
-	snapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	snapshotURI := durableSnapshotURI(suspended.GetActor().GetStatus())
 	if snapshotURI == "" {
 		t.Fatalf("SuspendActor wrote no external snapshot: %v", suspended)
 	}
@@ -5290,15 +5488,20 @@ func TestRevertActor_FromCrashed(t *testing.T) {
 	if got.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", got.GetState())
 	}
-	if uri := got.GetExternalSnapshot().GetSnapshotUri(); uri != snapshotURI {
+	if uri := durableSnapshotURI(got); uri != snapshotURI {
 		t.Errorf("external snapshot = %q, want it untouched at %q", uri, snapshotURI)
 	}
 	assertSnapshotPresent(t, tc, snapshotURI)
 	if got.GetWorkerAssignment() != nil {
 		t.Errorf("worker assignment = %v, want nil", got.GetWorkerAssignment())
 	}
-	if tc.fakeAtelet.TerminateCalled {
-		t.Errorf("unexpected Terminate call for crashed actor with no worker")
+	if got.GetAssignedNode() != "" {
+		t.Errorf("assigned node = %q, want empty", got.GetAssignedNode())
+	}
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Errorf("expected Terminate call to clean up assigned node for crashed actor")
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetWorkerPodUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.WorkerPodUid = %q, want empty for crashed actor", gotUID)
 	}
 	if tc.fakeAtelet.CheckpointCalled {
 		t.Errorf("RevertActor checkpointed the workload, want the execution discarded")
@@ -5315,20 +5518,21 @@ func TestRevertActor_FromCrashed(t *testing.T) {
 	}
 }
 
-// TestRevertActor_TerminateFailureCrashes verifies that an atelet error while
-// terminating the discarded execution crashes the actor, and that a later
-// successful revert clears the recorded crash.
-func TestRevertActor_TerminateFailureCrashes(t *testing.T) {
-	ns := namespaceForTest("ns-revert-terminate-crash")
+// TestRevertActor_TerminateFailureLeavesActorReverting verifies that an atelet
+// error while terminating the discarded execution leaves the actor REVERTING on
+// its worker, and that the next revert terminates it and finishes.
+func TestRevertActor_TerminateFailureLeavesActorReverting(t *testing.T) {
+	ns := namespaceForTest("ns-revert-terminate-fail")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
 	createTemplate(t, tc, ns)
-	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	ctx := context.Background()
 	const name = "id1"
-	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: name}
 
 	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
@@ -5336,27 +5540,116 @@ func TestRevertActor_TerminateFailureCrashes(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
-	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor failed: %v", err)
 	}
 
 	tc.fakeAtelet.Lock.Lock()
-	tc.fakeAtelet.FailTerminate = status.Error(codes.Internal, "injected terminate failure at /var/lib/node-path")
+	tc.fakeAtelet.FailTerminate = status.Error(codes.Internal, "injected terminate failure")
 	tc.fakeAtelet.Lock.Unlock()
-	if _, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef}); err == nil {
-		t.Fatal("RevertActor succeeded despite failing terminate")
+	_, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: ref})
+	if got := status.Code(err); got != codes.Internal {
+		t.Fatalf("RevertActor status code = %v, want %v (err: %v)", got, codes.Internal, err)
 	}
-	assertActorCrashStatus(t, tc, name, "revert failed: atelet Terminate: workflow failed at step CallAteletTerminate: while terminating actor on atelet: rpc error: code = Internal desc = injected terminate failure at /var/lib/node-path")
+
+	actor, err := tc.persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("failed to get actor from store: %v", err)
+	}
+	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_REVERTING {
+		t.Errorf("state after failed terminate = %v, want REVERTING", got)
+	}
+	if crash := actor.GetStatus().GetCrash(); crash != nil {
+		t.Errorf("crash recorded after failed terminate: %v", crash)
+	}
+	if got := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != podUID {
+		t.Errorf("assigned worker = %q, want %q kept for the retry", got, podUID)
+	}
 
 	tc.fakeAtelet.Lock.Lock()
 	tc.fakeAtelet.FailTerminate = nil
+	tc.fakeAtelet.TerminateCalled = false
 	tc.fakeAtelet.Lock.Unlock()
-	reverted, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef})
+	reverted, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: ref})
 	if err != nil {
 		t.Fatalf("second RevertActor failed: %v", err)
 	}
-	if got := reverted.GetActor().GetStatus().GetCrash(); got != nil {
-		t.Errorf("Crash = %v, want cleared by the successful revert", got)
+	if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("state after retry = %v, want SUSPENDED", got)
+	}
+	if got := reverted.GetActor().GetStatus().GetWorkerAssignment(); got != nil {
+		t.Errorf("worker assignment after retry = %v, want nil", got)
+	}
+	tc.fakeAtelet.Lock.Lock()
+	terminated := tc.fakeAtelet.TerminateCalled
+	tc.fakeAtelet.Lock.Unlock()
+	if !terminated {
+		t.Error("retried revert did not call atelet Terminate")
+	}
+}
+
+// TestDeleteActor_TerminateFailureLeavesActorDeleting verifies that an atelet
+// error while terminating a running actor leaves it DELETING on its worker,
+// and that the next delete terminates it and removes it.
+func TestDeleteActor_TerminateFailureLeavesActorDeleting(t *testing.T) {
+	ns := namespaceForTest("ns-delete-terminate-fail")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	ctx := context.Background()
+	const name = "id1"
+	ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: name}
+
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.FailTerminate = status.Error(codes.Internal, "injected terminate failure")
+	tc.fakeAtelet.Lock.Unlock()
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}); err == nil {
+		t.Fatal("DeleteActor succeeded despite failing terminate")
+	}
+
+	actor, err := tc.persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("failed to get actor from store: %v", err)
+	}
+	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
+		t.Errorf("state after failed terminate = %v, want DELETING", got)
+	}
+	if crash := actor.GetStatus().GetCrash(); crash != nil {
+		t.Errorf("crash recorded after failed terminate: %v", crash)
+	}
+	if got := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != podUID {
+		t.Errorf("assigned worker = %q, want %q kept for the retry", got, podUID)
+	}
+
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.FailTerminate = nil
+	tc.fakeAtelet.TerminateCalled = false
+	tc.fakeAtelet.Lock.Unlock()
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}); err != nil {
+		t.Fatalf("second DeleteActor failed: %v", err)
+	}
+	if _, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref}); status.Code(err) != codes.NotFound {
+		t.Errorf("GetActor after retried delete err = %v, want NotFound", err)
+	}
+	tc.fakeAtelet.Lock.Lock()
+	terminated := tc.fakeAtelet.TerminateCalled
+	tc.fakeAtelet.Lock.Unlock()
+	if !terminated {
+		t.Error("retried delete did not call atelet Terminate")
 	}
 }
 

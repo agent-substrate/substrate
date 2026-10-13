@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
@@ -44,8 +45,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/wakeupprobe"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // runningActor holds the live state for one actor's micro-VM. ateom owns the
@@ -74,6 +73,10 @@ type runningActor struct {
 	// base to produce a COMPLETE snapshot (CH's OnDemand snapshot alone drops the
 	// un-faulted pages). Empty for cold-run actors (their snapshot is already complete).
 	restoreSourceDir string
+
+	// preserveRestoreSource marks restoreSourceDir as a preserved snapshot
+	// (preserve_restore_dir): the next checkpoint must copy-merge, not move it.
+	preserveRestoreSource bool
 
 	// snapshotIsSelfContained is set when this actor was restored eagerly, which
 	// reads every populated extent up front. Every page the snapshot had is then
@@ -226,13 +229,17 @@ func (s *AteomService) resolveRuntime(paths map[string]string) resolvedRuntime {
 // Contract with atelet:
 //   - The runtime assets (guest kernel, guest OS image, cloud-hypervisor, virtiofsd)
 //     are on disk and passed as runtime asset paths.
-//   - The OCI bundle (config.json + populated rootfs/) is prepared per container.
+//   - Each container's bundle holds the overlay spec its rootfs/ is composed
+//     from. ateom builds the OCI spec itself.
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := validateRuntimeAssetPaths(req.GetRuntimeAssetPaths()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 	ctx, cancel := context.WithCancel(ctx)
@@ -263,15 +270,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	attribution := p.actorAttribution()
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor starting", attribution)
 
-	// A VM still running for this actor would be dropped from tracking by the
-	// re-host below and left running, so stop it first.
-	if s.runningVM(attribution.UID) != nil {
-		if err := s.stopActorVM(ctx, attribution.UID, req.GetActorDirs()); err != nil {
-			return nil, fmt.Errorf("while stopping the actor's previous micro-VM: %w", err)
-		}
+	if err := s.endPreviousActivation(ctx, attribution.UID, req.GetActorDirs()); err != nil {
+		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	if _, err := s.hostActor(ctx, attribution); err != nil {
+	if _, err := s.hostActor(ctx, attribution, false); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -292,7 +295,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 }
 
 // actorBootParams is what a cold boot needs about an actor. It comes from a Run
-// request, or from a Restore request whose snapshot scope covers only the
+// request, or from a Restore request whose snapshot fidelity covers only the
 // durable-dir volumes (the workload itself cold-starts).
 type actorBootParams struct {
 	actorRef         resources.ActorRef
@@ -309,6 +312,11 @@ type actorBootParams struct {
 	// memory); a container's own cgroup limit comes from its declared resources.
 	// Zero fields keep the kata defaults.
 	size sizing.SandboxSize
+	// rootfsUpperSnapshotDir, when set, names a snapshot directory holding the
+	// per-container rootfs upper tars; the cold boot re-materializes the uppers
+	// from it instead of starting from a pristine dir. A ROOTFS restore sets it
+	// to the restore dir.
+	rootfsUpperSnapshotDir string
 }
 
 func (p actorBootParams) attribution() resources.ActorAttribution {
@@ -358,7 +366,7 @@ func (s *AteomService) coldBootActorRetrying(ctx context.Context, p actorBootPar
 			slog.String("id", p.actorUID), slog.Int("attempt", attempt), slog.Any("err", err))
 		// The failed attempt deactivated egress, which retires the listener
 		// bound to it, so the network is rebuilt. The actor keeps its slot.
-		if _, err := s.hostActor(ctx, p.attribution()); err != nil {
+		if _, err := s.hostActor(ctx, p.attribution(), false); err != nil {
 			return err
 		}
 	}
@@ -376,10 +384,10 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// CreateSandbox + guest networking.
 	containers := p.containers
 	if len(containers) == 0 {
-		return status.Error(codes.InvalidArgument, "actor spec has no containers")
+		return apierror.InvalidArgument("actor spec has no containers")
 	}
 	if len(containers) > maxActorContainers {
-		return status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
+		return apierror.Unimplemented("ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
 
 	// ateom builds the CH vm.create itself, so it needs the guest kernel + image
@@ -413,6 +421,29 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		}
 	}()
 
+	// Clean stale per-sandbox state before anything touches the host upper dir.
+	// Also  create the runtime dir for the sockets.
+
+	s.cleanupSandboxState(ctx, actorUID)
+	if err := os.MkdirAll(kata.VMDir(actorUID), 0o700); err != nil {
+		return fmt.Errorf("while creating VM dir: %w", err)
+	}
+
+	// Stage the host upper dir in the background (pristine, or from a ROOTFS
+	// snapshot's tars) and join it right before the overlay mounts need it,
+	// hiding it behind the bundle preparation below. Every return before the
+	// join must drain the goroutine, or a retry's staging would race it.
+	upperDone := make(chan error, 1)
+	upperJoined := false
+	go func() {
+		upperDone <- stageRootfsUpper(p.actorDirs, p.rootfsUpperSnapshotDir, containerNames(containers))
+	}()
+	defer func() {
+		if !upperJoined {
+			<-upperDone
+		}
+	}()
+
 	// Guest sizing + agent kernel params.
 	memMiB, vcpus, kparams := s.guestConfig()
 
@@ -421,8 +452,8 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// vCPUs round up; VM RAM reserves a fixed margin for the VMM + virtiofsd, which
 	// share the pod cgroup with the guest RAM. A declared memory limit the reserve
 	// leaves too small to boot is rejected (resolveGuestMemMiB) rather than silently
-	// falling back to the larger kata default. NB: a FULL-scope snapshot restore
-	// reuses the size baked into the snapshot (restoreFullScope), so resizing an
+	// falling back to the larger kata default. NB: a MEMORY snapshot restore
+	// reuses the size baked into the snapshot (restoreMemoryFidelity), so resizing an
 	// existing actor takes effect on its next cold boot.
 	sz := p.size
 	if v := sz.VCPUs(); v > 0 {
@@ -435,7 +466,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 
 	// Prepare each container's OCI spec + record its bundle rootfs (the overlay
 	// lower the host merges under the container's writable upper).
-	ctrs, err := s.buildActorContainers(p.actorDirs, containers)
+	ctrs, err := s.buildActorContainers(p.actorUID, p.actorDirs, containers)
 	if err != nil {
 		return err
 	}
@@ -453,15 +484,9 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return err
 	}
 
-	// Clean stale per-sandbox state + create the runtime dir for the sockets.
-	s.cleanupSandboxState(ctx, actorUID)
-	if err := os.MkdirAll(kata.VMDir(actorUID), 0o700); err != nil {
-		return fmt.Errorf("while creating VM dir: %w", err)
-	}
-
-	// A cold boot starts from the bare image: give it a pristine host upper dir
-	// (atelet's actor-dir reset does not know this directory; see rootfsupper.go).
-	if err := resetRootfsUpperDir(p.actorDirs); err != nil {
+	// The overlay mounts below need the upper dir in its final state.
+	upperJoined = true
+	if err := <-upperDone; err != nil {
 		return err
 	}
 
@@ -510,7 +535,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// on a failed agent dial below, so keep it here.
 	consoleLog := kata.ConsoleLogPath(actorUID)
 	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, vcpus,
-		agentInit(ctx, client.Info()), s.kataDebug)
+		agentInit(ctx, client.Info()), s.guestDebug)
 	if err := client.CreateVM(ctx, vmCfg); err != nil {
 		return fmt.Errorf("while creating VM: %w", err)
 	}
@@ -609,24 +634,26 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// the handler polling a connection nobody owns. Same client the forwarding
 	// above reads over — ttrpc multiplexes, and teardownActor ends both.
 	s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: ac, workloadIDs: workloadIDs})
+	// Looked up while the caller holds the actor's lock, so it is this
+	// activation even if the read below outlives the RPC.
+	if hosted := s.lookupActor(actorUID); hosted != nil {
+		go s.recordInitial(context.WithoutCancel(ctx), hosted)
+	}
 
 	return nil
 }
 
 // buildActorContainers prepares each of the actor's containers for the shared
-// micro-VM: it loads the OCI spec from the per-container bundle, injects guest DNS,
+// micro-VM: it builds the OCI spec from the request, injects guest DNS,
 // and records the bundle rootfs that backs the overlay's RO lower. No host disk is
 // mounted here — the merged overlays are assembled in stageMergedRootfs after the
 // sandbox state is clean. Both RunWorkload and RestoreWorkload go through here.
-func (s *AteomService) buildActorContainers(actorDirs *ateompb.ActorDirs, containers []*ateompb.Container) ([]actorContainer, error) {
+func (s *AteomService) buildActorContainers(actorUID string, actorDirs *ateompb.ActorDirs, containers []*ateompb.Container) ([]actorContainer, error) {
 	ctrs := make([]actorContainer, len(containers))
 	for i, c := range containers {
 		cn := c.GetName()
 		bundle := ociBundlePath(actorDirs, cn)
-		spec, err := ocispec.Load(bundle)
-		if err != nil {
-			return nil, fmt.Errorf("while reading the OCI spec for %q: %w", cn, err)
-		}
+		spec := ocispec.Build(ocispec.Options{ActorUID: actorUID, ActorDirs: actorDirs, Container: c})
 		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerID: cn}); err != nil {
 			return nil, fmt.Errorf("while shaping the OCI spec for %q: %w", cn, err)
 		}
@@ -661,8 +688,7 @@ func (s *AteomService) buildActorContainers(actorDirs *ateompb.ActorDirs, contai
 // CSI volumes, and system-info volumes (if any) under SharedDir(id)/durable,
 // SharedDir(id)/csi, and SharedDir(id)/system-info,
 // then starts the ONE virtiofsd that serves them all. Must run AFTER CleanupSandboxState (which
-// wipes SharedDir) and resetRootfsUpperDir/untarRootfsUpper (which own the
-// upper contents). The returned virtiofsd cmd outlives this call (CH
+// wipes SharedDir) and stageRootfsUpper (which owns the upper contents). The returned virtiofsd cmd outlives this call (CH
 // demand-pages from it); the caller owns it (tracked on runningActor, killed
 // in teardownActor).
 func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateompb.ActorDirs, ctrs []actorContainer, containers []*ateompb.Container, procAttr *syscall.SysProcAttr) (*exec.Cmd, error) {
@@ -707,12 +733,10 @@ func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime
 	return vfsdCmd, nil
 }
 
-// guestConfig returns the default guest sizing and the agent kernel params, enabling
-// the debug console (vsock 1026) for in-guest diagnostics and, with kataDebug, raising
-// the agent log level.
+// guestConfig returns the default guest sizing and kernel params
 func (s *AteomService) guestConfig() (memMiB, vcpus int, kparams string) {
-	kparams = kata.WithDebugConsole()
-	if s.kataDebug {
+	kparams = kata.BaseKernelParams
+	if s.guestDebug {
 		kparams = kata.WithAgentDebug(kparams)
 	}
 	return kata.DefaultMemoryMiB, kata.DefaultVCPUs, kparams
@@ -796,7 +820,7 @@ func initParams(agentInit bool) string {
 // boot: measured host-launch to the agent's ttrpc accept, 1.24s -> 0.39s on a GKE
 // amd64 node and 21.6s -> 1.9s on a nested-virt arm64 kind node. What that costs is
 // the earliest messages: hvc0 only exists once virtio-console probes, so the memory
-// map, CPU features and ACPI lines never reach the log. kataDebug adds the UART back
+// map, CPU features and ACPI lines never reach the log. guestDebug adds the UART back
 // with earlycon (and pays the ~800ms) for diagnosing a guest that dies before then.
 func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool) ch.VmConfig {
 	cmdline := "root=/dev/vda1 rootflags=data=ordered,errors=remount-ro ro rootfstype=ext4 " +
@@ -875,15 +899,17 @@ func (s *AteomService) startActorContainers(ctx context.Context, ac *kata.AgentC
 	err = s.configureGuestNetwork(netCtx, ac, mtu)
 	netCancel()
 	if err != nil {
-		dump := kata.DebugConsoleDump(ctx, vsockPath, "ip addr 2>&1; echo '== route =='; ip route 2>&1; echo '== neigh =='; ip neigh 2>&1")
-		slog.ErrorContext(ctx, "guest network config failed; dump", slog.String("dump", dump))
+		if s.guestDebug {
+			dump := kata.DebugConsoleDump(ctx, vsockPath, "ip addr 2>&1; echo '== route =='; ip route 2>&1; echo '== neigh =='; ip neigh 2>&1")
+			slog.ErrorContext(ctx, "guest network config failed; dump", slog.String("dump", dump))
+		}
 		return fmt.Errorf("while configuring guest network: %w", err)
 	}
 
 	tNetwork := time.Now()
 
 	for _, c := range ctrs {
-		if err := startRootfsContainer(ctx, ac, vsockPath, c); err != nil {
+		if err := s.startRootfsContainer(ctx, ac, vsockPath, c); err != nil {
 			return err
 		}
 	}
@@ -900,16 +926,18 @@ func (s *AteomService) startActorContainers(ctx context.Context, ac *kata.AgentC
 // dumps the guest's view of the shared tree.
 //
 // Its spec binds every declared volume at its mount path.
-func startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
+func (s *AteomService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
 	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	err := ac.StartRootfsContainer(cCtx, c.name, c.spec)
 	cancel()
 	if err != nil {
-		dump := kata.DebugConsoleDump(ctx, vsockPath,
-			"echo '== shared/containers =='; ls -la /run/kata-containers/shared/containers/ 2>&1 | head -40; "+
-				"echo '== rootfs =='; ls /run/kata-containers/shared/containers/"+c.name+"/rootfs/ 2>&1 | head; "+
-				"echo '== mounts =='; grep -E 'kata|virtiofs' /proc/mounts 2>&1")
-		slog.ErrorContext(ctx, "rootfs container failed; dump", slog.String("container", c.name), slog.String("dump", dump))
+		if s.guestDebug {
+			dump := kata.DebugConsoleDump(ctx, vsockPath,
+				"echo '== shared/containers =='; ls -la /run/kata-containers/shared/containers/ 2>&1 | head -40; "+
+					"echo '== rootfs =='; ls /run/kata-containers/shared/containers/"+c.name+"/rootfs/ 2>&1 | head; "+
+					"echo '== mounts =='; grep -E 'kata|virtiofs' /proc/mounts 2>&1")
+			slog.ErrorContext(ctx, "rootfs container failed; dump", slog.String("container", c.name), slog.String("dump", dump))
+		}
 		return fmt.Errorf("while starting rootfs container %q: %w", c.name, err)
 	}
 	return nil

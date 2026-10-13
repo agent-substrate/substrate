@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"net/url"
 	"path"
 	"slices"
@@ -39,9 +40,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -181,6 +184,12 @@ type egressMockClient struct {
 	// policyGate, when non-nil, blocks each GetActorEgressPolicy until it is
 	// closed, so a test can hold several callers on one fetch.
 	policyGate chan struct{}
+
+	// The nth MintActorJwt call returns "jwt-<n>", expiring
+	// expiration_seconds from now. mintErr, when set, is returned instead.
+	mintCalls atomic.Int32
+	lastMint  atomic.Pointer[ateapipb.MintActorJwtRequest]
+	mintErr   error
 }
 
 func (m *egressMockClient) GetActor(context.Context, *ateapipb.GetActorRequest, ...grpc.CallOption) (*ateapipb.Actor, error) {
@@ -190,8 +199,11 @@ func (m *egressMockClient) GetActor(context.Context, *ateapipb.GetActorRequest, 
 	return m.actor, nil
 }
 
-func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, _ *ateapipb.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
 	m.policyCalls.Add(1)
+	if req.GetName() != resources.SingletonName {
+		return nil, status.Errorf(codes.InvalidArgument, "name must be %q", resources.SingletonName)
+	}
 	if m.policyGate != nil {
 		select {
 		case <-m.policyGate:
@@ -208,6 +220,18 @@ func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, _ *ateapipb
 	return m.policy, nil
 }
 
+func (m *egressMockClient) MintActorJwt(_ context.Context, req *ateapipb.MintActorJwtRequest, _ ...grpc.CallOption) (*ateapipb.MintActorJwtResponse, error) {
+	n := m.mintCalls.Add(1)
+	m.lastMint.Store(req)
+	if m.mintErr != nil {
+		return nil, m.mintErr
+	}
+	return &ateapipb.MintActorJwtResponse{
+		ActorJwt:  fmt.Sprintf("jwt-%d", n),
+		ExpiresAt: timestamppb.New(time.Now().Add(time.Duration(req.GetExpirationSeconds()) * time.Second)),
+	}, nil
+}
+
 // allowAllPolicy allows every name and address: cleartext HTTP on any port
 // and HTTPS on 443.
 func allowAllPolicy() *ateapipb.EgressPolicy {
@@ -216,31 +240,31 @@ func allowAllPolicy() *ateapipb.EgressPolicy {
 
 func httpPolicy(patterns ...string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Http: &ateapipb.HTTPRule{Hostnames: patterns},
+		Http: &ateapipb.HttpRule{Hostnames: patterns},
 	}}}
 }
 
 func httpPolicyOnPorts(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Http: &ateapipb.HTTPRule{Hostnames: patterns, Ports: ports},
+		Http: &ateapipb.HttpRule{Hostnames: patterns, Ports: ports},
 	}}}
 }
 
 func httpsPolicy(patterns ...string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Https: &ateapipb.HTTPSRule{Hostnames: patterns},
+		Https: &ateapipb.HttpsRule{Hostnames: patterns},
 	}}}
 }
 
 func httpsPolicyOnPorts(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Https: &ateapipb.HTTPSRule{Hostnames: patterns, Ports: ports},
+		Https: &ateapipb.HttpsRule{Hostnames: patterns, Ports: ports},
 	}}}
 }
 
 func passthroughPolicy(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: patterns, Ports: ports},
+		TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: patterns, Ports: ports},
 	}}}
 }
 
@@ -324,15 +348,15 @@ func TestHandleRequestHeadersAllowsVerifiedActor(t *testing.T) {
 	if res.Target != "" {
 		t.Errorf("target = %q, want %q", res.Target, "")
 	}
-	if got := passthroughDestinationOf(res); got != "93.184.216.34:80" {
-		t.Errorf("passthrough destination = %q, want %q", got, "93.184.216.34:80")
+	if got := dialedPortOf(res); got != "80" {
+		t.Errorf("dialed port = %q, want %q", got, "80")
 	}
 }
 
-// passthroughDestinationOf reads the address a CONNECT decision handed back
-// for the passthrough chain, or "" when it handed back none.
-func passthroughDestinationOf(res extproc.Result) string {
-	return res.DynamicMetadata.GetFields()[extproc.EgressMetadataNamespace].GetStructValue().GetFields()[extproc.EgressPassthroughDestinationKey].GetStringValue()
+// dialedPortOf reads the port a CONNECT decision handed back for the
+// passthrough chain.
+func dialedPortOf(res extproc.Result) string {
+	return res.DynamicMetadata.GetFields()[extproc.EgressMetadataNamespace].GetStructValue().GetFields()[extproc.EgressDialedPortKey].GetStringValue()
 }
 
 // The CONNECT opens for any policy with rules and returns the https and
@@ -395,8 +419,9 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 			if err != nil {
 				t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
 			}
-			if got := passthroughDestinationOf(res); got != md.Host {
-				t.Errorf("passthrough destination = %q, want %q", got, md.Host)
+			_, wantPort, _ := net.SplitHostPort(md.Host)
+			if got := dialedPortOf(res); got != wantPort {
+				t.Errorf("dialed port = %q, want %q", got, wantPort)
 			}
 			if got := sniRulesOf(t, res); !slices.Equal(got, tc.want) {
 				t.Errorf("SNI rules = %v, want %v", got, tc.want)
@@ -439,8 +464,8 @@ func TestConnectLegWithoutRequestLegs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
 	}
-	if got := passthroughDestinationOf(res); got != "93.184.216.34:80" {
-		t.Errorf("passthrough destination = %q, want %q", got, "93.184.216.34:80")
+	if got := dialedPortOf(res); got != "80" {
+		t.Errorf("dialed port = %q, want %q", got, "80")
 	}
 	h = New(&egressMockClient{actor: runningActor()}, ca.roots(), 0, nil, "")
 	_, err = h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(certificate))

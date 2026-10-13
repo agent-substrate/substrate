@@ -26,6 +26,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -33,6 +34,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -150,19 +153,19 @@ func TestRelayIngressWithHalfClose(t *testing.T) {
 	upstream := receiveWithin(t, accepted, "accepted connection")
 	defer upstream.Close()
 
-	clientReader, clientInput := io.Pipe()
-	defer clientReader.Close()
-	var clientOutput bytes.Buffer
+	downstreamReader, downstreamInput := io.Pipe()
+	defer downstreamReader.Close()
+	var downstreamOutput bytes.Buffer
 	done := make(chan struct{})
 	go func() {
-		relayIngressWithHalfClose(context.Background(), upstream, clientReader, &clientOutput, clientReader)
+		relayIngressWithHalfClose(context.Background(), slog.New(slog.DiscardHandler), upstream, downstreamReader, &downstreamOutput, downstreamReader)
 		close(done)
 	}()
 
-	if _, err := io.WriteString(clientInput, "request"); err != nil {
+	if _, err := io.WriteString(downstreamInput, "request"); err != nil {
 		t.Fatal(err)
 	}
-	if err := clientInput.Close(); err != nil {
+	if err := downstreamInput.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := actor.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
@@ -187,24 +190,64 @@ func TestRelayIngressWithHalfClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("relay did not finish after the actor response ended")
 	}
-	if got := clientOutput.String(); got != "response" {
-		t.Errorf("client received %q, want response", got)
+	if got := downstreamOutput.String(); got != "response" {
+		t.Errorf("downstream received %q, want response", got)
+	}
+}
+
+// A router reuses idle tunnels, so an actor closing its connection must end
+// the tunnel, or the router's next request hangs until its timeout.
+func TestRelayIngressClosesDownstreamWhenActorCloses(t *testing.T) {
+	upstream, actor := net.Pipe()
+	defer upstream.Close()
+	downstreamReader, downstreamInput := io.Pipe()
+	defer downstreamInput.Close()
+	var downstreamOutput bytes.Buffer
+	var logs syncBuffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	done := make(chan struct{})
+	go func() {
+		relayIngressWithHalfClose(context.Background(), log, upstream, downstreamReader, &downstreamOutput, downstreamReader)
+		close(done)
+	}()
+
+	if _, err := io.WriteString(actor, "response"); err != nil {
+		t.Fatal(err)
+	}
+	if err := actor.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("relay kept the tunnel open after the actor closed its connection")
+	}
+	if got := downstreamOutput.String(); got != "response" {
+		t.Errorf("downstream received %q, want response", got)
+	}
+	if _, err := io.WriteString(downstreamInput, "next request"); err == nil {
+		t.Fatal("downstream remained open after the actor closed its connection")
+	}
+	if want := `msg="atunnel CONNECT actor stopped sending" bytes=8 err=<nil>`; !strings.Contains(logs.String(), want) {
+		t.Errorf("relay logs = %q, want a line containing %q", logs.String(), want)
 	}
 }
 
 func TestRelayIngressCancellationClosesBothSides(t *testing.T) {
 	upstream, actor := net.Pipe()
 	defer actor.Close()
-	clientReader, clientInput := io.Pipe()
-	defer clientInput.Close()
-	ctx, cancel := context.WithCancel(context.Background())
+	downstreamReader, downstreamInput := io.Pipe()
+	defer downstreamInput.Close()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	var logs syncBuffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	done := make(chan struct{})
 	go func() {
-		relayIngressWithHalfClose(ctx, upstream, clientReader, io.Discard, clientReader)
+		relayIngressWithHalfClose(ctx, log, upstream, downstreamReader, io.Discard, downstreamReader)
 		close(done)
 	}()
 
-	cancel()
+	cancel(errActorDeactivated)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -215,9 +258,30 @@ func TestRelayIngressCancellationClosesBothSides(t *testing.T) {
 	if _, err := actor.Read(make([]byte, 1)); err == nil {
 		t.Fatal("actor connection remained open after relay cancellation")
 	}
-	if _, err := io.WriteString(clientInput, "request"); err == nil {
-		t.Fatal("client stream remained open after relay cancellation")
+	if _, err := io.WriteString(downstreamInput, "request"); err == nil {
+		t.Fatal("downstream remained open after relay cancellation")
 	}
+	if want := `msg="atunnel CONNECT canceled" cause="atunnel: actor deactivated"`; !strings.Contains(logs.String(), want) {
+		t.Errorf("relay logs = %q, want a line containing %q", logs.String(), want)
+	}
+}
+
+// syncBuffer collects logs from the relay's goroutines.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func TestServeHTTP(t *testing.T) {
@@ -287,6 +351,107 @@ func TestServeHTTP(t *testing.T) {
 		if got := upstreamHosts[i]; got != want {
 			t.Errorf("upstream Host = %q, want %q", got, want)
 		}
+	}
+}
+
+func TestServerRejectsDuplicateOrCommaTargetActorHeaders(t *testing.T) {
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestServer(t, upstreamURL)
+	var upstreamCalled bool
+	actorTransport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		upstreamCalled = true
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+		}, nil
+	})
+	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
+		t.Fatal(err)
+	}
+	setActorTransport(t, s, "team-a", "actor-1", actorTransport)
+
+	tests := []struct {
+		name    string
+		host    string
+		headers []string
+	}{
+		{
+			name:    "duplicate different actors",
+			host:    "actor-1.team-a.actors.resources.substrate.ate.dev",
+			headers: []string{"team-a/actor-1", "secret/x"},
+		},
+		{
+			name:    "duplicate identical actors",
+			host:    "actor-1.team-a.actors.resources.substrate.ate.dev",
+			headers: []string{"team-a/actor-1", "team-a/actor-1"},
+		},
+		{
+			name:    "comma-joined actors",
+			host:    "actor-1.team-a.actors.resources.substrate.ate.dev",
+			headers: []string{"team-a/actor-1,secret/x"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstreamCalled = false
+			req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
+			req.Host = tt.host
+			for _, h := range tt.headers {
+				req.Header.Add(atenet.TargetActorHeader, h)
+			}
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusMisdirectedRequest {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusMisdirectedRequest)
+			}
+			if rec.Header().Get(StaleAssignmentHeader) != "true" {
+				t.Errorf("missing %s response header", StaleAssignmentHeader)
+			}
+			if upstreamCalled {
+				t.Errorf("upstream was dialed, expected request to be rejected")
+			}
+		})
+	}
+}
+
+func TestServeHTTPStripsStaleAssignmentHeaderFromActor(t *testing.T) {
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestServer(t, upstreamURL)
+	actorTransport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		h := make(http.Header)
+		h.Set(StaleAssignmentHeader, "true")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     h,
+			Body:       http.NoBody,
+		}, nil
+	})
+	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
+		t.Fatal(err)
+	}
+	setActorTransport(t, s, "team-a", "actor-1", actorTransport)
+
+	req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
+	req.Header.Set(atenet.TargetActorHeader, "team-a/actor-1")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get(StaleAssignmentHeader); got != "" {
+		t.Errorf("expected %s to be stripped from actor response, got %q", StaleAssignmentHeader, got)
 	}
 }
 
@@ -533,8 +698,8 @@ func TestMutualTLSClientAuthentication(t *testing.T) {
 
 // TestServeNegotiatesH2 checks that the ingress server negotiates h2 with a
 // client that offers it, and HTTP/1.1 with one that does not. The router's
-// HTTP/2 pool depends on the h2 side, which holds only because ServeTLS
-// enables HTTP/2 when tlsConfig.NextProtos is empty — this pins that.
+// HTTP/2 pool depends on the h2 side, which holds because the server offers
+// both protocols in NextProtos — this pins that.
 func TestServeNegotiatesH2(t *testing.T) {
 	dir := t.TempDir()
 	ca := newTestCA(t)
@@ -655,9 +820,11 @@ func TestDeactivateCancelsInflightRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
+	causes := make(chan error, 1)
 	setActorTransport(t, s, "team-a", "actor-1", roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		close(started)
 		<-r.Context().Done()
+		causes <- context.Cause(r.Context())
 		return nil, r.Context().Err()
 	}))
 
@@ -675,6 +842,9 @@ func TestDeactivateCancelsInflightRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	receiveWithin(t, done, "canceled in-flight request")
+	if cause := receiveWithin(t, causes, "cancel cause"); !errors.Is(cause, errActorDeactivated) {
+		t.Errorf("in-flight request canceled with %v, want %v", cause, errActorDeactivated)
+	}
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
@@ -872,6 +1042,54 @@ func writeCredentialBundle(t *testing.T, path string, cert tls.Certificate) {
 	bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})...)
 	if err := os.WriteFile(path, bundle, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestMutualTLSClientAuthenticationReloadsTrustBundle verifies that a client
+// certificate chaining to a CA added to the trust bundle after the server
+// started is accepted on the next handshake, without a restart.
+func TestMutualTLSClientAuthenticationReloadsTrustBundle(t *testing.T) {
+	dir := t.TempDir()
+	ca := newTestCA(t)
+	serverCert := ca.issue(t, "", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	bundlePath := filepath.Join(dir, "server.pem")
+	trustPath := filepath.Join(dir, "trust.pem")
+	writeCredentialBundle(t, bundlePath, serverCert)
+	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	upstream, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewServer(Config{
+		CredentialBundlePath: bundlePath,
+		TrustBundlePath:      trustPath,
+		AllowedClientID:      "spiffe://cluster.local/ns/ate-system/sa/atenet-router",
+		Upstream:             upstream,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rotatedCA := newTestCA(t)
+	rotatedClientCert := rotatedCA.issue(t, "spiffe://cluster.local/ns/ate-system/sa/atenet-router", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
+
+	clientConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true, // Test only the server's client authentication here.
+		Certificates:       []tls.Certificate{rotatedClientCert},
+	}
+	if serverErr, clientErr := tlsHandshake(s.tlsConfig, clientConfig); serverErr == nil && clientErr == nil {
+		t.Fatalf("handshake with a not-yet-trusted CA succeeded, want it rejected before the rotation")
+	}
+
+	if err := os.WriteFile(trustPath, append(ca.certPEM, rotatedCA.certPEM...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if serverErr, clientErr := tlsHandshake(s.tlsConfig, clientConfig); serverErr != nil || clientErr != nil {
+		t.Fatalf("server error = %v, client error = %v, want the rotated CA accepted", serverErr, clientErr)
 	}
 }
 

@@ -48,7 +48,7 @@ func toAteletResources(r *ateapipb.Resources) (*ateletpb.ResourceLimits, error) 
 
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;
 // container env is copied verbatim.
-func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor) (*ateletpb.WorkloadSpec, error) {
+func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor, volumePublishContexts map[string]map[string]string) (*ateletpb.WorkloadSpec, error) {
 	workloadSpec := &ateletpb.WorkloadSpec{}
 
 	// Convert volumes to atelet's representation.  ActorTemplate validation has
@@ -57,10 +57,8 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 		switch {
 		case vol.GetDurableDir() != nil:
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
-				Name: vol.GetName(),
-				Source: &ateletpb.Volume_DurableDir{
-					DurableDir: &ateletpb.DurableDirVolume{},
-				},
+				Name:       vol.GetName(),
+				DurableDir: &ateletpb.DurableDirVolume{},
 			})
 
 		case vol.GetSystemInfo() != nil:
@@ -76,19 +74,15 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 						})
 					}
 					ateletSystemInfo.DataSources = append(ateletSystemInfo.DataSources, &ateletpb.SystemInfoDataSource{
-						DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
-							ActorMetadata: actorMetadata,
-						},
+						ActorMetadata: actorMetadata,
 					})
 				case dataSource.GetTrustBundle() != nil:
 					// atelet resolves named trustBundles against its allowlist
 					// and ClusterTrustBundle informer at write time
 					ateletSystemInfo.DataSources = append(ateletSystemInfo.DataSources, &ateletpb.SystemInfoDataSource{
-						DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
-							TrustBundle: &ateletpb.TrustBundleDataSource{
-								Name: dataSource.GetTrustBundle().GetName(),
-								Path: dataSource.GetTrustBundle().GetPath(),
-							},
+						TrustBundle: &ateletpb.TrustBundleDataSource{
+							Names: dataSource.GetTrustBundle().GetNames(),
+							Path:  dataSource.GetTrustBundle().GetPath(),
 						},
 					})
 				default:
@@ -96,19 +90,15 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 				}
 			}
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
-				Name: vol.GetName(),
-				Source: &ateletpb.Volume_SystemInfo{
-					SystemInfo: ateletSystemInfo,
-				},
+				Name:       vol.GetName(),
+				SystemInfo: ateletSystemInfo,
 			})
 
 		case vol.GetImage() != nil:
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name: vol.GetName(),
-				Source: &ateletpb.Volume_Image{
-					Image: &ateletpb.ImageVolumeSource{
-						Reference: vol.GetImage().GetReference(),
-					},
+				Image: &ateletpb.ImageVolumeSource{
+					Reference: vol.GetImage().GetReference(),
 				},
 			})
 
@@ -119,7 +109,7 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 
 	// TODO: order may be important for nested mounts. Also need to think about
 	// nested mount support in general.
-	if err := appendExternalVolumes(workloadSpec, actorTemplate, actor); err != nil {
+	if err := appendExternalVolumes(workloadSpec, actorTemplate, actor, volumePublishContexts); err != nil {
 		return nil, err
 	}
 
@@ -155,9 +145,11 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 	return workloadSpec, nil
 }
 
-// appendExternalVolumes maps template external volumes to resolved actor volumes and appends them to workloadSpec
-// if they are referenced in container volumeMounts.
-func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapipb.ActorTemplate, actor *ateapipb.Actor) error {
+// appendExternalVolumes maps template external volumes to resolved actor volumes
+// and appends them to workloadSpec if they are referenced in container
+// volumeMounts. volumePublishContexts carries the attachment metadata of the current
+// resume by volume name; it is nil on paths that do not mount.
+func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapipb.ActorTemplate, actor *ateapipb.Actor, volumePublishContexts map[string]map[string]string) error {
 	if template == nil {
 		return nil
 	}
@@ -173,8 +165,8 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapi
 			var storageVolID string
 			var volType string
 			var volCtx map[string]string
-			for _, dbVol := range actor.GetStatus().GetActorVolumes() {
-				if dbVol.GetVolumeName() == vol.GetName() {
+			for _, dbVol := range actor.GetStatus().GetExternalVolumes() {
+				if dbVol.GetName() == vol.GetName() {
 					storageVolID = dbVol.GetStorageVolumeId()
 					volType = dbVol.GetVolumeType()
 					volCtx = dbVol.GetVolumeContext()
@@ -186,12 +178,11 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapi
 			}
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name: vol.GetName(),
-				Source: &ateletpb.Volume_External{
-					External: &ateletpb.ExternalVolumeSource{
-						StorageVolumeId: storageVolID,
-						VolumeType:      volType,
-						VolumeContext:   volCtx,
-					},
+				External: &ateletpb.ExternalVolumeSource{
+					StorageVolumeId: storageVolID,
+					VolumeType:      volType,
+					VolumeContext:   volCtx,
+					PublishContext:  volumePublishContexts[vol.GetName()],
 				},
 			})
 		}
@@ -235,7 +226,7 @@ func toAteletWakeupProbe(in *ateapipb.ContainerWakeupProbe) *ateletpb.WakeupProb
 	}
 	out := &ateletpb.WakeupProbe{TimeoutSeconds: in.GetTimeoutSeconds()}
 	if in.GetHttpGet() != nil {
-		out.HttpGet = &ateletpb.HTTPGetAction{
+		out.HttpGet = &ateletpb.HttpGetAction{
 			Path: in.GetHttpGet().GetPath(),
 			Port: in.GetHttpGet().GetPort(),
 		}

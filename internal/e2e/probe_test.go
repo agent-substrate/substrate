@@ -22,10 +22,8 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// TestProbeTemplate_TrustBundle pins the opt-in. The bundle is derived from
-// one cluster-wide Secret, so a probe suite that does not ask for the
-// projection must not carry it: it would otherwise fail whenever the suite
-// that owns the pool finishes and takes the bundle with it.
+// TestProbeTemplate_TrustBundle checks that the probe template includes the
+// trust bundle only when a suite asks for it with WithTrustBundle.
 func TestProbeTemplate_TrustBundle(t *testing.T) {
 	t.Setenv(sandboxClassEnv, "")
 	for _, tc := range []struct {
@@ -66,8 +64,8 @@ func TestProbeTemplate_TrustBundle(t *testing.T) {
 			}
 			// The projected name must select the bundle atecontroller
 			// publishes, or actors fail closed on a name atelet rejects.
-			if !strings.HasPrefix(EgressTrustBundleObjectName, source.GetName()+":") {
-				t.Errorf("trustBundle name = %q, want the bundle backing %q", source.GetName(), EgressTrustBundleObjectName)
+			if names := source.GetNames(); len(names) != 1 || !strings.HasPrefix(EgressTrustBundleObjectName, names[0]+":") {
+				t.Errorf("trustBundle name = %q, want just the bundle backing %q", names, EgressTrustBundleObjectName)
 			}
 			if source.GetPath() == "" {
 				t.Error("trustBundle projection has no path")

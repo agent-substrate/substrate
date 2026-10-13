@@ -31,12 +31,12 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
-	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -74,12 +75,17 @@ var (
 	otelTracesSamplerArg = pflag.String("otel-traces-sampler-arg", os.Getenv("OTEL_TRACES_SAMPLER_ARG"),
 		"Trace sampler argument set on ateom worker pods, ignored unless --otel-traces-sampler is set. Defaults to the controller's own OTEL_TRACES_SAMPLER_ARG.")
 
+	otelLogsExporter = pflag.String("otel-logs-exporter", os.Getenv("OTEL_LOGS_EXPORTER"),
+		"Logs exporter set on ateom worker pods. Empty keeps the ateom binary's default, none. Defaults to the controller's own OTEL_LOGS_EXPORTER.")
+
 	ateletServiceAccount = pflag.String("atelet-service-account", installdefaults.AteletServiceAccount, "ServiceAccount atelet runs as. It is the service-account segment of the SPIFFE ID each worker's atunnel expects on the credential broker, so it has to match what the deployment actually creates.")
 	routerServiceAccount = pflag.String("router-service-account", installdefaults.RouterServiceAccount, "ServiceAccount atenet-router runs as. It is the service-account segment of the SPIFFE ID each worker's atunnel accepts on actor ingress, so it has to match what the deployment actually creates.")
 
 	ateapiCAFile     = pflag.String("ateapi-ca-file", ateapiauth.DefaultServiceAccountCAFile, "PEM file with CAs trusted to verify the ateapi server cert.")
 	ateapiServerName = pflag.String("ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
 	ateapiClientCert = pflag.String("ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required.")
+
+	workerSyncConcurrency = pflag.Int("worker-sync-concurrency", 2, "Number of concurrent worker goroutines reconciling worker pods into the Worker registry. Defaults to 2.")
 )
 
 func init() {
@@ -87,12 +93,47 @@ func init() {
 	utilruntime.Must(clientv1alpha1.AddToScheme(scheme)) // Register our CRD
 }
 
-const serviceName = "atecontroller"
+const (
+	serviceName = "atecontroller"
+
+	// metricsPullAddr is the manager's metrics listener, and metricsOffAddr
+	// turns it off.
+	metricsPullAddr = ":8080"
+	metricsOffAddr  = "0"
+)
 
 // logr verbosity V(n) maps to slog level -n, so V(1) stays below Info until
 // --log-level=debug. logr carries no context, so these records have no trace IDs.
 func newControllerRuntimeLogger(h slog.Handler) logr.Logger {
 	return logr.FromSlogHandler(h)
+}
+
+// metricsBindAddr is the manager's metrics address. servePull is whether
+// OTEL_METRICS_EXPORTER leaves the listener on.
+func metricsBindAddr(servePull bool) string {
+	if servePull {
+		return metricsPullAddr
+	}
+	return metricsOffAddr
+}
+
+// managerOptions configures the controller-runtime manager.
+func managerOptions(egressMITMCAPool types.NamespacedName, servePull bool) ctrl.Options {
+	return ctrl.Options{
+		Scheme:  scheme,
+		Metrics: metricsserver.Options{BindAddress: metricsBindAddr(servePull)},
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.Secret{}: {
+					Namespaces: map[string]cache.Config{
+						egressMITMCAPool.Namespace: {
+							FieldSelector: fields.OneTermEqualSelector("metadata.name", egressMITMCAPool.Name),
+						},
+					},
+				},
+			},
+		},
+	}
 }
 
 func main() {
@@ -109,6 +150,11 @@ func main() {
 	slog.InfoContext(ctx, "atecontroller starting", slog.String("version", version.Version))
 	ctrl.SetLogger(newControllerRuntimeLogger(slog.Default().Handler()))
 
+	if *workerSyncConcurrency <= 0 {
+		setupLog.Error(nil, "invalid flag", "flag", "--worker-sync-concurrency", "reason", "must be positive", "value", *workerSyncConcurrency)
+		os.Exit(1)
+	}
+
 	// Both providers must be registered before the ateapi client below:
 	// otelgrpc.NewClientHandler captures the global tracer and meter providers at
 	// construction, so a later init leaves it bound to the no-op ones.
@@ -122,14 +168,15 @@ func main() {
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
 	// controller-runtime records reconcile, workqueue, and runtime metrics into its
-	// own Prometheus registry, which the manager serves on a port nothing scrapes.
-	// Bridging it as a Producer puts them on the OTLP path instead.
-	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName,
-		prombridge.NewMetricProducer(prombridge.WithGatherer(ctrlmetrics.Registry)))
+	// own Prometheus registry. OTEL_METRICS_EXPORTER picks where they go: the
+	// OTLP push, which pads the bridged queue histograms so the Telemetry API
+	// accepts idle ones, and the manager's scrape listener.
+	mp, servePull, err := serverboot.InitMetricsBridged(ctx, serviceName, ctrlmetrics.Registry, padEmptyExponentialHistograms)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+	slog.InfoContext(ctx, "Metrics listener", slog.Bool("enabled", servePull), slog.String("addr", metricsBindAddr(servePull)))
 
 	k8sConfig := ctrl.GetConfigOrDie()
 	k8sClient, err := kubernetes.NewForConfig(k8sConfig)
@@ -176,20 +223,7 @@ func main() {
 	// EgressMITMTrustReconciler watches the Secret `egress-mitm-ca-pool`.
 	systemNamespace := installdefaults.NamespaceFromPodEnv()
 	egressMITMCAPool := controllers.EgressMITMCAPoolRef(systemNamespace)
-	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
-		Scheme: scheme,
-		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Secret{}: {
-					Namespaces: map[string]cache.Config{
-						egressMITMCAPool.Namespace: {
-							FieldSelector: fields.OneTermEqualSelector("metadata.name", egressMITMCAPool.Name),
-						},
-					},
-				},
-			},
-		},
-	})
+	mgr, err := ctrl.NewManager(k8sConfig, managerOptions(egressMITMCAPool, servePull))
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
@@ -203,11 +237,22 @@ func main() {
 		OTelMetricExportTimeout:  *otelMetricExportTimeout,
 		OTelTracesSampler:        *otelTracesSampler,
 		OTelTracesSamplerArg:     *otelTracesSamplerArg,
+		OTelLogsExporter:         *otelLogsExporter,
 		SystemNamespace:          systemNamespace,
 		AteletServiceAccount:     *ateletServiceAccount,
 		RouterServiceAccount:     *routerServiceAccount,
+		Recorder:                 mgr.GetEventRecorder("workerpool-controller"),
+		APIReader:                mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkerPool")
+		os.Exit(1)
+	}
+
+	if err = (&controllers.SandboxConfigProtectionReconciler{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SandboxConfigProtection")
 		os.Exit(1)
 	}
 
@@ -253,7 +298,7 @@ func main() {
 	// Start registers the informer event handlers, so it has to run before the
 	// factory does: the initial list then synthesizes an Add for every pod that
 	// already exists, and no explicit startup re-list is needed.
-	workersync.NewWorkerPoolSyncer(ateapiClient, workerPodInformer, workerPoolInformer.Informer()).Start(runCtx)
+	workersync.NewWorkerPoolSyncer(ateapiClient, k8sClient.CoreV1(), workerPodInformer, workerPoolInformer.Informer(), *workerSyncConcurrency).Start(runCtx)
 
 	workerPodInformerFactory.Start(runCtx.Done())
 	ateFactory.Start(runCtx.Done())

@@ -31,7 +31,9 @@ The [Quickstart (Development)](README.md#quickstart-development) in the README
 covers bringing up a local cluster with the default (gVisor) runtime. To run
 the microVM runtime locally — which needs `/dev/kvm`, or Lima nested
 virtualization on Apple Silicon — see
-[docs/dev/microvm-local.md](docs/dev/microvm-local.md).
+[docs/dev/microvm-local.md](docs/dev/microvm-local.md). To measure where a
+suspend or resume spends its time on such a cluster, follow
+[docs/dev/suspend-resume-phase-breakdown.md](docs/dev/suspend-resume-phase-breakdown.md).
 
 ## Contribution process
 
@@ -87,6 +89,8 @@ All code changes should be accompanied by tests. We will not merge code that
 does not have tests, and we will not merge code that causes tests to fail.
 
 Follow the [PostgreSQL schema evolution rules](docs/dev/postgresql-schema-evolution.md) for each application schema change.
+
+Each pull request title becomes its line in the [release notes](docs/dev/release-notes.md).
 
 ### Root-gated tests
 

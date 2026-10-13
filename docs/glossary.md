@@ -9,7 +9,9 @@ For how the pieces fit together, see the [Architecture](architecture.md) and
 
 - **ActorTemplate** (ate API resource): the definition of an actor "class":
   the container image(s) and snapshot configuration. Creating an
-  `ActorTemplate` triggers creation of a [Golden Snapshot](#snapshots). It is
+  `ActorTemplate` triggers creation of a [Golden Snapshot](#snapshots) by
+  default. Set `snapshotConfig.goldenSnapshotConfig.mode` to
+  `GOLDEN_SNAPSHOT_MODE_DISABLED` to skip it. The template is
   treated as immutable: you create a new template for a new version rather
   than editing an existing one. It is analogous to a Pod template, but for a
   checkpointable workload. ActorTemplates are created and managed through the
@@ -94,7 +96,7 @@ for etcd.
 ## Volumes
 
 - **DurableDir volume**: a directory mounted into one or more containers
-  whose contents are preserved by the [`Data` snapshot scope](#snapshots)
+  whose contents are preserved by the [`VOLUMES` snapshot fidelity](#snapshots)
   and therefore survive across Suspend/Resume independently of process
   memory or other rootfs writes. A volume may be mounted into multiple
   containers, potentially at different paths. This is the per-Actor
@@ -108,47 +110,35 @@ for etcd.
 
 ## Snapshots
 
-- **Snapshot scope**: what an `ActorTemplate`'s `SnapshotConfig` includes
-  in a given snapshot. Two scopes exist today:
-  - **`Full`**: process memory plus the rootfs delta on top of the OCI
-    image, and any attached `DurableDir` volumes. Used to capture
-    everything needed to resume hot.
-  - **`Data`**: only the contents of attached volumes that support
-    snapshots — currently `DurableDir` volumes. Process memory and the
-    rest of rootfs are discarded. Used to persist application data
-    cheaply without the cost of a full memory image. How the Actor comes
-    back on Resume is governed by the
-    [Resume sources](#snapshots) (`onResume.fromData`): cold-boot by
-    default, or combined with the [Golden Snapshot](#snapshots).
+- **Snapshot fidelity**: the state layers a snapshot holds, ordered lowest
+  to highest; each level includes the ones below it.
+  - **`VOLUMES`**: only the contents of attached volumes that support
+    snapshots — currently `DurableDir` volumes. Process memory and rootfs
+    changes are discarded. Used to persist application data cheaply
+    without the cost of a memory image. On Resume the containers start
+    afresh from the OCI image with the `DurableDir` contents restored.
+  - **`ROOTFS`**: volumes plus the root filesystem changes made since boot.
+    Process memory is discarded; on Resume the containers cold-boot from the
+    OCI image with their rootfs writes back in place. Served by the micro-VM
+    sandbox class only: gVisor keeps rootfs changes inside its memory
+    checkpoint, so a gVisor template that requests it is rejected.
+  - **`MEMORY`**: volumes, rootfs changes, and process memory. Used to
+    capture everything needed to resume hot.
 
-  Scopes describe only what a snapshot *captures*. They are configured
-  per-trigger via `onPause` and `onCommit`: `onPause` selects what is
-  captured during a [Pause](#lifecycle) (kept on the node), and
-  `onCommit` selects what is captured during a [Suspend](#lifecycle)
-  (uploaded to snapshot storage). `onCommit` must be a subset of
-  `onPause`.
+  Fidelity describes only what a snapshot *holds*. A template sets one
+  level, `preferredFidelity`, the ceiling for every snapshot of its actors:
+  the node-local checkpoint a [Pause](#lifecycle) keeps on the node and the
+  snapshot a [Suspend](#lifecycle) uploads to snapshot storage. It is best
+  effort: the system never packages more than that level, and may package
+  less when a layer cannot be captured or is too expensive to capture at
+  the time. A process resumed in place keeps its memory regardless.
 
-- **Resume sources**: an `ActorTemplate`'s `onResume` block selects, per
-  snapshot situation, what supplies the guest state on Resume. Each field
-  names what is being resumed *from*; the value names the boot source.
-  `onResume.fromData` applies when the Resume uses a `Data`-scope snapshot
-  (from either trigger):
-  - **`ColdBoot`** (default): start the containers afresh from the OCI image
-    with the `DurableDir` contents restored.
-  - **`Golden`**: restore the template's [Golden Snapshot](#snapshots)
-    (process memory + rootfs delta) and serve the Actor's `DurableDir` data
-    to it, so the Actor resumes with the golden's warm state over its own
-    data. Currently `microvm`-only.
-
-  A still-valid `Full` snapshot always restores from its own content and is
-  not configurable here.
-
-- **Golden Snapshot**: the initial checkpoint captured once, when an
+- **Golden Snapshot**: the initial checkpoint normally captured once, when an
   `ActorTemplate` is created, from a temporary "golden" boot of the workload.
-  By default an Actor of that template is first restored from this shared
-  snapshot. It is always a `Full` capture, and under `onResume.fromData:
-  Golden` (see [Resume sources](#snapshots)) it also supplies the guest state
-  that an Actor's `Data` snapshot is combined with on Resume.
+  Templates with golden snapshot creation disabled do not create one. By
+  default an Actor of that template is first restored from this shared
+  snapshot when it is available; otherwise it cold-boots. It is always a
+  `MEMORY` capture.
 
 - **Last Snapshot**: the most recent per-Actor snapshot, written on Suspend and
   used to restore that specific Actor on the next Resume.

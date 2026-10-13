@@ -327,13 +327,38 @@ func TestValidateActorUpdate(t *testing.T) {
 	}, {
 		"set valid actor.status.worker_assignment, IPv4",
 		validInput(withStatus()),
-		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIp = "1.2.3.4" }))),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIps = []string{"1.2.3.4"} }))),
 		nil,
 	}, {
 		"set valid actor.status.worker_assignment, IPv6",
 		validInput(withStatus()),
-		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIp = "1234::5678" }))),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIps = []string{"1234::5678"} }))),
 		nil,
+	}, {
+		"set valid actor.status.worker_assignment, dual-stack",
+		validInput(withStatus()),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) {
+			wa.WorkerPodIps = []string{"1234::5678", "1.2.3.4"}
+		}))),
+		nil,
+	}, {
+		"invalid actor.status.worker_assignment.worker_pod_ips: two IPv6",
+		validInput(withStatus()),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) {
+			wa.WorkerPodIps = []string{"1234::5678", "1234::9"}
+		}))),
+		field.ErrorList{
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ips").Index(1), nil, ""),
+		},
+	}, {
+		"invalid actor.status.worker_assignment.worker_pod_ips: too many",
+		validInput(withStatus()),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) {
+			wa.WorkerPodIps = []string{"1.2.3.4", "1234::5678", "1.2.3.5"}
+		}))),
+		field.ErrorList{
+			field.TooMany(field.NewPath("status", "worker_assignment", "worker_pod_ips"), 3, 2).WithOrigin("maxItems"),
+		},
 	}, {
 		"clear actor.status.worker_assignment",
 		validInput(withStatus(withWorkerAssignment())),
@@ -354,7 +379,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pool"), ""),
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pod"), ""),
 			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_uid"), ""),
-			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_ip"), ""),
+			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_ips"), ""),
 			field.Required(field.NewPath("status", "worker_assignment", "node_name"), ""),
 		},
 	}, {
@@ -366,7 +391,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			wa.WorkerPool = "invalid pool"
 			wa.WorkerPod = "invalid pod"
 			wa.WorkerPodUid = "invalid UUID"
-			wa.WorkerPodIp = "invalid IP"
+			wa.WorkerPodIps = []string{"invalid IP"}
 			wa.NodeName = "invalid node"
 		}))),
 		field.ErrorList{
@@ -376,171 +401,249 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pool"), nil, "").WithOrigin("format=k8s-long-name"),
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod"), nil, "").WithOrigin("format=k8s-long-name"),
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid"),
-			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ips").Index(0), nil, "").WithOrigin("format=ip-strict"),
 			field.Invalid(field.NewPath("status", "worker_assignment", "node_name"), nil, "").WithOrigin("format=k8s-long-name"),
 		},
 	}, {
 		// because we have manual IP format validation, let's be sure
-		"invalid actor.status.worker_assignment_worker_pod_ip: leading 0s",
+		"invalid actor.status.worker_assignment.worker_pod_ips: leading 0s",
 		validInput(),
-		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIp = "001.002.003.004" }))),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIps = []string{"001.002.003.004"} }))),
 		field.ErrorList{
-			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ips").Index(0), nil, "").WithOrigin("format=ip-strict"),
 		},
 	}, {
 		// because we have manual IP format validation, let's be sure
-		"invalid actor.status.worker_assignment_worker_pod_ip: non-canonical",
+		"invalid actor.status.worker_assignment.worker_pod_ips: non-canonical",
 		validInput(),
-		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIp = "0012::0034" }))),
+		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIps = []string{"0012::0034"} }))),
 		field.ErrorList{
-			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ips").Index(0), nil, "").WithOrigin("format=ip-strict"),
 		},
 	}, {
-		"valid actor.status.in_progress_snapshot_uri",
+		"valid actor.status.assigned_node",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.InProgressSnapshotUri = "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1"
+			s.AssignedNode = "node-1"
 		})),
 		nil,
 	}, {
-		"invalid actor.status.in_progress_snapshot_uri: too long",
+		"invalid actor.status.assigned_node",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.InProgressSnapshotUri = "gs://" + strings.Repeat("x", 2044)
+			s.AssignedNode = "NOT A NODE"
 		})),
-		field.ErrorList{field.TooLong(field.NewPath("status", "in_progress_snapshot_uri"), nil, 2048).WithOrigin("maxLength")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "assigned_node"), nil, "").WithOrigin("format=k8s-long-name")},
 	}, {
-		"valid actor.status.external_snapshot",
+		"valid actor.status.last_assigned_generation",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{
-				SnapshotUri:  "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1",
-				ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			}
+			s.LastAssignedGeneration = 1
 		})),
 		nil,
 	}, {
-		"valid actor.status.external_snapshot.actor_template_uid",
+		"increasing actor.status.last_assigned_generation",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 2
+		})),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 3
+		})),
+		nil,
+	}, {
+		"unchanged actor.status.last_assigned_generation",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 3
+		})),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 3
+		})),
+		nil,
+	}, {
+		"decreasing actor.status.last_assigned_generation",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 3
+		})),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 1
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "last_assigned_generation"), nil, "").WithOrigin("monotonic")},
+	}, {
+		"unsetting actor.status.last_assigned_generation",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 3
+		})),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 0
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "last_assigned_generation"), nil, "").WithOrigin("update")},
+	}, {
+		"negative actor.status.last_assigned_generation",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "01234567-89ab-cdef-0123-456789abcdef"}
+			s.LastAssignedGeneration = -1
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "last_assigned_generation"), nil, "").WithOrigin("minimum")},
+	}, {
+		"valid actor.status.snapshots with durable object snapshot",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot()}
+		})),
+		nil,
+	}, {
+		"valid actor.status.snapshots actor_template_uid",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.ActorTemplateUid = "01234567-89ab-cdef-0123-456789abcdef"
+			})}
 		})),
 		nil,
 	}, {
 		// Each suspend restamps the UID of the template the snapshot was captured under.
-		"changing actor.status.external_snapshot.actor_template_uid is allowed",
+		"changing actor.status.snapshots.actor_template_uid is allowed",
 		validInput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "01234567-89ab-cdef-0123-456789abcdef"}
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.ActorTemplateUid = "01234567-89ab-cdef-0123-456789abcdef"
+			})}
 		})),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "fedcba98-7654-3210-fedc-ba9876543210"}
-		})),
-		nil,
-	}, {
-		"invalid actor.status.external_snapshot.actor_template_uid",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "not-a-uuid"}
-		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "external_snapshot", "actor_template_uid"), nil, "").WithOrigin("format=k8s-uuid")},
-	}, {
-		"valid actor.status.local_snapshot.snapshot_name",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{SnapshotName: "snap-1"}
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.ActorTemplateUid = "fedcba98-7654-3210-fedc-ba9876543210"
+			})}
 		})),
 		nil,
 	}, {
-		"invalid actor.status.local_snapshot.snapshot_name",
+		"invalid actor.status.snapshots.actor_template_uid",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{SnapshotName: "SNAP 1"}
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.ActorTemplateUid = "not-a-uuid"
+			})}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("actor_template_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
-		"invalid actor.status.local_snapshot.node_vms entry",
+		"valid actor.status.snapshots uuid and locality",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{NodeVmsWithLocalSnapshots: []string{"node-1", "NOT A NODE"}}
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Uuid = "snap-1"
+				snap.Locality = "node-1"
+			})}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "node_vms_with_local_snapshots").Index(1), nil, "").WithOrigin("format=k8s-long-name")},
+		nil,
 	}, {
-		"too many actor.status.local_snapshot.node_vms entries",
+		"missing actor.status.snapshots.uuid",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			nodes := make([]string, 257)
-			for i := range nodes {
-				nodes[i] = fmt.Sprintf("node-%d", i)
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Uuid = ""
+			})}
+		})),
+		field.ErrorList{field.Required(field.NewPath("status", "snapshots").Index(0).Child("uuid"), "")},
+	}, {
+		"invalid actor.status.snapshots.uuid",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Uuid = "SNAP 1"
+			})}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("uuid"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid actor.status.snapshots.locality",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Locality = "NODE 1"
+			})}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("locality"), nil, "").WithOrigin("format=k8s-long-name")},
+	}, {
+		"duplicate actor.status.snapshots generation",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{
+				validSnapshot(func(snap *ateapipb.Snapshot) { snap.Generation = 1 }),
+				validSnapshot(func(snap *ateapipb.Snapshot) { snap.Generation = 1 }),
 			}
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{NodeVmsWithLocalSnapshots: nodes}
 		})),
-		field.ErrorList{field.TooMany(field.NewPath("status", "local_snapshot", "node_vms_with_local_snapshots"), 257, 256).WithOrigin("maxItems")},
+		field.ErrorList{field.Duplicate(field.NewPath("status", "snapshots").Index(1), nil)},
 	}, {
-		"duplicate actor.status.local_snapshot.node_vms entry",
+		"valid actor.status.snapshots.fidelity",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{NodeVmsWithLocalSnapshots: []string{"node-1", "node-1"}}
-		})),
-		field.ErrorList{field.Duplicate(field.NewPath("status", "local_snapshot", "node_vms_with_local_snapshots").Index(1), nil)},
-	}, {
-		"valid actor.status.local_snapshot.content_scope",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+			})}
 		})),
 		nil,
 	}, {
-		"negative actor.status.local_snapshot.content_scope",
+		"missing actor.status.snapshots.fidelity",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope(-1)}
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+			})}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "content_scope"), nil, "").WithOrigin("minimum")},
+		field.ErrorList{field.Required(field.NewPath("status", "snapshots").Index(0).Child("fidelity"), "")},
 	}, {
-		"invalid actor.status.local_snapshot.content_scope",
+		"negative actor.status.snapshots.fidelity",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope(3)}
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Fidelity = ateapipb.SnapshotFidelity(-1)
+			})}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "content_scope"), nil, "").WithOrigin("maximum")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("fidelity"), nil, "").WithOrigin("minimum")},
 	}, {
-		"too many actor_volumes",
+		"invalid actor.status.snapshots.fidelity",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Fidelity = ateapipb.SnapshotFidelity(4)
+			})}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("fidelity"), nil, "").WithOrigin("maximum")},
+	}, {
+		"too many external_volumes",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			vols := make([]*ateapipb.ExternalVolume, 33)
 			for i := range vols {
-				vols[i] = &ateapipb.ExternalVolume{VolumeName: fmt.Sprintf("vol-%d", i), VolumeType: "substrate.io/mock"}
+				vols[i] = &ateapipb.ExternalVolume{Name: fmt.Sprintf("vol-%d", i), VolumeType: "substrate.io/mock"}
 			}
-			s.ActorVolumes = vols
+			s.ExternalVolumes = vols
 		})),
-		field.ErrorList{field.TooMany(field.NewPath("status", "actor_volumes"), 33, 32).WithOrigin("maxItems")},
+		field.ErrorList{field.TooMany(field.NewPath("status", "external_volumes"), 33, 32).WithOrigin("maxItems")},
 	}, {
 		// Set-once fields permit the nil->set transition, so a volume added
 		// in an update validates like one added at creation.
 		"adding a volume on update is allowed",
 		validInput(withStatus()),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: "substrate.io/mock"}}
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
 		nil,
 	}, {
-		"duplicate actor_volumes volume_name",
+		"duplicate external_volumes name",
 		validInput(withStatus()),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{
-				{VolumeName: "vol-a", VolumeType: "substrate.io/mock"},
-				{VolumeName: "vol-a", VolumeType: "substrate.io/mock"},
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{
+				{Name: "vol-a", VolumeType: "substrate.io/mock"},
+				{Name: "vol-a", VolumeType: "substrate.io/mock"},
 			}
 		})),
-		field.ErrorList{field.Duplicate(field.NewPath("status", "actor_volumes").Index(1), nil)},
+		field.ErrorList{field.Duplicate(field.NewPath("status", "external_volumes").Index(1), nil)},
 	}, {
 		"provisioning transition on an existing volume is valid",
 		validInput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: "substrate.io/mock", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
 		})),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{
-				VolumeName:      "vol-a",
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{
+				Name:            "vol-a",
 				VolumeType:      "substrate.io/mock",
 				StorageVolumeId: "csi-426d29b7",
 				Status:          ateapipb.ExternalVolume_STATUS_CREATED,
@@ -548,11 +651,6 @@ func TestValidateActorUpdate(t *testing.T) {
 			}}
 		})),
 		nil,
-	}, {
-		"invalid actor.status.in_progress_local_snapshot_name",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressLocalSnapshotName = "BAD NAME" })),
-		field.ErrorList{field.Invalid(field.NewPath("status", "in_progress_local_snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -989,7 +1087,7 @@ func withActorWorkerAssignment(mods ...func(*ateapipb.WorkerAssignment)) func(*a
 			WorkerPool:      "pool",
 			WorkerPod:       "pod",
 			WorkerPodUid:    "12345678-1234-1234-1234-123456789abc",
-			WorkerPodIp:     "1.2.3.4",
+			WorkerPodIps:    []string{"1.2.3.4"},
 			NodeName:        "node1",
 		}
 		for _, m := range mods {
@@ -999,18 +1097,17 @@ func withActorWorkerAssignment(mods ...func(*ateapipb.WorkerAssignment)) func(*a
 }
 
 func TestValidateMintActorJWTRequest(t *testing.T) {
-	withExpiration := func(seconds int64) *ateapipb.MintActorJWTRequest {
-		return &ateapipb.MintActorJWTRequest{
+	withExpiration := func(seconds int64) *ateapipb.MintActorJwtRequest {
+		return &ateapipb.MintActorJwtRequest{
 			Actor:             &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-			ActorUid:          "0f8fad5b-d9cb-469f-a165-70867728950e",
-			Audience:          []string{"https://example.com"},
+			Audiences:         []string{"https://example.com"},
 			ExpirationSeconds: seconds,
 		}
 	}
 	path := field.NewPath("expiration_seconds")
 	tests := []struct {
 		name string
-		req  *ateapipb.MintActorJWTRequest
+		req  *ateapipb.MintActorJwtRequest
 		want field.ErrorList
 	}{
 		{name: "minimum expiration", req: withExpiration(300)},

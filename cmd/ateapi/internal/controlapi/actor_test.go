@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
@@ -37,7 +38,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -217,7 +217,7 @@ func TestUpdateActor(t *testing.T) {
 			updated, err := svc.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{Actor: tt.req})
 
 			if tt.wantCode != codes.OK {
-				if code := status.Code(err); code != tt.wantCode {
+				if code := apierror.Code(err); code != tt.wantCode {
 					t.Errorf("UpdateActor error = %v (code %v), want code %v", err, code, tt.wantCode)
 				}
 				return
@@ -295,7 +295,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "absent"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor to an absent template = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -304,7 +304,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-c"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor to a template with different mounts = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -313,7 +313,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-d"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor to a template with different volumes = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -322,7 +322,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-e"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor to a template with a different sandbox config = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -369,7 +369,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      running.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor repointing a running actor = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -488,14 +488,14 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			template:  "same-location",
 			snapshot:  unparseableSnapshot,
 			repointTo: "different-location",
-			wantCode:  codes.Unknown,
+			wantCode:  codes.Internal,
 		},
 		{
 			name:      "invalid storage location on the new template",
 			template:  "same-location",
 			snapshot:  snapshotOwnedByActor,
 			repointTo: "corrupt",
-			wantCode:  codes.Unknown,
+			wantCode:  codes.Internal,
 		},
 	}
 	svc := &RPCService{impl: newServiceImpl(persistence, nil)}
@@ -509,7 +509,10 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			if tt.snapshot != nil {
 				uri := tt.snapshot(t, actor)
 				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-					s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri}
+					s.LastAssignedGeneration = 1
+					s.Snapshots = []*ateapipb.Snapshot{
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot", uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					}
 				})
 			}
 
@@ -517,7 +520,7 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 				Metadata:      actor.GetMetadata(),
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tt.repointTo},
 			}})
-			if got := status.Code(err); got != tt.wantCode {
+			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("UpdateActor to %s = %v, want %v (err: %v)", tt.repointTo, got, tt.wantCode, err)
 			}
 			if err == nil {
@@ -624,7 +627,7 @@ func TestValidateTemplateVolumesUnchanged(t *testing.T) {
 				t.Fatalf("validateVolumeMountsUnchanged() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err != nil {
-				if got := status.Code(err); got != codes.FailedPrecondition {
+				if got := apierror.Code(err); got != codes.FailedPrecondition {
 					t.Errorf("status code = %v, want FailedPrecondition", got)
 				}
 			}
@@ -684,7 +687,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	// The client asserts "only update the actor with uid A".
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: original})
-	if code := status.Code(err); code != codes.Aborted {
+	if code := apierror.Code(err); code != codes.Aborted {
 		t.Errorf("UpdateActor error = %v (code %v), want code Aborted: the actor holding uid %s was deleted mid-update",
 			err, code, original.GetMetadata().GetUid())
 	}
@@ -746,7 +749,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	// This update must fail: the racing update bumped the version.
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 	_, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: original})
-	if code := status.Code(err); code != codes.Aborted {
+	if code := apierror.Code(err); code != codes.Aborted {
 		t.Errorf("UpdateActor error = %v (code %v), want code Aborted: the guarded version moved under the update", err, code)
 	}
 
@@ -814,13 +817,13 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 				Status: &ateapipb.TagStatus{
 					ActorTemplateUid: tmpl.GetMetadata().GetUid(),
-					Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/ate-golden/tags/" + someActorUID, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+					Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), someActorUID, "gs://bucket/atespaces/ate-golden/tags/"+someActorUID, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 				},
 			}
 			wantCode := codes.OK
 			switch scenario {
 			case "missing":
-				wantCode = codes.NotFound
+				wantCode = codes.FailedPrecondition
 			case "pending":
 				tag.Status.Snapshot = nil
 				wantCode = codes.FailedPrecondition
@@ -828,7 +831,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				tag.Status.ActorTemplateUid = "other"
 				wantCode = codes.FailedPrecondition
 			case "data scope":
-				tag.Status.Snapshot.ContentScope = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+				tag.Status.Snapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 				wantCode = codes.FailedPrecondition
 			}
 			if scenario != "missing" {
@@ -845,7 +848,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			actor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor"}, ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}
 			if scenario == "explicit tag" {
 				tag.Metadata.Name = "explicit"
-				tag.Status.Snapshot.SnapshotUri = "gs://bucket/atespaces/ate-golden/tags/explicit"
+				tag.Status.Snapshot = newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "explicit", "gs://bucket/atespaces/ate-golden/tags/explicit", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 				if _, err := persistence.CreateTag(ctx, tag); err != nil {
 					t.Fatal(err)
 				}
@@ -853,14 +856,15 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			}
 			svc := &ServiceImpl{store: persistence}
 			created, err := svc.CreateActor(ctx, actor)
-			if status.Code(err) != wantCode {
+			if apierror.Code(err) != wantCode {
 				t.Fatalf("CreateActor = %v, want %v", err, wantCode)
 			}
 			if err != nil {
 				return
 			}
-			if got := created.GetStatus(); got.GetExternalSnapshot().GetSnapshotUri() != tag.GetStatus().GetSnapshot().GetSnapshotUri() || got.GetExternalSnapshot().GetActorTemplateUid() != tmpl.GetMetadata().GetUid() {
-				t.Fatalf("incorrect initial status: %v", got)
+			gotSnap := findLatestDurableSnapshot(created.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			if gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri() != tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) || gotSnap.GetActorTemplateUid() != tmpl.GetMetadata().GetUid() {
+				t.Fatalf("incorrect initial status: %v", created.GetStatus())
 			}
 			if scenario == "own snapshot" {
 				uri, err := resources.NewActorSnapshotURI(tmpl.GetSnapshotConfig().GetStorageLocation(), "team-a", created.GetMetadata().GetUid(), "snapshot")
@@ -868,7 +872,10 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 					t.Fatal(err)
 				}
 				if _, err := persistence.UpdateActor(ctx, resources.ActorRefFromActor(created), store.PreconditionFrom(created), func(db *ateapipb.Actor) error {
-					db.Status.ExternalSnapshot.SnapshotUri = uri.String()
+					db.Status.LastAssignedGeneration = 1
+					db.Status.Snapshots = []*ateapipb.Snapshot{
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					}
 					return nil
 				}); err != nil {
 					t.Fatal(err)

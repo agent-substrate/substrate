@@ -24,10 +24,10 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // withEpoch returns a modifier func (see validWorker) which sets the worker's
@@ -162,7 +162,7 @@ func TestUpdateWorker_EpochCannotDecrease(t *testing.T) {
 			seedEpochWorker(t, ctx, persistence, 3, 3)
 
 			_, err := raiseEpoch(t, ctx, svc, persistence, tc.to)
-			if got := status.Code(err); got != codes.InvalidArgument {
+			if got := apierror.Code(err); got != codes.InvalidArgument {
 				t.Fatalf("UpdateWorker() = %v (err %v), want %v", got, err, codes.InvalidArgument)
 			}
 			if got := mustGetWorker(t, ctx, persistence).GetEpoch(); got != 3 {
@@ -177,7 +177,10 @@ func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 	svc, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
-		a.Status.InProgressLocalSnapshotName = "partial-local-snapshot"
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-local-snapshot", ""),
+		}
 	})
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 	mustRaiseEpoch(t, ctx, svc, persistence, 2)
@@ -204,8 +207,8 @@ func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 	if got.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("actor worker assignment = %v, want it cleared", got.GetStatus().GetWorkerAssignment())
 	}
-	if got.GetStatus().GetInProgressLocalSnapshotName() != "" {
-		t.Errorf("in-progress local checkpoint not cleared: %v", got.GetStatus())
+	if gotSnap := snapshotAtLatestGeneration(got.GetStatus()); gotSnap.GetUuid() != "partial-local-snapshot" {
+		t.Errorf("in-progress local checkpoint = %q, want %q preserved", gotSnap.GetUuid(), "partial-local-snapshot")
 	}
 	if a := firstAssignment(t, persistence, apiWorkerName); a != nil {
 		t.Errorf("worker still hosts %v, want the assignment released", a)

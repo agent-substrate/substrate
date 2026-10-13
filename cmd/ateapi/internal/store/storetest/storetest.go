@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
@@ -80,6 +81,17 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 			t.Errorf("dropping PostgreSQL test database: %v", err)
 		}
 	})
+	// The server always wires a PolicyManager, so test stores do too.
+	fgaServer, err := authz.NewOpenFGAServer(pool)
+	if err != nil {
+		t.Fatalf("creating OpenFGA server: %v", err)
+	}
+	t.Cleanup(fgaServer.Close)
+	_, policyManager, err := authz.New(ctx, pool, fgaServer, nil)
+	if err != nil {
+		t.Fatalf("initializing OpenFGA authz: %v", err)
+	}
+	persistence.SetPolicyManager(policyManager)
 	return persistence
 }
 

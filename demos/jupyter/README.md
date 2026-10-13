@@ -22,7 +22,7 @@ For local development, Agent Substrate provides helper scripts to get a Kind clu
 2. **Install Agent Substrate core system to the Kind cluster:**
 
    ```bash
-   ./hack/install-ate-kind.sh --deploy-ate-system
+   ./hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
    ```
 
 3. **Deploy the Jupyter Notebook Demo:**

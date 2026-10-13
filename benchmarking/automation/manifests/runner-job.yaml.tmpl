@@ -142,10 +142,13 @@ spec:
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
           readOnly: true
+        # Requests only: the runner shares a dedicated load-test node with
+        # nothing else, and a limit would turn a transient marshalling spike
+        # at high user counts into an OOM kill mid-run.
         resources:
           requests:
-            cpu: "500m"
-            memory: "512Mi"
+            cpu: "${RUNNER_CPU}"
+            memory: "${RUNNER_MEMORY}"
       volumes:
       - name: servicedns-ca
         projected:

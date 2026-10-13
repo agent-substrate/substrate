@@ -59,7 +59,7 @@ const (
 
 // ClassifyLifecycleFailure maps an error from ResumeActor / SuspendActor /
 // PauseActor onto what to do about it. Unrecognized codes are recoverable
-// until proven otherwise: a wrapped atelet error arrives as Unknown.
+// until proven otherwise: a wrapped atelet error arrives as Internal.
 func ClassifyLifecycleFailure(err error) FailureAction {
 	s, ok := status.FromError(err)
 	if !ok {
@@ -81,8 +81,8 @@ func ClassifyLifecycleFailure(err error) FailureAction {
 		// budget, but losing every race in one burst is still a race.
 		return ReplaceIfPersistent
 	case codes.ResourceExhausted, codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
-		// Cluster-wide and load-dependent ("no free workers available", a
-		// restarting ate-api-server): every VU sees these at once, and the
+		// Cluster-wide and load-dependent ("no worker has room for the actor",
+		// a restarting ate-api-server): every VU sees these at once, and the
 		// replacement needs the capacity the original was denied.
 		return RetryLater
 	case codes.InvalidArgument, codes.PermissionDenied, codes.Unauthenticated, codes.Unimplemented:

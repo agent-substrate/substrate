@@ -101,15 +101,17 @@ func verifyClientOnSameNode(node *substratex509.PodIdentity) func(tls.Connection
 	}
 }
 
-// SetWorkerCapacity records what the calling worker says it has.
+// RegisterWorker registers the calling worker with the control plane: what the
+// worker says its capacity and sandbox runtimes are, in one
+// WorkerService.RegisterWorker call so capacity and runtimes land atomically.
 //
 // It returns the control plane's error unwrapped so the caller retries: a
 // worker reports once, so an accepted call is the only thing that puts
-// capacity on the Worker, and a Worker record the syncer has not created yet
-// is the ordinary reason for a first attempt to fail.
-func (s *ateomSupportServer) SetWorkerCapacity(ctx context.Context, req *ateletpb.SetWorkerCapacityRequest) (*ateletpb.SetWorkerCapacityResponse, error) {
+// capacity and runtimes on the Worker, and a Worker record the syncer has not
+// created yet is the ordinary reason for a first attempt to fail.
+func (s *ateomSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.RegisterWorkerRequest) (*ateletpb.RegisterWorkerResponse, error) {
 	// Identity comes only from the mTLS certificate, never from the request:
-	// a worker can report its own capacity and no one else's.
+	// a worker can report its own capacity and runtimes and no one else's.
 	workerIdentity, err := authenticatedWorkerIdentity(ctx)
 	if err != nil {
 		return nil, err
@@ -117,19 +119,24 @@ func (s *ateomSupportServer) SetWorkerCapacity(ctx context.Context, req *ateletp
 	// Reject malformed requests here rather than forwarding them for the
 	// control plane to reject after a round trip. After authentication, so an
 	// unauthenticated caller learns nothing but Unauthenticated.
-	if errs := apivalidation.ValidateSetWorkerCapacityRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateRegisterWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
-	if _, err := s.workers.SetWorkerCapacity(ctx, &ateapipb.SetWorkerCapacityRequest{
+	if _, err := s.workers.RegisterWorker(ctx, &ateapipb.RegisterWorkerRequest{
 		// Workers are global-scoped and named by their pod UID.
-		Worker:   &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
-		Capacity: toWorkerResources(req.GetCapacity()),
+		Worker:             &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
+		Capacity:           toWorkerResources(req.GetCapacity()),
+		DefaultRuntime:     toAteAPISandboxRuntime(req.GetDefaultRuntime()),
+		RestorableRuntimes: toAteAPISandboxRuntimes(req.GetRestorableRuntimes()),
 	}); err != nil {
 		return nil, err
 	}
-	slog.InfoContext(ctx, "Recorded worker capacity",
-		slog.String("pod_uid", workerIdentity.PodUID), slog.Any("capacity", req.GetCapacity()))
-	return &ateletpb.SetWorkerCapacityResponse{}, nil
+	slog.InfoContext(ctx, "Registered worker capacity and sandbox runtimes",
+		slog.String("pod_uid", workerIdentity.PodUID),
+		slog.Any("capacity", req.GetCapacity()),
+		slog.Any("default_runtime", req.GetDefaultRuntime()),
+		slog.Any("restorable_runtimes", req.GetRestorableRuntimes()))
+	return &ateletpb.RegisterWorkerResponse{}, nil
 }
 
 // toWorkerResources converts atelet's WorkerResources to the control plane's,
@@ -144,6 +151,33 @@ func toWorkerResources(in *ateletpb.WorkerResources) *ateapipb.WorkerResources {
 		for _, l := range r.GetLimits() {
 			out.Resources.Limits = append(out.Resources.Limits, &ateapipb.Limits{Name: l.GetName(), Quantity: l.GetQuantity()})
 		}
+	}
+	return out
+}
+
+// toAteAPISandboxRuntime converts atelet's SandboxRuntime to the control
+// plane's, which it mirrors field for field.
+func toAteAPISandboxRuntime(in *ateletpb.SandboxRuntime) *ateapipb.SandboxRuntime {
+	if in == nil {
+		return nil
+	}
+	out := &ateapipb.SandboxRuntime{SandboxClass: in.GetSandboxClass()}
+	if v := in.GetVersion(); v != nil {
+		out.Version = &ateapipb.VersionedSandboxCompat{SchemaVersion: v.GetSchemaVersion()}
+		for _, a := range v.GetAttributes() {
+			out.Version.Attributes = append(out.Version.Attributes, &ateapipb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
+		}
+	}
+	return out
+}
+
+func toAteAPISandboxRuntimes(in []*ateletpb.SandboxRuntime) []*ateapipb.SandboxRuntime {
+	if in == nil {
+		return nil
+	}
+	out := make([]*ateapipb.SandboxRuntime, 0, len(in))
+	for _, r := range in {
+		out = append(out, toAteAPISandboxRuntime(r))
 	}
 	return out
 }

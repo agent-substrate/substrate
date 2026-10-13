@@ -177,6 +177,26 @@ type Interface interface {
 	// in it).
 	DeleteAtespace(ctx context.Context, name string, precondition DeletePreconditions) (*ateapipb.Atespace, error)
 
+	// Creates the deployment-wide global access policy singleton.
+	CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error)
+	// Fetches the deployment-wide global access policy singleton.
+	GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.AccessPolicy, error)
+	// Transactionally updates the deployment-wide global access policy singleton
+	// when its current UID and version match the precondition.
+	UpdateGlobalAccessPolicy(ctx context.Context, precondition Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error)
+
+	// Creates the 1:1 access policy subresource for an existing Atespace.
+	CreateAtespaceAccessPolicy(ctx context.Context, name string, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error)
+	// Fetches an Atespace's access policy subresource. Returns ErrNotFound if missing.
+	GetAtespaceAccessPolicy(ctx context.Context, name string) (*ateapipb.AccessPolicy, error)
+	// Transactionally updates an Atespace's access policy when its current UID
+	// and version match the precondition.
+	UpdateAtespaceAccessPolicy(ctx context.Context, name string, precondition Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error)
+	// Deletes and returns an Atespace's access policy subresource. Returns
+	// ErrNotFound if missing, or ErrUIDConflict/ErrVersionConflict if
+	// precondition does not describe the policy the caller observed.
+	DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition DeletePreconditions) (*ateapipb.AccessPolicy, error)
+
 	// Stores a new ActorTemplate and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
 	// mutated. Returns ErrAlreadyExists if the (atespace, name) is taken.

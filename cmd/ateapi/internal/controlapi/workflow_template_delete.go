@@ -20,10 +20,10 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // DeleteActorTemplate executes the workflow to delete an ActorTemplate. The
@@ -46,9 +46,9 @@ func (w *ActorWorkflow) DeleteActorTemplate(ctx context.Context, templateRef res
 	// destroy them.
 	if err := precondition.Check(tmpl.GetMetadata()); err != nil {
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "ActorTemplate %s does not have uid %s", templateRef, precondition.UID)
+			return nil, apierror.Aborted("ActorTemplate %s does not have uid %s", templateRef, precondition.UID)
 		}
-		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		return nil, apierror.Aborted("concurrent update conflict, please retry")
 	}
 
 	// Both are named after the template's uid, in the reserved atespace.
@@ -70,7 +70,7 @@ func (w *ActorWorkflow) loadTemplateForDelete(ctx context.Context, templateRef r
 	tmpl, err := w.store.GetActorTemplate(ctx, templateRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "ActorTemplate %s not found", templateRef)
+			return nil, apierror.NotFound("ActorTemplate %s not found", templateRef)
 		}
 		return nil, fmt.Errorf("while getting actor template %s: %w", templateRef, err)
 	}
@@ -85,7 +85,7 @@ func (w *ActorWorkflow) ensureGoldenActorDeleted(ctx context.Context, goldenRef 
 	defer func() { err = done(err) }()
 
 	if _, err := w.DeleteActor(ctx, goldenRef, true, store.DeletePreconditions{}); err != nil {
-		if status.Code(err) == codes.NotFound {
+		if apierror.Code(err) == codes.NotFound {
 			markSkipped(ctx, "golden actor already deleted")
 			return nil
 		}
@@ -101,7 +101,7 @@ func (w *ActorWorkflow) ensureGoldenTagDeleted(ctx context.Context, goldenTagRef
 	defer func() { err = done(err) }()
 
 	if _, err := w.DeleteTag(ctx, goldenTagRef, store.DeletePreconditions{}); err != nil {
-		if status.Code(err) == codes.NotFound {
+		if apierror.Code(err) == codes.NotFound {
 			markSkipped(ctx, "golden tag already deleted")
 			return nil
 		}
@@ -119,13 +119,13 @@ func (w *ActorWorkflow) finalizeTemplateDeleted(ctx context.Context, templateRef
 	deleted, err := w.store.DeleteActorTemplate(ctx, templateRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "ActorTemplate %s not found", templateRef)
+			return nil, apierror.NotFound("ActorTemplate %s not found", templateRef)
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "ActorTemplate %s does not have uid %s", templateRef, precondition.UID)
+			return nil, apierror.Aborted("ActorTemplate %s does not have uid %s", templateRef, precondition.UID)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while deleting actor template from DB: %w", err)
 	}

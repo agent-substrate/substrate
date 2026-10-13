@@ -144,6 +144,12 @@ func doFetch(t *testing.T, origin string, headerParams ...string) map[string]str
 	for _, h := range headerParams {
 		query.Add("header", h)
 	}
+	return doFetchQuery(t, query)
+}
+
+// doFetchQuery drives the fetch handler with the given query parameters.
+func doFetchQuery(t *testing.T, query url.Values) map[string]string {
+	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/fetch?"+query.Encode(), nil)
 	rec := httptest.NewRecorder()
 	fetch(rec, req)
@@ -206,6 +212,51 @@ func TestFetchRejectsMalformedHeader(t *testing.T) {
 	resp := doFetch(t, origin.URL, "no-colon")
 	if !strings.Contains(resp["error"], "not <name>:<value>") {
 		t.Errorf("error = %q, want the malformed-header error", resp["error"])
+	}
+	if resp["status"] != "" {
+		t.Errorf("status = %q, want none", resp["status"])
+	}
+}
+
+// ?dial= moves only the connection: the URL's host still names the origin in
+// the Host header (and the SNI, for https), which is what lets a suite send a
+// ClientHello for an allowed name to an address that reaches nothing.
+func TestFetchDialsTheGivenAddress(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("host=" + r.Host))
+	}))
+	defer origin.Close()
+
+	resp := doFetchQuery(t, url.Values{
+		"url":   {"http://origin.invalid/"},
+		"roots": {"system"},
+		"dial":  {origin.Listener.Addr().String()},
+	})
+	if resp["error"] != "" {
+		t.Fatalf("fetch failed: %s", resp["error"])
+	}
+	if resp["status"] != "200" {
+		t.Errorf("status = %q, want 200", resp["status"])
+	}
+	if resp["body"] != "host=origin.invalid" {
+		t.Errorf("body = %q, want %q", resp["body"], "host=origin.invalid")
+	}
+}
+
+// A ?dial= without a port fails the fetch before anything is sent.
+func TestFetchRejectsMalformedDial(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("fetch sent the request despite a malformed dial parameter")
+	}))
+	defer origin.Close()
+
+	resp := doFetchQuery(t, url.Values{
+		"url":   {origin.URL},
+		"roots": {"system"},
+		"dial":  {"127.0.0.1"},
+	})
+	if !strings.Contains(resp["error"], "dial parameter") {
+		t.Errorf("error = %q, want the malformed-dial error", resp["error"])
 	}
 	if resp["status"] != "" {
 		t.Errorf("status = %q, want none", resp["status"])

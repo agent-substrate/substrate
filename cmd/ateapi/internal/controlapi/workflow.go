@@ -24,17 +24,17 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/actorevent"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/objectstore"
+	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/resources"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	grpcCodes "google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
@@ -110,14 +110,14 @@ type ActorWorkflow struct {
 	instruments          *Instruments
 	egressGatewayAddress string
 	pluginRegistry       VolumePluginRegistry
-	objectStore          objectstore.Store
+	objectStorePlugin    objectstorev1.ControlProviderClient
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
 //
-// objectStore may be nil, which leaves external snapshots in place instead of
-// copying and releasing them. Only tests that never reach those steps pass nil;
-// ate-api always builds one.
+// objectStorePlugin may be nil, which leaves external snapshots in place instead
+// of copying and releasing them. Only tests that never reach those steps pass
+// nil; ate-api always builds one.
 func NewActorWorkflow(
 	store actorWorkflowStore,
 	workerCache *workercache.Cache,
@@ -127,7 +127,7 @@ func NewActorWorkflow(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	pluginRegistry VolumePluginRegistry,
-	objectStore objectstore.Store,
+	objectStorePlugin objectstorev1.ControlProviderClient,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:                store,
@@ -139,8 +139,22 @@ func NewActorWorkflow(
 		instruments:          instruments,
 		egressGatewayAddress: egressGatewayAddress,
 		pluginRegistry:       pluginRegistry,
-		objectStore:          objectStore,
+		objectStorePlugin:    objectStorePlugin,
 	}
+}
+
+// cleanupSnapshot deletes every object under prefix through the control
+// object-store plugin.
+func (w *ActorWorkflow) cleanupSnapshot(ctx context.Context, prefix resources.StoragePrefix) error {
+	_, err := w.objectStorePlugin.CleanupSnapshot(ctx, &objectstorev1.CleanupSnapshotRequest{SnapshotUri: prefix.String()})
+	return pluginsocket.CallError(err)
+}
+
+// copySnapshot copies every object under src to dst through the control
+// object-store plugin.
+func (w *ActorWorkflow) copySnapshot(ctx context.Context, src, dst resources.StoragePrefix) error {
+	_, err := w.objectStorePlugin.CopySnapshot(ctx, &objectstorev1.CopySnapshotRequest{SrcUri: src.String(), DstUri: dst.String()})
+	return pluginsocket.CallError(err)
 }
 
 // actorWorkflowStore enumerates the exact storage methods needed by
@@ -207,7 +221,7 @@ func acquireLease(ctx context.Context, holder leaseHolder, key, subject string) 
 	lease, err := holder.AcquireLease(ctx, key)
 	if err != nil {
 		if errors.Is(err, store.ErrLeaseConflict) {
-			return nil, nil, status.Errorf(grpcCodes.Aborted, "another operation is in progress for this %s", subject)
+			return nil, nil, apierror.Aborted("another operation is in progress for this %s", subject)
 		}
 		return nil, nil, fmt.Errorf("while acquiring lease: %w", err)
 	}

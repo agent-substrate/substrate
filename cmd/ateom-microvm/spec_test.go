@@ -24,10 +24,10 @@ import (
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"k8s.io/utils/ptr"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 )
 
@@ -114,7 +114,7 @@ func TestCheckResourceEnvelope(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Errorf("error %q does not mention %q", err, tc.wantErr)
 			}
-			if got := status.Code(err); got != codes.InvalidArgument {
+			if got := apierror.Code(err); got != codes.InvalidArgument {
 				t.Errorf("status code = %v, want InvalidArgument so a permanent misconfiguration does not read as a server fault", got)
 			}
 		})
@@ -136,7 +136,7 @@ func TestCheckResourceEnvelope_ErrorNamesActorLimitWhenDeclared(t *testing.T) {
 	if err == nil {
 		t.Fatal("checkResourceEnvelope() = nil, want an error")
 	}
-	if got := status.Code(err); got != codes.InvalidArgument {
+	if got := apierror.Code(err); got != codes.InvalidArgument {
 		t.Errorf("code = %v, want InvalidArgument", got)
 	}
 	for _, want := range []string{"hog", "1024", "256", "spec.resources.limits.memory"} {
@@ -163,7 +163,7 @@ func TestCheckResourceEnvelope_CPUErrorNamesCPULimitEvenWithDeclaredMemory(t *te
 	if err == nil {
 		t.Fatal("checkResourceEnvelope() = nil, want an error")
 	}
-	if got := status.Code(err); got != codes.InvalidArgument {
+	if got := apierror.Code(err); got != codes.InvalidArgument {
 		t.Errorf("code = %v, want InvalidArgument", got)
 	}
 	if !strings.Contains(err.Error(), "spec.resources.limits.cpu") {

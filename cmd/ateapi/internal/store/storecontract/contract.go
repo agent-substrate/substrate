@@ -110,8 +110,8 @@ func newTestActorTemplate(atespace, name string) *ateapipb.ActorTemplate {
 						}},
 					}},
 					{TrustBundle: &ateapipb.TrustBundleDataSource{
-						Name: "egress-mitm.ate.dev",
-						Path: "trust-bundle.pem",
+						Names: []string{"egress-mitm.ate.dev"},
+						Path:  "trust-bundle.pem",
 					}},
 				},
 			},
@@ -232,7 +232,7 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		policy := &ateapipb.EgressPolicy{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
 			Rules: []*ateapipb.EgressRule{{
-				Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
+				Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
 			}},
 		}
 
@@ -262,7 +262,7 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		updated, err := s.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(created), func(policy *ateapipb.EgressPolicy) error {
 			policy.Metadata.Atespace = "other"
 			policy.Metadata.Name = "other"
-			policy.Rules = []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}
+			policy.Rules = []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}
 			return nil
 		})
 		if err != nil || updated.GetMetadata().GetAtespace() != testAtespace || updated.GetMetadata().GetName() != "default" || updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
@@ -865,16 +865,34 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			Metadata:      &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace},
 			ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 			Status: &ateapipb.ActorStatus{
-				State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-				ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-1")},
+				State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+				LastAssignedGeneration: 1,
+				Snapshots: []*ateapipb.Snapshot{{
+					Generation: 1,
+					Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+					Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					DurableSnapshot: &ateapipb.SnapshotStorage{
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-1")},
+					},
+				}},
 			},
 		}
 		actor2 := &ateapipb.Actor{
 			Metadata:      &ateapipb.ResourceMetadata{Name: "id2", Atespace: testAtespace},
 			ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 			Status: &ateapipb.ActorStatus{
-				State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-				ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-2")},
+				State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+				LastAssignedGeneration: 1,
+				Snapshots: []*ateapipb.Snapshot{{
+					Generation: 1,
+					Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+					Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					DurableSnapshot: &ateapipb.SnapshotStorage{
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-2")},
+					},
+				}},
 			},
 		}
 		if _, err := s.CreateActor(ctx, actor1); err != nil {
@@ -1137,25 +1155,31 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 	})
 }
 
-// newTestSuspendedActor builds an actor that already holds an external
+// newTestSuspendedActor builds an actor that already holds a durable
 // snapshot, the state CreateTag tags from.
 func newTestSuspendedActor(atespace, name string) *ateapipb.Actor {
 	return &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
-			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{
-				SnapshotUri:  testActorSnapshotURI("gs://private", atespace, name),
-				ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			},
+			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{{
+				Generation: 1,
+				Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+				Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				DurableSnapshot: &ateapipb.SnapshotStorage{
+					Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					Object: &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://private", atespace, name)},
+				},
+			}},
 		},
 	}
 }
 
 // newTestInProgressTag builds the row CreateTag reserves for a
-// tag of actor: ATESPACE-scoped, with no snapshot yet and the destination of
-// the copy still to come derived from status.storage_location and its UID.
+// tag of actor: ATESPACE-scoped, with a PENDING snapshot naming where the
+// copy is going.
 func newTestInProgressTag(name string, actor *ateapipb.Actor) *ateapipb.Tag {
 	atespace := actor.GetMetadata().GetAtespace()
 	return &ateapipb.Tag{
@@ -1163,7 +1187,17 @@ func newTestInProgressTag(name string, actor *ateapipb.Actor) *ateapipb.Tag {
 		Scope:    ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		Status: &ateapipb.TagStatus{
 			ActorTemplateUid: "template-uid",
-			StorageLocation:  "gs://private",
+			Snapshot: &ateapipb.Snapshot{
+				Generation: 1,
+				Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
+				Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				DurableSnapshot: &ateapipb.SnapshotStorage{
+					Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+					Object: &ateapipb.ObjectSnapshot{
+						SnapshotUri: testTagSnapshotURI("gs://private", atespace, name),
+					},
+				},
+			},
 		},
 	}
 }
@@ -1171,7 +1205,7 @@ func newTestInProgressTag(name string, actor *ateapipb.Actor) *ateapipb.Tag {
 func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	t.Helper()
 
-	// seedSuspendedActor seeds an atespace and an actor holding an external
+	// seedSuspendedActor seeds an atespace and an actor holding a durable
 	// snapshot, the precondition every tag test starts from.
 	seedSuspendedActor := func(t *testing.T, s store.Interface, atespace, name string) *ateapipb.Actor {
 		t.Helper()
@@ -1204,10 +1238,10 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		if err != nil {
 			t.Fatalf("GetTag failed: %v", err)
 		}
-		// A reserved tag names where its copy is going and nothing else: it is
-		// not usable until the copy lands and finalize names it.
-		if tag.GetStatus().GetSnapshot() != nil {
-			t.Errorf("reserved tag snapshot = %v, want unset", tag.GetStatus().GetSnapshot())
+		// A reserved tag has a PENDING snapshot storage entry and is not
+		// usable until the copy lands and finalize marks it COMPLETED.
+		if got := tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetStatus(); got != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
+			t.Errorf("reserved tag snapshot storage status = %v, want PENDING", got)
 		}
 		if diff := cmp.Diff(inProgressTag, tag, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
 			t.Errorf("stored tag mismatch (-want +got):\n%s", diff)
@@ -1223,12 +1257,13 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		if err != nil {
 			t.Fatalf("finalizing tag failed: %v", err)
 		}
-		wantURI := testTagSnapshotURI(tag.GetStatus().GetStorageLocation(), "team-a", tag.GetMetadata().GetUid())
-		if got := ready.GetStatus().GetSnapshot().GetSnapshotUri(); got != wantURI {
-			t.Errorf("finalized tag snapshot uri = %q, want %q", got, wantURI)
+		wantURI := testTagSnapshotURI("gs://private", "team-a", "production")
+		gotURI := ready.GetStatus().GetSnapshot().GetDurableSnapshot().GetObject().GetSnapshotUri()
+		if gotURI != wantURI {
+			t.Errorf("finalized tag snapshot uri = %q, want %q", gotURI, wantURI)
 		}
-		if got := ready.GetStatus().GetStorageLocation(); got != tag.GetStatus().GetStorageLocation() {
-			t.Errorf("finalized tag storage location = %q, want unchanged", got)
+		if got := ready.GetStatus().GetSnapshot().GetDurableSnapshot().GetStatus(); got != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+			t.Errorf("finalized tag snapshot storage status = %v, want COMPLETED", got)
 		}
 
 		updated, err := s.UpdateTag(ctx, resources.TagRef{Atespace: "team-a", Name: "production"}, store.PreconditionFrom(ready), func(toUpdate *ateapipb.Tag) error {
@@ -1332,13 +1367,13 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 			{
 				name: "snapshot uri",
 				mutate: func(toUpdate *ateapipb.Tag) {
-					toUpdate.Status.Snapshot.SnapshotUri = "gs://private/elsewhere"
+					toUpdate.Status.Snapshot.DurableSnapshot.Object.SnapshotUri = "gs://private/elsewhere"
 				},
 			},
 			{
 				name: "snapshot content scope",
 				mutate: func(toUpdate *ateapipb.Tag) {
-					toUpdate.Status.Snapshot.ContentScope = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+					toUpdate.Status.Snapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 				},
 			},
 			{
@@ -1346,16 +1381,6 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 				mutate: func(toUpdate *ateapipb.Tag) {
 					toUpdate.Status.Snapshot = nil
 				},
-			},
-			{
-				name: "storage location",
-				mutate: func(toUpdate *ateapipb.Tag) {
-					toUpdate.Status.StorageLocation = "gs://elsewhere"
-				},
-			},
-			{
-				name:   "clearing the storage location",
-				mutate: func(toUpdate *ateapipb.Tag) { toUpdate.Status.StorageLocation = "" },
 			},
 			{
 				name:   "actor template uid",
@@ -1373,6 +1398,41 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 					t.Errorf("UpdateTag error = %v, want one matching store.ErrImmutableField", err)
 				}
 			})
+		}
+	})
+
+	t.Run("Tag_RecordSnapshotAfterReserve", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		actor := seedSuspendedActor(t, s, "team-a", "actor-1")
+		tagRef := resources.TagRef{Atespace: "team-a", Name: "production"}
+
+		// A tag's snapshot is keyed on the UID the store assigns, so the tag
+		// is reserved without one and the snapshot is recorded by an update.
+		input := newTestInProgressTag(tagRef.Name, actor)
+		pending := input.Status.Snapshot
+		input.Status.Snapshot = nil
+		reserved, err := s.CreateTag(ctx, input)
+		if err != nil {
+			t.Fatalf("CreateTag without a snapshot failed: %v", err)
+		}
+		recorded, err := s.UpdateTag(ctx, tagRef, store.PreconditionFrom(reserved), func(toUpdate *ateapipb.Tag) error {
+			toUpdate.Status.Snapshot = proto.CloneOf(pending)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("recording the snapshot of a reserved tag failed: %v", err)
+		}
+		if diff := cmp.Diff(pending, recorded.GetStatus().GetSnapshot(), protocmp.Transform()); diff != "" {
+			t.Errorf("recorded snapshot mismatch (-want +got):\n%s", diff)
+		}
+
+		// Once recorded, the snapshot is fixed like any other.
+		if _, err := s.UpdateTag(ctx, tagRef, store.PreconditionFrom(recorded), func(toUpdate *ateapipb.Tag) error {
+			toUpdate.Status.Snapshot.DurableSnapshot.Object.SnapshotUri = "gs://private/elsewhere"
+			return nil
+		}); !errors.Is(err, store.ErrImmutableField) {
+			t.Errorf("rewriting a recorded snapshot = %v, want one matching store.ErrImmutableField", err)
 		}
 	})
 
@@ -1494,12 +1554,9 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 }
 
 // finalizeTag mutates a reserved tag the way the tag workflow's second
-// transaction does: it names the copy that landed under the tag UID.
+// transaction does: it marks the pending snapshot storage COMPLETED.
 func finalizeTag(toUpdate *ateapipb.Tag) error {
-	toUpdate.Status.Snapshot = &ateapipb.ExternalSnapshot{
-		SnapshotUri:  testTagSnapshotURI(toUpdate.GetStatus().GetStorageLocation(), toUpdate.GetMetadata().GetAtespace(), toUpdate.GetMetadata().GetUid()),
-		ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-	}
+	toUpdate.Status.Snapshot.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 	return nil
 }
 
@@ -2077,10 +2134,9 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 	// over several of them is unambiguous about which were counted.
 	newTestAssignment := func(actorUID string, cpuMilli, memoryBytes int64) *ateapipb.ActorAssignment {
 		return &ateapipb.ActorAssignment{
-			ActorTemplateRef: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "test-template"},
-			Actor:            &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-" + actorUID},
-			ActorUid:         actorUID,
-			Resources:        resources.CPUMemory(cpuMilli, memoryBytes),
+			Actor:     &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-" + actorUID},
+			ActorUid:  actorUID,
+			Resources: resources.CPUMemory(cpuMilli, memoryBytes),
 		}
 	}
 
@@ -3169,7 +3225,7 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		created, err := s.CreateEgressPolicy(ctx, ref, withUnknownField(&ateapipb.EgressPolicy{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
 			Rules: []*ateapipb.EgressRule{withUnknownField(&ateapipb.EgressRule{
-				Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
+				Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
 			})},
 		}))
 		if err != nil {

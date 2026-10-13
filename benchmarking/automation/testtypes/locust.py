@@ -50,9 +50,19 @@ def job_tmpl(manifests_dir: str) -> str:
     return os.path.join(manifests_dir, "runner-job.yaml.tmpl")
 
 
+# Runner pod requests when a test sets none. Enough for the glutton and
+# sweperf suites at their usual user counts; a boomer-driven class at
+# thousands of users (agentsession marshals a 32Mi ingest payload per
+# in-flight op) needs runnerCpu / runnerMemory raised in tests.yaml.
+DEFAULT_RUNNER_CPU = "500m"
+DEFAULT_RUNNER_MEMORY = "512Mi"
+
+
 def job_subs(test: dict[str, Any]) -> dict[str, Any]:
     return {
         "TEST_FILE": test["file"],
         "DURATION": test["duration"],
         "USERS": test["users"],
+        "RUNNER_CPU": test.get("runnerCpu", DEFAULT_RUNNER_CPU),
+        "RUNNER_MEMORY": test.get("runnerMemory", DEFAULT_RUNNER_MEMORY),
     }

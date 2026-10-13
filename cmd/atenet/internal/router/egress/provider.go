@@ -81,16 +81,17 @@ func DialProvider(ctx context.Context, cfg ProviderDialConfig) (*grpc.ClientConn
 	return grpc.NewClient(cfg.Address, append(dialOpts, statsOpt)...)
 }
 
-// ProviderName reduces a configured provider — a ate-secret:// prefix such
-// as ate-secret://k8s.io — to the provider name (the URI host) the
-// handler compares credential URIs against, so a URI naming another provider
-// fails closed. An empty input returns an empty name, which disables the check
+// ProviderName validates a configured provider name, such as k8s.io: the host
+// of the credential URIs the gateway serves. An empty name disables the check
 // (dev only).
 func ProviderName(name string) (string, error) {
 	if name == "" {
 		return "", nil
 	}
-	return providerNameFromURI(name)
+	if got, err := providerNameFromURI(credentialURIScheme + "://" + name); err != nil || got != name {
+		return "", fmt.Errorf("%q is not a provider name such as k8s.io", name)
+	}
+	return name, nil
 }
 
 // providerNameFromURI returns the provider name of a ate-secret:// URI —

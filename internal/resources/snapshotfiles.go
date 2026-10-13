@@ -14,10 +14,30 @@
 
 package resources
 
-// DurableDirTarFile is the snapshot file holding the tar of the actor's
-// durable-dir volumes. atelet uploads it alone when a paused actor's FULL
-// capture is suspended as DATA.
-//
-// TODO: atelet should ask for the scope it wants and upload whatever files the
-// snapshot has, without knowing this name.
-const DurableDirTarFile = "durable-dir.tar"
+import (
+	"fmt"
+	"path/filepath"
+)
+
+// FSCheckpointSubdir is the subdirectory under the checkpoint directory where
+// filesystem checkpoint files are stored.
+const FSCheckpointSubdir = "fs"
+
+// ValidateSnapshotFileNames requires each name to be a distinct plain file name
+// in the checkpoint directory or its "fs" subdirectory. Actual file access must
+// still use os.Root so symlinks cannot escape that directory.
+func ValidateSnapshotFileNames(files []string) error {
+	seen := make(map[string]bool, len(files))
+	for i, name := range files {
+		dir := filepath.Dir(name)
+		base := filepath.Base(name)
+		switch {
+		case !filepath.IsLocal(name) || name != filepath.Clean(name) || base == "." || (dir != "." && dir != FSCheckpointSubdir):
+			return fmt.Errorf("snapshotFiles[%d] %q is not a file name in the checkpoint directory", i, name)
+		case seen[name]:
+			return fmt.Errorf("snapshotFiles[%d] %q is duplicated", i, name)
+		}
+		seen[name] = true
+	}
+	return nil
+}

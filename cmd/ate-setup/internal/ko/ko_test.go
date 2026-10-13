@@ -15,7 +15,10 @@
 package ko
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -66,11 +69,65 @@ func TestBuildVersionPrefersTheEnvironment(t *testing.T) {
 	}
 }
 
-// A source tarball has no git metadata, and the Makefile falls back to "dev"
+// A source tarball has no git metadata, so BuildVersion falls back to "dev"
 // there rather than stamping an empty version.
 func TestBuildVersionFallsBackToDev(t *testing.T) {
 	t.Setenv("VERSION", "")
 	if got := BuildVersion(t.TempDir()); got != "dev" {
 		t.Errorf("BuildVersion() = %q, want dev", got)
+	}
+}
+
+// fakeKo writes a ko stand-in that records its arguments, one per line, and
+// prints stdout.
+func fakeKo(t *testing.T, stdout string) (binary, argsFile string) {
+	t.Helper()
+	dir := t.TempDir()
+	argsFile = filepath.Join(dir, "args")
+	binary = filepath.Join(dir, "ko")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\nprintf '" + stdout + "'\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return binary, argsFile
+}
+
+// A release is only installable if every image carries the tag and the
+// --base-import-paths name that --image-repo looks it up by.
+func TestBuildTagged(t *testing.T) {
+	t.Setenv("VERSION", "v1.2.3")
+	binary, argsFile := fakeKo(t, "repo/ateapi:v1.2.3@sha256:a\\nrepo/atelet:v1.2.3@sha256:b\\n")
+	r := &Runner{Root: t.TempDir(), Stderr: os.Stderr, binary: binary}
+
+	refs, err := r.BuildTagged(t.Context(), "v1.2.3", "./cmd/ateapi", "./cmd/atelet")
+	if err != nil {
+		t.Fatalf("BuildTagged() error = %v", err)
+	}
+	if want := []string{"repo/ateapi:v1.2.3@sha256:a", "repo/atelet:v1.2.3@sha256:b"}; !slices.Equal(refs, want) {
+		t.Errorf("BuildTagged() = %q, want %q", refs, want)
+	}
+	raw, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Fields(string(raw))
+	if got := args[:3]; !slices.Equal(got, []string{"build", "./cmd/ateapi", "./cmd/atelet"}) {
+		t.Errorf("args[:3] = %v, want [build ./cmd/ateapi ./cmd/atelet]", got)
+	}
+	for _, want := range []string{"--tags=v1.2.3", "--base-import-paths"} {
+		if !slices.Contains(args, want) {
+			t.Errorf("args = %v, want %s", args, want)
+		}
+	}
+}
+
+// A ref missing from ko's output would leave a release short an image, so it
+// fails the build rather than printing an incomplete list.
+func TestBuildTaggedRejectsMissingRefs(t *testing.T) {
+	binary, _ := fakeKo(t, "repo/ateapi:v1@sha256:a\\n")
+	r := &Runner{Root: t.TempDir(), Stderr: os.Stderr, binary: binary}
+
+	if _, err := r.BuildTagged(t.Context(), "v1", "./cmd/ateapi", "./cmd/atelet"); err == nil {
+		t.Error("BuildTagged() error = nil, want one for 1 ref from 2 packages")
 	}
 }

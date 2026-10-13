@@ -14,8 +14,9 @@
 
 // Package serverboot collects the startup boilerplate shared by the
 // long-running substrate server binaries (ateapi, atelet, ateom-gvisor,
-// ateom-microvm): slog wiring, OTel tracer + meter providers, a Prometheus +
-// /readyz HTTP surface, and a couple of small helpers for startup fail-fast.
+// ateom-microvm): slog wiring, OTel tracer + meter providers, a Prometheus
+// /metrics server, a /readyz and /healthz server for the kubelet probes, and a
+// couple of small helpers for startup fail-fast.
 package serverboot
 
 import (
@@ -27,11 +28,14 @@ import (
 	"net/http"
 	"os"
 	"sync/atomic"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/google/uuid"
+	promclient "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -75,11 +79,6 @@ func SetLogLevel(level string) error {
 	}
 	return nil
 }
-
-// LogLevel exposes the level behind the serverboot loggers, for binaries
-// that build their own handler but should still honor --log-level. A
-// Leveler (not the LevelVar) so SetLogLevel stays the only mutation path.
-func LogLevel() slog.Leveler { return &logLevel }
 
 // serviceInstanceID is generated once so the tracer and meter resources share it.
 var serviceInstanceID = uuid.NewString()
@@ -176,57 +175,137 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(opts.Sampling.Sampler()),
 	}
-	expOpts := []otlptracegrpc.Option{
-		// GKE managed traces doesn't support validating the TLS certs of the collector.
-		otlptracegrpc.WithInsecure(),
+	// Without an exporter the provider still samples and propagates trace
+	// context, so a component that exports nothing keeps the traces of the
+	// components around it whole.
+	export := tracesPushEnabled(ctx)
+	if export {
+		expOpts := []otlptracegrpc.Option{
+			// GKE managed traces doesn't support validating the TLS certs of the collector.
+			otlptracegrpc.WithInsecure(),
+		}
+		if opts.ExporterConn != nil {
+			// WithGRPCConn takes precedence over endpoint/credential options, so
+			// WithInsecure above is inert on this path.
+			expOpts = append(expOpts, otlptracegrpc.WithGRPCConn(opts.ExporterConn))
+		}
+		exporter, err := otlptracegrpc.New(ctx, expOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create OTLP exporter: %w", err)
+		}
+		tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter))
 	}
-	if opts.ExporterConn != nil {
-		// WithGRPCConn takes precedence over endpoint/credential options, so
-		// WithInsecure above is inert on this path.
-		expOpts = append(expOpts, otlptracegrpc.WithGRPCConn(opts.ExporterConn))
-	}
-	exporter, err := otlptracegrpc.New(ctx, expOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("create OTLP exporter: %w", err)
-	}
-	tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter))
 
 	tp := sdktrace.NewTracerProvider(tpOpts...)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
-	slog.InfoContext(ctx, "Tracing initialized", slog.String("sampler", opts.Sampling.Sampler().Description()))
+	slog.InfoContext(ctx, "Tracing initialized",
+		slog.String("sampler", opts.Sampling.Sampler().Description()),
+		slog.Bool("export", export))
 	return tp, nil
+}
+
+const (
+	metricsExporterEnv = "OTEL_METRICS_EXPORTER"
+	tracesExporterEnv  = "OTEL_TRACES_EXPORTER"
+)
+
+// metricsExporters applies OTEL_METRICS_EXPORTER with the shared exporter
+// rules. prometheus, the specification's pull exporter, is known only when
+// pullServed, i.e. the component serves its own /metrics; elsewhere it is
+// skipped as unknown, so a push-only component keeps exporting. Unset selects
+// every exporter the component has.
+func metricsExporters(ctx context.Context, pullServed bool) Exporters {
+	known := []string{ExporterOTLP}
+	def := Exporters{ExporterOTLP: true}
+	if pullServed {
+		known = append(known, exporterPrometheus)
+		def[exporterPrometheus] = true
+	}
+	exporters := resolveExportersEnv(ctx, metricsExporterEnv, known, def)
+	slog.InfoContext(ctx, "Metrics exporters resolved", slog.String("exporters", exporters.String()))
+	return exporters
+}
+
+// metricsPushEnabled reports whether the OTLP reader is installed: while otlp
+// is selected, as it is when the variable is unset.
+func metricsPushEnabled(ctx context.Context, pullServed bool) bool {
+	return metricsExporters(ctx, pullServed).Has(ExporterOTLP)
+}
+
+// tracesPushEnabled applies OTEL_TRACES_EXPORTER with the shared exporter
+// rules: the OTLP span exporter is installed while otlp, the default, is
+// selected.
+func tracesPushEnabled(ctx context.Context) bool {
+	return resolveExportersEnv(ctx, tracesExporterEnv, []string{ExporterOTLP}, Exporters{ExporterOTLP: true}).Has(ExporterOTLP)
 }
 
 // InitMetrics registers a global MeterProvider with both a Prometheus
 // reader (exposed via StartMetricsServer's /metrics handler) and an
-// OTLP periodic reader. No Producer option, unlike InitMetricsPushOnly: a bridged
-// registry would be served twice, here and on its own endpoint.
+// OTLP periodic reader, the latter while OTEL_METRICS_EXPORTER selects otlp.
+// The Prometheus reader registers on the default registry.
 func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvider, error) {
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
 	}
-	promExporter, err := prometheus.New()
+	promReader, err := prometheus.New()
 	if err != nil {
 		return nil, fmt.Errorf("create Prometheus metric exporter: %w", err)
 	}
-	return newMeterProvider(ctx, serviceName, false, nil, nil, promExporter)
+	return newMeterProvider(ctx, serviceName, metricsPushEnabled(ctx, true), false, nil, nil, promReader)
 }
 
-// InitMetricsPushOnly is InitMetrics without the Prometheus reader, for binaries
-// that run no metrics HTTP server of their own (ateom, atecontroller): a pull
-// reader would collect into a registry nothing serves. producers put metrics
-// recorded outside the OTel SDK on the same push path; atecontroller bridges
-// controller-runtime's registry that way.
-func InitMetricsPushOnly(ctx context.Context, serviceName string, producers ...sdkmetric.Producer) (*sdkmetric.MeterProvider, error) {
-	return newMeterProvider(ctx, serviceName, false, nil, producers)
+// InitMetricsBridged is for a binary whose scraped endpoint serves a registry
+// it does not own (atecontroller: controller-runtime's), so every metric
+// reaches the backend exactly once on whichever path is active. With the OTLP
+// export, reg is bridged onto the push and the OTel instruments stay off it,
+// since the bridge would otherwise push them a second time. With prometheus
+// alone, nothing is pushed and the OTel instruments register on reg, so its
+// endpoint serves both.
+//
+// servePull reports whether OTEL_METRICS_EXPORTER leaves the scraped endpoint
+// on, which the caller must then serve from reg: unset, prometheus, or a list
+// with it. otlp and none turn it off, and with none no reader is installed.
+//
+// wrapProducer, when non-nil, wraps the bridge producer on the OTLP path, for
+// a rewrite the push backend needs but the scraped endpoint does not.
+func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
+	promclient.Registerer
+	promclient.Gatherer
+}, wrapProducer func(sdkmetric.Producer) sdkmetric.Producer) (mp *sdkmetric.MeterProvider, servePull bool, err error) {
+	if serviceName == "" {
+		return nil, false, fmt.Errorf("serviceName is required")
+	}
+	exporters := metricsExporters(ctx, true)
+	servePull = exporters.Has(exporterPrometheus)
+	switch {
+	case exporters.Has(ExporterOTLP):
+		producer := prombridge.NewMetricProducer(prombridge.WithGatherer(reg))
+		if wrapProducer != nil {
+			producer = wrapProducer(producer)
+		}
+		mp, err = newMeterProvider(ctx, serviceName, true, false, nil, []sdkmetric.Producer{producer})
+	case servePull:
+		var promReader *prometheus.Exporter
+		if promReader, err = prometheus.New(prometheus.WithRegisterer(reg)); err != nil {
+			return nil, false, fmt.Errorf("create Prometheus metric exporter: %w", err)
+		}
+		mp, err = newMeterProvider(ctx, serviceName, false, false, nil, nil, promReader)
+	default:
+		mp, err = newMeterProvider(ctx, serviceName, false, false, nil, nil)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return mp, servePull, nil
 }
 
-// InitMetricsPushOnlyVia is InitMetricsPushOnly with an explicit exporter
-// connection: the metrics counterpart of TracingOptions.ExporterConn. ateom
-// passes atelet's relay socket (internal/otlprelay) so the worker pod needs no
-// network path of its own; a nil conn keeps the direct dial to
-// OTEL_EXPORTER_OTLP_ENDPOINT.
+// InitMetricsPushOnlyVia is InitMetrics without the Prometheus reader, for a
+// binary that runs no metrics HTTP server of its own (ateom): a pull reader
+// would collect into a registry nothing serves. conn is the metrics counterpart
+// of TracingOptions.ExporterConn: ateom passes atelet's relay socket
+// (internal/otlprelay) so the worker pod needs no network path of its own; a
+// nil conn keeps the direct dial to OTEL_EXPORTER_OTLP_ENDPOINT.
 //
 // The caller owns the connection: the meter provider's Shutdown does not close
 // a connection it did not create.
@@ -236,38 +315,38 @@ func InitMetricsPushOnly(ctx context.Context, serviceName string, producers ...s
 // "direct" without one. It is the metrics counterpart of
 // TracingOptions.RelayCapable, implied rather than a parameter because only a
 // caller that has a relay to pass reaches for this function in the first place.
-func InitMetricsPushOnlyVia(ctx context.Context, serviceName string, conn *grpc.ClientConn, producers ...sdkmetric.Producer) (*sdkmetric.MeterProvider, error) {
-	return newMeterProvider(ctx, serviceName, true, conn, producers)
+func InitMetricsPushOnlyVia(ctx context.Context, serviceName string, conn *grpc.ClientConn) (*sdkmetric.MeterProvider, error) {
+	return newMeterProvider(ctx, serviceName, metricsPushEnabled(ctx, false), true, conn, nil)
 }
 
-func newMeterProvider(ctx context.Context, serviceName string, relayCapable bool, conn *grpc.ClientConn, producers []sdkmetric.Producer, extraReaders ...sdkmetric.Reader) (*sdkmetric.MeterProvider, error) {
+func newMeterProvider(ctx context.Context, serviceName string, push, relayCapable bool, conn *grpc.ClientConn, producers []sdkmetric.Producer, extraReaders ...sdkmetric.Reader) (*sdkmetric.MeterProvider, error) {
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
-	}
-	expOpts := []otlpmetricgrpc.Option{
-		// GKE managed metrics doesn't support validating the TLS certs of the collector.
-		otlpmetricgrpc.WithInsecure(),
-	}
-	if conn != nil {
-		// WithGRPCConn takes precedence over endpoint/credential options, so
-		// WithInsecure above is inert on this path.
-		expOpts = append(expOpts, otlpmetricgrpc.WithGRPCConn(conn))
-	}
-	otlpExporter, err := otlpmetricgrpc.New(ctx, expOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
 	}
 	res, err := newResource(ctx, serviceName, relayAttrs(relayCapable, conn)...)
 	if err != nil {
 		return nil, fmt.Errorf("create metric resource: %w", err)
 	}
-	readerOpts := make([]sdkmetric.PeriodicReaderOption, 0, len(producers))
-	for _, p := range producers {
-		readerOpts = append(readerOpts, sdkmetric.WithProducer(p))
-	}
-	opts := []sdkmetric.Option{
-		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter, readerOpts...)),
+	opts := []sdkmetric.Option{sdkmetric.WithResource(res)}
+	if push {
+		expOpts := []otlpmetricgrpc.Option{
+			// GKE managed metrics doesn't support validating the TLS certs of the collector.
+			otlpmetricgrpc.WithInsecure(),
+		}
+		if conn != nil {
+			// WithGRPCConn takes precedence over endpoint/credential options, so
+			// WithInsecure above is inert on this path.
+			expOpts = append(expOpts, otlpmetricgrpc.WithGRPCConn(conn))
+		}
+		otlpExporter, err := otlpmetricgrpc.New(ctx, expOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
+		}
+		readerOpts := make([]sdkmetric.PeriodicReaderOption, 0, len(producers))
+		for _, p := range producers {
+			readerOpts = append(readerOpts, sdkmetric.WithProducer(p))
+		}
+		opts = append(opts, sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter, readerOpts...)))
 	}
 	for _, r := range extraReaders {
 		opts = append(opts, sdkmetric.WithReader(r))
@@ -309,64 +388,69 @@ func (r *Readiness) MarkNotReady() { r.notReady.Store(true) }
 // Ready reports whether /readyz returns 200.
 func (r *Readiness) Ready() bool { return !r.notReady.Load() }
 
-// MetricsServerOptions configures StartMetricsServer.
-type MetricsServerOptions struct {
-	// Addr is the TCP listen address (e.g. ":9090").
-	Addr string
-	// Readiness, if non-nil, enables a /readyz handler: 200 while
-	// Ready, 503 after MarkNotReady. A zero-value Readiness never
-	// flips, giving a static 200 for binaries with no drain sequence.
-	// Nil serves no /readyz at all.
-	Readiness *Readiness
-	// EnableHealthz adds an always-200 /healthz for liveness probes,
-	// which must keep succeeding while a draining server fails /readyz.
-	EnableHealthz bool
-}
+// httpServerReadHeaderTimeout bounds how long a client can take to send the
+// request headers, so a slow client cannot hold a connection open forever.
+const httpServerReadHeaderTimeout = 10 * time.Second
 
-// StartMetricsServer runs an HTTP server exposing /metrics (Prometheus)
-// and optionally /readyz and /healthz. Blocks until http.ListenAndServe
-// returns; designed to be `go`-launched.
-func StartMetricsServer(ctx context.Context, opts MetricsServerOptions) {
-	slog.InfoContext(ctx, "Starting metrics HTTP server", slog.String("addr", opts.Addr))
-	if err := http.ListenAndServe(opts.Addr, metricsMux(opts)); err != nil {
-		slog.Error("Failed to start prometheus metrics server", slog.Any("err", err))
+// StartMetricsServer runs an HTTP server exposing only /metrics
+// (Prometheus). Blocks until the server stops; designed to be `go`-launched.
+// The kubelet probes use StartHealthServer, so a change to the metrics
+// endpoint does not change the health checks. A serve failure exits the
+// process: the probes no longer report a metrics server that cannot bind, so
+// without the exit the only sign of the failure is one log line.
+func StartMetricsServer(ctx context.Context, addr string) {
+	slog.InfoContext(ctx, "Starting metrics HTTP server", slog.String("addr", addr))
+	if err := listenAndServe(addr, metricsMux()); err != nil {
+		slog.Error("Metrics HTTP server failed", slog.Any("err", err))
+		os.Exit(1)
 	}
 }
 
-// StartReadinessServer runs an HTTP server exposing only /readyz. Blocks until
-// http.ListenAndServe returns; designed to be `go`-launched. A serve failure
-// exits the process: a worker whose readiness endpoint cannot come up never
-// turns Ready and never registers, so dying loudly lets the kubelet restart it
-// instead of leaving a pod that looks alive but can never receive work.
-func StartReadinessServer(ctx context.Context, addr string, readiness *Readiness) {
-	slog.InfoContext(ctx, "Starting readiness HTTP server", slog.String("addr", addr))
-	if err := http.ListenAndServe(addr, readinessMux(readiness)); err != nil {
-		slog.Error("Readiness HTTP server failed", slog.Any("err", err))
+// StartHealthServer runs an HTTP server exposing /readyz and /healthz for the
+// kubelet probes. /readyz returns 200 while readiness is Ready and 503 after
+// MarkNotReady. /healthz always returns 200, so liveness keeps succeeding
+// while a draining server fails readiness. Blocks until the server stops;
+// designed to be `go`-launched. A serve failure exits the process: a pod whose
+// probes can never succeed never turns Ready, so dying loudly lets the kubelet
+// restart it instead of leaving a pod that looks alive but never gets work.
+func StartHealthServer(ctx context.Context, addr string, readiness *Readiness) {
+	slog.InfoContext(ctx, "Starting health HTTP server", slog.String("addr", addr))
+	if err := listenAndServe(addr, healthMux(readiness)); err != nil {
+		slog.Error("Health HTTP server failed", slog.Any("err", err))
 		os.Exit(1)
+	}
+}
+
+func listenAndServe(addr string, handler http.Handler) error {
+	return newHTTPServer(addr, handler).ListenAndServe()
+}
+
+// newHTTPServer builds the server for StartMetricsServer and
+// StartHealthServer; split out so tests can check its timeouts.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: httpServerReadHeaderTimeout,
 	}
 }
 
 // metricsMux builds the handler for StartMetricsServer; split out so
 // tests can exercise the endpoints without binding a port.
-func metricsMux(opts MetricsServerOptions) *http.ServeMux {
+func metricsMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	if opts.Readiness != nil {
-		mux.Handle("/readyz", readinessHandler(opts.Readiness))
-	}
-	if opts.EnableHealthz {
-		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok"))
-		})
-	}
 	return mux
 }
 
-// readinessMux builds the handler for StartReadinessServer.
-func readinessMux(readiness *Readiness) *http.ServeMux {
+// healthMux builds the handler for StartHealthServer.
+func healthMux(readiness *Readiness) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/readyz", readinessHandler(readiness))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 	return mux
 }
 

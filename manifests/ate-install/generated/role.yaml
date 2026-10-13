@@ -22,6 +22,14 @@ rules:
   - ""
   resources:
   - pods
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - secrets
   verbs:
   - get
@@ -38,6 +46,15 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - ate.dev
+  resources:
+  - sandboxconfigs
+  verbs:
+  - get
+  - list
+  - patch
   - watch
 - apiGroups:
   - ate.dev
@@ -85,6 +102,13 @@ rules:
   - signers
   verbs:
   - attest
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - apiGroups:
   - networking.k8s.io
   resources:
