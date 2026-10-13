@@ -1294,7 +1294,7 @@ spec:
         image: ${ENVOY_DATAPLANE_IMAGE}
         resources:
           requests:
-            cpu: 250m
+            cpu: 100m
             memory: 256Mi
         securityContext:
           allowPrivilegeEscalation: false
