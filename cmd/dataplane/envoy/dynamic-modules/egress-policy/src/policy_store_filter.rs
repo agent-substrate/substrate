@@ -180,6 +180,13 @@ mod tests {
       })
       .once();
     mock_filter
+      .expect_set_dynamic_metadata_string()
+      .withf(|namespace, key, value| {
+        namespace == ATE_POLICY_EGRESS_NAMESPACE && key == ATE_POLICY_JSON_KEY && value.is_empty()
+      })
+      .return_const(())
+      .once();
+    mock_filter
       .expect_increase_gauge()
       .withf(|id, value| *id == EnvoyGaugeId(1) && *value == 1)
       .returning(|_, _| Ok(()))
@@ -242,6 +249,13 @@ mod tests {
           br#"{"rules":[{"pattern":"api.example.com","mode":"mitm"},{"pattern":"*.example.com","mode":"passthrough"}]}"#,
         ))
       })
+      .once();
+    mock_filter
+      .expect_set_dynamic_metadata_string()
+      .withf(|namespace, key, value| {
+        namespace == ATE_POLICY_EGRESS_NAMESPACE && key == ATE_POLICY_JSON_KEY && value.is_empty()
+      })
+      .return_const(())
       .once();
     mock_filter
       .expect_increment_counter()

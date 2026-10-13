@@ -55,6 +55,7 @@ impl EgressPolicy {
       ATE_POLICY_JSON_KEY,
     )?;
     let mut policy = serde_json::from_slice::<Self>(metadata.as_slice()).ok()?;
+    envoy_filter.set_dynamic_metadata_string(ATE_POLICY_EGRESS_NAMESPACE, ATE_POLICY_JSON_KEY, "");
     let mut hasher = RapidHasher::default();
     Hash::hash(&policy, &mut hasher);
     policy.hash = hasher.finish();
@@ -110,6 +111,13 @@ mod tests {
         ))
       })
       .times(2);
+    mock_filter
+      .expect_set_dynamic_metadata_string()
+      .withf(|namespace, key, value| {
+        namespace == ATE_POLICY_EGRESS_NAMESPACE && key == ATE_POLICY_JSON_KEY && value.is_empty()
+      })
+      .return_const(())
+      .times(2);
 
     let p1 = EgressPolicy::new_from_metadata(&mut mock_filter).unwrap();
     let p2 = EgressPolicy::new_from_metadata(&mut mock_filter).unwrap();
@@ -136,6 +144,13 @@ mod tests {
           br#"{"rules":[{"pattern":"api.example.com","mode":"passthrough"}]}"#,
         ))
       })
+      .once();
+    mock_filter
+      .expect_set_dynamic_metadata_string()
+      .withf(|namespace, key, value| {
+        namespace == ATE_POLICY_EGRESS_NAMESPACE && key == ATE_POLICY_JSON_KEY && value.is_empty()
+      })
+      .return_const(())
       .once();
 
     let p3 = EgressPolicy::new_from_metadata(&mut mock_filter).unwrap();
