@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -688,9 +689,10 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 	return c, nil
 }
 
-// requiredSnapshotRuntime returns the SandboxRuntime stamped on the snapshot
-// that ResumeActor will restore guest state from, or nil when the resume does
-// not restore guest state (cold boot, VOLUMES fidelity, or replaced template).
+// requiredSnapshotRuntime returns the SandboxRuntime a worker must match to
+// restore the snapshot ResumeActor will restore guest state from (see
+// snapshotRestoreRuntime), or nil when the resume does not restore guest state
+// (cold boot, VOLUMES fidelity, or replaced template).
 //
 // TODO: Once gVisor can restore ROOTFS snapshots, return nil for ROOTFS as
 // well: a rootfs upper is files tied to the image, not to the runtime, so only
@@ -700,7 +702,7 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 		if localSnap.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
 			return nil
 		}
-		return localSnap.GetSandboxRuntime()
+		return snapshotRestoreRuntime(localSnap)
 	}
 	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
 		if snap.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
@@ -710,9 +712,25 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 		if capturedUnder != "" && capturedUnder != tmpl.GetMetadata().GetUid() {
 			return nil
 		}
-		return snap.GetSandboxRuntime()
+		return snapshotRestoreRuntime(snap)
 	}
 	return nil
+}
+
+// snapshotRestoreRuntime returns the part of snap's stamped runtime its restore
+// depends on: all of it for MEMORY, and all but the micro-VM hypervisor backend
+// otherwise (hardware.RestoreRuntime). A micro-VM MEMORY stamp without a
+// backend was taken before workers reported one, when every micro-VM worker
+// ran on KVM, so it requires KVM rather than matching any backend.
+func snapshotRestoreRuntime(snap *ateapipb.Snapshot) *ateapipb.SandboxRuntime {
+	rt := snap.GetSandboxRuntime()
+	if snap.GetFidelity() != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		return hardware.RestoreRuntime(rt, false)
+	}
+	if rt.GetSandboxClass() == string(atev1alpha1.SandboxClassMicroVM) {
+		rt = hardware.WithAttr(rt, hardware.AttrHypervisor, hardware.HypervisorKVM)
+	}
+	return hardware.RestoreRuntime(rt, true)
 }
 
 // canRelaxRuntime reports whether a resume may drop its RequiredRuntime
