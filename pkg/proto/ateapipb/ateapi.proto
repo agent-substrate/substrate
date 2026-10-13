@@ -2296,6 +2296,7 @@ message Worker {
   //
   // +k8s:optional
   // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
   // +k8s:immutable
   string sandbox_class = 8;
 
@@ -2402,6 +2403,7 @@ message SandboxRuntime {
   //
   // +k8s:required
   // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
   string sandbox_class = 1;
 
   // Primary compatibility version stamped onto an actor's snapshot when a

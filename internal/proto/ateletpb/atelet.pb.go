@@ -298,6 +298,7 @@ type SandboxRuntime struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=63
+	// +k8s:customValidation # gvisor or microvm
 	SandboxClass string `protobuf:"bytes,1,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	// Primary compatibility version stamped onto an actor's snapshot when a
 	// checkpoint is taken on this runtime. Snapshots matching `version`
