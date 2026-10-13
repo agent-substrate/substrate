@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	certsv1 "k8s.io/api/certificates/v1"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
@@ -95,13 +96,9 @@ func (h *Impl) DesiredClusterTrustBundles() ([]*certsv1.ClusterTrustBundle, erro
 	}, nil
 }
 
-func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateRequest) error {
-	// Fetch the pod to check the request against it.
-	pod, err := h.kc.CoreV1().Pods(pcr.ObjectMeta.Namespace).Get(ctx, pcr.Spec.PodName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("while getting pod %s/%s: %w", pcr.ObjectMeta.Namespace, pcr.Spec.PodName, err)
-	}
-
+// checkPodMatchesRequest returns an error unless pod is the pod, running as the
+// ServiceAccount and on the node, that pcr names.
+func checkPodMatchesRequest(pod *corev1.Pod, pcr *certsv1beta1.PodCertificateRequest) error {
 	if pod.ObjectMeta.UID != pcr.Spec.PodUID {
 		return fmt.Errorf("pod UID mismatch: expected %s, got %s", pcr.Spec.PodUID, pod.ObjectMeta.UID)
 	}
@@ -110,6 +107,19 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 	}
 	if pod.Spec.NodeName != string(pcr.Spec.NodeName) {
 		return fmt.Errorf("request is for node %q but pod %s/%s is on node %q", pcr.Spec.NodeName, pod.ObjectMeta.Namespace, pod.ObjectMeta.Name, pod.Spec.NodeName)
+	}
+	return nil
+}
+
+func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateRequest) error {
+	// Fetch the pod to check the request against it.
+	pod, err := h.kc.CoreV1().Pods(pcr.ObjectMeta.Namespace).Get(ctx, pcr.Spec.PodName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("while getting pod %s/%s: %w", pcr.ObjectMeta.Namespace, pcr.Spec.PodName, err)
+	}
+
+	if err := checkPodMatchesRequest(pod, pcr); err != nil {
+		return err
 	}
 
 	subjectPublicKey, err := podcertificate.PublicKey(pcr)
