@@ -14,32 +14,44 @@
 
 //! The egress-policy-store HTTP filter dynamic module.
 
+use std::rc::Rc;
+
 use envoy_proxy_dynamic_modules_rust_sdk::{
   abi::{
     envoy_dynamic_module_type_on_http_filter_request_headers_status,
     envoy_dynamic_module_type_on_http_filter_response_headers_status,
   },
-  declare_init_functions, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
+  declare_init_functions, envoy_log_trace, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter,
+  HttpFilterConfig,
 };
+use substrate_envoy_common::egress_policy::{EgressPolicy, EgressPolicyFilterState};
 
 /// Configuration for the egress-policy-store HTTP filter.
 pub struct EgressPolicyStoreFilterConfig;
 
 impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for EgressPolicyStoreFilterConfig {
   fn new_http_filter(&self, _envoy: &mut EHF) -> Box<dyn HttpFilter<EHF>> {
-    Box::new(EgressPolicyStoreFilter)
+    Box::new(EgressPolicyStoreFilter::default())
   }
 }
 
 /// Per-stream HTTP filter instance for egress-policy-store.
-pub struct EgressPolicyStoreFilter;
+#[derive(Default)]
+pub struct EgressPolicyStoreFilter {
+  pub policy: Option<Rc<EgressPolicy>>,
+}
 
 impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyStoreFilter {
   fn on_request_headers(
     &mut self,
-    _envoy_filter: &mut EHF,
+    envoy_filter: &mut EHF,
     _end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
+    let Some(policy) = EgressPolicy::new_from_metadata(envoy_filter) else {
+      return envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue;
+    };
+    envoy_log_trace!("egress policy store: policy={:?}", policy);
+    self.policy = Some(policy);
     envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
   }
 
@@ -71,7 +83,15 @@ fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter>(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use envoy_proxy_dynamic_modules_rust_sdk::MockEnvoyHttpFilter;
+  use envoy_proxy_dynamic_modules_rust_sdk::{
+    abi::{
+      envoy_dynamic_module_type_filter_state_life_span, envoy_dynamic_module_type_metadata_source,
+    },
+    EnvoyBuffer, MockEnvoyHttpFilter,
+  };
+  use substrate_envoy_common::egress_policy::{
+    SniRule, ATE_POLICY_EGRESS_CACHE_KEY, ATE_POLICY_EGRESS_NAMESPACE, ATE_POLICY_JSON_KEY,
+  };
 
   #[test]
   fn test_init() {
@@ -79,14 +99,107 @@ mod tests {
   }
 
   #[test]
-  fn test_on_request_headers() {
-    let config = EgressPolicyStoreFilterConfig;
+  fn test_on_request_headers_parses_policy() {
+    let mut filter = EgressPolicyStoreFilter::default();
     let mut mock_filter = MockEnvoyHttpFilter::default();
-    let mut filter = config.new_http_filter(&mut mock_filter);
+    mock_filter
+      .expect_get_metadata_string()
+      .withf(|source, namespace, key| {
+        *source == envoy_dynamic_module_type_metadata_source::Dynamic
+          && namespace == ATE_POLICY_EGRESS_NAMESPACE
+          && key == ATE_POLICY_JSON_KEY
+      })
+      .returning(|_, _, _| {
+        Some(EnvoyBuffer::new(
+          br#"{"rules":[{"pattern":"api.example.com","mode":"mitm"},{"pattern":"*.example.com","mode":"passthrough"}]}"#,
+        ))
+      })
+      .once();
+    mock_filter
+      .expect_set_filter_state_object()
+      .withf(|key, object, _, life_span| {
+        key == ATE_POLICY_EGRESS_CACHE_KEY
+          && !object.is_null()
+          && *life_span == envoy_dynamic_module_type_filter_state_life_span::Request
+      })
+      .returning(|_, object, destructor, _| {
+        let state = unsafe { &*(object as *const EgressPolicyFilterState) };
+        assert_eq!(
+          state.policy,
+          Rc::new(EgressPolicy {
+            rules: vec![
+              SniRule {
+                pattern: "api.example.com".to_string(),
+                mode: "mitm".to_string(),
+              },
+              SniRule {
+                pattern: "*.example.com".to_string(),
+                mode: "passthrough".to_string(),
+              },
+            ],
+          })
+        );
+        destructor(object);
+        true
+      })
+      .once();
+
     assert_eq!(
       filter.on_request_headers(&mut mock_filter, false),
       envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
     );
+    assert_eq!(
+      filter.policy,
+      Some(Rc::new(EgressPolicy {
+        rules: vec![
+          SniRule {
+            pattern: "api.example.com".to_string(),
+            mode: "mitm".to_string(),
+          },
+          SniRule {
+            pattern: "*.example.com".to_string(),
+            mode: "passthrough".to_string(),
+          },
+        ],
+      }))
+    );
+  }
+
+  #[test]
+  fn test_on_request_headers_missing_or_invalid_policy() {
+    let mut filter = EgressPolicyStoreFilter::default();
+    let mut mock_filter = MockEnvoyHttpFilter::default();
+    mock_filter
+      .expect_get_metadata_string()
+      .withf(|source, namespace, key| {
+        *source == envoy_dynamic_module_type_metadata_source::Dynamic
+          && namespace == ATE_POLICY_EGRESS_NAMESPACE
+          && key == ATE_POLICY_JSON_KEY
+      })
+      .returning(|_, _, _| None)
+      .once();
+
+    assert_eq!(
+      filter.on_request_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+    assert_eq!(filter.policy, None);
+
+    mock_filter
+      .expect_get_metadata_string()
+      .withf(|source, namespace, key| {
+        *source == envoy_dynamic_module_type_metadata_source::Dynamic
+          && namespace == ATE_POLICY_EGRESS_NAMESPACE
+          && key == ATE_POLICY_JSON_KEY
+      })
+      .returning(|_, _, _| Some(EnvoyBuffer::new(b"not-json")))
+      .once();
+
+    assert_eq!(
+      filter.on_request_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+    assert_eq!(filter.policy, None);
   }
 
   #[test]

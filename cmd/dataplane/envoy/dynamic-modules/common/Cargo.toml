@@ -18,7 +18,6 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+envoy-proxy-dynamic-modules-rust-sdk.workspace = true
 serde.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true

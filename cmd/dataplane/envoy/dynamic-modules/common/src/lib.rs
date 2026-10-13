@@ -15,4 +15,4 @@
 //! Shared types for Substrate Envoy dynamic modules.
 
 pub mod egress_policy;
-pub use egress_policy::{EgressPolicy, SniRule};
+pub use egress_policy::{EgressPolicy, EgressPolicyFilterState, SniRule};

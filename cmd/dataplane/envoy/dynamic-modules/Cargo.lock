@@ -338,6 +338,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 name = "substrate-envoy-common"
 version = "0.1.0"
 dependencies = [
+ "envoy-proxy-dynamic-modules-rust-sdk",
  "serde",
  "serde_json",
 ]
@@ -356,6 +357,7 @@ name = "substrate-envoy-egress-policy-store"
 version = "0.1.0"
 dependencies = [
  "envoy-proxy-dynamic-modules-rust-sdk",
+ "substrate-envoy-common",
 ]
 
 [[package]]
