@@ -409,7 +409,7 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 
 	host := imageVolumeTestRegistry(t)
 	pauseRef := host + "/pause:3.10"
-	pushPauseImage(t, pauseRef)
+	pauseDigest := pushPauseImage(t, pauseRef)
 
 	content := []byte("runsc binary bytes")
 	sha := fmt.Sprintf("%x", sha256.Sum256(content))
@@ -447,7 +447,7 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if _, err := os.Stat(wantPath); err == nil {
-			return
+			break
 		} else if !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("stat %s: %v", wantPath, err)
 		}
@@ -455,5 +455,13 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 			t.Fatalf("asset never prewarmed to %s", wantPath)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	// The pause-image pull runs detached from the worker's context (see
+	// imagecache.Store.EnsureImage), so it can still be writing into the
+	// store after the asset has landed and the worker has exited. Looking
+	// the image up by digest joins that pull, so no write outlives the
+	// test's TempDir.
+	if _, err := store.EnsureImage(ctx, host+"/pause@"+pauseDigest.String()); err != nil {
+		t.Fatalf("pause image not prewarmed: %v", err)
 	}
 }
