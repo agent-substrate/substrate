@@ -2549,6 +2549,41 @@ func Validate_CredentialHeader(
 		errs = append(errs, fn(fldPath.Child("actor_jwt"), obj.ActorJwt, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.CredentialHeader.PathPrefix
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_CredentialHeader_PathPrefix(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 1024); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.CredentialHeader) *string {
+				return &oldObj.PathPrefix
+			})
+		errs = append(errs, fn(fldPath.Child("path_prefix"), &obj.PathPrefix, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -4993,7 +5028,9 @@ func Validate_HttpRuleEffects(
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.CredentialHeader, b *ateapipb.CredentialHeader) bool { return a.Header == b.Header }, ateDeepEqual, Validate_CredentialHeader); len(e) != 0 {
+				func(a *ateapipb.CredentialHeader, b *ateapipb.CredentialHeader) bool {
+					return a.Header == b.Header && a.PathPrefix == b.PathPrefix
+				}, ateDeepEqual, Validate_CredentialHeader); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return

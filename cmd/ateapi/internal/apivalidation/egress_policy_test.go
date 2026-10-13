@@ -813,6 +813,51 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			field.Duplicate(httpRule.Child("effects", "replace_headers").Index(1).Child("header"), "authorization"),
 		},
 	}, {
+		name: "same header on different path prefixes",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders = append(
+				p.Rules[0].Http.Effects.ReplaceHeaders,
+				&ateapipb.CredentialHeader{Header: "Authorization", Prefix: "Bearer ", PathPrefix: "/api/", CredentialUri: "ate-secret://example.com/provider/secret"},
+				&ateapipb.CredentialHeader{Header: "authorization", PathPrefix: "/api/v4", CredentialUri: "ate-secret://example.com/provider/secret"},
+			)
+		},
+	}, {
+		name: "duplicate header and path prefix",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders = append(
+				p.Rules[0].Http.Effects.ReplaceHeaders,
+				&ateapipb.CredentialHeader{Header: "authorization", PathPrefix: "/api/", CredentialUri: "ate-secret://example.com/provider/secret"},
+				&ateapipb.CredentialHeader{Header: "Authorization", PathPrefix: "/api/", CredentialUri: "ate-secret://example.com/provider/other"},
+			)
+		},
+		want: field.ErrorList{
+			field.Duplicate(httpRule.Child("effects", "replace_headers").Index(2).Child("path_prefix"), "/api/"),
+		},
+	}, {
+		name: "invalid path prefix",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0].PathPrefix = "/api/../admin"
+		},
+		want: field.ErrorList{
+			field.Invalid(staticHeader.Child("path_prefix"), "/api/../admin", `must be printable ASCII without a query, a dot or empty segment, a backslash, or a percent-encoded ".", "/" or "\"`),
+		},
+	}, {
+		name: "relative path prefix",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0].PathPrefix = "api/"
+		},
+		want: field.ErrorList{
+			field.Invalid(staticHeader.Child("path_prefix"), "api/", `must start with "/"`),
+		},
+	}, {
+		name: "path prefix too long",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0].PathPrefix = "/" + strings.Repeat("a", 1024)
+		},
+		want: field.ErrorList{
+			field.TooLong(staticHeader.Child("path_prefix"), "", 1024).WithOrigin("maxLength"),
+		},
+	}, {
 		name: "same header in later rule",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			later := proto.Clone(p.Rules[0]).(*ateapipb.EgressRule)

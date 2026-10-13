@@ -66,17 +66,18 @@ func mapActorJWTError(err error) error {
 }
 
 // applyEffects resolves a matched rule's credential injections and returns the
-// header mutations to add to the request, or an error that denies it. Only a
-// header the request carries is replaced (headers is keyed by lowercased
-// name); a request without it goes out unchanged, and its credential is not
-// fetched.
+// header mutations to add to the request, or an error that denies it. Of each
+// header name's injections, the one for the request's path applies (see
+// egresspolicy.ReplaceHeadersFor). Only a header the request carries is
+// replaced (headers is keyed by lowercased name); a request without it goes
+// out unchanged, and its credential is not fetched.
 //
 // Any failure to produce a credential the request needs denies it, including
 // having no provider configured for a credential_uri entry. Actor JWTs need no
 // provider.
-func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, headers map[string]string, effects *ateapipb.HttpRuleEffects) ([]*corev3.HeaderValueOption, error) {
+func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, path string, headers map[string]string, effects *ateapipb.HttpRuleEffects) ([]*corev3.HeaderValueOption, error) {
 	var injections []*ateapipb.CredentialHeader
-	for _, inj := range effects.GetReplaceHeaders() {
+	for _, inj := range egresspolicy.ReplaceHeadersFor(effects, path) {
 		if _, ok := headers[strings.ToLower(inj.GetHeader())]; ok {
 			injections = append(injections, inj)
 		}

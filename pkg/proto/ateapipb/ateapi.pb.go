@@ -1749,8 +1749,13 @@ type HttpRuleEffects struct {
 	// Replaces placeholder request headers with credentials. A header is
 	// replaced only when the request from the Actor carries it; requests
 	// without the header are forwarded unchanged, so a credential reaches only
-	// the requests that ask for it. Header names must be unique
-	// case-insensitively.
+	// the requests that ask for it.
+	//
+	// A header name may appear more than once when each entry has a different
+	// path_prefix: of a name's entries, the one with the longest path_prefix
+	// that matches the request path applies, and the one without a path_prefix
+	// otherwise. A header name and path_prefix must be unique, the name
+	// compared case-insensitively.
 	//
 	// Replacement is supported on HTTP and HTTPS. On HTTP, the gateway does
 	// not originate TLS to the destination. Without separate transport
@@ -1763,8 +1768,9 @@ type HttpRuleEffects struct {
 	// +k8s:maxItems=16
 	// +k8s:listType=map
 	// +k8s:listMapKey=header
-	// +k8s:customUnique # case-insensitive
-	// +k8s:customValidation # for duplicate headers
+	// +k8s:listMapKey=path_prefix
+	// +k8s:customUnique # case-insensitive header name
+	// +k8s:customValidation # for duplicate headers and path prefixes
 	ReplaceHeaders []*CredentialHeader `protobuf:"bytes,1,rep,name=replace_headers,json=replaceHeaders,proto3" json:"replace_headers,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -1840,7 +1846,22 @@ type CredentialHeader struct {
 	//
 	// +k8s:optional
 	// +k8s:unionMember
-	ActorJwt      *ActorJWTSource `protobuf:"bytes,4,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
+	ActorJwt *ActorJWTSource `protobuf:"bytes,4,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
+	// Scopes the replacement to the requests whose path lies under this prefix.
+	// Empty applies it to every path of the rule's hosts. The prefix matches
+	// the path without its query, byte for byte, at a segment boundary:
+	// "/api" matches "/api" and "/api/v4" but not "/apis", "/api/" matches
+	// "/api/v4" but not "/api". A request path with a dot segment, an empty
+	// segment, a backslash, or a percent-encoded ".", "/" or "\" matches no
+	// prefix, since an origin may resolve it outside the prefix it starts with.
+	//
+	// The prefix must start with "/", be printable ASCII, and carry no query
+	// and none of the forms above.
+	//
+	// +k8s:optional
+	// +k8s:maxLength=1024
+	// +k8s:customValidation # format
+	PathPrefix    string `protobuf:"bytes,5,opt,name=path_prefix,json=pathPrefix,proto3" json:"path_prefix,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1901,6 +1922,13 @@ func (x *CredentialHeader) GetActorJwt() *ActorJWTSource {
 		return x.ActorJwt
 	}
 	return nil
+}
+
+func (x *CredentialHeader) GetPathPrefix() string {
+	if x != nil {
+		return x.PathPrefix
+	}
+	return ""
 }
 
 // ActorJWTSource has the gateway mint a JWT for the Actor that sent the
@@ -8689,12 +8717,14 @@ const file_ateapi_proto_rawDesc = "" +
 	"\n" +
 	"\bAllPorts\"T\n" +
 	"\x0fHttpRuleEffects\x12A\n" +
-	"\x0freplace_headers\x18\x01 \x03(\v2\x18.ateapi.CredentialHeaderR\x0ereplaceHeaders\"\x9e\x01\n" +
+	"\x0freplace_headers\x18\x01 \x03(\v2\x18.ateapi.CredentialHeaderR\x0ereplaceHeaders\"\xbf\x01\n" +
 	"\x10CredentialHeader\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\tR\x06header\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12%\n" +
 	"\x0ecredential_uri\x18\x03 \x01(\tR\rcredentialUri\x123\n" +
-	"\tactor_jwt\x18\x04 \x01(\v2\x16.ateapi.ActorJWTSourceR\bactorJwt\"]\n" +
+	"\tactor_jwt\x18\x04 \x01(\v2\x16.ateapi.ActorJWTSourceR\bactorJwt\x12\x1f\n" +
+	"\vpath_prefix\x18\x05 \x01(\tR\n" +
+	"pathPrefix\"]\n" +
 	"\x0eActorJWTSource\x12\x1c\n" +
 	"\taudiences\x18\x01 \x03(\tR\taudiences\x12-\n" +
 	"\x12expiration_seconds\x18\x02 \x01(\x03R\x11expirationSeconds\"\xfa\x02\n" +

@@ -666,8 +666,13 @@ message HttpRuleEffects {
   // Replaces placeholder request headers with credentials. A header is
   // replaced only when the request from the Actor carries it; requests
   // without the header are forwarded unchanged, so a credential reaches only
-  // the requests that ask for it. Header names must be unique
-  // case-insensitively.
+  // the requests that ask for it.
+  //
+  // A header name may appear more than once when each entry has a different
+  // path_prefix: of a name's entries, the one with the longest path_prefix
+  // that matches the request path applies, and the one without a path_prefix
+  // otherwise. A header name and path_prefix must be unique, the name
+  // compared case-insensitively.
   //
   // Replacement is supported on HTTP and HTTPS. On HTTP, the gateway does
   // not originate TLS to the destination. Without separate transport
@@ -680,8 +685,9 @@ message HttpRuleEffects {
   // +k8s:maxItems=16
   // +k8s:listType=map
   // +k8s:listMapKey=header
-  // +k8s:customUnique # case-insensitive
-  // +k8s:customValidation # for duplicate headers
+  // +k8s:listMapKey=path_prefix
+  // +k8s:customUnique # case-insensitive header name
+  // +k8s:customValidation # for duplicate headers and path prefixes
   repeated CredentialHeader replace_headers = 1;
 }
 
@@ -721,6 +727,22 @@ message CredentialHeader {
   // +k8s:optional
   // +k8s:unionMember
   ActorJWTSource actor_jwt = 4;
+
+  // Scopes the replacement to the requests whose path lies under this prefix.
+  // Empty applies it to every path of the rule's hosts. The prefix matches
+  // the path without its query, byte for byte, at a segment boundary:
+  // "/api" matches "/api" and "/api/v4" but not "/apis", "/api/" matches
+  // "/api/v4" but not "/api". A request path with a dot segment, an empty
+  // segment, a backslash, or a percent-encoded ".", "/" or "\" matches no
+  // prefix, since an origin may resolve it outside the prefix it starts with.
+  //
+  // The prefix must start with "/", be printable ASCII, and carry no query
+  // and none of the forms above.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=1024
+  // +k8s:customValidation # format
+  string path_prefix = 5;
 }
 
 // ActorJWTSource has the gateway mint a JWT for the Actor that sent the

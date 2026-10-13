@@ -182,6 +182,98 @@ func TestInjectionReplacesOnlyCarriedHeaders(t *testing.T) {
 	}
 }
 
+// recordingProvider is a stub CredentialProviderClient that answers each URI
+// with the URI itself, so a test can tell which entry's credential was used.
+type recordingProvider struct{ uris []string }
+
+func (p *recordingProvider) FetchSecret(_ context.Context, req *credproviderpb.FetchSecretRequest, _ ...grpc.CallOption) (*credproviderpb.FetchSecretResponse, error) {
+	p.uris = append(p.uris, req.GetUri())
+	return bearerTokenResponse(req.GetUri()), nil
+}
+
+// One host, two schemes: the entry with the longest path prefix matching the
+// request path replaces the header, the entry without a prefix otherwise, and
+// only the chosen entry's credential is fetched.
+func TestInjectionPicksEntryByPath(t *testing.T) {
+	const (
+		basicURI  = "ate-secret://k8s/default/git-basic"
+		bearerURI = "ate-secret://k8s/default/api-token"
+	)
+	effects := &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{
+		{Header: "Authorization", Prefix: "Basic ", CredentialUri: basicURI},
+		{Header: "authorization", Prefix: "Bearer ", CredentialUri: bearerURI, PathPrefix: "/api/"},
+	}}
+	for _, tc := range []struct {
+		leg    string
+		policy *ateapipb.EgressPolicy
+	}{
+		{leg: extproc.EgressTLSMITMFilterChainName, policy: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HTTPSRule{
+			Hostnames: []string{"api.example.com"}, Effects: effects,
+		}}}}},
+		{leg: extproc.EgressCleartextFilterChainName, policy: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{
+			Hostnames: []string{"api.example.com"}, Effects: effects,
+		}}}}},
+	} {
+		for _, step := range []struct {
+			path string
+			want string
+		}{
+			{path: "/api/v4/projects?private_token=x", want: "Bearer " + bearerURI},
+			{path: "/group/repo.git/info/refs?service=git-receive-pack", want: "Basic " + basicURI},
+			{path: "/api", want: "Basic " + basicURI},
+			{path: "/api/../group/repo.git/info/refs", want: "Basic " + basicURI},
+		} {
+			t.Run(tc.leg+step.path, func(t *testing.T) {
+				provider := &recordingProvider{}
+				h := injectionHandlerFor(tc.policy, provider, injectionProviderName)
+				md := withAuthorization(innerMetadata(tc.leg, "GET", "api.example.com", nil))
+				md.Path = step.path
+
+				res, err := h.HandleRequestHeaders(context.Background(), md)
+				if err != nil {
+					t.Fatalf("HandleRequestHeaders: %v", err)
+				}
+				setHeaders := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders()
+				if len(setHeaders) != 1 {
+					t.Fatalf("got %d header mutations, want 1", len(setHeaders))
+				}
+				if got := string(setHeaders[0].GetHeader().GetRawValue()); got != step.want {
+					t.Errorf("authorization = %q, want %q", got, step.want)
+				}
+				if len(provider.uris) != 1 {
+					t.Errorf("fetched %v, want only the chosen entry's credential", provider.uris)
+				}
+			})
+		}
+	}
+}
+
+// A header whose every entry is scoped to a path the request is not under is
+// forwarded unchanged, and nothing is fetched.
+func TestInjectionSkippedOutsidePathPrefixes(t *testing.T) {
+	policy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HTTPSRule{
+		Hostnames: []string{"api.example.com"},
+		Effects: &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{
+			{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token", PathPrefix: "/api/"},
+		}},
+	}}}}
+	provider := &recordingProvider{}
+	h := injectionHandlerFor(policy, provider, injectionProviderName)
+	md := withAuthorization(innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
+	md.Path = "/v1/things"
+
+	res, err := h.HandleRequestHeaders(context.Background(), md)
+	if err != nil {
+		t.Fatalf("HandleRequestHeaders: %v", err)
+	}
+	if got := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders(); len(got) != 0 {
+		t.Errorf("got header mutations %v, want none", got)
+	}
+	if len(provider.uris) != 0 {
+		t.Errorf("fetched %v, want nothing", provider.uris)
+	}
+}
+
 // A failure to produce the promised credential denies the
 // request rather than forwarding it without the credential.
 func TestInjectionDenials(t *testing.T) {

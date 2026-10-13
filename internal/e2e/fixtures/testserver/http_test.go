@@ -93,6 +93,46 @@ func TestHTTPHandlerEchoesRequestHeaders(t *testing.T) {
 	}
 }
 
+func TestHTTPHandlerEchoesUnderEchoHeadersPath(t *testing.T) {
+	server := startOriginServer(t, newHTTPHandler(""), "", "")
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	for _, tt := range []struct {
+		path       string
+		wantStatus int
+	}{
+		{path: "/echoheaders/api/v4/projects?per_page=1", wantStatus: http.StatusOK},
+		{path: "/echoheaders/", wantStatus: http.StatusOK},
+		{path: "/echoheadersx", wantStatus: http.StatusNotFound},
+	} {
+		request, err := http.NewRequest(http.MethodGet, server.httpURL+tt.path, nil)
+		if err != nil {
+			t.Fatalf("building request for %s: %v", tt.path, err)
+		}
+		request.Header.Set("Authorization", "Basic placeholder")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("GET %s: %v", tt.path, err)
+		}
+		var echoed echoedHeaders
+		decodeErr := json.NewDecoder(response.Body).Decode(&echoed)
+		response.Body.Close()
+		if response.StatusCode != tt.wantStatus {
+			t.Errorf("GET %s status = %d, want %d", tt.path, response.StatusCode, tt.wantStatus)
+			continue
+		}
+		if tt.wantStatus != http.StatusOK {
+			continue
+		}
+		if decodeErr != nil {
+			t.Fatalf("decoding GET %s: %v", tt.path, decodeErr)
+		}
+		if got := echoed.Headers["Authorization"]; got != "Basic placeholder" {
+			t.Errorf("GET %s echoed Authorization = %q, want %q", tt.path, got, "Basic placeholder")
+		}
+	}
+}
+
 func TestHTTPSTestResponseUsesHTTP11AndVerifiedIdentity(t *testing.T) {
 	cert := writeOriginCertificate(t)
 	server := startOriginServer(t, newHTTPHandler("fixture response"), cert.certFile, cert.keyFile)

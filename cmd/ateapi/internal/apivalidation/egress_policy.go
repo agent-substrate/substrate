@@ -180,18 +180,29 @@ func ValidateCustom_HttpRuleEffects(_ context.Context, _ operation.Operation, p 
 	return errs
 }
 
+// ValidateCustom_HttpRuleEffects_ReplaceHeaders rejects two entries for one
+// header name, compared case-insensitively, and one path prefix: the gateway
+// would have no way to pick one.
 func ValidateCustom_HttpRuleEffects_ReplaceHeaders(_ context.Context, _ operation.Operation, p *field.Path, injections, _ []*ateapipb.CredentialHeader) field.ErrorList {
+	type key struct {
+		header     string
+		pathPrefix string
+	}
 	var errs field.ErrorList
-	seenHeaders := map[string]bool{}
+	seen := map[key]bool{}
 	for i, inj := range injections {
 		if inj == nil {
 			continue // handled by DV
 		}
-		norm := strings.ToLower(inj.Header)
-		if seenHeaders[norm] {
+		k := key{strings.ToLower(inj.Header), inj.PathPrefix}
+		switch {
+		case !seen[k]:
+			seen[k] = true
+		case inj.PathPrefix == "":
 			errs = append(errs, field.Duplicate(p.Index(i).Child("header"), inj.Header))
+		default:
+			errs = append(errs, field.Duplicate(p.Index(i).Child("path_prefix"), inj.PathPrefix))
 		}
-		seenHeaders[norm] = true
 	}
 	return errs
 }
@@ -232,6 +243,16 @@ func ValidateCustom_CredentialHeader_Prefix(_ context.Context, _ operation.Opera
 		return field.ErrorList{
 			field.Invalid(p, *prefix, "must be a valid HTTP field value prefix"),
 		}
+	}
+	return nil
+}
+
+func ValidateCustom_CredentialHeader_PathPrefix(_ context.Context, _ operation.Operation, p *field.Path, prefix, _ *string) field.ErrorList {
+	if *prefix == "" {
+		return nil
+	}
+	if err := egresspolicy.ValidatePathPrefix(*prefix); err != nil {
+		return field.ErrorList{field.Invalid(p, *prefix, err.Error())}
 	}
 	return nil
 }
