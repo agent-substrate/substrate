@@ -112,6 +112,11 @@ pub fn tls_verdict(policy: Option<&EgressPolicy>, sni: Option<&str>) -> &'static
   let (Some(policy), Some(sni)) = (policy, sni) else {
     return ATE_EGRESS_FILTER_CHAIN_DENIED;
   };
+  // Envoy's DNS cache treats a port in the SNI as an explicit upstream port,
+  // overriding the port authorized for this CONNECT.
+  if sni.contains(':') {
+    return ATE_EGRESS_FILTER_CHAIN_DENIED;
+  }
   let hostname = normalize_sni(sni);
   match policy
     .rules
@@ -291,6 +296,25 @@ mod tests {
   }
 
   #[test]
+  fn test_tls_verdict_rejects_port_bearing_sni_before_matching() {
+    for mode in [SNI_MODE_MITM, SNI_MODE_PASSTHROUGH] {
+      let any = policy(&[("*", mode)]);
+      for sni in [
+        "host.example:8443",
+        "host.example:8443.",
+        "[::1]:8443",
+        "host.example:",
+      ] {
+        assert_eq!(
+          tls_verdict(Some(&any), Some(sni)),
+          ATE_EGRESS_FILTER_CHAIN_DENIED,
+          "SNI {sni:?} matched {mode}"
+        );
+      }
+    }
+  }
+
+  #[test]
   fn test_tls_verdict_first_match_decides() {
     // The first match is final, even with an unknown mode.
     let unknown_first = policy(&[("*.example.com", "not-a-mode"), ("api.example.com", SNI_MODE_MITM)]);
@@ -421,6 +445,12 @@ mod tests {
   #[test]
   fn test_on_accept_wildcard_sni() {
     assert_tls_verdict(Some(b"mail.google.com"), Some(RULES), ATE_EGRESS_FILTER_CHAIN_MITM);
+  }
+
+  #[test]
+  fn test_on_accept_rejects_port_bearing_sni() {
+    let rules = br#"{"rules":[{"pattern":"*","mode":"passthrough"}]}"#;
+    assert_tls_verdict(Some(b"host.example:8443"), Some(rules), ATE_EGRESS_FILTER_CHAIN_DENIED);
   }
 
   #[test]

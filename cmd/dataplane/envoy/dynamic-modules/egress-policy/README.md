@@ -27,7 +27,7 @@ it:
 |---|---|---|
 | A ClientHello whose SNI matches an https rule (first match wins; `*` matches every name, `*.suffix` exactly one label, anything else the whole name, ASCII case folded) | `mitm` | `egress_tls_mitm`: terminated with a minted leaf, decided per request |
 | A ClientHello whose first matching rule is tls_passthrough | `passthrough` | `egress_passthrough`: relayed unread to the resolved SNI on the dialed port |
-| Any other ClientHello: no SNI, no match, no rules, unparseable rules | `denied` | none: the connection is closed |
+| Any other ClientHello: no SNI, SNI containing `:`, no match, no rules, unparseable rules | `denied` | none: the connection is closed |
 | Not TLS | `cleartext` | `egress_cleartext`: decided per request |
 | A transport protocol other than `tls` or `raw_buffer` | `denied` | none |
 
