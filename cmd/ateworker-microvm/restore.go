@@ -436,24 +436,12 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// failure after this point costs a re-download of the snapshot on retry.
 	maybeDropStagedMemoryImage(ctx, restoreDir, memMode, preserveRestoreDir)
 	dropActorSnapshotCacheAsync(restoreDir, memMode == ch.MemRestoreEager)
-	if err := client.Resume(ctx); err != nil {
-		return restoreGuestReadyError(ctx, "resuming restored guest", err)
-	}
-	tResume := time.Now()
 
-	// One kata-agent connection serves this whole activation: the CRNG reseed below,
-	// then log forwarding and guest stats. As on cold boot, not reaching the agent
-	// fails the restore. A failing restore closes the connection on its way out.
-	guestAC, err := dialAgentRetry(ctx, kata.VsockSocketPath(actorUID), 15*time.Second)
-	if err != nil {
-		return restoreGuestReadyError(ctx, "dialing kata-agent after resume", err)
-	}
-	defer func() {
-		if retErr != nil {
-			_ = guestAC.Close()
-		}
-	}()
-
+	// One kata-agent connection serves this whole activation: the CRNG reseed and,
+	// on MSHV, the clock set and the thaw (activateRestoredGuest), then log
+	// forwarding and guest stats. As on cold boot, not reaching the agent fails
+	// the restore. A failing restore closes the connection on its way out.
+	//
 	// Reseed the guest CRNG before the workload gets far. A restored guest resumes with
 	// the entropy pool frozen in the snapshot, so every actor restored from one snapshot
 	// (golden cold-start, tag clones) would share an identical CRNG state and emit the
@@ -462,9 +450,11 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// mixes it into /dev/random and reseeds. A failed reseed fails the restore, since the
 	// actor would otherwise run with randomness it shares with its clones.
 	//
-	// The reseed runs just after Resume, so a workload that reads randomness in its first
-	// instants after resume can still see the frozen state. Fully closing that needs the
-	// workload frozen across the reseed, or a VMM VmGenID that acts before the vCPUs resume.
+	// On MSHV the containers are frozen in the snapshot (CheckpointWorkload) and
+	// thawed only after the reseed and the clock set, so no workload code sees the
+	// frozen entropy or the snapshot-time clock. On KVM the reseed runs just after
+	// Resume, so a workload that reads randomness in its first instants after
+	// resume can still see the frozen state.
 	//
 	// TODO: switch to a Cloud Hypervisor VmGenID device once it exists. clh has no such
 	// device today; Firecracker and QEMU do. With one, the VMM changes the generation id
@@ -472,19 +462,33 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// CRNG on its own with no host round-trip, no per-restore RPC, and no post-Resume
 	// race. At that point this agent-driven reseed can be dropped.
 	//
-	// Egress opens only once the reseed succeeds, so nothing leaves the host drawn
-	// from CRNG state the actor shares with the snapshot's other clones, and a
-	// failed reseed is still safe to retry (see restoreGuestReadyError). The
-	// restored workload is past its boot, so it needs egress only from the wakeup
-	// probe on. Ingress follows the wakeup probe, as in coldBootActor.
-	if err := reseedGuestCRNG(ctx, guestAC); err != nil {
-		return restoreGuestReadyError(ctx, "reseeding guest CRNG", err)
-	}
-	if err := s.tunnel.ActivateEgress(p.attribution(), egress); err != nil {
+	// Egress opens only once activateRestoredGuest succeeds, so nothing leaves
+	// the host drawn from CRNG state the actor shares with the snapshot's other
+	// clones, and a failed reseed is still safe to retry (see
+	// restoreGuestReadyError). The restored workload is past its boot, so it
+	// needs egress only from the wakeup probe on. Ingress follows the wakeup
+	// probe, as in coldBootActor.
+	var tResume time.Time
+	resumeVM := func(ctx context.Context) error {
+		err := client.Resume(ctx)
+		tResume = time.Now()
 		return err
 	}
-	tReseeded := time.Now()
-	if err := syncGuestClock(ctx, s.hypervisor, guestAC, time.Now, guestClockTimeout); err != nil {
+	dial := func(ctx context.Context) (*kata.AgentClient, error) {
+		return dialAgentRetry(ctx, kata.VsockSocketPath(actorUID), 15*time.Second)
+	}
+	guestAC, tReseeded, err := activateRestoredGuest(ctx, s.hypervisor, resumeVM, dial, workloadIDs(ctrs), time.Now)
+	if guestAC != nil {
+		defer func() {
+			if retErr != nil {
+				_ = guestAC.Close()
+			}
+		}()
+	}
+	if err != nil {
+		return err
+	}
+	if err := s.tunnel.ActivateEgress(p.attribution(), egress); err != nil {
 		return err
 	}
 
@@ -606,18 +610,19 @@ func (s *AteWorkerService) cleanupFailedRestoreRootfs(ctx context.Context, actor
 // own context ended, wrap ctx.Err() so the server reports the context status
 // instead.
 //
-// The guest did run, though: after Resume, it and the workload in it run while
-// the agent is dialed and the CRNG reseeded (up to about 15s plus
-// reseedTimeout). Nothing routes inbound traffic to it yet (not even the wakeup
-// probe), and atunnel's egress proxy closes its outbound TCP connections until
-// tunnel.ActivateEgress, which restoreMemoryFidelity calls after the reseed for
-// that reason, but a background task in the guest can query the DNS relay or
-// write to its filesystems. The retry re-extracts the rootfs upper and
-// durable-dir volumes from the snapshot, whereas a CSI volume is outside the
-// snapshot and keeps any writes made during that window while guest memory and
-// its page cache resume from the snapshot; we accept that narrow window over
-// crashing the actor on a transient host stall. When the reseed is what failed,
-// the guest also ran on CRNG state shared with the snapshot's other clones.
+// The guest did run, though: after Resume, it runs while the agent is dialed
+// and the CRNG reseeded (up to about 15s plus reseedTimeout), and on KVM so
+// does the workload in it (see activateRestoredGuest). Nothing routes inbound
+// traffic to it yet (not even the wakeup probe), and atunnel's egress proxy
+// closes its outbound TCP connections until tunnel.ActivateEgress, which
+// restoreMemoryFidelity calls after activateRestoredGuest for that reason, but
+// a background task in the guest can query the DNS relay or write to its
+// filesystems. The retry re-extracts the rootfs upper and durable-dir volumes
+// from the snapshot, whereas a CSI volume is outside the snapshot and keeps any
+// writes made during that window while guest memory and its page cache resume
+// from the snapshot; we accept that narrow window over crashing the actor on a
+// transient host stall. When the reseed is what failed, the guest also ran on
+// CRNG state shared with the snapshot's other clones.
 //
 // A guest found stopped while dialing the agent (errGuestStopped:
 // cloud-hypervisor exited, e.g. a guest kernel panic after resume or a corrupt
