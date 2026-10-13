@@ -538,6 +538,10 @@ When an `ActorTemplate` is created with golden snapshots enabled:
 
 `CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag and records that snapshot on the new actor. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume. The default does not populate the caller-owned `sourceTag` field. Deleting the template collects its golden tag and any unfinished golden actor.
 
+VOLUMES templates require a volume mounted by a container. gVisor requires a
+durable-dir mount; micro-VM also supports mounted external volumes. A declared
+but unmounted volume does not satisfy this requirement.
+
 ### Resumption Lifecycle
 Once a template is `Ready`, creating an actor logically (via `kubectl ate create actor`) allows it to be resumed instantly on any free worker in the referenced `WorkerPool`. Substrate bypasses the standard container boot and restores the process directly from its last saved state.
 

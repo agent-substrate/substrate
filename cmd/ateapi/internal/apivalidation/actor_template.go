@@ -75,22 +75,35 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 			value.GetSnapshotConfig().GetPreferredFidelity().String(),
 			"ROOTFS fidelity requires sandbox_config.sandbox_class SANDBOX_CLASS_MICROVM"))
 	}
-	declared := make(map[string]bool, len(value.GetVolumes()))
+	declared := make(map[string]*ateapipb.Volume, len(value.GetVolumes()))
 	for _, vol := range value.GetVolumes() {
-		declared[vol.GetName()] = true
+		declared[vol.GetName()] = vol
 	}
+	canCaptureVolumes := false
 	for i, ctr := range value.GetContainers() {
 		for j, mount := range ctr.GetVolumeMounts() {
 			name := mount.GetName()
 			if name == "" {
 				continue // required is enforced by tags
 			}
-			if !declared[name] {
+			volume := declared[name]
+			if volume == nil {
 				errs = append(errs, field.Invalid(
 					fldPath.Child("containers").Index(i).Child("volume_mounts").Index(j).Child("name"),
 					name, "must reference a volume declared in the template"))
+				continue
+			}
+			if volume.GetDurableDir() != nil ||
+				(value.GetSandboxConfig().GetSandboxClass() == ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM && volume.GetExternalVolumeTemplate() != nil) {
+				canCaptureVolumes = true
 			}
 		}
+	}
+	if value.GetSnapshotConfig().GetPreferredFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES && !canCaptureVolumes {
+		errs = append(errs, field.Invalid(
+			fldPath.Child("snapshot_config", "preferred_fidelity"),
+			value.GetSnapshotConfig().GetPreferredFidelity().String(),
+			"VOLUMES fidelity requires a mounted durable-dir volume, or a mounted external volume on MICROVM"))
 	}
 	return errs
 }

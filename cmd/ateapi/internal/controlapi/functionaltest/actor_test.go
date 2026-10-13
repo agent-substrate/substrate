@@ -3046,10 +3046,12 @@ func createDataFidelityTemplate(t *testing.T, tc *testContext, ns string) *ateap
 				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
 				ConfigName:   "gvisor-default",
 			},
+			Volumes: []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}},
 			Containers: []*ateapipb.Container{{
-				Name:    "main",
-				Image:   "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-				Command: []string{"/main"},
+				Name:         "main",
+				Image:        "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+				Command:      []string{"/main"},
+				VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}},
 			}},
 			WorkerSelector: &ateapipb.Selector{
 				MatchLabels: map[string]string{poolLabelKey: ns},
