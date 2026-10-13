@@ -206,7 +206,7 @@ spec:
         # pod almost no CPU and its probes time out.
         resources:
           requests:
-            cpu: 250m
+            cpu: 100m
             memory: 512Mi
         args:
         - "router"
@@ -330,7 +330,7 @@ spec:
         image: ${ENVOY_DATAPLANE_IMAGE}
         resources:
           requests:
-            cpu: 250m
+            cpu: 100m
             memory: 256Mi
         command:
         - "/usr/local/bin/envoy"
