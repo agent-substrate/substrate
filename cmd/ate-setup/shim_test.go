@@ -485,12 +485,13 @@ func TestExampleConfigurationParses(t *testing.T) {
 const operatorDoc = "docs/operator-install.md"
 
 // settingDocs maps a key prefix to the document that lists the settings under
-// it. Demo and benchmark settings are documented with the demo or benchmark,
+// it. Demo, benchmark, and e2e settings are documented with what uses them,
 // so the operator page lists only what an install uses.
 var settingDocs = []struct{ prefix, doc string }{
 	{"demo.counter.", "demos/counter/README.md"},
 	{"demo.anthropicAPIKey", "demos/claude-code-multiplex/README.md"},
 	{"benchmark.", "benchmarking/README.md"},
+	{"e2e.", "internal/e2e/README.md"},
 }
 
 // settingDoc returns the document that lists the setting with this key.
@@ -514,8 +515,8 @@ func readDoc(t *testing.T, rel string) string {
 }
 
 // The settings tables are written by hand, so a setting added without
-// documenting it is the drift this catches. A demo or benchmark setting must
-// also stay out of the operator page.
+// documenting it is the drift this catches. A demo, benchmark, or e2e setting
+// must also stay out of the operator page.
 func TestDocsListEverySetting(t *testing.T) {
 	docs := map[string]string{operatorDoc: readDoc(t, operatorDoc)}
 	for _, d := range settingDocs {

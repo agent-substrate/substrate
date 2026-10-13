@@ -264,10 +264,11 @@ changes it.
 Defaults are also shown by `ate-setup --help` and by `--help` on the owning
 command. A setting with no default is unset unless something supplies it.
 
-Settings for the demos and benchmarks are listed with them: the
+Settings for the demos, benchmarks, and e2e tests are listed with them: the
 [counter](../demos/counter/README.md#settings) and
 [claude-code-multiplex](../demos/claude-code-multiplex/README.md#settings)
-demos, and the [benchmarks](../benchmarking/README.md#settings).
+demos, the [benchmarks](../benchmarking/README.md#settings), and the
+[e2e tests](../internal/e2e/README.md#settings).
 
 | Key                                          | Environment variable                            | Flag                                               | Default               | Applies to                               |
 |----------------------------------------------|-------------------------------------------------|----------------------------------------------------|-----------------------|------------------------------------------|
@@ -294,7 +295,6 @@ demos, and the [benchmarks](../benchmarking/README.md#settings).
 | `cordonControlPlane`                         | `ATE_INSTALL_CORDON_CONTROL_PLANE`              | `--cordon-control-plane`                           | `false`               | (global)                                 |
 | `csi.setup`                                  | `SETUP_CSI`                                     | `--setup-csi`                                      | `none`                | `deploy ate-system`                      |
 | `docker.buildFlags`                          | `DOCKER_BUILD_FLAGS`                            | `--docker-build-flags`                             | —                     | (global)                                 |
-| `e2e.envoyConcurrency`                       | `E2E_ATE_ENVOY_CONCURRENCY`                     | `--e2e-envoy-concurrency`                          | `0`                   | (global)                                 |
 | `gcp.clusterLocation`                        | `CLUSTER_LOCATION`                              | `--gcp-cluster-location`                           | —                     | (global)                                 |
 | `gcp.clusterName`                            | `CLUSTER_NAME`                                  | `--gcp-cluster-name`                               | —                     | (global)                                 |
 | `gcp.projectID`                              | `PROJECT_ID`                                    | `--gcp-project-id`                                 | —                     | (global)                                 |
