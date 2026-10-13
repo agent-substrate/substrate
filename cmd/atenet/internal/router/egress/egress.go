@@ -185,17 +185,21 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 		return extproc.Result{}, err
 	}
 	rules := policy.SNIRules(dest.Port)
+	dynamicMetadata, err := connectMetadata(dest, rules)
+	if err != nil {
+		return extproc.Result{}, err
+	}
 	slog.InfoContext(ctx, "egress tunnel opened: requests inside it are decided one by one",
 		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host), slog.Int("sniRules", len(rules)))
 	res := allow()
-	res.DynamicMetadata = connectMetadata(dest, rules)
+	res.DynamicMetadata = dynamicMetadata
 	return res, nil
 }
 
 // connectMetadata encodes the SNI rules for EgressPolicyMetadataNamespace and
 // the dialed port for EgressMetadataNamespace. The port is always set: without
 // it the passthrough chain falls back to its configured port instead of closing.
-func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule) *structpb.Struct {
+func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule) (*structpb.Struct, error) {
 	values := make([]*structpb.Value, len(rules))
 	for i, rule := range rules {
 		values[i] = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
@@ -203,14 +207,21 @@ func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule
 			extproc.EgressSNIRuleModeKey:    structpb.NewStringValue(string(rule.Mode)),
 		}})
 	}
+	policyStruct := &structpb.Struct{Fields: map[string]*structpb.Value{
+		extproc.EgressSNIRulesKey: structpb.NewListValue(&structpb.ListValue{Values: values}),
+	}}
+	policyJSON, err := policyStruct.MarshalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("marshaling egress policy metadata: %w", err)
+	}
 	return &structpb.Struct{Fields: map[string]*structpb.Value{
 		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
 			extproc.EgressDialedPortKey: structpb.NewStringValue(strconv.Itoa(int(dest.Port))),
 		}}),
 		extproc.EgressPolicyMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			extproc.EgressSNIRulesKey: structpb.NewListValue(&structpb.ListValue{Values: values}),
+			extproc.EgressPolicyJSONKey: structpb.NewStringValue(string(policyJSON)),
 		}}),
-	}}
+	}}, nil
 }
 
 // metadataAnswer is an answer in the egress metadata namespace.

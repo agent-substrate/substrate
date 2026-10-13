@@ -433,9 +433,17 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 // sniRulesOf reads the SNI rules from a CONNECT result.
 func sniRulesOf(t *testing.T, res extproc.Result) []egresspolicy.SNIRule {
 	t.Helper()
-	policyStruct := res.DynamicMetadata.GetFields()[extproc.EgressPolicyMetadataNamespace].GetStructValue()
-	if policyStruct == nil {
+	nsStruct := res.DynamicMetadata.GetFields()[extproc.EgressPolicyMetadataNamespace].GetStructValue()
+	if nsStruct == nil {
 		t.Fatalf("missing %q struct in DynamicMetadata", extproc.EgressPolicyMetadataNamespace)
+	}
+	policyJSON := nsStruct.GetFields()[extproc.EgressPolicyJSONKey].GetStringValue()
+	if policyJSON == "" {
+		t.Fatalf("missing %q string in %q DynamicMetadata", extproc.EgressPolicyJSONKey, extproc.EgressPolicyMetadataNamespace)
+	}
+	var policyStruct structpb.Struct
+	if err := policyStruct.UnmarshalJSON([]byte(policyJSON)); err != nil {
+		t.Fatalf("unmarshaling %q in %q DynamicMetadata: %v", extproc.EgressPolicyJSONKey, extproc.EgressPolicyMetadataNamespace, err)
 	}
 	listVal := policyStruct.GetFields()[extproc.EgressSNIRulesKey].GetListValue()
 	if listVal == nil {

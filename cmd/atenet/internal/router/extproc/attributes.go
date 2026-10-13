@@ -63,6 +63,9 @@ const (
 	// the egress-policy module: {"rules": [{"pattern": ..., "mode": ...}]},
 	// most specific first.
 	EgressPolicyMetadataNamespace = "dev.ate.policy.egress"
+	// EgressPolicyJSONKey, under EgressPolicyMetadataNamespace, holds the
+	// JSON-serialized SNI rules.
+	EgressPolicyJSONKey = "policy_json"
 	// EgressSNIRulesKey, under EgressPolicyMetadataNamespace, is the ordered
 	// list of rules; EgressSNIRulePatternKey and EgressSNIRuleModeKey are the
 	// fields of each.
@@ -139,8 +142,9 @@ const EgressDialHostFormat = "%DYNAMIC_METADATA(" + EgressMetadataNamespace + ":
 // Host wins. The request chains set it from EgressDialHostKey.
 const UpstreamDynamicHostFilterStateKey = "envoy.upstream.dynamic_host"
 
-// EgressPolicyMetadataFormat renders EgressPolicyMetadataNamespace as JSON.
-const EgressPolicyMetadataFormat = "%DYNAMIC_METADATA(" + EgressPolicyMetadataNamespace + ")%"
+// EgressPolicyMetadataFormat is the set_filter_state format string that reads
+// EgressPolicyJSONKey back out.
+const EgressPolicyMetadataFormat = "%DYNAMIC_METADATA(" + EgressPolicyMetadataNamespace + ":" + EgressPolicyJSONKey + ")%"
 
 // OriginalDstFilterStateKey is Envoy's filter-state key for the address an
 // ORIGINAL_DST cluster dials. The gateway never writes it and dials only by

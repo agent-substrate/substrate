@@ -250,7 +250,7 @@ data:
                     shared_with_upstream: ONCE
                     format_string:
                       text_format_source:
-                        inline_string: "%DYNAMIC_METADATA(dev.ate.policy.egress)%"
+                        inline_string: "%DYNAMIC_METADATA(dev.ate.policy.egress:policy_json)%"
                       omit_empty_values: true
               - name: envoy.filters.http.router
                 typed_config:
