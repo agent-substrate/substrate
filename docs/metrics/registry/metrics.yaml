@@ -124,6 +124,10 @@ groups:
               stability: development
               value: deleting
               brief: ateapi is removing the actor.
+            - id: reverting
+              stability: development
+              value: reverting
+              brief: ateapi is discarding the execution of the actor and returning it to the suspended state.
             - id: deleted
               stability: development
               value: deleted
@@ -162,11 +166,14 @@ groups:
             - id: revert
               stability: development
               value: revert
-              brief: ateapi discarded the actor's execution and returned it to its existing snapshot.
+              brief: ateapi discarded the execution of the actor and returned it to the suspended state.
             - id: unknown
               stability: development
               value: unknown
-              brief: The operation is not in this list. This is the default value.
+              brief: >
+                No lifecycle operation is running, such as when a running or
+                paused actor crashes because its worker is lost, or the
+                operation is not in this list. This is the default value.
 
   - id: registry.ate.template
     type: attribute_group
@@ -246,9 +253,9 @@ groups:
   - id: registry.ate.sandbox
     type: attribute_group
     brief: >
-      The class of the sandbox. The class comes from the template. Thus it adds
-      no series to the template labels. It lets a dashboard group the data by
-      class without a list of the template names.
+      The sandbox that hosts an actor. The class comes from the template. Thus
+      it adds no series to the template labels. It lets a dashboard group the
+      data by class without a list of the template names.
     attributes:
       - id: ate.sandbox.class
         stability: development
@@ -272,6 +279,18 @@ groups:
                 ateapi reports it for a Worker that CreateWorker accepted with
                 no class, and for an ActorTemplate with no sandbox config.
                 atelet reports it for a snapshot manifest with no class.
+      - id: ate.sandbox.oom_kills
+        stability: development
+        type: int
+        brief: >
+          The processes in the sandbox cgroup leaf that the kernel OOM killer
+          has killed, over the life of the leaf (memory.events oom_kill).
+        note: >
+          Logs only. It is only ever recorded beside actor identity, which no
+          metric may carry. ateom-gvisor sets it on the record it writes when a
+          hosted actor's sandbox has no process left. A leaf left behind by an
+          earlier activation of the same actor carries its count forward.
+        examples: [0, 3]
 
   - id: registry.ate.snapshot
     type: attribute_group
@@ -301,19 +320,23 @@ groups:
               stability: development
               value: boot
               brief: A start from nothing. This is not a restore. It does not occur on the atelet histograms.
-      - id: ate.snapshot.scope
+      - id: ate.snapshot.fidelity
         stability: development
-        brief: The content of the snapshot.
+        brief: The state layers the snapshot holds.
         type:
           members:
-            - id: full
+            - id: memory
               stability: development
-              value: full
-              brief: All the guest state and all the data.
-            - id: data
+              value: memory
+              brief: Process memory, root filesystem changes, and volumes.
+            - id: volumes
               stability: development
-              value: data
-              brief: Only the data of the actor.
+              value: volumes
+              brief: Only the volumes of the actor.
+            - id: rootfs
+              stability: development
+              value: rootfs
+              brief: Volumes and root filesystem changes, without process memory.
             - id: unknown
               stability: development
               value: unknown
@@ -573,7 +596,13 @@ groups:
             - id: final
               stability: development
               value: final
-              brief: The last sample of an activation, taken in the checkpoint before the workload is torn down.
+              brief: >
+                The last sample of an activation, written when a checkpoint, a
+                terminate, a graceful shutdown, or a re-host on ateom-microvm
+                ends it. When the sandbox is still running, ateom reads the
+                stats just before the teardown; when no read runs, or the read
+                fails or times out, it repeats the newest measured sample, or
+                writes a pending record when there is none.
       - id: ate.stats.memory.usage
         stability: development
         type: int
@@ -599,10 +628,10 @@ groups:
         type: double
         brief: The CPU time used since the activation began, in seconds.
         note: >
-          Logs only. Restarts at zero with each ate.actor.epoch. The lifetime
-          figure is the sum over the epochs of the highest value in each. The
-          unit is that of the instrument ate.actor.stats.cpu.time, thus one
-          query serves both signals.
+          Logs only. Restarts at zero with each ate.actor.epoch and never
+          decreases within one. The lifetime figure is the sum over the epochs
+          of the highest value in each. The unit is that of the instrument
+          ate.actor.stats.cpu.time, thus one query serves both signals.
         examples: [1.5]
 
   - id: registry.ate.deviation
@@ -673,7 +702,28 @@ groups:
         stability: stable
         type: string
         brief: The gRPC status that the server returned.
-        examples: ["OK", "ResourceExhausted"]
+        examples: ["OK", "RESOURCE_EXHAUSTED"]
+      - id: rpc.system.name
+        stability: stable
+        type: string
+        brief: The RPC system. otelgrpc always sets the value grpc.
+        examples: ["grpc"]
+      - id: server.address
+        stability: stable
+        type: string
+        brief: >
+          The address of the server that a gRPC client called. otelgrpc reads it
+          from the remote address of the connection, so it holds an IP address
+          and not the name in the dial target. For a unix socket it holds the
+          path of the socket. atelet calls each ateom on a socket path that holds
+          the UID of the worker pod, so on atelet this key has one value for
+          each worker pod.
+        examples: ["10.8.2.14", "/var/lib/ate/ateoms/<pod-uid>/ateom.sock"]
+      - id: server.port
+        stability: stable
+        type: int
+        brief: The TCP port of the server that a gRPC client called.
+        examples: [8085]
 
   # ---------------------------------------------------------------------------
   # Metrics. ateapi
@@ -765,8 +815,8 @@ groups:
     note: >
       ateapi does not record a resume of an actor that is already in operation.
       Thus this histogram counts the true activations and not the traffic of the
-      router. The set of labels changes with the operation. A resume has the
-      most labels. A delete has only the operation and error.type.
+      router. The set of labels changes with the operation. Each attribute
+      below gives the condition for its key.
     annotations:
       substrate:
         emitted_by: [ateapi]
@@ -778,24 +828,37 @@ groups:
       - ref: ate.actor.operation.name
         requirement_level: required
       - ref: ate.template.atespace
-        requirement_level: required
+        requirement_level:
+          conditionally_required: >
+            The operation is a create, or ateapi loaded the actor. Thus this key
+            is absent when a delete fails or when the load step fails. For a
+            resume, a suspend and a pause, the load step also reads the
+            ActorTemplate.
       - ref: ate.template.name
-        requirement_level: required
+        requirement_level:
+          conditionally_required: >
+            The operation is a create, or ateapi loaded the actor. Thus this key
+            is absent when a delete fails or when the load step fails. For a
+            resume, a suspend and a pause, the load step also reads the
+            ActorTemplate.
       - ref: ate.workerpool.namespace
         requirement_level:
-          conditionally_required: The actor has a worker.
+          conditionally_required: The operation is not a create or a delete, and the actor has a worker.
       - ref: ate.workerpool.name
         requirement_level:
-          conditionally_required: The actor has a worker.
+          conditionally_required: The operation is not a create or a delete, and the actor has a worker.
       - ref: ate.sandbox.class
         requirement_level:
-          conditionally_required: ateapi found the ActorTemplate.
+          conditionally_required: >
+            The operation is resume, suspend, pause or revert, and ateapi found
+            the ActorTemplate. A revert continues when the ActorTemplate no
+            longer exists, and then omits this key.
       - ref: ate.snapshot.kind
         requirement_level:
-          conditionally_required: The operation is a resume. A suspend and a pause do not restore, thus this key is absent.
-      - ref: ate.snapshot.scope
+          conditionally_required: The operation is a resume and the snapshot source is known. Other operations do not restore, thus this key is absent.
+      - ref: ate.snapshot.fidelity
         requirement_level:
-          conditionally_required: The scope is known.
+          conditionally_required: The operation is resume, suspend or pause, and the fidelity is known.
       - ref: error.type
         requirement_level:
           conditionally_required: The operation failed. If this key is absent, the operation was correct.
@@ -808,11 +871,13 @@ groups:
     stability: development
     brief: The time of one attempt of the scheduler to assign a worker during a resume.
     note: >
-      If a version conflict causes a second attempt, ateapi records only the
-      last attempt. The buckets are smaller than the buckets of the lifecycle
-      histogram. This step is a read of the cache and some writes to the store.
-      It is not a restore of some seconds. But the buckets go to 5 s. Thus you
-      can see a large delay in the store.
+      One resume gives one record. ateapi retries an attempt that loses a race
+      for a worker, and records only the last attempt. If the retries run out,
+      the outcome is error, and error.type is the code that the caller gets.
+      The buckets are smaller than the buckets of the lifecycle histogram.
+      This step is a read of the cache and some writes to the store. It is not
+      a restore of some seconds. But the buckets go to 5 s. Thus you can see a
+      large delay in the store.
     annotations:
       substrate:
         emitted_by: [ateapi]
@@ -865,7 +930,7 @@ groups:
         requirement_level: required
       - ref: ate.template.name
         requirement_level: required
-      - ref: ate.snapshot.scope
+      - ref: ate.snapshot.fidelity
         requirement_level: required
       - ref: ate.snapshot.phase
         requirement_level: required
@@ -899,7 +964,7 @@ groups:
         requirement_level: required
       - ref: ate.template.name
         requirement_level: required
-      - ref: ate.snapshot.scope
+      - ref: ate.snapshot.fidelity
         requirement_level: required
       - ref: ate.snapshot.phase
         requirement_level: required
@@ -945,11 +1010,21 @@ groups:
     stability: development
     brief: The total CPU time in seconds of the actors that are in operation.
     note: >
-      This is a usual counter. The other three stats instruments use a callback.
-      atelet adds the increase of each actor to this counter. Thus the value
-      always increases. If a template leaves the node, its series keeps its last
-      value. It does not disappear. This is the behaviour that a rate() query
-      needs.
+      This is a usual counter. The other three stats instruments use a
+      callback. atelet adds the increase of each activation to this counter.
+      Thus the value always increases. If a template leaves the node, its
+      series keeps its last value. It does not disappear. This is the
+      behaviour that a rate() query needs.
+
+      It does not count usage twice. It can count less: the end of an
+      activation after the last sample atelet read of it, which is up to one
+      poll interval plus one ateom sample interval plus the sweep's own time
+      (up to 45s on a micro-VM), so an activation shorter than that can lose
+      most or all of its CPU here, while its usage records keep it; the time
+      around an atelet restart; and, in a
+      micro-VM restored from a full snapshot, a container's use before its
+      first successful reading. A node clock that steps back across an atelet
+      restart can count one activation in full a second time.
     annotations:
       substrate:
         emitted_by: [atelet]
@@ -1219,17 +1294,21 @@ groups:
     brief: The time, the rate and the errors of each gRPC method on the server.
     note: >
       The otelgrpc interceptor sends this instrument. The code of Substrate does
-      not make it. This instrument is the only instrumentation of ateom. ateom
-      has it on the gRPC interface that atelet calls.
+      not make it. This instrument is the only metric of ateom. ateom has it on
+      the gRPC interface that atelet calls. credprovider is the
+      kubernetes-secrets credential provider in
+      cmd/credential-provider/kubernetes-secrets.
     annotations:
       substrate:
-        emitted_by: [ateapi, atelet, atenet-router, ateom-gvisor, ateom-microvm]
+        emitted_by: [ateapi, atelet, atenet-router, ateom-gvisor, ateom-microvm, credprovider]
         golden_signals: [latency, traffic, errors]
         source: external
         instrumentation: go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc
         code_anchor: cmd/atenet/internal/router/xds.go
         cuj: Which RPC is slow or fails, and on which component?
     attributes:
+      - ref: rpc.system.name
+        requirement_level: required
       - ref: rpc.method
         requirement_level: required
       - ref: rpc.response.status_code
@@ -1253,13 +1332,21 @@ groups:
         golden_signals: [latency, traffic, errors]
         source: external
         instrumentation: go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc
-        code_anchor: internal/ateclient/builder.go
+        code_anchor: cmd/ateapi/internal/controlapi/dialer.go
         cuj: A component waits on another component. Which call, and for how long?
     attributes:
+      - ref: rpc.system.name
+        requirement_level: required
       - ref: rpc.method
         requirement_level: required
       - ref: rpc.response.status_code
         requirement_level: required
+      - ref: server.address
+        requirement_level:
+          conditionally_required: The client sent the request headers on a connection.
+      - ref: server.port
+        requirement_level:
+          conditionally_required: The client called the server over TCP. A call on a unix socket has no port.
   # ---------------------------------------------------------------------------
   # The metrics that Substrate exports but does not define
   #

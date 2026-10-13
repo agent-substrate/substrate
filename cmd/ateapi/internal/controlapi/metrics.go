@@ -87,7 +87,7 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		// list just means no seeding this cycle, not a broken observation.
 		if pools, err := listPools(labels.Everything()); err == nil {
 			for _, p := range pools {
-				class := string(p.Spec.SandboxClass)
+				class := string(p.Spec.DefaultSandboxClass())
 				if class == "" {
 					class = string(atev1alpha1.SandboxClassGvisor)
 				}
@@ -201,17 +201,20 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 	i.lifecycleOpDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
 }
 
-// lifecycleOpAttrs builds the resume/suspend/pause dimensions from workflow
-// state. Nil-safe, and omits the pool, snapshot-kind and snapshot-scope labels
-// until they are known so a failure before the assign/restore steps never emits
-// an empty-string series. snapshotKind is empty for suspend/pause, which do not
+// lifecycleOpAttrs builds the resume/suspend/pause/revert dimensions from
+// workflow state. Nil-safe, and omits the template, pool, snapshot-kind and
+// snapshot-fidelity labels until they are known so a failure before the
+// load/assign/restore steps never emits an empty-string series. snapshotKind is empty for suspend/pause, which do not
 // restore; snapshotScope applies to all three and separates a full restore
 // from a data-only one of the same kind.
 // The pool keys are set together or not at all; see ateattr.WorkerPoolAttributes.
 func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, snapshotKind, snapshotScope string) []attribute.KeyValue {
-	attrs := []attribute.KeyValue{
-		ateattr.TemplateNameKey.String(actor.GetActorTemplate().GetName()),
-		ateattr.TemplateAtespaceKey.String(actor.GetActorTemplate().GetAtespace()),
+	var attrs []attribute.KeyValue
+	if actor != nil {
+		attrs = append(attrs,
+			ateattr.TemplateNameKey.String(actor.GetActorTemplate().GetName()),
+			ateattr.TemplateAtespaceKey.String(actor.GetActorTemplate().GetAtespace()),
+		)
 	}
 	ass := actor.GetStatus().GetWorkerAssignment()
 	attrs = append(attrs, ateattr.WorkerPoolAttributes(ass.GetWorkerNamespace(), ass.GetWorkerPool())...)
@@ -222,7 +225,7 @@ func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, s
 		attrs = append(attrs, ateattr.SnapshotKindKey.String(snapshotKind))
 	}
 	if snapshotScope != "" {
-		attrs = append(attrs, ateattr.SnapshotScopeKey.String(snapshotScope))
+		attrs = append(attrs, ateattr.SnapshotFidelityKey.String(snapshotScope))
 	}
 	return attrs
 }
@@ -233,7 +236,8 @@ func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, s
 // set on every outcome it is known for, so no_capacity names the capacity
 // that ran out and stays comparable with assigned.
 // The pool keys are set together or not at all; see ateattr.WorkerPoolAttributes.
-func (i *Instruments) recordSchedulerAssignment(ctx context.Context, start time.Time, outcome, poolNamespace, pool, class string, err error) {
+// elapsed is the time that the attempt took.
+func (i *Instruments) recordSchedulerAssignment(ctx context.Context, elapsed time.Duration, outcome, poolNamespace, pool, class string, err error) {
 	if i == nil || i.schedulerAssignmentDuration == nil {
 		return
 	}
@@ -246,5 +250,5 @@ func (i *Instruments) recordSchedulerAssignment(ctx context.Context, start time.
 	if outcome == ateattr.SchedulerOutcomeError && err != nil {
 		attrs = append(attrs, ateattr.ErrorTypeKey.String(apierror.Code(err).String()))
 	}
-	i.schedulerAssignmentDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
+	i.schedulerAssignmentDuration.Record(ctx, elapsed.Seconds(), metric.WithAttributes(attrs...))
 }

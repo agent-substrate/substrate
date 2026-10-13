@@ -57,8 +57,8 @@ type RouterServer struct {
 	Cmd       *cobra.Command
 	clientset kubernetes.Interface
 	apiClient ateapipb.ControlClient
-	// extprocSrv is the ext_proc mux. Which handlers it carries — ingress,
-	// egress, or both — follows cfg.Mode.
+	// extprocSrv is the ext_proc mux. Which handler it carries, ingress or
+	// egress, follows cfg.Mode.
 	extprocSrv *extproc.Server
 	// ingressHandler is the ingress handler registered on extprocSrv, kept for
 	// the status page's parking snapshot. Nil in egress-only mode.
@@ -158,11 +158,8 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	// pod drains — dropping it from the Service endpoints — while /healthz
 	// stays 200 for liveness.
 	readiness := &serverboot.Readiness{}
-	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
-		Addr:          s.cfg.MetricsAddr,
-		Readiness:     readiness,
-		EnableHealthz: true,
-	})
+	go serverboot.StartMetricsServer(ctx, s.cfg.MetricsAddr)
+	go serverboot.StartHealthServer(ctx, s.cfg.HealthAddr, readiness)
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        s.clientset,
@@ -190,9 +187,9 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	// Register one handler per direction this instance serves. The mux refuses
-	// any direction missing from this map, so the mode is enforced here rather
-	// than merely advertised.
+	// Register the handler for the direction this instance serves. The mux
+	// refuses any direction missing from this map, so the mode is enforced here
+	// rather than merely advertised.
 	handlers := extproc.Handlers{}
 	if s.cfg.Mode.ServesIngress() {
 		parkMetrics, err := ingress.NewParkingMetrics()
@@ -285,7 +282,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		// co-located in the same pod and always dials over loopback, so binding
 		// loopback keeps the ext_proc server unreachable from other pods on the
 		// flat pod network, where nothing authenticates the caller. Readiness is
-		// probed via /readyz on the metrics port, not this one, so a loopback bind
+		// probed via /readyz on the health port, not this one, so a loopback bind
 		// does not break it. An empty address binds every interface.
 		extprocListenAddr := net.JoinHostPort(s.cfg.ExtprocAddr, strconv.Itoa(s.cfg.ExtprocPort))
 		slog.InfoContext(ctx, "Starting ExtProc Server", slog.String("address", extprocListenAddr))

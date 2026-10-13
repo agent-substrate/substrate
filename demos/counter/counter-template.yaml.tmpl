@@ -54,12 +54,12 @@ resources:
   - name: memory
     quantity: 512Mi
 snapshotConfig:
-  # FULL, so a suspend captures process memory as well as the durable
+  # MEMORY, so a suspend captures process memory as well as the durable
   # volumes and the tutorial's in-memory counter really does continue
-  # across suspend/resume. DATA-scope behavior (durable volumes only,
+  # across suspend/resume. VOLUMES behavior (durable volumes only,
   # memory cold-boots) is exercised by the e2e demo suite's own
   # parameterized templates, not by this one.
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/ate-demo-counter/
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR

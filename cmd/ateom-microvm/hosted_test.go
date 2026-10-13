@@ -29,11 +29,11 @@ import (
 // on a full worker and a retry cannot lose its place to another actor.
 func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
 	s := &AteomService{actors: map[string]*hostedActor{}, maxActors: 1}
-	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"})
+	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"})
+	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, false)
 	if err != nil {
 		t.Fatalf("re-admitting a hosted actor on a full worker: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
 		t.Error("re-admission kept the old record; readers could not tell the incarnations apart")
 	}
 	// ResourceExhausted, so the control plane treats it as a capacity miss.
-	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}); apierror.Code(err) != codes.ResourceExhausted {
+	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}, false); apierror.Code(err) != codes.ResourceExhausted {
 		t.Errorf("admitting past the ceiling: got %v, want ResourceExhausted", err)
 	}
 	if got := len(s.hostedActors()); got != 1 {

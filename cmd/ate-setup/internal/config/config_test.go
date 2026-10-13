@@ -39,6 +39,7 @@ func loadEnv(t *testing.T) {
 	t.Setenv("NO_DEV_ENV", "1")
 	for _, name := range []string{
 		"ACTOR_JWT_ALGORITHM",
+		"ACTOR_JWT_ISSUER",
 		"ANTHROPIC_API_KEY",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
@@ -66,6 +67,7 @@ func loadEnv(t *testing.T) {
 		"CLUSTER_LOCATION",
 		"CLUSTER_NAME",
 		"DOCKER_BUILD_FLAGS",
+		"E2E_ATE_ENVOY_CONCURRENCY",
 		"EXPECTED_JWT_ISSUER",
 		"KIND_CLUSTER_NAME",
 		"KO_DEFAULTPLATFORMS",
@@ -435,6 +437,47 @@ func TestLoadActorJWTAlgorithm(t *testing.T) {
 	}
 }
 
+func TestLoadActorJWTIssuer(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		env       string
+		namespace string
+		want      string
+		wantErr   bool
+	}{
+		{name: "unset", want: "https://idp.ate-system.svc"},
+		{name: "unset in a relocated install", namespace: "team-a", want: "https://idp.team-a.svc"},
+		{name: "set is used as given", env: "https://idp.example.com/prod/", want: "https://idp.example.com/prod/"},
+		{name: "not https", env: "http://idp.example.com", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			loadEnv(t)
+			if tt.env != "" {
+				t.Setenv("ACTOR_JWT_ISSUER", tt.env)
+			}
+			if tt.namespace != "" {
+				t.Setenv("ATE_NAMESPACE", tt.namespace)
+			} else {
+				unsetEnv(t, "ATE_NAMESPACE")
+			}
+
+			cfg, err := Load(Options{})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Load() with ACTOR_JWT_ISSUER=%q returned nil error", tt.env)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.ActorJWTIssuer != tt.want {
+				t.Errorf("ActorJWTIssuer = %q, want %q", cfg.ActorJWTIssuer, tt.want)
+			}
+		})
+	}
+}
+
 // The endpoint has to reach both the Go steps and the shell scripts ate-setup
 // still delegates to, or the two halves of an install export different
 // collectors.
@@ -752,6 +795,30 @@ func TestLoadRejectsInvalidPodcertWorkersEnv(t *testing.T) {
 			t.Setenv("ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER", val)
 			if _, err := Load(Options{}); err == nil {
 				t.Fatalf("Load() with env %q succeeded, want an error", val)
+			}
+		})
+	}
+}
+
+func TestLoadEnvoyConcurrency(t *testing.T) {
+	loadEnv(t)
+	cfg, err := Load(Options{EnvoyConcurrency: 4})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.EnvoyConcurrency != 4 {
+		t.Errorf("EnvoyConcurrency = %d, want 4", cfg.EnvoyConcurrency)
+	}
+	if got := scriptEnvMap(t, cfg)["E2E_ATE_ENVOY_CONCURRENCY"]; got != "4" {
+		t.Errorf("ScriptEnv()[E2E_ATE_ENVOY_CONCURRENCY] = %q, want 4", got)
+	}
+
+	for _, val := range []string{"0", "-1", "abc"} {
+		t.Run("invalid_"+val, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("E2E_ATE_ENVOY_CONCURRENCY", val)
+			if _, err := Load(Options{}); err == nil {
+				t.Fatalf("Load() with E2E_ATE_ENVOY_CONCURRENCY=%q succeeded, want an error", val)
 			}
 		})
 	}

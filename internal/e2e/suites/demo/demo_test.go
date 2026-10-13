@@ -47,7 +47,7 @@ func TestActorLifecycle(t *testing.T) {
 	clients := e2e.GetClients()
 
 	// Create actor template.
-	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
 
-	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to suspend source Actor: %v", err)
 	}
-	snapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	snapshotURI := durableSnapshotURI(suspended.GetActor().GetStatus())
 	if snapshotURI == "" {
 		t.Fatal("suspended Actor has no external snapshot")
 	}
@@ -156,15 +156,11 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create the Tag: %v", err)
 	}
-	if got := tagToUpdate.GetStatus().GetSnapshot().GetSnapshotUri(); got == "" || got == snapshotURI {
+	if got := tagSnapshotURI(tagToUpdate); got == "" || got == snapshotURI {
 		t.Fatalf("Tag %s snapshot uri = %q, want a copy of its own", tagRef.GetName(), got)
 	}
-	wantTagURI, err := resources.NewTagSnapshotURI(tagToUpdate.GetStatus().GetStorageLocation(), tagToUpdate.GetMetadata().GetAtespace(), tagToUpdate.GetMetadata().GetUid())
-	if err != nil {
-		t.Fatalf("NewTagSnapshotURI: %v", err)
-	}
-	if got := tagToUpdate.GetStatus().GetSnapshot().GetSnapshotUri(); got != wantTagURI.String() {
-		t.Errorf("tag snapshot URI = %q, want UID-based URI %q", got, wantTagURI)
+	if _, err := resources.ParseSnapshotURI(tagSnapshotURI(tagToUpdate)); err != nil {
+		t.Errorf("ParseSnapshotURI(%q): %v", tagSnapshotURI(tagToUpdate), err)
 	}
 	listed, err := clients.SubstrateAPI.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: demoAtespace})
 	if err != nil {
@@ -219,51 +215,90 @@ func TestDurableDirLifecycle(t *testing.T) {
 		tc   actorLifecycleTestCase
 	}{
 		{
-			name: "onCommit:Full",
+			name: "preferredFidelity:MEMORY",
 			tc: actorLifecycleTestCase{
-				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				wantMemoryAfterPause:   2,
 				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
 				wantMemoryAfterSuspend: 3,
 				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
 			},
 		},
 		{
-			// Pause captures the same Data scope as suspend, so memory
-			// cold-boots on every resume.
-			name: "onCommit:Data",
+			// Pause captures the same VOLUMES fidelity as suspend, so memory
+			// and rootfs writes cold-boot on every resume.
+			name: "preferredFidelity:VOLUMES",
 			tc: actorLifecycleTestCase{
-				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				wantMemoryAfterPause:   1,
 				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   1,
 				wantMemoryAfterSuspend: 1,
 				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 1,
 			},
 		},
 		{
-			// Suspend from PAUSED uploads the Full local snapshot.
-			name: "onCommit:Full, suspend from PAUSED",
+			// ROOTFS keeps the rootfs writes across a cold boot: the memory
+			// counter restarts while the rootfs counter continues.
+			name: "preferredFidelity:ROOTFS",
 			tc: actorLifecycleTestCase{
-				onCommit:                 ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-				wantMemoryAfterPause:     2,
-				wantFileAfterPause:       2,
-				wantMemoryAfterSuspend:   3,
-				wantFileAfterSuspend:     3,
-				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-				suspendWhilePaused:       true,
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				wantMemoryAfterPause:   1,
+				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
+				wantMemoryAfterSuspend: 1,
+				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
+				microVMOnly:            true,
 			},
 		},
 		{
-			// Suspend from PAUSED uploads the Data local snapshot.
-			name: "onCommit:Data, suspend from PAUSED",
+			// Suspend from PAUSED uploads the MEMORY local snapshot.
+			name: "preferredFidelity:MEMORY, suspend from PAUSED",
 			tc: actorLifecycleTestCase{
-				onCommit:                 ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				wantMemoryAfterPause:     1,
-				wantFileAfterPause:       2,
-				wantMemoryAfterSuspend:   1,
-				wantFileAfterSuspend:     3,
-				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				suspendWhilePaused:       true,
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				wantMemoryAfterPause:   2,
+				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
+				wantMemoryAfterSuspend: 3,
+				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
+				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				suspendWhilePaused:     true,
+			},
+		},
+		{
+			// Suspend from PAUSED uploads the VOLUMES local snapshot.
+			name: "preferredFidelity:VOLUMES, suspend from PAUSED",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+				wantMemoryAfterPause:   1,
+				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   1,
+				wantMemoryAfterSuspend: 1,
+				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 1,
+				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+				suspendWhilePaused:     true,
+			},
+		},
+		{
+			// Suspend from PAUSED uploads the ROOTFS local snapshot.
+			name: "preferredFidelity:ROOTFS, suspend from PAUSED",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				wantMemoryAfterPause:   1,
+				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
+				wantMemoryAfterSuspend: 1,
+				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
+				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				suspendWhilePaused:     true,
+				microVMOnly:            true,
 			},
 		},
 	}
@@ -271,7 +306,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if test.tc.microVMOnly && !e2e.IsMicroVM() {
-				t.Skipf("Skipping %s: micro-VM-only case (durable-data extraction from a Full capture)", test.name)
+				t.Skipf("Skipping %s: only the micro-VM runtime serves this fidelity", test.name)
 			}
 			t.Parallel()
 			runActorLifecycleTestCase(t, "durabledir-lifecycle", createActorTemplate, test.tc)
@@ -290,9 +325,9 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 		tc   actorLifecycleTestCase
 	}{
 		{
-			name: "onCommit:Full",
+			name: "preferredFidelity:MEMORY",
 			tc: actorLifecycleTestCase{
-				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				wantMemoryAfterPause:   2,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 3,
@@ -301,14 +336,28 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 			},
 		},
 		{
-			name: "onCommit:Data",
+			name: "preferredFidelity:VOLUMES",
 			tc: actorLifecycleTestCase{
-				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				wantMemoryAfterPause:   1,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 1,
 				wantFileAfterSuspend:   3,
 				checkSecondFileCounter: true,
+			},
+		},
+		{
+			name: "preferredFidelity:ROOTFS",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				wantMemoryAfterPause:   1,
+				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
+				wantMemoryAfterSuspend: 1,
+				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
+				checkSecondFileCounter: true,
+				microVMOnly:            true,
 			},
 		},
 	}
@@ -332,9 +381,9 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 		tc   actorLifecycleTestCase
 	}{
 		{
-			name: "onCommit:Data",
+			name: "preferredFidelity:VOLUMES",
 			tc: actorLifecycleTestCase{
-				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				wantMemoryAfterPause:   1,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 1,
@@ -357,7 +406,7 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
 
-	at, err := createActorTemplateWithExternalVolume(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA)
+	at, err := createActorTemplateWithExternalVolume(ctx, t, clients, nsObj, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -388,12 +437,12 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get actor: %v", err)
 	}
-	if len(actor.GetStatus().GetActorVolumes()) == 0 {
+	if len(actor.GetStatus().GetExternalVolumes()) == 0 {
 		t.Fatalf("expected actor to have volumes, got 0")
 	}
-	for _, vol := range actor.GetStatus().GetActorVolumes() {
+	for _, vol := range actor.GetStatus().GetExternalVolumes() {
 		if vol.Status != ateapipb.ExternalVolume_STATUS_CREATED {
-			t.Fatalf("expected volume %q to be CREATED, got %s", vol.VolumeName, vol.Status)
+			t.Fatalf("expected volume %q to be CREATED, got %s", vol.Name, vol.Status)
 		}
 	}
 
@@ -424,7 +473,7 @@ func TestExternalVolume_NodeMigration(t *testing.T) {
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
 
-	at, err := createActorTemplateWithExternalVolume(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA)
+	at, err := createActorTemplateWithExternalVolume(ctx, t, clients, nsObj, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -512,11 +561,17 @@ func TestExternalVolume_NodeMigration(t *testing.T) {
 //  5. Suspend & Resume actor.
 //  6. Call to actor and validate memory and file counters.
 type actorLifecycleTestCase struct {
-	onCommit               ateapipb.SnapshotContentScope
+	fidelity               ateapipb.SnapshotFidelity
 	wantMemoryAfterPause   int
 	wantFileAfterPause     int
 	wantMemoryAfterSuspend int
 	wantFileAfterSuspend   int
+
+	// wantRootfsAfterPause and wantRootfsAfterSuspend assert the counter the
+	// workload keeps in a file on its root filesystem: ROOTFS and MEMORY
+	// snapshots carry it, VOLUMES resets it. Zero skips the check.
+	wantRootfsAfterPause   int
+	wantRootfsAfterSuspend int
 
 	// checkSecondFileCounter also asserts the counter kept in a SECOND durable
 	// volume. Both volumes are written on every request, so it must track the
@@ -524,9 +579,9 @@ type actorLifecycleTestCase struct {
 	// wrong place, they would diverge.
 	checkSecondFileCounter bool
 
-	// wantSnapshotContentScope, when set, asserts the content scope recorded
+	// wantSnapshotFidelity, when set, asserts the content scope recorded
 	// on the ActorSnapshot the suspend produced.
-	wantSnapshotContentScope ateapipb.SnapshotContentScope
+	wantSnapshotFidelity ateapipb.SnapshotFidelity
 
 	// microVMOnly skips the case outside the micro-VM environment.
 	microVMOnly bool
@@ -539,7 +594,7 @@ type actorLifecycleTestCase struct {
 	suspendWhilePaused bool
 }
 
-func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, ateapipb.SnapshotContentScope) (*ateapipb.ActorTemplate, error), tc actorLifecycleTestCase) {
+func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, ateapipb.SnapshotFidelity) (*ateapipb.ActorTemplate, error), tc actorLifecycleTestCase) {
 	// Create namespace
 	nsObj := e2e.CreateNamespace(t)
 
@@ -547,7 +602,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	clients := e2e.GetClients()
 
 	// Create actor template.
-	at, err := createTemplate(ctx, t, clients, nsObj, tc.onCommit)
+	at, err := createTemplate(ctx, t, clients, nsObj, tc.fidelity)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -589,6 +644,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	if tc.checkSecondFileCounter {
 		validateSecondFileCounter(t, resp, "after creation", 1)
 	}
+	if tc.wantRootfsAfterPause != 0 {
+		validateRootfsCounter(t, resp, "after creation", 1)
+	}
 
 	//
 	// Pausing the actor
@@ -617,6 +675,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	validateCounterResponse(t, resp, "after pause", tc.wantMemoryAfterPause, tc.wantFileAfterPause)
 	if tc.checkSecondFileCounter {
 		validateSecondFileCounter(t, resp, "after pause", tc.wantFileAfterPause)
+	}
+	if tc.wantRootfsAfterPause != 0 {
+		validateRootfsCounter(t, resp, "after pause", tc.wantRootfsAfterPause)
 	}
 
 	//
@@ -648,13 +709,13 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		if err != nil {
 			t.Fatalf("failed to get suspended Actor: %v", err)
 		}
-		if suspendedActor.GetStatus().GetLocalSnapshot() != nil {
-			t.Errorf("suspended Actor still carries LocalSnapshot: %v", suspendedActor.GetStatus().GetLocalSnapshot())
+		if hasLocalSnapshot(suspendedActor.GetStatus()) {
+			t.Errorf("suspended Actor still carries LocalSnapshot: %v", suspendedActor.GetStatus().GetSnapshots())
 		}
 	}
 
-	if tc.wantSnapshotContentScope != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED {
-		validateSnapshotContentScope(ctx, t, clients, actorID, tc.wantSnapshotContentScope)
+	if tc.wantSnapshotFidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+		validateSnapshotFidelity(ctx, t, clients, actorID, tc.wantSnapshotFidelity)
 	}
 
 	// Resuming the actor
@@ -674,11 +735,14 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	if tc.checkSecondFileCounter {
 		validateSecondFileCounter(t, resp, "after suspend", tc.wantFileAfterSuspend)
 	}
+	if tc.wantRootfsAfterSuspend != 0 {
+		validateRootfsCounter(t, resp, "after suspend", tc.wantRootfsAfterSuspend)
+	}
 }
 
-// validateSnapshotContentScope asserts the content scope recorded on the
+// validateSnapshotFidelity asserts the content scope recorded on the
 // suspended actor's external snapshot.
-func validateSnapshotContentScope(ctx context.Context, t *testing.T, clients *e2e.Clients, actorID string, want ateapipb.SnapshotContentScope) {
+func validateSnapshotFidelity(ctx context.Context, t *testing.T, clients *e2e.Clients, actorID string, want ateapipb.SnapshotFidelity) {
 	t.Helper()
 	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
@@ -686,12 +750,47 @@ func validateSnapshotContentScope(ctx context.Context, t *testing.T, clients *e2
 	if err != nil {
 		t.Fatalf("failed to get suspended Actor: %v", err)
 	}
-	if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() == "" {
+	if durableSnapshotURI(actor.GetStatus()) == "" {
 		t.Fatal("suspended Actor has no external snapshot")
 	}
-	if got := actor.GetStatus().GetExternalSnapshot().GetContentScope(); got != want {
-		t.Errorf("snapshot %q content scope = %v, want %v", actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(), got, want)
+	if got := durableSnapshot(actor.GetStatus()).GetFidelity(); got != want {
+		t.Errorf("snapshot %q content scope = %v, want %v", durableSnapshotURI(actor.GetStatus()), got, want)
 	}
+}
+
+func durableSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
+	var best *ateapipb.Snapshot
+	for _, snap := range status.GetSnapshots() {
+		st := snap.GetDurableSnapshot()
+		if st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+			st.GetObject().GetSnapshotUri() != "" {
+			if best == nil || snap.GetGeneration() > best.GetGeneration() {
+				best = snap
+			}
+		}
+	}
+	return best
+}
+
+func durableSnapshotStorage(status *ateapipb.ActorStatus) *ateapipb.SnapshotStorage {
+	return durableSnapshot(status).GetDurableSnapshot()
+}
+
+func durableSnapshotURI(status *ateapipb.ActorStatus) string {
+	return durableSnapshotStorage(status).GetObject().GetSnapshotUri()
+}
+
+func hasLocalSnapshot(status *ateapipb.ActorStatus) bool {
+	for _, snap := range status.GetSnapshots() {
+		if snap.GetLocality() != "" && snap.GetUuid() != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func tagSnapshotURI(tag *ateapipb.Tag) string {
+	return tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetObject().GetSnapshotUri()
 }
 
 // validateSecondFileCounter checks the counter the workload keeps in its second
@@ -701,6 +800,15 @@ func validateSecondFileCounter(t *testing.T, resp string, stage string, want int
 	const prefix = "preserved second file counter: "
 	if !strings.Contains(resp, prefix+fmt.Sprintf("%d", want)) {
 		t.Errorf("[%s] expected second file count %d, got response: %s", stage, want, resp)
+	}
+}
+
+// validateRootfsCounter asserts the counter the workload keeps in a file on
+// its root filesystem, the one layer that tells ROOTFS apart from VOLUMES.
+func validateRootfsCounter(t *testing.T, resp string, stage string, want int) {
+	t.Helper()
+	if !strings.Contains(resp, fmt.Sprintf("preserved rootfs counter: %d", want)) {
+		t.Errorf("[%s] expected rootfs counter %d, got response: %s", stage, want, resp)
 	}
 }
 
@@ -958,7 +1066,7 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	if err != nil {
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
-	snapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	snapshotURI := durableSnapshotURI(suspended.GetActor().GetStatus())
 	if snapshotURI == "" {
 		t.Fatal("suspend wrote no external snapshot")
 	}
@@ -983,7 +1091,7 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Fatalf("state after revert = %v, want SUSPENDED", got)
 	}
-	if got := reverted.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != snapshotURI {
+	if got := durableSnapshotURI(reverted.GetActor().GetStatus()); got != snapshotURI {
 		t.Fatalf("snapshot URI after revert = %q, want %q", got, snapshotURI)
 	}
 	if reverted.GetActor().GetStatus().GetWorkerAssignment() != nil {
@@ -1018,10 +1126,10 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Fatalf("state after revert from PAUSED = %v, want SUSPENDED", got)
 	}
-	if reverted.GetActor().GetStatus().GetLocalSnapshot() != nil {
+	if hasLocalSnapshot(reverted.GetActor().GetStatus()) {
 		t.Fatal("local snapshot pointer survived revert from PAUSED")
 	}
-	if got := reverted.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != snapshotURI {
+	if got := durableSnapshotURI(reverted.GetActor().GetStatus()); got != snapshotURI {
 		t.Fatalf("snapshot URI after revert from PAUSED = %q, want %q", got, snapshotURI)
 	}
 
@@ -1189,7 +1297,7 @@ func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.C
 	return nil
 }
 
-func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, base string, onCommit ateapipb.SnapshotContentScope, modifyTemplate func(*ateapipb.ActorTemplate)) (*ateapipb.ActorTemplate, error) {
+func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, base string, fidelity ateapipb.SnapshotFidelity, modifyTemplate func(*ateapipb.ActorTemplate)) (*ateapipb.ActorTemplate, error) {
 	env, err := e2e.CheckEnv("BUCKET_NAME")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
@@ -1206,19 +1314,19 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 		PoolReplicas: 2,
 		Labels:       map[string]string{"demo": nsObj.Name},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			StorageLocation: "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,
-			OnCommit:        onCommit,
+			StorageLocation:   "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,
+			PreferredFidelity: fidelity,
 		},
 		Modify: modifyTemplate,
 	})
 	return at, nil
 }
 
-func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit ateapipb.SnapshotContentScope) (*ateapipb.ActorTemplate, error) {
-	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter", onCommit, nil)
+func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, fidelity ateapipb.SnapshotFidelity) (*ateapipb.ActorTemplate, error) {
+	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter", fidelity, nil)
 }
 
-func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit ateapipb.SnapshotContentScope) (*ateapipb.ActorTemplate, error) {
+func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, fidelity ateapipb.SnapshotFidelity) (*ateapipb.ActorTemplate, error) {
 	scName := e2e.StorageClass
 	if !hasStorageClass(ctx, clients, scName) {
 		t.Fatalf("StorageClass %q not found in cluster; provide a valid --storage-class or install the CSI driver via --setup-csi", scName)
@@ -1263,7 +1371,7 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 			})
 		}
 	}
-	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-ext-vol", onCommit, modify)
+	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-ext-vol", fidelity, modify)
 }
 
 // secondDurableDirVolume is the extra durable-dir volume (and where the counter
@@ -1278,7 +1386,7 @@ const (
 // counter's second file counter at it, so both volumes are written on every
 // request. Only the micro-VM runtime accepts this: gVisor templates are still
 // capped at one durable-dir volume by the ActorTemplate CEL rules.
-func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit ateapipb.SnapshotContentScope) (*ateapipb.ActorTemplate, error) {
+func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, fidelity ateapipb.SnapshotFidelity) (*ateapipb.ActorTemplate, error) {
 	modify := func(at *ateapipb.ActorTemplate) {
 		for _, c := range at.GetContainers() {
 			if c.GetName() != "counter" {
@@ -1295,7 +1403,7 @@ func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, cl
 			DurableDir: &ateapipb.DurableDirVolumeSource{},
 		})
 	}
-	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-two-durabledirs", onCommit, modify)
+	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-two-durabledirs", fidelity, modify)
 }
 
 func hasStorageClass(ctx context.Context, clients *e2e.Clients, name string) bool {
@@ -1448,7 +1556,7 @@ func TestWorkerPodDeletion(t *testing.T) {
 	clients := e2e.GetClients()
 
 	// Create actor template.
-	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -1578,7 +1686,7 @@ func TestRevertCrashedActor(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -1614,7 +1722,7 @@ func TestRevertCrashedActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
-	snapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	snapshotURI := durableSnapshotURI(suspended.GetActor().GetStatus())
 	if snapshotURI == "" {
 		t.Fatal("suspend wrote no external snapshot")
 	}
@@ -1664,7 +1772,7 @@ func TestRevertCrashedActor(t *testing.T) {
 	if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Fatalf("state after revert = %v, want SUSPENDED", got)
 	}
-	if got := reverted.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != snapshotURI {
+	if got := durableSnapshotURI(reverted.GetActor().GetStatus()); got != snapshotURI {
 		t.Fatalf("snapshot URI after revert = %q, want %q", got, snapshotURI)
 	}
 	if reverted.GetActor().GetStatus().GetWorkerAssignment() != nil {

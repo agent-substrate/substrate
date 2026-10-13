@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
+	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
@@ -44,11 +45,17 @@ type hostedActor struct {
 	vm *runningActor
 	// Nil when no guest stats connection is available.
 	guest *guestStatsTarget
+
+	// usage is this activation's epoch, CPU baseline, and latest sample.
+	// Immutable after admission.
+	usage *ateomstats.Activation
 }
 
 // admitActor reserves capacity before network setup. An actor that is already
 // hosted keeps its slot; its old network is returned for the caller to close.
-func (s *AteomService) admitActor(attribution resources.ActorAttribution) (*hostedActor, *ateomnet.SandboxSession, error) {
+// resumesGuest is true when the activation resumes a guest from a snapshot,
+// whose CPU counters come back with it.
+func (s *AteomService) admitActor(attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, *ateomnet.SandboxSession, error) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	var stale *ateomnet.SandboxSession
@@ -57,19 +64,20 @@ func (s *AteomService) admitActor(attribution resources.ActorAttribution) (*host
 	} else if len(s.actors)+s.draining >= s.maxActors {
 		return nil, nil, apierror.ResourceExhausted("worker is full: %d actors", s.maxActors)
 	}
-	hosted := &hostedActor{attribution: attribution}
+	hosted := &hostedActor{attribution: attribution, usage: ateomstats.NewActivation(time.Now(), resumesGuest)}
 	s.actors[attribution.UID] = hosted
 	return hosted, stale, nil
 }
 
-// hostActor sets up the actor's network, replacing any stale one.
-func (s *AteomService) hostActor(ctx context.Context, attribution resources.ActorAttribution) (*hostedActor, error) {
+// hostActor sets up the actor's network, replacing any stale one. resumesGuest
+// is as for admitActor.
+func (s *AteomService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, error) {
 	uid := attribution.UID
 	if uid == "" {
 		return nil, fmt.Errorf("actor UID is required")
 	}
 
-	hosted, stale, err := s.admitActor(attribution)
+	hosted, stale, err := s.admitActor(attribution, resumesGuest)
 	if err != nil {
 		return nil, err
 	}
@@ -203,15 +211,11 @@ func (s *AteomService) setGuestStats(actorUID string, guest *guestStatsTarget) {
 	}
 }
 
-// guestStatsFor is the stats target for an actor, or nil.
-func (s *AteomService) guestStatsFor(actorUID string) *guestStatsTarget {
-	hosted := s.lookupActor(actorUID)
-	if hosted == nil {
-		return nil
-	}
+// guestOf is h's stats target, or nil.
+func (s *AteomService) guestOf(h *hostedActor) *guestStatsTarget {
 	s.actorsMu.RLock()
 	defer s.actorsMu.RUnlock()
-	return hosted.guest
+	return h.guest
 }
 
 // sandboxNetNS is where an actor's tap and atunnel's sockets live, or -1.

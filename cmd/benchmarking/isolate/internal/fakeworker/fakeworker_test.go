@@ -15,27 +15,24 @@
 package fakeworker
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/google/uuid"
 )
 
-// Names are pinned: a change renames every fake Worker, which strands the
-// ones a previous fake-workersync registered.
+// Names are pinned: a change renames every fake Worker's pod, which strands
+// the Workers a previous fake-workersync registered.
 func TestNamePinned(t *testing.T) {
 	if got, want := Name("r1", "benchmark-workloads", "benchmark-ateom", 0), "fake-r1-c52b9bd3-0"; got != want {
 		t.Errorf("Name = %q, want %q", got, want)
 	}
-	if got, want := PodUID("fake-r1-c52b9bd3-0"), "a44150bd-557f-5e1f-a1fa-7d6adbf63611"; got != want {
-		t.Errorf("PodUID = %q, want %q", got, want)
-	}
 }
 
-// k8sShortName is the k8s-short-name format Worker names are validated
-// against.
+// k8sShortName is the k8s-short-name format pod names follow.
 var k8sShortName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 func TestNameIsAShortNameAtTheBounds(t *testing.T) {
@@ -85,19 +82,6 @@ func TestNodeRoundRobin(t *testing.T) {
 	}
 }
 
-func TestPodUIDIsAStableUUID(t *testing.T) {
-	a, b := PodUID("fake-r1-00000000-0"), PodUID("fake-r1-00000000-0")
-	if a != b {
-		t.Errorf("PodUID is not deterministic: %q then %q", a, b)
-	}
-	if _, err := uuid.Parse(a); err != nil {
-		t.Errorf("PodUID = %q, not a UUID: %v", a, err)
-	}
-	if PodUID("fake-r1-00000000-1") == a {
-		t.Error("two names share a pod UID")
-	}
-}
-
 func TestIPInDocumentationRange(t *testing.T) {
 	doc := netip.MustParsePrefix("192.0.2.0/24")
 	for _, i := range []int{0, 253, 254, 1000} {
@@ -121,5 +105,28 @@ func TestValidateRun(t *testing.T) {
 		if err := ValidateRun(run); err == nil {
 			t.Errorf("ValidateRun(%q) = nil, want an error", run)
 		}
+	}
+}
+
+func TestVerifyPeerID(t *testing.T) {
+	const want = "spiffe://cluster.local/ns/benchmark-workloads/sa/fake-workersync"
+	state := func(path string) tls.ConnectionState {
+		cert := &x509.Certificate{}
+		if path != "" {
+			cert.URIs = []*url.URL{{Scheme: "spiffe", Host: "cluster.local", Path: path}}
+		}
+		return tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+	}
+	if err := VerifyPeerID(state("/ns/benchmark-workloads/sa/fake-workersync"), want); err != nil {
+		t.Errorf("VerifyPeerID(matching) = %v", err)
+	}
+	if err := VerifyPeerID(state("/ns/ate-system/sa/atelet"), want); err == nil {
+		t.Error("VerifyPeerID accepted another workload")
+	}
+	if err := VerifyPeerID(state(""), want); err == nil {
+		t.Error("VerifyPeerID accepted a certificate with no SPIFFE ID")
+	}
+	if err := VerifyPeerID(tls.ConnectionState{}, want); err == nil {
+		t.Error("VerifyPeerID accepted no certificate")
 	}
 }

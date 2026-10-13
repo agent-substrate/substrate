@@ -171,6 +171,16 @@ if [[ "${IP_FAMILY}" == "ipv6" ]]; then
   fi
 fi
 
+# 2.4 Every sandbox gets a link-local address, and the kernel's neighbor table
+# ceiling is global across network namespaces: at its default of 1024 entries a
+# host with about a thousand sandboxes overflows it ("neighbour: arp_cache:
+# neighbor table overflow!" in dmesg) and connections to sandboxes time out while
+# the host sits idle. Only Linux hosts expose the sysctl; warn, do not change it.
+if thresh3="$(sysctl -n net.ipv4.neigh.default.gc_thresh3 2>/dev/null)" && [ "${thresh3}" -le 1024 ]; then
+  echo "warning: net.ipv4.neigh.default.gc_thresh3=${thresh3}; above about 1000 sandboxes on this host set" >&2
+  echo "         net.ipv4.neigh.default.gc_thresh1=4096 gc_thresh2=16384 gc_thresh3=32768 (sysctl -w, as root)" >&2
+fi
+
 # 2.5 Enable Proxy ARP/NDP on kind nodes for gVisor loopback pod-to-pod networking
 echo "Enabling Proxy ARP/NDP on kind nodes..."
 for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do

@@ -27,7 +27,7 @@ containers:
   image: ko://github.com/agent-substrate/substrate/demos/counter
   command: ["/ko-app/counter"]
 snapshotConfig:
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/ate-demo-parking/
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR

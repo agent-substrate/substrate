@@ -36,6 +36,7 @@ type Options struct {
 	Router                         string
 	RolloutTimeout                 string
 	PodcertWorkersPerSigner        int
+	EnvoyConcurrency               int
 	ClusterSize                    string
 	CordonControlPlane             bool
 	AdditionalEgressExtprocService string
@@ -111,6 +112,11 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 	}
 	if opts.PodcertWorkersPerSigner != 0 {
 		if err := fs.Set("podcert-workers-per-signer", strconv.Itoa(opts.PodcertWorkersPerSigner)); err != nil {
+			return nil, err
+		}
+	}
+	if opts.EnvoyConcurrency != 0 {
+		if err := fs.Set("e2e-envoy-concurrency", strconv.Itoa(opts.EnvoyConcurrency)); err != nil {
 			return nil, err
 		}
 	}

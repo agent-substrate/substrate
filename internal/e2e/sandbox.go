@@ -21,7 +21,7 @@ import (
 )
 
 // SandboxClassMicroVM is the kata + cloud-hypervisor runtime, spelled as the
-// WorkerPool/ActorTemplate spec.sandboxClass field spells it.
+// WorkerPool spec.sandboxClasses[].name and ActorTemplate sandboxClass spell it.
 const SandboxClassMicroVM = "microvm"
 
 // sandboxClassEnv selects which runtime's fixtures the suites build actors
@@ -184,7 +184,7 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 		"${FIXTURE_SUFFIX}": "-" + name,
 	}
 	blocks = map[string]string{
-		"${WORKERPOOL_RUNTIME}":     "",
+		"${WORKERPOOL_RUNTIME}":     "  sandboxClasses:\n  - name: gvisor",
 		"${TEMPLATE_SANDBOX_CLASS}": "",
 		"${TEMPLATE_RESOURCES}":     "",
 		// Off unless the caller opts in; see WithTrustBundle.
@@ -199,7 +199,7 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 	// The micro-VM ActorTemplates name the cluster-wide SandboxConfig
 	// hack/install-microvm-deps.sh installs (configName: microvm), so a
 	// missing or stale one fails loudly. The pool only selects the class.
-	blocks["${WORKERPOOL_RUNTIME}"] = "  sandboxClass: microvm"
+	blocks["${WORKERPOOL_RUNTIME}"] = "  sandboxClasses:\n  - name: microvm"
 	// Must match the WorkerPool's: a snapshot is not portable across sandbox
 	// classes, so only same-class pools are eligible to run these actors.
 	blocks["${TEMPLATE_SANDBOX_CLASS}"] = "  sandboxClass: microvm"

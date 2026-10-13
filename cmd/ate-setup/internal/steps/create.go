@@ -35,6 +35,7 @@ const (
 	SecretActorIDCACerts   = "actor-id-ca-certs"
 	SecretServiceDNSCA     = "service-dns-ca-pool"
 	SecretPodIdentityCA    = "pod-identity-ca-pool"
+	SecretPostgresCA       = "postgres-ca-pool"
 	SecretEgressMITMCAPool = "egress-mitm-ca-pool"
 	SecretAPIEnvVars       = "ate-api-server-secret-envvars"
 	SecretPostgresServerCA = "postgres-server-ca"
@@ -89,7 +90,7 @@ func (e *Env) EnsureEgressMITMCAPoolSecret(ctx context.Context) error {
 	return e.ensureSecret(ctx, e.Namespace(), SecretEgressMITMCAPool, e.CreateEgressMITMCAPoolSecret)
 }
 
-// CreatePodCertificateControllerCAs generates the two signer pools the
+// CreatePodCertificateControllerCAs generates the signer pools the
 // podcertificate controller issues from.
 func (e *Env) CreatePodCertificateControllerCAs(ctx context.Context) error {
 	log.Step("create_podcertificate_controller_cas")
@@ -99,7 +100,10 @@ func (e *Env) CreatePodCertificateControllerCAs(ctx context.Context) error {
 	if err := e.createCAPool(ctx, NamespacePodCert, SecretServiceDNSCA); err != nil {
 		return err
 	}
-	return e.createCAPool(ctx, NamespacePodCert, SecretPodIdentityCA)
+	if err := e.createCAPool(ctx, NamespacePodCert, SecretPodIdentityCA); err != nil {
+		return err
+	}
+	return e.createCAPool(ctx, NamespacePodCert, SecretPostgresCA)
 }
 
 // CreateActorIDCACertsSecret derives a certificate-only trust bundle from the

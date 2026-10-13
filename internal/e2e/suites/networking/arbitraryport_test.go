@@ -125,6 +125,28 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 		}
 		t.Logf("tunneled request to an unlisted port correctly returned HTTP %d; body: %s", resp.StatusCode, body)
 	})
+
+	t.Run("duplicate actor header rejected on CONNECT", func(t *testing.T) {
+		headers := http.Header{
+			atenet.TargetActorHeader: []string{actorRef.String(), "untrusted/actor"},
+		}
+		conn, err := router.ConnectWithHeaders(ctx, actorRef, counterExtraPort, headers)
+		if err != nil {
+			// A rejected CONNECT handshake is a valid rejection.
+			t.Logf("CONNECT with duplicate headers rejected: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		resp, body, err := requestTunneled(conn, actorRef.Name)
+		if err != nil {
+			t.Logf("tunneled request with duplicate CONNECT headers correctly failed: %v", err)
+			return
+		}
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("request through CONNECT with duplicate actor headers returned %d, want 404; body: %s", resp.StatusCode, body)
+		}
+	})
 }
 
 // waitForTunneledRouteReady retries an entire CONNECT exchange while the

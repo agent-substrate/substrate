@@ -19,13 +19,11 @@ package postgressetup
 import _ "embed"
 
 const (
-	Schema            = "substrate"
-	OwnerRole         = "substrate_owner"
-	OwnerUser         = "substrate_owner_user"
-	OwnerPassword     = "substrate-owner"
-	ReadWriteRole     = "substrate_readwrite"
-	ReadWriteUser     = "substrate_readwrite_user"
-	ReadWritePassword = "substrate-readwrite"
+	Schema        = "substrate"
+	OwnerRole     = "substrate_owner"
+	OwnerUser     = "substrate_owner_user"
+	ReadWriteRole = "substrate_readwrite"
+	ReadWriteUser = "substrate_readwrite_user"
 )
 
 // Config names the schema and identities created by SQL.
@@ -39,16 +37,14 @@ type Config struct {
 	ReadWritePassword string
 }
 
-// DefaultConfig returns the identities used by bundled development installs.
+// DefaultConfig returns the passwordless identities used by bundled installs.
 func DefaultConfig() Config {
 	return Config{
-		Schema:            Schema,
-		OwnerRole:         OwnerRole,
-		OwnerUser:         OwnerUser,
-		OwnerPassword:     OwnerPassword,
-		ReadWriteRole:     ReadWriteRole,
-		ReadWriteUser:     ReadWriteUser,
-		ReadWritePassword: ReadWritePassword,
+		Schema:        Schema,
+		OwnerRole:     OwnerRole,
+		OwnerUser:     OwnerUser,
+		ReadWriteRole: ReadWriteRole,
+		ReadWriteUser: ReadWriteUser,
 	}
 }
 

@@ -149,7 +149,10 @@ func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 
 	err = c.handlePCR(ctx, pcr)
 	if errors.Is(err, rendezvous.ErrNotAssigned) {
-		c.pcrQueue.AddRateLimited(key)
+		// Not an error: don't consume the failure rate limiter or inflate
+		// this item's backoff. Assignments only change when a replica joins
+		// or its lease expires, so re-examine after the lease duration.
+		c.pcrQueue.AddAfter(key, rendezvous.LeaseDuration)
 		return true
 	}
 	if err != nil {

@@ -17,20 +17,26 @@ package resources
 import (
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/volumepath"
+	"github.com/distribution/reference"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/api/validate/content"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -88,13 +94,13 @@ func IsValidResourceName(name string) bool {
 	return len(content.IsDNS1123Label(name)) == 0
 }
 
-// ValidateAteomUID rejects a target ateom pod UID that could escape the host
+// ValidateWorkerPodUID rejects a worker pod UID that could escape the host
 // path built from it: the ateom control socket (.../ateoms/<uid>/ateom.sock).
 // Kubernetes pod UIDs are UUIDs, which are valid DNS-1123 labels, so a label
 // check accepts every legitimate value while rejecting separators and "..".
-func ValidateAteomUID(targetAteomUID string) error {
-	if errs := content.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
-		return fmt.Errorf("invalid target ateom UID %q: %s", targetAteomUID, strings.Join(errs, "; "))
+func ValidateWorkerPodUID(workerPodUID string) error {
+	if errs := content.IsDNS1123Label(workerPodUID); len(errs) > 0 {
+		return fmt.Errorf("invalid worker pod UID %q: %s", workerPodUID, strings.Join(errs, "; "))
 	}
 	return nil
 }
@@ -118,6 +124,24 @@ func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.
 		errs = append(errs, validateAbsDir(actorDir.path, fldPath.Child(actorDir.name))...)
 	}
 	return errs
+}
+
+// ValidateSnapshotFidelity rejects a checkpoint or restore request whose
+// fidelity the calling sandbox runtime cannot serve. Each runtime passes the
+// levels it implements; anything else, including an unset fidelity, is
+// refused before the request touches the guest.
+func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, supported []ateompb.SnapshotFidelity, fldPath *field.Path) field.ErrorList {
+	if fidelity == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+		return field.ErrorList{field.Required(fldPath, "")}
+	}
+	names := make([]string, 0, len(supported))
+	for _, f := range supported {
+		if f == fidelity {
+			return nil
+		}
+		names = append(names, f.String())
+	}
+	return field.ErrorList{field.NotSupported(fldPath, fidelity, names)}
 }
 
 func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
@@ -155,29 +179,6 @@ func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorLi
 	return nil
 }
 
-// ValidateContainerNames ensures every application container name is safe to
-// use as an OCI bundle path component. Each must be a DNS-1123 label (no
-// separator or ".."), must not be the reserved "pause" name (which would
-// collide with the sandbox-infra bundle and race its concurrent writer), and
-// must be unique (duplicates map to the same bundle path and corrupt each
-// other).
-func ValidateContainerNames(names []string) error {
-	seen := make(map[string]struct{})
-	for _, name := range names {
-		if errs := content.IsDNS1123Label(name); len(errs) > 0 {
-			return fmt.Errorf("invalid container name %q: %s", name, strings.Join(errs, "; "))
-		}
-		if name == "pause" {
-			return fmt.Errorf("invalid container name %q: reserved for sandbox infrastructure", name)
-		}
-		if _, dup := seen[name]; dup {
-			return fmt.Errorf("duplicate container name %q", name)
-		}
-		seen[name] = struct{}{}
-	}
-	return nil
-}
-
 // ValidateRunscHash ensures the runsc SHA-256 hash is exactly 64 hex
 // characters before it is used to build the on-disk binary path
 // (static-files/runsc-<hash>) and, on a cache hit, returned for ateom to
@@ -199,10 +200,7 @@ func ValidateRunscHash(sha256Hash string) error {
 // is a well-formed URI with a bucket, so a bad location fails fast instead of
 // deep inside an object-storage call. It deliberately does not restrict the
 // scheme: the storage layer only uses the host (bucket) and path, and which
-// schemes are acceptable is a storage-backend policy, not a per-RPC one. The
-// local paths used for snapshot upload/download are derived from the
-// separately validated actor ref, not from this URI, so this is a sanity check
-// rather than a path-traversal guard.
+// schemes are acceptable is a storage-backend policy, not a per-RPC one.
 //
 // This validates the base that many snapshots share, not any one snapshot's
 // URI; SnapshotURI is the type for the latter, and it applies this check when
@@ -222,6 +220,18 @@ func ValidateSnapshotLocation(location string) error {
 	// different object.
 	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("invalid snapshot location %q: must contain only a scheme, bucket, and path", location)
+	}
+	// url.JoinPath cleans dot segments, and some backends trim spaces from
+	// segments (or windows, trailing dots) and treat '\' as a separator, so
+	// these could move snapshots outside of the location, e.g. into another
+	// atespace's prefix
+	if strings.Contains(u.Path, `\`) {
+		return fmt.Errorf(`invalid snapshot location %q: must not contain '\'`, location)
+	}
+	for segment := range strings.SplitSeq(u.Path, "/") {
+		if segment != "" && strings.Trim(segment, ". ") == "" {
+			return fmt.Errorf("invalid snapshot location %q: must not contain path segments of only '.' and ' '", location)
+		}
 	}
 	return nil
 }
@@ -275,13 +285,21 @@ func ValidateUUID(uuid string, fldPath *field.Path) field.ErrorList {
 	return nil
 }
 
-// cpuLimitMax bounds cpu limits: they must be less than 1000 cores.
-var cpuLimitMax = resource.MustParse("1k")
+// cpuLimitMax bounds cpu limits. The wire carries ceil(cores × 1000)
+// millicores and caps it at 999999 (strictly below 1000 cores), so a limit
+// above 999.999 cores rounds up out of range.
+var cpuLimitMax = resource.MustParse("999.999")
+
+// memoryLimitMax bounds memory limits at what the wire's int64 byte count
+// holds; resource.Quantity.Value wraps silently past it.
+var memoryLimitMax = resource.MustParse("9223372036854775807")
 
 // ValidateLimit validates one resource limit entry at fldPath: only cpu and
-// memory are supported, the quantity must be greater than zero, and the cpu
-// limit must be less than 1000 cores. An empty quantity is left to the
-// required tag.
+// memory are supported, the quantity must be greater than zero, and it must
+// fit the scalars the control plane converts it to (cpuLimitMax and
+// memoryLimitMax). The bounds compare Quantities rather than the converted
+// integers, which wrap for very large values. An empty quantity is left to
+// the required tag.
 func ValidateLimit(fldPath *field.Path, name, quantity string) field.ErrorList {
 	if name != ResourceCPU && name != ResourceMemory {
 		return field.ErrorList{field.NotSupported(fldPath.Child("name"), name, []string{ResourceCPU, ResourceMemory})}
@@ -297,8 +315,221 @@ func ValidateLimit(fldPath *field.Path, name, quantity string) field.ErrorList {
 	if q.Sign() <= 0 {
 		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "must be greater than zero"))
 	}
-	if name == ResourceCPU && q.Cmp(cpuLimitMax) >= 0 {
-		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "cpu limit must be less than 1000 cores"))
+	switch {
+	case name == ResourceCPU && q.Cmp(cpuLimitMax) > 0:
+		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "cpu limit must be at most 999.999 cores"))
+	case name == ResourceMemory && q.Cmp(memoryLimitMax) > 0:
+		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "memory limit must be at most 9223372036854775807 bytes"))
+	}
+	return errs
+}
+
+// ValidatePinnedImage requires a well-formed OCI image reference pinned by
+// digest (e.g. "name@sha256:..."): changing the image content under a fixed
+// reference invalidates snapshots. It parses with the same grammar the
+// container runtimes use, so a malformed digest is rejected rather than
+// treated as pinned.
+func ValidatePinnedImage(fldPath *field.Path, value string) field.ErrorList {
+	if value == "" {
+		return nil
+	}
+	ref, err := reference.ParseNormalizedNamed(value)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath, value, fmt.Sprintf("must be a well-formed image reference: %v", err))}
+	}
+	if _, ok := ref.(reference.Digested); !ok {
+		return field.ErrorList{field.Invalid(fldPath, value, "must be pinned by digest (changing the image invalidates snapshots)")}
+	}
+	return nil
+}
+
+// capabilityRE constrains Linux capability names: uppercase, without the
+// "CAP_" prefix (which is added when the OCI spec is written; the prefixed
+// spelling would silently grant nothing).
+var capabilityRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+// ValidateCapabilities checks each capability name. "ALL" is accepted only
+// when allowAll is set, which is the case for drop but not add.
+func ValidateCapabilities(fldPath *field.Path, caps []string, allowAll bool) field.ErrorList {
+	var errs field.ErrorList
+	for i, c := range caps {
+		p := fldPath.Index(i)
+		switch {
+		case c == "ALL" && !allowAll:
+			errs = append(errs, field.Invalid(p, c, "add does not accept 'ALL'; name the individual capabilities the container needs"))
+		case c == "ALL":
+		case len(c) > 63:
+			errs = append(errs, field.TooLong(p, nil, 63))
+		case strings.HasPrefix(c, "CAP_"):
+			errs = append(errs, field.Invalid(p, c, "must be named without the 'CAP_' prefix (e.g. 'NET_BIND_SERVICE')"))
+		case !capabilityRE.MatchString(c):
+			errs = append(errs, field.Invalid(p, c, "must be an uppercase capability name like 'NET_BIND_SERVICE'"))
+		}
+	}
+	return errs
+}
+
+// mountPathBadSegmentRE matches '.' or '..' path segments.
+var mountPathBadSegmentRE = regexp.MustCompile(`(^|/)[.][.]?(/|$)`)
+
+// ValidateMountPath requires a clean absolute Unix path that starts with '/',
+// is not '/', and contains no ':', '.' or '..' segments, '//', trailing '/',
+// or control characters.
+func ValidateMountPath(fldPath *field.Path, p string) field.ErrorList {
+	if p == "" {
+		return nil
+	}
+	bad := !strings.HasPrefix(p, "/") || len(p) == 1 ||
+		strings.HasSuffix(p, "/") || strings.Contains(p, "//") ||
+		strings.Contains(p, ":") || mountPathBadSegmentRE.MatchString(p)
+	if !bad {
+		for _, r := range p {
+			if r < 0x20 || r == 0x7f {
+				bad = true
+				break
+			}
+		}
+	}
+	if bad {
+		return field.ErrorList{field.Invalid(fldPath, p, "must be a clean absolute Unix path: must start with '/', not be '/', and contain no ':', '..', '.', '//', trailing '/', or control characters")}
+	}
+	return nil
+}
+
+// ValidateNestedMountPaths rejects mount paths that nest under or over one
+// another: volumes cannot mount onto other volumes. paths[i] is reported at
+// fldPath[i].mount_path. Identical paths are left to the list-key uniqueness
+// check.
+func ValidateNestedMountPaths(fldPath *field.Path, paths []string) field.ErrorList {
+	var errs field.ErrorList
+	for i, path := range paths {
+		if path == "" {
+			continue
+		}
+		for _, prior := range paths[:i] {
+			if prior == "" || prior == path {
+				continue
+			}
+			if strings.HasPrefix(path, prior+"/") || strings.HasPrefix(prior, path+"/") {
+				errs = append(errs, field.Invalid(fldPath.Index(i).Child("mount_path"), path,
+					fmt.Sprintf("must not nest under or over another mount (%q)", prior)))
+			}
+		}
+	}
+	return errs
+}
+
+// httpGetPathRE constrains wakeup probe paths to RFC 3986 path-segment
+// characters only, with well-formed percent-escapes, and no query string
+// or fragment.
+var httpGetPathRE = regexp.MustCompile(`^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$`)
+
+// ValidateHTTPGetPath checks a wakeup probe's HTTP path.
+func ValidateHTTPGetPath(fldPath *field.Path, p string) field.ErrorList {
+	if p == "" {
+		return nil
+	}
+	if !httpGetPathRE.MatchString(p) {
+		return field.ErrorList{field.Invalid(fldPath, p, "must be a URL path starting with '/', using only RFC 3986 path-segment characters, without query or fragment")}
+	}
+	return nil
+}
+
+// envVarNameRE constrains env var names to any printable ASCII character
+// except '='.
+var envVarNameRE = regexp.MustCompile(`^[ -<>-~]+$`)
+
+// ValidateEnvVarName checks an environment variable name.
+func ValidateEnvVarName(fldPath *field.Path, name string) field.ErrorList {
+	if name == "" {
+		return nil
+	}
+	if !envVarNameRE.MatchString(name) {
+		return field.ErrorList{field.Invalid(fldPath, name, "may contain any printable ASCII character except '='")}
+	}
+	return nil
+}
+
+// ValidateProjectedPath applies volumepath.ValidateProjected to a file path
+// projected into a system-info volume. atelet re-checks it before writing to
+// the host.
+func ValidateProjectedPath(fldPath *field.Path, p string) field.ErrorList {
+	if p == "" {
+		return nil
+	}
+	if err := volumepath.ValidateProjected(p); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, p, err.Error())}
+	}
+	return nil
+}
+
+// ValidateStorageVolumeID rejects control characters (U+0000-U+0008, U+000B,
+// U+000C, U+000E-U+001F, U+007F-U+009F) in an external volume's storage ID.
+func ValidateStorageVolumeID(fldPath *field.Path, id string) field.ErrorList {
+	for _, r := range id {
+		if (r >= 0x0000 && r <= 0x0008) ||
+			r == 0x000B ||
+			r == 0x000C ||
+			(r >= 0x000E && r <= 0x001F) ||
+			(r >= 0x007F && r <= 0x009F) {
+			return field.ErrorList{field.Invalid(fldPath, id, "must not contain control characters (U+0000-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F-U+009F)")}
+		}
+	}
+	return nil
+}
+
+// ValidateVolumeType allows an optional "substrate.io/" prefix, followed by a
+// valid DNS-1123 subdomain.
+func ValidateVolumeType(fldPath *field.Path, volumeType string) field.ErrorList {
+	if volumeType == "" {
+		return nil
+	}
+	var errs field.ErrorList
+	for _, msg := range validation.IsDNS1123Subdomain(strings.TrimPrefix(volumeType, "substrate.io/")) {
+		errs = append(errs, field.Invalid(fldPath, volumeType, msg))
+	}
+	return errs
+}
+
+// csiMapMaxBytes bounds a map a CSI driver produced. The CSI spec caps
+// map<string, string> fields at 4 KiB; this allows ten times that so a future
+// revision of the limit does not turn compliant drivers away. It is a
+// guardrail against unbounded input, not a contract drivers are held to.
+const csiMapMaxBytes = 40 * 1024
+
+// ValidateCSIMap bounds a map a CSI driver produced (a volume or publish
+// context) at csiMapMaxBytes, counting keys and values. The entries are the
+// driver's own and are not validated further.
+func ValidateCSIMap(fldPath *field.Path, m map[string]string) field.ErrorList {
+	size := 0
+	for k, v := range m {
+		size += len(k) + len(v)
+	}
+	if size > csiMapMaxBytes {
+		return field.ErrorList{field.TooLong(fldPath, nil, csiMapMaxBytes)}
+	}
+	return nil
+}
+
+// ValidateHostPort requires "host:port", where host is an IP address or a DNS
+// subdomain name (a trailing dot, marking it fully qualified, is allowed) and
+// port is a number in 1..65535.
+func ValidateHostPort(fldPath *field.Path, value string) field.ErrorList {
+	if value == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath, value, "must be host:port")}
+	}
+	var errs field.ErrorList
+	if _, err := netip.ParseAddr(host); err != nil {
+		for _, msg := range content.IsDNS1123Subdomain(strings.TrimSuffix(host, ".")) {
+			errs = append(errs, field.Invalid(fldPath, value, "host: "+msg))
+		}
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		errs = append(errs, field.Invalid(fldPath, value, "port must be a number between 1 and 65535"))
 	}
 	return errs
 }

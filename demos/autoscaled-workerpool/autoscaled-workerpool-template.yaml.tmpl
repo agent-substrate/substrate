@@ -36,7 +36,7 @@ containers:
   - name: data
     mountPath: /home/counter
 snapshotConfig:
-  onCommit: SNAPSHOT_CONTENT_SCOPE_DATA
+  preferredFidelity: SNAPSHOT_FIDELITY_VOLUMES
   storageLocation: gs://${BUCKET_NAME}/ate-demo-autoscaled-workerpool/
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR

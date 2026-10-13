@@ -106,7 +106,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 			return nil, err
 		}
 		if inActor.GetSourceTag() == nil {
-			if err := validateGoldenSnapshotScope(sourceTag.GetStatus().GetSnapshot()); err != nil {
+			if err := validateGoldenSnapshotFidelity(sourceTag.GetStatus().GetSnapshot()); err != nil {
 				return nil, err
 			}
 		}
@@ -124,24 +124,23 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	// Verify that the result is properly valid before storing it.
 	outActor := proto.CloneOf(inActor)
 	outActor.Status = &ateapipb.ActorStatus{
-		State:        ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-		ActorVolumes: initVols,
+		State:           ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+		ExternalVolumes: initVols,
 	}
 	if sourceTag != nil {
-		// The Actor starts out borrowing the tag's external snapshot rather than
+		// The Actor starts out borrowing the tag's snapshot rather than
 		// copying it. The snapshot URI is under the tag's prefix, not the Actor's, which
 		// is what keeps the Actor from collecting those objects. Its first
 		// suspend writes a snapshot under its own prefix and takes over from
 		// there.
-		outActor.Status.ExternalSnapshot = proto.CloneOf(sourceTag.GetStatus().GetSnapshot())
+		snap := proto.CloneOf(sourceTag.GetStatus().GetSnapshot())
+		snap.Generation = 1
+		snap.Owner = ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG
 		// The Actor is born with guest state, so stamp the template that state
-		// was built on now rather than at the first resume. The Tag records it
-		// beside its snapshot rather than on it, so the clone above does not
-		// carry it. Left empty, a repoint before that first resume reads as "no
-		// guest state" instead of "replaced template", and the resume restores
-		// the old template's memory and rootfs in full instead of the volume
-		// data alone.
-		outActor.Status.ExternalSnapshot.ActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
+		// was built on now rather than at the first resume.
+		snap.ActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
+		outActor.Status.Snapshots = []*ateapipb.Snapshot{snap}
+		outActor.Status.LastAssignedGeneration = 1
 	}
 	if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
 		return nil, toGRPCInternalError(errs)
@@ -187,10 +186,10 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 		return nil, apierror.FailedPrecondition("source Tag has an invalid scope")
 	}
 	// A tag might have an empty Snapshot URI if the tag creation failed or is ongoing.
-	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
+	if tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == "" {
 		return nil, apierror.FailedPrecondition("source Tag is still being created or failed creation")
 	}
-	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
+	// TODO: Permit compatible VOLUMES snapshots when runtimes can extract portable data.
 	if tag.GetStatus().GetActorTemplateUid() != template.GetMetadata().GetUid() {
 		return nil, apierror.FailedPrecondition("source Tag must be taken from an actor with ActorTemplate uid %q", tag.GetStatus().GetActorTemplateUid())
 	}
@@ -395,7 +394,8 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 // Deleting an actor collects everything under its external snapshot prefix. If
 // the location prefix ever changes, we risk leaking the snapshots under the old prefix.
 func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateapipb.ActorTemplate) error {
-	currentSnapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	currentSnapshotURI := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if currentSnapshotURI == "" {
 		return nil
 	}
@@ -429,8 +429,8 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	}
 	start := time.Now()
 	// Template dims only once the record resolved: the request names only the
-	// actor, so failures before the load carry none. No pool pair: delete only
-	// runs from SUSPENDED or CRASHED, which already released the worker.
+	// actor, so failures before the load carry none. No pool pair, even when
+	// any_state deletes an actor that still holds a worker.
 	defer func() {
 		var attrs []attribute.KeyValue
 		if deleted != nil {
@@ -542,7 +542,7 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorR
 	return &ateapipb.RevertActorResponse{Actor: actor}, nil
 }
 
-func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJWTRequest) (*ateapipb.MintActorJWTResponse, error) {
+func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJwtRequest) (*ateapipb.MintActorJwtResponse, error) {
 	if errs := apivalidation.ValidateMintActorJWTRequest(ctx, req); len(errs) > 0 {
 		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
@@ -562,7 +562,7 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 	}
 
 	// We only issue tokens with audience bindings.
-	if len(req.GetAudience()) == 0 {
+	if len(req.GetAudiences()) == 0 {
 		return nil, fmt.Errorf("at least one audience must be requested")
 	}
 
@@ -573,7 +573,7 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 	actorClaims := &actoridjwt.Claims{
 		Issuer:     s.actorJWTIssuer,
 		Subject:    fmt.Sprintf("actor/%s/%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
-		Audiences:  req.GetAudience(),
+		Audiences:  req.GetAudiences(),
 		Expiration: expiresAt,
 		NotBefore:  now.Add(-5 * time.Minute),
 		IssuedAt:   now,
@@ -591,7 +591,7 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 		return nil, fmt.Errorf("while signing actor JWT: %w", err)
 	}
 
-	return &ateapipb.MintActorJWTResponse{
+	return &ateapipb.MintActorJwtResponse{
 		ActorJwt:  actorJWT,
 		ExpiresAt: timestamppb.New(expiresAt),
 	}, nil

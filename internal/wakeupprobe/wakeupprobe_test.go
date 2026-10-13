@@ -39,19 +39,19 @@ func TestURL(t *testing.T) {
 	}{
 		{
 			name:    "missing path",
-			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Port: 8080}},
+			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HttpGetAction{Port: 8080}},
 			actorIP: "169.254.17.2",
 			wantErr: true,
 		},
 		{
 			name:    "explicit path",
-			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Path: "/health", Port: 9000}},
+			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HttpGetAction{Path: "/health", Port: 9000}},
 			actorIP: "169.254.17.2",
 			want:    "http://169.254.17.2:9000/health",
 		},
 		{
 			name:    "path without leading slash is normalized",
-			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Path: "ready", Port: 80}},
+			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HttpGetAction{Path: "ready", Port: 80}},
 			actorIP: "10.0.0.1",
 			want:    "http://10.0.0.1:80/ready",
 		},
@@ -63,13 +63,13 @@ func TestURL(t *testing.T) {
 		},
 		{
 			name:    "port zero",
-			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Port: 0}},
+			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HttpGetAction{Port: 0}},
 			actorIP: "1.2.3.4",
 			wantErr: true,
 		},
 		{
 			name:    "port too large",
-			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Port: 70000}},
+			probe:   &ateompb.WakeupProbe{HttpGet: &ateompb.HttpGetAction{Port: 70000}},
 			actorIP: "1.2.3.4",
 			wantErr: true,
 		},
@@ -98,7 +98,7 @@ func TestWait_ReturnsOnFirst200(t *testing.T) {
 	defer srv.Close()
 
 	ip, port := splitHostPort(t, srv.URL)
-	probe := &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
+	probe := &ateompb.WakeupProbe{HttpGet: &ateompb.HttpGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -119,7 +119,7 @@ func TestWait_WaitsForServerToBecomeReady(t *testing.T) {
 	defer srv.Close()
 
 	ip, port := splitHostPort(t, srv.URL)
-	probe := &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
+	probe := &ateompb.WakeupProbe{HttpGet: &ateompb.HttpGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
 
 	flipAt := time.Now().Add(50 * time.Millisecond)
 	go func() {
@@ -146,7 +146,7 @@ func TestWait_ContextCancellation(t *testing.T) {
 	// Bind a port and immediately close to ensure connect-refused, so the
 	// poll loop is exercised but no server ever returns 200.
 	port := pickFreePort(t)
-	probe := &ateompb.WakeupProbe{HttpGet: &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
+	probe := &ateompb.WakeupProbe{HttpGet: &ateompb.HttpGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 1}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -201,7 +201,7 @@ func TestWait_GivesUpAtProbeTimeout(t *testing.T) {
 	// probe's own deadline rather than the package default.
 	port := pickFreePort(t)
 	probe := &ateompb.WakeupProbe{
-		HttpGet:        &ateompb.HTTPGetAction{Path: "/readyz", Port: int32(port)},
+		HttpGet:        &ateompb.HttpGetAction{Path: "/readyz", Port: int32(port)},
 		TimeoutSeconds: 1,
 	}
 

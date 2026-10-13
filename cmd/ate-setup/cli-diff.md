@@ -41,7 +41,7 @@ no `KUBECTL_CONTEXT`, a `gcloud container clusters get-credentials` per action
 rather than one for the whole line.
 
 `go` is therefore required to run the installer. In exchange, `kubectl`, `jq`,
-`openssl`, `sed`, `base64`, and `make` are not; see the external-binaries table
+`openssl`, `sed`, and `base64` are not; see the external-binaries table
 in [`differences.md`](differences.md#external-binaries) for what is still
 needed.
 

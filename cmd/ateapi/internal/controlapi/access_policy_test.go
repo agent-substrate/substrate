@@ -23,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -65,7 +66,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 		return interceptor(c, req, &grpc.UnaryServerInfo{FullMethod: method}, handler)
 	}
 	getGlobal := func(c context.Context) (*ateapipb.AccessPolicy, error) {
-		got, err := invoke(c, ateapipb.Control_GetGlobalAccessPolicy_FullMethodName, &ateapipb.GetGlobalAccessPolicyRequest{}, func(c context.Context, r any) (any, error) {
+		got, err := invoke(c, ateapipb.Control_GetGlobalAccessPolicy_FullMethodName, &ateapipb.GetGlobalAccessPolicyRequest{Name: resources.SingletonName}, func(c context.Context, r any) (any, error) {
 			return svc.GetGlobalAccessPolicy(c, r.(*ateapipb.GetGlobalAccessPolicyRequest))
 		})
 		if err != nil {
@@ -201,7 +202,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 	restartedInterceptor := authz.UnaryServerInterceptor(restarted, true)
 	getGlobalAfterRestart := func(c context.Context) error {
-		_, err := restartedInterceptor(c, &ateapipb.GetGlobalAccessPolicyRequest{}, &grpc.UnaryServerInfo{FullMethod: ateapipb.Control_GetGlobalAccessPolicy_FullMethodName}, func(c context.Context, r any) (any, error) {
+		_, err := restartedInterceptor(c, &ateapipb.GetGlobalAccessPolicyRequest{Name: resources.SingletonName}, &grpc.UnaryServerInfo{FullMethod: ateapipb.Control_GetGlobalAccessPolicy_FullMethodName}, func(c context.Context, r any) (any, error) {
 			return svc.GetGlobalAccessPolicy(c, r.(*ateapipb.GetGlobalAccessPolicyRequest))
 		})
 		return err
@@ -238,6 +239,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 
 	getSpacePolReq := &ateapipb.GetAtespaceAccessPolicyRequest{
 		Atespace: &ateapipb.ObjectRef{Name: "team-alpha"},
+		Name:     resources.SingletonName,
 	}
 	if _, err := invoke(aliceCtx, ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName, getSpacePolReq, func(c context.Context, r any) (any, error) {
 		return svc.GetAtespaceAccessPolicy(c, r.(*ateapipb.GetAtespaceAccessPolicyRequest))
@@ -292,6 +294,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 	deleteSpacePolReq := &ateapipb.DeleteAtespaceAccessPolicyRequest{
 		Atespace: &ateapipb.ObjectRef{Name: "team-alpha"},
+		Name:     resources.SingletonName,
 	}
 	if _, err := invoke(charlieCtx, ateapipb.Control_DeleteAtespaceAccessPolicy_FullMethodName, deleteSpacePolReq, func(c context.Context, r any) (any, error) {
 		return svc.DeleteAtespaceAccessPolicy(c, r.(*ateapipb.DeleteAtespaceAccessPolicyRequest))
