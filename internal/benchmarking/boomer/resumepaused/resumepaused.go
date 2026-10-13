@@ -35,6 +35,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
@@ -42,7 +43,9 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"golang.org/x/time/rate"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -196,13 +199,13 @@ const (
 
 // create creates one actor from the template.
 func (r *runtime) create(ctx context.Context, name string) error {
-	return r.call(ctx, "CreateActor", func(ctx context.Context) error {
+	return r.call(ctx, "CreateActor", func(ctx context.Context, trailer grpc.CallOption) error {
 		_, err := r.cfg.APIStub.CreateActor(ctx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: r.cfg.Atespace, Name: name},
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: templateName},
 			},
-		})
+		}, trailer)
 		return err
 	})
 }
@@ -242,10 +245,10 @@ func (r *runtime) cycle(name string) {
 // already paused fails it with FailedPrecondition; the actor is cold, which
 // is all recovery wants, so that counts as a success.
 func (r *runtime) recover(ctx context.Context, name string) {
-	_ = r.call(ctx, "PauseActorRecovery", func(ctx context.Context) error {
+	_ = r.call(ctx, "PauseActorRecovery", func(ctx context.Context, trailer grpc.CallOption) error {
 		_, err := r.cfg.APIStub.PauseActor(ctx, &ateapipb.PauseActorRequest{
 			Actor: r.ref(name),
-		})
+		}, trailer)
 		if status.Code(err) == codes.FailedPrecondition {
 			return nil
 		}
@@ -285,10 +288,10 @@ var errAlreadyRunning = errors.New("actor was already running: not a cold resume
 // resume calls ResumeActor. A response that reports no resume happened fails
 // the sample with errAlreadyRunning.
 func (r *runtime) resume(ctx context.Context, metricName, name string) error {
-	return r.call(ctx, metricName, func(ctx context.Context) error {
+	return r.call(ctx, metricName, func(ctx context.Context, trailer grpc.CallOption) error {
 		resp, err := r.cfg.APIStub.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
 			Actor: r.ref(name),
-		})
+		}, trailer)
 		if err == nil && !resp.GetResumed() {
 			return errAlreadyRunning
 		}
@@ -299,10 +302,10 @@ func (r *runtime) resume(ctx context.Context, metricName, name string) error {
 // pause calls PauseActor. suffix keeps warm-up calls apart from the measured
 // ones.
 func (r *runtime) pause(ctx context.Context, suffix, name string) error {
-	return r.call(ctx, "PauseActor"+suffix, func(ctx context.Context) error {
+	return r.call(ctx, "PauseActor"+suffix, func(ctx context.Context, trailer grpc.CallOption) error {
 		_, err := r.cfg.APIStub.PauseActor(ctx, &ateapipb.PauseActorRequest{
 			Actor: r.ref(name),
-		})
+		}, trailer)
 		return err
 	})
 }
@@ -383,11 +386,11 @@ func (r *runtime) delete(ctx context.Context, name string) error {
 				return ctx.Err()
 			}
 		}
-		err = r.call(ctx, "DeleteActor", func(ctx context.Context) error {
+		err = r.call(ctx, "DeleteActor", func(ctx context.Context, trailer grpc.CallOption) error {
 			_, err := r.cfg.APIStub.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
 				Actor:    r.ref(name),
 				AnyState: true,
-			})
+			}, trailer)
 			return err
 		})
 		if c := status.Code(err); c != codes.Aborted && c != codes.Unavailable {
@@ -402,12 +405,12 @@ func (r *runtime) ref(name string) *ateapipb.ObjectRef {
 }
 
 func (r *runtime) ensureAtespace(ctx context.Context) error {
-	return r.call(ctx, "CreateAtespace", func(ctx context.Context) error {
+	return r.call(ctx, "CreateAtespace", func(ctx context.Context, trailer grpc.CallOption) error {
 		_, err := r.cfg.APIStub.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
 			Atespace: &ateapipb.Atespace{
 				Metadata: &ateapipb.ResourceMetadata{Name: r.cfg.Atespace},
 			},
-		})
+		}, trailer)
 		if status.Code(err) == codes.AlreadyExists {
 			return nil
 		}
@@ -415,17 +418,29 @@ func (r *runtime) ensureAtespace(ctx context.Context) error {
 	})
 }
 
-// call times one unary RPC and reports its latency to locust and Prometheus.
-func (r *runtime) call(ctx context.Context, name string, do func(context.Context) error) error {
+// call times one unary RPC and reports it. The client latency goes to locust
+// and Prometheus; for a successful call, the server's own elapsed time, from
+// the trailer that ateinterceptors.ServerUnaryInterceptor sets, goes to
+// Prometheus as a second histogram, so the gap between the two is network
+// and client time. Failures stay out of it: the server histogram has no
+// status, and a call cut off by its deadline brings back no trailer. do
+// passes trailer to its RPC so the trailer is captured.
+func (r *runtime) call(ctx context.Context, name string, do func(ctx context.Context, trailer grpc.CallOption) error) error {
 	ctx, span := r.cfg.Tracer.Start(ctx, name)
 	defer span.End()
 
 	start := time.Now()
-	err := do(ctx)
+	var tr metadata.MD
+	err := do(ctx, grpc.Trailer(&tr))
 	latency := time.Since(start)
 
 	boomerutil.LogSampledTrace(span, name, latency, boomerutil.SourceClient, err)
 	r.record(name, latency, err)
+	if err == nil {
+		if serverLatency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, 0); source == boomerutil.SourceServer {
+			bmetrics.RecordServerLatency("grpc", name, userClass, serverLatency)
+		}
+	}
 	return err
 }
 
