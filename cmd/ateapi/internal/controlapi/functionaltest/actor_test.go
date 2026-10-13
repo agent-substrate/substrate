@@ -632,9 +632,8 @@ func TestListActors_Pagination(t *testing.T) {
 
 	for {
 		listResp, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{
-			Atespace:  testAtespace,
-			PageSize:  2,
-			PageToken: pageToken,
+			Atespace: testAtespace,
+			Options:  &ateapipb.ListOptions{PageSize: 2, PageToken: pageToken},
 		})
 		if err != nil {
 			t.Fatalf("ListActors failed: %v", err)
@@ -1557,17 +1556,17 @@ func TestValidation_Actor(t *testing.T) {
 	})
 
 	t.Run("ListActors", func(t *testing.T) {
-		_, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{PageSize: -1})
+		_, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{Options: &ateapipb.ListOptions{PageSize: -1}})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
 	t.Run("ListActors invalid token", func(t *testing.T) {
-		_, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{PageToken: "%%%"})
+		_, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{Options: &ateapipb.ListOptions{PageToken: "%%%"}})
 		assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
 	})
 
 	t.Run("ListTags invalid token", func(t *testing.T) {
-		_, err := tc.client.ListTags(context.Background(), &ateapipb.ListTagsRequest{PageToken: "%%%"})
+		_, err := tc.client.ListTags(context.Background(), &ateapipb.ListTagsRequest{Options: &ateapipb.ListOptions{PageToken: "%%%"}})
 		assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
 	})
 }
@@ -3657,7 +3656,7 @@ func TestSuspendActor(t *testing.T) {
 	if diff := cmp.Diff(wantTag, stored, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
 		t.Errorf("stored tag mismatch (-want +got):\n%s", diff)
 	}
-	listed, err := tc.client.ListTags(context.Background(), &ateapipb.ListTagsRequest{Atespace: testAtespace, PageSize: 1})
+	listed, err := tc.client.ListTags(context.Background(), &ateapipb.ListTagsRequest{Atespace: testAtespace, Options: &ateapipb.ListOptions{PageSize: 1}})
 	if err != nil || len(listed.GetTags()) != 1 {
 		t.Fatalf("ListTags = (%v, %v), want one", listed, err)
 	}

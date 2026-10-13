@@ -109,9 +109,8 @@ var getActorsCmd = &cobra.Command{
 		pageToken := ""
 		for {
 			resp, err := apiClient.ListActors(ctx, &ateapipb.ListActorsRequest{
-				PageSize:  1000,
-				PageToken: pageToken,
-				Atespace:  getActorAtespaceFlag,
+				Options:  &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
+				Atespace: getActorAtespaceFlag,
 			})
 			if err != nil {
 				return fmt.Errorf("failed to list actors: %w", err)

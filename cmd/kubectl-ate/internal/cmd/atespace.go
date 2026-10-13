@@ -53,8 +53,7 @@ var getAtespacesCmd = &cobra.Command{
 		pageToken := ""
 		for {
 			resp, err := apiClient.ListAtespaces(ctx, &ateapipb.ListAtespacesRequest{
-				PageSize:  1000,
-				PageToken: pageToken,
+				Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
 			})
 			if err != nil {
 				return fmt.Errorf("failed to list atespaces: %w", err)

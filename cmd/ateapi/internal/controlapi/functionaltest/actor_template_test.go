@@ -347,7 +347,7 @@ func TestListActorTemplates_InvalidPageToken(t *testing.T) {
 	defer tc.cleanup()
 
 	_, err := tc.client.ListActorTemplates(context.Background(),
-		&ateapipb.ListActorTemplatesRequest{PageToken: "%%%"})
+		&ateapipb.ListActorTemplatesRequest{Options: &ateapipb.ListOptions{PageToken: "%%%"}})
 	assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
 }
 

@@ -147,7 +147,7 @@ func (c *controller) adopt(ctx context.Context) error {
 	prefix := fakeworker.Prefix(c.run)
 	var token string
 	for {
-		page, err := c.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{PageSize: 1000, PageToken: token})
+		page, err := c.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: token}})
 		if err != nil {
 			return fmt.Errorf("while listing Workers: %w", err)
 		}
@@ -470,7 +470,7 @@ func (c *controller) retire(ctx context.Context, name string) error {
 		w.drainedAt = c.now()
 		c.mu.Unlock()
 	}
-	assigned, err := c.client.ListWorkerActorAssignments(ctx, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: ref, PageSize: 1})
+	assigned, err := c.client.ListWorkerActorAssignments(ctx, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: ref, Options: &ateapipb.ListOptions{PageSize: 1}})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			c.forget(name)
