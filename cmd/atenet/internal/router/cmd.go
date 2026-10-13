@@ -54,6 +54,7 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.StringVar(&cfg.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
 
 	fs.StringVar(&cfg.MetricsAddr, "metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
+	fs.StringVar(&cfg.HealthAddr, "health-listen-addr", ":9091", "Address and port the /readyz and /healthz probe server should listen on.")
 	fs.StringVar(&cfg.AtenetRouter, "atenet-dataplane", string(atenetRouterEnvoy), "Atenet ingress and egress dataplane: envoy or agentgateway")
 	fs.StringVar(&cfg.Namespace, "namespace", "default", "Target operations namespace")
 	fs.StringVar(&cfg.RouterServiceName, "router-service-name", installdefaults.RouterServiceName, "Service name of this atenet-router in the operations namespace. Override when the deployment renames the Service.")
@@ -64,7 +65,7 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.IntVar(&cfg.ConnectTLSPort, "port-connect-tls", 8444, "TCP port for CONNECT-tunneled traffic entering through the router dataplane over TLS. --port-https also defaults to 8443, and both listeners are commonly enabled at once, so --port-connect-tls defaults to a different port (8444) rather than colliding with it")
 	fs.IntVar(&cfg.XdsPort, "port-xds", 18000, "TCP port listening for the xDS dynamic Envoy connections")
 	fs.IntVar(&cfg.ExtprocPort, "port-extproc", 50051, "Listen port for the External Processing (ext_proc) server the dataplane calls")
-	fs.StringVar(&cfg.ExtprocAddr, "extproc-address", "127.0.0.1", "Address of the External Processing (ext_proc) server: both the address it binds and the address the co-located dataplane is told to dial. Defaults to loopback, which keeps it unreachable from other pods; readiness is probed via /readyz on the metrics port, not this one. Empty binds every interface")
+	fs.StringVar(&cfg.ExtprocAddr, "extproc-address", "127.0.0.1", "Address of the External Processing (ext_proc) server: both the address it binds and the address the co-located dataplane is told to dial. Defaults to loopback, which keeps it unreachable from other pods; readiness is probed via /readyz on the health port, not this one. Empty binds every interface")
 	fs.IntVar(&cfg.StatusPort, "status-port", 4040, "Port to serve /statusz on (set <= 0 to disable serving status)")
 	fs.DurationVar(&cfg.HealthInterval, "health-interval", 1*time.Second, "Interval for checking health of dependent services")
 	fs.IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the router dataplane")

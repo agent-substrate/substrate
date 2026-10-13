@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/credentialprovider"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
@@ -77,7 +78,6 @@ import (
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
@@ -87,6 +87,7 @@ import (
 var (
 	port              = pflag.Int("port", atelet.DefaultPort, "The port to listen on")
 	metricsListenAddr = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
+	healthListenAddr  = pflag.String("health-listen-addr", ":9091", "Address and port the /readyz and /healthz probe server should listen on.")
 
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle atelet presents as its gRPC serving certificate.")
 	clientCACerts        = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify gRPC client certificates.")
@@ -168,11 +169,8 @@ func main() {
 	// readiness flips to not-ready on SIGTERM so /readyz reports 503 while the
 	// pod drains, while /healthz stays 200 for liveness.
 	readiness := &serverboot.Readiness{}
-	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
-		Addr:          *metricsListenAddr,
-		Readiness:     readiness,
-		EnableHealthz: true,
-	})
+	go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
+	go serverboot.StartHealthServer(ctx, *healthListenAddr, readiness)
 
 	// The OTLP relay lets the ateom pods on this node export telemetry over a
 	// unix socket instead of their own network (see internal/otlprelay). Started
@@ -525,8 +523,8 @@ func NewService(
 }
 
 func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *ateletpb.RunResponse, err error) {
-	if err := validateRunRequest(req); err != nil {
-		return nil, apierror.InvalidArgument("%v", err)
+	if errs := apivalidation.ValidateRunRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
 	}
 
 	actorUID := req.GetActorUid()
@@ -646,8 +644,8 @@ func allocatedBytes(info os.FileInfo) int64 {
 }
 
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (_ *ateletpb.CheckpointResponse, err error) {
-	if err := validateCheckpointRequest(req); err != nil {
-		return nil, apierror.InvalidArgument("%v", err)
+	if errs := apivalidation.ValidateCheckpointRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
 	}
 
 	actorUID := req.GetActorUid()
@@ -893,7 +891,7 @@ func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
 	}
 
 	for _, vol := range req.GetSpec().GetVolumes() {
-		if _, ok := vol.GetSource().(*ateletpb.Volume_DurableDir); ok {
+		if vol.GetDurableDir() != nil {
 			return true
 		}
 	}
@@ -952,8 +950,8 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 // files and their self-describing manifest already sit under the actor's
 // local-checkpoints directory, written by an earlier local Checkpoint (pause).
 func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (_ *ateletpb.UploadPausedCheckpointResponse, err error) {
-	if err := validateUploadPausedCheckpointRequest(req); err != nil {
-		return nil, apierror.InvalidArgument("%v", err)
+	if errs := apivalidation.ValidateUploadPausedCheckpointRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
 	}
 
 	tStart := time.Now()
@@ -1054,8 +1052,8 @@ func readSnapshotManifest(dir string) ([]byte, error) {
 }
 
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (resp *ateletpb.RestoreResponse, err error) {
-	if err := validateRestoreRequest(req); err != nil {
-		return nil, apierror.InvalidArgument("%v", err)
+	if errs := apivalidation.ValidateRestoreRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
 	}
 
 	actorUID := req.GetActorUid()
@@ -1292,8 +1290,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 // Terminate terminates any running workload on ateom, unmounts external volumes,
 // and resets actor directories on the node.
 func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
-	if err := validateTerminateRequest(req); err != nil {
-		return nil, apierror.InvalidArgument("%v", err)
+	if errs := apivalidation.ValidateTerminateRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
 	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
@@ -1495,8 +1493,7 @@ func (s *AteomHerder) prepareOCIBundles(
 ) ([]*ateompb.ContainerSpec, error) {
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
-		switch vol.GetSource().(type) {
-		case *ateletpb.Volume_DurableDir:
+		if vol.GetDurableDir() != nil {
 			volPath := ateletpath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
 			if err := os.MkdirAll(volPath, 0o700); err != nil {
 				return nil, fmt.Errorf("while creating %q: %w", volPath, err)
@@ -1584,29 +1581,29 @@ func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*ateom
 				return nil, fmt.Errorf("container %q mounts volume %q which is not defined in workload volumes", ctr.GetName(), volName)
 			}
 
-			switch vol.GetSource().(type) {
-			case *ateletpb.Volume_DurableDir:
+			switch {
+			case vol.GetDurableDir() != nil:
 				ddMounts = append(ddMounts, &ateompb.DurableDirVolumeMount{
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
 				})
-			case *ateletpb.Volume_External:
+			case vol.GetExternal() != nil:
 				csiMounts = append(csiMounts, &ateompb.VolumeMount{
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
 				})
-			case *ateletpb.Volume_SystemInfo:
+			case vol.GetSystemInfo() != nil:
 				siMounts = append(siMounts, &ateompb.SystemInfoVolumeMount{
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
 				})
-			case *ateletpb.Volume_Image:
+			case vol.GetImage() != nil:
 				imgMounts = append(imgMounts, &ateompb.ImageVolumeMount{
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
 				})
 			default:
-				return nil, fmt.Errorf("container %q mounts volume %q with unsupported source %T", ctr.GetName(), volName, vol.GetSource())
+				return nil, fmt.Errorf("container %q mounts volume %q with no source set", ctr.GetName(), volName)
 			}
 		}
 		container := &ateompb.Container{
@@ -1706,171 +1703,6 @@ func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.Cl
 	d.conns.Add(key, conn)
 
 	return conn, nil
-}
-
-// validateRunRequest, validateCheckpointRequest, and validateRestoreRequest
-// validate everything in their request that atelet turns into host filesystem
-// paths, plus the request-specific fields. atelet listens on an insecure
-// hostPort, so any reachable caller could otherwise smuggle a path separator
-// or ".." through these fields and make atelet read/RemoveAll/write outside
-// the intended directory tree, or collide bundles. Each RPC validates at its
-// boundary, before any path is built. The field rules live in
-// internal/resources so other components can apply them at their boundaries.
-func validateRunRequest(req *ateletpb.RunRequest) error {
-	var errs field.ErrorList
-	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	if len(errs) > 0 {
-		return errs.ToAggregate()
-	}
-	// TODO: Migrate all validations below to the validation framework.
-	if err := resources.ValidateWorkerPodUID(req.GetWorkerPodUid()); err != nil {
-		return err
-	}
-	names := make([]string, 0, len(req.GetSpec().GetContainers()))
-	for _, ctr := range req.GetSpec().GetContainers() {
-		names = append(names, ctr.GetName())
-	}
-	return resources.ValidateContainerNames(names)
-}
-
-func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
-	var errs field.ErrorList
-	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	if len(errs) > 0 {
-		return errs.ToAggregate()
-	}
-	// TODO: Migrate all validations below to the validation framework.
-	if err := resources.ValidateWorkerPodUID(req.GetWorkerPodUid()); err != nil {
-		return err
-	}
-	names := make([]string, 0, len(req.GetSpec().GetContainers()))
-	for _, ctr := range req.GetSpec().GetContainers() {
-		names = append(names, ctr.GetName())
-	}
-	if err := resources.ValidateContainerNames(names); err != nil {
-		return err
-	}
-
-	if err := validateFidelity(req.GetFidelity()); err != nil {
-		return err
-	}
-
-	switch req.GetType() {
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		if _, err := resources.ParseSnapshotURI(req.GetExternalConfig().GetSnapshotUri()); err != nil {
-			return err
-		}
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		if !resources.IsValidResourceName(req.GetLocalConfig().GetSnapshotName()) {
-			return fmt.Errorf("invalid local snapshot name %q", req.GetLocalConfig().GetSnapshotName())
-		}
-	default:
-		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())
-	}
-	return nil
-}
-
-func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
-	var errs field.ErrorList
-	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	if len(errs) > 0 {
-		return errs.ToAggregate()
-	}
-	// TODO: Migrate all validations below to the validation framework.
-	if err := resources.ValidateWorkerPodUID(req.GetWorkerPodUid()); err != nil {
-		return err
-	}
-	names := make([]string, 0, len(req.GetSpec().GetContainers()))
-	for _, ctr := range req.GetSpec().GetContainers() {
-		names = append(names, ctr.GetName())
-	}
-	if err := resources.ValidateContainerNames(names); err != nil {
-		return err
-	}
-
-	if err := validateFidelity(req.GetFidelity()); err != nil {
-		return err
-	}
-
-	if req.GetSandboxAssets() == nil {
-		return fmt.Errorf("missing sandbox_assets")
-	}
-
-	switch req.GetType() {
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		if _, err := resources.ParseSnapshotURI(req.GetExternalConfig().GetSnapshotUri()); err != nil {
-			return err
-		}
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		if !resources.IsValidResourceName(req.GetLocalConfig().GetSnapshotName()) {
-			return fmt.Errorf("invalid local snapshot name %q", req.GetLocalConfig().GetSnapshotName())
-		}
-	default:
-		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())
-	}
-	return nil
-}
-
-func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
-	var errs field.ErrorList
-	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	if len(errs) > 0 {
-		return errs.ToAggregate()
-	}
-	if req.GetWorkerPodUid() != "" {
-		if err := resources.ValidateWorkerPodUID(req.GetWorkerPodUid()); err != nil {
-			return err
-		}
-	}
-	names := make([]string, 0, len(req.GetSpec().GetContainers()))
-	for _, ctr := range req.GetSpec().GetContainers() {
-		names = append(names, ctr.GetName())
-	}
-	return resources.ValidateContainerNames(names)
-}
-
-// validateFidelity accepts every level of the ladder. Which levels a sandbox
-// runtime can actually serve is the runtime's call: atelet forwards the
-// fidelity and ateom rejects what it cannot capture.
-func validateFidelity(fidelity ateletpb.SnapshotFidelity) error {
-	switch fidelity {
-	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
-		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
-		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-		return nil
-	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED:
-		return fmt.Errorf("snapshot fidelity must be non-zero")
-	default:
-		return fmt.Errorf("invalid snapshot fidelity: %v", fidelity)
-	}
-}
-
-func validateUploadPausedCheckpointRequest(req *ateletpb.UploadPausedCheckpointRequest) error {
-	var errs field.ErrorList
-	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	errs = append(errs, resources.ValidateResourceName(req.GetLocalSnapshotName(), field.NewPath("local_snapshot_name"))...)
-	// Golden actors are never paused (the golden flow commits a running
-	// actor), so never promote a paused checkpoint to a golden snapshot.
-	if req.GetAtespace() == resources.GoldenActorAtespace {
-		errs = append(errs, field.Forbidden(field.NewPath("atespace"), fmt.Sprintf("atespace %q holds golden actors, which are never paused", req.GetAtespace())))
-	}
-	if _, err := resources.ParseSnapshotURI(req.GetDestinationSnapshotUri()); err != nil {
-		errs = append(errs, field.Invalid(field.NewPath("destination_snapshot_uri"), req.GetDestinationSnapshotUri(), err.Error()))
-	}
-	if err := validateFidelity(req.GetDesiredFidelity()); err != nil {
-		errs = append(errs, field.Invalid(field.NewPath("desired_fidelity"), req.GetDesiredFidelity().String(), err.Error()))
-	}
-	return errs.ToAggregate()
 }
 
 // writeFileAtomic writes data to path by writing a temp file in the same

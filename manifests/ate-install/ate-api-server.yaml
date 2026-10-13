@@ -220,14 +220,16 @@ spec:
         - containerPort: 443
         - name: prometheus
           containerPort: 9090
+        - name: health
+          containerPort: 9091
         readinessProbe:
           httpGet:
             path: /readyz
-            port: 9090
+            port: health
           initialDelaySeconds: 5
           periodSeconds: 2
           failureThreshold: 3
-        # :9090 is bound near the end of boot, after the store connect and
+        # :9091 is bound near the end of boot, after the store connect and
         # the schema migrations, so nothing answers here until both finish.
         # The store connect alone budgets 60s (30 attempts, 2s apart) and the
         # migrations serialize across replicas on an advisory lock. Without a
@@ -239,7 +241,7 @@ spec:
         startupProbe:
           httpGet:
             path: /healthz
-            port: 9090
+            port: health
           periodSeconds: 5
           failureThreshold: 24
         # /healthz stays 200 while a terminating pod drains; /readyz
@@ -248,7 +250,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /healthz
-            port: 9090
+            port: health
           initialDelaySeconds: 10
           periodSeconds: 10
       volumes:

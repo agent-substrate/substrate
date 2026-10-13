@@ -68,7 +68,7 @@ var (
 
 	tunnelConfig = ateomtunnel.RegisterFlags(pflag.CommandLine)
 
-	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for HTTP readiness checks")
+	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
 	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateom samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
 
@@ -272,7 +272,7 @@ func do(ctx context.Context) error {
 		}
 	}()
 
-	go serverboot.StartReadinessServer(ctx, *readinessListenAddress, readiness)
+	go serverboot.StartHealthServer(ctx, *readinessListenAddress, readiness)
 
 	if err := svr.Serve(lis); err != nil {
 		return fmt.Errorf("while serving: %w", err)

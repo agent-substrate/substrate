@@ -796,9 +796,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			MemoryBytes:           memBytes,
 		}
 		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-		req.Config = &ateletpb.RestoreRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: localSnap.GetUuid()},
-		}
+		req.LocalConfig = &ateletpb.LocalCheckpointConfiguration{SnapshotName: localSnap.GetUuid()}
 		req.Fidelity = fidelityToAtelet(localSnap.GetFidelity())
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(req.Fidelity)
 
@@ -825,10 +823,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			ActorTemplateName:     actor.GetActorTemplate().GetName(),
 			Spec:                  workloadSpec,
 			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-			Config: &ateletpb.RestoreRequest_ExternalConfig{
-				ExternalConfig: &ateletpb.ExternalRestoreConfiguration{
-					SnapshotUri: src.SnapshotURI.String(),
-				},
+			ExternalConfig: &ateletpb.ExternalRestoreConfiguration{
+				SnapshotUri: src.SnapshotURI.String(),
 			},
 			Fidelity:      scope,
 			SandboxAssets: sandboxAssets,
