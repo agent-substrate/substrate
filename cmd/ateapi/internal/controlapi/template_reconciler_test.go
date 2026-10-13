@@ -164,6 +164,7 @@ type fakeGoldenControl struct {
 	exists         bool
 	goldenState    ateapipb.ActorState
 	goldenSnapshot string
+	goldenCrash    string
 	// snapshot is the external snapshot a completed suspend produces; empty
 	// simulates a suspend that wrote none.
 	snapshot string
@@ -183,6 +184,9 @@ func (c *fakeGoldenControl) CreateAtespace(_ context.Context, req *ateapipb.Crea
 
 func (c *fakeGoldenControl) goldenActorStatus() *ateapipb.ActorStatus {
 	st := &ateapipb.ActorStatus{State: c.goldenState}
+	if c.goldenCrash != "" {
+		st.Crash = &ateapipb.ActorCrash{Message: c.goldenCrash}
+	}
 	if c.goldenSnapshot != "" {
 		st.LastAssignedGeneration = 1
 		st.Snapshots = []*ateapipb.Snapshot{
@@ -520,9 +524,9 @@ func TestReconcileOne(t *testing.T) {
 		{
 			name:             "crashed golden actor fails the template",
 			template:         testTemplate(),
-			control:          &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+			control:          &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_CRASHED, goldenCrash: "atelet Run: unhandled tar entry"},
 			wantFailedReason: reasonGoldenActorCrashed,
-			wantMessage:      "crashed",
+			wantMessage:      "crashed before its snapshot was taken: atelet Run: unhandled tar entry",
 		},
 		{
 			name:        "resume failure requeues without failing",
