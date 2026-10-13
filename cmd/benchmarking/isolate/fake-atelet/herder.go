@@ -50,7 +50,7 @@ type actorCertMinter interface {
 // delays is how long each AteomHerder call takes before it succeeds: the
 // data plane's share of it, not counting an actor certificate mint.
 type delays struct {
-	run, restore, checkpoint, uploadPausedCheckpoint, terminate time.Duration
+	run, restore, checkpoint, detachActor, terminate time.Duration
 }
 
 // herder answers every AteomHerder call with success after its delay, without
@@ -181,15 +181,15 @@ func (h *herder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	return &ateletpb.CheckpointResponse{}, nil
 }
 
-func (h *herder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (*ateletpb.UploadPausedCheckpointResponse, error) {
+func (h *herder) DetachActor(ctx context.Context, req *ateletpb.DetachActorRequest) (*ateletpb.DetachActorResponse, error) {
 	start := time.Now()
-	if err := h.writePlaceholder(ctx, start, h.delays.uploadPausedCheckpoint, req.GetDestinationSnapshotUri()); err != nil {
+	if err := h.writePlaceholder(ctx, start, h.delays.detachActor, req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
-	if err := wait(ctx, start, h.delays.uploadPausedCheckpoint); err != nil {
+	if err := wait(ctx, start, h.delays.detachActor); err != nil {
 		return nil, err
 	}
-	return &ateletpb.UploadPausedCheckpointResponse{}, nil
+	return &ateletpb.DetachActorResponse{}, nil
 }
 
 func (h *herder) Terminate(ctx context.Context, _ *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {

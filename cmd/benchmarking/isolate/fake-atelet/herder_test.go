@@ -66,7 +66,7 @@ func (s *recordingStorage) objects() []string {
 }
 
 func uniformDelays(d time.Duration) delays {
-	return delays{run: d, restore: d, checkpoint: d, uploadPausedCheckpoint: d, terminate: d}
+	return delays{run: d, restore: d, checkpoint: d, detachActor: d, terminate: d}
 }
 
 // herderCalls invokes every AteomHerder method the herder implements. The
@@ -85,8 +85,8 @@ func herderCalls(h *herder) map[string]func(context.Context) error {
 			_, err := h.Checkpoint(ctx, externalCheckpoint(testSnapshotURI))
 			return err
 		},
-		"UploadPausedCheckpoint": func(ctx context.Context) error {
-			_, err := h.UploadPausedCheckpoint(ctx, &ateletpb.UploadPausedCheckpointRequest{DestinationSnapshotUri: testSnapshotURI})
+		"DetachActor": func(ctx context.Context) error {
+			_, err := h.DetachActor(ctx, &ateletpb.DetachActorRequest{Snapshot: &ateletpb.Snapshot{Object: &ateletpb.ObjectStorage{SnapshotUri: testSnapshotURI}}})
 			return err
 		},
 		"Terminate": func(ctx context.Context) error {
@@ -155,7 +155,7 @@ func TestHerderUsesEachCallsOwnDelay(t *testing.T) {
 // an object under its URI.
 func TestHerderWritesPlaceholderUnderSnapshotURI(t *testing.T) {
 	const want = "bench-bucket/benchmark-workloads/sleep/atespaces/team-a/actors/0f9c1d2e-3b4a-4c5d-8e6f-7a8b9c0d1e2f/snapshots/snap-1/" + placeholderObject
-	for _, name := range []string{"Checkpoint", "UploadPausedCheckpoint"} {
+	for _, name := range []string{"Checkpoint", "DetachActor"} {
 		t.Run(name, func(t *testing.T) {
 			storage := &recordingStorage{}
 			if err := herderCalls(&herder{storage: storage})[name](context.Background()); err != nil {
@@ -175,7 +175,7 @@ func TestHerderWritesNothingForLocalCheckpoint(t *testing.T) {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 	for name, call := range herderCalls(h) {
-		if name == "Checkpoint" || name == "UploadPausedCheckpoint" {
+		if name == "Checkpoint" || name == "DetachActor" {
 			continue
 		}
 		if err := call(context.Background()); err != nil {

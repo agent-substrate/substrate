@@ -55,9 +55,9 @@ func ValidateRestoreRequest(ctx context.Context, req *ateletpb.RestoreRequest) f
 	return Validate_RestoreRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
-// ValidateUploadPausedCheckpointRequest runs the generated validation for req.
-func ValidateUploadPausedCheckpointRequest(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) field.ErrorList {
-	return Validate_UploadPausedCheckpointRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+// ValidateDetachActorRequest runs the generated validation for req.
+func ValidateDetachActorRequest(ctx context.Context, req *ateletpb.DetachActorRequest) field.ErrorList {
+	return Validate_DetachActorRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
 // ValidateRegisterWorkerRequest runs the generated validation for req.
@@ -99,10 +99,10 @@ func ValidateCustom_AssetFile_Sha256(_ context.Context, _ operation.Operation, f
 	return nil
 }
 
-// ValidateCustom_UploadPausedCheckpointRequest_Atespace rejects the golden
-// atespace: golden actors are never paused, so a paused checkpoint is never
-// promoted to a golden snapshot.
-func ValidateCustom_UploadPausedCheckpointRequest_Atespace(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+// ValidateCustom_DetachActorRequest_Atespace rejects the golden atespace:
+// golden actors are never paused, so a paused checkpoint is never promoted to
+// a golden snapshot.
+func ValidateCustom_DetachActorRequest_Atespace(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if *value == resources.GoldenActorAtespace {
 		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf("atespace %q holds golden actors, which are never paused", *value))}
 	}
@@ -131,10 +131,6 @@ func ValidateCustom_ExternalCheckpointConfiguration_SnapshotUri(_ context.Contex
 }
 
 func ValidateCustom_ObjectStorage_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return validateSnapshotURI(fldPath, *value)
-}
-
-func ValidateCustom_UploadPausedCheckpointRequest_DestinationSnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return validateSnapshotURI(fldPath, *value)
 }
 

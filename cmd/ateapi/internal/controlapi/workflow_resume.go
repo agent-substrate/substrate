@@ -708,12 +708,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		if err != nil {
 			return tele, err
 		}
-		snapshot = &ateletpb.Snapshot{
-			SnapshotUuid: localSnap.GetUuid(),
-			Fidelity:     fidelityToAtelet(localSnap.GetFidelity()),
-			Object:       &ateletpb.ObjectStorage{SnapshotUri: objectURI},
-			Generation:   localSnap.GetGeneration(),
-		}
+		snapshot = snapshotToAtelet(localSnap, fidelityToAtelet(localSnap.GetFidelity()), objectURI)
 	} else if !src.SnapshotURI.IsZero() {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLatest
@@ -721,12 +716,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		if src.TemplateReplaced {
 			fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		}
-		snapshot = &ateletpb.Snapshot{
-			SnapshotUuid: src.Snapshot.GetUuid(),
-			Fidelity:     fidelity,
-			Object:       &ateletpb.ObjectStorage{SnapshotUri: src.SnapshotURI.String()},
-			Generation:   src.Snapshot.GetGeneration(),
-		}
+		snapshot = snapshotToAtelet(src.Snapshot, fidelity, src.SnapshotURI.String())
 	}
 
 	if snapshot != nil {
@@ -778,6 +768,17 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 		return nil
 	}
 	return &ateletpb.EgressGateway{Address: w.egressGatewayAddress}
+}
+
+// snapshotToAtelet names snap to atelet, with the fidelity the request asks
+// for and the URI of the snapshot's durable copy.
+func snapshotToAtelet(snap *ateapipb.Snapshot, fidelity ateletpb.SnapshotFidelity, objectURI string) *ateletpb.Snapshot {
+	return &ateletpb.Snapshot{
+		SnapshotUuid: snap.GetUuid(),
+		Fidelity:     fidelity,
+		Object:       &ateletpb.ObjectStorage{SnapshotUri: objectURI},
+		Generation:   snap.GetGeneration(),
+	}
 }
 
 // localSnapshotObjectURI is where a local snapshot's durable copy lives, which

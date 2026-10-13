@@ -3138,7 +3138,7 @@ func (*CheckpointResponse) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{43}
 }
 
-type UploadPausedCheckpointRequest struct {
+type DetachActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Golden actors are never paused, so the golden atespace is rejected.
 	//
@@ -3160,45 +3160,30 @@ type UploadPausedCheckpointRequest struct {
 	// +k8s:optional
 	// +k8s:format=k8s-short-name
 	ActorTemplateName string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	// The local checkpoint to upload: the uuid of the actor's pause snapshot
-	// (ateapi Snapshot.uuid, validated as a short name there too).
+	// The actor's latest snapshot as the control plane records it, and where
+	// it is, or will be, uploaded. fidelity is the one its Checkpoint
+	// requested, not the current template's preferred_fidelity.
 	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
-	LocalSnapshotName string `protobuf:"bytes,6,opt,name=local_snapshot_name,json=localSnapshotName,proto3" json:"local_snapshot_name,omitempty"`
-	// Destination object-storage URI (the actor's in-progress snapshot URI).
-	//
-	// +k8s:required
-	// +k8s:maxLength=2048
-	// +k8s:customValidation # a parseable snapshot URI
-	DestinationSnapshotUri string `protobuf:"bytes,7,opt,name=destination_snapshot_uri,json=destinationSnapshotUri,proto3" json:"destination_snapshot_uri,omitempty"`
-	// Fidelity the uploaded snapshot must have. The fidelity the pause
-	// checkpoint captured is not sent: atelet reads it from the local
-	// snapshot's own manifest, which is authoritative, and rejects the upload
-	// if the two differ.
-	//
-	// +k8s:required
-	// +k8s:minimum=1
-	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-	DesiredFidelity SnapshotFidelity `protobuf:"varint,8,opt,name=desired_fidelity,json=desiredFidelity,proto3,enum=atelet.SnapshotFidelity" json:"desired_fidelity,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	Snapshot      *Snapshot `protobuf:"bytes,6,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *UploadPausedCheckpointRequest) Reset() {
-	*x = UploadPausedCheckpointRequest{}
+func (x *DetachActorRequest) Reset() {
+	*x = DetachActorRequest{}
 	mi := &file_atelet_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *UploadPausedCheckpointRequest) String() string {
+func (x *DetachActorRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*UploadPausedCheckpointRequest) ProtoMessage() {}
+func (*DetachActorRequest) ProtoMessage() {}
 
-func (x *UploadPausedCheckpointRequest) ProtoReflect() protoreflect.Message {
+func (x *DetachActorRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_atelet_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3210,87 +3195,73 @@ func (x *UploadPausedCheckpointRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use UploadPausedCheckpointRequest.ProtoReflect.Descriptor instead.
-func (*UploadPausedCheckpointRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use DetachActorRequest.ProtoReflect.Descriptor instead.
+func (*DetachActorRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{44}
 }
 
-func (x *UploadPausedCheckpointRequest) GetAtespace() string {
+func (x *DetachActorRequest) GetAtespace() string {
 	if x != nil {
 		return x.Atespace
 	}
 	return ""
 }
 
-func (x *UploadPausedCheckpointRequest) GetActorName() string {
+func (x *DetachActorRequest) GetActorName() string {
 	if x != nil {
 		return x.ActorName
 	}
 	return ""
 }
 
-func (x *UploadPausedCheckpointRequest) GetActorUid() string {
+func (x *DetachActorRequest) GetActorUid() string {
 	if x != nil {
 		return x.ActorUid
 	}
 	return ""
 }
 
-func (x *UploadPausedCheckpointRequest) GetActorTemplateAtespace() string {
+func (x *DetachActorRequest) GetActorTemplateAtespace() string {
 	if x != nil {
 		return x.ActorTemplateAtespace
 	}
 	return ""
 }
 
-func (x *UploadPausedCheckpointRequest) GetActorTemplateName() string {
+func (x *DetachActorRequest) GetActorTemplateName() string {
 	if x != nil {
 		return x.ActorTemplateName
 	}
 	return ""
 }
 
-func (x *UploadPausedCheckpointRequest) GetLocalSnapshotName() string {
+func (x *DetachActorRequest) GetSnapshot() *Snapshot {
 	if x != nil {
-		return x.LocalSnapshotName
+		return x.Snapshot
 	}
-	return ""
+	return nil
 }
 
-func (x *UploadPausedCheckpointRequest) GetDestinationSnapshotUri() string {
-	if x != nil {
-		return x.DestinationSnapshotUri
-	}
-	return ""
-}
-
-func (x *UploadPausedCheckpointRequest) GetDesiredFidelity() SnapshotFidelity {
-	if x != nil {
-		return x.DesiredFidelity
-	}
-	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
-}
-
-type UploadPausedCheckpointResponse struct {
+type DetachActorResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *UploadPausedCheckpointResponse) Reset() {
-	*x = UploadPausedCheckpointResponse{}
+func (x *DetachActorResponse) Reset() {
+	*x = DetachActorResponse{}
 	mi := &file_atelet_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *UploadPausedCheckpointResponse) String() string {
+func (x *DetachActorResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*UploadPausedCheckpointResponse) ProtoMessage() {}
+func (*DetachActorResponse) ProtoMessage() {}
 
-func (x *UploadPausedCheckpointResponse) ProtoReflect() protoreflect.Message {
+func (x *DetachActorResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_atelet_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3302,8 +3273,8 @@ func (x *UploadPausedCheckpointResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use UploadPausedCheckpointResponse.ProtoReflect.Descriptor instead.
-func (*UploadPausedCheckpointResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use DetachActorResponse.ProtoReflect.Descriptor instead.
+func (*DetachActorResponse) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{45}
 }
 
@@ -3705,18 +3676,16 @@ const file_atelet_proto_rawDesc = "" +
 	"\x0fexternal_config\x18\n" +
 	" \x01(\v2'.atelet.ExternalCheckpointConfigurationR\x0eexternalConfig\x124\n" +
 	"\bfidelity\x18\v \x01(\x0e2\x18.atelet.SnapshotFidelityR\bfidelity\"\x14\n" +
-	"\x12CheckpointResponse\"\x8e\x03\n" +
-	"\x1dUploadPausedCheckpointRequest\x12\x1a\n" +
+	"\x12CheckpointResponse\"\x82\x02\n" +
+	"\x12DetachActorRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x126\n" +
 	"\x17actor_template_atespace\x18\x04 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
-	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12.\n" +
-	"\x13local_snapshot_name\x18\x06 \x01(\tR\x11localSnapshotName\x128\n" +
-	"\x18destination_snapshot_uri\x18\a \x01(\tR\x16destinationSnapshotUri\x12C\n" +
-	"\x10desired_fidelity\x18\b \x01(\x0e2\x18.atelet.SnapshotFidelityR\x0fdesiredFidelity\" \n" +
-	"\x1eUploadPausedCheckpointResponse\"\xa2\x04\n" +
+	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12,\n" +
+	"\bsnapshot\x18\x06 \x01(\v2\x10.atelet.SnapshotR\bsnapshot\"\x15\n" +
+	"\x13DetachActorResponse\"\xa2\x04\n" +
 	"\x0eRestoreRequest\x12$\n" +
 	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -3750,13 +3719,13 @@ const file_atelet_proto_rawDesc = "" +
 	"\fAteomSupport\x12c\n" +
 	"\x14MintActorCertificate\x12#.atelet.MintActorCertificateRequest\x1a$.atelet.MintActorCertificateResponse\"\x00\x12Q\n" +
 	"\x0eRegisterWorker\x12\x1d.atelet.RegisterWorkerRequest\x1a\x1e.atelet.RegisterWorkerResponse\"\x00\x12`\n" +
-	"\x13RequestActorSuspend\x12\".atelet.RequestActorSuspendRequest\x1a#.atelet.RequestActorSuspendResponse\"\x002\xf3\x02\n" +
+	"\x13RequestActorSuspend\x12\".atelet.RequestActorSuspendRequest\x1a#.atelet.RequestActorSuspendResponse\"\x002\xd2\x02\n" +
 	"\vAteomHerder\x120\n" +
 	"\x03Run\x12\x12.atelet.RunRequest\x1a\x13.atelet.RunResponse\"\x00\x12E\n" +
 	"\n" +
 	"Checkpoint\x12\x19.atelet.CheckpointRequest\x1a\x1a.atelet.CheckpointResponse\"\x00\x12<\n" +
-	"\aRestore\x12\x16.atelet.RestoreRequest\x1a\x17.atelet.RestoreResponse\"\x00\x12i\n" +
-	"\x16UploadPausedCheckpoint\x12%.atelet.UploadPausedCheckpointRequest\x1a&.atelet.UploadPausedCheckpointResponse\"\x00\x12B\n" +
+	"\aRestore\x12\x16.atelet.RestoreRequest\x1a\x17.atelet.RestoreResponse\"\x00\x12H\n" +
+	"\vDetachActor\x12\x1a.atelet.DetachActorRequest\x1a\x1b.atelet.DetachActorResponse\"\x00\x12B\n" +
 	"\tTerminate\x12\x18.atelet.TerminateRequest\x1a\x19.atelet.TerminateResponse\"\x00B>Z<github.com/agent-substrate/substrate/internal/proto/ateletpbb\x06proto3"
 
 var (
@@ -3821,8 +3790,8 @@ var file_atelet_proto_goTypes = []any{
 	(*Snapshot)(nil),                        // 44: atelet.Snapshot
 	(*CheckpointRequest)(nil),               // 45: atelet.CheckpointRequest
 	(*CheckpointResponse)(nil),              // 46: atelet.CheckpointResponse
-	(*UploadPausedCheckpointRequest)(nil),   // 47: atelet.UploadPausedCheckpointRequest
-	(*UploadPausedCheckpointResponse)(nil),  // 48: atelet.UploadPausedCheckpointResponse
+	(*DetachActorRequest)(nil),              // 47: atelet.DetachActorRequest
+	(*DetachActorResponse)(nil),             // 48: atelet.DetachActorResponse
 	(*RestoreRequest)(nil),                  // 49: atelet.RestoreRequest
 	(*RestoreResponse)(nil),                 // 50: atelet.RestoreResponse
 	nil,                                     // 51: atelet.ArchAssets.FilesEntry
@@ -3871,7 +3840,7 @@ var file_atelet_proto_depIdxs = []int32{
 	41, // 37: atelet.CheckpointRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
 	42, // 38: atelet.CheckpointRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
 	2,  // 39: atelet.CheckpointRequest.fidelity:type_name -> atelet.SnapshotFidelity
-	2,  // 40: atelet.UploadPausedCheckpointRequest.desired_fidelity:type_name -> atelet.SnapshotFidelity
+	44, // 40: atelet.DetachActorRequest.snapshot:type_name -> atelet.Snapshot
 	22, // 41: atelet.RestoreRequest.spec:type_name -> atelet.WorkloadSpec
 	44, // 42: atelet.RestoreRequest.snapshot:type_name -> atelet.Snapshot
 	18, // 43: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
@@ -3884,7 +3853,7 @@ var file_atelet_proto_depIdxs = []int32{
 	17, // 50: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
 	45, // 51: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
 	49, // 52: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
-	47, // 53: atelet.AteomHerder.UploadPausedCheckpoint:input_type -> atelet.UploadPausedCheckpointRequest
+	47, // 53: atelet.AteomHerder.DetachActor:input_type -> atelet.DetachActorRequest
 	15, // 54: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
 	14, // 55: atelet.AteomSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
 	10, // 56: atelet.AteomSupport.RegisterWorker:output_type -> atelet.RegisterWorkerResponse
@@ -3892,7 +3861,7 @@ var file_atelet_proto_depIdxs = []int32{
 	40, // 58: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
 	46, // 59: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
 	50, // 60: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
-	48, // 61: atelet.AteomHerder.UploadPausedCheckpoint:output_type -> atelet.UploadPausedCheckpointResponse
+	48, // 61: atelet.AteomHerder.DetachActor:output_type -> atelet.DetachActorResponse
 	16, // 62: atelet.AteomHerder.Terminate:output_type -> atelet.TerminateResponse
 	55, // [55:63] is the sub-list for method output_type
 	47, // [47:55] is the sub-list for method input_type

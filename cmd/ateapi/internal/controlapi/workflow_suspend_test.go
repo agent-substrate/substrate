@@ -760,7 +760,7 @@ func TestIsPausedOriginSuspend(t *testing.T) {
 // failure handling: a lost node record crashes the actor (the snapshot can
 // never be found), while an unreachable atelet stays retryable (the bytes
 // are likely still on the node's disk).
-func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
+func TestEnsurePausedActorDetached_Preconditions(t *testing.T) {
 	t.Run("no node recorded crashes", func(t *testing.T) {
 		ctx := context.Background()
 		persistence := newTestPersistence(t)
@@ -777,7 +777,7 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 			},
 		})
 
-		_, err := w.ensurePausedSnapshotUploaded(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{})
+		_, err := w.ensurePausedActorDetached(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created)
 		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("apierror.Code(err) = %v, want %v for a missing node record (err: %v)", got, codes.FailedPrecondition, err)
 		}
@@ -808,10 +808,9 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 			},
 		})
 
-		tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"}}
-		_, err := w.ensurePausedSnapshotUploaded(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, tmpl)
+		_, err := w.ensurePausedActorDetached(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created)
 		if !errors.Is(err, ErrNoAteletOnNode) {
-			t.Fatalf("ensurePausedSnapshotUploaded = %v, want ErrNoAteletOnNode", err)
+			t.Fatalf("ensurePausedActorDetached = %v, want ErrNoAteletOnNode", err)
 		}
 
 		stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})

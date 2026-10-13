@@ -1316,16 +1316,19 @@ func validCheckpointRequest() *ateletpb.CheckpointRequest {
 	}
 }
 
-func validUploadPausedCheckpointRequest() *ateletpb.UploadPausedCheckpointRequest {
-	return &ateletpb.UploadPausedCheckpointRequest{
-		Atespace:               "ate-demo",
-		ActorName:              "counter-1",
-		ActorUid:               "123e4567-e89b-12d3-a456-426614174000",
-		ActorTemplateAtespace:  "ate-demo",
-		ActorTemplateName:      "counter",
-		LocalSnapshotName:      "pause-snap-1",
-		DestinationSnapshotUri: pausedSnapshotURI,
-		DesiredFidelity:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+func validDetachActorRequest() *ateletpb.DetachActorRequest {
+	return &ateletpb.DetachActorRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter-1",
+		ActorUid:              "123e4567-e89b-12d3-a456-426614174000",
+		ActorTemplateAtespace: "ate-demo",
+		ActorTemplateName:     "counter",
+		Snapshot: &ateletpb.Snapshot{
+			SnapshotUuid: "pause-snap-1",
+			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			Object:       &ateletpb.ObjectStorage{SnapshotUri: pausedSnapshotURI},
+			Generation:   1,
+		},
 	}
 }
 
@@ -1366,7 +1369,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			"config.json": "cfg", "memory-ranges": "mem", "data.tar": "data",
 		})
 
-		if _, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri); err != nil {
+		if _, err := s.uploadLocalCheckpointDir(ctx, validDetachActorRequest(), dir, uri); err != nil {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
 		want := []string{
@@ -1395,8 +1398,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			Fidelity:          ateattr.SnapshotFidelityRootfs,
 		}, map[string]string{"rootfs-upper-app.tar": "upper", "data.tar": "data"})
 
-		req := validUploadPausedCheckpointRequest()
-		req.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		req := validDetachActorRequest()
+		req.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 		if _, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri); err != nil {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
@@ -1413,17 +1416,19 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}
 	})
 
-	// The capture and the upload always carry the template's one fidelity;
-	// a mismatch in either direction is drift, never a conversion.
+	// The request names the lowest fidelity the snapshot may hold: a capture
+	// below it is drift, one at or above it uploads as captured.
 	for _, tc := range []struct {
-		name     string
-		captured string
-		desired  ateletpb.SnapshotFidelity
+		name      string
+		captured  string
+		requested ateletpb.SnapshotFidelity
+		wantErr   bool
 	}{
-		{"volumes capture cannot become memory", ateattr.SnapshotFidelityVolumes, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
-		{"memory capture cannot become volumes", ateattr.SnapshotFidelityMemory, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
-		{"memory capture cannot become rootfs", ateattr.SnapshotFidelityMemory, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS},
-		{"rootfs capture cannot become memory", ateattr.SnapshotFidelityRootfs, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		{"volumes capture is below memory", ateattr.SnapshotFidelityVolumes, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, true},
+		{"rootfs capture is below memory", ateattr.SnapshotFidelityRootfs, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, true},
+		{"unknown capture is below volumes", "bogus", ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, true},
+		{"memory capture satisfies volumes", ateattr.SnapshotFidelityMemory, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, false},
+		{"memory capture satisfies rootfs", ateattr.SnapshotFidelityMemory, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &recordingObjectStorage{}
@@ -1435,9 +1440,18 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 				"config.json": "cfg", "memory-ranges": "mem", "data.tar": "data",
 			})
 
-			req := validUploadPausedCheckpointRequest()
-			req.DesiredFidelity = tc.desired
+			req := validDetachActorRequest()
+			req.Snapshot.Fidelity = tc.requested
 			_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("uploadLocalCheckpointDir: %v", err)
+				}
+				if got := remoteManifest(t, store).Fidelity; got != tc.captured {
+					t.Errorf("uploaded manifest fidelity = %q, want the captured %q", got, tc.captured)
+				}
+				return
+			}
 			if got := apierror.Code(err); got != codes.FailedPrecondition {
 				t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
 			}
@@ -1457,8 +1471,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			SnapshotFiles: []string{"data.tar"},
 		}, map[string]string{"data.tar": "data"})
 
-		req := validUploadPausedCheckpointRequest()
-		req.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		req := validDetachActorRequest()
+		req.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
 		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition for a scope-less manifest", got, err)
@@ -1474,7 +1488,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}}
 		s := newPluginHerder(t, store)
 
-		if _, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), filepath.Join(t.TempDir(), "never-created"), uri); err != nil {
+		if _, err := s.uploadLocalCheckpointDir(ctx, validDetachActorRequest(), filepath.Join(t.TempDir(), "never-created"), uri); err != nil {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
 	})
@@ -1482,7 +1496,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	t.Run("gone locally and remotely crashes the actor", func(t *testing.T) {
 		s := newPluginHerder(t, &recordingObjectStorage{})
 
-		_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), filepath.Join(t.TempDir(), "never-created"), uri)
+		_, err := s.uploadLocalCheckpointDir(ctx, validDetachActorRequest(), filepath.Join(t.TempDir(), "never-created"), uri)
 		if err == nil {
 			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
 		}
@@ -1498,7 +1512,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			"config.json": "cfg", "memory-ranges": "mem", "data.tar": "data",
 		})
 
-		_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri)
+		_, err := s.uploadLocalCheckpointDir(ctx, validDetachActorRequest(), dir, uri)
 		if err == nil {
 			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
 		}

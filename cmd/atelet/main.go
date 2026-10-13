@@ -831,6 +831,21 @@ func toAteomFidelity(fidelity ateletpb.SnapshotFidelity) ateompb.SnapshotFidelit
 	}
 }
 
+// manifestFidelity parses the fidelity a snapshot manifest records. An
+// unknown value is UNSPECIFIED, which ranks below every real fidelity.
+func manifestFidelity(value string) ateletpb.SnapshotFidelity {
+	for _, f := range []ateletpb.SnapshotFidelity{
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+	} {
+		if ateattr.SnapshotFidelityValue(f) == value {
+			return f
+		}
+	}
+	return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+}
+
 func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, rec *sandboxAssetsRecord) error {
 	actorDir := ateletpath.ActorPath(req.GetActorUid())
 	root, err := os.OpenRoot(actorDir)
@@ -945,12 +960,13 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 	return nil
 }
 
-// UploadPausedCheckpoint copies a paused actor's local checkpoint to object
-// storage. It drives no ateom — the actor's sandbox is gone; the checkpoint
-// files and their self-describing manifest already sit under the actor's
-// local-checkpoints directory, written by an earlier local Checkpoint (pause).
-func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (_ *ateletpb.UploadPausedCheckpointResponse, err error) {
-	if errs := apivalidation.ValidateUploadPausedCheckpointRequest(ctx, req); len(errs) > 0 {
+// DetachActor uploads a paused actor's local snapshot to object storage and
+// then deletes the actor's local snapshots. It drives no ateom — the actor's
+// sandbox is gone; the snapshot files and their self-describing manifest
+// already sit under the actor's local-checkpoint directory, written by an
+// earlier local Checkpoint (pause).
+func (s *AteomHerder) DetachActor(ctx context.Context, req *ateletpb.DetachActorRequest) (_ *ateletpb.DetachActorResponse, err error) {
+	if errs := apivalidation.ValidateDetachActorRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 
@@ -962,7 +978,7 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 		// Always the actor's durable latest: golden actors are never paused
 		// (validation above rejects the golden atespace).
 		kind:     ateattr.SnapshotKindLatest,
-		fidelity: ateattr.SnapshotFidelityValue(req.GetDesiredFidelity()),
+		fidelity: ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity()),
 	}
 	defer func() {
 		s.instruments.recordCheckpoint(ctx, op,
@@ -970,11 +986,11 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 			phase{ateattr.SnapshotPhaseTotal, time.Since(tStart)})
 	}()
 
-	uri, err := resources.ParseSnapshotURI(req.GetDestinationSnapshotUri())
+	uri, err := resources.ParseSnapshotURI(req.GetSnapshot().GetObject().GetSnapshotUri())
 	if err != nil {
 		return nil, apierror.InvalidArgument("%v", err)
 	}
-	localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalSnapshotName())
+	localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetSnapshot().GetSnapshotUuid())
 
 	tPersist := time.Now()
 	sandboxClass, err := s.uploadLocalCheckpointDir(ctx, req, localDir, uri)
@@ -990,14 +1006,13 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 		slog.WarnContext(ctx, "failed to prune uploaded local checkpoints", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
 	}
 
-	return &ateletpb.UploadPausedCheckpointResponse{}, nil
+	return &ateletpb.DetachActorResponse{}, nil
 }
 
 // uploadLocalCheckpointDir uploads the local checkpoint in localDir to uri,
-// converting the captured scope to the requested one where possible. It
-// returns the sandbox class recorded in the snapshot manifest (empty when the
+// at the fidelity it was captured with. It returns the sandbox class recorded in the snapshot manifest (empty when the
 // manifest was not read). Parameterized by localDir for tests.
-func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest, localDir string, uri resources.SnapshotURI) (string, error) {
+func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.DetachActorRequest, localDir string, uri resources.SnapshotURI) (string, error) {
 	manifest, err := readSnapshotManifest(localDir)
 	if errors.Is(err, os.ErrNotExist) {
 		// The local snapshot is gone. A previous invocation may have uploaded
@@ -1007,12 +1022,12 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 		// unrecoverable.
 		_, fetchErr := s.fetchManifest(ctx, uri.String())
 		if fetchErr == nil {
-			slog.InfoContext(ctx, "Local snapshot already uploaded and pruned; nothing to do", slog.String("snapshot_uri", req.GetDestinationSnapshotUri()))
+			slog.InfoContext(ctx, "Local snapshot already uploaded and pruned; nothing to do", slog.String("snapshot_uri", uri.String()))
 			return "", nil
 		}
 		if status.Code(fetchErr) == codes.NotFound {
 			return "", fmt.Errorf("local snapshot %q is gone and no uploaded copy exists: %w",
-				req.GetLocalSnapshotName(), fetchErr)
+				req.GetSnapshot().GetSnapshotUuid(), fetchErr)
 		}
 		return "", fmt.Errorf("while probing for an already-uploaded snapshot manifest: %w", fetchErr)
 	}
@@ -1025,16 +1040,15 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 		return "", err
 	}
 
-	capturedFidelity := rec.Fidelity
-	if capturedFidelity == "" {
-		return rec.SandboxClass, apierror.FailedPrecondition("local snapshot %q has no fidelity recorded in its manifest; resume and pause the actor again before suspending it", req.GetLocalSnapshotName())
+	if rec.Fidelity == "" {
+		return rec.SandboxClass, apierror.FailedPrecondition("local snapshot %q has no fidelity recorded in its manifest; resume and pause the actor again before suspending it", req.GetSnapshot().GetSnapshotUuid())
 	}
-	// Pause and suspend capture the template's one preferred fidelity, and a
-	// paused actor's template cannot change, so the upload is always of what
-	// the pause captured. A mismatch means the store or the control plane
-	// drifted; refuse rather than guess.
-	if desiredFidelity := ateattr.SnapshotFidelityValue(req.GetDesiredFidelity()); capturedFidelity != desiredFidelity {
-		return rec.SandboxClass, apierror.FailedPrecondition("pause snapshot captured %s; upload asks for %s", capturedFidelity, desiredFidelity)
+	// The request names the lowest fidelity the snapshot may hold. A lower
+	// one in the manifest means the store or the control plane drifted, so
+	// refuse rather than upload less than the actor needs.
+	captured := manifestFidelity(rec.Fidelity)
+	if requested := req.GetSnapshot().GetFidelity(); captured < requested {
+		return rec.SandboxClass, apierror.FailedPrecondition("local snapshot captured %s; detach asks for at least %s", rec.Fidelity, ateattr.SnapshotFidelityValue(requested))
 	}
 
 	// The local snapshot stays until the upload succeeds, so a retry can

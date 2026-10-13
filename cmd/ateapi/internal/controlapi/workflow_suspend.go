@@ -78,7 +78,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	}
 	actor = marked
 	if fromPaused {
-		wireFidelity, err = w.ensurePausedSnapshotUploaded(leaseCtx, actorRef, actor, actorTemplate)
+		wireFidelity, err = w.ensurePausedActorDetached(leaseCtx, actorRef, actor)
 	} else {
 		wireFidelity, err = w.ensureAteletSuspended(leaseCtx, actorRef, actor, actorTemplate)
 	}
@@ -275,14 +275,15 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	return wireFidelity, nil
 }
 
-// ensurePausedSnapshotUploaded suspends a PAUSED actor by telling the atelet
-// on the node holding the local pause snapshot to upload it to the actor's
-// persisted in-progress snapshot location; no workload runs, so there is no
-// ateom to checkpoint. Retries re-send the same semantic request: the
-// destination is minted once and the upload overwrites deterministic object
-// names, with the remote manifest as the commit marker.
-func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireFidelity string, err error) {
-	ctx, done := stepSpan(ctx, "UploadPausedCheckpoint")
+// ensurePausedActorDetached suspends a PAUSED actor by telling the atelet on
+// the node holding the local pause snapshot to detach it: upload the snapshot
+// to the actor's persisted in-progress snapshot location, then delete it from
+// the node. No workload runs, so there is no ateom to checkpoint. Retries
+// re-send the same semantic request: the destination is minted once and the
+// upload overwrites deterministic object names, with the remote manifest as
+// the commit marker.
+func (w *ActorWorkflow) ensurePausedActorDetached(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor) (wireFidelity string, err error) {
+	ctx, done := stepSpan(ctx, "DetachActor")
 	defer func() { err = done(err) }()
 
 	localSnap := findLatestLocalSnapshot(actor.GetStatus())
@@ -306,24 +307,27 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
 	inProgressSnap := snapshotAtLatestGeneration(actor.GetStatus())
-	req := &ateletpb.UploadPausedCheckpointRequest{
-		Atespace:               actor.GetMetadata().GetAtespace(),
-		ActorName:              actor.GetMetadata().GetName(),
-		ActorUid:               actor.GetMetadata().GetUid(),
-		ActorTemplateAtespace:  actor.GetActorTemplate().GetAtespace(),
-		ActorTemplateName:      actor.GetActorTemplate().GetName(),
-		LocalSnapshotName:      localSnap.GetUuid(),
-		DestinationSnapshotUri: inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(),
-		// The commit scope, like a running-origin suspend; atelet converts
-		// from the captured scope in the snapshot's manifest where possible.
-		DesiredFidelity: fidelityToAtelet(preferredFidelity(actor.GetMetadata().GetAtespace(), actorTemplate)),
-	}
-	wireFidelity = ateattr.SnapshotFidelityValue(req.DesiredFidelity)
+	req := detachActorRequest(actor, localSnap, inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri())
+	wireFidelity = ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity())
 
-	if _, err = client.UploadPausedCheckpoint(ctx, req); err != nil {
-		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "UploadPausedCheckpoint", false, err)
+	if _, err = client.DetachActor(ctx, req); err != nil {
+		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "DetachActor", false, err)
 	}
 	return wireFidelity, nil
+}
+
+// detachActorRequest asks atelet to detach actor from the node holding its
+// local snapshot snap, uploading it to objectURI. The fidelity is the one the
+// snapshot records, which is what its Checkpoint requested.
+func detachActorRequest(actor *ateapipb.Actor, snap *ateapipb.Snapshot, objectURI string) *ateletpb.DetachActorRequest {
+	return &ateletpb.DetachActorRequest{
+		Atespace:              actor.GetMetadata().GetAtespace(),
+		ActorName:             actor.GetMetadata().GetName(),
+		ActorUid:              actor.GetMetadata().GetUid(),
+		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
+		ActorTemplateName:     actor.GetActorTemplate().GetName(),
+		Snapshot:              snapshotToAtelet(snap, fidelityToAtelet(snap.GetFidelity()), objectURI),
+	}
 }
 
 // newInProgressSnapshotURI is where the snapshot an actor is currently taking is

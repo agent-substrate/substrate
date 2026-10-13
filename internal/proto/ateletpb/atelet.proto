@@ -250,11 +250,15 @@ service AteomHerder {
   // Restore restores a workload from checkpoint onto an ateom.
   rpc Restore(RestoreRequest) returns (RestoreResponse) {}
 
-  // UploadPausedCheckpoint copies a local (pause) checkpoint from this node's
-  // disk to object storage. Unlike Checkpoint it drives no ateom: the actor is
-  // paused, its sandbox is gone; the checkpoint files plus their manifest
-  // already sit under the actor's local-checkpoints directory.
-  rpc UploadPausedCheckpoint(UploadPausedCheckpointRequest) returns (UploadPausedCheckpointResponse) {}
+  // DetachActor releases a paused actor from this node: atelet uploads its
+  // latest snapshot to `snapshot.object`, then deletes the actor's local
+  // snapshots. It drives no ateom: the actor's sandbox is gone, and the
+  // snapshot files plus their manifest sit under the actor's local-checkpoint
+  // directory.
+  //
+  // Idempotent: once atelet holds nothing for the actor, it answers from the
+  // manifest at `snapshot.object`, and fails if there is none.
+  rpc DetachActor(DetachActorRequest) returns (DetachActorResponse) {}
 
   // Terminate tells atelet to terminate/kill any running workload for an actor,
   // unmount its volumes, and clean up actor state on the node.
@@ -918,7 +922,7 @@ message CheckpointRequest {
 message CheckpointResponse {
 }
 
-message UploadPausedCheckpointRequest {
+message DetachActorRequest {
   // Golden actors are never paused, so the golden atespace is rejected.
   //
   // +k8s:required
@@ -944,32 +948,15 @@ message UploadPausedCheckpointRequest {
   // +k8s:format=k8s-short-name
   string actor_template_name = 5;
 
-  // The local checkpoint to upload: the uuid of the actor's pause snapshot
-  // (ateapi Snapshot.uuid, validated as a short name there too).
+  // The actor's latest snapshot as the control plane records it, and where
+  // it is, or will be, uploaded. fidelity is the one its Checkpoint
+  // requested, not the current template's preferred_fidelity.
   //
   // +k8s:required
-  // +k8s:format=k8s-short-name
-  string local_snapshot_name = 6;
-
-  // Destination object-storage URI (the actor's in-progress snapshot URI).
-  //
-  // +k8s:required
-  // +k8s:maxLength=2048
-  // +k8s:customValidation # a parseable snapshot URI
-  string destination_snapshot_uri = 7;
-
-  // Fidelity the uploaded snapshot must have. The fidelity the pause
-  // checkpoint captured is not sent: atelet reads it from the local
-  // snapshot's own manifest, which is authoritative, and rejects the upload
-  // if the two differ.
-  //
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-  SnapshotFidelity desired_fidelity = 8;
+  Snapshot snapshot = 6;
 }
 
-message UploadPausedCheckpointResponse {
+message DetachActorResponse {
 }
 
 message RestoreRequest {

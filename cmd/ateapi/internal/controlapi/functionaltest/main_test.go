@@ -128,15 +128,15 @@ type FakeAteletServer struct {
 	FailRestore    error
 	RestoreDelay   time.Duration
 
-	UploadCalled  bool
-	UploadRequest *ateletpb.UploadPausedCheckpointRequest
-	FailUpload    error
+	DetachCalled  bool
+	DetachRequest *ateletpb.DetachActorRequest
+	FailDetach    error
 
 	TerminateCalled  bool
 	TerminateRequest *ateletpb.TerminateRequest
 	FailTerminate    error
 
-	// objectStore, when set, receives the objects a checkpoint or an upload
+	// objectStore, when set, receives the objects a checkpoint or a detach
 	// writes, so the control plane's copy and release steps have real external
 	// snapshots to act on. setupTest points it at the test's own store.
 	objectStore *objectstoretest.Fake
@@ -154,7 +154,7 @@ func (f *FakeAteletServer) SetObjectStore(store *objectstoretest.Fake) {
 	f.objectStore = store
 }
 
-// writeSnapshot records the external snapshot a checkpoint or an upload would
+// writeSnapshot records the external snapshot a checkpoint or a detach would
 // have written at snapshotURI. Called with Lock held.
 func (f *FakeAteletServer) writeSnapshot(snapshotURI string) error {
 	if f.objectStore == nil || snapshotURI == "" {
@@ -180,9 +180,9 @@ func (f *FakeAteletServer) Reset() {
 	f.FailRestore = nil
 	f.RestoreDelay = 0
 
-	f.UploadCalled = false
-	f.UploadRequest = nil
-	f.FailUpload = nil
+	f.DetachCalled = false
+	f.DetachRequest = nil
+	f.FailDetach = nil
 
 	f.TerminateCalled = false
 	f.TerminateRequest = nil
@@ -191,19 +191,19 @@ func (f *FakeAteletServer) Reset() {
 	f.objectStore = nil
 }
 
-func (f *FakeAteletServer) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (*ateletpb.UploadPausedCheckpointResponse, error) {
+func (f *FakeAteletServer) DetachActor(ctx context.Context, req *ateletpb.DetachActorRequest) (*ateletpb.DetachActorResponse, error) {
 	f.Lock.Lock()
 	defer f.Lock.Unlock()
 
-	f.UploadCalled = true
-	f.UploadRequest = proto.Clone(req).(*ateletpb.UploadPausedCheckpointRequest)
-	if f.FailUpload != nil {
-		return nil, f.FailUpload
+	f.DetachCalled = true
+	f.DetachRequest = proto.Clone(req).(*ateletpb.DetachActorRequest)
+	if f.FailDetach != nil {
+		return nil, f.FailDetach
 	}
-	if err := f.writeSnapshot(req.GetDestinationSnapshotUri()); err != nil {
+	if err := f.writeSnapshot(req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
-	return &ateletpb.UploadPausedCheckpointResponse{}, nil
+	return &ateletpb.DetachActorResponse{}, nil
 }
 
 func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
