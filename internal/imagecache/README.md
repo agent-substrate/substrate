@@ -141,6 +141,11 @@ rebuilds the layer (a wiped cache or a node that joins later). Treat a
 `go-erofs` bump as a snapshot format change: pin it deliberately, and expect
 golden snapshots to be regenerated after one.
 
+With `--host-erofs-layers` on atelet (off by default; it requires EROFS in the
+host kernel, which atelet probes at startup), gVisor bundles and image volumes
+are pulled as `Form{EROFS: true}` too, and `SetupBundleRootfs` and
+`SetupBundleImageVolumes` mount the layer images on the host.
+
 `prepareOCIDirectory` in atelet then writes `rootfs-overlay.json`
 (`OverlaySpec`) into the bundle, listing the layer
 directories bottom-first plus any `ExtraDirs` (in-rootfs bind-mount targets,
@@ -209,6 +214,15 @@ mtime and `user.*` / `security.capability` xattrs. `SetupBundleImageVolumes`
 composes only a bundle's image volumes, for a rootfs the consumer assembles
 itself. `SetupBundleRootfs` refuses a bundle on EROFS images: the host does
 not mount them here.
+
+On the host (`ateworker-gvisor` rootfs via `SetupBundleRootfs`, and image volumes
+via `SetupBundleImageVolumes`), each distinct `layer.erofs` is mounted
+read-only under the bundle (using file-backed EROFS on Linux 6.12+ or an
+autoclear loop device on older kernels) and passed as a lowerdir to
+`mountOverlay` (or mounted directly at the volume mount point for a
+single-layer image volume). `SetupBundleRootfs` repairs implicit parent
+directories in the bundle's upper via `PrepareEROFSUpper` before mounting the
+overlay.
 
 **Teardown**: `UnmountAllUnder(bundleDir)` lazily detaches every mount below
 an actor's bundle directory (via `/proc/self/mountinfo`) before atelet wipes

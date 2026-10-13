@@ -51,14 +51,14 @@ type OverlaySpec struct {
 	// protect the image while the bundle exists; consumers ignore it.
 	// Optional: older specs lack it.
 	ImageDigest string `json:"imageDigest,omitempty"`
-	// Layers are the cached layer directories (each holding its tree under
-	// fs/), bottom-most layer first — the order the image manifest lists
-	// them. Consumers reverse this into overlayfs's top-first lowerdir.
+	// Layers are the cached layer directories, bottom-most layer first — the
+	// order the image manifest lists them. Consumers reverse this into
+	// overlayfs's top-first lowerdir.
 	Layers []string `json:"layers"`
 	// EROFS indicates that every layer in Layers has a layer.erofs image (see
-	// LayerEROFSPath). Micro-VM consumers attach those images to the guest and
-	// fail if any is missing; SetupBundleRootfs refuses such a bundle, as the
-	// host mounts only fs/ trees.
+	// LayerEROFSPath). Micro-VM consumers attach those images to the guest;
+	// SetupBundleRootfs and SetupBundleImageVolumes mount them on the host.
+	// Either fails if any is missing.
 	EROFS bool `json:"erofs,omitempty"`
 	// ExtraDirs are absolute in-rootfs directories the consumer creates after
 	// mounting (they land in the actor's private upper): bind-mount targets
@@ -82,6 +82,8 @@ type ImageVolumeOverlay struct {
 	ImageDigest string `json:"imageDigest,omitempty"`
 	// Layers are the cached layer directories, bottom-most first.
 	Layers []string `json:"layers"`
+	// EROFS indicates that every layer in Layers has a layer.erofs image.
+	EROFS bool `json:"erofs,omitempty"`
 }
 
 // WriteSpec writes spec into the bundle at bundlePath.

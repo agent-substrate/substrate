@@ -127,7 +127,7 @@ func setDirXattrs(root *os.Root, rel string, xattrs map[string]string) error {
 
 // SetupBundleImageVolumes composes the bundle's image volumes when the guest
 // mounts the container rootfs from EROFS layers.
-func SetupBundleImageVolumes(bundlePath string) error {
+func SetupBundleImageVolumes(bundlePath string) (retErr error) {
 	spec, err := ReadSpec(bundlePath)
 	if err != nil {
 		return err
@@ -135,6 +135,11 @@ func SetupBundleImageVolumes(bundlePath string) error {
 	if spec == nil {
 		return nil
 	}
+	defer func() {
+		if retErr != nil {
+			_ = UnmountAllUnder(bundlePath)
+		}
+	}()
 	if err := setupImageVolumes(bundlePath, spec.ImageVolumes); err != nil {
 		return fmt.Errorf("while setting up image volumes: %w", err)
 	}
