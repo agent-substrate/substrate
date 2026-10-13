@@ -18,7 +18,7 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   abi::envoy_dynamic_module_type_on_listener_filter_status, envoy_log_trace, EnvoyListenerFilter,
   EnvoyListenerFilterConfig, ListenerFilter, ListenerFilterConfig,
 };
-pub use substrate_envoy_common::egress_policy::{EgressPolicy, SniRule};
+pub use crate::egress_policy::{EgressPolicy, SniRule};
 
 /// Filter state holding the SNI rules as JSON. See
 /// EgressPolicyMetadataNamespace in cmd/atenet/internal/router/extproc.

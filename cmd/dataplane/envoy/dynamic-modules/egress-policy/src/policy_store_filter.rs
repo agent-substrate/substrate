@@ -23,7 +23,7 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   },
   envoy_log_trace, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
 };
-use substrate_envoy_common::egress_policy::EgressPolicy;
+use crate::egress_policy::EgressPolicy;
 
 /// Configuration for the egress-policy-store HTTP filter.
 pub struct EgressPolicyStoreFilterConfig;
@@ -78,7 +78,7 @@ mod tests {
   use envoy_proxy_dynamic_modules_rust_sdk::{
     abi::envoy_dynamic_module_type_metadata_source, EnvoyBuffer, MockEnvoyHttpFilter,
   };
-  use substrate_envoy_common::egress_policy::{
+  use crate::egress_policy::{
     SniRule, ATE_POLICY_EGRESS_NAMESPACE, ATE_POLICY_JSON_KEY,
   };
 
