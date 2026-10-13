@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 // seedTagSource stores a suspended actor whose external snapshot is made of
@@ -105,11 +106,8 @@ func TestTagActorSnapshot(t *testing.T) {
 	if got, want := tag.GetStatus().GetSnapshot().GetFidelity(), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY; got != want {
 		t.Errorf("fidelity = %v, want the source's %v", got, want)
 	}
-	if gotRt := tag.GetStatus().GetSnapshot().GetSandboxRuntime(); gotRt.GetSandboxClass() != "gvisor" ||
-		gotRt.GetVersion().GetSchemaVersion() != "v1" ||
-		len(gotRt.GetVersion().GetAttributes()) != 1 ||
-		gotRt.GetVersion().GetAttributes()[0].GetValue() != "amd64" {
-		t.Errorf("tag Snapshot.SandboxRuntime = %v, want gvisor/v1/amd64", gotRt)
+	if diff := cmp.Diff(testSandboxRuntime(), tag.GetStatus().GetSnapshot().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Errorf("tag Snapshot.SandboxRuntime mismatch (-want +got):\n%s", diff)
 	}
 
 	// Both prefixes hold the same objects: the tag copied rather than moved.

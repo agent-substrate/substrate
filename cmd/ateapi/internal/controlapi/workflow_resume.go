@@ -52,8 +52,6 @@ type resumeSnapshotSource struct {
 	// RequiredRuntime is the runtime resolved from the snapshot's guest state
 	// (via requiredSnapshotRuntime), or nil when guest state is not restored.
 	RequiredRuntime *ateapipb.SandboxRuntime
-	// Owner is the ownership kind of the durable snapshot.
-	Owner ateapipb.SnapshotOwner
 }
 
 // restoreTelemetry labels the restore operation for the resume lifecycle
@@ -188,7 +186,6 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		src.Fidelity = snap.GetFidelity()
 		capturedUnder := snap.GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
-		src.Owner = snap.GetOwner()
 	}
 
 	return actor, actorTemplate, src, nil
@@ -603,6 +600,15 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime *ateapipb.SandboxRunti
 		// The runtime the actor is started or restored under. Snapshots taken
 		// during this assignment are stamped with it, so a worker that later
 		// changes its default does not relabel state captured on the old one.
+		//
+		// TODO: A restorable_runtimes match records the old runtime here, but
+		// resolveSandboxAssets still ships the SandboxConfig's default version
+		// and atelet restores with the assets in the request, so the restore
+		// runs on the new version: it fails, or the next checkpoint is stamped
+		// with a runtime that did not produce it. Resolve the assets for the
+		// matched version once SandboxConfig can name them, or treat a
+		// restorable-only match as incompatible until it can. Latent for now:
+		// ateom reports no restorable_runtimes (internal/ateom/register.go).
 		SandboxRuntime: proto.CloneOf(hardware.RuntimeFor(w.GetStatus(), snapRuntime)),
 	}
 }
@@ -675,7 +681,7 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 }
 
 // canRelaxRuntime reports whether a resume may drop its RequiredRuntime
-// constraint and fall back to cold-booting or volume-only restore when no
+// constraint and fall back to a volumes-only restore when no
 // runtime-compatible worker has capacity. A local pause checkpoint is not
 // relaxed: the resume stays pinned to its node, the local restore has no
 // fidelity downgrade, and nothing invalidates the checkpoint files if the actor
@@ -772,7 +778,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	// The assignment is what the next checkpoint is stamped from, so it is also
 	// what decides how this restore runs.
 	runtimeIncompatible := src.RequiredRuntime != nil && !hardware.Matches(assignment.GetSandboxRuntime(), src.RequiredRuntime)
-	borrowedGolden := src.Owner == ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG && actor.GetSourceTag() == nil
 	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
@@ -801,13 +806,13 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
 		}
 		return tele, nil
-	} else if !src.SnapshotURI.IsZero() && !(runtimeIncompatible && borrowedGolden) {
+	} else if !src.SnapshotURI.IsZero() {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLatest
 		scope := fidelityToAtelet(src.Fidelity)
 		if src.TemplateReplaced || runtimeIncompatible {
 			if runtimeIncompatible {
-				logRuntimeFallback(ctx, actorRef, assignment, src.RequiredRuntime, "volumes")
+				logRuntimeFallback(ctx, actorRef, assignment, src.RequiredRuntime)
 			}
 			scope = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		}
@@ -837,9 +842,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		return tele, nil
 	} else {
-		if runtimeIncompatible && borrowedGolden {
-			logRuntimeFallback(ctx, actorRef, assignment, src.RequiredRuntime, "cold_boot")
-		}
 		slog.InfoContext(ctx, "Actor has no snapshot; Booting from ActorTemplate spec")
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
 
@@ -863,15 +865,13 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	}
 }
 
-// logRuntimeFallback records a resume that discards the snapshot's guest
-// state because the assigned worker does not run the runtime it was captured
-// under. fallback names what runs instead: "volumes" for a restore of the
-// durable volumes alone, "cold_boot" for a boot from the template spec.
-func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapipb.WorkerAssignment, required *ateapipb.SandboxRuntime, fallback string) {
-	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; discarding guest state",
+// logRuntimeFallback records a resume that restores the durable volumes alone
+// because the assigned worker does not run the runtime the snapshot's guest
+// state was captured under.
+func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapipb.WorkerAssignment, required *ateapipb.SandboxRuntime) {
+	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; restoring volumes only",
 		slog.String("actor", actorRef.String()),
 		slog.String("worker", assignment.GetWorkerPod()),
-		slog.String("fallback", fallback),
 		slog.Any("required_runtime", required),
 		slog.Any("assigned_runtime", assignment.GetSandboxRuntime()))
 }

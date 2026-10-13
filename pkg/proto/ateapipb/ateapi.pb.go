@@ -741,8 +741,8 @@ type Snapshot struct {
 	//
 	// +k8s:optional
 	DurableSnapshot *SnapshotStorage `protobuf:"bytes,7,opt,name=durable_snapshot,json=durableSnapshot,proto3" json:"durable_snapshot,omitempty"`
-	// sandbox_runtime is the worker sandbox runtime and compatibility version
-	// this snapshot's guest state was captured on.
+	// sandbox_runtime is the runtime the actor ran under when the snapshot was
+	// taken.
 	//
 	// +k8s:optional
 	SandboxRuntime *SandboxRuntime `protobuf:"bytes,8,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
@@ -7427,10 +7427,10 @@ type VersionedSandboxCompat struct {
 	// Key-value compatibility attributes defined by this schema version, covering
 	// both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
 	// features after masking (e.g. "architecture", "cpu_features").
-	// Matched against a snapshot under the same schema_version: every attribute
-	// on the snapshot must be present on the worker with an equal value; keys
-	// only the worker has are ignored. Bump schema_version when a key's meaning
-	// changes or older snapshots must no longer match.
+	// Matched against a snapshot under the same schema_version by exact equality
+	// of all keys and values: a key present on only one side is a mismatch.
+	// Adding, removing, or recomputing a key is a new schema_version, under
+	// which older snapshots no longer match.
 	// Order as sent does not matter: ate-api-server sorts attributes by key
 	// before recording them.
 	//

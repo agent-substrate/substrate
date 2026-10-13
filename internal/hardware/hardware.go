@@ -66,9 +66,11 @@ func Matches(worker, snap *ateapipb.SandboxRuntime) bool {
 }
 
 // MatchesCompat reports whether worker can restore a snapshot stamped with
-// snap: same non-empty schema version, and every attribute on snap present on
-// worker with an equal value. Keys only the worker has are ignored; a new
-// schema version is how older snapshots are excluded.
+// snap: the same non-empty schema version and exactly the same attributes,
+// each key present on both sides with an equal value. A schema version is
+// the unit of evolution: adding, removing, or recomputing a key means a new
+// version, under which older snapshots stop matching, rather than a subset
+// match that would let old keys accumulate forever.
 func MatchesCompat(worker, snap *ateapipb.VersionedSandboxCompat) bool {
 	if worker == nil || snap == nil {
 		return false
@@ -79,7 +81,11 @@ func MatchesCompat(worker, snap *ateapipb.VersionedSandboxCompat) bool {
 	wAttrs := worker.GetAttributes()
 	sAttrs := snap.GetAttributes()
 	// API validation bounds attributes to at most 32 entries with unique keys,
-	// so the nested scan is small and avoids map allocation on the hot path.
+	// so equal counts plus a one-way scan is a two-way match, and the nested
+	// scan is small and avoids map allocation on the hot path.
+	if len(wAttrs) != len(sAttrs) {
+		return false
+	}
 	for _, sa := range sAttrs {
 		found := false
 		for _, wa := range wAttrs {
@@ -128,7 +134,7 @@ func WorkerMatches(status *ateapipb.WorkerStatus, snap *ateapipb.SandboxRuntime)
 
 // RuntimeFor returns the runtime a worker with status runs an actor under
 // whose snapshot is stamped with snap: the matching runtime when it can
-// restore the snapshot, else the DefaultRuntime it cold-boots the actor on.
+// restore the snapshot, else the DefaultRuntime the guest boots fresh under.
 // This is what an assignment records and what the actor's next checkpoint
 // is stamped with.
 func RuntimeFor(status *ateapipb.WorkerStatus, snap *ateapipb.SandboxRuntime) *ateapipb.SandboxRuntime {

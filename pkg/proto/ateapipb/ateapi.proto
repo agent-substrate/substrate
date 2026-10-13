@@ -268,8 +268,8 @@ message Snapshot {
   // +k8s:optional
   SnapshotStorage durable_snapshot = 7;
 
-  // sandbox_runtime is the worker sandbox runtime and compatibility version
-  // this snapshot's guest state was captured on.
+  // sandbox_runtime is the runtime the actor ran under when the snapshot was
+  // taken.
   //
   // +k8s:optional
   SandboxRuntime sandbox_runtime = 8;
@@ -2305,10 +2305,10 @@ message VersionedSandboxCompat {
   // Key-value compatibility attributes defined by this schema version, covering
   // both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
   // features after masking (e.g. "architecture", "cpu_features").
-  // Matched against a snapshot under the same schema_version: every attribute
-  // on the snapshot must be present on the worker with an equal value; keys
-  // only the worker has are ignored. Bump schema_version when a key's meaning
-  // changes or older snapshots must no longer match.
+  // Matched against a snapshot under the same schema_version by exact equality
+  // of all keys and values: a key present on only one side is a mismatch.
+  // Adding, removing, or recomputing a key is a new schema_version, under
+  // which older snapshots no longer match.
   // Order as sent does not matter: ate-api-server sorts attributes by key
   // before recording them.
   //

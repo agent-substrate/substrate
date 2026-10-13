@@ -1492,14 +1492,18 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "23 stamped borrowed golden snapshot on incompatible worker cold-boots via Run",
+			name: "23 stamped borrowed golden snapshot on incompatible worker drops to Volumes",
 			actor: actorSeed{
 				externalSnapshot: stampedExtSnap(ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, goldenURI, fullScope, amd64RT),
 				tmplUID:          "current",
 				assignedRuntime:  arm64RT,
 			},
 			tmpl: templateSeed{golden: stampedExtSnap(ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, goldenURI, fullScope, amd64RT)},
-			want: restoreWant{run: true},
+			want: restoreWant{
+				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+				snapshotURI:    goldenURI,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			},
 		},
 		{
 			name: "24 stamped explicit source_tag clone on incompatible worker drops to Volumes",
@@ -2303,7 +2307,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		if got := worker.GetWorkerPod(); got != "arm-pod" {
 			t.Errorf("assigned worker = %q, want %q", got, "arm-pod")
 		}
-		// A cold boot runs under the fallback worker's default.
+		// The volumes-only restore runs under the fallback worker's default.
 		assertAssignedRuntime(t, stored, arm64RT)
 	})
 
@@ -2417,4 +2421,148 @@ func TestValidateAssignedWorker_RuntimeFallback(t *testing.T) {
 			t.Errorf("validated worker = %q, want %q", got, "arm-pod")
 		}
 	})
+}
+
+// TestRequiredSnapshotRuntime pins which snapshot a resume takes its runtime
+// constraint from, and when it takes none.
+func TestRequiredSnapshotRuntime(t *testing.T) {
+	const tmplUID = "tmpl-uid"
+	tmpl := &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Uid: tmplUID}}
+	localRT := testRuntime("amd64", "paused-under")
+	durableRT := testRuntime("amd64", "suspended-under")
+	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	rootfs := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	volumes := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+
+	durable := func(gen int32, fidelity ateapipb.SnapshotFidelity, capturedUnder string, status ateapipb.SnapshotStorageStatus, rt *ateapipb.SandboxRuntime) *ateapipb.Snapshot {
+		snap := newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, capturedUnder, "snap", "gs://bucket/snap", status)
+		snap.SandboxRuntime = rt
+		return snap
+	}
+	local := func(gen int32, fidelity ateapipb.SnapshotFidelity, rt *ateapipb.SandboxRuntime) *ateapipb.Snapshot {
+		snap := newLocalSnapshot(gen, fidelity, tmplUID, "local", "node-1")
+		snap.SandboxRuntime = rt
+		return snap
+	}
+
+	tests := []struct {
+		name      string
+		snapshots []*ateapipb.Snapshot
+		want      *ateapipb.SandboxRuntime
+	}{
+		{name: "no snapshot cold-boots unconstrained"},
+		{
+			name:      "completed MEMORY durable snapshot requires its runtime",
+			snapshots: []*ateapipb.Snapshot{durable(1, memory, tmplUID, completed, durableRT)},
+			want:      durableRT,
+		},
+		{
+			name:      "completed ROOTFS durable snapshot requires its runtime",
+			snapshots: []*ateapipb.Snapshot{durable(1, rootfs, tmplUID, completed, durableRT)},
+			want:      durableRT,
+		},
+		{
+			name:      "VOLUMES durable snapshot restores no guest state",
+			snapshots: []*ateapipb.Snapshot{durable(1, volumes, tmplUID, completed, durableRT)},
+		},
+		{
+			name:      "durable snapshot captured under a replaced template is not restored",
+			snapshots: []*ateapipb.Snapshot{durable(1, memory, "old-tmpl-uid", completed, durableRT)},
+		},
+		{
+			name:      "durable snapshot with no template uid keeps its runtime",
+			snapshots: []*ateapipb.Snapshot{durable(1, memory, "", completed, durableRT)},
+			want:      durableRT,
+		},
+		{
+			name:      "unstamped durable snapshot imposes no constraint",
+			snapshots: []*ateapipb.Snapshot{durable(1, memory, tmplUID, completed, nil)},
+		},
+		{
+			name:      "PENDING durable snapshot is not a restore source",
+			snapshots: []*ateapipb.Snapshot{durable(1, memory, tmplUID, pending, durableRT)},
+		},
+		{
+			name:      "local checkpoint requires its runtime",
+			snapshots: []*ateapipb.Snapshot{local(1, memory, localRT)},
+			want:      localRT,
+		},
+		{
+			// ensureAteletRestored restores a local checkpoint before any
+			// durable snapshot, so the constraint follows it regardless of
+			// which is newer.
+			name: "local checkpoint takes precedence over a newer durable snapshot",
+			snapshots: []*ateapipb.Snapshot{
+				local(1, memory, localRT),
+				durable(2, memory, tmplUID, completed, durableRT),
+			},
+			want: localRT,
+		},
+		{
+			name: "VOLUMES local checkpoint imposes no constraint beside a stamped durable snapshot",
+			snapshots: []*ateapipb.Snapshot{
+				local(2, volumes, localRT),
+				durable(1, memory, tmplUID, completed, durableRT),
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{Snapshots: tc.snapshots}}
+			if diff := cmp.Diff(tc.want, requiredSnapshotRuntime(actor, tmpl), protocmp.Transform()); diff != "" {
+				t.Errorf("requiredSnapshotRuntime mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestCanRelaxRuntime pins when a resume may drop its runtime constraint: only
+// when it has one, and never while a local pause checkpoint pins the actor.
+func TestCanRelaxRuntime(t *testing.T) {
+	rt := testSandboxRuntime()
+	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	durable := func(gen int32) *ateapipb.Snapshot {
+		return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "snap", "gs://bucket/snap", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	}
+	local := func(gen int32) *ateapipb.Snapshot {
+		return newLocalSnapshot(gen, memory, "", "local", "node-1")
+	}
+
+	tests := []struct {
+		name      string
+		snapshots []*ateapipb.Snapshot
+		required  *ateapipb.SandboxRuntime
+		want      bool
+	}{
+		{
+			name:      "nothing to relax without a runtime constraint",
+			snapshots: []*ateapipb.Snapshot{durable(1)},
+		},
+		{
+			name:      "durable snapshot may fall back",
+			snapshots: []*ateapipb.Snapshot{durable(1)},
+			required:  rt,
+			want:      true,
+		},
+		{
+			name:      "local checkpoint stays pinned",
+			snapshots: []*ateapipb.Snapshot{local(1)},
+			required:  rt,
+		},
+		{
+			name:      "local checkpoint stays pinned beside a durable snapshot",
+			snapshots: []*ateapipb.Snapshot{durable(1), local(2)},
+			required:  rt,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{Snapshots: tc.snapshots}}
+			if got := canRelaxRuntime(actor, scheduling.Constraints{RequiredRuntime: tc.required}); got != tc.want {
+				t.Errorf("canRelaxRuntime = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }

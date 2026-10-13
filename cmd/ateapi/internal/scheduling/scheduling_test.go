@@ -338,9 +338,9 @@ func TestSchedule(t *testing.T) {
 			name: "required runtime matches worker restorable runtime",
 			fleet: fleet{
 				worker("w-upgraded", "gvisor", "node-a", tierTwo,
-					withRuntimes(sandboxRuntime("gvisor", "amd64", "v2"), sandboxRuntime("gvisor", "amd64", "v1"))),
+					withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64", "v1")},
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64", "old")},
 			wantPod:     "w-upgraded",
 		},
 		{
@@ -451,15 +451,15 @@ func TestApplies(t *testing.T) {
 		},
 		{
 			name:        "matches required runtime via default runtime",
-			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "amd64", "v1"))),
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64", "v1")},
+			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "amd64", "old"))),
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64", "old")},
 			want:        true,
 		},
 		{
 			name: "matches required runtime via restorable runtimes",
 			worker: worker("w", "gvisor", "node-a", nil,
-				withRuntimes(sandboxRuntime("gvisor", "amd64", "v2"), sandboxRuntime("gvisor", "amd64", "v1"))),
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64", "v1")},
+				withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64", "old")},
 			want:        true,
 		},
 		{
@@ -499,10 +499,10 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 	return w
 }
 
-func sandboxRuntime(class, arch string, hash ...string) *ateapipb.SandboxRuntime {
+func sandboxRuntime(class, arch string, assetHash ...string) *ateapipb.SandboxRuntime {
 	attrs := []*ateapipb.AttributeEntry{{Key: "architecture", Value: arch}}
-	if len(hash) > 0 && hash[0] != "" {
-		attrs = append(attrs, &ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: hash[0]})
+	if len(assetHash) > 0 && assetHash[0] != "" {
+		attrs = append(attrs, &ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: assetHash[0]})
 	}
 	return &ateapipb.SandboxRuntime{
 		SandboxClass: class,

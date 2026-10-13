@@ -410,12 +410,27 @@ a `Snapshot` with the following fields:
   written and `COMPLETED` once it can be restored from. A snapshot that exists
   only on a node has no `durableSnapshot`. A tag's snapshot always has one, and
   the tag can seed actors only once it is `COMPLETED`.
-- `sandboxRuntime`: The sandbox runtime and compatibility version the guest
-  state was captured under, copied from the worker assignment the actor ran on.
-  A resume that restores memory or rootfs state is placed on a worker whose
-  `defaultRuntime` or `restorableRuntimes` can restore it; when none has room,
-  the actor is placed anywhere eligible and restores its durable volumes only. A
-  snapshot without one imposes no placement constraint.
+- `sandboxRuntime`: The sandbox runtime and hardware compatibility attributes the
+  guest state was captured under, copied from `status.workerAssignment.sandboxRuntime`
+  when the checkpoint is taken. A resume that restores memory or rootfs state
+  (`SNAPSHOT_FIDELITY_MEMORY` or `SNAPSHOT_FIDELITY_ROOTFS`) first schedules onto
+  an eligible worker whose `defaultRuntime` or `restorableRuntimes` is compatible
+  with `sandboxRuntime` (same sandbox class, same schema version, and exactly
+  the same attribute keys and values). When no compatible worker has
+  capacity:
+  - A durable snapshot — the actor's own, a `sourceTag` clone, or the
+    template's golden snapshot a new actor starts from — falls back to any eligible
+    worker and downgrades the restore to `SNAPSHOT_FIDELITY_VOLUMES`, preserving
+    the snapshot's volume data while booting the guest fresh under the new
+    worker's `defaultRuntime`.
+  - A local pause checkpoint (with `locality` and no `durableSnapshot`) is not
+    relaxed; the resume returns `RESOURCE_EXHAUSTED` and the actor remains
+    `PAUSED` on its node until a compatible worker there has room. Suspending
+    the actor uploads the checkpoint and lifts the node pin, after which its
+    next resume may fall back like a durable snapshot.
+
+  A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_VOLUMES` imposes
+  no runtime placement constraint.
 
 An `ActorTemplate` references its golden tag with the `ObjectRef` in
 `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned
@@ -598,7 +613,7 @@ Replaces the mutable fields of an existing actor with the ones in the request.
 Because the guards are required and only a read supplies them, an update is always a read-modify-write. To Update an `Actor`, you must first `GetActor`/`CreateActor`, instead of building a new one — see [§7.2 of the API style guide](api-style-guide.md#72-using-version-and-uid-to-guard-writes) for why reconstructing the message can silently drop data.
 
 #### `ResumeActor`
-Activates a suspended actor by restoring it onto a physical worker.
+Activates a suspended or paused actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment`).

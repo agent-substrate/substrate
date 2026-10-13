@@ -192,9 +192,9 @@ func TestEnsureMarkedSuspending_StateMatrix(t *testing.T) {
 		actorStatus := &ateapipb.ActorStatus{State: seedState}
 		if seedState == ateapipb.ActorState_ACTOR_STATE_PAUSED {
 			actorStatus.LastAssignedGeneration = 1
-			actorStatus.Snapshots = []*ateapipb.Snapshot{
-				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", "node-1"),
-			}
+			snap := newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", "node-1")
+			snap.SandboxRuntime = testSandboxRuntime()
+			actorStatus.Snapshots = []*ateapipb.Snapshot{snap}
 		}
 		actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
@@ -223,6 +223,9 @@ func TestEnsureMarkedSuspending_StateMatrix(t *testing.T) {
 			// minting a new generation.
 			if pending.GetGeneration() != 1 || pending.GetUuid() != "snap-1" {
 				t.Errorf("paused-origin pending snapshot = generation %d, uuid %q; want the pause snapshot (generation 1, uuid %q)", pending.GetGeneration(), pending.GetUuid(), "snap-1")
+			}
+			if diff := cmp.Diff(testSandboxRuntime(), pending.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+				t.Errorf("paused-origin pending Snapshot.SandboxRuntime mismatch (-want +got):\n%s", diff)
 			}
 			if got := marked.GetStatus().GetLastAssignedGeneration(); got != 1 {
 				t.Errorf("paused-origin LastAssignedGeneration = %d, want 1", got)
