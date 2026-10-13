@@ -712,3 +712,52 @@ func TestSchedulePowerOfTwoChoicesShiftedSecondSample(t *testing.T) {
 		t.Fatalf("Schedule() = %q, want %q", got.GetWorkerPod(), "w-2")
 	}
 }
+
+// microVMRuntime is the runtime an ateworker-microvm worker reports: its host
+// hardware plus the hypervisor backend it drives.
+func microVMRuntime(hypervisor string) *ateapi.ActorSandboxRuntime {
+	rt := sandboxRuntime("microvm", "amd64")
+	rt.Version.Attributes = append(rt.Version.Attributes, &ateapi.AttributeEntry{Key: hardware.AttrHypervisor, Value: hypervisor})
+	return rt
+}
+
+// TestScheduleMixedHypervisorPool covers a microvm fleet with KVM and MSHV
+// workers: guest memory captured on one backend must only be placed on a
+// worker with the same backend, and with no such worker the scheduler reports
+// no capacity instead of choosing an incompatible one.
+func TestScheduleMixedHypervisorPool(t *testing.T) {
+	kvm := worker("w-kvm", "microvm", "node-kvm", nil, withRuntimes(microVMRuntime("kvm")))
+	mshv := worker("w-mshv", "microvm", "node-mshv", nil, withRuntimes(microVMRuntime("mshv")))
+	for _, tc := range []struct {
+		name     string
+		fleet    fleet
+		snapshot *ateapi.ActorSandboxRuntime
+		wantPod  string
+	}{
+		{name: "kvm snapshot", fleet: fleet{mshv, kvm}, snapshot: microVMRuntime("kvm"), wantPod: "w-kvm"},
+		{name: "mshv snapshot", fleet: fleet{kvm, mshv}, snapshot: microVMRuntime("mshv"), wantPod: "w-mshv"},
+		{name: "kvm snapshot without kvm workers", fleet: fleet{mshv}, snapshot: microVMRuntime("kvm")},
+		{name: "mshv snapshot without mshv workers", fleet: fleet{kvm}, snapshot: microVMRuntime("mshv")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			constraints := Constraints{SandboxClass: "microvm", RequiredRuntime: hardware.NewRequirement(tc.snapshot)}
+			s := New(tc.fleet, WithIntn(firstIntn))
+			for _, w := range tc.fleet {
+				want := w.GetWorkerPod() == tc.wantPod
+				if got := s.Applies(w, constraints); got != want {
+					t.Errorf("Applies(%s) = %v, want %v", w.GetWorkerPod(), got, want)
+				}
+			}
+			got, err := s.Schedule(context.Background(), constraints)
+			if tc.wantPod == "" {
+				if !errors.Is(err, ErrNoCapacity) {
+					t.Fatalf("Schedule() = %v, %v; want ErrNoCapacity", got.GetWorkerPod(), err)
+				}
+				return
+			}
+			if err != nil || got.GetWorkerPod() != tc.wantPod {
+				t.Fatalf("Schedule() = %q, %v; want %q", got.GetWorkerPod(), err, tc.wantPod)
+			}
+		})
+	}
+}

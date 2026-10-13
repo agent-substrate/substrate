@@ -32,8 +32,9 @@ const hostDevRoot = "/host/dev"
 
 // startDevicePlugins advertises the sandbox host devices present on this node to
 // kubelet as extended resources, in the background for the lifetime of ctx. This
-// is what lets a worker be granted /dev/kvm without running privileged. atelet
-// already runs per node, so it hosts this rather than adding a second DaemonSet.
+// is what lets a worker be granted its hypervisor device without running
+// privileged. atelet already runs per node, so it hosts this rather than adding
+// a second DaemonSet.
 //
 // Failures are logged, never fatal: a node that cannot advertise devices still
 // runs every sandbox class that needs none.

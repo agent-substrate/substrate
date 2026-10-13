@@ -114,6 +114,21 @@ func TestAvailableFiltersToPresentDevices(t *testing.T) {
 	}
 }
 
+func TestSandboxDevicesIncludeMicroVMHypervisors(t *testing.T) {
+	got := map[string]string{}
+	for _, dev := range SandboxDevices {
+		got[dev.ResourceName] = dev.Path
+	}
+	for resourceName, path := range map[string]string{
+		ResourceKVM:  "/dev/kvm",
+		ResourceMSHV: "/dev/mshv",
+	} {
+		if got[resourceName] != path {
+			t.Errorf("SandboxDevices[%q] = %q, want %q", resourceName, got[resourceName], path)
+		}
+	}
+}
+
 // A regular file at the device path is not a device; advertising it would grant
 // a meaningless resource.
 func TestPresentRejectsNonDevice(t *testing.T) {

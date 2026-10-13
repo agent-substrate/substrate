@@ -73,7 +73,12 @@ type WorkerPoolPodTemplate struct {
 
 	// resources are the compute resources allocated for each worker pod.
 	//
+	// For a microvm pool, naming ate.dev/mshv in limits or requests selects
+	// the Microsoft Hypervisor backend; otherwise the worker uses KVM. The
+	// controller requests one unit of the selected device either way.
+	//
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="!((has(self.limits) && 'ate.dev/kvm' in self.limits) || (has(self.requests) && 'ate.dev/kvm' in self.requests)) || !((has(self.limits) && 'ate.dev/mshv' in self.limits) || (has(self.requests) && 'ate.dev/mshv' in self.requests))",message="resources may name at most one of ate.dev/kvm and ate.dev/mshv"
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
 	// serviceAccountName for the worker pods. The ServiceAccount must exist
