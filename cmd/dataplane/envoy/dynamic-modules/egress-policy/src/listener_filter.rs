@@ -186,6 +186,7 @@ mod tests {
           mode: mode.to_string(),
         })
         .collect(),
+      hash: 0,
     }
   }
 
@@ -358,7 +359,7 @@ mod tests {
   ) {
     let hash_state = policy.map(|p| {
       let rc = std::rc::Rc::new(p);
-      let hash = rc.hash();
+      let hash = rc.hash;
       GlobalEgressPolicyStore::get_local_store().store(hash, &rc);
       hash.to_string().into_bytes()
     });

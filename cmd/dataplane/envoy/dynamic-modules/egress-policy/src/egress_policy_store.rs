@@ -49,6 +49,11 @@ impl EgressPolicyStore {
   pub fn store(&mut self, key: u64, policy: &Rc<EgressPolicy>) {
     self.policies.insert(key, Rc::clone(policy));
   }
+
+  /// Removes the policy under `key` and returns it, or `None` if not present.
+  pub fn remove(&mut self, key: u64) -> Option<Rc<EgressPolicy>> {
+    self.policies.remove(&key)
+  }
 }
 
 /// Global store for egress policies holding a thread-local [`EgressPolicyStore`].
@@ -90,11 +95,18 @@ mod tests {
         pattern: "api.example.com".to_string(),
         mode: "mitm".to_string(),
       }],
+      hash: 1,
     });
-    GlobalEgressPolicyStore::get_local_store().store(1, &policy);
-    let looked_up = GlobalEgressPolicyStore::get_local_store().lookup(1);
+    GlobalEgressPolicyStore::get_local_store().store(policy.hash, &policy);
+    let looked_up = GlobalEgressPolicyStore::get_local_store().lookup(policy.hash);
     assert_eq!(looked_up, Some(Rc::clone(&policy)));
     assert!(Rc::ptr_eq(&looked_up.unwrap(), &policy));
     assert_eq!(GlobalEgressPolicyStore::get_local_store().lookup(2), None);
+
+    let removed = GlobalEgressPolicyStore::get_local_store().remove(policy.hash);
+    assert_eq!(removed, Some(Rc::clone(&policy)));
+    assert!(Rc::ptr_eq(&removed.unwrap(), &policy));
+    assert_eq!(GlobalEgressPolicyStore::get_local_store().lookup(policy.hash), None);
+    assert_eq!(GlobalEgressPolicyStore::get_local_store().remove(policy.hash), None);
   }
 }

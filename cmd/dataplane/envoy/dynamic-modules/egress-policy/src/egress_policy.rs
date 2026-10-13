@@ -34,6 +34,8 @@ pub const ATE_POLICY_JSON_KEY: &str = "policy_json";
 pub struct EgressPolicy {
   /// Most specific first; the first match wins.
   pub rules: Vec<SniRule>,
+  #[serde(skip)]
+  pub hash: u64,
 }
 
 /// A pattern and the mode applied when it matches.
@@ -52,15 +54,11 @@ impl EgressPolicy {
       ATE_POLICY_EGRESS_NAMESPACE,
       ATE_POLICY_JSON_KEY,
     )?;
-    let policy = serde_json::from_slice::<Self>(metadata.as_slice()).ok()?;
-    Some(Rc::new(policy))
-  }
-
-  /// Computes a 64-bit hash of the egress policy using rapidhash.
-  pub fn hash(&self) -> u64 {
+    let mut policy = serde_json::from_slice::<Self>(metadata.as_slice()).ok()?;
     let mut hasher = RapidHasher::default();
-    Hash::hash(self, &mut hasher);
-    hasher.finish()
+    Hash::hash(&policy, &mut hasher);
+    policy.hash = hasher.finish();
+    Some(Rc::new(policy))
   }
 }
 
@@ -88,6 +86,7 @@ mod tests {
             mode: "mitm".to_string(),
           },
         ],
+        hash: 0,
       }
     );
     assert!(
@@ -110,18 +109,37 @@ mod tests {
           br#"{"rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#,
         ))
       })
+      .times(2);
+
+    let p1 = EgressPolicy::new_from_metadata(&mut mock_filter).unwrap();
+    let p2 = EgressPolicy::new_from_metadata(&mut mock_filter).unwrap();
+    assert_eq!(
+      p1.rules,
+      vec![SniRule {
+        pattern: "api.example.com".to_string(),
+        mode: "mitm".to_string(),
+      }]
+    );
+    assert_ne!(p1.hash, 0);
+    assert_eq!(p1.hash, p2.hash);
+    assert_eq!(p1, p2);
+
+    mock_filter
+      .expect_get_metadata_string()
+      .withf(|source, namespace, key| {
+        *source == envoy_dynamic_module_type_metadata_source::Dynamic
+          && namespace == ATE_POLICY_EGRESS_NAMESPACE
+          && key == ATE_POLICY_JSON_KEY
+      })
+      .returning(|_, _, _| {
+        Some(EnvoyBuffer::new(
+          br#"{"rules":[{"pattern":"api.example.com","mode":"passthrough"}]}"#,
+        ))
+      })
       .once();
 
-    let policy = EgressPolicy::new_from_metadata(&mut mock_filter);
-    assert_eq!(
-      policy,
-      Some(Rc::new(EgressPolicy {
-        rules: vec![SniRule {
-          pattern: "api.example.com".to_string(),
-          mode: "mitm".to_string(),
-        }],
-      }))
-    );
+    let p3 = EgressPolicy::new_from_metadata(&mut mock_filter).unwrap();
+    assert_ne!(p1.hash, p3.hash);
   }
 
   #[test]
@@ -138,29 +156,5 @@ mod tests {
       .returning(|_, _, _| Some(EnvoyBuffer::new(b"not-json")))
       .once();
     assert_eq!(EgressPolicy::new_from_metadata(&mut mock_filter), None);
-  }
-
-  #[test]
-  fn test_hash() {
-    let p1 = EgressPolicy {
-      rules: vec![SniRule {
-        pattern: "api.example.com".to_string(),
-        mode: "mitm".to_string(),
-      }],
-    };
-    let p2 = EgressPolicy {
-      rules: vec![SniRule {
-        pattern: "api.example.com".to_string(),
-        mode: "mitm".to_string(),
-      }],
-    };
-    let p3 = EgressPolicy {
-      rules: vec![SniRule {
-        pattern: "api.example.com".to_string(),
-        mode: "passthrough".to_string(),
-      }],
-    };
-    assert_eq!(p1.hash(), p2.hash());
-    assert_ne!(p1.hash(), p3.hash());
   }
 }
