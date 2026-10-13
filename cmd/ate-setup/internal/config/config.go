@@ -171,6 +171,9 @@ type Config struct {
 	// --route-timeout and --parked-request-budget; zero keeps the router default.
 	RouterRouteTimeout        time.Duration
 	RouterParkedRequestBudget time.Duration
+	// RouterExtProcMaxRequests is the router's --extproc-max-requests; zero
+	// keeps the router's derivation from --parked-request-max.
+	RouterExtProcMaxRequests int
 	// The read/write and owner connections can use different login identities.
 	// With one configured connection, both pools use it. Both empty selects
 	// bundled PostgreSQL.

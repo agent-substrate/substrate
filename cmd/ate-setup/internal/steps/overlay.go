@@ -336,6 +336,9 @@ func (e *Env) patchAtenetRouterSettings(raw []byte) ([]byte, error) {
 	if d := e.Cfg.RouterParkedRequestBudget; d > 0 {
 		args = append(args, "--parked-request-budget="+d.String())
 	}
+	if n := e.Cfg.RouterExtProcMaxRequests; n > 0 {
+		args = append(args, "--extproc-max-requests="+strconv.Itoa(n))
+	}
 	if len(args) == 0 {
 		return raw, nil
 	}

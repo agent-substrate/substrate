@@ -980,7 +980,7 @@ func TestRenderRouterSettings(t *testing.T) {
 	resolver := images.NewPrebuilt(src, func(context.Context, string) (string, error) {
 		return "sha256:" + strings.Repeat("2", 64), nil
 	})
-	flags := []string{"--route-timeout=", "--parked-request-budget="}
+	flags := []string{"--route-timeout=", "--parked-request-budget=", "--extproc-max-requests="}
 	for _, tc := range []struct {
 		name      string
 		cfg       config.Config
@@ -989,15 +989,21 @@ func TestRenderRouterSettings(t *testing.T) {
 	}{
 		{name: "unset", wantGrace: routerManifestGracePeriodSeconds},
 		{
-			name:      "route timeout and budget",
-			cfg:       config.Config{RouterRouteTimeout: 30 * time.Minute, RouterParkedRequestBudget: 2 * time.Minute},
-			wantArgs:  []string{"--route-timeout=30m0s", "--parked-request-budget=2m0s"},
+			name:      "all set",
+			cfg:       config.Config{RouterRouteTimeout: 30 * time.Minute, RouterParkedRequestBudget: 2 * time.Minute, RouterExtProcMaxRequests: 4096},
+			wantArgs:  []string{"--route-timeout=30m0s", "--parked-request-budget=2m0s", "--extproc-max-requests=4096"},
 			wantGrace: routerManifestGracePeriodSeconds + 115,
 		},
 		{
 			name:      "budget at the router default",
 			cfg:       config.Config{RouterParkedRequestBudget: 5 * time.Second},
 			wantArgs:  []string{"--parked-request-budget=5s"},
+			wantGrace: routerManifestGracePeriodSeconds,
+		},
+		{
+			name:      "breaker alone",
+			cfg:       config.Config{RouterExtProcMaxRequests: 4096},
+			wantArgs:  []string{"--extproc-max-requests=4096"},
 			wantGrace: routerManifestGracePeriodSeconds,
 		},
 	} {
