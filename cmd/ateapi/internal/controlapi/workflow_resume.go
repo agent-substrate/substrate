@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
@@ -653,14 +654,28 @@ func snapshotSandboxClass(actor *ateapi.Actor) string {
 	return snapshotToResume(actor.GetStatus()).GetSandboxRuntime().GetSandboxClass()
 }
 
-// requiredSnapshotRuntime returns the ActorSandboxRuntime stamped on snap, the
-// snapshotToResume, when the resume restores its memory state, or nil when it
-// does not (cold boot, ROOTFS or VOLUMES fidelity, or replaced template).
+// requiredSnapshotRuntime returns the ActorSandboxRuntime a worker must match
+// to restore the memory state of snap, the snapshotToResume (see
+// memoryRestoreRuntime), or nil when the resume does not restore memory state
+// (cold boot, ROOTFS or VOLUMES fidelity, or replaced template).
 func requiredSnapshotRuntime(snap *ateapi.Snapshot, tmpl *ateapi.ActorTemplate) *ateapi.ActorSandboxRuntime {
 	if snap.GetFidelity() != ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY || templateReplaced(snap, tmpl) {
 		return nil
 	}
-	return snap.GetSandboxRuntime()
+	return memoryRestoreRuntime(snap)
+}
+
+// memoryRestoreRuntime returns the runtime a worker must match to restore
+// snap's memory state: its stamped runtime, except that a microVM stamp
+// without a hypervisor backend requires KVM rather than matching any backend,
+// as it was taken before workers reported one, when every microVM worker ran
+// on KVM.
+func memoryRestoreRuntime(snap *ateapi.Snapshot) *ateapi.ActorSandboxRuntime {
+	rt := snap.GetSandboxRuntime()
+	if rt.GetSandboxClass() == string(atev1.SandboxClassMicroVM) {
+		rt = hardware.WithAttr(rt, hardware.AttrHypervisor, hardware.HypervisorKVM)
+	}
+	return rt
 }
 
 // canRelaxRuntime reports whether scheduling may drop its runtime requirement.

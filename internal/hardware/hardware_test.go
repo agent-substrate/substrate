@@ -18,8 +18,10 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 func TestProbeHost(t *testing.T) {
@@ -319,4 +321,69 @@ func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
 			t.Errorf("ColdBootRuntime(status) = %v, want %v", got, defRT)
 		}
 	})
+}
+
+func microVMRuntime(attrs ...*ateapi.AttributeEntry) *ateapi.ActorSandboxRuntime {
+	return &ateapi.ActorSandboxRuntime{
+		SandboxClass: "microvm",
+		Version:      &ateapi.VersionedSandboxCompat{SchemaVersion: SchemaVersionV1, Attributes: attrs},
+	}
+}
+
+var (
+	amd64Attr = &ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"}
+	arm64Attr = &ateapi.AttributeEntry{Key: AttrArchitecture, Value: "arm64"}
+	kvmAttr   = &ateapi.AttributeEntry{Key: AttrHypervisor, Value: HypervisorKVM}
+	mshvAttr  = &ateapi.AttributeEntry{Key: AttrHypervisor, Value: HypervisorMSHV}
+)
+
+// TestMatches_Hypervisor pins that the backend constrains a requirement that
+// names it and is ignored on the worker when the requirement omits it.
+func TestMatches_Hypervisor(t *testing.T) {
+	kvm := microVMRuntime(amd64Attr, kvmAttr)
+	mshv := microVMRuntime(amd64Attr, mshvAttr)
+	noBackend := microVMRuntime(amd64Attr)
+	tests := []struct {
+		name         string
+		worker, snap *ateapi.ActorSandboxRuntime
+		want         bool
+	}{
+		{"same backend", mshv, mshv, true},
+		{"other backend fails", mshv, kvm, false},
+		{"requirement without a backend matches kvm", kvm, noBackend, true},
+		{"requirement without a backend matches mshv", mshv, noBackend, true},
+		{"requirement without a backend still checks other attributes", microVMRuntime(arm64Attr, mshvAttr), noBackend, false},
+		{"backend on the requirement only fails", noBackend, kvm, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Matches(tc.worker, tc.snap); got != tc.want {
+				t.Errorf("Matches() = %v, want %v", got, tc.want)
+			}
+			if got := WorkerMatches(&ateapi.WorkerStatus{SandboxClasses: []*ateapi.WorkerSandboxClass{{
+				SandboxClass:   tc.worker.GetSandboxClass(),
+				DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: tc.worker.GetVersion()},
+			}}}, tc.snap); got != tc.want {
+				t.Errorf("WorkerMatches() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWithAttr(t *testing.T) {
+	noBackend := microVMRuntime(amd64Attr)
+	got := WithAttr(noBackend, AttrHypervisor, HypervisorKVM)
+	if diff := cmp.Diff(microVMRuntime(amd64Attr, kvmAttr), got, protocmp.Transform()); diff != "" {
+		t.Errorf("WithAttr() mismatch (-want +got):\n%s", diff)
+	}
+	if len(noBackend.GetVersion().GetAttributes()) != 1 {
+		t.Errorf("WithAttr() modified its input: %v", noBackend)
+	}
+	mshv := microVMRuntime(amd64Attr, mshvAttr)
+	if got := WithAttr(mshv, AttrHypervisor, HypervisorKVM); got != mshv {
+		t.Errorf("WithAttr() on a runtime with the key = %v, want it unchanged", got)
+	}
+	if got := WithAttr(nil, AttrHypervisor, HypervisorKVM); got != nil {
+		t.Errorf("WithAttr(nil) = %v, want nil", got)
+	}
 }

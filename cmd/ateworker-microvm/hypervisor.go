@@ -35,8 +35,8 @@ import (
 type hypervisor string
 
 const (
-	hypervisorKVM  hypervisor = "kvm"
-	hypervisorMSHV hypervisor = "mshv"
+	hypervisorKVM  hypervisor = hardware.HypervisorKVM
+	hypervisorMSHV hypervisor = hardware.HypervisorMSHV
 
 	// hypervisorFile records the backend of a MEMORY snapshot taken on a
 	// backend other than KVM. KVM is the default backend, so its snapshots
