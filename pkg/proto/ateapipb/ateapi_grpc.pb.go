@@ -1876,17 +1876,15 @@ type WorkerServiceClient interface {
 	// retries a suspend it had already been granted therefore sees a failure
 	// rather than a repeat of its success.
 	RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error)
-	// ReportActorSnapshotState reports the snapshots atelet holds for an Actor
-	// on the caller's node. atelet sends it after an upload and when it detaches
-	// the Actor. Each report carries the full state and supersedes earlier ones.
+	// ReportActorSnapshotState records which snapshots of an Actor the calling
+	// atelet holds on its node, and which of them are durable. Only atelet can
+	// observe when an upload finishes or a local copy is deleted, and the
+	// control plane needs both to decide where the Actor can resume.
 	//
-	// An unset latest_local means atelet no longer restores the Actor locally.
-	// The control plane then clears Snapshot.locality for the caller's node,
-	// and status.assigned_node if the Actor is SUSPENDED there, so the next
-	// resume can go to any node.
-	//
-	// atelet calls this with its own client certificate. The control plane
-	// accepts it only for an Actor on the caller's node. Idempotent.
+	// Only atelet should call this, with its own client certificate. The
+	// control plane serves it only for an Actor on the caller's node.
+	// Idempotent: each report carries the whole state and replaces the previous
+	// one. Returns ABORTED while another operation holds the Actor; retry.
 	ReportActorSnapshotState(ctx context.Context, in *ReportActorSnapshotStateRequest, opts ...grpc.CallOption) (*ReportActorSnapshotStateResponse, error)
 }
 
@@ -1983,17 +1981,15 @@ type WorkerServiceServer interface {
 	// retries a suspend it had already been granted therefore sees a failure
 	// rather than a repeat of its success.
 	RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error)
-	// ReportActorSnapshotState reports the snapshots atelet holds for an Actor
-	// on the caller's node. atelet sends it after an upload and when it detaches
-	// the Actor. Each report carries the full state and supersedes earlier ones.
+	// ReportActorSnapshotState records which snapshots of an Actor the calling
+	// atelet holds on its node, and which of them are durable. Only atelet can
+	// observe when an upload finishes or a local copy is deleted, and the
+	// control plane needs both to decide where the Actor can resume.
 	//
-	// An unset latest_local means atelet no longer restores the Actor locally.
-	// The control plane then clears Snapshot.locality for the caller's node,
-	// and status.assigned_node if the Actor is SUSPENDED there, so the next
-	// resume can go to any node.
-	//
-	// atelet calls this with its own client certificate. The control plane
-	// accepts it only for an Actor on the caller's node. Idempotent.
+	// Only atelet should call this, with its own client certificate. The
+	// control plane serves it only for an Actor on the caller's node.
+	// Idempotent: each report carries the whole state and replaces the previous
+	// one. Returns ABORTED while another operation holds the Actor; retry.
 	ReportActorSnapshotState(context.Context, *ReportActorSnapshotStateRequest) (*ReportActorSnapshotStateResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
