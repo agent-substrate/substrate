@@ -65,7 +65,7 @@ anywhere.
       layer.erofs                    the layer as an EROFS image (for consumers
                                      asking Form{EROFS: true}); a node holds
                                      one form per layer
-      layer.erofs.sha256             its digest, checked at micro-VM restore
+      layer.erofs.sha256             its digest, for a consumer to pin
       whiteouts.json                 whiteout and implicit-dir metadata
                                      recorded at unpack time
       finalized                      marker written by FinalizeLayer (consumer side)
@@ -210,6 +210,18 @@ bit-exact, pristine image rootfs — it just costs a mount instead of an
 extraction. The micro-VM path is nearly untouched: it bind-mounts the (now
 overlay-composed) bundle rootfs into virtiofsd's shared dir and the guest
 keeps building its own tmpfs upper, as before.
+
+## Merged view without a host mount (`PrepareEROFSUpper`)
+
+A consumer that mounts `layer.erofs` images itself has no host-side merged
+tree to write into before its first mount. `PrepareEROFSUpper` resolves
+paths through the images with overlayfs lookup rules and creates in the
+fresh upper the directories the host writes into (such as `etc` for
+`resolv.conf`) and the implicit-parent repairs, so a directory like `/tmp`
+keeps its declared mode. Each gets the merged view's owner, mode, mtime and
+`user.*` / `security.capability` xattrs. `SetupBundleImageVolumes` composes
+only a bundle's image volumes. `SetupBundleRootfs` refuses a bundle on EROFS
+images.
 
 **Teardown**: `UnmountAllUnder(bundleDir)` lazily detaches every mount below
 an actor's bundle directory (via `/proc/self/mountinfo`) before atelet wipes

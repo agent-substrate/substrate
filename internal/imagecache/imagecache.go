@@ -450,8 +450,8 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 }
 
 // EnsureImageAs is EnsureImage for consumers that want the layers in a
-// particular Form. A layer the cache holds in another form is converted
-// from its blob (one layer download), not pulled whole.
+// particular Form. A layer the cache already holds in the other form is an
+// error (see Form).
 func (s *Store) EnsureImageAs(ctx context.Context, ref string, form Form) (_ *Image, err error) {
 	// A miss until a complete record proves otherwise; recordRequest
 	// reclassifies a failure onto its own outcome.
@@ -504,8 +504,8 @@ func (s *Store) EnsureImageAs(ctx context.Context, ref string, form Form) (_ *Im
 	// timeout: a waiter must only ever see a real pull failure, never another
 	// caller's cancellation. Each caller stops waiting when its own ctx ends,
 	// while the pull runs on to warm the cache for the next attempt.
-	// The flight is keyed by digest and form: two consumers wanting the
-	// same image in different forms both need their layers converted.
+	// The flight is keyed by digest and form, so a second form of the same
+	// image reaches the per-layer form check instead of sharing the flight.
 	ch := s.imageSF.DoChan(digest.String()+formFlightSuffix(form), func() (any, error) {
 		pullCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.pullTimeout)
 		defer cancel()
