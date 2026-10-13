@@ -94,7 +94,12 @@ func handleAteletError(ctx context.Context, st crashActorStore, actorRef resourc
 		}
 		return fmt.Errorf("actor %s crashed: %w", actorRef, err)
 	}
+	return ateletRetryError(ctx, rpc, err)
+}
 
+// ateletRetryError wraps a failed call to atelet's rpc that leaves the actor
+// as it was, for the operation to be retried.
+func ateletRetryError(ctx context.Context, rpc string, err error) error {
 	// The caller went away or its deadline passed: report that, not atelet's
 	// error. The actor keeps its assignment, so a retry can finish the operation.
 	if ctx.Err() != nil {

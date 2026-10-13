@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -115,7 +116,17 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	actor = created
 	var worker *ateapipb.Worker
 	var assigned *ateapipb.Actor
-	if assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate); err != nil {
+	if detachStarted(actor) {
+		// A previous resume began detaching the actor, and atelet may already
+		// have deleted its local snapshot: finish the detach, then place it.
+		assigned, worker, src, err = w.detachAndAssign(leaseCtx, actorRef, actor, actorTemplate)
+	} else {
+		assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate)
+		if err != nil && detachesToReschedule(actor, err) {
+			assigned, worker, src, err = w.rescheduleOffNode(leaseCtx, actorRef, actor, actorTemplate, err)
+		}
+	}
+	if err != nil {
 		return nil, false, err
 	}
 	actor = assigned
@@ -174,17 +185,196 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	if err != nil {
 		return nil, nil, src, err
 	}
-	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
-		st := snap.GetDurableSnapshot()
-		if src.SnapshotURI, err = resources.ParseSnapshotURI(st.GetObject().GetSnapshotUri()); err != nil {
-			return nil, nil, src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
+	if src, err = resumeSourceFor(actorRef, actor, actorTemplate); err != nil {
+		return nil, nil, src, err
+	}
+	return actor, actorTemplate, src, nil
+}
+
+// resumeSourceFor resolves the durable snapshot the actor would restore from.
+func resumeSourceFor(actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (resumeSnapshotSource, error) {
+	var src resumeSnapshotSource
+	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	if snap == nil {
+		return src, nil
+	}
+	uri, err := resources.ParseSnapshotURI(snap.GetDurableSnapshot().GetObject().GetSnapshotUri())
+	if err != nil {
+		return src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
+	}
+	src.SnapshotURI = uri
+	src.Snapshot = snap
+	capturedUnder := snap.GetActorTemplateUid()
+	src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
+	return src, nil
+}
+
+// detachesToReschedule reports whether a failed worker assignment should
+// detach the actor from the node holding its local snapshot and try again on
+// any node: the actor is PAUSED there, and that node has no room for it.
+func detachesToReschedule(actor *ateapipb.Actor, assignErr error) bool {
+	return errors.Is(assignErr, errNoWorkerRoom) &&
+		actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED &&
+		actor.GetStatus().GetAssignedNode() != "" &&
+		findLatestLocalSnapshot(actor.GetStatus()) != nil
+}
+
+// detachStarted reports whether a previous resume began detaching the PAUSED
+// actor from its node: its local snapshot carries the PENDING durable copy
+// ensureDetachedFromNode records before it calls atelet.
+func detachStarted(actor *ateapipb.Actor) bool {
+	status := actor.GetStatus()
+	return status.GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED &&
+		status.GetAssignedNode() != "" &&
+		findLatestLocalSnapshot(status).GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+}
+
+// rescheduleOffNode detaches a PAUSED actor from its full node and places it
+// on any node, when some node has room for it. Otherwise it returns assignErr
+// and the actor stays PAUSED: a detach would cost an upload and the local
+// snapshot, and still leave the actor without a worker.
+func (w *ActorWorkflow) rescheduleOffNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, assignErr error) (*ateapipb.Actor, *ateapipb.Worker, resumeSnapshotSource, error) {
+	room, err := w.anyNodeHasRoom(ctx, actor, actorTemplate)
+	if err != nil {
+		return nil, nil, resumeSnapshotSource{}, err
+	}
+	if !room {
+		return nil, nil, resumeSnapshotSource{}, assignErr
+	}
+	return w.detachAndAssign(ctx, actorRef, actor, actorTemplate)
+}
+
+// anyNodeHasRoom asks the scheduler, without claiming a worker, whether a
+// worker on any node has room for the actor.
+func (w *ActorWorkflow) anyNodeHasRoom(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (bool, error) {
+	constraints, err := schedulingConstraints(actor, actorTemplate)
+	if err != nil {
+		return false, err
+	}
+	constraints.RequiredNodes = nil
+	if _, err := w.scheduler.Schedule(ctx, constraints); err != nil {
+		if errors.Is(err, scheduling.ErrNoCapacity) {
+			return false, nil
 		}
-		src.Snapshot = snap
-		capturedUnder := snap.GetActorTemplateUid()
-		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
+		return false, err
+	}
+	return true, nil
+}
+
+// detachAndAssign detaches a PAUSED actor from the node holding its local
+// snapshot, then assigns it a worker on any node. It also returns the durable
+// snapshot the actor now restores from.
+func (w *ActorWorkflow) detachAndAssign(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (*ateapipb.Actor, *ateapipb.Worker, resumeSnapshotSource, error) {
+	nodeName := actor.GetStatus().GetAssignedNode()
+	detached, err := w.ensureDetachedFromNode(ctx, actorRef, actor, actorTemplate)
+	if err != nil {
+		return nil, nil, resumeSnapshotSource{}, detachFailedError(ctx, nodeName, err)
+	}
+	src, err := resumeSourceFor(actorRef, detached, actorTemplate)
+	if err != nil {
+		return nil, nil, src, err
+	}
+	assigned, worker, err := w.ensureWorkerAssigned(ctx, actorRef, detached, actorTemplate)
+	return assigned, worker, src, err
+}
+
+// detachFailedError reports a failed detach as ResourceExhausted, which a
+// parked routed request retries: the actor stays PAUSED on the node that had
+// no room for it, and the next resume detaches again. A context error or a
+// version conflict keeps its own code.
+func detachFailedError(ctx context.Context, nodeName string, err error) error {
+	if ctx.Err() != nil || apierror.Code(err) == codes.Aborted {
+		return err
+	}
+	return apierror.ResourceExhausted("detaching the actor from node %q, which had no room for it, failed: %v", nodeName, err)
+}
+
+// ensureDetachedFromNode moves a PAUSED actor's local snapshot to durable
+// storage so the actor can be placed on any node, and leaves it SUSPENDED:
+//   - Record where the durable copy goes, as a PENDING durable snapshot on the
+//     local one. The actor stays PAUSED.
+//   - Ask the atelet on the snapshot's node to detach the actor: upload the
+//     snapshot there, then delete it from the node.
+//   - Commit the durable snapshot, drop the local one and the node pin, and
+//     mark the actor SUSPENDED in one update.
+//
+// A retry finds the PENDING record and repeats the detach, which atelet
+// answers from the uploaded manifest once the upload is done. A failed detach
+// leaves the actor PAUSED rather than crashing it: the local snapshot is still
+// on the node.
+func (w *ActorWorkflow) ensureDetachedFromNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
+	ctx, done := stepSpan(ctx, "DetachFromNode")
+	defer func() { err = done(err) }()
+
+	nodeName := actor.GetStatus().GetAssignedNode()
+	localSnap := findLatestLocalSnapshot(actor.GetStatus())
+	objectURI := localSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()
+	if objectURI == "" {
+		// The URI is the one Restore already names for this snapshot.
+		uri, err := newInProgressSnapshotURI(actorTemplate, actor, localSnap.GetUuid())
+		if err != nil {
+			return nil, err
+		}
+		objectURI = uri.String()
+		if actor, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+			snap := findLatestLocalSnapshot(toUpdate.Status)
+			if snap == nil {
+				return fmt.Errorf("actor %s has no local snapshot to detach", actorRef)
+			}
+			snap.DurableSnapshot = &ateapipb.SnapshotStorage{
+				Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+				Object: &ateapipb.ObjectSnapshot{SnapshotUri: objectURI},
+			}
+			return nil
+		}); err != nil {
+			if errors.Is(err, store.ErrVersionConflict) {
+				return nil, apierror.Aborted("concurrent update conflict, please retry")
+			}
+			return nil, err
+		}
+		localSnap = findLatestLocalSnapshot(actor.GetStatus())
 	}
 
-	return actor, actorTemplate, src, nil
+	ateletConn, err := w.dialer.DialForAteletOnNode(nodeName)
+	if err != nil {
+		// The snapshot bytes may still be on the node's disk: stay retryable.
+		return nil, fmt.Errorf("while getting atelet conn for node %q: %w", nodeName, err)
+	}
+	client := ateletpb.NewAteomHerderClient(ateletConn)
+	if _, err := client.DetachActor(ctx, detachActorRequest(actor, localSnap, objectURI)); err != nil {
+		return nil, ateletRetryError(ctx, "DetachActor", err)
+	}
+
+	stored, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		snap := findLatestLocalSnapshot(toUpdate.Status)
+		if snap == nil || snap.GetDurableSnapshot() == nil {
+			return fmt.Errorf("actor %s lost its detached snapshot", actorRef)
+		}
+		snap.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		// Keep only the snapshot just made durable, with its node cleared.
+		pruneSnapshots(toUpdate.Status, nil)
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+		toUpdate.Status.AssignedNode = ""
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
+		}
+		return nil, err
+	}
+	logActorStateChanged(ctx, stored, ateattr.OperationResume)
+
+	// Release the durable snapshot the detached one replaced. Best-effort, as
+	// in FinalizeSuspended: the actor's prefix is removed when it is deleted.
+	replaced := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED).GetDurableSnapshot().GetObject().GetSnapshotUri()
+	if releaseErr := w.releaseReplacedSnapshot(ctx, actor, replaced, objectURI); releaseErr != nil {
+		slog.WarnContext(ctx, "Failed to release the durable snapshot a detach replaced; its objects are left in storage until the actor is deleted",
+			slog.Any("actor", actorRef),
+			slog.String("snapshot_uri", replaced),
+			slog.String("err", releaseErr.Error()))
+	}
+	return stored, nil
 }
 
 // ensureVolumesCreated provisions any initial actor volumes that are in
@@ -491,7 +681,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
 				outcome = ateattr.SchedulerOutcomeNoCapacity
-				return nil, nil, apierror.ResourceExhausted("no worker has room for the actor")
+				return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom)
 			}
 			return nil, nil, err
 		}
@@ -565,6 +755,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, assignedWorker, nil
 }
+
+// errNoWorkerRoom reports that the scheduler found no worker with room for the
+// actor under its constraints.
+var errNoWorkerRoom = errors.New("no worker has room for the actor")
 
 // errWorkerFilledUp reports that the Worker the scheduler picked would not take
 // the Actor once the store asked under its row lock. Retryable: the next

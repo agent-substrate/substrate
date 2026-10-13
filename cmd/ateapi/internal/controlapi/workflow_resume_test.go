@@ -1037,6 +1037,28 @@ type capturingAtelet struct {
 	restore    *ateletpb.RestoreRequest
 	run        *ateletpb.RunRequest
 	checkpoint *ateletpb.CheckpointRequest
+	detach     *ateletpb.DetachActorRequest
+	// detachErr, when set, is what DetachActor returns.
+	detachErr error
+}
+
+func (f *capturingAtelet) DetachActor(ctx context.Context, req *ateletpb.DetachActorRequest) (*ateletpb.DetachActorResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.detach = proto.Clone(req).(*ateletpb.DetachActorRequest)
+	if f.detachErr != nil {
+		return nil, f.detachErr
+	}
+	return &ateletpb.DetachActorResponse{}, nil
+}
+
+func (f *capturingAtelet) detachRequest() *ateletpb.DetachActorRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.detach == nil {
+		return nil
+	}
+	return proto.Clone(f.detach).(*ateletpb.DetachActorRequest)
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -2083,5 +2105,321 @@ func TestEnsureWorkerAssigned_ContextEndsInsideAttemptRecordsOne(t *testing.T) {
 	want := ateattr.SchedulerOutcomeError + "/" + codes.DeadlineExceeded.String()
 	if outcomes[0] != want {
 		t.Errorf("recorded outcome %q, want %q", outcomes[0], want)
+	}
+}
+
+func TestDetachesToReschedule(t *testing.T) {
+	pausedOnNode := func(mutate ...func(*ateapipb.ActorStatus)) *ateapipb.Actor {
+		status := &ateapipb.ActorStatus{
+			State:        ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			AssignedNode: "node-1",
+			Snapshots:    []*ateapipb.Snapshot{newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap-1", "node-1")},
+		}
+		for _, m := range mutate {
+			m(status)
+		}
+		return &ateapipb.Actor{Status: status}
+	}
+	noCapacity := apierror.ResourceExhausted("%w", errNoWorkerRoom)
+
+	tests := []struct {
+		name  string
+		actor *ateapipb.Actor
+		err   error
+		want  bool
+	}{
+		{"paused actor whose node is full", pausedOnNode(), noCapacity, true},
+		{"assignment lost a race", pausedOnNode(), apierror.Aborted("concurrent update conflict, please retry: %w", store.ErrVersionConflict), false},
+		{"other failure", pausedOnNode(), errors.New("boom"), false},
+		{"suspended actor has no node to leave", pausedOnNode(func(s *ateapipb.ActorStatus) {
+			s.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+		}), noCapacity, false},
+		{"paused actor without a local snapshot", pausedOnNode(func(s *ateapipb.ActorStatus) { s.Snapshots = nil }), noCapacity, false},
+		{"paused actor without a node", pausedOnNode(func(s *ateapipb.ActorStatus) { s.AssignedNode = "" }), noCapacity, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := detachesToReschedule(tt.actor, tt.err); got != tt.want {
+				t.Errorf("detachesToReschedule() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestEnsureDetachedFromNode pins the detach a resume runs when the node
+// holding a PAUSED actor's local snapshot has no room: the request atelet
+// receives, and the actor the step leaves behind, whether the detach
+// succeeds or fails.
+func TestEnsureDetachedFromNode(t *testing.T) {
+	const snapName = "pause-snap-1"
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation}}
+	recordedURI := someActorSnapshotURI(t, testStorageLocation, "team-a", "recorded")
+
+	tests := []struct {
+		name string
+		// pendingURI seeds the PENDING durable copy a previous attempt
+		// recorded on the local snapshot; "" seeds none.
+		pendingURI string
+		// node is the actor's AssignedNode. The dialer knows only node-1.
+		node      string
+		detachErr error
+
+		wantCode   codes.Code
+		wantDetach bool
+		// wantURI is the durable copy's URI; "" expects the one minted
+		// under the actor's own prefix.
+		wantURI   string
+		wantState ateapipb.ActorState
+	}{{
+		name:       "first attempt records the durable copy, detaches, and suspends",
+		node:       "node-1",
+		wantDetach: true,
+		wantState:  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+	}, {
+		name:       "retry reuses the recorded durable copy",
+		pendingURI: recordedURI,
+		node:       "node-1",
+		wantDetach: true,
+		wantURI:    recordedURI,
+		wantState:  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+	}, {
+		name:       "unavailable atelet leaves the actor paused",
+		node:       "node-1",
+		detachErr:  status.Error(codes.Unavailable, "atelet restarting"),
+		wantCode:   codes.Unavailable,
+		wantDetach: true,
+		wantState:  ateapipb.ActorState_ACTOR_STATE_PAUSED,
+	}, {
+		name:       "failed detach leaves the actor paused rather than crashed",
+		node:       "node-1",
+		detachErr:  status.Error(codes.Internal, "upload failed"),
+		wantCode:   codes.Internal,
+		wantDetach: true,
+		wantState:  ateapipb.ActorState_ACTOR_STATE_PAUSED,
+	}, {
+		name:      "no atelet on the node leaves the actor paused",
+		node:      "node-2",
+		wantCode:  codes.Unknown,
+		wantState: ateapipb.ActorState_ACTOR_STATE_PAUSED,
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			w, atelet := newWireCaptureWorkflow(t, persistence)
+			atelet.detachErr = tt.detachErr
+
+			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_PAUSED, func(a *ateapipb.Actor) {
+				local := newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "tmpl-uid", snapName, tt.node)
+				if tt.pendingURI != "" {
+					local.DurableSnapshot = &ateapipb.SnapshotStorage{
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: tt.pendingURI},
+					}
+				}
+				a.Status.AssignedNode = tt.node
+				a.Status.LastAssignedGeneration = 2
+				a.Status.Snapshots = []*ateapipb.Snapshot{local}
+			})
+			actor, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			wantURI := tt.wantURI
+			if wantURI == "" {
+				uri, err := resources.NewActorSnapshotURI(testStorageLocation, actorRef.Atespace, actor.GetMetadata().GetUid(), snapName)
+				if err != nil {
+					t.Fatalf("NewActorSnapshotURI: %v", err)
+				}
+				wantURI = uri.String()
+			}
+
+			_, err = w.ensureDetachedFromNode(ctx, actorRef, actor, tmpl)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
+			}
+
+			detach := atelet.detachRequest()
+			if !tt.wantDetach {
+				if detach != nil {
+					t.Fatalf("atelet received DetachActor %v, want none", detach)
+				}
+			} else {
+				if detach == nil {
+					t.Fatal("atelet received no DetachActor")
+				}
+				want := &ateletpb.Snapshot{
+					SnapshotUuid: snapName,
+					Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					Object:       &ateletpb.ObjectStorage{SnapshotUri: wantURI},
+					Generation:   2,
+				}
+				if !proto.Equal(detach.GetSnapshot(), want) {
+					t.Errorf("DetachActor snapshot = %v, want %v", detach.GetSnapshot(), want)
+				}
+				if detach.GetActorUid() != actor.GetMetadata().GetUid() {
+					t.Errorf("DetachActor actor_uid = %q, want %q", detach.GetActorUid(), actor.GetMetadata().GetUid())
+				}
+			}
+
+			stored, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if got := stored.GetStatus().GetState(); got != tt.wantState {
+				t.Fatalf("state = %v, want %v", got, tt.wantState)
+			}
+			snaps := stored.GetStatus().GetSnapshots()
+			if len(snaps) != 1 {
+				t.Fatalf("snapshots = %v, want exactly the pause snapshot", snaps)
+			}
+			snap := snaps[0]
+			if tt.wantState == ateapipb.ActorState_ACTOR_STATE_PAUSED {
+				// The local snapshot still pins the actor to its node.
+				if snap.GetLocality() != tt.node || stored.GetStatus().GetAssignedNode() != tt.node {
+					t.Errorf("locality = %q, assigned node = %q; want both %q", snap.GetLocality(), stored.GetStatus().GetAssignedNode(), tt.node)
+				}
+				return
+			}
+			if snap.GetLocality() != "" || stored.GetStatus().GetAssignedNode() != "" {
+				t.Errorf("locality = %q, assigned node = %q; want both cleared", snap.GetLocality(), stored.GetStatus().GetAssignedNode())
+			}
+			if got := snap.GetDurableSnapshot().GetStatus(); got != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+				t.Errorf("durable status = %v, want COMPLETED", got)
+			}
+			if got := snap.GetDurableSnapshot().GetObject().GetSnapshotUri(); got != wantURI {
+				t.Errorf("durable URI = %q, want %q", got, wantURI)
+			}
+			if snap.GetUuid() != snapName || snap.GetGeneration() != 2 || snap.GetActorTemplateUid() != "tmpl-uid" {
+				t.Errorf("durable snapshot = uuid %q, generation %d, template %q; want the pause snapshot's", snap.GetUuid(), snap.GetGeneration(), snap.GetActorTemplateUid())
+			}
+		})
+	}
+}
+
+func TestDetachStarted(t *testing.T) {
+	pending := &ateapipb.SnapshotStorage{
+		Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+		Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://bucket/snap"},
+	}
+	pausedOnNode := func(mutate ...func(*ateapipb.ActorStatus)) *ateapipb.Actor {
+		local := newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap-1", "node-1")
+		local.DurableSnapshot = proto.Clone(pending).(*ateapipb.SnapshotStorage)
+		status := &ateapipb.ActorStatus{
+			State:        ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			AssignedNode: "node-1",
+			Snapshots:    []*ateapipb.Snapshot{local},
+		}
+		for _, m := range mutate {
+			m(status)
+		}
+		return &ateapipb.Actor{Status: status}
+	}
+
+	tests := []struct {
+		name  string
+		actor *ateapipb.Actor
+		want  bool
+	}{
+		{"local snapshot with a pending durable copy", pausedOnNode(), true},
+		{"local snapshot with no durable copy", pausedOnNode(func(s *ateapipb.ActorStatus) {
+			s.Snapshots[0].DurableSnapshot = nil
+		}), false},
+		{"local snapshot with a completed durable copy", pausedOnNode(func(s *ateapipb.ActorStatus) {
+			s.Snapshots[0].DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		}), false},
+		{"pending durable snapshot that is not local", pausedOnNode(func(s *ateapipb.ActorStatus) {
+			s.Snapshots[0].Locality = ""
+		}), false},
+		{"suspending actor uploads through suspend", pausedOnNode(func(s *ateapipb.ActorStatus) {
+			s.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
+		}), false},
+		{"paused actor without a node", pausedOnNode(func(s *ateapipb.ActorStatus) { s.AssignedNode = "" }), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := detachStarted(tt.actor); got != tt.want {
+				t.Errorf("detachStarted() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// fixedScheduler is a Scheduler whose Schedule returns err, or a worker when
+// err is nil, and records the constraints it was asked about.
+type fixedScheduler struct {
+	scheduling.Scheduler
+	err         error
+	constraints scheduling.Constraints
+}
+
+func (s *fixedScheduler) Schedule(_ context.Context, constraints scheduling.Constraints) (*ateapipb.Worker, error) {
+	s.constraints = constraints
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &ateapipb.Worker{}, nil
+}
+
+func TestAnyNodeHasRoom(t *testing.T) {
+	actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{
+		State:        ateapipb.ActorState_ACTOR_STATE_PAUSED,
+		AssignedNode: "node-1",
+	}}
+	listErr := errors.New("while listing workers: boom")
+
+	tests := []struct {
+		name        string
+		scheduleErr error
+		want        bool
+		wantErr     error
+	}{
+		{name: "a worker has room", want: true},
+		{name: "no worker has room", scheduleErr: scheduling.ErrNoCapacity, want: false},
+		{name: "scheduler fails", scheduleErr: listErr, wantErr: listErr},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sched := &fixedScheduler{err: tt.scheduleErr}
+			w := &ActorWorkflow{scheduler: sched}
+			got, err := w.anyNodeHasRoom(context.Background(), actor, &ateapipb.ActorTemplate{})
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("anyNodeHasRoom() error = %v, want %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("anyNodeHasRoom() = %v, want %v", got, tt.want)
+			}
+			// The question is about every node, not the one holding the
+			// local snapshot.
+			if nodes := sched.constraints.RequiredNodes; len(nodes) != 0 {
+				t.Errorf("Schedule asked with RequiredNodes %v, want none", nodes)
+			}
+		})
+	}
+}
+
+func TestDetachFailedError(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		err      error
+		wantCode codes.Code
+	}{
+		{"atelet failure", context.Background(), apierror.Internal("while calling atelet DetachActor: upload failed"), codes.ResourceExhausted},
+		{"atelet unavailable", context.Background(), apierror.Unavailable("while calling atelet DetachActor: restarting"), codes.ResourceExhausted},
+		{"no atelet on the node", context.Background(), fmt.Errorf("while getting atelet conn for node %q: %w", "node-1", ErrNoAteletOnNode), codes.ResourceExhausted},
+		{"version conflict keeps Aborted", context.Background(), apierror.Aborted("concurrent update conflict, please retry"), codes.Aborted},
+		{"ended context keeps its error", canceled, fmt.Errorf("while calling atelet DetachActor: %w", context.Canceled), codes.Canceled},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := apierror.Code(detachFailedError(tt.ctx, "node-1", tt.err)); got != tt.wantCode {
+				t.Errorf("apierror.Code(detachFailedError()) = %v, want %v", got, tt.wantCode)
+			}
+		})
 	}
 }
