@@ -15,6 +15,9 @@
 package main
 
 import (
+	"os"
+	"regexp"
+	"slices"
 	"testing"
 	"time"
 
@@ -77,5 +80,43 @@ func TestApplyTuningEnv(t *testing.T) {
 	fs, _, _, _ = newFlags()
 	if err := applyTuningEnv(fs, env(map[string]string{"FAKE_ATELET_DELAY": "fast"})); err == nil {
 		t.Error("applyTuningEnv() accepted FAKE_ATELET_DELAY=fast")
+	}
+}
+
+// Every tuning flag is one fake-atelet registers, so applyTuningEnv can set
+// it rather than failing startup.
+func TestTuningFlagsRegistered(t *testing.T) {
+	for _, name := range tuningFlags {
+		if pflag.CommandLine.Lookup(name) == nil {
+			t.Errorf("tuning flag %q is not a fake-atelet flag", name)
+		}
+	}
+}
+
+// The benchmark automation's isolate keys set exactly the tuning variables.
+// fake-atelet ignores a variable it does not know, so a key left behind by a
+// rename would tune nothing without an error.
+func TestIsolateTuningMatchesAutomation(t *testing.T) {
+	const automation = "../../../../benchmarking/automation/util.py"
+	src, err := os.ReadFile(automation)
+	if err != nil {
+		t.Fatalf("reading %s: %v", automation, err)
+	}
+	block := regexp.MustCompile(`(?s)ISOLATE_TUNING = \{(.*?)\}`).FindSubmatch(src)
+	if block == nil {
+		t.Fatalf("%s has no ISOLATE_TUNING map", automation)
+	}
+	var got []string
+	for _, m := range regexp.MustCompile(`"(FAKE_ATELET_[A-Z_]+)"`).FindAllSubmatch(block[1], -1) {
+		got = append(got, string(m[1]))
+	}
+	var want []string
+	for _, name := range tuningFlags {
+		want = append(want, tuningEnv(name))
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("%s ISOLATE_TUNING sets %v, want fake-atelet's tuning variables %v", automation, got, want)
 	}
 }
