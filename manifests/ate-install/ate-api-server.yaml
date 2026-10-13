@@ -179,7 +179,7 @@ spec:
         # pod almost no CPU and its probes time out.
         resources:
           requests:
-            cpu: "1"
+            cpu: 250m
             memory: 512Mi
         args:
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"

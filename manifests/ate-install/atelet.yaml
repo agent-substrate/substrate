@@ -194,8 +194,8 @@ spec:
           capabilities:
             drop:
             - ALL
-        # Same reservation as atelet and no limits: the plugin now does the
-        # zstd work atelet used to, and must not get less CPU for it.
+        # No limits: the plugin does the zstd work atelet used to, and must
+        # not get less CPU for it.
         resources:
           requests:
             cpu: 50m
@@ -292,7 +292,7 @@ spec:
         # omit limits to allow usage to grow with the number of hosted actors.
         resources:
           requests:
-            cpu: "1"
+            cpu: 250m
             memory: 256Mi
         env:
         - name: NODE_NAME
