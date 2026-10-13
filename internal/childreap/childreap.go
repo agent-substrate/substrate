@@ -13,14 +13,17 @@
 // limitations under the License.
 
 // Package childreap reaps orphaned children without racing subprocess waits.
-// Reaping waits for tracked subprocesses to finish because wait4(-1) can
-// consume an exit status expected by os/exec.
+// A subprocess started through RunCommand is tracked from its fork, and the
+// reaper collects only zombie children it does not track, so a wait here can
+// never consume an exit status that os/exec expects.
 //go:build unix
 
 package childreap
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -31,87 +34,61 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// MaxDefer is how long reaping waits before blocking new subprocesses.
-const MaxDefer = 60 * time.Second
-
-// MaxDrain is how long a forced drain waits before abandoning the reap.
-const MaxDrain = 30 * time.Second
+// sweepInterval bounds how long an orphan stays a zombie when its SIGCHLD was
+// coalesced away or arrived before Run.
+const sweepInterval = 10 * time.Second
 
 // Reaper collects orphaned children. The zero value is not usable; call New.
 type Reaper struct {
-	mu sync.Mutex
-	// cond is broadcast when inFlight reaches zero or reaping ends.
-	cond *sync.Cond
-	// inFlight counts tracked subprocesses.
-	inFlight int
-	// reaping blocks new subprocesses while wait4 runs.
-	reaping bool
-	// draining blocks new subprocesses until inFlight reaches zero.
-	draining bool
-	// abandoned records that a reap gave up with children left unreaped.
-	abandoned bool
-	// retry re-runs an abandoned reap once the subprocesses that held it off
-	// are gone. SIGCHLD fires on a transition, so a child that died before the
-	// abandoned round will never announce itself again.
-	retry chan struct{}
+	// forks is held shared across a fork and its registration and exclusively
+	// across a reap, so a reap never sees a child that is not tracked yet.
+	forks sync.RWMutex
+	mu    sync.Mutex
+	// tracked holds the pids whose exit status belongs to a RunCommand.
+	tracked map[int]struct{}
 }
 
 func New() *Reaper {
-	r := &Reaper{retry: make(chan struct{}, 1)}
-	r.cond = sync.NewCond(&r.mu)
-	return r
+	return &Reaper{tracked: map[int]struct{}{}}
 }
 
-// Enter prevents reaping until the returned function is called.
-//
-//	defer reaper.Enter()()
-//
-// Do not use Enter for long-lived subprocesses; they prevent reaping.
-func (r *Reaper) Enter() func() {
-	r.enter()
-	return r.leave
-}
-
-// RunCommand runs cmd while excluding child reaping.
+// RunCommand runs cmd; its exit status is reserved for cmd.Wait.
 func (r *Reaper) RunCommand(cmd *exec.Cmd) error {
-	defer r.Enter()()
-	return cmd.Run()
+	if err := r.start(cmd); err != nil {
+		return err
+	}
+	err := cmd.Wait()
+	r.mu.Lock()
+	delete(r.tracked, cmd.Process.Pid)
+	r.mu.Unlock()
+	return err
 }
 
 // CombinedOutput is RunCommand for callers that need cmd.CombinedOutput.
 func (r *Reaper) CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
-	defer r.Enter()()
-	return cmd.CombinedOutput()
+	if cmd.Stdout != nil {
+		return nil, errors.New("exec: Stdout already set")
+	}
+	if cmd.Stderr != nil {
+		return nil, errors.New("exec: Stderr already set")
+	}
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := r.RunCommand(cmd)
+	return out.Bytes(), err
 }
 
-func (r *Reaper) enter() {
+func (r *Reaper) start(cmd *exec.Cmd) error {
+	r.forks.RLock()
+	defer r.forks.RUnlock()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	for r.reaping || r.draining {
-		r.cond.Wait()
-	}
-	r.inFlight++
-}
-
-func (r *Reaper) leave() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.inFlight--
-	if r.inFlight < 0 {
-		// The exclusion is now meaningless: a later reap would see a quiet
-		// process that is not quiet and take a subprocess's exit status.
-		panic("childreap: leave called more times than Enter")
-	}
-	if r.inFlight == 0 {
-		if r.abandoned {
-			r.abandoned = false
-			select {
-			case r.retry <- struct{}{}:
-			default:
-			}
-		}
-		r.cond.Broadcast()
-	}
+	r.tracked[cmd.Process.Pid] = struct{}{}
+	r.mu.Unlock()
+	return nil
 }
 
 // Run reaps until ctx ends. Call it once in its own goroutine.
@@ -119,17 +96,18 @@ func (r *Reaper) Run(ctx context.Context) {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, unix.SIGCHLD)
 	defer signal.Stop(sigs)
-
+	sweep := time.NewTicker(sweepInterval)
+	defer sweep.Stop()
 	for {
+		r.reapOnce(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-sigs:
-		case <-r.retry:
+			// A burst of SIGCHLD needs only one pass.
+			drain(sigs)
+		case <-sweep.C:
 		}
-		// A burst of SIGCHLD needs only one pass over wait4.
-		drain(sigs)
-		r.reapOnce(ctx)
 	}
 }
 
@@ -144,128 +122,40 @@ func drain(ch <-chan os.Signal) {
 	}
 }
 
-// reapOnce waits for a quiet moment, then collects everything waiting.
+// reapOnce collects every zombie child that no RunCommand is waiting for.
 func (r *Reaper) reapOnce(ctx context.Context) {
-	if !r.acquire(ctx) {
+	r.forks.Lock()
+	defer r.forks.Unlock()
+	zombies, err := zombieChildren(os.Getpid())
+	if err != nil {
+		slog.WarnContext(ctx, "Listing zombie children failed", slog.Any("err", err))
 		return
 	}
-	defer r.release()
-	for {
-		var status unix.WaitStatus
-		pid, err := unix.Wait4(-1, &status, unix.WNOHANG, nil)
-		switch err {
-		case nil:
-			if pid <= 0 {
-				// Children exist but none have exited. Another SIGCHLD will
-				// bring us back.
-				return
-			}
-		case unix.EINTR:
+	for _, pid := range zombies {
+		r.mu.Lock()
+		_, tracked := r.tracked[pid]
+		r.mu.Unlock()
+		if tracked {
 			continue
-		case unix.ECHILD:
+		}
+		reap(ctx, pid)
+	}
+}
+
+// reap collects one zombie. WNOHANG: a thread group still exiting is not
+// waitable yet, and the next pass gets it.
+func reap(ctx context.Context, pid int) {
+	var status unix.WaitStatus
+	for {
+		_, err := unix.Wait4(pid, &status, unix.WNOHANG, nil)
+		switch {
+		case err == nil, errors.Is(err, unix.ECHILD):
 			return
+		case errors.Is(err, unix.EINTR):
+			continue
 		default:
-			slog.WarnContext(ctx, "Reaping children failed", slog.Any("err", err))
+			slog.WarnContext(ctx, "Reaping a child failed", slog.Int("pid", pid), slog.Any("err", err))
 			return
 		}
 	}
-}
-
-// acquire waits for in-flight subprocesses, blocking new ones after MaxDefer.
-// It returns false if ctx ends or the drain exceeds MaxDrain.
-func (r *Reaper) acquire(ctx context.Context) bool {
-	if ctx.Err() != nil {
-		return false
-	}
-	// Nothing to wait for is the ordinary case, and it needs no deadlines.
-	if r.tryAcquire() {
-		return true
-	}
-	return r.awaitAcquire(ctx)
-}
-
-// tryAcquire takes the reap if no subprocess is running, and reports whether
-// it did.
-func (r *Reaper) tryAcquire() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.inFlight > 0 || r.reaping {
-		return false
-	}
-	r.draining = false
-	r.reaping = true
-	return true
-}
-
-// awaitAcquire is acquire once something is in the way, so it is the only path
-// that pays for the deadlines.
-func (r *Reaper) awaitAcquire(ctx context.Context) bool {
-	// sync.Cond has no timed wait, so each deadline is a timer that broadcasts
-	// and the loop reads the clock itself.
-	startedAt := time.Now()
-	drainAt := startedAt.Add(MaxDefer)
-	giveUpAt := drainAt.Add(MaxDrain)
-	for _, at := range []time.Time{drainAt, giveUpAt} {
-		timer := time.AfterFunc(time.Until(at), r.wake)
-		defer timer.Stop()
-	}
-
-	stop := context.AfterFunc(ctx, r.wake)
-	defer stop()
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for {
-		if ctx.Err() != nil {
-			r.stopDrainingLocked()
-			return false
-		}
-		// Another reap is in progress (it drained on our behalf); let it.
-		if r.reaping {
-			r.cond.Wait()
-			continue
-		}
-		now := time.Now()
-		if r.inFlight == 0 {
-			if !now.Before(drainAt) {
-				slog.WarnContext(ctx, "Reaped children only after holding off subprocesses",
-					slog.Duration("waited", now.Sub(startedAt)))
-			}
-			r.draining = false
-			r.reaping = true
-			return true
-		}
-		if !now.Before(giveUpAt) {
-			// Reaping now could consume the tracked subprocess's exit status.
-			slog.ErrorContext(ctx, "Gave up reaping: a subprocess has held off the reaper too long",
-				slog.Duration("waited", now.Sub(startedAt)), slog.Int("inFlight", r.inFlight))
-			r.abandoned = true
-			r.stopDrainingLocked()
-			return false
-		}
-		if !now.Before(drainAt) {
-			r.draining = true
-		}
-		r.cond.Wait()
-	}
-}
-
-// wake only signals acquire; timer callbacks may run after acquire returns.
-func (r *Reaper) wake() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.cond.Broadcast()
-}
-
-// stopDrainingLocked ends an abandoned drain. Callers hold r.mu.
-func (r *Reaper) stopDrainingLocked() {
-	r.draining = false
-	r.cond.Broadcast()
-}
-
-func (r *Reaper) release() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.reaping = false
-	r.cond.Broadcast()
 }

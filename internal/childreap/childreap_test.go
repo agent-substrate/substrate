@@ -12,28 +12,80 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build unix
+//go:build linux
 
 package childreap
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
-	"testing/synctest"
 	"time"
 )
 
+// waitReaped fails the test if pid is still in /proc after timeout.
+func waitReaped(t *testing.T, pid int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		_, err := os.Stat("/proc/" + strconv.Itoa(pid))
+		if errors.Is(err, fs.ErrNotExist) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("child %d was not reaped within %s", pid, timeout)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// An orphan is collected while a tracked subprocess is still running: reaping
+// does not wait for a quiet moment.
+func TestOrphansAreReapedBesideARunningCommand(t *testing.T) {
+	r := New()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go r.Run(ctx)
+
+	var long sync.WaitGroup
+	long.Go(func() { _ = r.RunCommand(exec.Command("/bin/sleep", "3")) })
+	defer long.Wait()
+
+	orphan := exec.Command("true")
+	if err := orphan.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitReaped(t, orphan.Process.Pid, 2*time.Second)
+}
+
+// A child that died before Run began raised a SIGCHLD nobody heard.
+func TestTheFirstPassCollectsEarlierOrphans(t *testing.T) {
+	orphan := exec.Command("true")
+	if err := orphan.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	r := New()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go r.Run(ctx)
+	waitReaped(t, orphan.Process.Pid, 2*time.Second)
+}
+
 // Short subprocesses must stay short while a long one is always in flight
-// beside them. This needs continuous arrival with mixed durations, not just N
-// concurrent commands.
+// beside them, and no exit status may be taken from a tracked subprocess
+// while orphans keep SIGCHLD pending.
 func TestShortSubprocessesAreNotPacedByLongOnes(t *testing.T) {
 	const (
 		shortRunners = 8
 		short        = 20 * time.Millisecond
-		long         = 400 * time.Millisecond
 		testFor      = 3 * time.Second
 	)
 
@@ -62,7 +114,7 @@ func TestShortSubprocessesAreNotPacedByLongOnes(t *testing.T) {
 	// Keep one long subprocess in flight.
 	wg.Go(func() {
 		for run.Err() == nil {
-			_ = runUnder(r, exec.Command("/bin/sleep", "0.4"))
+			_ = r.RunCommand(exec.Command("/bin/sleep", "0.4"))
 		}
 	})
 
@@ -72,7 +124,7 @@ func TestShortSubprocessesAreNotPacedByLongOnes(t *testing.T) {
 		wg.Go(func() {
 			for run.Err() == nil {
 				started := time.Now()
-				err := runUnder(r, exec.Command("/bin/sleep", "0.02"))
+				err := r.RunCommand(exec.Command("/bin/sleep", "0.02"))
 				elapsed := time.Since(started)
 				mu.Lock()
 				if err != nil {
@@ -90,218 +142,29 @@ func TestShortSubprocessesAreNotPacedByLongOnes(t *testing.T) {
 	}
 	slices.Sort(samples)
 	p90 := samples[len(samples)*90/100]
-
-	// Distinguish normal overhead from pacing by the long subprocess.
 	if limit := 8 * short; p90 > limit {
-		t.Errorf("p90 of %d short subprocesses was %s, want under %s; they are being paced by the long one (median %s, max %s)",
+		t.Errorf("p90 of %d short subprocesses was %s, want under %s (median %s, max %s)",
 			len(samples), p90.Round(time.Millisecond), limit,
 			samples[len(samples)/2].Round(time.Millisecond), samples[len(samples)-1].Round(time.Millisecond))
 	}
-	t.Logf("%d short subprocesses: p50=%s p90=%s max=%s", len(samples),
-		samples[len(samples)/2].Round(time.Millisecond), p90.Round(time.Millisecond),
-		samples[len(samples)-1].Round(time.Millisecond))
 }
 
-func runUnder(r *Reaper, cmd *exec.Cmd) error {
-	return r.RunCommand(cmd)
-}
-
-func TestReapCollectsOrphans(t *testing.T) {
-	r := New()
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go r.Run(ctx)
-
-	// Leave the child for the reaper.
-	cmd := exec.Command("true")
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start: %v", err)
+func TestCombinedOutputKeepsBothStreams(t *testing.T) {
+	out, err := New().CombinedOutput(exec.Command("sh", "-c", "echo out; echo err >&2"))
+	if err != nil {
+		t.Fatalf("CombinedOutput: %v", err)
 	}
-	pid := cmd.Process.Pid
-
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		// An unreaped zombie still responds to signal 0.
-		if err := cmd.Process.Signal(nil); err != nil {
-			return // reaped
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("child %d was never reaped", pid)
-		}
-		time.Sleep(10 * time.Millisecond)
+	if string(out) != "out\nerr\n" {
+		t.Errorf("output = %q, want %q", out, "out\nerr\n")
 	}
 }
 
-// TestExecIsExcludedWhileReaping verifies that wait4 cannot race Enter.
-func TestExecIsExcludedWhileReaping(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		r := New()
-
-		// Enter the reaper's critical section directly.
-		if !r.acquire(context.Background()) {
-			t.Fatal("acquire failed on an idle reaper")
-		}
-
-		entered := make(chan struct{})
-		go func() {
-			defer r.Enter()()
-			close(entered)
-		}()
-		synctest.Wait()
-
-		select {
-		case <-entered:
-			t.Fatal("Enter returned while a reap was in progress")
-		default:
-		}
-
-		r.release()
-		<-entered
-	})
-}
-
-func TestMaxDeferDrainsInFlightSubprocesses(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		r := New()
-		leave := r.Enter()
-
-		acquired := make(chan bool)
-		go func() {
-			acquired <- r.acquire(t.Context())
-		}()
-		synctest.Wait()
-		time.Sleep(MaxDefer)
-		synctest.Wait()
-
-		r.mu.Lock()
-		draining := r.draining
-		r.mu.Unlock()
-		if !draining {
-			t.Fatal("reaper never began draining")
-		}
-
-		entered := make(chan func(), 1)
-		go func() {
-			entered <- r.Enter()
-		}()
-		synctest.Wait()
-		select {
-		case <-entered:
-			t.Fatal("new subprocess entered while the reaper was draining")
-		default:
-		}
-
-		leave()
-		if ok := <-acquired; !ok {
-			t.Fatal("reaper did not acquire after in-flight subprocess exited")
-		}
-		r.release()
-
-		leaveEntered := <-entered
-		leaveEntered()
-	})
-}
-
-// An abandoned drain must not block later subprocesses.
-func TestAnEntryThatNeverLeavesDoesNotBlockLaterCommands(t *testing.T) {
-	const horizon = 10 * time.Minute
-
-	synctest.Test(t, func(t *testing.T) {
-		r := New()
-
-		defer r.Enter()()
-
-		gaveUp := make(chan bool, 1)
-		go func() { gaveUp <- r.acquire(t.Context()) }()
-
-		// The reaper must not consume the tracked child's status.
-		synctest.Wait()
-		select {
-		case got := <-gaveUp:
-			t.Fatalf("acquire returned %v immediately, want it to wait for the entry", got)
-		default:
-		}
-
-		time.Sleep(horizon)
-		synctest.Wait()
-		select {
-		case got := <-gaveUp:
-			if got {
-				t.Fatal("acquire reported it reaped, want it to have given the round up")
-			}
-		default:
-			t.Fatalf("acquire still waiting after %s; the held entry blocks reaping forever", horizon)
-		}
-
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			defer r.Enter()()
-		}()
-		synctest.Wait()
-		select {
-		case <-done:
-		default:
-			t.Fatal("a later Enter is still blocked by the abandoned drain")
-		}
-	})
-}
-
-// A timer callback after acquire returns must not alter reaper state.
-func TestALateDeadlineCallbackLeavesNothingBehind(t *testing.T) {
-	r := New()
-
-	if !r.acquire(t.Context()) {
-		t.Fatal("acquire failed on an idle reaper")
+func TestParseStatReadsPastACommandNameWithParentheses(t *testing.T) {
+	state, ppid, ok := parseStat([]byte("4242 (a (b) c) Z 17 4242 4242 0 -1 4194560"))
+	if !ok || state != 'Z' || ppid != 17 {
+		t.Errorf("parseStat = %c %d %v, want Z 17 true", state, ppid, ok)
 	}
-	r.release()
-
-	r.wake()
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		defer r.Enter()()
-	}()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("a later Enter is blocked: a deadline callback left reaper state behind")
+	if _, _, ok := parseStat([]byte("garbage")); ok {
+		t.Error("parseStat accepted a line without fields")
 	}
-}
-
-// An abandoned round leaves children unreaped, and SIGCHLD fires on a
-// transition, so nothing will announce them again. Releasing the entry that
-// held the reaper off has to be what brings it back.
-func TestAnAbandonedRoundRetriesOnceTheEntryLeaves(t *testing.T) {
-	const horizon = 10 * time.Minute
-
-	synctest.Test(t, func(t *testing.T) {
-		r := New()
-
-		leave := r.Enter()
-
-		gaveUp := make(chan bool, 1)
-		go func() { gaveUp <- r.acquire(t.Context()) }()
-
-		time.Sleep(horizon)
-		synctest.Wait()
-		if got := <-gaveUp; got {
-			t.Fatal("acquire reported it reaped, want it to have given the round up")
-		}
-
-		select {
-		case <-r.retry:
-			t.Fatal("the reaper was re-armed while the entry was still held")
-		default:
-		}
-
-		leave()
-		synctest.Wait()
-		select {
-		case <-r.retry:
-		default:
-			t.Fatal("leaving the entry did not re-arm the reaper; the orphans it gave up on stay zombies")
-		}
-	})
 }

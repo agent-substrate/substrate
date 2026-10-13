@@ -50,9 +50,6 @@ func TestRunSurvivesAConcurrentReaper(t *testing.T) {
 		} else if string(out) != "ok\n" {
 			t.Fatalf("guarded command output = %q, want %q", out, "ok\n")
 		}
-		// A moment with nothing in flight, which is when the reaper collects.
-		// Without one it would only ever be held off, and the orphans above
-		// would go uncollected.
 		time.Sleep(5 * time.Millisecond)
 	}
 }

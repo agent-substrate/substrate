@@ -19,7 +19,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -28,7 +27,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -300,26 +298,13 @@ func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error
 
 // cmdWait blocks until the given container's process exits. Used during
 // graceful shutdown to confirm the actor has stopped before ateom exits.
-//
-// Deliberately outside the reaper: this blocks for as long as the actor runs,
-// and an entry held that long would hold off reaping and, past MaxDefer, every
-// other runsc invocation with it.
 func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
 	slog.InfoContext(ctx, "About to run runsc wait", slog.String("container", containerName))
 
 	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("wait", containerName)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		// Running outside the reaper means the reaper can collect this process
-		// first, leaving os/exec nothing to wait for. `runsc wait` only exits
-		// once the container has, so that is the answer we came for -- and
-		// reporting it as a failure would stop the caller escalating to
-		// SIGKILL.
-		if errors.Is(err, syscall.ECHILD) {
-			slog.DebugContext(ctx, "runsc wait was collected by the child reaper", slog.String("container", containerName))
-			return nil
-		}
+	if err := reaper.RunCommand(cmd); err != nil {
 		return fmt.Errorf("while running `runsc wait`: %w", err)
 	}
 	return nil
