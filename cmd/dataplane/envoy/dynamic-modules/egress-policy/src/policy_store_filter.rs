@@ -26,6 +26,9 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
 use crate::egress_policy::EgressPolicy;
 use crate::egress_policy_store::GlobalEgressPolicyStore;
 
+/// Filter state key where the unshared egress policy hash is written.
+pub const ATE_POLICY_EGRESS_HASH_NOT_SHARED: &[u8] = b"dev.ate.policy.egress.hash.not_shared";
+
 /// Configuration for the egress-policy-store HTTP filter.
 pub struct EgressPolicyStoreFilterConfig;
 
@@ -61,6 +64,10 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyStoreFilter {
       local_store.store(hash, &policy);
       self.policy = Some(policy);
     }
+    envoy_filter.set_filter_state_bytes(
+      ATE_POLICY_EGRESS_HASH_NOT_SHARED,
+      hash.to_string().as_bytes(),
+    );
     envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
   }
 
@@ -94,6 +101,20 @@ mod tests {
 
   #[test]
   fn test_on_request_headers_parses_policy() {
+    let expected_policy = EgressPolicy {
+      rules: vec![
+        SniRule {
+          pattern: "api.example.com".to_string(),
+          mode: "mitm".to_string(),
+        },
+        SniRule {
+          pattern: "*.example.com".to_string(),
+          mode: "passthrough".to_string(),
+        },
+      ],
+    };
+    let expected_hash_str = expected_policy.hash().to_string();
+
     let mut filter = EgressPolicyStoreFilter::default();
     let mut mock_filter = MockEnvoyHttpFilter::default();
     mock_filter
@@ -109,26 +130,18 @@ mod tests {
         ))
       })
       .once();
+    let hash_bytes = expected_hash_str.clone().into_bytes();
+    mock_filter
+      .expect_set_filter_state_bytes()
+      .withf(move |key, value| key == ATE_POLICY_EGRESS_HASH_NOT_SHARED && value == hash_bytes)
+      .returning(|_, _| true)
+      .once();
 
     assert_eq!(
       filter.on_request_headers(&mut mock_filter, false),
       envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
     );
-    assert_eq!(
-      filter.policy,
-      Some(Rc::new(EgressPolicy {
-        rules: vec![
-          SniRule {
-            pattern: "api.example.com".to_string(),
-            mode: "mitm".to_string(),
-          },
-          SniRule {
-            pattern: "*.example.com".to_string(),
-            mode: "passthrough".to_string(),
-          },
-        ],
-      }))
-    );
+    assert_eq!(filter.policy, Some(Rc::new(expected_policy)));
 
     let first_rc = filter.policy.as_ref().unwrap().clone();
     let hash = first_rc.hash();
@@ -153,6 +166,14 @@ mod tests {
           br#"{"rules":[{"pattern":"api.example.com","mode":"mitm"},{"pattern":"*.example.com","mode":"passthrough"}]}"#,
         ))
       })
+      .once();
+    let hash_bytes_second = expected_hash_str.into_bytes();
+    mock_filter
+      .expect_set_filter_state_bytes()
+      .withf(move |key, value| {
+        key == ATE_POLICY_EGRESS_HASH_NOT_SHARED && value == hash_bytes_second
+      })
+      .returning(|_, _| true)
       .once();
 
     assert_eq!(
