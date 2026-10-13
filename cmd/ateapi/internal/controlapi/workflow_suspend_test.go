@@ -457,7 +457,7 @@ func TestEnsureSuspendedFinalized_ReleasesReplacedSnapshot(t *testing.T) {
 var errObjectStore = errors.New("object storage is unavailable")
 
 // isObjectStoreErr reports whether err came from errObjectStore. The object
-// store sits behind the snapshot plugin's gRPC boundary, which carries the
+// store sits behind the object-store plugin's gRPC boundary, which carries the
 // message but not the error value, so errors.Is cannot match it.
 func isObjectStoreErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), errObjectStore.Error())
@@ -547,7 +547,7 @@ func TestEnsureSuspendedFinalized_KeepsReplacedSnapshotOnConflict(t *testing.T) 
 		}
 	})
 
-	w := &ActorWorkflow{store: &conflictingUpdateStore{Interface: persistence}, snapshotPlugin: objectstoreplugintest.ControlClient(objects)}
+	w := &ActorWorkflow{store: &conflictingUpdateStore{Interface: persistence}, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}
 	if _, err := w.ensureSuspendedFinalized(ctx, actorRef); apierror.Code(err) != codes.Aborted {
 		t.Fatalf("ensureSuspendedFinalized = %v, want code Aborted", err)
 	}

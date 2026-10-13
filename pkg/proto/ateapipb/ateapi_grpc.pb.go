@@ -45,7 +45,7 @@ const (
 	Control_CreateActorEgressPolicy_FullMethodName    = "/ateapi.Control/CreateActorEgressPolicy"
 	Control_UpdateActorEgressPolicy_FullMethodName    = "/ateapi.Control/UpdateActorEgressPolicy"
 	Control_DeleteActorEgressPolicy_FullMethodName    = "/ateapi.Control/DeleteActorEgressPolicy"
-	Control_MintActorJWT_FullMethodName               = "/ateapi.Control/MintActorJWT"
+	Control_MintActorJwt_FullMethodName               = "/ateapi.Control/MintActorJwt"
 	Control_MintActorCertificate_FullMethodName       = "/ateapi.Control/MintActorCertificate"
 	Control_CreateTag_FullMethodName                  = "/ateapi.Control/CreateTag"
 	Control_GetTag_FullMethodName                     = "/ateapi.Control/GetTag"
@@ -114,7 +114,7 @@ type ControlClient interface {
 	// Create a Substrate-issued JWT asserting the actor identity.
 	//
 	// * Called by the egress gateway when actor JWT injection is configured for outbound requests.
-	MintActorJWT(ctx context.Context, in *MintActorJWTRequest, opts ...grpc.CallOption) (*MintActorJWTResponse, error)
+	MintActorJwt(ctx context.Context, in *MintActorJwtRequest, opts ...grpc.CallOption) (*MintActorJwtResponse, error)
 	// Create a Substrate-issued SPIFFE certificate asserting the actor identity.
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/actor/${atespace}/${actor}
@@ -150,7 +150,7 @@ type ControlClient interface {
 	// Mark a Worker as terminating so the scheduler stops routing new Actors to
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
-	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
+	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error)
 	// List the Actors hosted by a given Worker.
 	ListWorkerActorAssignments(ctx context.Context, in *ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
@@ -319,10 +319,10 @@ func (c *controlClient) DeleteActorEgressPolicy(ctx context.Context, in *DeleteA
 	return out, nil
 }
 
-func (c *controlClient) MintActorJWT(ctx context.Context, in *MintActorJWTRequest, opts ...grpc.CallOption) (*MintActorJWTResponse, error) {
+func (c *controlClient) MintActorJwt(ctx context.Context, in *MintActorJwtRequest, opts ...grpc.CallOption) (*MintActorJwtResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MintActorJWTResponse)
-	err := c.cc.Invoke(ctx, Control_MintActorJWT_FullMethodName, in, out, cOpts...)
+	out := new(MintActorJwtResponse)
+	err := c.cc.Invoke(ctx, Control_MintActorJwt_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -439,9 +439,9 @@ func (c *controlClient) DeleteWorker(ctx context.Context, in *DeleteWorkerReques
 	return out, nil
 }
 
-func (c *controlClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error) {
+func (c *controlClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Worker)
+	out := new(DrainWorkerResponse)
 	err := c.cc.Invoke(ctx, Control_DrainWorker_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -656,7 +656,7 @@ type ControlServer interface {
 	// Create a Substrate-issued JWT asserting the actor identity.
 	//
 	// * Called by the egress gateway when actor JWT injection is configured for outbound requests.
-	MintActorJWT(context.Context, *MintActorJWTRequest) (*MintActorJWTResponse, error)
+	MintActorJwt(context.Context, *MintActorJwtRequest) (*MintActorJwtResponse, error)
 	// Create a Substrate-issued SPIFFE certificate asserting the actor identity.
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/actor/${atespace}/${actor}
@@ -692,7 +692,7 @@ type ControlServer interface {
 	// Mark a Worker as terminating so the scheduler stops routing new Actors to
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
-	DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error)
+	DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error)
 	// List the Actors hosted by a given Worker.
 	ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
@@ -777,8 +777,8 @@ func (UnimplementedControlServer) UpdateActorEgressPolicy(context.Context, *Upda
 func (UnimplementedControlServer) DeleteActorEgressPolicy(context.Context, *DeleteActorEgressPolicyRequest) (*EgressPolicy, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteActorEgressPolicy not implemented")
 }
-func (UnimplementedControlServer) MintActorJWT(context.Context, *MintActorJWTRequest) (*MintActorJWTResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method MintActorJWT not implemented")
+func (UnimplementedControlServer) MintActorJwt(context.Context, *MintActorJwtRequest) (*MintActorJwtResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MintActorJwt not implemented")
 }
 func (UnimplementedControlServer) MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintActorCertificate not implemented")
@@ -813,7 +813,7 @@ func (UnimplementedControlServer) UpdateWorker(context.Context, *UpdateWorkerReq
 func (UnimplementedControlServer) DeleteWorker(context.Context, *DeleteWorkerRequest) (*Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteWorker not implemented")
 }
-func (UnimplementedControlServer) DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error) {
+func (UnimplementedControlServer) DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DrainWorker not implemented")
 }
 func (UnimplementedControlServer) ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error) {
@@ -1104,20 +1104,20 @@ func _Control_DeleteActorEgressPolicy_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Control_MintActorJWT_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MintActorJWTRequest)
+func _Control_MintActorJwt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MintActorJwtRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ControlServer).MintActorJWT(ctx, in)
+		return srv.(ControlServer).MintActorJwt(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Control_MintActorJWT_FullMethodName,
+		FullMethod: Control_MintActorJwt_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).MintActorJWT(ctx, req.(*MintActorJWTRequest))
+		return srv.(ControlServer).MintActorJwt(ctx, req.(*MintActorJwtRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1700,8 +1700,8 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_DeleteActorEgressPolicy_Handler,
 		},
 		{
-			MethodName: "MintActorJWT",
-			Handler:    _Control_MintActorJWT_Handler,
+			MethodName: "MintActorJwt",
+			Handler:    _Control_MintActorJwt_Handler,
 		},
 		{
 			MethodName: "MintActorCertificate",

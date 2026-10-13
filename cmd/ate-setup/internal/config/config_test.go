@@ -67,6 +67,7 @@ func loadEnv(t *testing.T) {
 		"CLUSTER_LOCATION",
 		"CLUSTER_NAME",
 		"DOCKER_BUILD_FLAGS",
+		"E2E_ATE_ENVOY_CONCURRENCY",
 		"EXPECTED_JWT_ISSUER",
 		"KIND_CLUSTER_NAME",
 		"KO_DEFAULTPLATFORMS",
@@ -794,6 +795,30 @@ func TestLoadRejectsInvalidPodcertWorkersEnv(t *testing.T) {
 			t.Setenv("ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER", val)
 			if _, err := Load(Options{}); err == nil {
 				t.Fatalf("Load() with env %q succeeded, want an error", val)
+			}
+		})
+	}
+}
+
+func TestLoadEnvoyConcurrency(t *testing.T) {
+	loadEnv(t)
+	cfg, err := Load(Options{EnvoyConcurrency: 4})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.EnvoyConcurrency != 4 {
+		t.Errorf("EnvoyConcurrency = %d, want 4", cfg.EnvoyConcurrency)
+	}
+	if got := scriptEnvMap(t, cfg)["E2E_ATE_ENVOY_CONCURRENCY"]; got != "4" {
+		t.Errorf("ScriptEnv()[E2E_ATE_ENVOY_CONCURRENCY] = %q, want 4", got)
+	}
+
+	for _, val := range []string{"0", "-1", "abc"} {
+		t.Run("invalid_"+val, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("E2E_ATE_ENVOY_CONCURRENCY", val)
+			if _, err := Load(Options{}); err == nil {
+				t.Fatalf("Load() with E2E_ATE_ENVOY_CONCURRENCY=%q succeeded, want an error", val)
 			}
 		})
 	}

@@ -180,6 +180,9 @@ type Config struct {
 	// PodcertWorkersPerSigner overrides WORKERS_PER_SIGNER on podcertificate-controller.
 	PodcertWorkersPerSigner int
 
+	// EnvoyConcurrency overrides --concurrency on the envoy container in atenet-egress.
+	EnvoyConcurrency int
+
 	// ClusterSize is the footprint profile (ATE_INSTALL_CLUSTER_SIZE): size0
 	// or size10.
 	ClusterSize string
@@ -415,6 +418,9 @@ func (c *Config) ScriptEnv() []string {
 	}
 	if c.PodcertWorkersPerSigner > 0 {
 		merged["ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER"] = strconv.Itoa(c.PodcertWorkersPerSigner)
+	}
+	if c.EnvoyConcurrency > 0 {
+		merged["E2E_ATE_ENVOY_CONCURRENCY"] = strconv.Itoa(c.EnvoyConcurrency)
 	}
 	// Resolved values again, so a flag overrides whatever the environment
 	// carried rather than layering under it.

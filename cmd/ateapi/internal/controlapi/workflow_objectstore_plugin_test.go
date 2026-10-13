@@ -39,9 +39,9 @@ func (p failingControlPlugin) CopySnapshot(context.Context, *objectstorev1.CopyS
 	return nil, p.err
 }
 
-// A control snapshot plugin that cannot be reached fails the request with
+// A control object-store plugin that cannot be reached fails the request with
 // Unavailable, which a client retries; other plugin errors stay Internal.
-func TestSnapshotPluginErrorCodeToClient(t *testing.T) {
+func TestObjectStorePluginErrorCodeToClient(t *testing.T) {
 	prefix, err := resources.ParseStoragePrefix("gs://bucket/root/atespaces/team-a/actors/uid1/snapshots/snap1")
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestSnapshotPluginErrorCodeToClient(t *testing.T) {
 		{codes.FailedPrecondition, codes.Internal},
 	} {
 		t.Run(tc.pluginCode.String(), func(t *testing.T) {
-			w := &ActorWorkflow{snapshotPlugin: failingControlPlugin{err: status.Error(tc.pluginCode, "plugin failed")}}
+			w := &ActorWorkflow{objectStorePlugin: failingControlPlugin{err: status.Error(tc.pluginCode, "plugin failed")}}
 			for name, call := range map[string]func(context.Context) error{
 				"cleanup": func(ctx context.Context) error { return w.cleanupSnapshot(ctx, prefix) },
 				"copy":    func(ctx context.Context) error { return w.copySnapshot(ctx, prefix, prefix) },

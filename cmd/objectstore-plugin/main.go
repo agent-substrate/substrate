@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command snapshot-plugin serves the snapshot plugin API on GCS or S3 over a
-// Unix socket. It runs as a sidecar: "node" next to atelet, "control" next to
-// ate-api-server. The backend is chosen by ATE_STORAGE_BACKEND ("s3", or GCS
-// by default) with the ambient credentials, as atelet and ate-api-server do.
+// Command objectstore-plugin serves the object-store plugin API on GCS or S3 over
+// a Unix socket. It runs as a sidecar: "node" next to atelet, serving snapshot
+// transfers and sandbox assets, and "control" next to ate-api-server. The
+// backend is chosen by ATE_STORAGE_BACKEND ("s3", or GCS by default) with the
+// ambient credentials.
 // "healthcheck" reports whether a running plugin is serving, for the sidecar's
 // startup probe.
 package main
@@ -33,6 +34,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
+	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
@@ -41,9 +43,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-const usage = `usage: snapshot-plugin <node|control|healthcheck> [flags]`
+const usage = `usage: objectstore-plugin <node|control|healthcheck> [flags]`
 
 func main() {
 	if len(os.Args) < 2 {
@@ -53,7 +56,9 @@ func main() {
 	mode := os.Args[1]
 	flags := pflag.NewFlagSet(mode, pflag.ExitOnError)
 	socket := flags.String("socket", "", "Unix socket to serve on, or to check in healthcheck mode")
-	root := flags.String("root", nodepath.BasePath, "node mode: the only directory tree local snapshot files may be read from or written to")
+	root := flags.String("root", nodepath.BasePath, "node mode: the only directory tree local snapshot and asset files may be read from or written to")
+	assetStagingDir := flags.String("asset-staging-dir", "/var/lib/objectstore-plugin/asset-staging", "node mode: directory sandbox assets are downloaded into and verified before they are copied below --root; must not be below --root or readable by the caller")
+	assetStagingCapacity := flags.String("asset-staging-capacity", "8Gi", "node mode: the most sandbox asset downloads in --asset-staging-dir may hold at once, as a Kubernetes quantity; downloads wait for space, and an asset larger than this is refused")
 	timeout := flags.Duration("timeout", 5*time.Second, "healthcheck mode: how long to wait for the plugin to report that it is serving")
 	_ = flags.Parse(os.Args[2:])
 
@@ -67,13 +72,13 @@ func main() {
 	// shell or grpc_health_probe, so the binary checks itself.
 	if mode == "healthcheck" {
 		if err := healthcheck(ctx, *socket, *timeout); err != nil {
-			serverboot.Fatal(ctx, "Snapshot plugin is not serving", err)
+			serverboot.Fatal(ctx, "Object-store plugin is not serving", err)
 		}
 		return
 	}
 
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
-		ServiceName: "snapshot-plugin-" + mode,
+		ServiceName: "objectstore-plugin-" + mode,
 		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 	})
 	if err != nil {
@@ -93,6 +98,18 @@ func main() {
 			serverboot.Fatal(ctx, "Invalid --root", err)
 		}
 		objectstorev1.RegisterNodeProviderServer(srv, plugin)
+		capacity, err := parseCapacity(*assetStagingCapacity)
+		if err != nil {
+			serverboot.Fatal(ctx, "Invalid --asset-staging-capacity", err)
+		}
+		if err := os.MkdirAll(*assetStagingDir, 0o700); err != nil {
+			serverboot.Fatal(ctx, "Failed to create --asset-staging-dir", err)
+		}
+		assets, err := objectstoreplugin.NewAssetPlugin(objects, assetScheme(), *root, *assetStagingDir, capacity)
+		if err != nil {
+			serverboot.Fatal(ctx, "Invalid --asset-staging-dir", err)
+		}
+		objectstorev1.RegisterAssetProviderServer(srv, assets)
 	case "control":
 		store, err := newObjectStore(ctx)
 		if err != nil {
@@ -105,7 +122,7 @@ func main() {
 	}
 	healthpb.RegisterHealthServer(srv, health.NewServer())
 
-	lis, err := objectstoreplugin.Listen(*socket)
+	lis, err := pluginsocket.Listen(*socket)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to listen", err)
 	}
@@ -116,11 +133,11 @@ func main() {
 	defer stop()
 	go func() {
 		<-sigCtx.Done()
-		slog.InfoContext(ctx, "Draining snapshot plugin")
+		slog.InfoContext(ctx, "Draining object-store plugin")
 		srv.GracefulStop()
 	}()
 
-	slog.InfoContext(ctx, "Serving snapshot plugin", slog.String("mode", mode), slog.String("socket", *socket))
+	slog.InfoContext(ctx, "Serving object-store plugin", slog.String("mode", mode), slog.String("socket", *socket))
 	if err := srv.Serve(lis); err != nil {
 		serverboot.Fatal(ctx, "Serve failed", err)
 	}
@@ -146,15 +163,38 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 	return objectstore.NewGCS(client), nil
 }
 
+// assetScheme is the asset URI scheme the node plugin serves: its backend's,
+// as objectstorage.NewFromEnv selects it.
+func assetScheme() string {
+	if objectstorage.UsesS3() {
+		return "s3"
+	}
+	return "gs"
+}
+
 // healthcheck dials the plugin at socket and waits up to timeout for it to
 // report that it is serving.
 func healthcheck(ctx context.Context, socket string, timeout time.Duration) error {
-	conn, err := objectstoreplugin.Dial(socket, objectstoreplugin.ReadyWait)
+	conn, err := pluginsocket.Dial(socket, pluginsocket.ReadyWait)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return objectstoreplugin.WaitReady(ctx, conn)
+	return pluginsocket.WaitReady(ctx, conn)
+}
+
+// parseCapacity parses a positive byte count written as a Kubernetes quantity,
+// such as 8Gi.
+func parseCapacity(s string) (int64, error) {
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
+		return 0, err
+	}
+	n, ok := q.AsInt64()
+	if !ok || n <= 0 {
+		return 0, fmt.Errorf("%q is not a positive whole number of bytes", s)
+	}
+	return n, nil
 }

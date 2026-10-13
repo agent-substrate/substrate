@@ -90,7 +90,7 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 	return errs
 }
 
-func ValidateCustom_HTTPGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_HttpGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateHTTPGetPath(fldPath, *value)
 }
 

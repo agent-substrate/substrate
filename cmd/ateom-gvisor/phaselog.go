@@ -36,7 +36,6 @@ const (
 	phasePrep          = "prep"
 	phaseEgressPrepare = "egress_prepare"
 	phaseNetSetup      = "net_setup"
-	phaseDurableDir    = "durable_dir"
 	phasePauseRootfs   = "pause_rootfs"
 	phasePauseCreate   = "pause_create"
 	phasePauseRestore  = "pause_restore"
@@ -46,9 +45,8 @@ const (
 	phaseWakeupProbe   = "wakeup_probe"
 	phaseActivate      = "activate"
 
-	phasePause      = "pause"
 	phaseCheckpoint = "checkpoint"
-	phaseResume     = "resume"
+	phaseDurableDir = "durable_dir"
 	phaseTeardown   = "teardown"
 
 	phaseTotal = ateattr.SnapshotPhaseTotal
@@ -62,10 +60,10 @@ const containerCountKey = "ate.actor.container.count"
 // left at zero never ran. Under a Data scope pauseRestore and appRestore time
 // the cold start that stands in for the restore.
 type restoreTiming struct {
-	prep, egressPrepare, netSetup, durableDir time.Duration
-	pauseRootfs, pauseCreate, pauseRestore    time.Duration
-	appRootfs, appCreate, appRestore          time.Duration
-	wakeupProbe, activate, total              time.Duration
+	prep, egressPrepare, netSetup          time.Duration
+	pauseRootfs, pauseCreate, pauseRestore time.Duration
+	appRootfs, appCreate, appRestore       time.Duration
+	wakeupProbe, activate, total           time.Duration
 }
 
 func (t restoreTiming) phases() []ateomphaselog.Phase {
@@ -73,7 +71,6 @@ func (t restoreTiming) phases() []ateomphaselog.Phase {
 		{Name: phasePrep, D: t.prep},
 		{Name: phaseEgressPrepare, D: t.egressPrepare},
 		{Name: phaseNetSetup, D: t.netSetup},
-		{Name: phaseDurableDir, D: t.durableDir},
 		{Name: phasePauseRootfs, D: t.pauseRootfs},
 		{Name: phasePauseCreate, D: t.pauseCreate},
 		{Name: phasePauseRestore, D: t.pauseRestore},
@@ -87,19 +84,16 @@ func (t restoreTiming) phases() []ateomphaselog.Phase {
 }
 
 // checkpointTiming is the elapsed time of each CheckpointWorkload phase. A
-// Full scope runs checkpoint; a Data scope runs pause and resume around the
-// durable_dir capture instead.
+// Full scope runs checkpoint; a Data scope runs durable_dir capture instead.
 type checkpointTiming struct {
-	prep, pause, checkpoint, durableDir, resume, teardown, total time.Duration
+	prep, checkpoint, durableDir, teardown, total time.Duration
 }
 
 func (t checkpointTiming) phases() []ateomphaselog.Phase {
 	return []ateomphaselog.Phase{
 		{Name: phasePrep, D: t.prep},
-		{Name: phasePause, D: t.pause},
 		{Name: phaseCheckpoint, D: t.checkpoint},
 		{Name: phaseDurableDir, D: t.durableDir},
-		{Name: phaseResume, D: t.resume},
 		{Name: phaseTeardown, D: t.teardown},
 		{Name: phaseTotal, D: t.total},
 	}

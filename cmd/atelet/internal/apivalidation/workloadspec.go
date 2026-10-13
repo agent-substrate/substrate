@@ -85,7 +85,7 @@ func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, 
 	return resources.ValidateCapabilities(fldPath, value, true)
 }
 
-func ValidateCustom_HTTPGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_HttpGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateHTTPGetPath(fldPath, *value)
 }
 

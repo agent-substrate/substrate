@@ -1097,8 +1097,8 @@ func withActorWorkerAssignment(mods ...func(*ateapipb.WorkerAssignment)) func(*a
 }
 
 func TestValidateMintActorJWTRequest(t *testing.T) {
-	withExpiration := func(seconds int64) *ateapipb.MintActorJWTRequest {
-		return &ateapipb.MintActorJWTRequest{
+	withExpiration := func(seconds int64) *ateapipb.MintActorJwtRequest {
+		return &ateapipb.MintActorJwtRequest{
 			Actor:             &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
 			Audiences:         []string{"https://example.com"},
 			ExpirationSeconds: seconds,
@@ -1107,7 +1107,7 @@ func TestValidateMintActorJWTRequest(t *testing.T) {
 	path := field.NewPath("expiration_seconds")
 	tests := []struct {
 		name string
-		req  *ateapipb.MintActorJWTRequest
+		req  *ateapipb.MintActorJwtRequest
 		want field.ErrorList
 	}{
 		{name: "minimum expiration", req: withExpiration(300)},

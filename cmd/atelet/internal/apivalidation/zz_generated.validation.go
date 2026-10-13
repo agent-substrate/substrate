@@ -1542,13 +1542,13 @@ func Validate_ExternalVolumeSource(
 	return errs
 }
 
-// Validate_HTTPGetAction validates an instance of HTTPGetAction according
+// Validate_HttpGetAction validates an instance of HttpGetAction according
 // to declarative validation rules in the API schema.
-func Validate_HTTPGetAction(
+func Validate_HttpGetAction(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateletpb.HTTPGetAction) (errs field.ErrorList) {
+	obj, oldObj *ateletpb.HttpGetAction) (errs field.ErrorList) {
 
-	{ // field ateletpb.HTTPGetAction.Path
+	{ // field ateletpb.HttpGetAction.Path
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -1569,7 +1569,7 @@ func Validate_HTTPGetAction(
 				return // do not proceed
 			}
 			// custom validation
-			if e := ValidateCustom_HTTPGetAction_Path(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := ValidateCustom_HttpGetAction_Path(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 1024); len(e) != 0 {
@@ -1578,13 +1578,13 @@ func Validate_HTTPGetAction(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.HTTPGetAction) *string {
+			func(oldObj *ateletpb.HttpGetAction) *string {
 				return &oldObj.Path
 			})
 		errs = append(errs, fn(fldPath.Child("path"), &obj.Path, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.HTTPGetAction.Port
+	{ // field ateletpb.HttpGetAction.Port
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *int32,
@@ -1613,7 +1613,7 @@ func Validate_HTTPGetAction(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.HTTPGetAction) *int32 {
+			func(oldObj *ateletpb.HttpGetAction) *int32 {
 				return &oldObj.Port
 			})
 		errs = append(errs, fn(fldPath.Child("port"), &obj.Port, oldVal, oldObj != nil)...)
@@ -4475,7 +4475,7 @@ func Validate_WakeupProbe(
 	{ // field ateletpb.WakeupProbe.HttpGet
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.HTTPGetAction,
+			obj, oldObj *ateletpb.HttpGetAction,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -4493,11 +4493,11 @@ func Validate_WakeupProbe(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_HTTPGetAction(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_HttpGetAction(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.WakeupProbe) *ateletpb.HTTPGetAction {
+			func(oldObj *ateletpb.WakeupProbe) *ateletpb.HttpGetAction {
 				return oldObj.HttpGet
 			})
 		errs = append(errs, fn(fldPath.Child("http_get"), obj.HttpGet, oldVal, oldObj != nil)...)

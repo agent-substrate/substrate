@@ -373,11 +373,15 @@ message EgressGateway {
 // AssetFile is one content-addressed file atelet fetches for a sandbox runtime
 // (e.g. the gVisor release tarball).
 message AssetFile {
-  // gs:// URL to download the asset from.
+  // URL to download the asset from. atelet fetches every URL through the
+  // node's object-store plugin, and reads a gs:// URL anonymously only when
+  // the plugin cannot serve it.
+  // Masked in logged requests, since a signed URL carries its credential in
+  // the query.
   //
   // +k8s:required
-  // +k8s:maxLength=2048
-  string url = 1;
+  // +k8s:maxLength=2048 # matches the SandboxConfig asset url's bound
+  string url = 1 [ debug_redact = true ];
 
   // Lower-case hex SHA256; names the cached file and verifies its integrity.
   //
@@ -719,7 +723,7 @@ message EnvEntry {
 // Only HTTP is supported today.
 message WakeupProbe {
   // +k8s:required
-  HTTPGetAction http_get = 1;
+  HttpGetAction http_get = 1;
 
   // How long to keep polling before giving up and failing the actor start.
   //
@@ -729,8 +733,8 @@ message WakeupProbe {
   int32 timeout_seconds = 2;
 }
 
-// HTTPGetAction performs an HTTP GET against the container.
-message HTTPGetAction {
+// HttpGetAction performs an HTTP GET against the container.
+message HttpGetAction {
   // Path to access on the HTTP server.
   //
   // +k8s:required

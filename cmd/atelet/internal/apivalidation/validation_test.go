@@ -1656,7 +1656,7 @@ func TestValidateContainer(t *testing.T) {
 	}
 	probe := func(mutate ...func(*ateletpb.WakeupProbe)) *ateletpb.Container {
 		p := &ateletpb.WakeupProbe{
-			HttpGet:        &ateletpb.HTTPGetAction{Path: "/healthz", Port: 8080},
+			HttpGet:        &ateletpb.HttpGetAction{Path: "/healthz", Port: 8080},
 			TimeoutSeconds: 30,
 		}
 		for _, m := range mutate {
@@ -1774,7 +1774,7 @@ func TestValidateContainer(t *testing.T) {
 			want: field.ErrorList{field.Invalid(mountPath.Child("mount_path"), nil, "")},
 		},
 
-		// WakeupProbe and HTTPGetAction.
+		// WakeupProbe and HttpGetAction.
 		{
 			name: "valid probe",
 			obj:  probe(),

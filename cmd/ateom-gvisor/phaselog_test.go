@@ -43,8 +43,7 @@ func renderPhaseRecord(t *testing.T, attrs []slog.Attr) map[string]any {
 }
 
 // TestRestoreTimingPhases pins the keys a Full restore record carries, in
-// the layout benchmarking tooling joins with atelet's record on, and that a
-// phase which never ran stays off it.
+// the layout benchmarking tooling joins with atelet's record on.
 func TestRestoreTimingPhases(t *testing.T) {
 	t.Parallel()
 
@@ -52,17 +51,15 @@ func TestRestoreTimingPhases(t *testing.T) {
 		prep:          10 * time.Millisecond,
 		egressPrepare: 120 * time.Millisecond,
 		netSetup:      30 * time.Millisecond,
-		// No durable volumes: the phase never ran.
-		durableDir:   0,
-		pauseRootfs:  5 * time.Millisecond,
-		pauseCreate:  200 * time.Millisecond,
-		pauseRestore: 900 * time.Millisecond,
-		appRootfs:    15 * time.Millisecond,
-		appCreate:    50 * time.Millisecond,
-		appRestore:   400 * time.Millisecond,
-		wakeupProbe:  250 * time.Millisecond,
-		activate:     2 * time.Millisecond,
-		total:        2 * time.Second,
+		pauseRootfs:   5 * time.Millisecond,
+		pauseCreate:   200 * time.Millisecond,
+		pauseRestore:  900 * time.Millisecond,
+		appRootfs:     15 * time.Millisecond,
+		appCreate:     50 * time.Millisecond,
+		appRestore:    400 * time.Millisecond,
+		wakeupProbe:   250 * time.Millisecond,
+		activate:      2 * time.Millisecond,
+		total:         2 * time.Second,
 	}
 	attrs := ateomphaselog.SnapshotPhaseAttrs(resources.ActorAttribution{UID: "uid-abc"},
 		ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateomphaselog.RestoreDurationKey, nil, timing.phases())
@@ -99,9 +96,6 @@ func TestRestoreTimingPhases(t *testing.T) {
 			t.Errorf("%s = %v, want %v", k, got, want)
 		}
 	}
-	if v, ok := rec["ateom.actor.restore.duration.durable_dir"]; ok {
-		t.Errorf("durable_dir present with %v, want absent", v)
-	}
 	if rec["ate.actor.uid"] != "uid-abc" {
 		t.Errorf("ate.actor.uid = %v, want uid-abc", rec["ate.actor.uid"])
 	}
@@ -110,16 +104,14 @@ func TestRestoreTimingPhases(t *testing.T) {
 	}
 }
 
-// TestCheckpointTimingPhases: a Data checkpoint pauses and resumes around the
-// durable capture and never runs the runsc checkpoint, and the record says so.
+// TestCheckpointTimingPhases: a Data checkpoint runs the durable capture and
+// never runs the full runsc checkpoint, and the record says so.
 func TestCheckpointTimingPhases(t *testing.T) {
 	t.Parallel()
 
 	timing := checkpointTiming{
 		prep:       20 * time.Millisecond,
-		pause:      3 * time.Millisecond,
 		durableDir: 300 * time.Millisecond,
-		resume:     4 * time.Millisecond,
 		teardown:   150 * time.Millisecond,
 		total:      500 * time.Millisecond,
 	}
@@ -128,9 +120,7 @@ func TestCheckpointTimingPhases(t *testing.T) {
 
 	for k, want := range map[string]float64{
 		"ateom.actor.checkpoint.duration.prep":        0.02,
-		"ateom.actor.checkpoint.duration.pause":       0.003,
 		"ateom.actor.checkpoint.duration.durable_dir": 0.3,
-		"ateom.actor.checkpoint.duration.resume":      0.004,
 		"ateom.actor.checkpoint.duration.teardown":    0.15,
 		"ateom.actor.checkpoint.duration.total":       0.5,
 	} {

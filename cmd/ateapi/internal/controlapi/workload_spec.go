@@ -226,7 +226,7 @@ func toAteletWakeupProbe(in *ateapipb.ContainerWakeupProbe) *ateletpb.WakeupProb
 	}
 	out := &ateletpb.WakeupProbe{TimeoutSeconds: in.GetTimeoutSeconds()}
 	if in.GetHttpGet() != nil {
-		out.HttpGet = &ateletpb.HTTPGetAction{
+		out.HttpGet = &ateletpb.HttpGetAction{
 			Path: in.GetHttpGet().GetPath(),
 			Port: in.GetHttpGet().GetPort(),
 		}
