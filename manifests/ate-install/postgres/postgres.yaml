@@ -193,7 +193,7 @@ spec:
             - pg_isready -U "${POSTGRES_USER}" -d postgres
           initialDelaySeconds: 10
           periodSeconds: 10
-          timeoutSeconds: 5
+          timeoutSeconds: 10
           failureThreshold: 6
         args:
         - -c
