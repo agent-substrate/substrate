@@ -53,9 +53,22 @@ convenience:
 ./hack/install-ate.sh --delete-benchmarks
 ```
 
-The installer accepts `--benchmark-worker-count N` (default `1`).
 `--skip-build` and `--worker-memory` are only available when invoking
 `benchmarking/deploy_locust.sh` directly.
+
+### Settings
+
+`ate-setup` reads these settings in addition to those in
+[docs/operator-install.md](../docs/operator-install.md#settings), through the same
+flag, environment variable, and configuration document channels.
+`hack/install-ate.sh` forwards them as `--benchmark-worker-count`,
+`--benchmark-sandbox-class`, and `--benchmark-actor-memory`.
+
+| Key                      | Environment variable          | Flag                       | Default  | Applies to                               |
+|--------------------------|-------------------------------|----------------------------|----------|------------------------------------------|
+| `benchmark.actorMemory`  | `BENCHMARK_ACTOR_MEMORY`      | `--benchmark-actor-memory` | —        | (global)                                 |
+| `benchmark.sandboxClass` | `ATE_BENCHMARK_SANDBOX_CLASS` | `--sandbox-class`          | `gvisor` | `deploy benchmarks`, `delete benchmarks` |
+| `benchmark.workerCount`  | `ATE_BENCHMARK_WORKER_COUNT`  | `--worker-count`           | `1`      | `deploy benchmarks`, `delete benchmarks` |
 
 ## Running Tests
 
