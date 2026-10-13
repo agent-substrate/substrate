@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -32,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"github.com/agent-substrate/substrate/internal/ateomtunnel"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
@@ -79,6 +81,25 @@ func reseedGuestCRNG(ctx context.Context, ac *kata.AgentClient) error {
 	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return ac.ReseedRandomDev(rctx, nonce)
+}
+
+// runAlongside starts fn in the background and returns a join that waits for
+// its result. join may be called any number of times and always returns the
+// same result, so a deferred call can drain fn on an early return.
+func runAlongside[T any](fn func() (T, error)) (join func() (T, error)) {
+	type result struct {
+		v   T
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		v, err := fn()
+		done <- result{v, err}
+	}()
+	return sync.OnceValues(func() (T, error) {
+		r := <-done
+		return r.v, r.err
+	})
 }
 
 // newReseedNonce returns 32 bytes of fresh entropy to mix into the guest CRNG.
@@ -236,10 +257,15 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 	actorUID := p.actorUID
 
 	rr := s.resolveRuntime(p.assetPaths)
-	egress, err := s.tunnel.PrepareEgress(ctx, p.attribution(), p.egressGateway)
-	if err != nil {
-		return err
-	}
+	// Minting the actor's egress certificate is a round trip through atelet to the
+	// control plane, and nothing needs it until the tunnel activates. Run it
+	// alongside the VM restore, and join it before the guest resumes, so that
+	// configured tunneled egress still fails closed before the workload runs.
+	joinEgress := runAlongside(func() (*ateomtunnel.ActorEgress, error) {
+		return s.tunnel.PrepareEgress(ctx, p.attribution(), p.egressGateway)
+	})
+	// Drains it on a return before the join.
+	defer func() { _, _ = joinEgress() }()
 	s.cleanupSandboxState(ctx, actorUID)
 
 	// Repoint the snapshot's vsock socket to this actor's VMDir (the disk + kernel
@@ -366,8 +392,7 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 		restoredNets = append(restoredNets, rn)
 	}
 
-	// Relaunch CH and restore with the tap FDs attached (SCM_RIGHTS). CH reopens
-	// /dev/vda (image) + each /dev/vd{b+i} (actor rootfs) from the snapshot config paths.
+	// Relaunch CH and restore with the tap FDs attached (SCM_RIGHTS).
 	apiSocket := filepath.Join(kata.VMDir(actorUID), "clh-api-restore.sock")
 	tTap := time.Now()
 	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
@@ -401,6 +426,10 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 		return fmt.Errorf("while restoring VM with net FDs: %w", err)
 	}
 	tVMRestore := time.Now()
+	egress, err := joinEgress()
+	if err != nil {
+		return err
+	}
 	if err := client.Resume(ctx); err != nil {
 		return fmt.Errorf("while resuming restored guest: %w", err)
 	}
@@ -436,13 +465,20 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 	// and notifies the guest before unpausing the vCPUs, so a >=5.18 kernel reseeds its
 	// CRNG on its own with no host round-trip, no per-restore RPC, and no post-Resume
 	// race. At that point this agent-driven reseed can be dropped.
-	if err := reseedGuestCRNG(ctx, guestAC); err != nil {
-		return fmt.Errorf("while reseeding guest CRNG: %w", err)
-	}
+	//
+	// The workload already runs, so the wakeup probe need not wait for the reseed:
+	// run them together, and fail the restore on either.
+	joinReseed := runAlongside(func() (struct{}, error) {
+		return struct{}{}, reseedGuestCRNG(ctx, guestAC)
+	})
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
-		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
+	probeErr := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID)))
+	if _, err := joinReseed(); err != nil {
+		return fmt.Errorf("while reseeding guest CRNG: %w", err)
+	}
+	if probeErr != nil {
+		return fmt.Errorf("while waiting for container wakeup probe: %w", probeErr)
 	}
 
 	// Where a resume goes. Like the boot phases, this used to be a single total,
@@ -541,7 +577,7 @@ func maybeDropStagedMemoryImage(ctx context.Context, restoreDir, memMode string,
 // rewriteSnapshotSocketPaths repoints the snapshot config.json's per-VMDir paths from
 // the source actor's VMDir to the restoring actor's: the hybrid-vsock socket, the
 // File serial console, and each virtio-fs socket, so the sockets/files we create are
-// the ones CH reopens. The kernel and /dev/vda kata image are content-addressed static
+// the ones CH reopens. The kernel and the kata image are content-addressed static
 // files with identical paths on every node, so they need no rewrite, and the overlay
 // has no per-actor disk to repoint.
 func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
