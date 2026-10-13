@@ -19,10 +19,10 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   EnvoyListenerFilterConfig, ListenerFilter, ListenerFilterConfig,
 };
 pub use crate::egress_policy::{EgressPolicy, SniRule};
+use crate::egress_policy_store::GlobalEgressPolicyStore;
 
-/// Filter state holding the SNI rules as JSON. See
-/// EgressPolicyMetadataNamespace in cmd/atenet/internal/router/extproc.
-pub const ATE_POLICY_EGRESS: &[u8] = b"dev.ate.policy.egress";
+/// Filter state holding the egress policy hash.
+pub const ATE_POLICY_EGRESS_HASH: &[u8] = b"dev.ate.policy.egress.hash";
 
 /// Filter state this filter writes the chosen chain name to.
 pub const ATE_EGRESS_FILTER_CHAIN: &[u8] = b"dev.ate.egress.filter_chain";
@@ -135,11 +135,14 @@ impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for EgressPolicyFilter {
         let sni = envoy_filter
           .get_requested_server_name()
           .map(|value| String::from_utf8_lossy(value.as_slice()).into_owned());
-        // Unparseable rules deny, like absent ones.
         let policy = envoy_filter
-          .get_filter_state_bytes(ATE_POLICY_EGRESS)
-          .and_then(|value| serde_json::from_slice::<EgressPolicy>(value.as_slice()).ok());
-        let verdict = tls_verdict(policy.as_ref(), sni.as_deref());
+          .get_filter_state_bytes(ATE_POLICY_EGRESS_HASH)
+          .and_then(|value| std::str::from_utf8(value.as_slice()).ok()?.parse::<u64>().ok())
+          .and_then(|hash| GlobalEgressPolicyStore::get_local_store().lookup(hash));
+        let verdict = match policy {
+          Some(ref policy) => tls_verdict(Some(policy), sni.as_deref()),
+          None => ATE_EGRESS_FILTER_CHAIN_DENIED,
+        };
         envoy_log_trace!("egress policy: sni={:?} chain={}", sni, verdict);
         verdict
       }
@@ -314,9 +317,13 @@ mod tests {
     .expect("a filter config")
   }
 
-  /// Runs on_accept for a TLS connection with the given SNI and policy filter
-  /// state, asserting the verdict written.
-  fn assert_tls_verdict(sni: Option<&'static [u8]>, policy: Option<&'static [u8]>, want: &'static str) {
+  /// Runs on_accept for a TLS connection with the given SNI and policy hash
+  /// filter state, asserting the verdict written.
+  fn assert_tls_verdict_with_hash_state(
+    sni: Option<&'static [u8]>,
+    hash_state: Option<Vec<u8>>,
+    want: &'static str,
+  ) {
     let config = new_filter_config();
     let mut mock_filter = MockEnvoyListenerFilter::new();
     mock_filter
@@ -327,8 +334,8 @@ mod tests {
       .returning(move || sni.map(EnvoyBuffer::new));
     mock_filter
       .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS)
-      .returning(move |_| policy.map(EnvoyBuffer::new));
+      .withf(|key| key == ATE_POLICY_EGRESS_HASH)
+      .returning(move |_| hash_state.as_deref().map(EnvoyBuffer::new));
     mock_filter
       .expect_set_filter_state_bytes()
       .withf(move |key, value| key == ATE_EGRESS_FILTER_CHAIN && value == want.as_bytes())
@@ -340,6 +347,22 @@ mod tests {
       filter.on_accept(&mut mock_filter),
       envoy_dynamic_module_type_on_listener_filter_status::Continue
     );
+  }
+
+  /// Stores the given policy (if any) in the thread-local store and runs
+  /// on_accept with its hash in filter state.
+  fn assert_tls_verdict(
+    sni: Option<&'static [u8]>,
+    policy: Option<EgressPolicy>,
+    want: &'static str,
+  ) {
+    let hash_state = policy.map(|p| {
+      let rc = std::rc::Rc::new(p);
+      let hash = rc.hash();
+      GlobalEgressPolicyStore::get_local_store().store(hash, &rc);
+      hash.to_string().into_bytes()
+    });
+    assert_tls_verdict_with_hash_state(sni, hash_state, want);
   }
 
   /// Runs on_accept for a connection with the given detected transport,
@@ -382,38 +405,79 @@ mod tests {
     assert_transport_verdict(Some(b"quic"), ATE_EGRESS_FILTER_CHAIN_DENIED);
   }
 
-  const RULES: &[u8] =
-    br#"{"rules":[{"pattern":"api.google.com","mode":"mitm"},{"pattern":"*.google.com","mode":"mitm"}]}"#;
+  fn google_rules() -> EgressPolicy {
+    policy(&[
+      ("api.google.com", SNI_MODE_MITM),
+      ("*.google.com", SNI_MODE_MITM),
+    ])
+  }
 
   #[test]
   fn test_on_accept_matching_sni() {
-    assert_tls_verdict(Some(b"api.google.com"), Some(RULES), ATE_EGRESS_FILTER_CHAIN_MITM);
+    assert_tls_verdict(
+      Some(b"api.google.com"),
+      Some(google_rules()),
+      ATE_EGRESS_FILTER_CHAIN_MITM,
+    );
   }
 
   #[test]
   fn test_on_accept_wildcard_sni() {
-    assert_tls_verdict(Some(b"mail.google.com"), Some(RULES), ATE_EGRESS_FILTER_CHAIN_MITM);
+    assert_tls_verdict(
+      Some(b"mail.google.com"),
+      Some(google_rules()),
+      ATE_EGRESS_FILTER_CHAIN_MITM,
+    );
   }
 
   #[test]
   fn test_on_accept_case_insensitive_sni() {
-    assert_tls_verdict(Some(b"API.Google.COM"), Some(RULES), ATE_EGRESS_FILTER_CHAIN_MITM);
+    assert_tls_verdict(
+      Some(b"API.Google.COM"),
+      Some(google_rules()),
+      ATE_EGRESS_FILTER_CHAIN_MITM,
+    );
   }
 
   #[test]
   fn test_on_accept_mismatched_sni() {
-    assert_tls_verdict(Some(b"google.com"), Some(RULES), ATE_EGRESS_FILTER_CHAIN_DENIED);
-    assert_tls_verdict(Some(b"www.example.com"), Some(RULES), ATE_EGRESS_FILTER_CHAIN_DENIED);
+    assert_tls_verdict(
+      Some(b"google.com"),
+      Some(google_rules()),
+      ATE_EGRESS_FILTER_CHAIN_DENIED,
+    );
+    assert_tls_verdict(
+      Some(b"www.example.com"),
+      Some(google_rules()),
+      ATE_EGRESS_FILTER_CHAIN_DENIED,
+    );
   }
 
   #[test]
   fn test_on_accept_no_rules() {
-    assert_tls_verdict(Some(b"api.google.com"), Some(br#"{"rules":[]}"#), ATE_EGRESS_FILTER_CHAIN_DENIED);
+    assert_tls_verdict(
+      Some(b"api.google.com"),
+      Some(policy(&[])),
+      ATE_EGRESS_FILTER_CHAIN_DENIED,
+    );
   }
 
   #[test]
-  fn test_on_accept_invalid_policy_json() {
-    assert_tls_verdict(Some(b"api.google.com"), Some(b"not-json"), ATE_EGRESS_FILTER_CHAIN_DENIED);
+  fn test_on_accept_invalid_policy_hash() {
+    assert_tls_verdict_with_hash_state(
+      Some(b"api.google.com"),
+      Some(b"not-a-hash".to_vec()),
+      ATE_EGRESS_FILTER_CHAIN_DENIED,
+    );
+  }
+
+  #[test]
+  fn test_on_accept_unknown_policy_hash() {
+    assert_tls_verdict_with_hash_state(
+      Some(b"api.google.com"),
+      Some(b"9999999999999999999".to_vec()),
+      ATE_EGRESS_FILTER_CHAIN_DENIED,
+    );
   }
 
   #[test]
@@ -423,6 +487,6 @@ mod tests {
 
   #[test]
   fn test_on_accept_missing_sni() {
-    assert_tls_verdict(None, Some(RULES), ATE_EGRESS_FILTER_CHAIN_DENIED);
+    assert_tls_verdict(None, Some(google_rules()), ATE_EGRESS_FILTER_CHAIN_DENIED);
   }
 }

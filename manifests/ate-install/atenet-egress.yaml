@@ -248,16 +248,6 @@ data:
                       text_format_source:
                         inline_string: "%DYNAMIC_METADATA(dev.ate.egress:dialed_port)%"
                       omit_empty_values: true
-                  # SNI rules for the egress-policy module. If absent, all TLS
-                  # is denied.
-                  - object_key: dev.ate.policy.egress
-                    factory_key: envoy.string
-                    skip_if_empty: true
-                    shared_with_upstream: ONCE
-                    format_string:
-                      text_format_source:
-                        inline_string: "%DYNAMIC_METADATA(dev.ate.policy.egress:policy_json)%"
-                      omit_empty_values: true
                   # Workaround for dynamic module inability to store filter state that is shared with the upstream.
                   # TODO(yanavlasov): Remove after Envoy v1.40 is released.
                   - object_key: dev.ate.policy.egress.hash
