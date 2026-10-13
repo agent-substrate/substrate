@@ -137,8 +137,13 @@ func (a *Azure) Download(ctx context.Context, name string) (Download, error) {
 	if err != nil {
 		return Download{}, mapError(err)
 	}
+	size := int64(-1)
+	if resp.ContentLength != nil {
+		size = *resp.ContentLength
+	}
 	return Download{
 		Body:     mappedBody{resp.NewRetryReader(ctx, &blob.RetryReaderOptions{MaxRetries: 3})},
+		Size:     size,
 		Metadata: resp.Metadata,
 	}, nil
 }
