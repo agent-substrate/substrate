@@ -61,8 +61,10 @@ type guestClockSetter interface {
 // the guest's RTC or chronyd. A failure fails the boot or restore rather than
 // running the actor on a wrong clock.
 //
-// It is a no-op on KVM. Guest code can still observe the stale clock between
-// vCPU resume and this call. timeout bounds all attempts together.
+// It is a no-op on KVM. Containers do not run on the stale clock: a cold boot
+// sets it before starting them, and a restore sets it before thawing the
+// containers its snapshot holds frozen (guestQuiesce, activateRestoredGuest).
+// timeout bounds all attempts together.
 func syncGuestClock(ctx context.Context, h hypervisor, ac guestClockSetter, now func() time.Time, timeout time.Duration) error {
 	if h != hypervisorMSHV {
 		return nil

@@ -21,9 +21,12 @@
 // Code, without Reason, when it rejects a stale snapshot request before calling
 // the worker; ate-api-server keeps that actor SUSPENDING for a retry instead.
 //
-// Only an MSHV MEMORY checkpoint returns it today, when freezing the guest's
-// containers fails, every container it froze was thawed again, and no earlier
-// attempt of the checkpoint deactivated the actor's tunnel.
+// Only an MSHV MEMORY checkpoint returns it today, when a step before the
+// freeze of the guest's containers fails or the freeze fails, and nothing has
+// changed: Cloud Hypervisor's API does not answer in time or its VM state read
+// fails while its process runs and its api-socket listens, or the freeze fails
+// and every container it froze was thawed again. No earlier attempt of the
+// checkpoint may have deactivated the actor's tunnel.
 package checkpointabort
 
 import (
