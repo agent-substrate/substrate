@@ -242,6 +242,13 @@ func (p *sandboxPrewarmer) process(ctx context.Context, name string) {
 		// Shutting down, not a prewarm failure; drop without retry noise.
 		return
 	}
+	if !retryable(err) {
+		// The next config event re-enqueues it; first use reports the error.
+		slog.WarnContext(ctx, "Sandbox asset prewarm failed; not retrying, since only a config or plugin change can fix it",
+			slog.String("config", name), slog.Any("err", err))
+		p.queue.Forget(name)
+		return
+	}
 	if retries := p.queue.NumRequeues(name); retries < prewarmMaxRetries {
 		slog.WarnContext(ctx, "Sandbox asset prewarm failed; will retry",
 			slog.String("config", name), slog.Int("retries", retries), slog.Any("err", err))
@@ -313,6 +320,21 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 		slog.String("pauseImage", ver.PauseImage),
 		slog.Duration("duration", time.Since(t)))
 	return nil
+}
+
+// retryable reports whether retrying a failed prewarm can succeed: it cannot
+// when every error err joins is a permanentAssetError.
+func retryable(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range joined.Unwrap() {
+			if retryable(e) {
+				return true
+			}
+		}
+		return false
+	}
+	var permanent *permanentAssetError
+	return !errors.As(err, &permanent)
 }
 
 // errNoAssetsForArch reports that a SandboxConfig lists no assets for this
