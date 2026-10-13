@@ -415,8 +415,9 @@ a `Snapshot` with the following fields:
   when the checkpoint is taken. A resume that restores memory or rootfs state
   (`SNAPSHOT_FIDELITY_MEMORY` or `SNAPSHOT_FIDELITY_ROOTFS`) first schedules onto
   an eligible worker whose `defaultRuntime` or `restorableRuntimes` is compatible
-  with `sandboxRuntime` (same sandbox class, same schema version, and exactly
-  the same attribute keys and values). When no compatible worker has
+  with `sandboxRuntime` (same sandbox class, same schema version, and every
+  attribute recorded on the snapshot present on the worker with the same
+  value; attributes only the worker reports are ignored). When no compatible worker has
   capacity:
   - A durable snapshot — the actor's own, a `sourceTag` clone, or the
     template's golden snapshot a new actor starts from — falls back to any eligible

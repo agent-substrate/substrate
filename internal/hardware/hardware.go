@@ -66,11 +66,12 @@ func Matches(worker, snap *ateapipb.SandboxRuntime) bool {
 }
 
 // MatchesCompat reports whether worker can restore a snapshot stamped with
-// snap: the same non-empty schema version and exactly the same attributes,
-// each key present on both sides with an equal value. A schema version is
-// the unit of evolution: adding, removing, or recomputing a key means a new
-// version, under which older snapshots stop matching, rather than a subset
-// match that would let old keys accumulate forever.
+// snap: the same non-empty schema version, and every attribute on snap
+// present on worker with an equal value. Keys only the worker has are
+// ignored, so a worker can start reporting a new key under the same schema
+// version without invalidating the snapshots taken before it; removing or
+// recomputing a key is a new schema version, under which older snapshots no
+// longer match.
 func MatchesCompat(worker, snap *ateapipb.VersionedSandboxCompat) bool {
 	if worker == nil || snap == nil {
 		return false
@@ -81,11 +82,7 @@ func MatchesCompat(worker, snap *ateapipb.VersionedSandboxCompat) bool {
 	wAttrs := worker.GetAttributes()
 	sAttrs := snap.GetAttributes()
 	// API validation bounds attributes to at most 32 entries with unique keys,
-	// so equal counts plus a one-way scan is a two-way match, and the nested
-	// scan is small and avoids map allocation on the hot path.
-	if len(wAttrs) != len(sAttrs) {
-		return false
-	}
+	// so the nested scan is small and avoids map allocation on the hot path.
 	for _, sa := range sAttrs {
 		found := false
 		for _, wa := range wAttrs {

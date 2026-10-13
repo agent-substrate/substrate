@@ -80,7 +80,7 @@ func TestMatches(t *testing.T) {
 		{"different attribute value fails", arm64GVisor, amd64GVisor, false},
 		{"different sandbox class fails", amd64MicroVM, amd64GVisor, false},
 		{"different schema version fails", amd64GVisorV2, amd64GVisor, false},
-		{"attribute only the worker has fails", amd64GVisorExtraAttr, amd64GVisor, false},
+		{"attribute only the worker has is ignored", amd64GVisorExtraAttr, amd64GVisor, true},
 		{"attribute missing on worker fails", amd64GVisor, amd64GVisorExtraAttr, false},
 		{"nil worker fails when snapshot is stamped", nil, amd64GVisor, false},
 		{"nil version fails", &ateapipb.SandboxRuntime{SandboxClass: "gvisor"}, amd64GVisor, false},
@@ -109,9 +109,9 @@ func TestMatchesCompat(t *testing.T) {
 		want         bool
 	}{
 		{"equal", compat("v1", amd64), compat("v1", amd64), true},
-		{"key only the worker has fails", compat("v1", amd64, cpu), compat("v1", amd64), false},
+		{"key only the worker has is ignored", compat("v1", amd64, cpu), compat("v1", amd64), true},
 		{"key only the snapshot has fails", compat("v1", amd64), compat("v1", amd64, cpu), false},
-		{"same count, different keys fails", compat("v1", amd64, cpu), compat("v1", amd64, hash), false},
+		{"key only the snapshot has fails even at equal count", compat("v1", amd64, cpu), compat("v1", amd64, hash), false},
 		{"value differs", compat("v1", arm64), compat("v1", amd64), false},
 		{"schema version differs", compat("v2", amd64), compat("v1", amd64), false},
 		{"both schema versions empty", compat("", amd64), compat("", amd64), false},
