@@ -292,13 +292,27 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 	if isPodTerminal(pod) {
 		return s.deleteWorkerPod(ctx, key, pod, "phase "+string(pod.Status.Phase))
 	}
+	// Checked before eligibility too: a pod that is not Ready never reaches
+	// createOrUpdateWorker, but its pool can still be gone.
+	poolName := pod.Labels[workerPodLabel]
+	poolObject, exists, err := s.workerPoolInformer.GetIndexer().GetByKey(key.namespace + "/" + poolName)
+	if err != nil {
+		return fmt.Errorf("getting WorkerPool %s/%s: %w", key.namespace, poolName, err)
+	}
+	if !exists {
+		return s.reconcileMissingPool(ctx, key, pod, poolName)
+	}
+	pool, ok := poolObject.(*atev1alpha1.WorkerPool)
+	if !ok {
+		return fmt.Errorf("getting WorkerPool %s/%s: unexpected object type %T", key.namespace, poolName, poolObject)
+	}
 	if !isWorkerEligible(pod) {
 		// The pod has no IP or is not Ready yet; a later update event re-enqueues
 		// it. A registered Worker still takes a raised epoch: an ateom that is
 		// restarting is not Ready, but its Actors are already lost.
 		return s.raiseEpoch(ctx, key, pod)
 	}
-	return s.createOrUpdateWorker(ctx, key, pod)
+	return s.createOrUpdateWorker(ctx, key, pod, pool)
 }
 
 // ateomContainer is the name of the worker pod's ateom container.
@@ -340,20 +354,8 @@ func (s *WorkerPoolSyncer) raiseEpoch(ctx context.Context, key workerKey, pod *c
 	return err
 }
 
-func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod) error {
-	poolName := pod.Labels[workerPodLabel]
-	poolObject, exists, err := s.workerPoolInformer.GetIndexer().GetByKey(key.namespace + "/" + poolName)
-	if err != nil {
-		return fmt.Errorf("getting WorkerPool %s/%s: %w", key.namespace, poolName, err)
-	}
-	if !exists {
-		return s.reconcileMissingPool(ctx, key, pod, poolName)
-	}
-	pool, ok := poolObject.(*atev1alpha1.WorkerPool)
-	if !ok {
-		return fmt.Errorf("getting WorkerPool %s/%s: unexpected object type %T", key.namespace, poolName, poolObject)
-	}
-
+func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod, pool *atev1alpha1.WorkerPool) error {
+	poolName := pool.Name
 	w, err := s.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: key.workerRef()})
 	if status.Code(err) == codes.NotFound {
 		slog.InfoContext(ctx, "Syncer: registering worker", key.logAttrs()...)

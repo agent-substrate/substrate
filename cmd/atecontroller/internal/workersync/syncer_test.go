@@ -802,6 +802,32 @@ func TestSyncer_DeletedWorkerPool(t *testing.T) {
 	}
 }
 
+// TestSyncer_DeletedWorkerPool_NotReadyPod verifies that an orphaned pod that is
+// not Ready is still cleaned up: it never reaches the eligibility gate's
+// registration path, but its pool is gone all the same.
+func TestSyncer_DeletedWorkerPool_NotReadyPod(t *testing.T) {
+	ctx := context.Background()
+	ns, poolName, podName, ip := "ns-deleted-pool-notready", "pool1", "worker-1", "10.0.0.5"
+
+	api := newFakeControl()
+	api.put(registeredWorker(ns, poolName, podName, testPodUID, ip))
+	s, pods, _ := setupReconcileTest(t, api)
+
+	pod := workerPod(ns, podName, poolName, testPodUID, ip)
+	pod.Status.Conditions = nil
+	//nolint:staticcheck // NewSimpleClientset is the fake the syncer's clients take.
+	fakeK8s := fake.NewSimpleClientset(pod.DeepCopy())
+	s.pods, s.apps = fakeK8s.CoreV1(), fakeK8s.AppsV1()
+	mustReconcile(t, ctx, s, seedPod(t, pods, pod))
+
+	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("get pod = %v, want NotFound", err)
+	}
+	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("worker state = %v, want DRAINING", got)
+	}
+}
+
 // TestSyncer_DeletedWorkerPool_Errors verifies that a failed read of the pod's
 // owners requeues the key and deletes nothing, rather than guessing the pod was
 // orphaned.
