@@ -19,6 +19,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -191,6 +192,63 @@ func TestSpawnIsTerminalError(t *testing.T) {
 
 	if isSpawnTerminalError(errors.New("plain non-status error")) {
 		t.Errorf("expected non-grpc error to NOT be terminal")
+	}
+}
+
+func TestRetryWithBackoff(t *testing.T) {
+	t.Run("retries transient errors until success", func(t *testing.T) {
+		var attempts []int
+		err := retryWithBackoff(context.Background(), func(attempt int) error {
+			attempts = append(attempts, attempt)
+			if attempt < 2 {
+				return status.Error(codes.Unavailable, "down")
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("retryWithBackoff = %v, want nil", err)
+		}
+		if want := []int{0, 1, 2}; !slices.Equal(attempts, want) {
+			t.Errorf("attempts = %v, want %v", attempts, want)
+		}
+	})
+
+	t.Run("stops on a terminal error", func(t *testing.T) {
+		calls := 0
+		err := retryWithBackoff(context.Background(), func(int) error {
+			calls++
+			return status.Error(codes.FailedPrecondition, "stuck")
+		})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("retryWithBackoff = %v, want FailedPrecondition", err)
+		}
+		if calls != 1 {
+			t.Errorf("calls = %d, want 1", calls)
+		}
+	})
+
+	t.Run("stops at the deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		err := retryWithBackoff(ctx, func(int) error {
+			return status.Error(codes.ResourceExhausted, "no room")
+		})
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("retryWithBackoff = %v, want DeadlineExceeded", err)
+		}
+	})
+}
+
+func TestCreateLanded(t *testing.T) {
+	exists := status.Error(codes.AlreadyExists, "exists")
+	if createLanded(0, exists) {
+		t.Error("AlreadyExists on the first attempt is a name clash, not a landed create")
+	}
+	if !createLanded(1, exists) {
+		t.Error("AlreadyExists on a retry means an earlier attempt landed")
+	}
+	if createLanded(1, status.Error(codes.Unavailable, "down")) {
+		t.Error("only AlreadyExists means the create landed")
 	}
 }
 

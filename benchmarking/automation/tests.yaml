@@ -599,6 +599,30 @@ tests:
       - "2"
       - "--actor-deadline"
       - "120"
+  # Burst benchmark: one user resumes and suspends the whole cohort at once, batch after batch.
+  - name: burst_smoke_10_actors
+    type: locust
+    description: "Burst benchmark smoke: 10 actors resumed and suspended together"
+    targetCluster: dev
+    file: /app/tests/burst.py
+    duration: 5m
+    users: 1
+    workerCount: 10
+    flags:
+      - "--total-actors"
+      - "10"
+      - "--actor-deadline"
+      - "120"
+      - "--min-wait-time"
+      - "5.0"
+      - "--max-wait-time"
+      - "5.0"
+      - "--min-live-time"
+      - "5.0"
+      - "--max-live-time"
+      - "5.0"
+      - "--max-pings-per-wake"
+      - "3"
   - name: ingress_routercap_envoy_2cpu
     description: "Router capacity: Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 2 CPUs"
     type: nighthawk-ingress
