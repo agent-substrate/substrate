@@ -91,68 +91,35 @@ func get(h http.Handler, method, target string) *httptest.ResponseRecorder {
 	return w
 }
 
-type discoveryDoc struct {
-	Issuer     string   `json:"issuer"`
-	JWKSURI    string   `json:"jwks_uri"`
-	Algorithms []string `json:"id_token_signing_alg_values_supported"`
-}
-
-func TestServesDocumentsUnderIssuerPath(t *testing.T) {
+func TestServesDocuments(t *testing.T) {
 	keys := verificationKeys(t, "ES256")
-	want := keySet(t, keys)
+	s := newServer(t, "https://idp.ate-system.svc", &fakeKeys{keys: keys})
 	tests := []struct {
-		issuer      string
-		prefix      string
-		wantJWKSURI string
+		target string
+		want   string
 	}{
-		{issuer: "https://idp.ate-system.svc", prefix: "", wantJWKSURI: "https://idp.ate-system.svc/openid/v1/jwks"},
-		{issuer: "https://idp.example.com/prod/", prefix: "/prod", wantJWKSURI: "https://idp.example.com/prod/openid/v1/jwks"},
-		{issuer: "https://idp.example.com/a/../b", prefix: "/b", wantJWKSURI: "https://idp.example.com/a/../b/openid/v1/jwks"},
-		{issuer: "https://idp.example.com/{tenant}", prefix: "/{tenant}", wantJWKSURI: "https://idp.example.com/{tenant}/openid/v1/jwks"},
+		{
+			target: "/.well-known/openid-configuration",
+			want: `{"issuer":"https://idp.ate-system.svc",` +
+				`"jwks_uri":"https://idp.ate-system.svc/openid/v1/jwks",` +
+				`"response_types_supported":["id_token"],` +
+				`"subject_types_supported":["public"],` +
+				`"id_token_signing_alg_values_supported":["ES256"],` +
+				`"claims_supported":["iss","sub","aud","exp","nbf","iat","jti","actor.ate.dev","worker-for-actor.ate.dev"]}`,
+		},
+		{target: "/openid/v1/jwks", want: keySet(t, keys)},
 	}
 	for _, tt := range tests {
-		s := newServer(t, tt.issuer, &fakeKeys{keys: keys})
-		w := get(s, http.MethodGet, tt.prefix+"/openid/v1/jwks")
-		if w.Code != http.StatusOK || w.Body.String() != want {
-			t.Errorf("%s: GET %s/openid/v1/jwks = %d %q, want 200 and the key set", tt.issuer, tt.prefix, w.Code, w.Body)
-		}
-
-		w = get(s, http.MethodGet, tt.prefix+"/.well-known/openid-configuration")
+		w := get(s, http.MethodGet, tt.target)
 		if w.Code != http.StatusOK {
-			t.Fatalf("%s: GET %s/.well-known/openid-configuration = %d, want 200", tt.issuer, tt.prefix, w.Code)
+			t.Fatalf("GET %s = %d, want 200", tt.target, w.Code)
 		}
-		var doc discoveryDoc
-		if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil {
-			t.Fatal(err)
+		if diff := cmp.Diff(tt.want, w.Body.String()); diff != "" {
+			t.Errorf("GET %s body (-want +got):\n%s", tt.target, diff)
 		}
-		if doc.Issuer != tt.issuer || doc.JWKSURI != tt.wantJWKSURI {
-			t.Errorf("%s: discovery issuer %q, jwks_uri %q; want %q, %q", tt.issuer, doc.Issuer, doc.JWKSURI, tt.issuer, tt.wantJWKSURI)
+		if got := w.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+			t.Errorf("GET %s: Content-Type = %q, want application/json; charset=utf-8", tt.target, got)
 		}
-		wantHeaders := map[string]string{
-			"Content-Type":                "application/json; charset=utf-8",
-			"Cache-Control":               "public, max-age=60",
-			"Access-Control-Allow-Origin": "*",
-		}
-		for name, want := range wantHeaders {
-			if got := w.Header().Get(name); got != want {
-				t.Errorf("%s: %s = %q, want %q", tt.issuer, name, got, want)
-			}
-		}
-	}
-}
-
-func TestIssuerPathIsNotAPattern(t *testing.T) {
-	s := newServer(t, "https://idp.example.com/{tenant}", &fakeKeys{keys: verificationKeys(t, "ES256")})
-	if got := get(s, http.MethodGet, "/other/openid/v1/jwks").Code; got != http.StatusNotFound {
-		t.Errorf("GET /other/openid/v1/jwks = %d, want 404", got)
-	}
-}
-
-func TestRedirectsDotSegments(t *testing.T) {
-	s := newServer(t, "https://idp.example.com/a/../b", &fakeKeys{keys: verificationKeys(t, "ES256")})
-	w := get(s, http.MethodGet, "/a/../b/openid/v1/jwks")
-	if w.Code/100 != 3 || w.Header().Get("Location") != "/b/openid/v1/jwks" {
-		t.Errorf("GET /a/../b/openid/v1/jwks = %d, Location %q; want a redirect to /b/openid/v1/jwks", w.Code, w.Header().Get("Location"))
 	}
 }
 
@@ -163,6 +130,7 @@ func TestNewFails(t *testing.T) {
 		keys   KeySource
 	}{
 		"issuer not https": {issuer: "http://idp.ate-system.svc", keys: &fakeKeys{keys: keys}},
+		"issuer with path": {issuer: "https://idp.example.com/prod", keys: &fakeKeys{keys: keys}},
 		"keys unreadable":  {issuer: "https://idp.ate-system.svc", keys: &fakeKeys{err: os.ErrNotExist}},
 		"no keys":          {issuer: "https://idp.ate-system.svc", keys: &fakeKeys{}},
 	}
@@ -201,8 +169,10 @@ func TestFollowsKeyChanges(t *testing.T) {
 }
 
 func TestDiscoveryAdvertisesPoolAlgorithms(t *testing.T) {
-	s := newServer(t, "https://idp.ate-system.svc", &fakeKeys{keys: verificationKeys(t, "RS256", "ES256")})
-	var doc discoveryDoc
+	s := newServer(t, "https://idp.ate-system.svc", &fakeKeys{keys: verificationKeys(t, "RS256", "ES256", "ES256")})
+	var doc struct {
+		Algorithms []string `json:"id_token_signing_alg_values_supported"`
+	}
 	if err := json.Unmarshal(get(s, http.MethodGet, "/.well-known/openid-configuration").Body.Bytes(), &doc); err != nil {
 		t.Fatal(err)
 	}
@@ -218,12 +188,11 @@ func TestMethodsAndUnknownPaths(t *testing.T) {
 		t.Errorf("GET /healthz = %d, want 200", got)
 	}
 
-	w := get(s, http.MethodHead, "/openid/v1/jwks")
-	if w.Code != http.StatusOK || w.Body.Len() != 0 || w.Header().Get("Content-Type") == "" {
-		t.Errorf("HEAD = %d with %d body bytes, want 200, headers, and no body", w.Code, w.Body.Len())
+	if got := get(s, http.MethodHead, "/openid/v1/jwks").Code; got != http.StatusOK {
+		t.Errorf("HEAD = %d, want 200", got)
 	}
 
-	w = get(s, http.MethodPost, "/openid/v1/jwks")
+	w := get(s, http.MethodPost, "/openid/v1/jwks")
 	if w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != "GET, HEAD" {
 		t.Errorf("POST = %d, Allow %q; want 405, Allow GET, HEAD", w.Code, w.Header().Get("Allow"))
 	}

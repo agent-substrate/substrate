@@ -17,19 +17,15 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
-	"path"
-	"strconv"
-	"strings"
+	"slices"
 
+	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/localjwtauthority"
-	"go.ate.dev/substrate/internal/oidcdiscovery"
 )
-
-const wellKnownPath = "/.well-known/openid-configuration"
 
 // KeySource supplies the verification keys to publish.
 // *localjwtauthority.RefreshingPool is one.
@@ -37,36 +33,21 @@ type KeySource interface {
 	VerificationKeys() ([]*localjwtauthority.VerificationKey, error)
 }
 
-// Server serves the discovery document and JWK set under the issuer's path,
-// plus /healthz. It builds both documents from its KeySource on every request
-// and answers 500 when that fails.
+// Server serves the discovery document at /.well-known/openid-configuration
+// and the JWK set at /openid/v1/jwks, plus /healthz. It builds both documents
+// from its KeySource on every request and answers 500 when that fails.
 type Server struct {
-	issuer        string
-	discoveryPath string
-	jwksPath      string
-	keys          KeySource
+	issuer string
+	keys   KeySource
 }
 
-// New returns a Server that publishes keys for issuer. It fails if the keys
-// cannot be published.
+// New returns a Server that publishes keys for issuer, which must be
+// https://<host>. It fails if the keys cannot be published.
 func New(issuer string, keys KeySource) (*Server, error) {
-	if err := oidcdiscovery.ValidateIssuer(issuer); err != nil {
+	if err := actoridjwt.ValidateIssuer(issuer); err != nil {
 		return nil, err
 	}
-	u, err := url.Parse(issuer)
-	if err != nil {
-		return nil, err
-	}
-	// The escaped path keeps characters such as { from reading as pattern
-	// wildcards. Routes use the cleaned path because ServeMux redirects
-	// requests with dot segments to it.
-	base := strings.TrimSuffix(path.Clean("/"+u.EscapedPath()), "/")
-	s := &Server{
-		issuer:        issuer,
-		discoveryPath: base + wellKnownPath,
-		jwksPath:      base + oidcdiscovery.JWKSPath,
-		keys:          keys,
-	}
+	s := &Server{issuer: issuer, keys: keys}
 	if _, _, err := s.build(); err != nil {
 		return nil, fmt.Errorf("cannot publish the keys: %w", err)
 	}
@@ -75,11 +56,11 @@ func New(issuer string, keys KeySource) (*Server, error) {
 
 // Register adds the server's routes to mux.
 func (s *Server) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET "+s.discoveryPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		discovery, _, err := s.build()
 		serveDocument(w, r, discovery, err)
 	})
-	mux.HandleFunc("GET "+s.jwksPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /openid/v1/jwks", func(w http.ResponseWriter, r *http.Request) {
 		_, jwks, err := s.build()
 		serveDocument(w, r, jwks, err)
 	})
@@ -88,19 +69,37 @@ func (s *Server) Register(mux *http.ServeMux) {
 	})
 }
 
+type discoveryDocument struct {
+	Issuer                           string   `json:"issuer"`
+	JWKSURI                          string   `json:"jwks_uri"`
+	ResponseTypesSupported           []string `json:"response_types_supported"`
+	SubjectTypesSupported            []string `json:"subject_types_supported"`
+	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
+	ClaimsSupported                  []string `json:"claims_supported"`
+}
+
 func (s *Server) build() (discovery, jwks []byte, err error) {
 	verificationKeys, err := s.keys.VerificationKeys()
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading verification keys: %w", err)
 	}
+	if jwks, err = localjwtauthority.JWKS(verificationKeys); err != nil {
+		return nil, nil, err
+	}
 	algorithms := make([]string, 0, len(verificationKeys))
 	for _, vk := range verificationKeys {
 		algorithms = append(algorithms, vk.Algorithm)
 	}
-	if jwks, err = localjwtauthority.JWKS(verificationKeys); err != nil {
-		return nil, nil, err
-	}
-	if discovery, err = oidcdiscovery.DiscoveryDocument(s.issuer, algorithms); err != nil {
+	slices.Sort(algorithms)
+	discovery, err = json.Marshal(discoveryDocument{
+		Issuer:                           s.issuer,
+		JWKSURI:                          s.issuer + "/openid/v1/jwks",
+		ResponseTypesSupported:           []string{"id_token"},
+		SubjectTypesSupported:            []string{"public"},
+		IDTokenSigningAlgValuesSupported: slices.Compact(algorithms),
+		ClaimsSupported:                  []string{"iss", "sub", "aud", "exp", "nbf", "iat", "jti", "actor.ate.dev", "worker-for-actor.ate.dev"},
+	})
+	if err != nil {
 		return nil, nil, err
 	}
 	return discovery, jwks, nil
@@ -112,13 +111,6 @@ func serveDocument(w http.ResponseWriter, r *http.Request, doc []byte, err error
 		http.Error(w, "cannot publish the key set", http.StatusInternalServerError)
 		return
 	}
-	h := w.Header()
-	h.Set("Content-Type", "application/json; charset=utf-8")
-	h.Set("Cache-Control", "public, max-age=60")
-	h.Set("Access-Control-Allow-Origin", "*")
-	h.Set("Content-Length", strconv.Itoa(len(doc)))
-	if r.Method == http.MethodHead {
-		return
-	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_, _ = w.Write(doc)
 }

@@ -40,7 +40,7 @@ import (
 )
 
 var (
-	issuer       = pflag.String("issuer", "", "Actor JWT issuer URL; must match ate-api-server's --actor-jwt-issuer (required).")
+	issuer       = pflag.String("issuer", "", "Actor JWT issuer URL, https://<host>; must match ate-api-server's --actor-jwt-issuer (required).")
 	poolFile     = pflag.String("actor-id-jwt-pool", "", "File holding the actor JWT authority pool that ate-api-server signs with (required).")
 	listenAddr   = pflag.String("listen-address", ":8443", "HTTPS listen address.")
 	serverBundle = pflag.String("server-cred-bundle", "", "Credential bundle (PEM key and chain) presented for serving TLS (required).")
