@@ -324,7 +324,7 @@ func testTemplate(opts ...func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate
 	tmpl := &ateapipb.ActorTemplate{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testTemplateName, Uid: testTemplateUID, Version: 1},
 		Containers: []*ateapipb.Container{
-			{Name: "main", Image: "img", WakeupProbe: &ateapipb.ContainerWakeupProbe{}},
+			{Name: "main", Image: "img", WakeupProbe: &ateapipb.WakeupProbe{}},
 		},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
@@ -379,7 +379,7 @@ func newTestTemplateReconciler(persistence templateReconcilerStore, control gold
 }
 
 func TestGoldenSnapshotWarmupFor(t *testing.T) {
-	probe := &ateapipb.ContainerWakeupProbe{}
+	probe := &ateapipb.WakeupProbe{}
 	tests := []struct {
 		name       string
 		containers []*ateapipb.Container

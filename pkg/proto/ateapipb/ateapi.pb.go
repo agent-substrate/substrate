@@ -3185,7 +3185,7 @@ type Container struct {
 	// as soon as the container has started, which may be before it listens.
 	//
 	// +k8s:optional
-	WakeupProbe *ContainerWakeupProbe `protobuf:"bytes,6,opt,name=wakeup_probe,json=wakeupProbe,proto3" json:"wakeup_probe,omitempty"`
+	WakeupProbe *WakeupProbe `protobuf:"bytes,6,opt,name=wakeup_probe,json=wakeupProbe,proto3" json:"wakeup_probe,omitempty"`
 	// Keyed by mount_path: each path hosts exactly one mount, while a volume
 	// may be mounted at multiple paths.
 	//
@@ -3274,7 +3274,7 @@ func (x *Container) GetEnv() []*EnvVar {
 	return nil
 }
 
-func (x *Container) GetWakeupProbe() *ContainerWakeupProbe {
+func (x *Container) GetWakeupProbe() *WakeupProbe {
 	if x != nil {
 		return x.WakeupProbe
 	}
@@ -3484,11 +3484,11 @@ func (x *EnvVar) GetValue() string {
 	return ""
 }
 
-// ContainerWakeupProbe tells the platform when a container is serving. It is
+// WakeupProbe tells the platform when a container is serving. It is
 // polled on every wakeup, whether the actor cold-boots or is restored from a
 // snapshot, and not again while the actor stays running. A probe that does
 // not answer 200 within timeout_seconds crashes the actor.
-type ContainerWakeupProbe struct {
+type WakeupProbe struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// http_get is the request to poll.
 	//
@@ -3505,20 +3505,20 @@ type ContainerWakeupProbe struct {
 	sizeCache      protoimpl.SizeCache
 }
 
-func (x *ContainerWakeupProbe) Reset() {
-	*x = ContainerWakeupProbe{}
+func (x *WakeupProbe) Reset() {
+	*x = WakeupProbe{}
 	mi := &file_ateapi_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ContainerWakeupProbe) String() string {
+func (x *WakeupProbe) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ContainerWakeupProbe) ProtoMessage() {}
+func (*WakeupProbe) ProtoMessage() {}
 
-func (x *ContainerWakeupProbe) ProtoReflect() protoreflect.Message {
+func (x *WakeupProbe) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3530,19 +3530,19 @@ func (x *ContainerWakeupProbe) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ContainerWakeupProbe.ProtoReflect.Descriptor instead.
-func (*ContainerWakeupProbe) Descriptor() ([]byte, []int) {
+// Deprecated: Use WakeupProbe.ProtoReflect.Descriptor instead.
+func (*WakeupProbe) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{36}
 }
 
-func (x *ContainerWakeupProbe) GetHttpGet() *HttpGetAction {
+func (x *WakeupProbe) GetHttpGet() *HttpGetAction {
 	if x != nil {
 		return x.HttpGet
 	}
 	return nil
 }
 
-func (x *ContainerWakeupProbe) GetTimeoutSeconds() int32 {
+func (x *WakeupProbe) GetTimeoutSeconds() int32 {
 	if x != nil {
 		return x.TimeoutSeconds
 	}
@@ -8766,14 +8766,14 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x12preferred_fidelity\x18\x02 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\x11preferredFidelity\x12R\n" +
 	"\x16golden_snapshot_config\x18\x05 \x01(\v2\x1c.ateapi.GoldenSnapshotConfigR\x14goldenSnapshotConfig\"F\n" +
 	"\x14GoldenSnapshotConfig\x12.\n" +
-	"\x04mode\x18\x01 \x01(\x0e2\x1a.ateapi.GoldenSnapshotModeR\x04mode\"\xf5\x02\n" +
+	"\x04mode\x18\x01 \x01(\x0e2\x1a.ateapi.GoldenSnapshotModeR\x04mode\"\xec\x02\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x18\n" +
 	"\acommand\x18\x03 \x03(\tR\acommand\x12\x12\n" +
 	"\x04args\x18\x04 \x03(\tR\x04args\x12 \n" +
-	"\x03env\x18\x05 \x03(\v2\x0e.ateapi.EnvVarR\x03env\x12?\n" +
-	"\fwakeup_probe\x18\x06 \x01(\v2\x1c.ateapi.ContainerWakeupProbeR\vwakeupProbe\x128\n" +
+	"\x03env\x18\x05 \x03(\v2\x0e.ateapi.EnvVarR\x03env\x126\n" +
+	"\fwakeup_probe\x18\x06 \x01(\v2\x13.ateapi.WakeupProbeR\vwakeupProbe\x128\n" +
 	"\rvolume_mounts\x18\a \x03(\v2\x13.ateapi.VolumeMountR\fvolumeMounts\x12B\n" +
 	"\x10security_context\x18\b \x01(\v2\x17.ateapi.SecurityContextR\x0fsecurityContext\x12/\n" +
 	"\tresources\x18\t \x01(\v2\x11.ateapi.ResourcesR\tresources\"K\n" +
@@ -8784,8 +8784,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x04drop\x18\x02 \x03(\tR\x04drop\"7\n" +
 	"\x06EnvVar\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
-	"\x05value\x18\x02 \x01(\tB\x03\x80\x01\x01R\x05value\"q\n" +
-	"\x14ContainerWakeupProbe\x120\n" +
+	"\x05value\x18\x02 \x01(\tB\x03\x80\x01\x01R\x05value\"h\n" +
+	"\vWakeupProbe\x120\n" +
 	"\bhttp_get\x18\x01 \x01(\v2\x15.ateapi.HttpGetActionR\ahttpGet\x12'\n" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
 	"\rHttpGetAction\x12\x12\n" +
@@ -9206,7 +9206,7 @@ var file_ateapi_proto_goTypes = []any{
 	(*SecurityContext)(nil),                    // 43: ateapi.SecurityContext
 	(*Capabilities)(nil),                       // 44: ateapi.Capabilities
 	(*EnvVar)(nil),                             // 45: ateapi.EnvVar
-	(*ContainerWakeupProbe)(nil),               // 46: ateapi.ContainerWakeupProbe
+	(*WakeupProbe)(nil),                        // 46: ateapi.WakeupProbe
 	(*HttpGetAction)(nil),                      // 47: ateapi.HttpGetAction
 	(*Volume)(nil),                             // 48: ateapi.Volume
 	(*ImageVolumeSource)(nil),                  // 49: ateapi.ImageVolumeSource
@@ -9353,12 +9353,12 @@ var file_ateapi_proto_depIdxs = []int32{
 	41,  // 55: ateapi.SnapshotConfig.golden_snapshot_config:type_name -> ateapi.GoldenSnapshotConfig
 	6,   // 56: ateapi.GoldenSnapshotConfig.mode:type_name -> ateapi.GoldenSnapshotMode
 	45,  // 57: ateapi.Container.env:type_name -> ateapi.EnvVar
-	46,  // 58: ateapi.Container.wakeup_probe:type_name -> ateapi.ContainerWakeupProbe
+	46,  // 58: ateapi.Container.wakeup_probe:type_name -> ateapi.WakeupProbe
 	57,  // 59: ateapi.Container.volume_mounts:type_name -> ateapi.VolumeMount
 	43,  // 60: ateapi.Container.security_context:type_name -> ateapi.SecurityContext
 	35,  // 61: ateapi.Container.resources:type_name -> ateapi.Resources
 	44,  // 62: ateapi.SecurityContext.capabilities:type_name -> ateapi.Capabilities
-	47,  // 63: ateapi.ContainerWakeupProbe.http_get:type_name -> ateapi.HttpGetAction
+	47,  // 63: ateapi.WakeupProbe.http_get:type_name -> ateapi.HttpGetAction
 	50,  // 64: ateapi.Volume.durable_dir:type_name -> ateapi.DurableDirVolumeSource
 	51,  // 65: ateapi.Volume.external_volume_template:type_name -> ateapi.ExternalVolumeTemplate
 	52,  // 66: ateapi.Volume.system_info:type_name -> ateapi.SystemInfoVolumeSource

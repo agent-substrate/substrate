@@ -253,7 +253,7 @@ Each entry in `containers` describes one process to run in the actor's sandbox.
 | `command` | `[]string` | Optional. Entrypoint array. If unset, the image's `ENTRYPOINT` is used. If set, it replaces **both** the image's `ENTRYPOINT` and `CMD`. |
 | `args` | `[]string` | Optional. Arguments to the entrypoint. If unset, the image's `CMD` is used (unless `command` is set, which discards the image's `CMD`). If set, it replaces the image's `CMD`. |
 | `env` | `[]EnvVar` | Optional. Literal `value` entries. |
-| `wakeupProbe` | `ContainerWakeupProbe` | Optional. HTTP wakeup probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
+| `wakeupProbe` | `WakeupProbe` | Optional. HTTP wakeup probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `volumeMounts` | `[]VolumeMount` | Optional. Mounts a `volumes` entry (e.g. `durableDir`) into this container. |
 | `securityContext` | `SecurityContext` | Optional. Security settings for the container process — see [Container Capabilities](#container-capabilities-securitycontextcapabilities). |
 | `resources` | `ContainerResources` | Optional. Compute limits for this container, enforced inside the actor's sandbox. Only `limits` is supported, and only `cpu` and `memory`. See [Per-container limits](#per-container-limits). |

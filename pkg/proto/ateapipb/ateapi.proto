@@ -1201,7 +1201,7 @@ message Container {
   // as soon as the container has started, which may be before it listens.
   //
   // +k8s:optional
-  ContainerWakeupProbe wakeup_probe = 6;
+  WakeupProbe wakeup_probe = 6;
 
   // Keyed by mount_path: each path hosts exactly one mount, while a volume
   // may be mounted at multiple paths.
@@ -1276,11 +1276,11 @@ message EnvVar {
   string value = 2 [ debug_redact = true ];
 }
 
-// ContainerWakeupProbe tells the platform when a container is serving. It is
+// WakeupProbe tells the platform when a container is serving. It is
 // polled on every wakeup, whether the actor cold-boots or is restored from a
 // snapshot, and not again while the actor stays running. A probe that does
 // not answer 200 within timeout_seconds crashes the actor.
-message ContainerWakeupProbe {
+message WakeupProbe {
   // http_get is the request to poll.
   //
   // +k8s:required
