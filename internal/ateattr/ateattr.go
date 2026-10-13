@@ -27,7 +27,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -373,12 +372,10 @@ const SandboxClassUnknown = "unknown"
 // Empty reports as unknown rather than the gvisor default, so a manifest
 // problem stays visible.
 func NormalizeSandboxClass(class string) string {
-	switch atev1alpha1.SandboxClass(class) {
-	case atev1alpha1.SandboxClassGvisor, atev1alpha1.SandboxClassMicroVM:
+	if resources.IsSandboxClass(class) {
 		return class
-	default:
-		return SandboxClassUnknown
 	}
+	return SandboxClassUnknown
 }
 
 // SandboxClassAttribute sets ate.sandbox.class. No source of the class is

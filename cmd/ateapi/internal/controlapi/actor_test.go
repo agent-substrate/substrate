@@ -254,8 +254,8 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 	// different sandbox class.
 	dataVolume := &ateapipb.Volume{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}
 	scratchVolume := &ateapipb.Volume{Name: "scratch", DurableDir: &ateapipb.DurableDirVolumeSource{}}
-	gvisorConfig := &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"}
-	microvmConfig := &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM, ConfigName: "microvm"}
+	gvisorConfig := &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"}
+	microvmConfig := &ateapipb.SandboxConfig{SandboxClass: "microvm", ConfigName: "microvm"}
 	templates := map[string]struct {
 		mountPath     string
 		volumes       []*ateapipb.Volume
@@ -416,7 +416,7 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 		if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
 			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: location},
-			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
 		}); err != nil {
 			t.Fatalf("creating template %s: %v", name, err)
 		}

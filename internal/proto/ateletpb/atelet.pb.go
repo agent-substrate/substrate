@@ -1787,9 +1787,6 @@ func (x *ArchAssets) GetFiles() map[string]*AssetFile {
 // the release tarball; legacy "runsc", a bare binary, is still accepted).
 type SandboxAssets struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// TODO: send this as an enum, like ateapi's and ateom's SandboxClass, so
-	// the tags can bound it and the custom validation goes away.
-	//
 	// +k8s:required
 	// +k8s:maxLength=63 # guardrail; the class names are a few characters
 	// +k8s:customValidation # gvisor or microvm

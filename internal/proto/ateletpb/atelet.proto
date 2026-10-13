@@ -491,9 +491,6 @@ message ArchAssets {
 // atelet's backend code interprets the asset names (gVisor expects "gvisor",
 // the release tarball; legacy "runsc", a bare binary, is still accepted).
 message SandboxAssets {
-  // TODO: send this as an enum, like ateapi's and ateom's SandboxClass, so
-  // the tags can bound it and the custom validation goes away.
-  //
   // +k8s:required
   // +k8s:maxLength=63 # guardrail; the class names are a few characters
   // +k8s:customValidation # gvisor or microvm

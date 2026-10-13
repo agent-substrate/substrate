@@ -344,7 +344,7 @@ var assignmentBackoff = wait.Backoff{
 func (w *ActorWorkflow) recordExhaustedAssignment(ctx context.Context, elapsed time.Duration, actorTemplate *ateapipb.ActorTemplate, err error) {
 	class := ""
 	if actorTemplate != nil {
-		class = sandboxClassString(actorTemplate.GetSandboxConfig().GetSandboxClass())
+		class = actorTemplate.GetSandboxConfig().GetSandboxClass()
 	}
 	w.instruments.recordSchedulerAssignment(ctx, elapsed, ateattr.SchedulerOutcomeError, "", "", class, err)
 }
@@ -482,7 +482,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	pool := ""
 	class := ""
 	if actorTemplate != nil {
-		class = sandboxClassString(actorTemplate.GetSandboxConfig().GetSandboxClass())
+		class = actorTemplate.GetSandboxConfig().GetSandboxClass()
 	}
 	defer func() {
 		if schedulerRecordable(err) {
@@ -654,7 +654,7 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 		requiredNodes = []string{node}
 	}
 	c := scheduling.Constraints{
-		SandboxClass:    sandboxClassString(tmpl.GetSandboxConfig().GetSandboxClass()),
+		SandboxClass:    tmpl.GetSandboxConfig().GetSandboxClass(),
 		RequiredRuntime: requiredSnapshotRuntime(actor, tmpl),
 		ActorSelector:   labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
 		RequiredNodes:   requiredNodes,

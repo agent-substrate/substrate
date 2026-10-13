@@ -1119,15 +1119,6 @@ message ObjectRef {
   string name = 2;
 }
 
-// SandboxClass selects the sandbox runtime family. Snapshots are not portable
-// across classes.
-enum SandboxClass {
-  SANDBOX_CLASS_UNSPECIFIED = 0;
-  SANDBOX_CLASS_GVISOR = 1;
-  SANDBOX_CLASS_MICROVM = 2;
-  // Keep this in sync with SandboxConfig.sandbox_class's maximum.
-}
-
 message ActorTemplate {
   option (resource) = {
     scope : SCOPE_ATESPACE
@@ -1229,12 +1220,13 @@ message ActorTemplateStatus {
 
 // SandboxConfig selects the sandbox runtime for an ActorTemplate.
 message SandboxConfig {
-  // sandbox_class selects the sandbox runtime family.
+  // sandbox_class selects the sandbox runtime family: "gvisor" or "microvm".
+  // Snapshots are not portable across classes.
   //
   // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SandboxClass enum
-  SandboxClass sandbox_class = 1;
+  // +k8s:maxLength=63
+  // +k8s:customValidation # must be "gvisor" or "microvm"
+  string sandbox_class = 1;
 
   // config_name names the cluster-scoped SandboxConfig Kubernetes object
   // supplying the sandbox binaries. Required; must match sandbox_class.
@@ -1262,7 +1254,7 @@ message SnapshotConfig {
   // captured or is too expensive to capture at the time, for example memory
   // under host pressure. A process resumed in place on its worker keeps its
   // memory regardless of this setting. ROOTFS requires
-  // sandbox_config.sandbox_class SANDBOX_CLASS_MICROVM. Defaults to MEMORY
+  // sandbox_config.sandbox_class "microvm". Defaults to MEMORY
   // when unset.
   //
   // +k8s:required

@@ -246,7 +246,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 		},
 	}
 	template := &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
 	}
 	inst.recordLifecycleOp(context.Background(), ateattr.OperationResume, time.Now(), nil,
 		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest, ateattr.SnapshotFidelityVolumes)...)

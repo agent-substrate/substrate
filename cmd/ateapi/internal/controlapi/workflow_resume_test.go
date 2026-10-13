@@ -161,7 +161,7 @@ func TestAssignWorkerAttempt_MissingSelectedWorkerIsRetried(t *testing.T) {
 	actor, wc := seedAssignFixture(t, ctx, persistence)
 	st := &bindErrorStore{Interface: persistence, err: store.ErrNotFound}
 	w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
+	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
 
 	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if !errors.Is(err, store.ErrVersionConflict) {
@@ -182,7 +182,7 @@ func TestEnsureWorkerAssigned_ConflictExhaustionIsRetryable(t *testing.T) {
 	actor, wc := seedAssignFixture(t, ctx, persistence)
 	st := &bindErrorStore{Interface: persistence, err: store.ErrVersionConflict}
 	w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
+	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
 
 	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if !errors.Is(err, store.ErrVersionConflict) {
@@ -225,7 +225,7 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: "actor-uid"},
 	}
 	tmpl := &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
 	}
 	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, actor, tmpl)
 	if apierror.Code(err) != codes.ResourceExhausted {
@@ -293,7 +293,7 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
 	}
 	_, worker, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if err != nil {
@@ -370,7 +370,7 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
 	}
 	_, worker, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if err != nil {
@@ -511,7 +511,7 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 
 			w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
 			tmpl := &ateapipb.ActorTemplate{
-				SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+				SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
 			}
 			refreshed, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 
@@ -883,7 +883,7 @@ func TestValidateAssignedWorker(t *testing.T) {
 					},
 				},
 			}
-			tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
+			tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
 			_, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, resumingActor, tmpl)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
@@ -1550,7 +1550,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 					StorageLocation: testStorageLocation,
 				},
 				SandboxConfig: &ateapipb.SandboxConfig{
-					SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+					SandboxClass: "gvisor",
 					ConfigName:   configName,
 				},
 			}
@@ -1913,7 +1913,7 @@ func newContendedWorkflow(t *testing.T, sched *filledUpScheduler) (*ActorWorkflo
 
 func gvisorTemplate() *ateapipb.ActorTemplate {
 	return &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
 	}
 }
 

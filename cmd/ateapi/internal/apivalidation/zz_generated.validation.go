@@ -7298,7 +7298,7 @@ func Validate_SandboxConfig(
 	{ // field ateapipb.SandboxConfig.SandboxClass
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateapipb.SandboxClass,
+			obj, oldObj *string,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -7315,16 +7315,17 @@ func Validate_SandboxConfig(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 2); len(e) != 0 {
+			// custom validation
+			if e := ValidateCustom_SandboxConfig_SandboxClass(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
-			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 63); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.SandboxConfig) *ateapipb.SandboxClass {
+			func(oldObj *ateapipb.SandboxConfig) *string {
 				return &oldObj.SandboxClass
 			})
 		errs = append(errs, fn(fldPath.Child("sandbox_class"), &obj.SandboxClass, oldVal, oldObj != nil)...)

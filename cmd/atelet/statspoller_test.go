@@ -61,7 +61,7 @@ func (f *fakeStatsAteom) GetActiveWorkloadStats(ctx context.Context, req *ateomp
 }
 
 // executingResponse builds the sample an executing ateom would echo.
-func executingResponse(templateNS, templateName string, class ateompb.SandboxClass, source ateompb.StatsSource, current, workingSet uint64) *ateompb.GetActiveWorkloadStatsResponse {
+func executingResponse(templateNS, templateName string, class string, source ateompb.StatsSource, current, workingSet uint64) *ateompb.GetActiveWorkloadStatsResponse {
 	return &ateompb.GetActiveWorkloadStatsResponse{
 		Samples: []*ateompb.WorkloadStatsSample{{
 			ActorTemplateAtespace: templateNS,
@@ -80,7 +80,7 @@ func measuredSample(actorUID, templateNS, templateName string, current, workingS
 		ActorUid:              actorUID,
 		ActorTemplateAtespace: templateNS,
 		ActorTemplateName:     templateName,
-		SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
+		SandboxClass:          "gvisor",
 		Source:                ateompb.StatsSource_STATS_SOURCE_CGROUP,
 		MemoryCurrentBytes:    current,
 		MemoryWorkingSetBytes: workingSet,
@@ -95,7 +95,7 @@ func pendingSample(actorUID, templateNS, templateName string) *ateompb.WorkloadS
 		ActorUid:              actorUID,
 		ActorTemplateAtespace: templateNS,
 		ActorTemplateName:     templateName,
-		SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
+		SandboxClass:          "gvisor",
 	}
 }
 
@@ -128,7 +128,7 @@ func pendingResponse(actorUID string) *ateompb.GetActiveWorkloadStatsResponse {
 			ActorUid:              actorUID,
 			ActorTemplateAtespace: "ns-a",
 			ActorTemplateName:     "tmpl-a",
-			SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			SandboxClass:          "gvisor",
 		}},
 	}
 }
@@ -193,9 +193,9 @@ func TestStatsPollerCollectAggregates(t *testing.T) {
 	// worker, one mid-boot: the same-template pair sums, the others contribute
 	// nothing.
 	fakes := map[string]*fakeStatsAteom{
-		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
-		"uid-2": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 500, 300)},
-		"uid-3": {resp: executingResponse("ns-b", "tmpl-b", ateompb.SandboxClass_SANDBOX_CLASS_MICROVM, ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT, 42, 40)},
+		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
+		"uid-2": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 500, 300)},
+		"uid-3": {resp: executingResponse("ns-b", "tmpl-b", "microvm", ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT, 42, 40)},
 		"uid-4": {resp: availableResponse()},
 		"uid-5": {resp: pendingResponse("uid-5-actor")},
 	}
@@ -231,7 +231,7 @@ func TestStatsPollerCollectAggregates(t *testing.T) {
 // The healthy ateom's sample must still be aggregated.
 func TestStatsPollerCollectSkipsFailures(t *testing.T) {
 	fakes := map[string]*fakeStatsAteom{
-		"uid-healthy": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)},
+		"uid-healthy": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)},
 		"uid-stale":   nil, // directory with no reachable socket: dial fails
 		"uid-broken":  {err: errors.New("rpc error: connection refused")},
 	}
@@ -343,7 +343,7 @@ func cpuResponse(actorUID string, cpuUsec uint64) *ateompb.GetActiveWorkloadStat
 			ActorUid:              actorUID,
 			ActorTemplateAtespace: "ns-a",
 			ActorTemplateName:     "tmpl-a",
-			SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			SandboxClass:          "gvisor",
 			Source:                ateompb.StatsSource_STATS_SOURCE_CGROUP,
 			CpuUsageUsec:          cpuUsec,
 		}},
@@ -396,8 +396,8 @@ func TestStatsPollerCPUDeltas(t *testing.T) {
 // than vanishing, and the two never merge.
 func TestStatsPollerWorkerPoolLabels(t *testing.T) {
 	fakes := map[string]*fakeStatsAteom{
-		"uid-pooled":   {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)},
-		"uid-unpooled": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
+		"uid-pooled":   {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)},
+		"uid-unpooled": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
 	}
 	p, _ := newPollerFixture(t, fakes)
 	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
@@ -425,8 +425,8 @@ func TestStatsPollerWorkerPoolLabels(t *testing.T) {
 func TestStatsPollerCollectSaturatesCorruptSamples(t *testing.T) {
 	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
 	fakes := map[string]*fakeStatsAteom{
-		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, math.MaxUint64, math.MaxUint64)},
-		"uid-2": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
+		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, math.MaxUint64, math.MaxUint64)},
+		"uid-2": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
 	}
 	p, _ := newPollerFixture(t, fakes)
 
@@ -495,7 +495,7 @@ func TestNewWorkerPoolFetcher(t *testing.T) {
 // that feeds the monotonic counter and can never be re-attributed -- on the
 // pooled label set.
 func TestStatsPollerPoolCacheSurvivesListFlap(t *testing.T) {
-	resp := executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp := executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
 	resp.GetSamples()[0].ActorUid = "uid-a"
 	resp.GetSamples()[0].CpuUsageUsec = 1000
 	fake := &fakeStatsAteom{resp: resp}
@@ -519,7 +519,7 @@ func TestStatsPollerPoolCacheSurvivesListFlap(t *testing.T) {
 	// Sweep 2: the list fails AND the actor consumed CPU. Both the sample and
 	// its delta must still group under the pool.
 	listOK = false
-	resp2 := executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp2 := executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
 	resp2.GetSamples()[0].ActorUid = "uid-a"
 	resp2.GetSamples()[0].CpuUsageUsec = 1600
 	fake.resp = resp2
@@ -564,7 +564,7 @@ func TestStatsPollerPoolCachePrunes(t *testing.T) {
 // labels (the residual, documented case) and heals on the next good list.
 func TestStatsPollerPoolCacheMissDuringOutage(t *testing.T) {
 	fakes := map[string]*fakeStatsAteom{
-		"uid-new": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
+		"uid-new": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
 	}
 	p, _ := newPollerFixture(t, fakes)
 	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef { return nil }
@@ -583,7 +583,7 @@ func TestStatsPollerPoolCacheMissDuringOutage(t *testing.T) {
 // all-nil flap test above -- a whole-map fallback would pass that test and
 // fail this one.
 func TestStatsPollerPoolCachePartialListFallsBack(t *testing.T) {
-	resp := executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp := executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
 	resp.GetSamples()[0].ActorUid = "uid-a"
 	resp.GetSamples()[0].CpuUsageUsec = 1000
 	fake := &fakeStatsAteom{resp: resp}
@@ -606,7 +606,7 @@ func TestStatsPollerPoolCachePartialListFallsBack(t *testing.T) {
 	}
 
 	full = false
-	resp2 := executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp2 := executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
 	resp2.GetSamples()[0].ActorUid = "uid-a"
 	resp2.GetSamples()[0].CpuUsageUsec = 1250
 	fake.resp = resp2

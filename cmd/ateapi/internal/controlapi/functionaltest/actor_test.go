@@ -201,7 +201,7 @@ func TestCreateActor_SubstrateTemplateRef(t *testing.T) {
 			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "sub-tmpl"},
 			Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
 		},
 	}); err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
@@ -324,7 +324,7 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl1"},
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"},
 			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				SandboxClass: "gvisor",
 				ConfigName:   "gvisor-default",
 			},
 			Containers: []*ateapipb.Container{{
@@ -771,7 +771,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 						}},
 						Volumes:        tmpl.volumes,
 						SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-						SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: tmpl.configName},
+						SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: tmpl.configName},
 					},
 				}); err != nil {
 					t.Fatalf("CreateActorTemplate %s failed: %v", name, err)
@@ -3102,7 +3102,7 @@ func createDataFidelityTemplate(t *testing.T, tc *testContext, ns string) *ateap
 				PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				SandboxClass: "gvisor",
 				ConfigName:   "gvisor-default",
 			},
 			Containers: []*ateapipb.Container{{
