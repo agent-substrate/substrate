@@ -726,9 +726,8 @@ func TestValidateReportActorSnapshotStateRequest(t *testing.T) {
 		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State.LatestLocal.Object.SnapshotUri = "" }),
 		want: field.ErrorList{field.Required(local.Child("object", "snapshot_uri"), "")},
 	}, {
-		name: "missing local_commit_time",
-		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State.LatestLocal.LocalCommitTime = nil }),
-		want: field.ErrorList{field.Required(local.Child("local_commit_time"), "")},
+		name: "valid without local_commit_time",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State.LatestDurable.LocalCommitTime = nil }),
 	}, {
 		name: "uploading is validated",
 		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State.Uploading.Uuid = "" }),

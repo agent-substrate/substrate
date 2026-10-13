@@ -2610,8 +2610,10 @@ message SnapshotReport {
   ObjectSnapshot object = 4;
 
   // When the checkpoint that produced the snapshot committed on the node.
+  // Unset when this atelet did not take it, as for a snapshot it restored
+  // from object storage.
   //
-  // +k8s:required
+  // +k8s:optional
   google.protobuf.Timestamp local_commit_time = 5;
 
   // When the snapshot's manifest was written to object storage. Set only in

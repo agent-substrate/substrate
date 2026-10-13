@@ -8285,8 +8285,10 @@ type SnapshotReport struct {
 	// +k8s:required
 	Object *ObjectSnapshot `protobuf:"bytes,4,opt,name=object,proto3" json:"object,omitempty"`
 	// When the checkpoint that produced the snapshot committed on the node.
+	// Unset when this atelet did not take it, as for a snapshot it restored
+	// from object storage.
 	//
-	// +k8s:required
+	// +k8s:optional
 	LocalCommitTime *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=local_commit_time,json=localCommitTime,proto3" json:"local_commit_time,omitempty"`
 	// When the snapshot's manifest was written to object storage. Set only in
 	// latest_durable, and only when this atelet wrote it.
