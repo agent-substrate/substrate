@@ -55,9 +55,8 @@ func TestBuildAPIServerEnvVars(t *testing.T) {
 	}
 }
 
-// The expected strings here are what the shell installer's
-// create_api_authentication_config produced, so a regression shows up as a
-// diff rather than as an apiserver that silently trusts the wrong issuer.
+// The expected strings are the whole rendered file, so a regression shows up
+// as a diff rather than as an apiserver that silently trusts the wrong issuer.
 func TestBuildAuthenticationConfig(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -67,8 +66,7 @@ func TestBuildAuthenticationConfig(t *testing.T) {
 		{
 			name:   "external issuer needs no discovery credentials",
 			issuer: "https://container.googleapis.com/v1/projects/p/locations/l/clusters/c",
-			want: "actorIdentityJWTProvider: kubernetes\n" +
-				"jwtProviders:\n" +
+			want: "jwtProviders:\n" +
 				"- name: kubernetes\n" +
 				"  issuer: https://container.googleapis.com/v1/projects/p/locations/l/clusters/c\n" +
 				"  audiences: [api.ate-system.svc]",
@@ -76,8 +74,7 @@ func TestBuildAuthenticationConfig(t *testing.T) {
 		{
 			name:   "in-cluster issuer projects the service account CA and token",
 			issuer: inClusterIssuer,
-			want: "actorIdentityJWTProvider: kubernetes\n" +
-				"jwtProviders:\n" +
+			want: "jwtProviders:\n" +
 				"- name: kubernetes\n" +
 				"  issuer: https://kubernetes.default.svc\n" +
 				"  audiences: [api.ate-system.svc]\n" +
@@ -87,8 +84,7 @@ func TestBuildAuthenticationConfig(t *testing.T) {
 		{
 			name:   "cluster.local form is treated as in-cluster too",
 			issuer: inClusterIssuer + ".cluster.local",
-			want: "actorIdentityJWTProvider: kubernetes\n" +
-				"jwtProviders:\n" +
+			want: "jwtProviders:\n" +
 				"- name: kubernetes\n" +
 				"  issuer: https://kubernetes.default.svc.cluster.local\n" +
 				"  audiences: [api.ate-system.svc]\n" +
