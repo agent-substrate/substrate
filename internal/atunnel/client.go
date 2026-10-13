@@ -201,6 +201,7 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 		}
 
 		// First check if there is an existing H/2 connection with available stream capacity.
+		// TODO(yanavlasov): do not use existing H/2 connections if their keys have been rotated.
 		c.mu.Lock()
 		if c.closed {
 			c.mu.Unlock()
