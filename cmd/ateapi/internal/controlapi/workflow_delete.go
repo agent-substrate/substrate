@@ -179,12 +179,10 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			if vol.GetStorageVolumeId() != "" {
 				workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 					Name: vol.GetName(),
-					Source: &ateletpb.Volume_External{
-						External: &ateletpb.ExternalVolumeSource{
-							StorageVolumeId: vol.GetStorageVolumeId(),
-							VolumeType:      vol.GetVolumeType(),
-							VolumeContext:   vol.GetVolumeContext(),
-						},
+					External: &ateletpb.ExternalVolumeSource{
+						StorageVolumeId: vol.GetStorageVolumeId(),
+						VolumeType:      vol.GetVolumeType(),
+						VolumeContext:   vol.GetVolumeContext(),
 					},
 				})
 			}
@@ -375,7 +373,7 @@ func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, act
 	ctx, done := stepSpan(ctx, "ReleaseExternalSnapshots")
 	defer func() { err = done(err) }()
 
-	if w.snapshotPlugin == nil {
+	if w.objectStorePlugin == nil {
 		markSkipped(ctx, "no object store configured")
 		return nil
 	}

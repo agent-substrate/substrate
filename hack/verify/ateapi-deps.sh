@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ate-api-server moves snapshots through the snapshot plugin sidecar, so it
+# ate-api-server moves snapshots through the object-store plugin sidecar, so it
 # must not link the object-store SDKs.
 
 set -o errexit -o nounset -o pipefail

@@ -21,8 +21,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
@@ -411,4 +413,92 @@ func TestAnnotateAPIServerEnvHash(t *testing.T) {
 			t.Errorf("%s = %q, want %q", envHashAnnotation, got, want)
 		}
 	})
+}
+
+// CreateAPIServerEnvVars only writes the environment. The deploy that runs
+// it then applies the Deployment with the new digest, so ate-api-server rolls
+// once, onto the new image. Only create api-server-env-vars, which applies no
+// Deployment, patches the running one.
+func TestOnlyAStandaloneEnvUpdateRollsTheAPIServer(t *testing.T) {
+	newEnv := func(t *testing.T) *Env {
+		return &Env{Cfg: &config.Config{PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg"},
+			Kube: fakeKube(t,
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}},
+				apiServerDeployment(SecretAPIEnvVars),
+			)}
+	}
+	stamped := func(t *testing.T, e *Env) bool {
+		dep, err := e.Kube.GetDeployment(t.Context(), NamespaceAteSystem, "ate-api-server")
+		if err != nil {
+			t.Fatalf("GetDeployment() error = %v", err)
+		}
+		_, ok := dep.Spec.Template.Annotations[envHashAnnotation]
+		return ok
+	}
+
+	t.Run("deploy", func(t *testing.T) {
+		e := newEnv(t)
+		if err := e.CreateAPIServerEnvVars(t.Context()); err != nil {
+			t.Fatalf("CreateAPIServerEnvVars() error = %v", err)
+		}
+		if stamped(t, e) {
+			t.Errorf("CreateAPIServerEnvVars() patched the running Deployment; the deploy's apply should carry the digest")
+		}
+	})
+	t.Run("standalone", func(t *testing.T) {
+		e := newEnv(t)
+		if err := e.UpdateAPIServerEnvVars(t.Context()); err != nil {
+			t.Fatalf("UpdateAPIServerEnvVars() error = %v", err)
+		}
+		if !stamped(t, e) {
+			t.Errorf("UpdateAPIServerEnvVars() left the running Deployment unstamped, so it would not roll")
+		}
+	})
+}
+
+// The applied Deployment carries the digest, so one apply rolls a new image
+// and a new environment together, and a fresh install starts out stamped. A
+// manifest without it fails instead of applying unstamped.
+func TestStampAPIServerEnvHash(t *testing.T) {
+	objs, err := kube.DecodeManifestBytes([]byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-api-server
+  namespace: ate-system
+spec:
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-controller
+  namespace: ate-system
+spec:
+  template:
+    metadata: {}
+`))
+	if err != nil {
+		t.Fatalf("DecodeManifestBytes() error = %v", err)
+	}
+	if err := stampAPIServerEnvHash(objs, "digest"); err != nil {
+		t.Fatalf("stampAPIServerEnvHash() error = %v", err)
+	}
+	annotations := func(obj *unstructured.Unstructured) map[string]string {
+		a, _, _ := unstructured.NestedStringMap(obj.Object, "spec", "template", "metadata", "annotations")
+		return a
+	}
+	if got := annotations(objs[0]); got[envHashAnnotation] != "digest" || got["prometheus.io/scrape"] != "true" {
+		t.Errorf("ate-api-server pod template annotations = %v, want the digest added to the existing ones", got)
+	}
+	if got := annotations(objs[1]); got[envHashAnnotation] != "" {
+		t.Errorf("ate-controller pod template annotations = %v, want no digest", got)
+	}
+	if err := stampAPIServerEnvHash(objs[1:], "digest"); err == nil {
+		t.Errorf("stampAPIServerEnvHash() without ate-api-server error = nil, want an error")
+	}
 }

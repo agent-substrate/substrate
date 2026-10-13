@@ -52,14 +52,14 @@ func sampleEffects() *ateapipb.HttpRuleEffects {
 // the authorization header, which only the MITM leg can honor.
 func credentialInjectionPolicySample(pattern string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Https: &ateapipb.HTTPSRule{Hostnames: []string{pattern}, Effects: sampleEffects()},
+		Https: &ateapipb.HttpsRule{Hostnames: []string{pattern}, Effects: sampleEffects()},
 	}}}
 }
 
 // cleartextInjectionPolicy is the same replacement on an http rule.
 func cleartextInjectionPolicy(pattern string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Http: &ateapipb.HTTPRule{Hostnames: []string{pattern}, Effects: sampleEffects()},
+		Http: &ateapipb.HttpRule{Hostnames: []string{pattern}, Effects: sampleEffects()},
 	}}}
 }
 

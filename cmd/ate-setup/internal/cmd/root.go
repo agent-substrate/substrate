@@ -112,6 +112,11 @@ is present (skipped for --kind, and by NO_DEV_ENV=1).`,
 		if err := cfg.EnsureClusterCredentials(cmd.Context()); err != nil {
 			return err
 		}
+		if cfg.Kind && isDeployCommand(cmd) {
+			if err := cfg.CheckKindCluster(cmd.Context()); err != nil {
+				return err
+			}
+		}
 		env, err = steps.NewEnv(cfg)
 		if err != nil {
 			return err
@@ -128,6 +133,15 @@ is present (skipped for --kind, and by NO_DEV_ENV=1).`,
 		recordRun(cmd, nil)
 		return nil
 	},
+}
+
+func isDeployCommand(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		if c == deployCmd {
+			return true
+		}
+	}
+	return false
 }
 
 // recordRun writes what this run used, so the next one can reproduce it by

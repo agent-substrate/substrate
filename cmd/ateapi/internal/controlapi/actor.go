@@ -429,8 +429,8 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	}
 	start := time.Now()
 	// Template dims only once the record resolved: the request names only the
-	// actor, so failures before the load carry none. No pool pair: delete only
-	// runs from SUSPENDED or CRASHED, which already released the worker.
+	// actor, so failures before the load carry none. No pool pair, even when
+	// any_state deletes an actor that still holds a worker.
 	defer func() {
 		var attrs []attribute.KeyValue
 		if deleted != nil {
@@ -542,7 +542,7 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorR
 	return &ateapipb.RevertActorResponse{Actor: actor}, nil
 }
 
-func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJWTRequest) (*ateapipb.MintActorJWTResponse, error) {
+func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJwtRequest) (*ateapipb.MintActorJwtResponse, error) {
 	if errs := apivalidation.ValidateMintActorJWTRequest(ctx, req); len(errs) > 0 {
 		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
@@ -591,7 +591,7 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 		return nil, fmt.Errorf("while signing actor JWT: %w", err)
 	}
 
-	return &ateapipb.MintActorJWTResponse{
+	return &ateapipb.MintActorJwtResponse{
 		ActorJwt:   actorJWT,
 		ExpireTime: timestamppb.New(expiresAt),
 	}, nil
