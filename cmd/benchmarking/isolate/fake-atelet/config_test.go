@@ -17,6 +17,8 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/spf13/pflag"
 )
 
 func TestResolveDelays(t *testing.T) {
@@ -30,5 +32,50 @@ func TestResolveDelays(t *testing.T) {
 	}
 	if _, err := resolveDelays(-time.Second, -1, -1, -1, -1, -1); err == nil {
 		t.Error("resolveDelays accepted a negative default")
+	}
+}
+
+// A benchmark tunes fake-atelet through FAKE_ATELET_* variables; a flag on
+// the command line wins over its variable, and a bad value is an error.
+func TestApplyTuningEnv(t *testing.T) {
+	newFlags := func() (*pflag.FlagSet, *time.Duration, *time.Duration, *bool) {
+		fs := pflag.NewFlagSet("fake-atelet", pflag.ContinueOnError)
+		d := fs.Duration("delay", 0, "")
+		run := fs.Duration("delay-run", -1, "")
+		for _, name := range []string{"delay-restore", "delay-checkpoint", "delay-promote-snapshot", "delay-terminate"} {
+			fs.Duration(name, -1, "")
+		}
+		mint := fs.Bool("mint-actor-certificate", true, "")
+		fs.String("port", "", "")
+		return fs, d, run, mint
+	}
+	env := func(vars map[string]string) func(string) (string, bool) {
+		return func(k string) (string, bool) { v, ok := vars[k]; return v, ok }
+	}
+
+	fs, d, run, mint := newFlags()
+	if err := fs.Parse([]string{"--delay-run=3s"}); err != nil {
+		t.Fatal(err)
+	}
+	err := applyTuningEnv(fs, env(map[string]string{
+		"FAKE_ATELET_DELAY":                  "500ms",
+		"FAKE_ATELET_DELAY_RUN":              "9s",
+		"FAKE_ATELET_MINT_ACTOR_CERTIFICATE": "false",
+		// Not a tuning flag, so not read.
+		"FAKE_ATELET_PORT": "1",
+	}))
+	if err != nil {
+		t.Fatalf("applyTuningEnv() = %v", err)
+	}
+	if *d != 500*time.Millisecond || *run != 3*time.Second || *mint {
+		t.Errorf("delay, delay-run, mint = %v, %v, %v, want 500ms from the environment, 3s from the flag, false", *d, *run, *mint)
+	}
+	if fs.Changed("port") {
+		t.Error("FAKE_ATELET_PORT set --port, which is not a tuning flag")
+	}
+
+	fs, _, _, _ = newFlags()
+	if err := applyTuningEnv(fs, env(map[string]string{"FAKE_ATELET_DELAY": "fast"})); err == nil {
+		t.Error("applyTuningEnv() accepted FAKE_ATELET_DELAY=fast")
 	}
 }

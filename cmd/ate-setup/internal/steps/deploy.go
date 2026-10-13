@@ -17,9 +17,13 @@ package steps
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -76,6 +80,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.CheckCSIDriver(opts.SetupCSI); err != nil {
 		return err
 	}
+	if err := e.requireNoWorkerPods(ctx); err != nil {
+		return err
+	}
 
 	// The namespace has to exist before RBAC or CRDs are applied.
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
@@ -130,6 +137,10 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err != nil {
 		return err
 	}
+	// Before the bundle, which starts ate-controller on the real data plane.
+	if err := e.removeFakeWorkersync(ctx); err != nil {
+		return err
+	}
 	if err := e.applyWithAPIServerEnvHash(ctx, manifests); err != nil {
 		return err
 	}
@@ -174,6 +185,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		if err := e.Kube.RolloutStatus(ctx, w.kind, e.Namespace(), w.name, e.Cfg.RolloutTimeout); err != nil {
 			return err
 		}
+	}
+	if err := e.waitFakeWorkersync(ctx); err != nil {
+		return err
 	}
 	return e.applyOtelEndpointOverride(ctx)
 }
@@ -310,6 +324,9 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 func (e *Env) DeployAteController(ctx context.Context) error {
 	log.Step("deploy_ate_controller")
 
+	if err := e.requireInstalledDataPlane(ctx, "deploy ate-controller"); err != nil {
+		return err
+	}
 	if err := e.DeployCRDs(ctx); err != nil {
 		return err
 	}
@@ -319,16 +336,122 @@ func (e *Env) DeployAteController(ctx context.Context) error {
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
-	if err := e.renderResolveApply(ctx, e.Cfg.Manifest("ate-controller.yaml")); err != nil {
+	manifest, err := e.renderDataPlane(e.Cfg.Manifest("ate-controller.yaml"))
+	if err != nil {
 		return err
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), "ate-controller", e.Cfg.RolloutTimeout)
+	if err := e.ResolveAndApplyBytes(ctx, manifest); err != nil {
+		return err
+	}
+	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), "ate-controller", e.Cfg.RolloutTimeout); err != nil {
+		return err
+	}
+	return e.waitFakeWorkersync(ctx)
+}
+
+// fakeWorkersyncDeployment is the Deployment fakeDataPlaneComponent adds.
+const fakeWorkersyncDeployment = "fake-workersync"
+
+// fakeWorkersyncPath is fakeDataPlaneComponent's fake-workersync manifest.
+func (e *Env) fakeWorkersyncPath() string {
+	return e.Cfg.Manifest("components", "fake-data-plane", "fake-workersync.yaml")
+}
+
+// requireInstalledDataPlane refuses a single-component redeploy that asks for
+// a data plane other than the installed one. atelet and ate-controller switch
+// together: fake-atelet beside a running ate-controller would have its fake
+// Workers deleted, and the real atelet beside a stopped one would have no
+// WorkerPool served. deploy ate-system switches both.
+func (e *Env) requireInstalledDataPlane(ctx context.Context, step string) error {
+	installed, err := e.Kube.DeploymentExists(ctx, e.Namespace(), fakeWorkersyncDeployment)
+	if err != nil {
+		return err
+	}
+	switch {
+	case e.Cfg.FakeDataPlane && !installed:
+		return fmt.Errorf("%s --fake-data-plane needs the fake data plane installed; install it with deploy ate-system --fake-data-plane", step)
+	case !e.Cfg.FakeDataPlane && installed:
+		return fmt.Errorf("the cluster has the fake data plane, which %s alone would half replace; pass --fake-data-plane, or switch back with deploy ate-system", step)
+	}
+	return nil
+}
+
+// workerPoolLabel is the label ate-controller puts on each WorkerPool's
+// worker pods, naming the pool.
+const workerPoolLabel = "ate.dev/worker-pool"
+
+// requireNoWorkerPods refuses to install the fake data plane while worker
+// pods exist, terminating ones included. Their WorkerPools own them, so
+// stopping ate-controller would leave them running, or leave the Workers of
+// those terminating unregistered, taking actors fake-workersync knows nothing
+// of, beside a fake atelet. A pod that has finished, as an evicted one has,
+// holds no Worker, so a pool scaled to zero does not stand in the way.
+func (e *Env) requireNoWorkerPods(ctx context.Context) error {
+	if !e.Cfg.FakeDataPlane {
+		return nil
+	}
+	list, err := e.Kube.Typed.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{LabelSelector: workerPoolLabel})
+	if err != nil {
+		return fmt.Errorf("while listing worker pods: %w", err)
+	}
+	names := make([]string, 0, len(list.Items))
+	for _, p := range list.Items {
+		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		names = append(names, p.Namespace+"/"+p.Labels[workerPoolLabel])
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	slices.Sort(names)
+	return fmt.Errorf("--fake-data-plane cannot replace the real data plane while worker pods exist; delete these WorkerPools and wait for their pods to go: %s", strings.Join(slices.Compact(names), ", "))
+}
+
+// stopFakeWorkersync deletes fake-workersync's Deployment, if any, and waits
+// until its pod is gone.
+func (e *Env) stopFakeWorkersync(ctx context.Context) error {
+	running, err := e.Kube.DeploymentExists(ctx, e.Namespace(), fakeWorkersyncDeployment)
+	if err != nil || !running {
+		return err
+	}
+	log.Step("remove_fake_workersync")
+	return e.Kube.DeleteDeploymentAndWait(ctx, e.Namespace(), fakeWorkersyncDeployment, e.Cfg.RolloutTimeout)
+}
+
+// removeFakeWorkersync removes what an earlier fake install left of
+// fake-workersync, on an install of the real data plane. It runs before the
+// bundle, so fake-workersync is gone before ate-controller starts;
+// ate-controller's startup sweep then deletes the fake Workers, which no pod
+// backs. The rest of its manifest is deleted on every real install, as
+// missing objects are skipped, so a run that failed partway leaves nothing
+// behind for long.
+func (e *Env) removeFakeWorkersync(ctx context.Context) error {
+	if e.Cfg.FakeDataPlane {
+		return nil
+	}
+	if err := e.stopFakeWorkersync(ctx); err != nil {
+		return err
+	}
+	return e.Kube.DeletePath(ctx, e.fakeWorkersyncPath())
+}
+
+// waitFakeWorkersync waits for fake-workersync's rollout under
+// --fake-data-plane, after every apply that carries atelet or ate-controller.
+func (e *Env) waitFakeWorkersync(ctx context.Context) error {
+	if !e.Cfg.FakeDataPlane {
+		return nil
+	}
+	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), fakeWorkersyncDeployment, e.Cfg.RolloutTimeout)
 }
 
 // DeployAtelet redeploys only the atelet DaemonSet.
 func (e *Env) DeployAtelet(ctx context.Context) error {
 	log.Step("deploy_atelet")
 
+	if err := e.requireInstalledDataPlane(ctx, "deploy atelet"); err != nil {
+		return err
+	}
 	if err := e.EnsureCRDs(ctx); err != nil {
 		return err
 	}
@@ -342,21 +465,26 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 		return err
 	}
 
-	var manifest []byte
-	var err error
+	path := e.Cfg.Manifest("atelet.yaml")
 	if e.Cfg.Kind {
 		// The kind overlay patches the DaemonSet for the local node layout.
-		manifest, err = e.KustomizeResolve(ctx, installDir+"/kind/atelet")
-	} else {
-		manifest, err = e.ResolveManifest(ctx, e.Cfg.Manifest("atelet.yaml"))
+		path = e.Cfg.Path(installDir + "/kind/atelet")
 	}
+	manifest, err := e.renderDataPlane(path)
+	if err != nil {
+		return err
+	}
+	manifest, err = e.ResolveManifestBytes(ctx, manifest)
 	if err != nil {
 		return err
 	}
 	if err := e.Kube.ApplyBytes(ctx, manifest); err != nil {
 		return err
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, e.Namespace(), "atelet", e.Cfg.RolloutTimeout)
+	if err := e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, e.Namespace(), "atelet", e.Cfg.RolloutTimeout); err != nil {
+		return err
+	}
+	return e.waitFakeWorkersync(ctx)
 }
 
 // DeployAtenet redeploys the atenet dataplane: router and egress.
