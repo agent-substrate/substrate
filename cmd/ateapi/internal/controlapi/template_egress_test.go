@@ -34,8 +34,8 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 	}{
 		{name: "absent"},
 		{name: "configured", policy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}}},
-			{Https: &ateapipb.HTTPSRule{Hostnames: []string{"api.example.com"}}},
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}},
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}},
 		}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -67,7 +67,7 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 					Actor: ref,
 					EgressPolicy: &ateapipb.EgressPolicy{
 						Metadata: &ateapipb.ResourceMetadata{Atespace: "actors", Name: "default"},
-						Rules:    []*ateapipb.EgressRule{{Https: &ateapipb.HTTPSRule{Hostnames: []string{"runtime.example.com"}}}},
+						Rules:    []*ateapipb.EgressRule{{Https: &ateapipb.HttpsRule{Hostnames: []string{"runtime.example.com"}}}},
 					},
 				}); err != nil {
 					t.Fatalf("creating the actor's runtime policy: %v", err)
@@ -96,7 +96,7 @@ func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
 		policy *ateapipb.EgressPolicyTemplate
 	}{
 		{name: "absent"},
-		{name: "configured", policy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HTTPSRule{Hostnames: []string{"api.example.com"}}}}}},
+		{name: "configured", policy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}}}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := t.Context()

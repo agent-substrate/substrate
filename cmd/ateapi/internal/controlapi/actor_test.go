@@ -843,7 +843,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			}
 			if _, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl), store.PreconditionFrom(tmpl), func(db *ateapipb.ActorTemplate) error {
 				db.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{GoldenTag: ref}}
-				db.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HTTPSRule{Hostnames: []string{"init.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}}
+				db.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HttpsRule{Hostnames: []string{"init.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}}
 				return nil
 			}); err != nil {
 				t.Fatal(err)

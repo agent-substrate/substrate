@@ -102,7 +102,7 @@ func TestCreateActor_EgressPolicyRollback(t *testing.T) {
 	policy := &ateapipb.EgressPolicy{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"},
 		Rules: []*ateapipb.EgressRule{{
-			Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
+			Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
 		}},
 	}
 	wantActor, wantPolicy := proto.CloneOf(actor), proto.CloneOf(policy)

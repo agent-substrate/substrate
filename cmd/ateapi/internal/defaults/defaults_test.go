@@ -133,16 +133,16 @@ func TestApply(t *testing.T) {
 	}, {
 		name: "template defaults egress ports",
 		in: &ateapipb.ActorTemplate{GoldenEgressPolicy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}}},
-			{Https: &ateapipb.HTTPSRule{Hostnames: []string{"api.example.com"}}},
-			{Https: &ateapipb.HTTPSRule{Hostnames: []string{"custom.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{8443}}}},
-			{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"tcp.example.com"}}},
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}},
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}},
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"custom.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{8443}}}},
+			{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"tcp.example.com"}}},
 		}}},
 		want: &ateapipb.ActorTemplate{GoldenEgressPolicy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}},
-			{Https: &ateapipb.HTTPSRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
-			{Https: &ateapipb.HTTPSRule{Hostnames: []string{"custom.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{8443}}}},
-			{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"tcp.example.com"}}},
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}},
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"custom.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{8443}}}},
+			{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"tcp.example.com"}}},
 		}}},
 	}, {
 		name: "tag has no defaults",
