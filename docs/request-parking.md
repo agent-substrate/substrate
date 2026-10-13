@@ -160,6 +160,13 @@ actor serves. Both are install settings, `--atenet-parked-request-budget` and
 `terminationGracePeriodSeconds` with the budget so parked requests still
 finish during a rollout.
 
+A burst of requests larger than the ext_proc circuit breaker is rejected by
+Envoy itself, with `503` and `reset reason: overflow`, before the router sees
+it. The router derives the breaker as twice `--parked-request-max` (at least
+`1024`); the install setting `--atenet-extproc-max-requests`
+(`ATE_ATENET_EXTPROC_MAX_REQUESTS`) raises it for hosts dense enough to
+synchronize more requests than that.
+
 ## Observability
 
 **Metrics** (OpenTelemetry, meter `atenet-router`):

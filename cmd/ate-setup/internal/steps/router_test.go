@@ -73,7 +73,7 @@ func flagValues(args []any, flag string) []string {
 }
 
 func TestConfigureAtenetRouter(t *testing.T) {
-	objs, e := routerObjects(t, &config.Config{RouterRouteTimeout: 30 * time.Minute, RouterParkedRequestBudget: 2 * time.Minute})
+	objs, e := routerObjects(t, &config.Config{RouterRouteTimeout: 30 * time.Minute, RouterParkedRequestBudget: 2 * time.Minute, RouterExtProcMaxRequests: 4096})
 	_, grace := routerPodSpec(t, objs)
 	if err := e.configureAtenetRouter(objs); err != nil {
 		t.Fatalf("configureAtenetRouter: %v", err)
@@ -85,8 +85,32 @@ func TestConfigureAtenetRouter(t *testing.T) {
 	if v := flagValues(args, "--parked-request-budget"); len(v) != 1 || v[0] != "2m0s" {
 		t.Errorf("--parked-request-budget = %v, want [2m0s]", v)
 	}
+	if v := flagValues(args, "--extproc-max-requests"); len(v) != 1 || v[0] != "4096" {
+		t.Errorf("--extproc-max-requests = %v, want [4096]", v)
+	}
 	if want := grace + 115; got != want {
 		t.Errorf("terminationGracePeriodSeconds = %d, want %d", got, want)
+	}
+}
+
+// The breaker alone must still reach the container, with the grace period untouched.
+func TestConfigureAtenetRouterExtProcMaxRequestsAlone(t *testing.T) {
+	objs, e := routerObjects(t, &config.Config{RouterExtProcMaxRequests: 4096})
+	_, grace := routerPodSpec(t, objs)
+	if err := e.configureAtenetRouter(objs); err != nil {
+		t.Fatalf("configureAtenetRouter: %v", err)
+	}
+	args, got := routerPodSpec(t, objs)
+	if v := flagValues(args, "--extproc-max-requests"); len(v) != 1 || v[0] != "4096" {
+		t.Errorf("--extproc-max-requests = %v, want [4096]", v)
+	}
+	for _, flag := range []string{"--route-timeout", "--parked-request-budget"} {
+		if v := flagValues(args, flag); len(v) != 0 {
+			t.Errorf("%s = %v, want unset", flag, v)
+		}
+	}
+	if got != grace {
+		t.Errorf("terminationGracePeriodSeconds = %d, want %d unchanged", got, grace)
 	}
 }
 
@@ -94,7 +118,7 @@ func TestConfigureAtenetRouter(t *testing.T) {
 func TestConfigureAtenetRouterUnsetLeavesManifestAlone(t *testing.T) {
 	objs, e := routerObjects(t, &config.Config{})
 	before, grace := routerPodSpec(t, objs)
-	for _, flag := range []string{"--route-timeout", "--parked-request-budget"} {
+	for _, flag := range []string{"--route-timeout", "--parked-request-budget", "--extproc-max-requests"} {
 		if v := flagValues(before, flag); len(v) != 0 {
 			t.Errorf("the manifest sets %s=%v; the settings expect it unset", flag, v)
 		}
