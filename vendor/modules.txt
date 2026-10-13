@@ -427,6 +427,11 @@ github.com/envoyproxy/go-control-plane/ratelimit/service/ratelimit/v3
 # github.com/envoyproxy/protoc-gen-validate v1.3.3
 ## explicit; go 1.24.1
 github.com/envoyproxy/protoc-gen-validate/validate
+# github.com/erofs/go-erofs v0.3.2-0.20261012133254-3772b1e68e1a
+## explicit; go 1.23
+github.com/erofs/go-erofs
+github.com/erofs/go-erofs/internal/builder
+github.com/erofs/go-erofs/internal/disk
 # github.com/evanphx/json-patch/v5 v5.9.11
 ## explicit; go 1.18
 github.com/evanphx/json-patch/v5
