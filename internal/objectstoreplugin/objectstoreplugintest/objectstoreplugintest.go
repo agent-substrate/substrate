@@ -43,6 +43,19 @@ func (c nodeClient) UploadSnapshot(ctx context.Context, in *objectstorev1.Upload
 	return c.p.UploadSnapshot(ctx, in)
 }
 
+// AssetClient returns a client that calls p directly.
+func AssetClient(p *objectstoreplugin.AssetPlugin) objectstorev1.AssetProviderClient {
+	return assetClient{p}
+}
+
+type assetClient struct {
+	p *objectstoreplugin.AssetPlugin
+}
+
+func (c assetClient) FetchAsset(ctx context.Context, in *objectstorev1.FetchAssetRequest, _ ...grpc.CallOption) (*objectstorev1.FetchAssetResponse, error) {
+	return c.p.FetchAsset(ctx, in)
+}
+
 // ControlClient returns a client that calls a ControlPlugin on store directly.
 func ControlClient(store objectstore.Store) objectstorev1.ControlProviderClient {
 	return controlClient{objectstoreplugin.NewControlPlugin(store)}

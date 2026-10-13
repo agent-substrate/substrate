@@ -40,7 +40,8 @@ import (
 
 // TestRedactedRecursesIntoRealMapFields walks real messages whose maps hold
 // messages (atelet sandbox assets) and strings (ateapi selectors): map values
-// are visited without panicking and non-sensitive content is left intact.
+// are visited without panicking, labeled fields in them are masked, and
+// non-sensitive content is left intact.
 func TestRedactedRecursesIntoRealMapFields(t *testing.T) {
 	run := &ateletpb.RunRequest{
 		SandboxAssets: &ateletpb.SandboxAssets{
@@ -61,8 +62,13 @@ func TestRedactedRecursesIntoRealMapFields(t *testing.T) {
 	if v := got.GetSpec().GetContainers()[0].GetEnv()[0].GetValue(); v != protoredact.Placeholder {
 		t.Fatalf("env value = %q, want placeholder", v)
 	}
-	if u := got.GetSandboxAssets().GetAssets()["amd64"].GetFiles()["runsc"].GetUrl(); u != "https://assets.example/runsc" {
-		t.Fatalf("map-of-message content was altered: %q", u)
+	// Inside the map value, the labeled url is masked and the sha256 is kept.
+	file := got.GetSandboxAssets().GetAssets()["amd64"].GetFiles()["runsc"]
+	if u := file.GetUrl(); u != protoredact.Placeholder {
+		t.Fatalf("asset url in a map value = %q, want placeholder", u)
+	}
+	if sum := file.GetSha256(); sum != "abc123" {
+		t.Fatalf("map-of-message content was altered: sha256 = %q", sum)
 	}
 	if run.GetSpec().GetContainers()[0].GetEnv()[0].GetValue() != "sk-secret" {
 		t.Fatal("original mutated")
@@ -411,9 +417,11 @@ func TestDebugRedactFieldsArePinned(t *testing.T) {
 	want := map[string]bool{
 		"ateapi.EnvVar.value":                            true,
 		"ateapi.MintActorJWTResponse.actor_jwt":          true,
+		"atelet.AssetFile.url":                           true,
 		"atelet.EnvEntry.value":                          true,
 		"ateom.ContainerSpec.env":                        true,
 		"credprovider.FetchSecretResponse.opaque_bytes":  true,
+		"objectstore.v1.FetchAssetRequest.asset_uri":     true,
 		"objectstore.v1.FetchSnapshotRequest.actor_jwt":  true,
 		"objectstore.v1.UploadSnapshotRequest.actor_jwt": true,
 	}

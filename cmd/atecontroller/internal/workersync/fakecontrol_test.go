@@ -227,7 +227,7 @@ func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapipb.DeleteWorkerR
 	return stored, nil
 }
 
-func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapipb.DrainWorkerResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -238,13 +238,13 @@ func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerReq
 	}
 	if stored.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
 		// Already draining: no write, and specifically no version bump.
-		return proto.Clone(stored).(*ateapipb.Worker), nil
+		return &ateapipb.DrainWorkerResponse{Worker: proto.Clone(stored).(*ateapipb.Worker)}, nil
 	}
 	drained := proto.Clone(stored).(*ateapipb.Worker)
 	drained.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
 	drained.Metadata.Version++
 	f.workers[name] = drained
-	return proto.Clone(drained).(*ateapipb.Worker), nil
+	return &ateapipb.DrainWorkerResponse{Worker: proto.Clone(drained).(*ateapipb.Worker)}, nil
 }
 
 func (f *fakeControl) ListWorkers(_ context.Context, in *ateapipb.ListWorkersRequest, _ ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error) {

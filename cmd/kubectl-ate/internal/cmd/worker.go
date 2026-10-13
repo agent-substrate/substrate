@@ -44,15 +44,15 @@ var (
 )
 
 var getWorkersCmd = &cobra.Command{
-	Use:     "workers <worker-name ...>",
-	Aliases: []string{"worker"},
+	Use:     "worker <worker-name ...>",
+	Aliases: []string{"workers"},
 	Short:   "List all workers or get one or more workers",
 	RunE:    runGetWorkers,
 }
 
 var topWorkersCmd = &cobra.Command{
-	Use:     "workers",
-	Aliases: []string{"worker"},
+	Use:     "worker",
+	Aliases: []string{"workers"},
 	Short:   "Display resource (CPU/Memory) usage of workers",
 	Args:    cobra.NoArgs,
 	RunE:    runTopWorkers,

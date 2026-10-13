@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -90,7 +91,7 @@ func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapipb.DeleteWorkerR
 	return w, nil
 }
 
-func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapipb.DrainWorkerResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.drainErr != nil {
@@ -101,7 +102,7 @@ func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerReq
 		return nil, status.Error(codes.NotFound, "no such Worker")
 	}
 	w.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
-	return w, nil
+	return &ateapipb.DrainWorkerResponse{Worker: w}, nil
 }
 
 func (f *fakeControl) GetWorker(_ context.Context, in *ateapipb.GetWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
@@ -411,7 +412,7 @@ func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
 	if got := rel.runtimes[ctl.uid(name)]; !proto.Equal(got, wantRuntime) {
 		t.Errorf("default runtime %v, want %v: the pool's class on this host, which ate-api-server requires", got, wantRuntime)
 	}
-	if got, want := cl.statuses["bench"], (atev1alpha1.WorkerPoolStatus{Replicas: 3, ReadyReplicas: 3, Selector: "ate.dev/worker-pool=bench"}); got != want {
+	if got, want := cl.statuses["bench"], (atev1alpha1.WorkerPoolStatus{Replicas: 3, ReadyReplicas: 3, Selector: "ate.dev/worker-pool=bench"}); !reflect.DeepEqual(got, want) {
 		t.Errorf("status = %+v, want %+v", got, want)
 	}
 }

@@ -65,7 +65,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 			},
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapipb.Snapshot{
-				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 			},
 		},
 	})
@@ -112,7 +112,7 @@ func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, act
 			State:                  ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapipb.Snapshot{
-				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 			},
 		},
 	})
@@ -130,7 +130,7 @@ func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, actorR
 		t.Errorf("status = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
 	}
 	// Keep the snapshot uri for debugging.
-	if _, st := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS); st == nil {
+	if findLatestDurableSnapshot(got.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING) == nil {
 		t.Error(`in-progress durable snapshot URI = "", want preserved`)
 	}
 	if got.GetStatus().GetWorkerAssignment() != nil {
@@ -720,6 +720,51 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 	if firstAssignment(t, st, "uid") == nil {
 		t.Error("worker assignment = nil, want still assigned (release failed, must remain retriable)")
 	}
+}
+
+// TestCrashActorAndFail verifies the error a workflow step fails with when it
+// crashes the actor: FailedPrecondition once the crash commits, since no retry
+// can finish the step, but the crash's own error when it does not, leaving the
+// actor as it was so the caller retries and the retry crashes it.
+func TestCrashActorAndFail(t *testing.T) {
+	ctx := context.Background()
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+
+	t.Run("committed crash is FailedPrecondition", func(t *testing.T) {
+		st, cleanup := storetest.SetupTestStore(t)
+		defer cleanup()
+		seedActor(t, ctx, st, actorRef)
+		seedWorker(t, ctx, st, actorRef)
+
+		err := crashActorAndFail(ctx, st, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
+		if got := apierror.Code(err); got != codes.FailedPrecondition {
+			t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
+		}
+		assertCrashed(t, ctx, st, actorRef)
+	})
+
+	t.Run("failed crash returns its error", func(t *testing.T) {
+		st, cleanup := storetest.SetupTestStore(t)
+		defer cleanup()
+		seedActor(t, ctx, st, actorRef)
+		seedWorker(t, ctx, st, actorRef)
+
+		releaseErr := errors.New("state store unavailable")
+		err := crashActorAndFail(ctx, failingReleaseStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
+		if !errors.Is(err, releaseErr) {
+			t.Fatalf("crashActorAndFail() = %v, want it to wrap %v", err, releaseErr)
+		}
+		if got := apierror.Code(err); got == codes.FailedPrecondition {
+			t.Errorf("apierror.Code(err) = %v for a crash that did not commit, want a code the caller retries", got)
+		}
+		got, gerr := st.GetActor(ctx, actorRef)
+		if gerr != nil {
+			t.Fatalf("GetActor() = %v, want nil", gerr)
+		}
+		if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+			t.Errorf("status = %v, want %v (the crash did not commit)", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
+		}
+	})
 }
 
 // crashRecords captures the "Actor crashed" records a crash emits, so a test can

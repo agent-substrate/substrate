@@ -24,11 +24,13 @@ func TestValidateSnapshotFileNames(t *testing.T) {
 	}{
 		{name: "empty list", files: nil},
 		{name: "plain names", files: []string{"manifest.json", "memory.img", "durable-dir.tar"}},
+		{name: "fs subdir names", files: []string{"checkpoint.img", "fs/fscheckpoint.pb", "fs/multitar.img", "fs/pages.img", "fs/pages_meta.img"}},
 		{name: "empty name", files: []string{""}, wantErr: true},
 		{name: "dot", files: []string{"."}, wantErr: true},
 		{name: "dot dot", files: []string{".."}, wantErr: true},
 		{name: "absolute", files: []string{"/etc/passwd"}, wantErr: true},
-		{name: "nested", files: []string{"a/b"}, wantErr: true},
+		{name: "nested arbitrary subdir", files: []string{"a/b"}, wantErr: true},
+		{name: "deeply nested under fs", files: []string{"fs/a/b"}, wantErr: true},
 		{name: "escaping", files: []string{"../x"}, wantErr: true},
 		{name: "duplicate", files: []string{"a", "b", "a"}, wantErr: true},
 	} {

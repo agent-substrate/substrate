@@ -49,7 +49,7 @@ func NewRouterCmd() *cobra.Command {
 
 // bindRouterFlags registers the router's flags on fs, writing into cfg.
 func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
-	fs.StringVar((*string)(&cfg.Mode), "mode", string(ModeAll), fmt.Sprintf("Traffic direction this instance serves: %q (also runs the ingress control plane — the xDS server — for an Envoy dataplane), %q (ext_proc only, needs no Kubernetes access), or %q for both. The ext_proc mux refuses a direction this instance was not started to serve rather than falling back to the other one", ModeIngress, ModeEgress, ModeAll))
+	fs.StringVar((*string)(&cfg.Mode), "mode", "", fmt.Sprintf("Required. Traffic direction this instance serves: %q (also runs the ingress control plane — the xDS server — for an Envoy dataplane) or %q (ext_proc only, needs no Kubernetes access). The ext_proc mux refuses the other direction rather than falling back to it", ModeIngress, ModeEgress))
 
 	fs.StringVar(&cfg.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
 
@@ -69,6 +69,16 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.DurationVar(&cfg.HealthInterval, "health-interval", 1*time.Second, "Interval for checking health of dependent services")
 	fs.IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the router dataplane")
 	fs.StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file.")
+
+	// Flags for client authentication and authorization in ingress mode.
+	fs.StringVar(&cfg.IngressAuth.ClientCAFile, "ingress-client-ca-file", "", "PEM bundle of the CAs allowed to sign ingress client certificates. Envoy reads the file, so it must be mounted at this path in the Envoy container as well. Required whenever a TLS ingress listener is enabled")
+	fs.StringSliceVar(&cfg.IngressAuth.AllowedSPIFFEIDs, "ingress-allowed-spiffe-ids", nil, "SPIFFE IDs (exact match) allowed to connect to actors through the ingress dataplane. Comma-separated or repeated. Required whenever a TLS ingress listener is enabled")
+	fs.StringVar(
+		(*string)(&cfg.IngressAuth.Mode),
+		"ingress-auth-mode",
+		string(IngressAuthDeprecatedInsecure),
+		"Ingress authentication and authorization mode.  `deprecated-insecure` (both http and https served, client certificates optional on https) or `static-mtls` (only https served, client certificates required).",
+	)
 
 	fs.StringVar(&cfg.UpstreamCredentialBundlePath, "upstream-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle (cert+key) the router presents as the client cert when dialing the actor's atunnel ingress server over mTLS. Empty disables upstream mTLS (legacy plaintext pod-IP:80).")
 	fs.StringVar(&cfg.UpstreamTrustBundlePath, "upstream-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to validate the actor's atunnel ingress server certificate.")

@@ -92,6 +92,11 @@ const (
 	UpstreamCertSecretName  = "upstream_client_cert"
 	UpstreamTrustSecretName = "upstream_trust_bundle"
 
+	// IngressClientTrustSecretName is the SDS secret holding the CA bundle the
+	// TLS ingress listeners verify client certificates against when client
+	// authentication is on (see SetDownstreamClientAuth).
+	IngressClientTrustSecretName = "ingress_client_trust_bundle"
+
 	// httpProtocolOptionsName is the well-known extension key Envoy looks for in
 	// a cluster's typed_extension_protocol_options. It must match the message's
 	// full proto type name exactly; a typo is silently ignored rather than
@@ -208,6 +213,15 @@ type XdsServer struct {
 	// cert carries only a spiffe:// URI SAN, so without this Envoy's default
 	// SAN check against the dialed IP fails ("verify SAN list").
 	upstreamSpiffePrefix string
+
+	// Downstream (client-facing) mTLS. When downstreamClientCAPath is set,
+	// every TLS ingress listener requests a client certificate and rejects
+	// one that does not chain to it or carry one of
+	// downstreamAllowedSPIFFEIDs as a URI SAN. downstreamRequireClientCert
+	// also rejects a client that presents no certificate.
+	downstreamClientCAPath      string
+	downstreamAllowedSPIFFEIDs  []string
+	downstreamRequireClientCert bool
 
 	otlpHost string
 	otlpPort uint32
@@ -332,6 +346,21 @@ func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
 	}
 	x.httpsPort = httpsPort
 	x.certPath = certPath
+}
+
+// SetDownstreamClientAuth makes every TLS ingress listener request a client
+// certificate and accept only one signed by a CA in caPath whose URI SAN
+// exactly matches one of allowedSPIFFEIDs. With require, a client that
+// presents no certificate is rejected too; without it, such a client is let
+// through unauthenticated. Envoy enforces this during the handshake, so a
+// rejected client never reaches ext_proc. It does not touch the plaintext
+// listeners (see routerConfig.validateIngressAuth).
+func (x *XdsServer) SetDownstreamClientAuth(caPath string, allowedSPIFFEIDs []string, require bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.downstreamClientCAPath = caPath
+	x.downstreamAllowedSPIFFEIDs = allowedSPIFFEIDs
+	x.downstreamRequireClientCert = require
 }
 
 // otlpDefaultPort is the OTLP/gRPC default port, used when the collector
@@ -472,8 +501,9 @@ func (x *XdsServer) UpdateSnapshot() error {
 	}
 
 	// Listeners
-	listeners := []types.Resource{
-		x.buildListener(),
+	var listeners []types.Resource
+	if x.ingressPort > 0 {
+		listeners = append(listeners, x.buildListener())
 	}
 	if connectEnabled {
 		listeners = append(listeners, x.buildMainInternalListener())
@@ -491,6 +521,9 @@ func (x *XdsServer) UpdateSnapshot() error {
 	}
 	if needsCert {
 		secrets = append(secrets, x.buildTlsSecret())
+		if x.downstreamClientCAPath != "" {
+			secrets = append(secrets, x.buildIngressClientTrustSecret())
+		}
 	}
 	// Mirrors buildUpstreamTransportSocket's gating: the actor-facing socket
 	// exists only when the credential bundle is configured, and it references
@@ -1210,7 +1243,13 @@ func (x *XdsServer) buildListener() *listenerv3.Listener {
 // includes whenever any TLS listener (HTTPS or CONNECT-TLS) is configured.
 // alpnProtocols, when non-empty, is offered during the handshake; empty
 // advertises nothing, leaving clients on HTTP/1.1.
-func buildDownstreamTlsTransportSocket(alpnProtocols []string) *corev3.TransportSocket {
+//
+// With client authentication configured (see SetDownstreamClientAuth) the
+// socket also requests, and optionally requires, a client certificate, which
+// Envoy validates whenever one is presented. As on the upstream side, the CA
+// bundle arrives over SDS so it tracks ClusterTrustBundle rotation, while the
+// SPIFFE ID matchers stay inline in the default context.
+func (x *XdsServer) buildDownstreamTlsTransportSocket(alpnProtocols []string) *corev3.TransportSocket {
 	tlsConfig := &tlsv3.DownstreamTlsContext{
 		CommonTlsContext: &tlsv3.CommonTlsContext{
 			AlpnProtocols: alpnProtocols,
@@ -1221,6 +1260,29 @@ func buildDownstreamTlsTransportSocket(alpnProtocols []string) *corev3.Transport
 				},
 			},
 		},
+	}
+	if x.downstreamClientCAPath != "" {
+		tlsConfig.RequireClientCertificate = wrapperspb.Bool(x.downstreamRequireClientCert)
+		sanMatchers := make([]*tlsv3.SubjectAltNameMatcher, 0, len(x.downstreamAllowedSPIFFEIDs))
+		for _, id := range x.downstreamAllowedSPIFFEIDs {
+			sanMatchers = append(sanMatchers, &tlsv3.SubjectAltNameMatcher{
+				SanType: tlsv3.SubjectAltNameMatcher_URI,
+				Matcher: &matcherv3.StringMatcher{
+					MatchPattern: &matcherv3.StringMatcher_Exact{Exact: id},
+				},
+			})
+		}
+		tlsConfig.CommonTlsContext.ValidationContextType = &tlsv3.CommonTlsContext_CombinedValidationContext{
+			CombinedValidationContext: &tlsv3.CommonTlsContext_CombinedCertificateValidationContext{
+				DefaultValidationContext: &tlsv3.CertificateValidationContext{
+					MatchTypedSubjectAltNames: sanMatchers,
+				},
+				ValidationContextSdsSecretConfig: &tlsv3.SdsSecretConfig{
+					Name:      IngressClientTrustSecretName,
+					SdsConfig: adsConfigSource(),
+				},
+			},
+		}
 	}
 	tlsConfigAny := newAny(tlsConfig)
 	return &corev3.TransportSocket{
@@ -1264,7 +1326,7 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 						},
 					},
 				},
-				TransportSocket: buildDownstreamTlsTransportSocket(alpn),
+				TransportSocket: x.buildDownstreamTlsTransportSocket(alpn),
 			},
 		},
 	}
@@ -1333,7 +1395,7 @@ func (x *XdsServer) buildConnectTerminateTLSListener() *listenerv3.Listener {
 				// No ALPN: CONNECT-TLS clients speak HTTP/1.1 CONNECT
 				// today, and the HTTPS listener's h2 offer deliberately
 				// leaves this listener alone.
-				TransportSocket: buildDownstreamTlsTransportSocket(nil),
+				TransportSocket: x.buildDownstreamTlsTransportSocket(nil),
 			},
 		},
 	}
@@ -1397,17 +1459,30 @@ func (x *XdsServer) buildUpstreamCertSecret() *tlsv3.Secret {
 // the CA set it read at cluster warm-up and rejects certificates issued by a
 // rotated CA with "unknown CA".
 func (x *XdsServer) buildUpstreamTrustSecret() *tlsv3.Secret {
+	return buildTrustSecret(UpstreamTrustSecretName, x.upstreamTrustBundlePath)
+}
+
+// buildIngressClientTrustSecret serves the CA bundle the TLS ingress listeners
+// verify client certificates against. It is watched for the same reason as
+// buildUpstreamTrustSecret.
+func (x *XdsServer) buildIngressClientTrustSecret() *tlsv3.Secret {
+	return buildTrustSecret(IngressClientTrustSecretName, x.downstreamClientCAPath)
+}
+
+// buildTrustSecret returns the SDS secret named name, serving the CA bundle at
+// path as a validation context.
+func buildTrustSecret(name, path string) *tlsv3.Secret {
 	return &tlsv3.Secret{
-		Name: UpstreamTrustSecretName,
+		Name: name,
 		Type: &tlsv3.Secret_ValidationContext{
 			ValidationContext: &tlsv3.CertificateValidationContext{
 				TrustedCa: &corev3.DataSource{
 					Specifier: &corev3.DataSource_Filename{
-						Filename: x.upstreamTrustBundlePath,
+						Filename: path,
 					},
 				},
 				WatchedDirectory: &corev3.WatchedDirectory{
-					Path: filepath.Dir(x.upstreamTrustBundlePath),
+					Path: filepath.Dir(path),
 				},
 			},
 		},

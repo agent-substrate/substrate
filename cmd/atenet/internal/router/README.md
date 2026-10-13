@@ -175,24 +175,42 @@ state rather than a client header.
 
 ## modes
 
-One binary serves both directions. `--mode` selects which:
+One binary serves both directions, one per instance. `--mode` (required)
+selects which:
 
 | `--mode` | ext_proc handlers | xDS server | Kubernetes access |
 | --- | --- | --- | --- |
 | `ingress` | ingress | yes | yes |
 | `egress` | egress | no | none |
-| `all` (default) | both | yes | yes |
 
 The mux refuses a direction this instance was not started to serve (404) rather
 than falling back to the other handler, which would run the request through the
 wrong trust model.
 
-Ingress and egress are deployed separately today — `atenet-router` fronts the
-ingress dataplane, `atenet-egress` the egress gateway — because the two scale
-independently, not because they need separate binaries.
+Ingress and egress are deployed separately — `atenet-router` fronts the
+ingress dataplane, `atenet-egress` the egress gateway.
 
 `--atenet-dataplane` selects the dataplane for both Deployments. Each gateway has
 its own static configuration because ingress and egress scale independently.
+
+## Ingress client authentication and authorization
+
+The ingress router is migrating to require clients to present a SPIFFE certificate.
+* With `--ingress-auth-mode=static-mtls`, the ingress router no longer offers any
+  plaintext listeners, and all clients *must* present a SPIFFE certificate.
+* With `--ingress-auth-mode=deprecated-insecure`, the ingress router offers both
+  plaintext and secure listeners.  If a client presents a SPIFFE certificate, it
+  must be valid.
+
+Configure the CA that is used to validate client certificates with the
+`--ingress-client-ca-file` flag, which points at a PEM file containing root
+certificates.
+
+Right now the only "authorization" policy is to check the client's SPIFFE ID
+against a static allowlist.  Any ID on the allowlist may use the ingress router
+to contact any actor.  Richer authorization policies may be added post-GA.  Use
+the `--ingress-allowed-spiffe-ids` flag to set the allowlist (comma-separated
+list).
 
 ## status page
 

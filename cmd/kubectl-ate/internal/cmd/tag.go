@@ -38,8 +38,8 @@ var (
 )
 
 var getTagsCmd = &cobra.Command{
-	Use:     "tags [tag-name ...]",
-	Aliases: []string{"tag"},
+	Use:     "tag [tag-name ...]",
+	Aliases: []string{"tags"},
 	Short:   "List or get tags",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if getTagAllAtespacesFlag && getTagAtespaceFlag != "" {
@@ -94,9 +94,8 @@ var getTagsCmd = &cobra.Command{
 }
 
 var createTagCmd = &cobra.Command{
-	Use:     "tag <tag-name>",
-	Aliases: []string{"tags"},
-	Short:   "Tag the external snapshot a suspended actor holds",
+	Use:   "tag <tag-name>",
+	Short: "Tag the external snapshot a suspended actor holds",
 	Long: "Tag the external snapshot a suspended actor holds.\n\n" +
 		"The tag gets its own copy of that snapshot, so suspending the actor\n" +
 		"again or deleting it cannot collect what the tag names.",
@@ -128,10 +127,9 @@ var createTagCmd = &cobra.Command{
 }
 
 var updateTagCmd = &cobra.Command{
-	Use:     "tag <tag-name>",
-	Aliases: []string{"tags"},
-	Short:   "Publish or unpublish a tag",
-	Args:    cobra.ExactArgs(1),
+	Use:   "tag <tag-name>",
+	Short: "Publish or unpublish a tag",
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		scope, err := parseTagScope(updateTagScopeFlag)
 		if err != nil {
@@ -154,10 +152,9 @@ var updateTagCmd = &cobra.Command{
 }
 
 var deleteTagCmd = &cobra.Command{
-	Use:     "tag <tag-name>",
-	Aliases: []string{"tags"},
-	Short:   "Delete a tag",
-	Args:    cobra.ExactArgs(1),
+	Use:   "tag <tag-name>",
+	Short: "Delete a tag",
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)

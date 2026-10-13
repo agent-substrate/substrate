@@ -151,8 +151,8 @@ const (
 	// (currently DurableDir-typed volumes). Memory and the rest of rootfs are
 	// excluded.
 	SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES SnapshotFidelity = 1
-	// Volumes plus the root filesystem changes made since boot. No runtime
-	// captures this yet; requests carrying it are rejected.
+	// Volumes plus the root filesystem changes made since boot. Served by the
+	// micro-VM runtime only; other runtimes reject requests carrying it.
 	SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS SnapshotFidelity = 2
 	// Capture process memory plus the full filesystem delta on top of the OCI
 	// image (including any attached DurableDir volumes).
@@ -1236,7 +1236,11 @@ func (x *EgressGateway) GetAddress() string {
 // (e.g. the gVisor release tarball).
 type AssetFile struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// gs:// URL to download the asset from.
+	// URL to download the asset from. atelet fetches every URL through the
+	// node's object-store plugin, and reads a gs:// URL anonymously only when
+	// the plugin cannot serve it.
+	// Masked in logged requests, since a signed URL carries its credential in
+	// the query.
 	Url string `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
 	// Lower-case hex SHA256; names the cached file and verifies its integrity.
 	Sha256        string `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
@@ -2874,16 +2878,15 @@ type UploadPausedCheckpointRequest struct {
 	// For metrics attribution, like on CheckpointRequest.
 	ActorTemplateAtespace string `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
 	ActorTemplateName     string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	// The local checkpoint to upload: LocalSnapshot.snapshot_name recorded
-	// at pause time.
+	// The local checkpoint to upload: the uuid of the actor's pause snapshot
+	// (ateapi Snapshot.uuid).
 	LocalSnapshotName string `protobuf:"bytes,6,opt,name=local_snapshot_name,json=localSnapshotName,proto3" json:"local_snapshot_name,omitempty"`
 	// Destination object-storage URI (the actor's in-progress snapshot URI).
 	DestinationSnapshotUri string `protobuf:"bytes,7,opt,name=destination_snapshot_uri,json=destinationSnapshotUri,proto3" json:"destination_snapshot_uri,omitempty"`
-	// Fidelity the uploaded snapshot must have (MEMORY or VOLUMES). The
-	// fidelity the pause checkpoint captured is not sent: atelet reads it from
-	// the local snapshot's own manifest, which is authoritative. When they
-	// differ, atelet converts where possible (a MEMORY capture to a VOLUMES
-	// upload of the volume files ateom reported) and rejects otherwise.
+	// Fidelity the uploaded snapshot must have. The fidelity the pause
+	// checkpoint captured is not sent: atelet reads it from the local
+	// snapshot's own manifest, which is authoritative, and rejects the upload
+	// if the two differ.
 	DesiredFidelity SnapshotFidelity `protobuf:"varint,8,opt,name=desired_fidelity,json=desiredFidelity,proto3,enum=atelet.SnapshotFidelity" json:"desired_fidelity,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -3313,9 +3316,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\fmemory_bytes\x18\v \x01(\x03R\vmemoryBytesB\x11\n" +
 	"\x0f_egress_gateway\")\n" +
 	"\rEgressGateway\x12\x18\n" +
-	"\aaddress\x18\x01 \x01(\tR\aaddress\"5\n" +
-	"\tAssetFile\x12\x10\n" +
-	"\x03url\x18\x01 \x01(\tR\x03url\x12\x16\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\":\n" +
+	"\tAssetFile\x12\x15\n" +
+	"\x03url\x18\x01 \x01(\tB\x03\x80\x01\x01R\x03url\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\tR\x06sha256\"\x8e\x01\n" +
 	"\n" +
 	"ArchAssets\x123\n" +

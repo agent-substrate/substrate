@@ -43,9 +43,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
+	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -114,7 +114,7 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
-	snapshotPluginSocket = pflag.String("snapshot-plugin-socket", "/run/snapshot-plugin/node.sock", "Unix socket of the node snapshot plugin that external snapshots are fetched and uploaded through.")
+	snapshotPluginSocket = pflag.String("snapshot-plugin-socket", "/run/snapshot-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and every sandbox asset is fetched through. A gs:// asset the plugin cannot serve is then read anonymously.")
 )
 
 var _ imagecache.CandidateKeychain = (*credentialprovider.Keychain)(nil)
@@ -131,6 +131,9 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
 	slog.InfoContext(ctx, "atelet starting", slog.String("version", version.Version))
+	if err := rejectStorageEnv(); err != nil {
+		serverboot.Fatal(ctx, "Invalid environment", err)
+	}
 
 	// Kept separate from ctx so in-flight work (e.g. a Checkpoint/Restore
 	// streaming a multi-GiB snapshot) is not cancelled the moment SIGTERM
@@ -228,14 +231,12 @@ func main() {
 		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
 	}
 
+	// Sandbox assets go through the object-store plugin; a gs:// asset it
+	// cannot serve, such as one in the public gs://gvisor bucket, is read
+	// anonymously.
 	wrappedAnonGCS, err := objectstorage.NewGCSClient(ctx, option.WithoutAuthentication())
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create anonymous GCS client", err)
-	}
-
-	wrappedGCS, err := objectstorage.NewFromEnv(ctx)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to set up the object storage backend", err)
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginWorkerPlane)
@@ -283,7 +284,7 @@ func main() {
 	go trustBundles.Informer().Run(stopCh)
 	cache.WaitForCacheSync(stopCh, trustBundles.Informer().HasSynced)
 
-	snapshotPluginConn, err := objectstoreplugin.Dial(*snapshotPluginSocket, objectstoreplugin.ReadyWait)
+	snapshotPluginConn, err := pluginsocket.Dial(*snapshotPluginSocket, pluginsocket.ReadyWait)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to set up the snapshot plugin client", err)
 	}
@@ -291,7 +292,7 @@ func main() {
 	// A plugin that never serves would fail every call. Fail at startup
 	// instead, giving the sidecar time to come up.
 	readyCtx, cancelReady := context.WithTimeout(ctx, time.Minute)
-	err = objectstoreplugin.WaitReady(readyCtx, snapshotPluginConn)
+	err = pluginsocket.WaitReady(readyCtx, snapshotPluginConn)
 	cancelReady()
 	if err != nil {
 		serverboot.Fatal(ctx, "Snapshot plugin is not serving", err)
@@ -301,8 +302,9 @@ func main() {
 		ctx,
 		ateomDialer,
 		wrappedAnonGCS,
-		wrappedGCS,
 		objectstorev1.NewNodeProviderClient(snapshotPluginConn),
+		objectstorev1.NewAssetProviderClient(snapshotPluginConn),
+		*snapshotPluginSocket,
 		imageCache,
 		instruments,
 		volPlugins,
@@ -388,11 +390,7 @@ func main() {
 		}
 	}()
 
-	svr := grpc.NewServer(
-		grpc.Creds(credentials.NewTLS(tlsCfg)),
-		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
-	)
+	svr := grpc.NewServer(ateomHerderServerOptions(credentials.NewTLS(tlsCfg))...)
 	ateletpb.RegisterAteomHerderServer(svr, wmService)
 	reflection.Register(svr)
 	slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))
@@ -403,6 +401,28 @@ func main() {
 	}
 	<-drainDone
 	slog.InfoContext(ctx, "Shutdown complete")
+}
+
+// ateomHerderServerOptions are the options of the gRPC server that serves
+// AteomHerder to ate-api-server. Its interceptor logs every request; fields
+// marked debug_redact (env values, asset URLs) are masked in that log.
+func ateomHerderServerOptions(creds credentials.TransportCredentials) []grpc.ServerOption {
+	return []grpc.ServerOption{
+		grpc.Creds(creds),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
+	}
+}
+
+// rejectStorageEnv fails if ATE_STORAGE_BACKEND is set on atelet, which no
+// longer reads it: object storage settings belong on the snapshot-plugin
+// sidecar. Only this variable is a signal: EKS pod identity sets AWS_* in
+// every container.
+func rejectStorageEnv() error {
+	if v, ok := os.LookupEnv("ATE_STORAGE_BACKEND"); ok {
+		return fmt.Errorf("ATE_STORAGE_BACKEND=%q is set on atelet, which no longer reads it; set the storage backend on its snapshot-plugin sidecar", v)
+	}
+	return nil
 }
 
 // drainOnShutdown drives graceful shutdown when ctx is cancelled (SIGTERM or
@@ -451,14 +471,17 @@ func (g *directCSIDriverConfigGetter) Get(name string) (*atev1alpha1.CSIDriverCo
 type AteomHerder struct {
 	ateletpb.UnimplementedAteomHerderServer
 
-	ateomDialer   *AteomDialer
-	imageCache    *imagecache.Store
+	ateomDialer *AteomDialer
+	imageCache  *imagecache.Store
+	// anonGCSClient reads gs:// assets the plugin cannot serve, without credentials.
 	anonGCSClient objectstorage.ObjectStorage
-	// gcsClient downloads sandbox assets. Snapshot files never use it: they move
-	// through snapshotPlugin.
-	gcsClient objectstorage.ObjectStorage
 	// snapshotPlugin moves external snapshot files between the node and storage.
 	snapshotPlugin objectstorev1.NodeProviderClient
+	// assetPlugin fetches every sandbox asset first; anonGCSClient reads a gs://
+	// asset it cannot serve.
+	assetPlugin objectstorev1.AssetProviderClient
+	// pluginSocket is the object-store plugin's socket, for error messages.
+	pluginSocket string
 	// snapshotScratchDir holds short-lived manifest directories; it must be
 	// inside the node plugin's root.
 	snapshotScratchDir    string
@@ -476,8 +499,9 @@ func NewService(
 	ctx context.Context,
 	ateomDialer *AteomDialer,
 	anonGCSClient objectstorage.ObjectStorage,
-	gcsClient objectstorage.ObjectStorage,
 	snapshotPlugin objectstorev1.NodeProviderClient,
+	assetPlugin objectstorev1.AssetProviderClient,
+	pluginSocket string,
 	imageCache *imagecache.Store,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
@@ -488,8 +512,9 @@ func NewService(
 		ateomDialer:           ateomDialer,
 		imageCache:            imageCache,
 		anonGCSClient:         anonGCSClient,
-		gcsClient:             gcsClient,
 		snapshotPlugin:        snapshotPlugin,
+		assetPlugin:           assetPlugin,
+		pluginSocket:          pluginSocket,
 		snapshotScratchDir:    ateletpath.SnapshotScratchDir,
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
@@ -841,6 +866,9 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 		}
 		recordSnapshotSize(ctx, fileName, allocatedBytes(info), req.GetActorTemplateAtespace(), req.GetActorTemplateName())
 
+		if err := root.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return fmt.Errorf("while creating parent directory for %s: %w", dst, err)
+		}
 		if err := root.Rename(src, dst); err != nil {
 			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
 		}
@@ -874,7 +902,7 @@ func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
 
 // uploadExternalCheckpoint uploads the checkpoint CheckpointWorkload just
 // took. Its plugin calls pass grpc.WaitForReady, so they wait out a plugin
-// outage for as long as ctx allows rather than only objectstoreplugin's ready
+// outage for as long as ctx allows rather than only pluginsocket's ready
 // wait, and their errors are not reported as retryable: see Checkpoint.
 func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
 	uri, err := resources.ParseSnapshotURI(req.GetExternalConfig().GetSnapshotUri())
@@ -1003,23 +1031,17 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 	if capturedFidelity == "" {
 		return rec.SandboxClass, apierror.FailedPrecondition("local snapshot %q has no fidelity recorded in its manifest; resume and pause the actor again before suspending it", req.GetLocalSnapshotName())
 	}
-	desiredFidelity := ateattr.SnapshotFidelityValue(req.GetDesiredFidelity())
-
-	switch {
-	case capturedFidelity == desiredFidelity:
-	case capturedFidelity == ateattr.SnapshotFidelityVolumes && desiredFidelity == ateattr.SnapshotFidelityMemory:
-		// The control plane rejects this before marking SUSPENDING; reaching
-		// it here means the template changed mid-flight or store state drifted.
-		return rec.SandboxClass, apierror.FailedPrecondition("pause snapshot captured %s; cannot upload it as %s (memory was never captured)", capturedFidelity, desiredFidelity)
-	default: // captured MEMORY, VOLUMES wanted
-		if err := narrowMemoryCaptureToVolumes(rec); err != nil {
-			return rec.SandboxClass, err
-		}
+	// Pause and suspend capture the template's one preferred fidelity, and a
+	// paused actor's template cannot change, so the upload is always of what
+	// the pause captured. A mismatch means the store or the control plane
+	// drifted; refuse rather than guess.
+	if desiredFidelity := ateattr.SnapshotFidelityValue(req.GetDesiredFidelity()); capturedFidelity != desiredFidelity {
+		return rec.SandboxClass, apierror.FailedPrecondition("pause snapshot captured %s; upload asks for %s", capturedFidelity, desiredFidelity)
 	}
 
 	// The local snapshot stays until the upload succeeds, so a retry can
 	// upload it again.
-	return rec.SandboxClass, objectstoreplugin.CallError(s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName()))
+	return rec.SandboxClass, pluginsocket.CallError(s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName()))
 }
 
 func readSnapshotManifest(dir string) ([]byte, error) {
@@ -1029,19 +1051,6 @@ func readSnapshotManifest(dir string) ([]byte, error) {
 	}
 	defer root.Close()
 	return root.ReadFile(sandboxManifestName)
-}
-
-// narrowMemoryCaptureToVolumes rewrites rec so a MEMORY capture uploads as a
-// VOLUMES snapshot holding only the volume files ateom reported at checkpoint.
-func narrowMemoryCaptureToVolumes(rec *sandboxAssetsRecord) error {
-	if len(rec.DataSnapshotFiles) == 0 {
-		// Either no durable-dir volumes were attached at pause, or the
-		// manifest predates the list. Neither is retryable.
-		return apierror.FailedPrecondition("memory capture lists no volume files; the actor has no durable data to upload as %s", ateattr.SnapshotFidelityVolumes)
-	}
-	rec.SnapshotFiles = rec.DataSnapshotFiles
-	rec.Fidelity = ateattr.SnapshotFidelityVolumes
-	return nil
 }
 
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (resp *ateletpb.RestoreResponse, err error) {
@@ -1355,10 +1364,16 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 }
 
 // checkLocalSnapshotFiles verifies each snapshot file exists in dir as a
-// regular file. Lstat, so a symlink cannot point ateom outside the snapshot.
+// regular file. Lstat via os.Root, so a symlink cannot point ateom outside the
+// snapshot.
 func checkLocalSnapshotFiles(dir string, files []string) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return wrapFileSystemErr("while opening local checkpoint directory", err)
+	}
+	defer root.Close()
 	for _, name := range files {
-		info, err := os.Lstat(filepath.Join(dir, name))
+		info, err := root.Lstat(name)
 		if err != nil {
 			return wrapFileSystemErr("while checking local checkpoint file", err)
 		}
@@ -1399,6 +1414,9 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, actorDir, snapsho
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("%s is not a regular file", src)
+		}
+		if err := root.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return fmt.Errorf("while creating parent directory for %s: %w", dst, err)
 		}
 		// Link rather than copy. The local checkpoint lives under the same actor dir
 		// as the restore staging area, so this stages the memory image in constant
@@ -1819,18 +1837,17 @@ func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
 	return resources.ValidateContainerNames(names)
 }
 
-// validateFidelity rejects a fidelity no runtime can serve. ROOTFS is in the
-// enum but not captured by any sandbox runtime yet, so it is refused here as
-// well as at template admission.
+// validateFidelity accepts every level of the ladder. Which levels a sandbox
+// runtime can actually serve is the runtime's call: atelet forwards the
+// fidelity and ateom rejects what it cannot capture.
 func validateFidelity(fidelity ateletpb.SnapshotFidelity) error {
 	switch fidelity {
-	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		return nil
 	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED:
 		return fmt.Errorf("snapshot fidelity must be non-zero")
-	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
-		return fmt.Errorf("ROOTFS fidelity is not supported yet")
 	default:
 		return fmt.Errorf("invalid snapshot fidelity: %v", fidelity)
 	}
@@ -1850,14 +1867,8 @@ func validateUploadPausedCheckpointRequest(req *ateletpb.UploadPausedCheckpointR
 	if _, err := resources.ParseSnapshotURI(req.GetDestinationSnapshotUri()); err != nil {
 		errs = append(errs, field.Invalid(field.NewPath("destination_snapshot_uri"), req.GetDestinationSnapshotUri(), err.Error()))
 	}
-	// Uploads only ever produce MEMORY or VOLUMES snapshots.
-	switch req.GetDesiredFidelity() {
-	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
-		errs = append(errs, field.Invalid(field.NewPath("desired_fidelity"), req.GetDesiredFidelity().String(), "ROOTFS fidelity is not supported yet"))
-	default:
-		errs = append(errs, field.NotSupported(field.NewPath("desired_fidelity"), req.GetDesiredFidelity(),
-			[]string{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY.String(), ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES.String()}))
+	if err := validateFidelity(req.GetDesiredFidelity()); err != nil {
+		errs = append(errs, field.Invalid(field.NewPath("desired_fidelity"), req.GetDesiredFidelity().String(), err.Error()))
 	}
 	return errs.ToAggregate()
 }

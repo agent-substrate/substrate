@@ -260,7 +260,7 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 	if _, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(stale), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.LastAssignedGeneration = 1
 		toUpdate.Status.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", someActorSnapshotURI(t, testStorageLocation, "team-a", "someone-else"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "someone-else", someActorSnapshotURI(t, testStorageLocation, "team-a", "someone-else"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 		}
 		return nil
 	}); err != nil {
