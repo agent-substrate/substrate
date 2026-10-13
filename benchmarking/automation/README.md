@@ -65,9 +65,10 @@ name (the routing key in `tests.yaml`) and the GCP project ID of the
 orchestrator image registry. It then builds + pushes the orchestrator image
 to `gcr.io/<ORCH_PROJECT_ID>/ate-images/substrate-benchmark-orchestrator:<short-commit>`
 (with a `-dirty` suffix if `benchmarking/automation/` has uncommitted
-changes) and renders `scratch/cronjob.yaml`, `scratch/test-list.yaml`, and
-`scratch/target-clusters.yaml`. You can edit the `.ate-dev-env.sh` for your
-workload cluster directly in the config map. 
+changes) and renders `scratch/cronjob.yaml`, `scratch/test-list.yaml`,
+`scratch/target-clusters.yaml`, and `scratch/test-manifests.yaml`. You can
+edit the `.ate-dev-env.sh` for your workload cluster directly in the config
+map.
 
 Then edit the `--repo / --branch / --dest` args in `scratch/cronjob.yaml` and
 apply:
@@ -168,3 +169,21 @@ gcloud storage buckets add-iam-policy-binding gs://<DEST_BUCKET> \
 `tests.yaml` is delivered to the orchestrator via a ConfigMap mounted at
 `/etc/orchestrator/tests.yaml`, so the image doesn't need to be rebuilt when
 the test list changes. Just reapply the config map.
+
+## Extra manifests for a test
+
+A test can list Kubernetes manifest files in `additionalManifests`. The
+orchestrator applies them after it deploys substrate and before the
+workloads, and deletes them after the test. Use it for anything the test
+needs on the cluster that the substrate install does not create, such as a
+StorageClass for `storageClassName` on storage the install does not set up.
+
+Relative paths resolve against the directory holding `tests.yaml`. `setup.sh`
+builds the `substrate-benchmark-test-manifests` ConfigMap from the YAML files
+in `test-manifests/`, and the CronJob sample mounts it at
+`/etc/orchestrator/test-manifests`, next to `tests.yaml`, so a test lists them
+as `test-manifests/<file>`. A test that lists a file that is not there fails.
+
+The commented-out `durdir_external_volume_example` entry at the end of
+`tests.yaml` runs the DurDir load on `csi-nfs-sc`, the NFS class that
+`--setup-csi=nfs` creates, so it needs no extra manifest.

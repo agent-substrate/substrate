@@ -26,13 +26,14 @@ contract). The flow, with the type hooks marked:
         the runner image build [hook: build_image] are cached per
         target cluster.
      b. Sweep leftovers, deploy substrate, let the type shape the
-        cluster [hook: pre_test], deploy workloads (+ microvm deps when
-        the sandbox class needs them).
+        cluster [hook: pre_test], apply the test's additionalManifests,
+        deploy workloads (+ microvm deps when the sandbox class needs
+        them).
      c. Render the type's Job template [hooks: job_tmpl, job_subs],
         submit it, wait, tail logs, delete the Job.
-     d. Tear substrate + workloads down again so tests don't pollute
-        each other, then drop the env file so the next test can't
-        inherit this one's cluster.
+     d. Tear substrate + workloads + additionalManifests down again so
+        tests don't pollute each other, then drop the env file so the
+        next test can't inherit this one's cluster.
   4. Exit non-zero if any test didn't complete.
 """
 
@@ -307,6 +308,14 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
                 f"test {name!r} has invalid sandboxClass {sandbox_class!r} "
                 f"(want one of {list(SANDBOX_CLASSES)})"
             )
+        manifests = t.get("additionalManifests", [])
+        if not isinstance(manifests, list) or not all(
+            isinstance(m, str) and m for m in manifests
+        ):
+            raise ValueError(
+                f"test {name!r} has invalid additionalManifests {manifests!r} "
+                "(want a list of file paths)"
+            )
         if "type" not in t:
             raise ValueError(
                 f"test {name!r} missing required 'type' field "
@@ -349,6 +358,7 @@ def deploy_workloads(
     actor_memory: str = "",
     wait_timeout_secs: int | str = "",
     worker_memory: str = "",
+    storage_class_name: str = "",
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -366,6 +376,11 @@ def deploy_workloads(
     # control how many workers the scheduler packs onto a node.
     if worker_memory:
         cmd += ["--worker-memory", worker_memory]
+    # Storage suites set storageClassName in tests.yaml, which makes deploy.sh
+    # add the glutton-storage template; without it, the template is not
+    # deployed.
+    if storage_class_name:
+        cmd += ["--storage-class-name", storage_class_name]
     # Empty keeps deploy.sh's own default; large fleets set workerWaitTimeout
     # (whole seconds).
     if wait_timeout_secs != "":
@@ -376,6 +391,30 @@ def deploy_workloads(
 
 def teardown_workloads() -> None:
     run_no_check(["benchmarking/workloads/deploy.sh", "--delete"])
+
+
+def additional_manifests(test: dict[str, Any], tests_dir: Path) -> list[Path]:
+    """The test's additionalManifests. Relative paths resolve against
+    tests_dir, the directory holding tests.yaml."""
+    return [tests_dir / m for m in test.get("additionalManifests", [])]
+
+
+def apply_additional_manifests(paths: list[Path]) -> None:
+    """Check every file first, so a missing one fails the test before
+    anything is applied."""
+    for p in paths:
+        if not p.is_file():
+            raise FileNotFoundError(f"additional manifest {p} not found")
+    for p in paths:
+        run(["kubectl", "apply", "-f", str(p)])
+
+
+def delete_additional_manifests(paths: list[Path]) -> None:
+    """Delete in the reverse order of apply. A missing file has nothing on
+    the cluster to delete, because apply checks every file first."""
+    for p in reversed(paths):
+        if p.is_file():
+            run_no_check(["kubectl", "delete", "--ignore-not-found", "-f", str(p)])
 
 
 def run_test(
@@ -476,6 +515,7 @@ def main() -> None:
     print(f"Building commit {commit}", flush=True)
 
     tests = yaml.safe_load(Path(args.tests).read_text())["tests"]
+    tests_dir = Path(args.tests).absolute().parent
     print(f"Running {len(tests)} test(s)", flush=True)
     try:
         validate_and_normalize_tests(tests)
@@ -524,8 +564,11 @@ def main() -> None:
             # into this run. All teardowns use --ignore-not-found, so
             # this is cheap on a clean cluster. Order matters:
             # microvm-deps deletes a SandboxConfig CR, which requires the
-            # SandboxConfig CRD that teardown_substrate removes.
+            # SandboxConfig CRD that teardown_substrate removes. The same
+            # goes for a custom resource in additionalManifests.
+            manifests = additional_manifests(test, tests_dir)
             teardown_workloads()
+            delete_additional_manifests(manifests)
             teardown_microvm_deps()
             teardown_substrate()
 
@@ -540,12 +583,17 @@ def main() -> None:
                 # deploy_workloads needs the microvm SandboxConfig.
                 if sandbox_class == "microvm":
                     install_microvm_deps()
+                # After substrate, so a manifest can use its CRDs; before the
+                # workloads, so a StorageClass exists when glutton-storage is
+                # created.
+                apply_additional_manifests(manifests)
                 deploy_workloads(
                     test.get("workerCount", 1),
                     sandbox_class,
                     test.get("actorMemory", ""),
                     test.get("workerWaitTimeout", ""),
                     test.get("workerMemory", ""),
+                    storage_class_name=test.get("storageClassName", ""),
                 )
                 try:
                     status = run_test(
@@ -569,6 +617,7 @@ def main() -> None:
                 # microvm-deps must go before substrate for the same reason
                 # as above.
                 teardown_workloads()
+                delete_additional_manifests(manifests)
                 teardown_microvm_deps()
                 teardown_substrate()
             duration = time.time() - start_time

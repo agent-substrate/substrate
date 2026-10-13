@@ -41,6 +41,20 @@
 #                  node needs more than half the node's allocatable memory.
 #                  The limit is also the memory the worker reports as its
 #                  actor capacity.
+#   storageClassName
+#                  Optional (default: none). StorageClass for the
+#                  glutton-storage external volume. Setting it deploys the
+#                  glutton-storage template. The class must exist when the
+#                  workloads deploy: on the cluster already, created by the
+#                  install (ateArgs --setup-csi=nfs creates csi-nfs-sc), or
+#                  created by additionalManifests.
+#   additionalManifests
+#                  Optional (default: none). Kubernetes manifest files the
+#                  orchestrator applies after deploying substrate and deletes
+#                  after the test, e.g. a StorageClass for storageClassName.
+#                  Relative paths resolve against the directory holding this
+#                  file; the CronJob sample mounts test-manifests/ next to
+#                  it. A missing file fails the test.
 #   workerWaitTimeout
 #                  Optional (default 300, set by workloads/deploy.sh).
 #                  Whole seconds to wait after the WorkerPool deploy for
@@ -635,3 +649,22 @@ tests:
     nighthawk-ingress:
       envoyCpu: 16
       tailLatencySloMs: 25
+  # Example only, not run: the DurDir load on an external volume.
+  # --setup-csi=nfs installs the NFS CSI driver and its csi-nfs-sc
+  # StorageClass. For storage the install does not set up, drop that flag,
+  # set storageClassName to your class, and list a manifest that creates it,
+  # e.g. additionalManifests: [test-manifests/my-storage-class.yaml].
+  # - name: durdir_external_volume_example
+  #   type: locust
+  #   description: "DurDir load on an external CSI volume (example)"
+  #   targetCluster: dev
+  #   file: /app/tests/durdir.py
+  #   duration: 1m
+  #   users: 1
+  #   workerCount: 1
+  #   storageClassName: csi-nfs-sc
+  #   ateArgs:
+  #     - "--setup-csi=nfs"
+  #   flags:
+  #     - "--durdir-template"
+  #     - "glutton-storage"
