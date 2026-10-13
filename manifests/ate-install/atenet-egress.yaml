@@ -1368,6 +1368,10 @@ spec:
       - name: envoy
         # ENVOY_DATAPLANE_IMAGE is substituted for the image URI in renderAtenetEgressManifest
         image: ${ENVOY_DATAPLANE_IMAGE}
+        resources:
+          requests:
+            cpu: 500m
+            memory: 256Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -1414,6 +1418,8 @@ spec:
             path: /ready
             port: envoy-metrics
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
         startupProbe:
           failureThreshold: 60
           httpGet:
