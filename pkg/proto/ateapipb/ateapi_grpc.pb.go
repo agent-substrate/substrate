@@ -1876,19 +1876,17 @@ type WorkerServiceClient interface {
 	// retries a suspend it had already been granted therefore sees a failure
 	// rather than a repeat of its success.
 	RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error)
-	// ReportActorSnapshotState reports what atelet holds for an Actor on the
-	// caller's node. Each report carries the whole state, so a newer report
-	// supersedes any older one still in flight. atelet reports after an upload
-	// completes and when it detaches the Actor.
+	// ReportActorSnapshotState reports the snapshots atelet holds for an Actor
+	// on the caller's node. atelet sends it after an upload and when it detaches
+	// the Actor. Each report carries the full state and supersedes earlier ones.
 	//
-	// An unset latest_local means atelet no longer serves local restores for
-	// the Actor: it is detaching or has detached. The control plane then clears
-	// Snapshot.locality for the caller's node and, if the Actor is SUSPENDED
-	// there, status.assigned_node, so the next resume may go to any node.
+	// An unset latest_local means atelet no longer restores the Actor locally.
+	// The control plane then clears Snapshot.locality for the caller's node,
+	// and status.assigned_node if the Actor is SUSPENDED there, so the next
+	// resume can go to any node.
 	//
-	// atelet calls this with its own client certificate, as it does for
-	// RegisterWorker. The control plane serves it only for an Actor on the
-	// caller's node. Idempotent.
+	// atelet calls this with its own client certificate. The control plane
+	// accepts it only for an Actor on the caller's node. Idempotent.
 	ReportActorSnapshotState(ctx context.Context, in *ReportActorSnapshotStateRequest, opts ...grpc.CallOption) (*ReportActorSnapshotStateResponse, error)
 }
 
@@ -1985,19 +1983,17 @@ type WorkerServiceServer interface {
 	// retries a suspend it had already been granted therefore sees a failure
 	// rather than a repeat of its success.
 	RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error)
-	// ReportActorSnapshotState reports what atelet holds for an Actor on the
-	// caller's node. Each report carries the whole state, so a newer report
-	// supersedes any older one still in flight. atelet reports after an upload
-	// completes and when it detaches the Actor.
+	// ReportActorSnapshotState reports the snapshots atelet holds for an Actor
+	// on the caller's node. atelet sends it after an upload and when it detaches
+	// the Actor. Each report carries the full state and supersedes earlier ones.
 	//
-	// An unset latest_local means atelet no longer serves local restores for
-	// the Actor: it is detaching or has detached. The control plane then clears
-	// Snapshot.locality for the caller's node and, if the Actor is SUSPENDED
-	// there, status.assigned_node, so the next resume may go to any node.
+	// An unset latest_local means atelet no longer restores the Actor locally.
+	// The control plane then clears Snapshot.locality for the caller's node,
+	// and status.assigned_node if the Actor is SUSPENDED there, so the next
+	// resume can go to any node.
 	//
-	// atelet calls this with its own client certificate, as it does for
-	// RegisterWorker. The control plane serves it only for an Actor on the
-	// caller's node. Idempotent.
+	// atelet calls this with its own client certificate. The control plane
+	// accepts it only for an Actor on the caller's node. Idempotent.
 	ReportActorSnapshotState(context.Context, *ReportActorSnapshotStateRequest) (*ReportActorSnapshotStateResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
