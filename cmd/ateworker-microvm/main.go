@@ -103,6 +103,10 @@ func main() {
 }
 
 func do(ctx context.Context) error {
+	hypervisor, err := detectHypervisor("/dev")
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -234,7 +238,7 @@ func do(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *vmmMemReserve, *maxActors, tunnel, actorLogger)
+	ateworkerService := NewService(*podUID, *chBinary, hypervisor, *guestDebug, *vmmMemReserve, *maxActors, tunnel, actorLogger)
 	ateworkerService.actorCgroups = actorCgroups
 	// The controller sets both from the downward API.
 	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
@@ -290,6 +294,7 @@ func do(ctx context.Context) error {
 		PodIPs:               register.ParsePodIPs(*podIPs),
 		SandboxClass:         string(atev1alpha1.SandboxClassMicroVM),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
+		RuntimeAttributes:    runtimeAttributes(hypervisor),
 	}
 	if reporter, err := register.NewCrashReporter(reportConfig); err != nil {
 		slog.ErrorContext(ctx, "Crashed actors will not be reported", slog.Any("err", err))
@@ -372,7 +377,10 @@ type AteWorkerService struct {
 
 	podUID     string
 	chBinary   string
+	hypervisor hypervisor
 	guestDebug bool
+	// vmmBackends caches which backends each cloud-hypervisor build supports.
+	vmmBackends vmmBackends
 
 	// memReserveMiB is guest RAM (MiB) held back from the pod's memory limit for
 	// the cloud-hypervisor VMM + virtiofsd (host processes sharing the pod cgroup
@@ -405,7 +413,7 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(podUID, chBinary string, guestDebug bool, memReserveMiB, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteWorkerService {
+func NewService(podUID, chBinary string, hypervisor hypervisor, guestDebug bool, memReserveMiB, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteWorkerService {
 	return &AteWorkerService{
 		locks:         actorlock.New(),
 		inFlight:      actorlock.NewInFlight(),
@@ -414,6 +422,7 @@ func NewService(podUID, chBinary string, guestDebug bool, memReserveMiB, maxActo
 		maxActors:     maxActors,
 		podUID:        podUID,
 		chBinary:      chBinary,
+		hypervisor:    hypervisor,
 		guestDebug:    guestDebug,
 		memReserveMiB: memReserveMiB,
 		tunnel:        tunnel,

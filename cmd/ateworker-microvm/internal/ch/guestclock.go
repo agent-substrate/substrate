@@ -21,13 +21,13 @@ package ch
 // frozen at the instant it was snapshotted and something in the guest has to notice.
 var clockAdvanceSince = [3]int{53, 0, 0}
 
-// AdvancesGuestClockOnRestore reports whether this VMM repairs the guest clock
-// across a restore by itself.
+// KVMAdvancesGuestClockOnRestore reports whether this VMM repairs a KVM guest's
+// clock across a restore by itself.
 //
 // It reports false when the version cannot be read or parsed, which is the safe
 // direction: a caller that wrongly believes the VMM corrects the clock leaves the
 // guest reading a stale time after every resume, with no error to show for it.
-func (i VMMInfo) AdvancesGuestClockOnRestore() bool {
+func (i VMMInfo) KVMAdvancesGuestClockOnRestore() bool {
 	v, ok := i.semver()
 	if !ok {
 		return false

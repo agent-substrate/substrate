@@ -130,6 +130,11 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err := validateRuntimeAssetPaths(req.GetActorUid(), req.GetActorDirs(), req.GetRuntimeAssetPaths()); err != nil {
 		return nil, err
 	}
+	if includesMemory(req.GetFidelity()) {
+		if err := validateSnapshotHypervisor(req.GetActorDirs().GetRestoreDir(), s.hypervisor); err != nil {
+			return nil, err
+		}
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
@@ -258,6 +263,9 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	}
 
 	rr := s.resolveRuntime(p.assetPaths)
+	if err := s.vmmBackends.check(ctx, rr.chBinary, s.hypervisor); err != nil {
+		return err
+	}
 	egress, err := s.tunnel.PrepareEgress(ctx, p.attribution(), p.egressGateway)
 	if err != nil {
 		return err
@@ -466,6 +474,9 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		return restoreGuestReadyError(ctx, "reseeding guest CRNG", err)
 	}
 	tReseeded := time.Now()
+	if err := syncGuestClock(ctx, s.hypervisor, guestAC, time.Now, guestClockTimeout); err != nil {
+		return err
+	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
 	if err := wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {

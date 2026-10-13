@@ -48,6 +48,10 @@ const (
 	// AttrCPUModel identifies the host CPU family/model (e.g. "6:143" on amd64
 	// or "0x0:0xd40:1" on arm64) reported by microVM runtimes.
 	AttrCPUModel = "cpu_model"
+
+	// AttrHypervisor is the host hypervisor backend a micro-VM runtime drives
+	// ("kvm", "mshv"). Guest memory snapshots restore only on the same backend.
+	AttrHypervisor = "hypervisor"
 )
 
 // ProbeHost returns a minimal v1 VersionedSandboxCompat with the current

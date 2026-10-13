@@ -256,9 +256,13 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 }
 
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot
-// (config.json + state.json + memory-ranges) plus the base-id the restore side
-// needs, and returns how long the snapshot itself took.
+// (config.json + state.json + memory-ranges) plus the base-id and hypervisor
+// metadata the restore side needs, and returns how long the snapshot itself took.
 func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Client, ra *runningActor, actorUID, checkpointDir string) (time.Duration, error) {
+	if err := writeSnapshotHypervisor(checkpointDir, s.hypervisor); err != nil {
+		return 0, err
+	}
+
 	// Record the FROZEN base id (the id the guest's virtio-fs find-paths are pinned
 	// to, <baseID>/rootfs). For a cold-run actor this is its own id; for a restored
 	// actor it is the golden id propagated via ra.baseID (set from the snapshot we
