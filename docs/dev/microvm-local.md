@@ -1,11 +1,20 @@
 # Running the microVM runtime locally
 
 The microVM sandbox class (`ateworker-microvm`: a Kata guest on Cloud Hypervisor)
-needs `/dev/kvm`, which takes some extra setup compared to the default gVisor
-path. This guide covers just that delta: getting a KVM-capable Docker
+uses `/dev/kvm` by default, which takes some extra setup compared to the default
+gVisor path. This guide covers just that delta: getting a KVM-capable Docker
 environment — on Linux, or on Apple Silicon macOS via
 [Lima](https://lima-vm.io/) — then running the microVM counter demo and
 verifying a guest-memory snapshot round-trip.
+
+Microsoft Hypervisor root partitions expose `/dev/mshv` instead. Name
+`ate.dev/mshv: "1"` in the microVM `WorkerPool`'s
+`spec.template.resources.limits` and use a Cloud Hypervisor asset built with its
+`mshv` feature (the upstream release binary has both `kvm` and `mshv`). atelet
+advertises `ate.dev/mshv` only on nodes where the character device exists, so
+the worker's resource request drives placement without a node label or
+architecture selector, and `ateworker-microvm` detects the backend from the
+device it was granted.
 
 ## Prerequisites
 

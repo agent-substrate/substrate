@@ -355,6 +355,39 @@ func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
 	}
 }
 
+func TestRestoreWorkloadRejectsHypervisorMismatch(t *testing.T) {
+	root := t.TempDir()
+	restoreDir := filepath.Join(root, "restore")
+	if err := os.MkdirAll(restoreDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSnapshotHypervisor(restoreDir, hypervisorMSHV); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &AteWorkerService{hypervisor: hypervisorKVM}
+	_, err := s.RestoreWorkload(t.Context(), &ateworkerpb.RestoreWorkloadRequest{
+		ActorUid: "actor-a",
+		Fidelity: ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		ActorDirs: &ateworkerpb.ActorDirs{
+			RootDir:                   root,
+			OciBundleDir:              filepath.Join(root, "bundle"),
+			CheckpointDir:             filepath.Join(root, "checkpoint"),
+			RestoreDir:                restoreDir,
+			DurableDirVolumeMountsDir: filepath.Join(root, "durable"),
+			SystemInfoVolumeRootsDir:  filepath.Join(root, "system-info"),
+			ExternalVolumeMountsDir:   filepath.Join(root, "volumes"),
+			SandboxAssetsDir:          nodepath.ActorSandboxAssetsDir("actor-a"),
+		},
+	})
+	if apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RestoreWorkload() code = %v, want %v (err: %v)", apierror.Code(err), codes.FailedPrecondition, err)
+	}
+	if !strings.Contains(err.Error(), "taken on hypervisor mshv") {
+		t.Errorf("RestoreWorkload() error = %v, want hypervisor mismatch", err)
+	}
+}
+
 func TestMaybeDropStagedMemoryImage(t *testing.T) {
 	for _, tc := range []struct {
 		name               string

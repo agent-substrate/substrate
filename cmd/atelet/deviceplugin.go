@@ -31,21 +31,22 @@ import (
 const hostDevRoot = "/host/dev"
 
 // microvmNodeCapable reports whether this node can host micro-VM workers:
-// cloud-hypervisor needs /dev/kvm (VmCreate fails with EPERM without it), and
+// cloud-hypervisor needs a supported hypervisor device, and
 // worker pods request the matching extended resource, so they only schedule to
 // nodes where the device exists. Device presence is therefore the earliest
 // reliable eligibility signal — known at atelet startup, before any WorkerPool
 // schedules here.
-//
-// TODO(https://github.com/agent-substrate/substrate/pull/1207): /dev/kvm is
-// not the only micro-VM hypervisor device; once /dev/mshv support lands, an
-// mshv-only node would be wrongly reported incapable here. Treat presence of
-// any micro-VM hypervisor device in SandboxDevices as capability, not KVM
-// alone.
 func microvmNodeCapable(devRoot string) bool {
-	for _, d := range deviceplugin.SandboxDevices {
-		if d.ResourceName == deviceplugin.ResourceKVM {
-			return d.Present(devRoot)
+	return microvmNodeCapableWithDevices(devRoot, deviceplugin.SandboxDevices)
+}
+
+func microvmNodeCapableWithDevices(devRoot string, devices []deviceplugin.HostDevice) bool {
+	for _, d := range devices {
+		switch d.ResourceName {
+		case deviceplugin.ResourceKVM, deviceplugin.ResourceMSHV:
+			if d.Present(devRoot) {
+				return true
+			}
 		}
 	}
 	return false
@@ -53,8 +54,9 @@ func microvmNodeCapable(devRoot string) bool {
 
 // startDevicePlugins advertises the sandbox host devices present on this node to
 // kubelet as extended resources, in the background for the lifetime of ctx. This
-// is what lets a worker be granted /dev/kvm without running privileged. atelet
-// already runs per node, so it hosts this rather than adding a second DaemonSet.
+// is what lets a worker be granted its hypervisor device without running
+// privileged. atelet already runs per node, so it hosts this rather than adding
+// a second DaemonSet.
 //
 // Failures are logged, never fatal: a node that cannot advertise devices still
 // runs every sandbox class that needs none.

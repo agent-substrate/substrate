@@ -401,6 +401,9 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		return fmt.Errorf("ateworker-microvm requires %q and %q asset paths", assetKernel, assetImage)
 	}
 	rr := s.resolveRuntime(paths)
+	if err := s.vmmBackends.check(ctx, rr.chBinary, s.hypervisor); err != nil {
+		return err
+	}
 	egress, err := s.tunnel.PrepareEgress(ctx, p.attribution(), p.egressGateway)
 	if err != nil {
 		return err
@@ -535,7 +538,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// on a failed agent dial below, so keep it here.
 	consoleLog := kata.ConsoleLogPath(actorUID)
 	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, vcpus,
-		agentInit(ctx, client.Info()), s.guestDebug)
+		agentInit(ctx, client.Info(), s.hypervisor), s.guestDebug, s.hypervisor)
 	if err := client.CreateVM(ctx, vmCfg); err != nil {
 		return fmt.Errorf("while creating VM: %w", err)
 	}
@@ -590,6 +593,11 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 			_ = ac.Close()
 		}
 	}()
+
+	// Correct the guest clock before any workload starts.
+	if err := syncGuestClock(ctx, s.hypervisor, ac, time.Now, guestClockTimeout); err != nil {
+		return err
+	}
 
 	// Post-boot kata-agent setup: sandbox, guest networking, start each container.
 	if err := s.startActorContainers(ctx, ac, actorUID, vsockPath, ctrs); err != nil {
@@ -765,15 +773,15 @@ func resolveGuestMemMiB(declaredBytes int64, reserveMiB int) (int, error) {
 //
 // Booting the agent directly skips systemd entirely, which is most of what the guest
 // reads at boot and most of what its snapshot carries. The catch is that it also drops
-// chronyd (kata-containers.target wants it), and chronyd is what repairs the guest
-// clock after a resume — so this is only safe on a VMM that advances the guest clock
-// across a restore itself. On an older or unreadable version, boot systemd instead and
-// keep the guest correct at the cost of the memory.
-func agentInit(ctx context.Context, info ch.VMMInfo) bool {
-	if info.AdvancesGuestClockOnRestore() {
+// chronyd (kata-containers.target wants it). Use the direct path only when KVM advances
+// the guest clock across restore itself. Other backends boot systemd to retain chronyd
+// as a fallback; on MSHV, syncGuestClock also sets the clock after boot and restore.
+func agentInit(ctx context.Context, info ch.VMMInfo, hypervisor hypervisor) bool {
+	if hypervisor == hypervisorKVM && info.KVMAdvancesGuestClockOnRestore() {
 		return true
 	}
 	slog.InfoContext(ctx, "VMM does not advance the guest clock on restore; booting systemd to keep chronyd",
+		slog.String("hypervisor", string(hypervisor)),
 		slog.String("vmm_version", info.Version), slog.String("vmm_build_version", info.BuildVersion))
 	return false
 }
@@ -801,14 +809,14 @@ func initParams(agentInit bool) string {
 // the earliest messages: hvc0 only exists once virtio-console probes, so the memory
 // map, CPU features and ACPI lines never reach the log. guestDebug adds the UART back
 // with earlycon (and pays the ~800ms) for diagnosing a guest that dies before then.
-func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool) ch.VmConfig {
+func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool, hypervisor hypervisor) ch.VmConfig {
 	cmdline := "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro ro rootfstype=ext4 " +
 		"panic=1 no_timer_check noreplace-smp console=hvc0 " +
 		initParams(agentInit)
 	if kparams != "" {
 		cmdline += " " + kparams
 	}
-	if runtime.GOARCH == "amd64" {
+	if runtime.GOARCH == "amd64" && hypervisor == hypervisorKVM {
 		cmdline += " clocksource=kvm-clock"
 	}
 	serial := &ch.ConsoleConfig{Mode: "Off"}

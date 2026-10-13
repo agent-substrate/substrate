@@ -39,6 +39,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/internal/deviceplugin"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
@@ -223,8 +224,7 @@ func TestPrewarmProcessReappliesClassGate(t *testing.T) {
 	}
 }
 
-// TestMicrovmNodeCapable covers the detectable negative cases; the positive
-// case needs a /dev/kvm character device, which a test cannot mknod.
+// TestMicrovmNodeCapable covers the detectable negative cases.
 func TestMicrovmNodeCapable(t *testing.T) {
 	devRoot := t.TempDir()
 	if microvmNodeCapable(devRoot) {
@@ -236,6 +236,18 @@ func TestMicrovmNodeCapable(t *testing.T) {
 	}
 	if microvmNodeCapable(devRoot) {
 		t.Error("microvmNodeCapable = true for a regular file named kvm")
+	}
+
+	for _, resourceName := range []string{deviceplugin.ResourceKVM, deviceplugin.ResourceMSHV} {
+		t.Run(resourceName, func(t *testing.T) {
+			devices := []deviceplugin.HostDevice{{
+				ResourceName: resourceName,
+				Path:         "/dev/null",
+			}}
+			if !microvmNodeCapableWithDevices("/dev", devices) {
+				t.Errorf("microvmNodeCapableWithDevices = false with %s present", resourceName)
+			}
+		})
 	}
 }
 

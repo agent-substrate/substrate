@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 )
 
@@ -145,6 +146,7 @@ func TestInitParams(t *testing.T) {
 	if got := initParams(true); got != "init=/usr/bin/kata-agent" {
 		t.Errorf("initParams(true) = %q", got)
 	}
+
 	// Without the agent as PID 1, systemd needs kata's target — it powers the guest
 	// off within seconds otherwise — and networkd must stay masked, the agent owns eth0.
 	systemd := initParams(false)
@@ -162,6 +164,16 @@ func TestInitParams(t *testing.T) {
 	}
 }
 
+func TestAgentInitRequiresKVMClockRepair(t *testing.T) {
+	info := ch.VMMInfo{Version: "53.0.0"}
+	if !agentInit(t.Context(), info, hypervisorKVM) {
+		t.Error("agentInit = false for KVM with a VMM that repairs the guest clock")
+	}
+	if agentInit(t.Context(), info, hypervisorMSHV) {
+		t.Error("agentInit = true for MSHV without verified restore clock repair")
+	}
+}
+
 // The guest must log over virtio-console, not the emulated UART: the UART traps to
 // the VMM per byte, which costs ~800ms of cold boot on the kata guest's boot log.
 // Debug mode adds the UART back (with earlycon) to capture the early messages hvc0
@@ -170,7 +182,7 @@ func TestBuildVMConfigConsole(t *testing.T) {
 	const id = "actor-1"
 	consoleLog := kata.ConsoleLogPath(id)
 
-	cfg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, false)
+	cfg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, false, hypervisorKVM)
 	if cfg.Console == nil || cfg.Console.Mode != "File" || cfg.Console.File != consoleLog {
 		t.Errorf("Console = %+v, want File %q", cfg.Console, consoleLog)
 	}
@@ -187,12 +199,17 @@ func TestBuildVMConfigConsole(t *testing.T) {
 		t.Errorf("cmdline = %q, must not pay for earlycon outside debug mode", cfg.Payload.Cmdline)
 	}
 
-	dbg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, true)
+	dbg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, true, hypervisorKVM)
 	if dbg.Serial == nil || dbg.Serial.Mode != "File" || dbg.Serial.File != kata.SerialLogPath(id) {
 		t.Errorf("debug Serial = %+v, want File %q", dbg.Serial, kata.SerialLogPath(id))
 	}
 	if !strings.Contains(dbg.Payload.Cmdline, "earlycon=") {
 		t.Errorf("debug cmdline = %q, want an earlycon", dbg.Payload.Cmdline)
+	}
+
+	mshv := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, false, false, hypervisorMSHV)
+	if strings.Contains(mshv.Payload.Cmdline, "clocksource=kvm-clock") {
+		t.Errorf("MSHV cmdline = %q, must not select the KVM clocksource", mshv.Payload.Cmdline)
 	}
 }
 

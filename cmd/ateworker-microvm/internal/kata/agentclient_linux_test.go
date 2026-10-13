@@ -103,3 +103,44 @@ func TestReseedRandomDevReturnsAgentError(t *testing.T) {
 		t.Fatal("ReseedRandomDev returned nil for an agent error, want the error")
 	}
 }
+
+func TestSetGuestDateTime(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "agent.sock")
+	listener, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	server, err := ttrpc.NewServer()
+	if err != nil {
+		t.Fatalf("ttrpc.NewServer: %v", err)
+	}
+	got := make(chan *agentpb.SetGuestDateTimeRequest, 1)
+	server.Register("grpc.AgentService", map[string]ttrpc.Method{
+		"SetGuestDateTime": func(_ context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+			var req agentpb.SetGuestDateTimeRequest
+			if err := unmarshal(&req); err != nil {
+				return nil, err
+			}
+			got <- &req
+			return &emptypb.Empty{}, nil
+		},
+	})
+	go func() { _ = server.Serve(context.Background(), listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	ac := &AgentClient{conn: conn, client: ttrpc.NewClient(conn)}
+	t.Cleanup(func() { _ = ac.Close() })
+
+	want := time.Unix(123, 456789000)
+	if err := ac.SetGuestDateTime(t.Context(), want); err != nil {
+		t.Fatalf("SetGuestDateTime: %v", err)
+	}
+	req := <-got
+	if req.GetSec() != want.Unix() || req.GetUsec() != 456789 {
+		t.Errorf("SetGuestDateTime request = {%d, %d}, want {%d, 456789}", req.GetSec(), req.GetUsec(), want.Unix())
+	}
+}
