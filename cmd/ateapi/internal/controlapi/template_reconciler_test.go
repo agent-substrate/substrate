@@ -25,6 +25,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
@@ -32,6 +33,7 @@ import (
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -42,6 +44,8 @@ type fakeTemplateStore struct {
 
 	// leaseErr, when set, is returned by AcquireLease.
 	leaseErr error
+	// updateErr, when set, is returned by UpdateActorTemplate.
+	updateErr error
 	// forcePageSize, when > 0, overrides the requested page size so tests
 	// can exercise the resync pagination loop.
 	forcePageSize int
@@ -99,6 +103,9 @@ func (s *fakeTemplateStore) ListActorTemplates(_ context.Context, _ string, opts
 func (s *fakeTemplateStore) UpdateActorTemplate(_ context.Context, ref resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.updateErr != nil {
+		return nil, s.updateErr
+	}
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
@@ -167,6 +174,10 @@ type fakeGoldenControl struct {
 	// snapshot is the external snapshot a completed suspend produces; empty
 	// simulates a suspend that wrote none.
 	snapshot string
+	// lastGen is the golden actor's last assigned generation. A suspend of a
+	// RUNNING actor assigns the next one, which a rolled-back suspend keeps
+	// without a snapshot, as rollBackAbortedCheckpoint does.
+	lastGen int32
 
 	createReqs   []*ateapipb.CreateActorRequest
 	resumeReqs   []*ateapipb.ResumeActorRequest
@@ -182,11 +193,11 @@ func (c *fakeGoldenControl) CreateAtespace(_ context.Context, req *ateapipb.Crea
 }
 
 func (c *fakeGoldenControl) goldenActorStatus() *ateapipb.ActorStatus {
-	st := &ateapipb.ActorStatus{State: c.goldenState}
+	st := &ateapipb.ActorStatus{State: c.goldenState, LastAssignedGeneration: c.lastGen}
 	if c.goldenSnapshot != "" {
-		st.LastAssignedGeneration = 1
+		st.LastAssignedGeneration = max(c.lastGen, 1)
 		st.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "golden-snapshot", c.goldenSnapshot, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(st.LastAssignedGeneration, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "golden-snapshot", c.goldenSnapshot, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 		}
 	}
 	return st
@@ -242,7 +253,14 @@ func (c *fakeGoldenControl) SuspendActor(_ context.Context, req *ateapipb.Suspen
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.suspendReqs = append(c.suspendReqs, req)
+	if c.suspendErr != nil && !isCheckpointRolledBack(c.suspendErr) {
+		return nil, c.suspendErr
+	}
+	if c.goldenState == ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		c.lastGen++
+	}
 	if c.suspendErr != nil {
+		c.goldenState = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil, c.suspendErr
 	}
 	c.goldenState = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
@@ -475,12 +493,55 @@ func TestReconcileOne(t *testing.T) {
 			wantDeadline:   true,
 		},
 		{
+			// The deadline is in the future so the row fails only on the
+			// rolled-back generation, not on a passed deadline.
+			name: "running golden actor with a rolled-back suspend fails the template without suspending",
+			template: testTemplate(withoutWakeupProbe,
+				withSnapshotDeadline(time.Now().Add(time.Hour))),
+			control:          &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING, lastGen: 1},
+			wantFailedReason: reasonGoldenSnapshotAborted,
+			wantMessage:      "suspend at generation 1 left no snapshot",
+		},
+		{
+			name: "running golden actor whose latest generation has its snapshot waits for its deadline",
+			template: testTemplate(withoutWakeupProbe,
+				withSnapshotDeadline(time.Now().Add(time.Hour))),
+			control:        &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING, lastGen: 2, goldenSnapshot: goldenSnapshot},
+			wantRequeueMin: 59 * time.Minute,
+			wantRequeueMax: time.Hour,
+		},
+		{
 			name: "suspend returning no snapshot errors",
 			template: testTemplate(
 				withSnapshotDeadline(time.Now().Add(-time.Minute))),
 			control:      &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING, snapshot: ""},
 			wantErr:      true,
 			wantSuspends: 1,
+		},
+		{
+			name: "suspend failing precondition requeues without failing",
+			template: testTemplate(
+				withSnapshotDeadline(time.Now().Add(-time.Minute))),
+			control:      &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING, suspendErr: apierror.FailedPrecondition("actor is busy")},
+			wantErr:      true,
+			wantSuspends: 1,
+		},
+		{
+			name: "rolled-back suspend of a running golden actor fails the template",
+			template: testTemplate(
+				withSnapshotDeadline(time.Now().Add(-time.Minute))),
+			control:          &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING, suspendErr: rolledBackSuspendErr()},
+			wantFailedReason: reasonGoldenSnapshotAborted,
+			wantMessage:      "still RUNNING",
+			wantSuspends:     1,
+		},
+		{
+			name:             "rolled-back suspend of a suspending golden actor fails the template",
+			template:         testTemplate(),
+			control:          &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, suspendErr: rolledBackSuspendErr()},
+			wantFailedReason: reasonGoldenSnapshotAborted,
+			wantMessage:      "still RUNNING",
+			wantSuspends:     1,
 		},
 		{
 			name:         "suspending golden actor is completed and recorded",
@@ -679,6 +740,240 @@ func TestReconcileOne_GoldenActorRequests(t *testing.T) {
 	}
 }
 
+// rolledBackSuspendErr is the error SuspendActor returns for a golden actor
+// whose checkpoint was aborted and rolled back to RUNNING.
+func rolledBackSuspendErr() error {
+	return &checkpointRolledBackError{err: apierror.FailedPrecondition(
+		"suspend of actor ate-golden/%s was aborted and the actor is still RUNNING: while freezing guest container \"app\": injected", testTemplateUID)}
+}
+
+// abortedGoldenDeleteReq is the request that deletes the golden actor of
+// testTemplate after its suspend was rolled back.
+var abortedGoldenDeleteReq = &ateapipb.DeleteActorRequest{
+	Actor:    &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: testTemplateUID},
+	AnyState: true,
+}
+
+// checkAbortedGoldenCleanup checks that the golden snapshot is failed as
+// aborted, that the golden actor is gone after wantDeletes delete requests,
+// each the any-state delete, and that the suspend ran exactly once.
+func checkAbortedGoldenCleanup(t *testing.T, st *fakeTemplateStore, control *fakeGoldenControl, wantDeletes int) {
+	t.Helper()
+	if _, _, suspends := control.callCounts(); suspends != 1 {
+		t.Errorf("suspend calls = %d, want 1", suspends)
+	}
+	if got := st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetErrorMessage(); !strings.HasPrefix(got, reasonGoldenSnapshotAborted+": ") {
+		t.Errorf("stored error message = %q, want prefix %q", got, reasonGoldenSnapshotAborted+": ")
+	}
+	control.mu.Lock()
+	defer control.mu.Unlock()
+	if control.exists {
+		t.Error("golden actor still exists, want it deleted")
+	}
+	if len(control.deleteReqs) != wantDeletes {
+		t.Fatalf("delete requests = %v, want %d", control.deleteReqs, wantDeletes)
+	}
+	for i, req := range control.deleteReqs {
+		if diff := cmp.Diff(abortedGoldenDeleteReq, req, protocmp.Transform()); diff != "" {
+			t.Errorf("delete request %d (-want +got):\n%s", i, diff)
+		}
+	}
+}
+
+// TestReconcileOne_RolledBackSuspendDeletesGoldenActor pins that a golden
+// snapshot failed by a rolled-back suspend deletes its RUNNING golden actor,
+// and that later passes neither retry the suspend nor delete again.
+func TestReconcileOne_RolledBackSuspendDeletesGoldenActor(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTemplateStore(testTemplate(withSnapshotDeadline(time.Now().Add(-time.Minute))))
+	control := &fakeGoldenControl{
+		exists:      true,
+		goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		suspendErr:  rolledBackSuspendErr(),
+	}
+	r := newTestTemplateReconciler(st, control)
+
+	for pass := range 2 {
+		if _, err := r.reconcileOne(ctx, testTemplateRef); err != nil {
+			t.Fatalf("reconcileOne pass %d: %v", pass, err)
+		}
+	}
+	checkAbortedGoldenCleanup(t, st, control, 1)
+}
+
+// TestReconcileOne_AbortedGoldenActorDeleteRetries pins that a failed delete
+// of the golden actor after a rolled-back suspend is returned for the
+// workqueue to retry, with the failure already recorded, and that the retry
+// deletes the actor without suspending it again.
+func TestReconcileOne_AbortedGoldenActorDeleteRetries(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTemplateStore(testTemplate(withSnapshotDeadline(time.Now().Add(-time.Minute))))
+	control := &fakeGoldenControl{
+		exists:      true,
+		goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		suspendErr:  rolledBackSuspendErr(),
+		deleteErr:   apierror.Unavailable("atelet unreachable"),
+	}
+	r := newTestTemplateReconciler(st, control)
+
+	// The first pass fails the snapshot, then fails to delete; so does the
+	// first retry.
+	for pass := range 2 {
+		if _, err := r.reconcileOne(ctx, testTemplateRef); apierror.Code(err) != codes.Unavailable {
+			t.Fatalf("reconcileOne pass %d error = %v, want the Unavailable delete error", pass, err)
+		}
+	}
+	if got := st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetErrorMessage(); !strings.HasPrefix(got, reasonGoldenSnapshotAborted+": ") {
+		t.Fatalf("stored error message after failed deletes = %q, want prefix %q", got, reasonGoldenSnapshotAborted+": ")
+	}
+
+	control.mu.Lock()
+	control.deleteErr = nil
+	control.mu.Unlock()
+	for pass := range 2 {
+		if _, err := r.reconcileOne(ctx, testTemplateRef); err != nil {
+			t.Fatalf("reconcileOne pass %d after recovery: %v", pass, err)
+		}
+	}
+	// Two failed deletes, one that succeeds, none once the actor is gone.
+	checkAbortedGoldenCleanup(t, st, control, 3)
+}
+
+// TestReconcileOne_AbortedGoldenActorCleanedUpAfterRestart pins that a
+// replica that stops after recording GoldenSnapshotAborted but before the
+// golden actor is deleted leaves the cleanup to the next replica: its resync
+// enqueues the failed template and its pass deletes the actor without
+// suspending it again.
+func TestReconcileOne_AbortedGoldenActorCleanedUpAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTemplateStore(testTemplate(withSnapshotDeadline(time.Now().Add(-time.Minute))))
+	control := &fakeGoldenControl{
+		exists:      true,
+		goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		suspendErr:  rolledBackSuspendErr(),
+		deleteErr:   apierror.Unavailable("replica stopping"),
+	}
+	before := newTestTemplateReconciler(st, control)
+	if _, err := before.reconcileOne(ctx, testTemplateRef); err == nil {
+		t.Fatal("first replica's pass succeeded, want its delete to fail")
+	}
+	// The first replica stops.
+	drainQueue(before)
+
+	control.mu.Lock()
+	control.deleteErr = nil
+	control.mu.Unlock()
+	after := newTestTemplateReconciler(st, control)
+	after.resync(ctx)
+	queued := drainQueue(after)
+	if len(queued) != 1 || queued[0] != testTemplateRef {
+		t.Fatalf("resync queued %v, want [%v]", queued, testTemplateRef)
+	}
+	if _, err := after.reconcileOne(ctx, queued[0]); err != nil {
+		t.Fatalf("reconcileOne after restart: %v", err)
+	}
+	checkAbortedGoldenCleanup(t, st, control, 2)
+}
+
+// TestReconcileOne_RolledBackSuspendRecordedAfterRestart pins that a replica
+// that stops after a golden suspend was rolled back to RUNNING, but before it
+// recorded GoldenSnapshotAborted, leaves the failure to the next replica: its
+// resync enqueues the template, and its pass reads the rollback from the
+// golden actor's status, fails the golden snapshot and deletes the actor
+// without suspending it again.
+func TestReconcileOne_RolledBackSuspendRecordedAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTemplateStore(testTemplate(withSnapshotDeadline(time.Now().Add(-time.Minute))))
+	control := &fakeGoldenControl{
+		exists:      true,
+		goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		suspendErr:  rolledBackSuspendErr(),
+	}
+	// The first replica's lease is lost after the rollback, so its write of
+	// the failure fails.
+	st.updateErr = errors.New("lease lost")
+	before := newTestTemplateReconciler(st, control)
+	if _, err := before.reconcileOne(ctx, testTemplateRef); err == nil {
+		t.Fatal("first replica's pass succeeded, want its failure write to fail")
+	}
+	drainQueue(before)
+	if got := st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetErrorMessage(); got != "" {
+		t.Fatalf("stored error message after the lost write = %q, want none", got)
+	}
+	if len(control.deleteReqs) != 0 {
+		t.Fatalf("delete requests after the lost write = %v, want none", control.deleteReqs)
+	}
+
+	st.mu.Lock()
+	st.updateErr = nil
+	st.mu.Unlock()
+	after := newTestTemplateReconciler(st, control)
+	after.resync(ctx)
+	queued := drainQueue(after)
+	if len(queued) != 1 || queued[0] != testTemplateRef {
+		t.Fatalf("resync queued %v, want [%v]", queued, testTemplateRef)
+	}
+	if _, err := after.reconcileOne(ctx, queued[0]); err != nil {
+		t.Fatalf("reconcileOne after restart: %v", err)
+	}
+	checkAbortedGoldenCleanup(t, st, control, 1)
+	if got := st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetErrorMessage(); !strings.Contains(got, "generation 1 left no snapshot") {
+		t.Errorf("stored error message = %q, want it to name the rolled-back generation", got)
+	}
+}
+
+// TestReconcileOne_AbortedGoldenActorGetFails pins that an error reading the
+// golden actor of an aborted golden snapshot is returned for retry and does
+// not delete or suspend.
+func TestReconcileOne_AbortedGoldenActorGetFails(t *testing.T) {
+	st := newFakeTemplateStore(testTemplate(withFailed(reasonGoldenSnapshotAborted)))
+	control := &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING, getErr: apierror.Unavailable("store down")}
+	r := newTestTemplateReconciler(st, control)
+
+	if _, err := r.reconcileOne(context.Background(), testTemplateRef); apierror.Code(err) != codes.Unavailable {
+		t.Fatalf("reconcileOne error = %v, want the Unavailable get error", err)
+	}
+	if _, _, suspends := control.callCounts(); suspends != 0 {
+		t.Errorf("suspend calls = %d, want 0", suspends)
+	}
+	if len(control.deleteReqs) != 0 {
+		t.Errorf("delete requests = %v, want none", control.deleteReqs)
+	}
+}
+
+// TestReconcileOne_FailedTemplatesLeaveGoldenActor pins that only an aborted
+// golden snapshot deletes its golden actor: other failures leave it for the
+// template's deletion, and an aborted one whose actor is gone sends no delete.
+func TestReconcileOne_FailedTemplatesLeaveGoldenActor(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		reason      string
+		exists      bool
+		wantDeletes int
+	}{
+		{"aborted with live actor", reasonGoldenSnapshotAborted, true, 1},
+		{"aborted with actor gone", reasonGoldenSnapshotAborted, false, 0},
+		{"crashed", reasonGoldenActorCrashed, true, 0},
+		{"unexpected state", reasonUnexpectedState, true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeTemplateStore(testTemplate(withFailed(tc.reason)))
+			control := &fakeGoldenControl{exists: tc.exists, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING}
+			r := newTestTemplateReconciler(st, control)
+
+			if _, err := r.reconcileOne(context.Background(), testTemplateRef); err != nil {
+				t.Fatalf("reconcileOne: %v", err)
+			}
+			if creates, resumes, suspends := control.callCounts(); creates+resumes+suspends != 0 {
+				t.Errorf("creates, resumes, suspends = %d, %d, %d, want none", creates, resumes, suspends)
+			}
+			if len(control.deleteReqs) != tc.wantDeletes {
+				t.Errorf("delete requests = %v, want %d", control.deleteReqs, tc.wantDeletes)
+			}
+		})
+	}
+}
+
 func TestCheckpoint_TerminalStateErrors(t *testing.T) {
 	ctx := context.Background()
 
@@ -841,6 +1136,7 @@ func TestResync_QueuesOnlyActionableTemplates(t *testing.T) {
 		{"mid warmup", []func(*ateapipb.ActorTemplate){withSnapshotDeadline(time.Now().Add(time.Hour))}, true},
 		{"golden snapshot taken", []func(*ateapipb.ActorTemplate){withGoldenTag()}, false},
 		{"failed", []func(*ateapipb.ActorTemplate){withFailed(reasonGoldenActorCrashed)}, false},
+		{"aborted", []func(*ateapipb.ActorTemplate){withFailed(reasonGoldenSnapshotAborted)}, true},
 	}
 
 	// Seed one template per row, resync once, and check membership per row.
@@ -869,6 +1165,52 @@ func TestResync_QueuesOnlyActionableTemplates(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestResync_SkipsAbortedTemplateOnceGoldenActorGone pins that a replica
+// whose pass found an aborted template's golden actor gone stops enqueuing
+// that template, that another replica still enqueues it until it sees the
+// same, and that a resync forgets templates it no longer lists.
+func TestResync_SkipsAbortedTemplateOnceGoldenActorGone(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTemplateStore(testTemplate(withFailed(reasonGoldenSnapshotAborted)))
+	control := &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING}
+	r := newTestTemplateReconciler(st, control)
+
+	// The first pass deletes the actor, the second finds it gone.
+	for pass := 1; pass <= 2; pass++ {
+		r.resync(ctx)
+		if got := r.queue.Len(); got != 1 {
+			t.Fatalf("pass %d: resync queued %d templates, want 1", pass, got)
+		}
+		ref, _ := r.queue.Get()
+		if _, err := r.reconcileOne(ctx, ref); err != nil {
+			t.Fatalf("pass %d: reconcileOne: %v", pass, err)
+		}
+		r.queue.Done(ref)
+	}
+	if len(control.deleteReqs) != 1 {
+		t.Errorf("delete requests = %v, want 1", control.deleteReqs)
+	}
+
+	r.resync(ctx)
+	if got := r.queue.Len(); got != 0 {
+		t.Errorf("resync after the actor was seen gone queued %d templates, want 0", got)
+	}
+	other := newTestTemplateReconciler(st, control)
+	other.resync(ctx)
+	if got := len(drainQueue(other)); got != 1 {
+		t.Errorf("another replica's resync queued %d templates, want 1", got)
+	}
+
+	st.mu.Lock()
+	delete(st.templates, testTemplateRef)
+	st.mu.Unlock()
+	r.resync(ctx)
+	if r.sawGoldenActorGone(testTemplateUID) {
+		t.Error("resync kept a deleted template's UID")
+	}
+	drainQueue(r)
 }
 
 func TestResync_FollowsPagination(t *testing.T) {
