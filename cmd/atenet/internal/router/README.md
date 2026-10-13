@@ -193,6 +193,25 @@ ingress dataplane, `atenet-egress` the egress gateway.
 `--atenet-dataplane` selects the dataplane for both Deployments. Each gateway has
 its own static configuration because ingress and egress scale independently.
 
+## Ingress client authentication and authorization
+
+The ingress router is migrating to require clients to present a SPIFFE certificate.
+* With `--ingress-auth-mode=static-mtls`, the ingress router no longer offers any
+  plaintext listeners, and all clients *must* present a SPIFFE certificate.
+* With `--ingress-auth-mode=deprecated-insecure`, the ingress router offers both
+  plaintext and secure listeners.  If a client presents a SPIFFE certificate, it
+  must be valid.
+
+Configure the CA that is used to validate client certificates with the
+`--ingress-client-ca-file` flag, which points at a PEM file containing root
+certificates.
+
+Right now the only "authorization" policy is to check the client's SPIFFE ID
+against a static allowlist.  Any ID on the allowlist may use the ingress router
+to contact any actor.  Richer authorization policies may be added post-GA.  Use
+the `--ingress-allowed-spiffe-ids` flag to set the allowlist (comma-separated
+list).
+
 ## status page
 
 Serve a `/statusz` page on port 8080.

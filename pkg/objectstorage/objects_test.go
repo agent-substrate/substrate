@@ -17,6 +17,7 @@ package objectstorage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -45,6 +46,53 @@ func (s *memStore) GetObject(_ context.Context, bucket, object string) (io.ReadC
 		return nil, fmt.Errorf("object %q/%q not found", bucket, object)
 	}
 	return io.NopCloser(bytes.NewReader(b)), nil
+}
+
+type closeErrorReader struct {
+	io.ReadCloser
+	closeErr error
+}
+
+func (r *closeErrorReader) Close() error {
+	return errors.Join(r.ReadCloser.Close(), r.closeErr)
+}
+
+type closeErrorStore struct {
+	*memStore
+	closeErr error
+}
+
+func (s *closeErrorStore) GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
+	r, err := s.memStore.GetObject(ctx, bucket, object)
+	if err != nil {
+		return nil, err
+	}
+	return &closeErrorReader{ReadCloser: r, closeErr: s.closeErr}, nil
+}
+
+func TestFetchFromGCSWithZstdCloseError(t *testing.T) {
+	var compressed bytes.Buffer
+	if _, err := writeContent(&compressed, bytes.NewBufferString("snapshot payload")); err != nil {
+		t.Fatal(err)
+	}
+	closeErr := errors.New("object reader close failed")
+	for _, tc := range []struct {
+		name    string
+		data    []byte
+		wantErr error
+	}{
+		{name: "successful decode", data: compressed.Bytes(), wantErr: closeErr},
+		{name: "truncated object", data: compressed.Bytes()[:compressed.Len()-1], wantErr: io.ErrUnexpectedEOF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &closeErrorStore{memStore: newMemStore(), closeErr: closeErr}
+			store.m["bucket/snapshot"] = tc.data
+			err := fetchFromGCSWithZstd(context.Background(), store, "gs://bucket/snapshot", io.Discard)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("fetchFromGCSWithZstd() error = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
 }
 
 // streamingMemStore is a memStore that advertises streaming PutObject support, so

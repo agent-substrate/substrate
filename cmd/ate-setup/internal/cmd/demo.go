@@ -56,6 +56,9 @@ func init() {
 			Short: demo.Description(),
 			Args:  cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
+				if err := env.RequireControlPlane(cmd.Context()); err != nil {
+					return err
+				}
 				return demo.Deploy(cmd.Context(), env)
 			},
 		}

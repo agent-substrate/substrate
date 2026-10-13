@@ -96,6 +96,10 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 			values:  benchmarkValues,
 			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "kernelmem"},
 		},
+		{
+			relPath: "benchmarking/nighthawk-egress/traffic-driver-template.yaml.tmpl",
+			want:    resources.ActorTemplateRef{Atespace: "nighthawk", Name: "traffic-driver"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.relPath, func(t *testing.T) {

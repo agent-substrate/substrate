@@ -36,6 +36,8 @@ var (
 	metricsListenAddr = pflag.String("metrics-listen-addr", ":9090", "Address and port the Prometheus metrics server should listen on.")
 	dataDir           = pflag.String("data-dir", "", "Directory under which WriteDisk files are stored. Required.")
 	mode              = pflag.String("mode", glutton.ModeGRPC, "Wire protocol for the main listener: grpc (default) or http.")
+	syncWrites        = pflag.Bool("sync-writes", false, "Fsync each WriteDisk file before returning, so the write includes the flush to the backing volume.")
+	writableReadyz    = pflag.Bool("readyz-require-writable-data-dir", false, "Fail /readyz until --data-dir is writable, so a resume waits for an external volume mount.")
 
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
@@ -73,7 +75,14 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create data directory", fmt.Errorf("%s: %w", *dataDir, err))
 	}
 
-	svc, err := glutton.New(*dataDir)
+	var opts []glutton.Option
+	if *syncWrites {
+		opts = append(opts, glutton.WithSyncWrites())
+	}
+	if *writableReadyz {
+		opts = append(opts, glutton.WithWritableReadyz())
+	}
+	svc, err := glutton.New(*dataDir, opts...)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to construct glutton service", err)
 	}

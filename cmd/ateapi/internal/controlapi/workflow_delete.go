@@ -375,7 +375,7 @@ func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, act
 	ctx, done := stepSpan(ctx, "ReleaseExternalSnapshots")
 	defer func() { err = done(err) }()
 
-	if w.snapshotPlugin == nil {
+	if w.objectStorePlugin == nil {
 		markSkipped(ctx, "no object store configured")
 		return nil
 	}
