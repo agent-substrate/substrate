@@ -24,7 +24,7 @@ cannot reach the collector until the actor has an `http` egress rule for it. See
 | any | WebSocket | Blocked | n/a | `403 Forbidden` |
 | any | Standard HTTP(S) CONNECT (forward-proxy tunnel) | Blocked | n/a | `403 Forbidden` |
 | 53 | DNS to the sandbox's gateway | Allowed for hostnames matching the actor's egress policy | sandbox DNS relay -> worker pod's resolvers | `REFUSED` |
-| any | Any other TCP | Blocked | n/a | The connection is accepted and then closed with no bytes returned. There is no status code. atunnel logs the failure. |
+| any | Any other TCP | Blocked | n/a | If the actor sends first, the gateway treats bytes that are not TLS as cleartext HTTP and answers `400 Bad Request`, then closes. If the actor waits for the server to speak first, the connection is closed with no bytes returned and no status code. The destination is never contacted either way. |
 
 ## UDP
 
