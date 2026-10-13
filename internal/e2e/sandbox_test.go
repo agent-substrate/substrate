@@ -45,6 +45,10 @@ var substrateFixtures = []struct {
 		Template: "internal/e2e/fixtures/security/actor-isolation-template.yaml.tmpl",
 	}, 1},
 	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/security/concurrent-a-pool.yaml.tmpl",
+		Template: "internal/e2e/fixtures/security/concurrent-template.yaml.tmpl",
+	}, 1},
+	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/security/atespace-a-pool.yaml.tmpl",
 		Template: "internal/e2e/fixtures/security/atespace-template.yaml.tmpl",
 	}, 1},

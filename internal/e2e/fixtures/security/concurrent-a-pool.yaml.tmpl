@@ -1,0 +1,43 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Atespace A of the concurrent security fixture: a namespace plus a
+# WorkerPool with replicas: 2.
+#
+# replicas is 2 on purpose: the test runs two actors at the exact same time
+# on two distinct worker pods to verify space-invariance boundaries (NW-6,
+# NW-2, ST-1 [space], EX-4 [space]). Atespace B deploys
+# concurrent-b-namespace.yaml.tmpl, a namespace with no pool, so both
+# atespaces share this 2-worker pool.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-e2e${FIXTURE_SUFFIX}
+  labels:
+    ate.dev/e2e: "true"
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: concurrent
+  namespace: ate-e2e${FIXTURE_SUFFIX}
+  labels:
+    workload: ate-e2e-concurrent
+spec:
+  replicas: 2
+  workerImage: ${ATEOM_IMAGE}
+${WORKERPOOL_RUNTIME}

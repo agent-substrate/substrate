@@ -22,8 +22,9 @@ Prereqs: Go, kubectl, a running Docker. kind is created for you.
 
    Stop there. The NFS/CSI and demo steps CI runs are for other suites.
 
-3. Run one of the two top-level tests. They are split by the boundary under
-   test: between two actors in one atespace, or between two atespaces.
+3. Run one of the three top-level tests. They are split by the boundary under
+   test: between two actors in one atespace, between two atespaces, or across
+   two worker pods running concurrently in space.
 
    **`TestActorIsolation`** ([actor_isolation_test.go](actor_isolation_test.go)),
    one atespace, fixtures `actor-isolation.yaml.tmpl` and
@@ -48,6 +49,19 @@ Prereqs: Go, kubectl, a running Docker. kind is created for you.
    ```
 
    - `TagScopedToAtespaceCannotSeedAnotherAtespace` — **ST-4 [space]** (unpublished `ATESPACE`-scoped snapshot tag isolation across atespaces)
+
+   **`TestConcurrentActorIsolation`** ([concurrent_isolation_test.go](concurrent_isolation_test.go)),
+   two replicas, fixtures `concurrent-a-pool.yaml.tmpl`,
+   `concurrent-b-namespace.yaml.tmpl` and `concurrent-template.yaml.tmpl`:
+
+   ```
+   hack/run-e2e-kind.sh ./internal/e2e/suites/security -v -run TestConcurrentActorIsolation
+   ```
+
+   - `RouterDeliversOnlyToNamedActorInSpace` — **NW-6 [space]** (ingress router atespace/actor isolation with concurrent actors on distinct workers: T-14)
+   - `DirectActorToActorTrafficBlocked` — **NW-2 [space]** (no direct actor-to-actor traffic across the pod network; blocked by NetworkPolicy: T-17)
+   - `ConcurrentDurableMountIsolation` — **ST-1 [space]** (durable-dir volume mount isolation across concurrent actors: T-18, T-27)
+   - `ConcurrentHostStateNotReachableFromActorSandbox` — **EX-4 [space]** (live per-actor host state under shared `/var/lib/ate` not reachable across concurrent sandboxes: T-18)
 
    To run a subset of subtests:
 
