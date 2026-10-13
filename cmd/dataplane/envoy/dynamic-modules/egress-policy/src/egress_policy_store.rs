@@ -39,6 +39,11 @@ impl EgressPolicyStore {
       policies: HashMap::new(),
     }
   }
+
+  /// Looks up a policy by key and returns a cloned [`Rc<EgressPolicy>`] if present.
+  pub fn lookup(&self, key: u64) -> Option<Rc<EgressPolicy>> {
+    self.policies.get(&key).cloned()
+  }
 }
 
 /// Global store for egress policies holding a thread-local [`EgressPolicyStore`].
@@ -80,7 +85,10 @@ mod tests {
     });
     GLOBAL_EGRESS_POLICY_STORE.store.with(|store| {
       store.borrow_mut().policies.insert(1, Rc::clone(&policy));
-      assert_eq!(store.borrow().policies.get(&1), Some(&policy));
+      let looked_up = store.borrow().lookup(1);
+      assert_eq!(looked_up, Some(Rc::clone(&policy)));
+      assert!(Rc::ptr_eq(&looked_up.unwrap(), &policy));
+      assert_eq!(store.borrow().lookup(2), None);
     });
   }
 }

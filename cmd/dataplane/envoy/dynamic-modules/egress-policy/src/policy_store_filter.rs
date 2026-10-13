@@ -47,6 +47,8 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyStoreFilter {
     _end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
     let Some(policy) = EgressPolicy::new_from_metadata(envoy_filter) else {
+      // TODO: error counter
+      // TODO: return an error response
       return envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue;
     };
     envoy_log_trace!("egress policy store: policy={:?}", policy);

@@ -14,11 +14,13 @@
 
 //! Shared egress policy types for Substrate Envoy dynamic modules.
 
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use envoy_proxy_dynamic_modules_rust_sdk::{
   abi::envoy_dynamic_module_type_metadata_source, EnvoyHttpFilter,
 };
+use rapidhash::quality::RapidHasher;
 use serde::Deserialize;
 
 /// Dynamic metadata namespace holding the egress policy JSON.
@@ -28,14 +30,14 @@ pub const ATE_POLICY_EGRESS_NAMESPACE: &str = "dev.ate.policy.egress";
 pub const ATE_POLICY_JSON_KEY: &str = "policy_json";
 
 /// The SNI rules for a connection.
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq, Eq, Hash)]
 pub struct EgressPolicy {
   /// Most specific first; the first match wins.
   pub rules: Vec<SniRule>,
 }
 
 /// A pattern and the mode applied when it matches.
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq, Eq, Hash)]
 pub struct SniRule {
   pub pattern: String,
   pub mode: String,
@@ -52,6 +54,13 @@ impl EgressPolicy {
     )?;
     let policy = serde_json::from_slice::<Self>(metadata.as_slice()).ok()?;
     Some(Rc::new(policy))
+  }
+
+  /// Computes a 64-bit hash of the egress policy using rapidhash.
+  pub fn hash(&self) -> u64 {
+    let mut hasher = RapidHasher::default();
+    Hash::hash(self, &mut hasher);
+    hasher.finish()
   }
 }
 
@@ -129,5 +138,29 @@ mod tests {
       .returning(|_, _, _| Some(EnvoyBuffer::new(b"not-json")))
       .once();
     assert_eq!(EgressPolicy::new_from_metadata(&mut mock_filter), None);
+  }
+
+  #[test]
+  fn test_hash() {
+    let p1 = EgressPolicy {
+      rules: vec![SniRule {
+        pattern: "api.example.com".to_string(),
+        mode: "mitm".to_string(),
+      }],
+    };
+    let p2 = EgressPolicy {
+      rules: vec![SniRule {
+        pattern: "api.example.com".to_string(),
+        mode: "mitm".to_string(),
+      }],
+    };
+    let p3 = EgressPolicy {
+      rules: vec![SniRule {
+        pattern: "api.example.com".to_string(),
+        mode: "passthrough".to_string(),
+      }],
+    };
+    assert_eq!(p1.hash(), p2.hash());
+    assert_ne!(p1.hash(), p3.hash());
   }
 }
