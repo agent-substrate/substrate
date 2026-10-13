@@ -223,6 +223,7 @@ func TestLoadFlagsRouterSettings(t *testing.T) {
 	loadEnv(t)
 	t.Setenv("ATE_ATENET_ROUTE_TIMEOUT", "30m")
 	t.Setenv("ATE_ATENET_PARKED_REQUEST_BUDGET", "2m")
+	t.Setenv("ATE_ATENET_EXTPROC_MAX_REQUESTS", "4096")
 
 	fs, err := optionsFlagSet(Options{})
 	if err != nil {
@@ -238,37 +239,55 @@ func TestLoadFlagsRouterSettings(t *testing.T) {
 	if cfg.RouterParkedRequestBudget != 2*time.Minute {
 		t.Errorf("RouterParkedRequestBudget = %s, want 2m", cfg.RouterParkedRequestBudget)
 	}
+	if cfg.RouterExtProcMaxRequests != 4096 {
+		t.Errorf("RouterExtProcMaxRequests = %d, want 4096", cfg.RouterExtProcMaxRequests)
+	}
 }
 
 func TestLoadFlagsRouterSettingsNeedEnvoy(t *testing.T) {
-	loadEnv(t)
-	t.Setenv("ATE_ATENET_DATAPLANE", RouterAgentgateway)
-	t.Setenv("ATE_ATENET_PARKED_REQUEST_BUDGET", "2m")
+	for env, value := range map[string]string{
+		"ATE_ATENET_PARKED_REQUEST_BUDGET": "2m",
+		"ATE_ATENET_EXTPROC_MAX_REQUESTS":  "4096",
+	} {
+		t.Run(env, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_ATENET_DATAPLANE", RouterAgentgateway)
+			t.Setenv(env, value)
 
-	fs, err := optionsFlagSet(Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = LoadFlags(fs, LoadOptions{})
-	if err == nil {
-		t.Fatal("LoadFlags() = nil error, want a dataplane conflict")
-	}
-	for _, want := range []string{"ATE_ATENET_PARKED_REQUEST_BUDGET", "ATE_ATENET_DATAPLANE"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not name %s", err, want)
-		}
+			fs, err := optionsFlagSet(Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = LoadFlags(fs, LoadOptions{})
+			if err == nil {
+				t.Fatal("LoadFlags() = nil error, want a dataplane conflict")
+			}
+			for _, want := range []string{env, "ATE_ATENET_DATAPLANE"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not name %s", err, want)
+				}
+			}
+		})
 	}
 }
 
 func TestLoadFlagsRouterSettingsMustBePositive(t *testing.T) {
-	loadEnv(t)
-	t.Setenv("ATE_ATENET_ROUTE_TIMEOUT", "0s")
+	for _, tc := range []struct{ env, value, want string }{
+		{"ATE_ATENET_ROUTE_TIMEOUT", "0s", "positive duration"},
+		{"ATE_ATENET_EXTPROC_MAX_REQUESTS", "0", "positive integer"},
+		{"ATE_ATENET_EXTPROC_MAX_REQUESTS", "-1", "positive integer"},
+	} {
+		t.Run(tc.env+"="+tc.value, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv(tc.env, tc.value)
 
-	fs, err := optionsFlagSet(Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadFlags(fs, LoadOptions{}); err == nil || !strings.Contains(err.Error(), "positive duration") {
-		t.Errorf("LoadFlags() error = %v, want a positive-duration error", err)
+			fs, err := optionsFlagSet(Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadFlags(fs, LoadOptions{}); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("LoadFlags() error = %v, want a %s error", err, tc.want)
+			}
+		})
 	}
 }

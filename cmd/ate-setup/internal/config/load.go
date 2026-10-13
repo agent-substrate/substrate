@@ -245,6 +245,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		Router:                    r.String("atenet.dataplane"),
 		RouterRouteTimeout:        r.Duration("atenet.router.routeTimeout"),
 		RouterParkedRequestBudget: r.Duration("atenet.router.parkedRequestBudget"),
+		RouterExtProcMaxRequests:  r.Int("atenet.router.extprocMaxRequests"),
 		PostgresSchema:            r.String("ateapi.postgres.schema"),
 		PostgresPoolMaxConns:      r.String("ateapi.postgres.poolMaxConns"),
 		PostgresServerCAFile:      r.String("ateapi.postgres.serverCAFile"),
@@ -394,13 +395,20 @@ func validateResolved(cfg *Config, r *Resolved) error {
 	}
 
 	// Only the envoy dataplane runs the atenet-router container the flags go on.
-	for _, key := range []string{"atenet.router.routeTimeout", "atenet.router.parkedRequestBudget"} {
+	for _, key := range []string{"atenet.router.routeTimeout", "atenet.router.parkedRequestBudget", "atenet.router.extprocMaxRequests"} {
 		v, _ := r.Value(key)
 		if v.Raw == "" {
 			continue
 		}
-		if r.Duration(key) <= 0 {
-			return &InvalidError{Value: v, Want: "a positive duration"}
+		switch v.Setting.Kind {
+		case KindDuration:
+			if r.Duration(key) <= 0 {
+				return &InvalidError{Value: v, Want: "a positive duration"}
+			}
+		case KindInt:
+			if r.Int(key) <= 0 {
+				return &InvalidError{Value: v, Want: "a positive integer"}
+			}
 		}
 		if cfg.Router != RouterEnvoy {
 			return &ConflictError{A: v, B: dataplane, Why: "the router flags need the envoy dataplane"}

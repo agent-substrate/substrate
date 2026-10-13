@@ -167,6 +167,11 @@ var Registry = []Setting{
 		Usage: "The router's --parked-request-budget; unset keeps the router default; the router pod's grace period grows with it (envoy dataplane only)",
 	},
 	{
+		Key: "atenet.router.extprocMaxRequests", Env: "ATE_ATENET_EXTPROC_MAX_REQUESTS", Flag: "atenet-extproc-max-requests",
+		Kind:  KindInt,
+		Usage: "The router's --extproc-max-requests, the circuit breaker on Envoy's ext_proc cluster; unset keeps the router's derivation (envoy dataplane only)",
+	},
+	{
 		Key: "atenet.egress.additionalExtprocService", Env: "ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
 		Flag: "experimental-additional-egress-extproc-service", Kind: KindString,
 		Usage: "Run an additional ext_proc authorization filter served by NS/SVC:PORT " +
