@@ -402,10 +402,26 @@ func TestPrewarmDefaultVersionOnly(t *testing.T) {
 // fake clientset flows through the informer into the prewarm worker, which
 // lands the asset in the static-files cache without any Run/Restore request.
 func TestSandboxAssetPrewarmDownloads(t *testing.T) {
-	origDir, origJitter := nodepath.StaticFilesDir, prewarmMaxJitter
+	origDir, origJitter, origFinished := nodepath.StaticFilesDir, prewarmMaxJitter, prewarmFinished
 	nodepath.StaticFilesDir = t.TempDir()
 	prewarmMaxJitter = 0
-	t.Cleanup(func() { nodepath.StaticFilesDir, prewarmMaxJitter = origDir, origJitter })
+	// The worker's own prewarm call returns only when the asset has landed
+	// and the pause-image pull has finished: it waits for the pull on a live
+	// context, while the pull runs detached from that context (see
+	// imagecache.Store.EnsureImage). Waiting for the call keeps the pull's
+	// last writes from racing the TempDir cleanup.
+	prewarmed := make(chan error, 1)
+	prewarmFinished = func(_ string, err error) {
+		// Non-blocking: a failed attempt is retried, and the worker must not
+		// block on a result nobody reads.
+		select {
+		case prewarmed <- err:
+		default:
+		}
+	}
+	t.Cleanup(func() {
+		nodepath.StaticFilesDir, prewarmMaxJitter, prewarmFinished = origDir, origJitter, origFinished
+	})
 
 	host := imageVolumeTestRegistry(t)
 	pauseRef := host + "/pause:3.10"
@@ -443,17 +459,16 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	defer close(stopCh)
 	factory.Start(stopCh)
 
+	select {
+	case err := <-prewarmed:
+		if err != nil {
+			t.Fatalf("prewarm: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("prewarm never finished")
+	}
 	wantPath := ateletpath.RunSCBinaryPath(sha)
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if _, err := os.Stat(wantPath); err == nil {
-			return
-		} else if !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("stat %s: %v", wantPath, err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("asset never prewarmed to %s", wantPath)
-		}
-		time.Sleep(10 * time.Millisecond)
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Fatalf("asset not prewarmed to %s: %v", wantPath, err)
 	}
 }

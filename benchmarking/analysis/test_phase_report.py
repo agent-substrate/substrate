@@ -162,11 +162,19 @@ class ParseTest(unittest.TestCase):
             out = phase_report.parse_files([path])
         self.assertEqual((out.lines_seen, len(out.breakdowns)), (2, 2))
 
-    def test_ateom_records_default_to_the_microvm_class(self):
-        out = parse(ATEOM_RESTORE, ATELET_RESTORE)
-        self.assertEqual(out.breakdowns[0].sandbox_class, "microvm")
-        self.assertEqual(out.breakdowns[1].sandbox_class, "")  # not on this fixture
+    def test_ateom_records_take_class_and_kind_from_the_paired_atelet_record(self):
+        atelet = dict(ATELET_RESTORE, **{"ate.sandbox.class": "gvisor"})
+        out = parse(ATEOM_RESTORE, atelet)
+        self.assertEqual(out.breakdowns[0].sandbox_class, "")  # not on the ateom record
+        phase_report.join_layers(out.breakdowns)
+        self.assertEqual((out.breakdowns[0].sandbox_class, out.breakdowns[0].kind), ("gvisor", "latest"))
 
+    def test_an_unpaired_ateom_record_keeps_no_class(self):
+        out = parse(ATEOM_RESTORE)
+        phase_report.join_layers(out.breakdowns)
+        self.assertEqual(out.breakdowns[0].sandbox_class, "")
+        rows = phase_report.report_phases(out.breakdowns, lambda _: None)
+        self.assertEqual({r["class"] for r in rows}, {"-"})
     def test_non_numeric_duration_is_skipped_not_fatal(self):
         rec = dict(ATELET_RESTORE, **{"ate.actor.restore.duration.download": None,
                                       "ate.actor.restore.duration.oci_unpack": "fast"})
@@ -201,6 +209,12 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(len(out.breakdowns), 2)
         self.assertIn("reading it line by line", err.getvalue())
 
+    def test_parse_lines_feeds_an_existing_parse(self):
+        out = phase_report.parse_lines([json.dumps(ATELET_RESTORE), "not json", ""])
+        self.assertEqual((out.lines_seen, len(out.breakdowns)), (1, 1))
+        phase_report.parse_lines(["pod/x " + json.dumps(ATEOM_RESTORE)], out)
+        self.assertEqual(len(out.breakdowns), 2)
+
     def test_prefixed_kubectl_lines_still_parse(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "pod.log")
@@ -213,25 +227,58 @@ class ParseTest(unittest.TestCase):
 
 class UnattributedTest(unittest.TestCase):
     def test_atelet_checkpoint_residual_is_total_minus_sequential_phases(self):
-        b = parse(ATELET_CHECKPOINT).breakdowns[0]
-        self.assertAlmostEqual(b.phases["unattributed"], 6.0 - (0.01 + 1.14 + 4.48))
-
-    def test_ateom_checkpoint_counts_the_concurrent_captures_once(self):
-        b = parse(ATEOM_CHECKPOINT).breakdowns[0]
+        out = parse(ATELET_CHECKPOINT)
+        phase_report.join_layers(out.breakdowns)
+        self.assertAlmostEqual(out.breakdowns[0].phases["unattributed"], 6.0 - (0.01 + 1.14 + 4.48))
+    def test_microvm_ateom_checkpoint_counts_the_concurrent_captures_once(self):
         # prep + pause + max(snapshot, rootfs_upper) + teardown; the two
         # captures overlapped, so only the slower one is spent wall time.
-        self.assertAlmostEqual(b.phases["unattributed"], 1.2 - (0.04 + 0.01 + 0.9 + 0.2))
+        phases = {k[len("ateom.actor.checkpoint.duration."):]: v
+                  for k, v in ATEOM_CHECKPOINT.items() if k.startswith("ateom.actor.checkpoint.duration.")}
+        got = phase_report.unattributed("ateom", "checkpoint", "microvm", phases)
+        self.assertAlmostEqual(got, 1.2 - (0.04 + 0.01 + 0.9 + 0.2))
 
+    def test_gvisor_ateom_checkpoint_phases_are_sequential(self):
+        phases = {"prep": 0.01, "pause": 0.02, "checkpoint": 0.15, "durable_dir": 0.03,
+                  "resume": 0.02, "teardown": 0.05, "total": 0.30}
+        got = phase_report.unattributed("ateom", "checkpoint", "gvisor", phases)
+        self.assertAlmostEqual(got, 0.30 - (0.01 + 0.02 + 0.15 + 0.03 + 0.02 + 0.05))
+
+    def test_ateom_checkpoint_of_unknown_runtime_gets_no_residual(self):
+        out = parse(ATEOM_CHECKPOINT)  # no atelet partner, so no class
+        phase_report.join_layers(out.breakdowns)
+        self.assertNotIn("unattributed", out.breakdowns[0].phases)
+
+    def test_gvisor_pair_splits_both_layers_by_class(self):
+        atelet = dict(ATELET_CHECKPOINT, **{"ate.sandbox.class": "gvisor"})
+        ateom = {
+            "time": "2026-09-23T10:00:55.000000000Z", "msg": "Checkpoint timing breakdown",
+            "ate.actor.uid": "uid-1", "ate.template.name": "swebench-astropy-7336", "ate.snapshot.scope": "full",
+            "ateom.actor.checkpoint.duration.pause": 0.02,
+            "ateom.actor.checkpoint.duration.checkpoint": 0.15,
+            "ateom.actor.checkpoint.duration.teardown": 0.05,
+            "ateom.actor.checkpoint.duration.total": 0.25,
+        }
+        out = parse(ateom, atelet)
+        phase_report.join_layers(out.breakdowns)
+        rows = phase_report.report_phases(out.breakdowns, lambda _: None)
+        ateom_rows = {r["phase"]: r for r in rows if r["layer"] == "ateom"}
+        self.assertEqual({r["class"] for r in ateom_rows.values()}, {"gvisor"})
+        self.assertEqual({r["kind"] for r in ateom_rows.values()}, {"latest"})
+        self.assertAlmostEqual(ateom_rows["unattributed"]["p50_ms"], (0.25 - 0.22) * 1000)
+        # gVisor's phases sort in their own order, before the shared tail.
+        order = [r["phase"] for r in rows if r["layer"] == "ateom"]
+        self.assertEqual(order, ["pause", "checkpoint", "teardown", "unattributed", "total"])
     def test_restore_layers_get_no_residual(self):
         out = parse(ATELET_RESTORE, ATEOM_RESTORE)
+        phase_report.join_layers(out.breakdowns)
         for b in out.breakdowns:
             self.assertNotIn("unattributed", b.phases)
-
     def test_negative_residual_is_not_clamped(self):
         # Cannot happen on a well-formed record; if it does, it must show.
-        rec = dict(ATELET_CHECKPOINT, **{"ate.actor.checkpoint.duration.total": 1.0})
-        self.assertAlmostEqual(parse(rec).breakdowns[0].phases["unattributed"], 1.0 - (0.01 + 1.14 + 4.48))
-
+        phases = {"sandbox_assets": 0.01, "ateom_checkpoint": 1.14, "persist": 4.48, "total": 1.0}
+        self.assertAlmostEqual(phase_report.unattributed("atelet", "checkpoint", "microvm", phases),
+                               1.0 - (0.01 + 1.14 + 4.48))
 
 class ReportTest(unittest.TestCase):
     def test_failed_records_are_flagged_and_excluded_from_percentiles(self):
@@ -284,6 +331,19 @@ class ReportTest(unittest.TestCase):
         self.assertIn("atelet ateom_restore", text)
         self.assertNotIn("ateom  vm_restore", text)
         self.assertNotIn("(gap)", text)
+
+    def test_stats_rows_take_the_runner_jsonl_shape(self):
+        rows = phase_report.report_phases(parse(ATELET_RESTORE).breakdowns, lambda _: None)
+        entries = phase_report.stats_rows(rows, "2026-09-23T10:00:00Z", "abc123", "glutton_mem_1gi")
+        download = next(e for e in entries if e["metric"].endswith("_download"))
+        self.assertEqual(download["metric"], "phase_atelet_restore_none_latest_full_download")
+        self.assertEqual((download["timestamp"], download["tag"], download["test_name"]),
+                         ("2026-09-23T10:00:00Z", "abc123", "glutton_mem_1gi"))
+        # String values and the dimensions as fields, like the runner's rows.
+        self.assertEqual(download["measurements"], {
+            "layer": "atelet", "op": "restore", "class": "none", "kind": "latest",
+            "scope": "full", "phase": "download",
+            "count": "1", "p50_ms": "2400.0", "p90_ms": "2400.0", "p95_ms": "2400.0", "max_ms": "2400.0"})
 
     def test_waterfall_nests_ateom_and_gap_under_atelet(self):
         out = parse(ATEOM_RESTORE, ATELET_RESTORE)

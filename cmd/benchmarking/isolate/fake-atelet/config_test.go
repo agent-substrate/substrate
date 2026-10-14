@@ -24,7 +24,7 @@ func TestResolveDelays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveDelays: %v", err)
 	}
-	want := delays{run: time.Second, restore: 2 * time.Second, checkpoint: 0, uploadPausedCheckpoint: time.Second, terminate: time.Second}
+	want := delays{run: time.Second, restore: 2 * time.Second, checkpoint: 0, promoteSnapshot: time.Second, terminate: time.Second}
 	if got != want {
 		t.Errorf("resolveDelays = %+v, want %+v", got, want)
 	}

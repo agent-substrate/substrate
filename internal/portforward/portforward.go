@@ -51,6 +51,17 @@ func ServicePortForward(ctx context.Context, config *rest.Config, clientset kube
 	return PodPortForward(ctx, config, clientset, namespace, pod.Name, targetPort)
 }
 
+// ServicePodPortForward forwards a random local port straight to
+// containerPort on a ready pod behind the named Service, for ports the
+// Service does not publish. Otherwise it behaves like ServicePortForward.
+func ServicePodPortForward(ctx context.Context, config *rest.Config, clientset kubernetes.Interface, namespace, service string, containerPort int32) (int, func(), error) {
+	pod, _, err := firstReadyPodForService(ctx, clientset, namespace, service)
+	if err != nil {
+		return 0, nil, err
+	}
+	return podPortForward(ctx, config, clientset, namespace, pod.Name, containerPort)
+}
+
 func firstReadyPodForService(ctx context.Context, clientset kubernetes.Interface, namespace, service string) (*corev1.Pod, *corev1.Service, error) {
 	svc, err := clientset.CoreV1().Services(namespace).Get(ctx, service, metav1.GetOptions{})
 	if err != nil {

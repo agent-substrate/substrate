@@ -20,9 +20,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +63,17 @@ type FormattedQuery struct {
 	Action    string `json:"action"`
 	Target    string `json:"target"`
 	Duration  string `json:"duration"`
+}
+
+// listenStatus binds the /statusz listener on --status-address and
+// --status-port.
+func (c routerConfig) listenStatus() (net.Listener, error) {
+	addr := net.JoinHostPort(c.StatusAddr, strconv.Itoa(c.StatusPort))
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed binding Router HTTP status server address %q: %w", addr, err)
+	}
+	return lis, nil
 }
 
 func (s *RouterServer) getRouterIP(ctx context.Context) string {

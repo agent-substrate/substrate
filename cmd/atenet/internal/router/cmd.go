@@ -67,6 +67,7 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.IntVar(&cfg.ExtprocPort, "port-extproc", 50051, "Listen port for the External Processing (ext_proc) server the dataplane calls")
 	fs.StringVar(&cfg.ExtprocAddr, "extproc-address", "127.0.0.1", "Address of the External Processing (ext_proc) server: both the address it binds and the address the co-located dataplane is told to dial. Defaults to loopback, which keeps it unreachable from other pods; readiness is probed via /readyz on the health port, not this one. Empty binds every interface")
 	fs.IntVar(&cfg.StatusPort, "status-port", 4040, "Port to serve /statusz on (set <= 0 to disable serving status)")
+	fs.StringVar(&cfg.StatusAddr, "status-address", "127.0.0.1", "Address to bind the unauthenticated /statusz dashboard to. Defaults to loopback; use /healthz and /readyz on the health port for health checks. Empty binds every interface")
 	fs.DurationVar(&cfg.HealthInterval, "health-interval", 1*time.Second, "Interval for checking health of dependent services")
 	fs.IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the router dataplane")
 	fs.StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file.")
@@ -84,6 +85,7 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.StringVar(&cfg.UpstreamCredentialBundlePath, "upstream-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle (cert+key) the router presents as the client cert when dialing the actor's atunnel ingress server over mTLS. Empty disables upstream mTLS (legacy plaintext pod-IP:80).")
 	fs.StringVar(&cfg.UpstreamTrustBundlePath, "upstream-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to validate the actor's atunnel ingress server certificate.")
 	fs.StringVar(&cfg.UpstreamSpiffePrefix, "upstream-spiffe-prefix", "spiffe://cluster.local/", "SPIFFE URI SAN prefix (trust domain) the actor's atunnel server cert must match. Empty falls back to default SAN check against the dialed pod IP (which SPIFFE-only certs never match).")
+	fs.BoolVar(&cfg.UpstreamConnect, "upstream-connect", false, "Reach atunnel through mTLS CONNECT tunnels on port 8443 instead of HTTPS on 443 (Envoy dataplane only). Requires --upstream-credential-bundle")
 
 	fs.StringVar(&cfg.ActorIdentityCAFile, "actor-identity-ca-file", "", "PEM trust bundle for the actor-identity CA, used to verify the actor client certificates presented on egress CONNECTs. Required by the egress gateway's ext_proc sidecar; empty (the default) leaves egress authentication unconfigured and every egress CONNECT is denied.")
 

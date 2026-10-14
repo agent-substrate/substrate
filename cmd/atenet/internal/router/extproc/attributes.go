@@ -143,8 +143,9 @@ const UpstreamDynamicHostFilterStateKey = "envoy.upstream.dynamic_host"
 const EgressPolicyMetadataFormat = "%DYNAMIC_METADATA(" + EgressPolicyMetadataNamespace + ")%"
 
 // OriginalDstFilterStateKey is Envoy's filter-state key for the address an
-// ORIGINAL_DST cluster dials. The gateway never writes it and dials only by
-// name; the request legs read it as an attribute.
+// ORIGINAL_DST cluster dials. The ingress router sets it for actor tunnels.
+// The egress gateway never writes it and dials only by name; its request legs
+// read it as an attribute.
 const OriginalDstFilterStateKey = "envoy.network.transport_socket.original_dst_address"
 
 // OriginalDstIPAttribute and OriginalDstPortAttribute are the CEL expressions

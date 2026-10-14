@@ -109,8 +109,9 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		// The counter cannot speak h2c. Envoy returns HTTP 502; agentgateway
-		// reports the upstream failure with gRPC's Unavailable status.
+		// The counter cannot speak h2c. Through atunnel's HTTPS listener Envoy
+		// returns HTTP 502; through a CONNECT tunnel the failure is gRPC's
+		// Unavailable status.
 		grpcStatus := resp.Header.Get("Grpc-Status")
 		if grpcStatus == "" {
 			grpcStatus = resp.Trailer.Get("Grpc-Status")

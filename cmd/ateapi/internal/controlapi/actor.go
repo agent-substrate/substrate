@@ -566,7 +566,7 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 		return nil, fmt.Errorf("at least one audience must be requested")
 	}
 
-	// JWT timestamps have one-second resolution; truncating keeps expires_at
+	// JWT timestamps have one-second resolution; truncating keeps expire_time
 	// equal to the exp claim.
 	now := time.Now().Truncate(time.Second)
 	expiresAt := now.Add(time.Duration(req.GetExpirationSeconds()) * time.Second)
@@ -592,8 +592,8 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 	}
 
 	return &ateapipb.MintActorJwtResponse{
-		ActorJwt:  actorJWT,
-		ExpiresAt: timestamppb.New(expiresAt),
+		ActorJwt:   actorJWT,
+		ExpireTime: timestamppb.New(expiresAt),
 	}, nil
 }
 

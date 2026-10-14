@@ -73,11 +73,14 @@ func TestTwoActorsShareOneWorker(t *testing.T) {
 	}
 	defer rc.Close()
 
-	for _, name := range names {
-		got := whoami(t, ctx, rc, name)
-		if got.Atespace != multiactorNamespace || got.File != name {
-			t.Errorf("request for %s was served by atespace=%q actor=%q; each actor must be reached in its own sandbox",
-				name, got.Atespace, got.File)
+	// Alternate actors to catch one actor's tunnel serving the other.
+	for range 3 {
+		for _, name := range names {
+			got := whoami(t, ctx, rc, name)
+			if got.Atespace != multiactorNamespace || got.File != name {
+				t.Errorf("request for %s was served by atespace=%q actor=%q; each actor must be reached in its own sandbox",
+					name, got.Atespace, got.File)
+			}
 		}
 	}
 

@@ -15,13 +15,11 @@
 package router
 
 import (
-	"os"
 	"strings"
 	"testing"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
-	"sigs.k8s.io/yaml"
+	"github.com/spf13/pflag"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 )
@@ -106,6 +104,15 @@ func TestRouterConfigValidate(t *testing.T) {
 			name:    "negative drain-timeout rejected",
 			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainTimeout: -time.Second},
 			wantErr: "--drain-timeout must not be negative",
+		},
+		{
+			name: "upstream-connect with the upstream credential bundle accepted",
+			cfg:  routerConfig{Mode: ModeIngress, UpstreamConnect: true, UpstreamCredentialBundlePath: "/run/bundle.pem"},
+		},
+		{
+			name:    "upstream-connect without the upstream credential bundle rejected",
+			cfg:     routerConfig{Mode: ModeIngress, UpstreamConnect: true},
+			wantErr: "--upstream-connect requires --upstream-credential-bundle",
 		},
 		{
 			name:    "negative drain-delay rejected",
@@ -419,58 +426,40 @@ const routerManifestPath = "../../../../manifests/ate-install/atenet-router.yaml
 // manifest rather than in Go: --drain-delay on the router container, which is
 // how long it keeps serving after SIGTERM, and the pod's
 // terminationGracePeriodSeconds, which is the whole budget.
-//
-// --drain-delay is read back through the router command's own flag set, so a
-// renamed or retyped flag fails here rather than being parsed by a private
-// copy of the syntax.
 func routerShutdownBudget(t *testing.T) (drainDelay, grace time.Duration) {
 	t.Helper()
-	raw, err := os.ReadFile(routerManifestPath)
-	if err != nil {
-		t.Fatalf("reading %s: %v", routerManifestPath, err)
+	pod := findDeployment(t, routerManifestPath, "atenet-router").Spec.Template.Spec
+	if pod.TerminationGracePeriodSeconds == nil {
+		t.Fatalf("%s sets no terminationGracePeriodSeconds on the atenet-router pod", routerManifestPath)
 	}
-	for _, doc := range strings.Split(string(raw), "\n---\n") {
-		var head struct {
-			Kind     string `json:"kind"`
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-		}
-		if err := yaml.Unmarshal([]byte(doc), &head); err != nil {
-			t.Fatalf("parsing a document of %s: %v", routerManifestPath, err)
-		}
-		if head.Kind != "Deployment" || head.Metadata.Name != "atenet-router" {
+	d, err := routerManifestFlags(t).GetDuration("drain-delay")
+	if err != nil {
+		t.Fatalf("reading --drain-delay from the manifest args: %v", err)
+	}
+	return d, time.Duration(*pod.TerminationGracePeriodSeconds) * time.Second
+}
+
+// routerManifestFlags returns the router command's flags parsed from the
+// atenet-router container's args in the manifest. Reading them back through
+// the command's own flag set means a renamed or retyped flag fails here rather
+// than being parsed by a private copy of the syntax.
+func routerManifestFlags(t *testing.T) *pflag.FlagSet {
+	t.Helper()
+	for _, c := range findDeployment(t, routerManifestPath, "atenet-router").Spec.Template.Spec.Containers {
+		if c.Name != "atenet-router" {
 			continue
 		}
-		var deployment appsv1.Deployment
-		if err := yaml.Unmarshal([]byte(doc), &deployment); err != nil {
-			t.Fatalf("decoding the atenet-router Deployment from %s: %v", routerManifestPath, err)
+		cmd := NewRouterCmd()
+		if len(c.Args) == 0 || c.Args[0] != cmd.Name() {
+			t.Fatalf("the atenet-router container's args are %v; they should invoke the %q subcommand", c.Args, cmd.Name())
 		}
-		pod := deployment.Spec.Template.Spec
-		if pod.TerminationGracePeriodSeconds == nil {
-			t.Fatalf("%s sets no terminationGracePeriodSeconds on the atenet-router pod", routerManifestPath)
+		if err := cmd.ParseFlags(c.Args[1:]); err != nil {
+			t.Fatalf("the atenet-router container's flags are not ones the binary accepts: %v", err)
 		}
-		for _, c := range pod.Containers {
-			if c.Name != "atenet-router" {
-				continue
-			}
-			cmd := NewRouterCmd()
-			if len(c.Args) == 0 || c.Args[0] != cmd.Name() {
-				t.Fatalf("the atenet-router container's args are %v; they should invoke the %q subcommand", c.Args, cmd.Name())
-			}
-			if err := cmd.ParseFlags(c.Args[1:]); err != nil {
-				t.Fatalf("the atenet-router container's flags are not ones the binary accepts: %v", err)
-			}
-			d, err := cmd.Flags().GetDuration("drain-delay")
-			if err != nil {
-				t.Fatalf("reading --drain-delay from the manifest args: %v", err)
-			}
-			return d, time.Duration(*pod.TerminationGracePeriodSeconds) * time.Second
-		}
-		t.Fatalf("the atenet-router Deployment in %s has no container named atenet-router", routerManifestPath)
+		return cmd.Flags()
 	}
-	t.Fatalf("%s has no Deployment named atenet-router", routerManifestPath)
-	return 0, 0
+	t.Fatalf("the atenet-router Deployment in %s has no container named atenet-router", routerManifestPath)
+	return nil
 }
 
 func TestRouterConfigDrainTimeout(t *testing.T) {
