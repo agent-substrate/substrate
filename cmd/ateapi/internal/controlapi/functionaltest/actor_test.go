@@ -107,6 +107,9 @@ func TestCreateActor_Success(t *testing.T) {
 	if md.GetUpdateTime() == nil {
 		t.Errorf("CreateActor response missing update_time")
 	}
+	if createResp.GetStatus().GetStateTransitionTime() == nil {
+		t.Errorf("CreateActor response missing status.state_transition_time")
+	}
 
 	if diff := cmp.Diff(want, createResp, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 		t.Errorf("CreateActor response mismatch (-want +got):\n%s", diff)
