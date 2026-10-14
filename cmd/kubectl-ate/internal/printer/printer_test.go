@@ -435,7 +435,7 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				SandboxClass: "gvisor",
 				ConfigName:   "gvisor-default",
 			},
 			Status: &ateapipb.ActorTemplateStatus{
@@ -452,7 +452,7 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM,
+				SandboxClass: "microvm",
 				ConfigName:   "microvm",
 			},
 			Status: &ateapipb.ActorTemplateStatus{
@@ -469,7 +469,7 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 				CreateTime: timestamppb.New(now.Add(-72 * time.Hour)),
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				SandboxClass: "gvisor",
 				ConfigName:   "gvisor-default",
 			},
 		},
@@ -479,7 +479,7 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 				Name:       "counter-3",
 				CreateTime: timestamppb.New(now.Add(-15 * time.Minute)),
 			},
-			SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+			SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
 			SnapshotConfig: &ateapipb.SnapshotConfig{
 				GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
 			},
@@ -492,11 +492,11 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 
 	// Sorted by atespace, then name. The ERROR column only flags that an
 	// error message exists; the full text is available via json/yaml.
-	expected := `ATESPACE                             NAME              SANDBOX CLASS           GOLDEN TAG   ERROR   AGE
-ate-demo-counter-substrate           counter           SANDBOX_CLASS_GVISOR    golden-tag           5m
-ate-demo-counter-substrate           counter-2         SANDBOX_CLASS_GVISOR                         3d
-ate-demo-counter-substrate           counter-3         SANDBOX_CLASS_GVISOR    DISABLED             15m
-ate-demo-counter-substrate-microvm   counter-microvm   SANDBOX_CLASS_MICROVM                ERROR   5h
+	expected := `ATESPACE                             NAME              SANDBOX CLASS   GOLDEN TAG   ERROR   AGE
+ate-demo-counter-substrate           counter           gvisor          golden-tag           5m
+ate-demo-counter-substrate           counter-2         gvisor                               3d
+ate-demo-counter-substrate           counter-3         gvisor          DISABLED             15m
+ate-demo-counter-substrate-microvm   counter-microvm   microvm                      ERROR   5h
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

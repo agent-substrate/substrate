@@ -79,6 +79,8 @@ type WorkerPoolReconciler struct {
 	SystemNamespace      string
 	AteletServiceAccount string
 	RouterServiceAccount string
+	// DNSEgressPolicy is the --dns-egress-policy mode propagated to ateom pods.
+	DNSEgressPolicy string
 	// Recorder emits a Normal event each time a pool's SandboxConfig
 	// changes, and a Warning event when a class stops resolving.
 	Recorder events.EventRecorder
@@ -322,7 +324,7 @@ func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alp
 		TracesSampler:        r.OTelTracesSampler,
 		TracesSamplerArg:     r.OTelTracesSamplerArg,
 		LogsExporter:         r.OTelLogsExporter,
-	}, r.SystemNamespace, r.AteletServiceAccount, r.RouterServiceAccount)
+	}, r.SystemNamespace, r.AteletServiceAccount, r.RouterServiceAccount, r.DNSEgressPolicy)
 	if err := r.Apply(ctx, depAC, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply Deployment: %w", err)
 	}

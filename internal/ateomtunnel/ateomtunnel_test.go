@@ -33,8 +33,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/spf13/pflag"
 )
 
@@ -48,6 +50,7 @@ func TestRegisterFlags(t *testing.T) {
 		"--atunnel-broker-identity=broker",
 		"--atunnel-egress-listen-address=0.0.0.0:3",
 		"--atunnel-egress-trust-bundle=egress-trust",
+		"--dns-egress-policy=enforce-in-atunnel",
 	}
 	want := Config{
 		ListenAddress:        ":1",
@@ -58,6 +61,7 @@ func TestRegisterFlags(t *testing.T) {
 		BrokerIdentity:       "broker",
 		EgressListenAddress:  "0.0.0.0:3",
 		EgressTrustBundle:    "egress-trust",
+		DNSEgressPolicy:      egresspolicy.DNSEgressPolicyEnforceInAtunnel,
 	}
 
 	std := flag.NewFlagSet("std", flag.ContinueOnError)
@@ -79,6 +83,9 @@ func TestRegisterFlags(t *testing.T) {
 			if tc.cfg.CredentialBundle == "" || tc.cfg.TrustBundle == "" || tc.cfg.ClientIdentity == "" || tc.cfg.BrokerIdentity == "" || tc.cfg.EgressTrustBundle == "" {
 				t.Errorf("unset default: %+v", *tc.cfg)
 			}
+			if tc.cfg.DNSEgressPolicy != "" {
+				t.Errorf("DNSEgressPolicy default = %q, want empty", tc.cfg.DNSEgressPolicy)
+			}
 			if err := tc.parse(args); err != nil {
 				t.Fatal(err)
 			}
@@ -91,6 +98,21 @@ func TestRegisterFlags(t *testing.T) {
 
 // testConfig returns a Config over fresh credentials and free loopback ports.
 func testConfig(t *testing.T) Config {
+	t.Helper()
+	cfg, _ := testConfigAndCA(t)
+	return cfg
+}
+
+// testCA is the self-signed worker certificate in a test Config, which is also
+// the Config's trust bundle.
+type testCA struct {
+	cert *x509.Certificate
+	key  *ecdsa.PrivateKey
+}
+
+// testConfigAndCA is testConfig, also returning the certificate that both
+// authenticates the worker and is the trust bundle.
+func testConfigAndCA(t *testing.T) (Config, testCA) {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -109,7 +131,18 @@ func testConfig(t *testing.T) Config {
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 	}
+	// Worker certificates name the worker's Pod, which atelet connections need.
+	if err := substratex509.AddPodIdentityToCertificate(&substratex509.PodIdentity{
+		Namespace: "workers", ServiceAccountName: "default", ServiceAccountUID: "sa-uid",
+		PodName: "worker", PodUID: "pod-uid", NodeName: testNodeName, NodeUID: testNodeUID,
+	}, template); err != nil {
+		t.Fatal(err)
+	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,8 +178,15 @@ func testConfig(t *testing.T) Config {
 		BrokerIdentity:       "spiffe://cluster.local/ns/ate-system/sa/atelet",
 		EgressListenAddress:  "0.0.0.0:15001",
 		EgressTrustBundle:    trust,
-	}
+		DNSEgressPolicy:      egresspolicy.DNSEgressPolicyEnforceInAtunnel,
+	}, testCA{cert: cert, key: key}
 }
+
+// The node the test worker runs on.
+const (
+	testNodeName = "node"
+	testNodeUID  = "node-uid"
+)
 
 // freeAddress returns a loopback address nothing is listening on.
 func freeAddress(t *testing.T) string {
@@ -200,6 +240,14 @@ func TestStartErrors(t *testing.T) {
 		edit    func(t *testing.T, cfg *Config)
 		wantErr bool
 	}{
+		"missing dns egress policy": {
+			edit:    func(_ *testing.T, cfg *Config) { cfg.DNSEgressPolicy = "" },
+			wantErr: true,
+		},
+		"invalid dns egress policy": {
+			edit:    func(_ *testing.T, cfg *Config) { cfg.DNSEgressPolicy = "invalid" },
+			wantErr: true,
+		},
 		"no resolvers": {
 			edit: func(t *testing.T, _ *Config) {
 				empty := filepath.Join(t.TempDir(), "resolv.conf")
@@ -212,6 +260,10 @@ func TestStartErrors(t *testing.T) {
 		},
 		"missing credentials": {
 			edit:    func(t *testing.T, cfg *Config) { cfg.CredentialBundle = filepath.Join(t.TempDir(), "absent.pem") },
+			wantErr: true,
+		},
+		"no atelet identity": {
+			edit:    func(_ *testing.T, cfg *Config) { cfg.BrokerIdentity = "" },
 			wantErr: true,
 		},
 		"ingress address in use": {

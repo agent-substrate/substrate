@@ -261,6 +261,26 @@ func TestValidateUUID(t *testing.T) {
 	}
 }
 
+func TestValidateSandboxClass(t *testing.T) {
+	path := field.NewPath("sandbox_class")
+	tests := []struct {
+		name  string
+		class string
+		want  field.ErrorList
+	}{
+		{name: "gvisor", class: "gvisor"},
+		{name: "microvm", class: "microvm"},
+		{name: "empty left to tags", class: ""},
+		{name: "unknown class", class: "kata", want: field.ErrorList{field.NotSupported[string](path, nil, nil)}},
+		{name: "case-sensitive", class: "GVISOR", want: field.ErrorList{field.NotSupported[string](path, nil, nil)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateSandboxClass(path, tt.class))
+		})
+	}
+}
+
 func TestValidateLimit(t *testing.T) {
 	path := field.NewPath("limits").Index(0)
 	quantityPath := path.Child("quantity")

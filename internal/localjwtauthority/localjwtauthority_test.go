@@ -166,7 +166,7 @@ func TestSignJWTHeader(t *testing.T) {
 		ActiveForSigning: "key-1",
 	}
 
-	jwt, err := pool.SignJWT(&actoridjwt.Claims{Subject: "actor/a/b", Audiences: []string{"aud"}})
+	jwt, err := pool.SignJWT(&actoridjwt.Claims{Kind: actoridjwt.KindActor, Subject: "actor/a/b", Audiences: []string{"aud"}})
 	if err != nil {
 		t.Fatalf("Unexpected error signing JWT: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestPoolRotation(t *testing.T) {
 	if diff := cmp.Diff([]string{"next"}, authorityIDs(pool)); diff != "" {
 		t.Errorf("authorities (-want +got):\n%s", diff)
 	}
-	jwt, err := pool.SignJWT(&actoridjwt.Claims{Subject: "actor/a/b", Audiences: []string{"aud"}})
+	jwt, err := pool.SignJWT(&actoridjwt.Claims{Kind: actoridjwt.KindActor, Subject: "actor/a/b", Audiences: []string{"aud"}})
 	if err != nil {
 		t.Fatalf("SignJWT: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestGenerateAuthority(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			jwt, err := loaded.SignJWT(&actoridjwt.Claims{Subject: "actor/a/b", Audiences: []string{"aud"}})
+			jwt, err := loaded.SignJWT(&actoridjwt.Claims{Kind: actoridjwt.KindActor, Subject: "actor/a/b", Audiences: []string{"aud"}})
 			if err != nil {
 				t.Fatal(err)
 			}
