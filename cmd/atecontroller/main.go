@@ -18,12 +18,14 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
 	"go.ate.dev/substrate/cmd/atecontroller/internal/controllers"
 	"go.ate.dev/substrate/cmd/atecontroller/internal/workersync"
 	"go.ate.dev/substrate/internal/ateapiauth"
+	"go.ate.dev/substrate/internal/cachesync"
 	"go.ate.dev/substrate/internal/egresspolicy"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/preview"
@@ -39,6 +41,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -102,6 +105,9 @@ const (
 	// turns it off.
 	metricsPullAddr = ":8080"
 	metricsOffAddr  = "0"
+
+	// cacheSyncTimeout bounds the startup wait for the worker-sync caches.
+	cacheSyncTimeout = time.Minute
 )
 
 // logr verbosity V(n) maps to slog level -n, so V(1) stays below Info until
@@ -307,8 +313,15 @@ func main() {
 
 	workerPodInformerFactory.Start(runCtx.Done())
 	ateFactory.Start(runCtx.Done())
-	workerPodInformerFactory.WaitForCacheSync(runCtx.Done())
-	ateFactory.WaitForCacheSync(runCtx.Done())
+	// The syncer cannot reconcile without these caches, but exiting here would
+	// forfeit recovery: the informers keep retrying, and a fixed RoleBinding
+	// lets them sync without a controller restart.
+	if err := cachesync.WaitForCacheSync(runCtx, cacheSyncTimeout, map[string]cache.InformerSynced{
+		"worker Pods": workerPodInformer.HasSynced,
+		"WorkerPools": workerPoolInformer.Informer().HasSynced,
+	}); err != nil {
+		setupLog.Error(err, "worker-sync caches not synced; the syncer will keep waiting for them in the background")
+	}
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(runCtx); err != nil {
