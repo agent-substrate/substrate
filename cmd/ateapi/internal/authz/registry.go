@@ -246,6 +246,11 @@ var defaultRPCPermissions = map[string]rpcRule{
 		return onActor(RelationCanDeleteEgressPolicy, r.GetActor(), field.NewPath("actor"))
 	})),
 
+	// Actor identity.
+	ateapipb.Control_MintActorJwt_FullMethodName: rule(checksOf(func(r *ateapipb.MintActorJwtRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanMintActorJWT, r.GetActor(), field.NewPath("actor"))
+	})),
+
 	// Workers.
 	ateapipb.Control_CreateWorker_FullMethodName: rule(checksOf(func(*ateapipb.CreateWorkerRequest) ([]check, field.ErrorList) {
 		return onGlobal(RelationCanCreateWorker)

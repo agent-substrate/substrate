@@ -193,6 +193,14 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			want:       []check{{RelationCanDeleteEgressPolicy, "actor:team-a/runner"}},
 		},
 
+		// Actor identity.
+		{
+			name:       "MintActorJwt",
+			fullMethod: ateapipb.Control_MintActorJwt_FullMethodName,
+			req:        &ateapipb.MintActorJwtRequest{Actor: actorRef},
+			want:       []check{{RelationCanMintActorJWT, "actor:team-a/runner"}},
+		},
+
 		// Workers.
 		{
 			name:       "CreateWorker",
