@@ -29,12 +29,16 @@ import (
 // This reads nothing from the object's contents: the ranges are the original byte
 // stream again before anything parses it, so it needs no format change and works on
 // objects written by any earlier version.
+//
+// Keep ranges small enough that an object of a few tens of MB still spreads over
+// several connections: with 16MiB ranges, 16 of a 19MB memory image's bytes came
+// over the first one.
 const (
 	// downloadChunkSize is how much one ranged request fetches. Peak buffering is
 	// this times downloadConcurrency.
-	downloadChunkSize = 16 << 20
+	downloadChunkSize = 4 << 20
 	// downloadConcurrency is how many ranges are in flight.
-	downloadConcurrency = 8
+	downloadConcurrency = 16
 )
 
 // fetchRangeFunc reads the object's [off, off+n) into buf. i is the range's index,

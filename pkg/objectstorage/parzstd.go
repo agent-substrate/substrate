@@ -33,8 +33,10 @@ import (
 // Independent chunks cost a little ratio (no matches across a boundary), which
 // parZstdChunk is sized to keep negligible.
 const (
-	// parZstdChunk is the per-frame chunk size.
-	parZstdChunk = 8 << 20
+	// parZstdChunk is the per-frame chunk size. Frames are also the unit a
+	// download decodes in parallel (parZstdReader), and one 8MiB frame of guest
+	// memory took ~12ms to decode, so smaller frames finish a download sooner.
+	parZstdChunk = 2 << 20
 	// parZstdQueue is how many chunks may be outstanding per worker, so the producer
 	// can run ahead while workers compress.
 	parZstdQueue = 2
@@ -143,17 +145,4 @@ func (p *parZstd) Close() error {
 	close(p.ordered)
 	<-p.done
 	return p.err
-}
-
-// newSerialZstd is a plain streaming encoder, for callers that are already running one
-// per parallel unit of work (an upload part) and so need no fan-out of their own.
-func newSerialZstd(dst io.Writer) *zstd.Encoder {
-	// NewWriter only errors on bad options, which are compile-time constants here.
-	enc, err := zstd.NewWriter(dst,
-		zstd.WithEncoderLevel(zstd.SpeedFastest),
-		zstd.WithEncoderConcurrency(1))
-	if err != nil {
-		panic(err)
-	}
-	return enc
 }

@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 
-	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sys/unix"
 )
 
@@ -142,10 +142,7 @@ func readSparseZstd(dst *os.File, src io.Reader) (logical int64, err error) {
 		return 0, fmt.Errorf("unsupported sparse snapshot format version %d (this build supports %d)", ver, sparseVersion)
 	}
 
-	zr, err := zstd.NewReader(src, zstd.WithDecoderConcurrency(1))
-	if err != nil {
-		return 0, err
-	}
+	zr := newParZstdReader(src, runtime.GOMAXPROCS(0))
 	defer zr.Close()
 
 	var size int64
