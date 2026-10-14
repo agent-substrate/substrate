@@ -22,3 +22,8 @@ import "errors"
 func Exited(pid int) (<-chan struct{}, error) {
 	return nil, errors.ErrUnsupported
 }
+
+// ExitedFD is not supported off Linux.
+func ExitedFD(pidfd int) (<-chan struct{}, error) {
+	return nil, errors.ErrUnsupported
+}

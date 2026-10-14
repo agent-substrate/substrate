@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/internal/ateworker/register"
-	"go.ate.dev/substrate/internal/pidfd"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 )
@@ -42,11 +41,12 @@ var _ crashReporter = (*register.CrashReporter)(nil)
 // worker for it again, and then reported crashed.
 func (s *AteWorkerService) watchSandbox(ctx context.Context, hosted *hostedActor, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) {
 	attribution := hosted.attribution
-	pid, err := sandboxPid(actorDirs)
-	var exited <-chan struct{}
-	if err == nil {
-		exited, err = pidfd.Exited(pid)
+	if hosted.sandbox == nil {
+		slog.WarnContext(ctx, "Cannot watch the sandbox, a crash will go unreported: it was never pinned", slog.String("actorUID", attribution.UID))
+		return
 	}
+	pid := hosted.sandbox.pid
+	exited, err := hosted.sandbox.exited()
 	if err != nil {
 		slog.WarnContext(ctx, "Cannot watch the sandbox, a crash will go unreported", slog.String("actorUID", attribution.UID), slog.Any("err", err))
 		return

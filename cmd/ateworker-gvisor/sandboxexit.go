@@ -25,6 +25,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"go.ate.dev/substrate/internal/pidfd"
+
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
@@ -66,6 +68,11 @@ func sandboxPid(actorDirs *ateworkerpb.ActorDirs) (int, error) {
 		return 0, fmt.Errorf("parsing sandbox pid %q: %w", b, err)
 	}
 	return pid, nil
+}
+
+// exited returns a channel closed once the sandbox exits.
+func (p *sandboxProcess) exited() (<-chan struct{}, error) {
+	return pidfd.ExitedFD(p.pidfd)
 }
 
 func (p *sandboxProcess) Close() {

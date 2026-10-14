@@ -689,6 +689,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, nil); err != nil {
 		return nil, fmt.Errorf("while creating pause container: %w", err)
 	}
+	s.pinSandbox(ctx, hosted, req.GetActorDirs())
 	if err := rcmd.cmdStart(ctx, pw, ocispec.PauseContainer); err != nil {
 		return nil, fmt.Errorf("while starting pause container: %w", err)
 	}
@@ -847,14 +848,13 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		// rootfs overlays into the rootfs bundle and durable-dir volumes into
 		// <checkpointPath>/fs when present.
 		checkpointFn = func(ctx context.Context) error {
+			var sandbox *sandboxProcess
 			if hosted != nil {
 				hosted.stopping.Store(true)
+				sandbox = hosted.sandbox
 			}
-			sandbox, sbErr := openSandboxProcess(req.GetActorDirs())
-			if sbErr != nil {
-				slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", sbErr))
-			} else {
-				defer sandbox.Close()
+			if sandbox == nil {
+				slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint: it was never pinned")
 			}
 			err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, fsPaths)
 			if err != nil {
@@ -1103,6 +1103,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		if err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
+		s.pinSandbox(ctx, hosted, req.GetActorDirs())
 		err = rcmd.cmdStart(ctx, pw, ocispec.PauseContainer)
 		timing.pauseRestore = lap(&tLast)
 		if err != nil {
@@ -1116,6 +1117,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		if err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
+		s.pinSandbox(ctx, hosted, req.GetActorDirs())
 		err = rcmd.cmdRestore(ctx, pw, ocispec.PauseContainer, checkpointDir)
 		timing.pauseRestore = lap(&tLast)
 		if err != nil {

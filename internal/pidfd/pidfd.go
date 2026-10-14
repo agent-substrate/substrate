@@ -36,6 +36,28 @@ func Exited(pid int) (<-chan struct{}, error) {
 	if err != nil {
 		return nil, err
 	}
+	return watch(fd, done)
+}
+
+// ExitedFD is Exited for a process already pinned by pidfd. It watches a
+// duplicate, so the caller keeps pidfd and may close it at any time.
+func ExitedFD(pidfd int) (<-chan struct{}, error) {
+	fd, err := unix.FcntlInt(uintptr(pidfd), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	// the duplicate shares the file status flags, so this makes pidfd
+	// nonblocking too, which signaling it does not mind
+	if err := unix.SetNonblock(fd, true); err != nil {
+		unix.Close(fd)
+		return nil, err
+	}
+	return watch(fd, make(chan struct{}))
+}
+
+// watch closes done once the nonblocking pidfd fd turns readable, and takes
+// ownership of fd.
+func watch(fd int, done chan struct{}) (<-chan struct{}, error) {
 	// A nonblocking fd handed to os.NewFile joins the runtime's netpoller, so
 	// waiting on it parks a goroutine rather than a thread.
 	f := os.NewFile(uintptr(fd), "pidfd")

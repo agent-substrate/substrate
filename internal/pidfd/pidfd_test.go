@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestExited(t *testing.T) {
@@ -61,6 +63,30 @@ func TestExitedAlreadyGone(t *testing.T) {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("not closed for a reaped process")
+	}
+}
+
+func TestExitedFD(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Wait()
+	fd, err := unix.PidfdOpen(cmd.Process.Pid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done, err := ExitedFD(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the caller's pidfd is its own to close
+	unix.Close(fd)
+	_ = cmd.Process.Kill()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("not closed after the process exited")
 	}
 }
 
