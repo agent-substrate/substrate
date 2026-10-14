@@ -15,9 +15,11 @@
 package snapshottracker
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +29,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"k8s.io/client-go/util/workqueue"
 	clocktesting "k8s.io/utils/clock/testing"
 )
 
@@ -48,7 +51,7 @@ func useTempNodeDirs(t *testing.T) {
 // newTracker returns a tracker on a fake clock whose context ends with the
 // test. Its workers are not started.
 func newTracker(t *testing.T) *Tracker {
-	return New(t.Context(), clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)))
+	return New(t.Context(), nil, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)))
 }
 
 // testRef is a MEMORY snapshot of the tracked actor.
@@ -73,6 +76,181 @@ func timeOf(ts *timestamppb.Timestamp) time.Time {
 
 func uuidOf(r *ateletpb.SnapshotReport) string {
 	return r.GetSnapshot().GetSnapshotUuid()
+}
+
+// The delays of the trackers newStoreTracker builds. Nothing is due until a
+// test advances the tracker's clock.
+const (
+	testDetachDelay   = 4 * time.Hour
+	testRetryDelay    = 30 * time.Minute
+	testMaxRetryDelay = 2 * time.Hour
+)
+
+// fakeSnapshotStore is a Store that records its calls. A call for a URI it
+// already holds uploads nothing.
+type fakeSnapshotStore struct {
+	// started receives each call's snapshot uuid as the call starts.
+	started chan string
+	// release ends a blocked call with the error it receives.
+	release chan error
+
+	mu       sync.Mutex
+	calls    []string
+	uploaded map[string]bool
+	blocking bool
+	err      error
+}
+
+func newFakeSnapshotStore() *fakeSnapshotStore {
+	return &fakeSnapshotStore{started: make(chan string, 100), release: make(chan error)}
+}
+
+// setBlocking makes later calls wait for release, or their context.
+func (f *fakeSnapshotStore) setBlocking(blocking bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.blocking = blocking
+}
+
+// setErr makes later calls fail with err, or succeed when it is nil.
+func (f *fakeSnapshotStore) setErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
+func (f *fakeSnapshotStore) uploads() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
+}
+
+func (f *fakeSnapshotStore) UploadLocalSnapshot(ctx context.Context, _ string, ref SnapshotRef) (bool, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, ref.uuid())
+	blocking, err := f.blocking, f.err
+	f.mu.Unlock()
+	f.started <- ref.uuid()
+	if blocking {
+		select {
+		case err = <-f.release:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	if err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	uri := ref.Snapshot.GetObject().GetSnapshotUri()
+	if f.uploaded[uri] {
+		return false, nil
+	}
+	if f.uploaded == nil {
+		f.uploaded = map[string]bool{}
+	}
+	f.uploaded[uri] = true
+	return true, nil
+}
+
+// newStoreTracker returns a tracker over store on a fake clock, with the test
+// delays, whose workers have not started: background work starts only once a
+// test advances the clock to when it is due (see stepTo). Its workers stop
+// once the test ends, before the node directories are restored.
+func newStoreTracker(t *testing.T, store Store) *Tracker {
+	t.Helper()
+	tr := New(t.Context(), store, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)))
+	tr.detachDelay = testDetachDelay
+	tr.retries = workqueue.NewTypedItemExponentialFailureRateLimiter[string](testRetryDelay, testMaxRetryDelay)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := tr.Wait(ctx); err != nil {
+			t.Errorf("workers still running a minute after the test ended: %v", err)
+		}
+	})
+	return tr
+}
+
+// newIdleTestTracker returns a tracker like newStoreTracker's, on fresh node
+// directories that hold the tracked actor's directory.
+func newIdleTestTracker(t *testing.T, store Store) *Tracker {
+	t.Helper()
+	useActorDir(t)
+	return newStoreTracker(t, store)
+}
+
+// newTestTracker returns a tracker like newIdleTestTracker's, with its workers
+// running.
+func newTestTracker(t *testing.T, store Store) *Tracker {
+	t.Helper()
+	tr := newIdleTestTracker(t, store)
+	tr.Start()
+	return tr
+}
+
+// stepTo advances the tracker's fake clock to at, unless it is there already,
+// so the background work due by then starts.
+func stepTo(tr *Tracker, at time.Time) {
+	clk := tr.clock.(*clocktesting.FakeClock)
+	if d := at.Sub(clk.Now()); d > 0 {
+		clk.Step(d)
+	}
+}
+
+// waitStarted waits for the next store call to start, and returns the uuid of
+// the snapshot it uploads.
+func waitStarted(t *testing.T, store *fakeSnapshotStore) string {
+	t.Helper()
+	select {
+	case uuid := <-store.started:
+		return uuid
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for an upload to start")
+		return ""
+	}
+}
+
+// opDone returns a channel closed once the actor's operation in progress has
+// ended, deleting the local snapshots it no longer needs included.
+func opDone(t *testing.T, tr *Tracker, actorUID string) <-chan struct{} {
+	t.Helper()
+	tr.lock(actorUID)
+	defer tr.unlock(actorUID)
+	a := tr.findLocked(actorUID)
+	if a == nil || a.op == nil {
+		t.Fatal("no operation in progress")
+	}
+	return a.op.done
+}
+
+func waitClosed(t *testing.T, done <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+// processNext takes the next actor from the queue of a tracker whose workers
+// have not started, and runs its background work as a worker would.
+func processNext(t *testing.T, tr *Tracker) {
+	t.Helper()
+	next := make(chan string, 1)
+	go func() {
+		if actorUID, shutdown := tr.queue.Get(); !shutdown {
+			next <- actorUID
+		}
+	}()
+	select {
+	case actorUID := <-next:
+		tr.syncActor(actorUID)
+		tr.queue.Done(actorUID)
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for an actor to be queued")
+	}
 }
 
 // State reports the latest local snapshot a deferred checkpoint leaves, and

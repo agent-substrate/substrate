@@ -350,7 +350,9 @@ service Atelet {
   // Waits for an operation already in progress on the actor, such as an
   // upload or a detach. Does nothing when atelet holds no local snapshot for
   // the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
-  // actor is in progress or the actor runs on this node.
+  // actor is in progress or the actor runs on this node, and
+  // FAILED_PRECONDITION when atelet cannot make the latest local snapshot
+  // durable, such as when it has no `snapshot.object`.
   //
   // TODO: Temporarily, atelet returns UNIMPLEMENTED.
   rpc DetachActor(DetachActorRequest) returns (DetachActorResponse) {}
@@ -984,11 +986,14 @@ enum UploadMode {
   // that is not yet durable was taken. Snapshots superseded before then
   // are never uploaded.
   //
-  // Once the actor has stayed suspended on this node for
-  // atelet's detach-delay, atelet detaches it (deletes all the local snapshots).
+  // Once the actor has stayed suspended on this node for atelet's
+  // detach-delay, atelet detaches it: it uploads the latest local snapshot
+  // unless that is durable already, then deletes all the local snapshots. It
+  // never detaches a snapshot it cannot make durable, such as one without
+  // `snapshot.object`.
   //
-  // TODO: Temporarily the deferred upload and detach are unimplemented. Only a local
-  // copy is taken.
+  // TODO: Temporarily the deferred upload is unimplemented: until the
+  // detach, only PromoteSnapshot uploads the snapshot.
   UPLOAD_MODE_DEFERRED = 1;
 
   // Upload the snapshot synchronously before Checkpoint returns, while keeping the local copy.

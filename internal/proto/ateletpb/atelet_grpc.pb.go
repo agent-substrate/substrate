@@ -346,7 +346,9 @@ type AteletClient interface {
 	// Waits for an operation already in progress on the actor, such as an
 	// upload or a detach. Does nothing when atelet holds no local snapshot for
 	// the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
-	// actor is in progress or the actor runs on this node.
+	// actor is in progress or the actor runs on this node, and
+	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
+	// durable, such as when it has no `snapshot.object`.
 	//
 	// TODO: Temporarily, atelet returns UNIMPLEMENTED.
 	DetachActor(ctx context.Context, in *DetachActorRequest, opts ...grpc.CallOption) (*DetachActorResponse, error)
@@ -464,7 +466,9 @@ type AteletServer interface {
 	// Waits for an operation already in progress on the actor, such as an
 	// upload or a detach. Does nothing when atelet holds no local snapshot for
 	// the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
-	// actor is in progress or the actor runs on this node.
+	// actor is in progress or the actor runs on this node, and
+	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
+	// durable, such as when it has no `snapshot.object`.
 	//
 	// TODO: Temporarily, atelet returns UNIMPLEMENTED.
 	DetachActor(context.Context, *DetachActorRequest) (*DetachActorResponse, error)

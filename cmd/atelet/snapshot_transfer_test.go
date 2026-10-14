@@ -58,7 +58,7 @@ func newPluginHerder(t *testing.T, store objectstorage.ObjectStorage) *Atelet {
 	return &Atelet{
 		objectStorePlugin:  objectstoreplugintest.NodeClient(plugin),
 		snapshotScratchDir: t.TempDir(),
-		snapshots:          snapshottracker.New(t.Context(), clock.RealClock{}),
+		snapshots:          snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 		sandboxAssetCache:  newTestAssetCache(t),
 	}
 }
@@ -194,7 +194,7 @@ func TestObjectStorePluginErrorCodeThroughAtelet(t *testing.T) {
 		{"paused upload", true, func(ctx context.Context, s *Atelet) error {
 			dir := t.TempDir()
 			writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
-			_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+			_, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
 			return err
 		}},
 		{"checkpoint upload", false, func(ctx context.Context, s *Atelet) error {
@@ -260,7 +260,7 @@ func TestObjectStorePluginErrorKeepsCredentialsOut(t *testing.T) {
 		{"paused upload", "", func(ctx context.Context, s *Atelet) error {
 			dir := t.TempDir()
 			writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
-			_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+			_, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
 			return err
 		}},
 	}
@@ -412,7 +412,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 		}
 	}
 
-	if _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), pausedDir, uri); apierror.Code(err) != codes.Unavailable {
+	if _, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), pausedDir, uri); apierror.Code(err) != codes.Unavailable {
 		t.Fatalf("paused upload during the outage = %v, want %s", err, codes.Unavailable)
 	}
 

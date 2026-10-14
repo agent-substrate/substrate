@@ -161,11 +161,14 @@ const (
 	// that is not yet durable was taken. Snapshots superseded before then
 	// are never uploaded.
 	//
-	// Once the actor has stayed suspended on this node for
-	// atelet's detach-delay, atelet detaches it (deletes all the local snapshots).
+	// Once the actor has stayed suspended on this node for atelet's
+	// detach-delay, atelet detaches it: it uploads the latest local snapshot
+	// unless that is durable already, then deletes all the local snapshots. It
+	// never detaches a snapshot it cannot make durable, such as one without
+	// `snapshot.object`.
 	//
-	// TODO: Temporarily the deferred upload and detach are unimplemented. Only a local
-	// copy is taken.
+	// TODO: Temporarily the deferred upload is unimplemented: until the
+	// detach, only PromoteSnapshot uploads the snapshot.
 	UploadMode_UPLOAD_MODE_DEFERRED UploadMode = 1
 	// Upload the snapshot synchronously before Checkpoint returns, while keeping the local copy.
 	//
