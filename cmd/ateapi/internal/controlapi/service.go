@@ -46,6 +46,7 @@ type RPCService struct {
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
 	actorWorkflow         *ActorWorkflow
 	workerWorkflow        *WorkerWorkflow
+	sharedVolumeWorkflow  *SharedVolumeWorkflow
 	instruments           *Instruments
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginControlPlane
@@ -105,6 +106,7 @@ func NewRPCService(
 	}
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
 	s.workerWorkflow = NewWorkerWorkflow(impl)
+	s.sharedVolumeWorkflow = NewSharedVolumeWorkflow(impl, storageClassLister, s)
 	return s
 }
 
@@ -123,6 +125,11 @@ type serviceStore interface {
 	ListTags(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Tag], error)
 	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error)
+	CreateSharedVolume(ctx context.Context, volume *ateapipb.SharedVolume) (*ateapipb.SharedVolume, error)
+	GetSharedVolume(ctx context.Context, volumeRef resources.SharedVolumeRef) (*ateapipb.SharedVolume, error)
+	ListSharedVolumes(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.SharedVolume], error)
+	UpdateSharedVolume(ctx context.Context, volumeRef resources.SharedVolumeRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.SharedVolume) error) (*ateapipb.SharedVolume, error)
+	DeleteSharedVolume(ctx context.Context, volumeRef resources.SharedVolumeRef, precondition store.DeletePreconditions) (*ateapipb.SharedVolume, error)
 	CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error)
 	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
 	ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error)

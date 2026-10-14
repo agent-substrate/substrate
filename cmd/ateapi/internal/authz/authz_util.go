@@ -78,6 +78,8 @@ const (
 	RelationCanCreateTag            = "can_create_tag"
 	RelationCanListTags             = "can_list_tags"
 	RelationCanUseTag               = "can_use_tag"
+	RelationCanCreateSharedVolume   = "can_create_shared_volume"
+	RelationCanListSharedVolumes    = "can_list_shared_volumes"
 	RelationCanMintActorJWT         = "can_mint_actor_jwt"
 	RelationCanMintActorCertificate = "can_mint_actor_certificate"
 
@@ -142,6 +144,11 @@ func ActorTemplateObject(atespace, name string) string {
 // TagObject formats a tag as an OpenFGA object string.
 func TagObject(atespace, name string) string {
 	return "tag:" + atespacedID(atespace, name)
+}
+
+// SharedVolumeObject formats a shared volume as an OpenFGA object string.
+func SharedVolumeObject(atespace, name string) string {
+	return "shared_volume:" + atespacedID(atespace, name)
 }
 
 // atespacedID formats the object ID of an atespaced resource as

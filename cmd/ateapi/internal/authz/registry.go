@@ -123,6 +123,13 @@ func onTag(relation string, ref resourceRef, fldPath *field.Path) ([]check, fiel
 	return []check{{relation: relation, object: TagObject(ref.GetAtespace(), ref.GetName())}}, nil
 }
 
+func onSharedVolume(relation string, ref resourceRef, fldPath *field.Path) ([]check, field.ErrorList) {
+	if errs := validateRef(ref, fldPath); len(errs) > 0 {
+		return nil, errs
+	}
+	return []check{{relation: relation, object: SharedVolumeObject(ref.GetAtespace(), ref.GetName())}}, nil
+}
+
 // onSourceTag checks can_use_tag on the tag an actor is created from, if the
 // request names one. Golden tags are exempt: the handler only accepts one
 // built from the actor's own template, which can_use_template already covers.
@@ -334,6 +341,23 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 	ateapipb.Control_DeleteTag_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteTagRequest) ([]check, field.ErrorList) {
 		return onTag(RelationCanDelete, r.GetTag(), field.NewPath("tag"))
+	})),
+
+	// Shared volumes: viewers read, editors write, within the owning atespace.
+	ateapipb.Control_CreateSharedVolume_FullMethodName: rule(checksOf(func(r *ateapipb.CreateSharedVolumeRequest) ([]check, field.ErrorList) {
+		return onAtespace(RelationCanCreateSharedVolume, r.GetSharedVolume().GetMetadata().GetAtespace(), field.NewPath("shared_volume", "metadata", "atespace"))
+	})),
+	ateapipb.Control_GetSharedVolume_FullMethodName: rule(checksOf(func(r *ateapipb.GetSharedVolumeRequest) ([]check, field.ErrorList) {
+		return onSharedVolume(RelationCanGet, r.GetSharedVolume(), field.NewPath("shared_volume"))
+	})),
+	ateapipb.Control_ListSharedVolumes_FullMethodName: rule(checksOf(func(r *ateapipb.ListSharedVolumesRequest) ([]check, field.ErrorList) {
+		return onAtespaceOrGlobal(RelationCanListSharedVolumes, r.GetAtespace(), field.NewPath("atespace"))
+	})),
+	ateapipb.Control_UpdateSharedVolume_FullMethodName: rule(checksOf(func(r *ateapipb.UpdateSharedVolumeRequest) ([]check, field.ErrorList) {
+		return onSharedVolume(RelationCanUpdate, r.GetSharedVolume().GetMetadata(), field.NewPath("shared_volume", "metadata"))
+	})),
+	ateapipb.Control_DeleteSharedVolume_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteSharedVolumeRequest) ([]check, field.ErrorList) {
+		return onSharedVolume(RelationCanDelete, r.GetSharedVolume(), field.NewPath("shared_volume"))
 	})),
 
 	// WorkerService is served only to atelet, which each handler

@@ -293,6 +293,34 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			want:       []check{{RelationCanMintActorCertificate, "actor:team-a/runner"}},
 		},
 
+		// Shared volumes.
+		{
+			name:       "CreateSharedVolume checks its atespace",
+			fullMethod: ateapipb.Control_CreateSharedVolume_FullMethodName,
+			req: &ateapipb.CreateSharedVolumeRequest{SharedVolume: &ateapipb.SharedVolume{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "ctx"},
+			}},
+			want: []check{{RelationCanCreateSharedVolume, "atespace:team-a"}},
+		},
+		{
+			name:       "GetSharedVolume",
+			fullMethod: ateapipb.Control_GetSharedVolume_FullMethodName,
+			req:        &ateapipb.GetSharedVolumeRequest{SharedVolume: &ateapipb.ObjectRef{Atespace: "team-a", Name: "ctx"}},
+			want:       []check{{RelationCanGet, "shared_volume:team-a/ctx"}},
+		},
+		{
+			name:       "ListSharedVolumes across all atespaces",
+			fullMethod: ateapipb.Control_ListSharedVolumes_FullMethodName,
+			req:        &ateapipb.ListSharedVolumesRequest{},
+			want:       []check{{RelationCanListSharedVolumes, GlobalRootObject}},
+		},
+		{
+			name:       "DeleteSharedVolume",
+			fullMethod: ateapipb.Control_DeleteSharedVolume_FullMethodName,
+			req:        &ateapipb.DeleteSharedVolumeRequest{SharedVolume: &ateapipb.ObjectRef{Atespace: "team-a", Name: "ctx"}},
+			want:       []check{{RelationCanDelete, "shared_volume:team-a/ctx"}},
+		},
+
 		// Tags.
 		{
 			name:       "CreateTag checks its source actor's atespace",

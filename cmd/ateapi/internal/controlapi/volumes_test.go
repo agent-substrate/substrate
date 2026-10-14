@@ -345,7 +345,7 @@ func (emptyIDVolumePlugin) CreateVolume(context.Context, volume.CreateVolumeRequ
 func TestCreateActorVolumesRejectsEmptyPluginID(t *testing.T) {
 	tmpl := &ateapipb.ActorTemplate{
 		Volumes: []*ateapipb.Volume{{
-			Name:                   "data-vol",
+			Name:     "data-vol",
 			External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard"}},
 		}},
 	}

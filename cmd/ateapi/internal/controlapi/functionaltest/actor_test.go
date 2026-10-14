@@ -183,7 +183,7 @@ func TestCreateActor_ExternalVolumesWithoutOptIn(t *testing.T) {
 
 	createTemplateWithVolumes(t, tc, ns,
 		[]*ateapipb.Volume{{
-			Name:                   "ext-vol-1",
+			Name:     "ext-vol-1",
 			External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard", Capacity: "10Gi"}},
 		}},
 		[]*ateapipb.VolumeMount{{Name: "ext-vol-1", MountPath: "/data"}})
@@ -215,7 +215,7 @@ func TestActorLifecycle_ExternalVolumesWithoutOptIn(t *testing.T) {
 
 	createTemplateWithVolumes(t, tc, ns,
 		[]*ateapipb.Volume{{
-			Name:                   "data-vol",
+			Name:     "data-vol",
 			External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "fast", Capacity: "20Gi"}},
 		}},
 		[]*ateapipb.VolumeMount{{Name: "data-vol", MountPath: "/mnt/data"}})

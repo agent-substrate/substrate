@@ -1790,7 +1790,7 @@ func (p *createCountingVolumePlugin) CreateVolume(ctx context.Context, req volum
 func TestEnsureVolumesCreated(t *testing.T) {
 	tmpl := &ateapipb.ActorTemplate{
 		Volumes: []*ateapipb.Volume{{
-			Name:                   "data",
+			Name:     "data",
 			External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
 		}},
 	}
