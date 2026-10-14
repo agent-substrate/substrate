@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package cachesync
 
 import (
 	"bytes"
@@ -26,8 +26,8 @@ import (
 	"testing"
 	"time"
 
-	atefake "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
-	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
+	atefake "go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
+	"go.ate.dev/substrate/pkg/client/informers/externalversions"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -36,25 +36,29 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-type cacheSyncLogBuffer struct {
+type logBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
-func (b *cacheSyncLogBuffer) Write(p []byte) (int, error) {
+func (b *logBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.Write(p)
 }
 
-func (b *cacheSyncLogBuffer) String() string {
+func (b *logBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
 
-func TestWaitForAPICachesWorkerPoolForbidden(t *testing.T) {
-	var logs cacheSyncLogBuffer
+// TestOptionalSyncForbiddenCache mirrors ateapi's startup: the optional
+// WorkerPool cache is Forbidden while the required caches sync, the warn
+// callback fires naming only WorkerPools, and the diagnostic deadline leaves
+// the informer retrying so granting permission recovers it without a restart.
+func TestOptionalSyncForbiddenCache(t *testing.T) {
+	var logs logBuffer
 	oldLogger := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(oldLogger) })
@@ -82,10 +86,15 @@ func TestWaitForAPICachesWorkerPoolForbidden(t *testing.T) {
 	if !cache.WaitForCacheSync(ctx.Done(), sandboxConfigs.HasSynced, csiConfigs.HasSynced) {
 		t.Fatal("required caches did not sync")
 	}
-	if err := waitForAPICaches(ctx, 100*time.Millisecond, "agent-workloads", workerPools.HasSynced, map[string]cache.InformerSynced{
+	OptionalSync(ctx, 100*time.Millisecond, map[string]cache.InformerSynced{"WorkerPools": workerPools.HasSynced},
+		func(ctx context.Context, err error) {
+			slog.WarnContext(ctx, "WorkerPool cache has not synced; worker-count metrics may omit empty pools",
+				"watch-namespace", "agent-workloads", "err", err)
+		})
+	if err := WaitForCacheSync(ctx, 100*time.Millisecond, map[string]cache.InformerSynced{
 		"SandboxConfigs": sandboxConfigs.HasSynced, "CSIDriverConfigs": csiConfigs.HasSynced,
 	}); err != nil {
-		t.Fatalf("optional WorkerPool cache blocked API startup: %v", err)
+		t.Fatalf("optional WorkerPool cache blocked startup: %v", err)
 	}
 	if workerPools.HasSynced() {
 		t.Fatal("forbidden WorkerPool cache unexpectedly synced")
@@ -93,15 +102,15 @@ func TestWaitForAPICachesWorkerPoolForbidden(t *testing.T) {
 	if err := wait.PollUntilContextCancel(ctx, 10*time.Millisecond, true, func(context.Context) (bool, error) {
 		return strings.Contains(logs.String(), "WorkerPool cache has not synced"), nil
 	}); err != nil {
-		t.Fatalf("missing cache diagnostic: %v", err)
+		t.Fatalf("missing optional-cache diagnostic: %v", err)
 	}
-	for _, want := range []string{`"level":"WARN"`, `"watch-namespace":"agent-workloads"`, "list/watch RBAC"} {
+	for _, want := range []string{`"level":"WARN"`, "caches not synced (WorkerPools)", "check logs for more details"} {
 		if !strings.Contains(logs.String(), want) {
-			t.Errorf("cache diagnostic lacks %q: %s", want, logs.String())
+			t.Errorf("optional-cache diagnostic lacks %q: %s", want, logs.String())
 		}
 	}
-	// The diagnostic deadline must not stop the informer: fixing RBAC should
-	// restore metric seeding without restarting the API.
+	// The diagnostic deadline must not stop the informer: fixing the
+	// underlying cause should restore it without a restart.
 	denied.Store(false)
 	if !cache.WaitForCacheSync(ctx.Done(), workerPools.HasSynced) {
 		t.Fatal("WorkerPool cache did not recover after list permission was granted")
@@ -112,23 +121,39 @@ func TestWaitForCacheSync(t *testing.T) {
 	ready := func() bool { return true }
 	pending := func() bool { return false }
 	t.Run("ready", func(t *testing.T) {
-		if err := waitForCacheSync(t.Context(), time.Second, map[string]cache.InformerSynced{"SandboxConfigs": ready}); err != nil {
+		if err := WaitForCacheSync(t.Context(), time.Second, map[string]cache.InformerSynced{"SandboxConfigs": ready}); err != nil {
 			t.Fatal(err)
 		}
 	})
 	t.Run("timeout names only unsynced caches", func(t *testing.T) {
-		err := waitForCacheSync(t.Context(), 10*time.Millisecond, map[string]cache.InformerSynced{
+		err := WaitForCacheSync(t.Context(), 10*time.Millisecond, map[string]cache.InformerSynced{
 			"SandboxConfigs": pending, "CSIDriverConfigs": pending, "atelet Pods": ready,
 		})
 		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "CSIDriverConfigs, SandboxConfigs") || strings.Contains(err.Error(), "atelet Pods") {
 			t.Fatalf("cache timeout = %v, want deadline and only unsynced cache names", err)
 		}
+		if !strings.Contains(err.Error(), "check logs for more details") {
+			t.Fatalf("cache timeout = %v, want a pointer to the component logs", err)
+		}
 	})
 	t.Run("shutdown cancels wait", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		if err := waitForCacheSync(ctx, time.Minute, map[string]cache.InformerSynced{"StorageClasses": pending}); !errors.Is(err, context.Canceled) {
+		if err := WaitForCacheSync(ctx, time.Minute, map[string]cache.InformerSynced{"StorageClasses": pending}); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cache wait = %v, want cancellation", err)
 		}
 	})
+}
+
+func TestOptionalSyncSkipsWarnOnShutdown(t *testing.T) {
+	warned := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	OptionalSync(ctx, time.Minute, map[string]cache.InformerSynced{"WorkerPools": func() bool { return false }},
+		func(context.Context, error) { warned <- struct{}{} })
+	select {
+	case <-warned:
+		t.Fatal("warn called for a canceled context")
+	case <-time.After(500 * time.Millisecond):
+	}
 }
