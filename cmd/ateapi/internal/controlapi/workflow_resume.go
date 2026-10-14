@@ -173,6 +173,13 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	if err != nil {
 		return nil, nil, src, err
 	}
+	// A template can be deleted and recreated under the same name while the
+	// actor is paused, leaving its local checkpoint tied to the old template.
+	if snap := findLatestLocalSnapshot(actor.GetStatus()); snap != nil && snap.GetActorTemplateUid() != actorTemplate.GetMetadata().GetUid() {
+		return nil, nil, src, apierror.FailedPrecondition(
+			"Actor %s local snapshot %q was taken under ActorTemplate uid %q, but the current template uid is %q",
+			actorRef, snap.GetUuid(), snap.GetActorTemplateUid(), actorTemplate.GetMetadata().GetUid())
+	}
 	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
 		st := snap.GetDurableSnapshot()
 		if src.SnapshotURI, err = resources.ParseSnapshotURI(st.GetObject().GetSnapshotUri()); err != nil {

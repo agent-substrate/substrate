@@ -1001,6 +1001,59 @@ func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 	}
 }
 
+func TestResumeActor_RecreatedTemplateRejectsLocalSnapshot(t *testing.T) {
+	ctx := t.Context()
+	persistence := newTestPersistence(t)
+	w := newTestActorWorkflow(t, persistence, "ns", "tmpl1")
+	templateRef := resources.ActorTemplateRef{Atespace: "ns", Name: "tmpl1"}
+	original, err := persistence.GetActorTemplate(ctx, templateRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns", Name: "tmpl1"},
+		Status: &ateapipb.ActorStatus{
+			State:                  ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			AssignedNode:           "node-1",
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, original.GetMetadata().GetUid(), "pause-1", "node-1"),
+			},
+		},
+	})
+	if _, err := w.DeleteActorTemplate(ctx, templateRef, store.DeletePreconditions{}); err != nil {
+		t.Fatal(err)
+	}
+	replacement := proto.CloneOf(original)
+	replacement.Metadata = &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"}
+	replacement.Containers = []*ateapipb.Container{{Name: "app", Image: "example/app:v2"}}
+	replacement, err = persistence.CreateActorTemplate(ctx, replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.GetMetadata().GetUid() == original.GetMetadata().GetUid() {
+		t.Fatal("recreated template must have a new UID")
+	}
+	wc := workercache.New(persistence, time.Hour)
+	if err := wc.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w.workerCache, w.scheduler = wc, scheduling.New(wc)
+
+	ref := resources.ActorRefFromActor(actor)
+	if _, _, err := w.ResumeActor(ctx, ref); apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ResumeActor = %v, want FailedPrecondition before scheduling", err)
+	}
+	stored, err := persistence.GetActor(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(actor, stored, protocmp.Transform()); diff != "" {
+		t.Errorf("actor changed after rejected resume (-want +got):\n%s", diff)
+	}
+}
+
 func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
@@ -1411,10 +1464,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			// An older external snapshot's template mismatch does not affect a
-			// local pause restore: templates can only be updated while
-			// SUSPENDED, so a pause checkpoint is always from the current
-			// template.
+			// A local snapshot from the current template takes precedence
+			// over an older durable snapshot from a different template.
 			name: "18 local snapshot ignores an older external snapshot's template mismatch",
 			actor: actorSeed{
 				localSnapshot:    localSnap(localSnapshotName, fullScope),
@@ -1521,9 +1572,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 					a.Status.AssignedNode = "node-1"
 					loc := proto.CloneOf(tt.actor.localSnapshot)
 					loc.Generation = gen
-					if loc.ActorTemplateUid == "" {
-						loc.ActorTemplateUid = uid
-					}
+					loc.ActorTemplateUid = createdTmpl.GetMetadata().GetUid()
 					a.Status.Snapshots = append(a.Status.Snapshots, loc)
 				}
 				a.Status.LastAssignedGeneration = gen
