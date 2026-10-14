@@ -58,10 +58,10 @@ ActorTemplate, worker pool, test, and manual walkthrough are otherwise the same.
 
 ```bash
 # Envoy (default)
-./hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+./hack/install-ate-kind.sh --deploy-ate-system
 
 # agentgateway
-./hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=agentgateway --credential-provider='{"name":"k8s.io"}'
+./hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=agentgateway
 ```
 
 | | Envoy | agentgateway |

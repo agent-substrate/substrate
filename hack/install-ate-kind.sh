@@ -38,6 +38,10 @@ export BUCKET_NAME="ate-snapshots"
 # An explicit KUBECTL_CONTEXT still wins.
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 export KUBECTL_CONTEXT="${KUBECTL_CONTEXT:-kind-${KIND_CLUSTER_NAME}}"
+# default to the bundled credential provider
+if [[ -z "${ATE_CREDENTIAL_PROVIDER:-}" ]]; then
+  export ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}'
+fi
 # unset other env from ate-dev-env.sh in case the developer already sourced them
 unset GCE_REGION CLUSTER_LOCATION NETWORK SUBNETWORK MEMORYSTORE_INSTANCE PROJECT_ID
 

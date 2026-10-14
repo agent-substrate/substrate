@@ -92,7 +92,7 @@ var withPlaceholder = []string{"header=" + url.QueryEscape("Authorization:"+plac
 // be made with the bundled provider, which deploys the k8s-credential-provider
 // and points the egress gateway at it. Locally:
 //
-//	hack/install-ate-kind.sh --deploy-atenet --credential-provider='{"name":"k8s.io"}'
+//	hack/install-ate-kind.sh --deploy-atenet
 //	hack/setup-e2e-egress-tls-kind.sh
 //	hack/run-e2e-kind.sh ./internal/e2e/suites/egresscredinject -v -args --no-color
 func TestActorEgressCredentialInjection(t *testing.T) {

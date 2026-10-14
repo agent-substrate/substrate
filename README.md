@@ -113,7 +113,7 @@ To quickly set up the complete environment:
 hack/create-kind-cluster.sh
 
 # install ate, PostgreSQL, rustfs
-hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+hack/install-ate-kind.sh --deploy-ate-system
 
 # install counter demo
 hack/install-ate-kind.sh --deploy-demo-counter
@@ -130,9 +130,10 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 ```
 
 > [!IMPORTANT]
-> `{"name":"k8s.io"}` deploys the bundled credential provider with an empty,
-> default-deny namespace policy. Before an actor can have a credential
-> injected, grant its atespace the namespaces whose Secrets it may read; see
+> On kind the installer defaults to `--credential-provider='{"name":"k8s.io"}'`,
+> which deploys the bundled credential provider with an empty, default-deny
+> namespace policy. Before an actor can have a credential injected, grant its
+> atespace the namespaces whose Secrets it may read; see
 > [Enable it](docs/egress-credential-injection.md#enable-it).
 
 3. In a **separate terminal**, send an HTTP request to increment the counter:

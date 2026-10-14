@@ -22,7 +22,7 @@ setup in [Running the microVM runtime locally](microvm-local.md).
 ```bash
 ./hack/create-kind-cluster.sh
 kubectl config use-context kind-kind
-ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}' ./hack/install-ate-kind.sh --deploy-ate-system
+./hack/install-ate-kind.sh --deploy-ate-system
 ```
 
 For micro-VM, install its assets before deploying the fixture:
@@ -36,8 +36,8 @@ Deploy both egress ActorTemplates and add local-origin trust to the current
 gateway:
 
 ```bash
-ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}' ./hack/install-ate-kind.sh --deploy-demo-egress
-ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}' ./hack/install-ate-kind.sh --deploy-demo-egress-microvm
+./hack/install-ate-kind.sh --deploy-demo-egress
+./hack/install-ate-kind.sh --deploy-demo-egress-microvm
 ./hack/setup-e2e-egress-tls-kind.sh
 ```
 

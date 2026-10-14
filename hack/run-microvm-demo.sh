@@ -29,8 +29,8 @@
 # registry / bucket settings unless NO_DEV_ENV is set. The control plane deploy
 # requires a credential provider selection, which reaches it only through the
 # environment here: export ATE_CREDENTIAL_PROVIDER (e.g. '{"name":"k8s.io"}';
-# see hack/install-ate.sh --help) before running this, the kind wrapper
-# included.
+# see hack/install-ate.sh --help) before running this. On kind,
+# install-ate-kind.sh defaults it to '{"name":"k8s.io"}'.
 #
 # Env (most come from .ate-dev-env.sh):
 #   KO_DOCKER_REPO   (required) image registry, e.g. gcr.io/PROJECT/ate-images for
