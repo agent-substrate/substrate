@@ -52,6 +52,11 @@ const (
 	Control_ListTags_FullMethodName                   = "/ateapi.Control/ListTags"
 	Control_UpdateTag_FullMethodName                  = "/ateapi.Control/UpdateTag"
 	Control_DeleteTag_FullMethodName                  = "/ateapi.Control/DeleteTag"
+	Control_CreateSharedVolume_FullMethodName         = "/ateapi.Control/CreateSharedVolume"
+	Control_GetSharedVolume_FullMethodName            = "/ateapi.Control/GetSharedVolume"
+	Control_ListSharedVolumes_FullMethodName          = "/ateapi.Control/ListSharedVolumes"
+	Control_UpdateSharedVolume_FullMethodName         = "/ateapi.Control/UpdateSharedVolume"
+	Control_DeleteSharedVolume_FullMethodName         = "/ateapi.Control/DeleteSharedVolume"
 	Control_ListWorkers_FullMethodName                = "/ateapi.Control/ListWorkers"
 	Control_GetWorker_FullMethodName                  = "/ateapi.Control/GetWorker"
 	Control_CreateWorker_FullMethodName               = "/ateapi.Control/CreateWorker"
@@ -136,6 +141,16 @@ type ControlClient interface {
 	// tag that have not yet been suspended still point at that external snapshot
 	// and become unrecoverable, so do not delete a tag while such Actors exist.
 	DeleteTag(ctx context.Context, in *DeleteTagRequest, opts ...grpc.CallOption) (*Tag, error)
+	// Create a SharedVolume, provisioning it or registering an existing volume.
+	CreateSharedVolume(ctx context.Context, in *CreateSharedVolumeRequest, opts ...grpc.CallOption) (*SharedVolume, error)
+	// Get a SharedVolume.
+	GetSharedVolume(ctx context.Context, in *GetSharedVolumeRequest, opts ...grpc.CallOption) (*SharedVolume, error)
+	// List ExternalVolumes.
+	ListSharedVolumes(ctx context.Context, in *ListSharedVolumesRequest, opts ...grpc.CallOption) (*ListSharedVolumesResponse, error)
+	// Update a SharedVolume's delete trigger.
+	UpdateSharedVolume(ctx context.Context, in *UpdateSharedVolumeRequest, opts ...grpc.CallOption) (*SharedVolume, error)
+	// Delete a SharedVolume and its storage. Rejected while any Actor references it.
+	DeleteSharedVolume(ctx context.Context, in *DeleteSharedVolumeRequest, opts ...grpc.CallOption) (*SharedVolume, error)
 	// List Workers.
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
 	// Get a Worker.
@@ -383,6 +398,56 @@ func (c *controlClient) DeleteTag(ctx context.Context, in *DeleteTagRequest, opt
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Tag)
 	err := c.cc.Invoke(ctx, Control_DeleteTag_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) CreateSharedVolume(ctx context.Context, in *CreateSharedVolumeRequest, opts ...grpc.CallOption) (*SharedVolume, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SharedVolume)
+	err := c.cc.Invoke(ctx, Control_CreateSharedVolume_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetSharedVolume(ctx context.Context, in *GetSharedVolumeRequest, opts ...grpc.CallOption) (*SharedVolume, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SharedVolume)
+	err := c.cc.Invoke(ctx, Control_GetSharedVolume_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ListSharedVolumes(ctx context.Context, in *ListSharedVolumesRequest, opts ...grpc.CallOption) (*ListSharedVolumesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSharedVolumesResponse)
+	err := c.cc.Invoke(ctx, Control_ListSharedVolumes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) UpdateSharedVolume(ctx context.Context, in *UpdateSharedVolumeRequest, opts ...grpc.CallOption) (*SharedVolume, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SharedVolume)
+	err := c.cc.Invoke(ctx, Control_UpdateSharedVolume_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) DeleteSharedVolume(ctx context.Context, in *DeleteSharedVolumeRequest, opts ...grpc.CallOption) (*SharedVolume, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SharedVolume)
+	err := c.cc.Invoke(ctx, Control_DeleteSharedVolume_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -678,6 +743,16 @@ type ControlServer interface {
 	// tag that have not yet been suspended still point at that external snapshot
 	// and become unrecoverable, so do not delete a tag while such Actors exist.
 	DeleteTag(context.Context, *DeleteTagRequest) (*Tag, error)
+	// Create a SharedVolume, provisioning it or registering an existing volume.
+	CreateSharedVolume(context.Context, *CreateSharedVolumeRequest) (*SharedVolume, error)
+	// Get a SharedVolume.
+	GetSharedVolume(context.Context, *GetSharedVolumeRequest) (*SharedVolume, error)
+	// List ExternalVolumes.
+	ListSharedVolumes(context.Context, *ListSharedVolumesRequest) (*ListSharedVolumesResponse, error)
+	// Update a SharedVolume's delete trigger.
+	UpdateSharedVolume(context.Context, *UpdateSharedVolumeRequest) (*SharedVolume, error)
+	// Delete a SharedVolume and its storage. Rejected while any Actor references it.
+	DeleteSharedVolume(context.Context, *DeleteSharedVolumeRequest) (*SharedVolume, error)
 	// List Workers.
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
 	// Get a Worker.
@@ -797,6 +872,21 @@ func (UnimplementedControlServer) UpdateTag(context.Context, *UpdateTagRequest) 
 }
 func (UnimplementedControlServer) DeleteTag(context.Context, *DeleteTagRequest) (*Tag, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteTag not implemented")
+}
+func (UnimplementedControlServer) CreateSharedVolume(context.Context, *CreateSharedVolumeRequest) (*SharedVolume, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateSharedVolume not implemented")
+}
+func (UnimplementedControlServer) GetSharedVolume(context.Context, *GetSharedVolumeRequest) (*SharedVolume, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSharedVolume not implemented")
+}
+func (UnimplementedControlServer) ListSharedVolumes(context.Context, *ListSharedVolumesRequest) (*ListSharedVolumesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSharedVolumes not implemented")
+}
+func (UnimplementedControlServer) UpdateSharedVolume(context.Context, *UpdateSharedVolumeRequest) (*SharedVolume, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateSharedVolume not implemented")
+}
+func (UnimplementedControlServer) DeleteSharedVolume(context.Context, *DeleteSharedVolumeRequest) (*SharedVolume, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteSharedVolume not implemented")
 }
 func (UnimplementedControlServer) ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListWorkers not implemented")
@@ -1226,6 +1316,96 @@ func _Control_DeleteTag_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).DeleteTag(ctx, req.(*DeleteTagRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_CreateSharedVolume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateSharedVolumeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).CreateSharedVolume(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_CreateSharedVolume_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).CreateSharedVolume(ctx, req.(*CreateSharedVolumeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetSharedVolume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSharedVolumeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetSharedVolume(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetSharedVolume_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetSharedVolume(ctx, req.(*GetSharedVolumeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ListSharedVolumes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSharedVolumesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ListSharedVolumes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ListSharedVolumes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ListSharedVolumes(ctx, req.(*ListSharedVolumesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_UpdateSharedVolume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateSharedVolumeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).UpdateSharedVolume(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_UpdateSharedVolume_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).UpdateSharedVolume(ctx, req.(*UpdateSharedVolumeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_DeleteSharedVolume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteSharedVolumeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).DeleteSharedVolume(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_DeleteSharedVolume_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).DeleteSharedVolume(ctx, req.(*DeleteSharedVolumeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1726,6 +1906,26 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteTag",
 			Handler:    _Control_DeleteTag_Handler,
+		},
+		{
+			MethodName: "CreateSharedVolume",
+			Handler:    _Control_CreateSharedVolume_Handler,
+		},
+		{
+			MethodName: "GetSharedVolume",
+			Handler:    _Control_GetSharedVolume_Handler,
+		},
+		{
+			MethodName: "ListSharedVolumes",
+			Handler:    _Control_ListSharedVolumes_Handler,
+		},
+		{
+			MethodName: "UpdateSharedVolume",
+			Handler:    _Control_UpdateSharedVolume_Handler,
+		},
+		{
+			MethodName: "DeleteSharedVolume",
+			Handler:    _Control_DeleteSharedVolume_Handler,
 		},
 		{
 			MethodName: "ListWorkers",

@@ -209,6 +209,7 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runAtespaceContractTests(t, setup)
 	runActorTemplateContractTests(t, setup)
 	runTagContractTests(t, setup)
+	runSharedVolumeContractTests(t, setup)
 	runLeaseContractTests(t, setup)
 	runListOptionsContractTests(t, setup)
 	runUnknownFieldContractTests(t, setup)
@@ -394,6 +395,7 @@ func runListOptionsContractTests(t *testing.T, setup func(t *testing.T) store.In
 			{"actors", func(opts store.ListOptions) error { _, err := s.ListActors(ctx, "", opts); return err }},
 			{"actor templates", func(opts store.ListOptions) error { _, err := s.ListActorTemplates(ctx, "", opts); return err }},
 			{"tags", func(opts store.ListOptions) error { _, err := s.ListTags(ctx, "", opts); return err }},
+			{"external volumes", func(opts store.ListOptions) error { _, err := s.ListSharedVolumes(ctx, "", opts); return err }},
 			{"workers", func(opts store.ListOptions) error { _, err := s.ListWorkers(ctx, opts); return err }},
 		}
 		for _, call := range calls {
@@ -419,6 +421,7 @@ func runListOptionsContractTests(t *testing.T, setup func(t *testing.T) store.In
 			{"actors", func(opts store.ListOptions) error { _, err := s.ListActors(ctx, "", opts); return err }},
 			{"actor templates", func(opts store.ListOptions) error { _, err := s.ListActorTemplates(ctx, "", opts); return err }},
 			{"tags", func(opts store.ListOptions) error { _, err := s.ListTags(ctx, "", opts); return err }},
+			{"external volumes", func(opts store.ListOptions) error { _, err := s.ListSharedVolumes(ctx, "", opts); return err }},
 			{"workers", func(opts store.ListOptions) error { _, err := s.ListWorkers(ctx, opts); return err }},
 		}
 		for _, call := range calls {
@@ -1573,6 +1576,302 @@ func storeTag(t *testing.T, s store.Interface, tag *ateapipb.Tag) *ateapipb.Tag 
 		t.Fatalf("finalizing tag %q failed: %v", tag.GetMetadata().GetName(), err)
 	}
 	return stored
+}
+
+func newTestPendingSharedVolume(atespace, name string) *ateapipb.SharedVolume {
+	return &ateapipb.SharedVolume{
+		Metadata:         &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
+		DeleteTrigger:    ateapipb.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR,
+		AccessMode:       ateapipb.AccessMode_ACCESS_MODE_READ_WRITE_ONCE,
+		StorageClassName: "standard-rwx",
+		Status:           &ateapipb.SharedVolumeStatus{State: ateapipb.SharedVolumeState_SHARED_VOLUME_STATE_PENDING},
+	}
+}
+
+func finalizeSharedVolume(toUpdate *ateapipb.SharedVolume) error {
+	toUpdate.VolumeId = "substrate-" + toUpdate.GetMetadata().GetUid()
+	toUpdate.VolumeType = "filestore.csi.storage.gke.io"
+	toUpdate.VolumeContext = map[string]string{"ip": "10.0.0.2"}
+	toUpdate.Status.State = ateapipb.SharedVolumeState_SHARED_VOLUME_STATE_READY
+	return nil
+}
+
+func storeSharedVolume(t *testing.T, s store.Interface, volume *ateapipb.SharedVolume) *ateapipb.SharedVolume {
+	t.Helper()
+	reserved, err := s.CreateSharedVolume(context.Background(), volume)
+	if err != nil {
+		t.Fatalf("CreateSharedVolume(%q) failed: %v", volume.GetMetadata().GetName(), err)
+	}
+	stored, err := s.UpdateSharedVolume(context.Background(), resources.SharedVolumeRefFromSharedVolume(reserved), store.PreconditionFrom(reserved), finalizeSharedVolume)
+	if err != nil {
+		t.Fatalf("finalizing external volume %q failed: %v", volume.GetMetadata().GetName(), err)
+	}
+	return stored
+}
+
+func runSharedVolumeContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("SharedVolume_Lifecycle", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+
+		input := newTestPendingSharedVolume("team-a", "scratch")
+		pending, err := s.CreateSharedVolume(ctx, input)
+		if err != nil {
+			t.Fatalf("CreateSharedVolume failed: %v", err)
+		}
+		if pending.GetMetadata().GetVersion() != 1 || pending.GetMetadata().GetUid() == "" {
+			t.Errorf("created volume metadata = %v, want server-owned uid and version 1", pending.GetMetadata())
+		}
+		if input.GetMetadata().GetUid() != "" || input.GetMetadata().GetVersion() != 0 {
+			t.Errorf("CreateSharedVolume mutated its input metadata: %v", input.GetMetadata())
+		}
+
+		volumeRef := resources.SharedVolumeRef{Atespace: "team-a", Name: "scratch"}
+		volume, err := s.GetSharedVolume(ctx, volumeRef)
+		if err != nil {
+			t.Fatalf("GetSharedVolume failed: %v", err)
+		}
+		if volume.GetVolumeId() != "" {
+			t.Errorf("reserved volume id = %q, want unset", volume.GetVolumeId())
+		}
+		if diff := cmp.Diff(input, volume, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
+			t.Errorf("stored external volume mismatch (-want +got):\n%s", diff)
+		}
+		if _, err := s.GetSharedVolume(ctx, resources.SharedVolumeRef{Atespace: "team-a", Name: "missing"}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("missing GetSharedVolume = %v, want ErrNotFound", err)
+		}
+
+		ready, err := s.UpdateSharedVolume(ctx, volumeRef, store.PreconditionFrom(volume), finalizeSharedVolume)
+		if err != nil {
+			t.Fatalf("finalizing external volume failed: %v", err)
+		}
+		if got, want := ready.GetVolumeId(), "substrate-"+volume.GetMetadata().GetUid(); got != want {
+			t.Errorf("finalized volume id = %q, want %q", got, want)
+		}
+		if ready.GetStatus().GetState() != ateapipb.SharedVolumeState_SHARED_VOLUME_STATE_READY {
+			t.Errorf("finalized volume state = %v, want READY", ready.GetStatus().GetState())
+		}
+
+		claimed, err := s.UpdateSharedVolume(ctx, volumeRef, store.PreconditionFrom(ready), func(toUpdate *ateapipb.SharedVolume) error {
+			toUpdate.DeleteTrigger = ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL
+			toUpdate.Status.Refs = append(toUpdate.Status.Refs, &ateapipb.ActorRef{ActorUid: "actor-uid-1", ActorName: "producer", Active: true})
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateSharedVolume failed: %v", err)
+		}
+		if claimed.GetDeleteTrigger() != ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL || len(claimed.GetStatus().GetRefs()) != 1 {
+			t.Errorf("updated volume = %v, want MANUAL and one ref", claimed)
+		}
+		if claimed.GetMetadata().GetVersion() != ready.GetMetadata().GetVersion()+1 {
+			t.Errorf("updated volume version = %d, want %d", claimed.GetMetadata().GetVersion(), ready.GetMetadata().GetVersion()+1)
+		}
+		if _, err := s.UpdateSharedVolume(ctx, volumeRef, store.PreconditionFrom(ready), func(toUpdate *ateapipb.SharedVolume) error {
+			return nil
+		}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("stale UpdateSharedVolume = %v, want ErrVersionConflict", err)
+		}
+		if _, err := s.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("DeleteAtespace with an external volume = %v, want ErrFailedPrecondition", err)
+		}
+
+		if _, err := s.DeleteSharedVolume(ctx, volumeRef, store.DeletePreconditions{Version: ready.GetMetadata().GetVersion()}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("stale DeleteSharedVolume = %v, want ErrVersionConflict", err)
+		}
+		deleted, err := s.DeleteSharedVolume(ctx, volumeRef, store.DeletePreconditions{UID: claimed.GetMetadata().GetUid()})
+		if err != nil || !proto.Equal(deleted, claimed) {
+			t.Errorf("DeleteSharedVolume = (%v, %v), want the claimed volume", deleted, err)
+		}
+		if _, err := s.GetSharedVolume(ctx, volumeRef); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("deleted GetSharedVolume = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("SharedVolume_ImmutableFields", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+		volume := storeSharedVolume(t, s, newTestPendingSharedVolume("team-a", "scratch"))
+
+		tests := []struct {
+			name   string
+			mutate func(*ateapipb.SharedVolume)
+		}{
+			{
+				name: "access mode",
+				mutate: func(toUpdate *ateapipb.SharedVolume) {
+					toUpdate.AccessMode = ateapipb.AccessMode_ACCESS_MODE_READ_WRITE_MANY
+				},
+			},
+			{
+				name:   "storage class name",
+				mutate: func(toUpdate *ateapipb.SharedVolume) { toUpdate.StorageClassName = "premium-rwx" },
+			},
+			{
+				name:   "clearing the storage class name",
+				mutate: func(toUpdate *ateapipb.SharedVolume) { toUpdate.StorageClassName = "" },
+			},
+			{
+				name:   "volume id",
+				mutate: func(toUpdate *ateapipb.SharedVolume) { toUpdate.VolumeId = "substrate-somewhere-else" },
+			},
+			{
+				name:   "clearing the volume id",
+				mutate: func(toUpdate *ateapipb.SharedVolume) { toUpdate.VolumeId = "" },
+			},
+			{
+				name:   "volume type",
+				mutate: func(toUpdate *ateapipb.SharedVolume) { toUpdate.VolumeType = "pd.csi.storage.gke.io" },
+			},
+			{
+				name:   "volume context",
+				mutate: func(toUpdate *ateapipb.SharedVolume) { toUpdate.VolumeContext = map[string]string{"ip": "10.0.0.3"} },
+			},
+			{
+				name:   "clearing the volume context",
+				mutate: func(toUpdate *ateapipb.SharedVolume) { toUpdate.VolumeContext = nil },
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := s.UpdateSharedVolume(ctx, resources.SharedVolumeRef{Atespace: "team-a", Name: "scratch"}, store.PreconditionFrom(volume), func(toUpdate *ateapipb.SharedVolume) error {
+					tt.mutate(toUpdate)
+					return nil
+				})
+				if !errors.Is(err, store.ErrImmutableField) {
+					t.Errorf("UpdateSharedVolume error = %v, want one matching store.ErrImmutableField", err)
+				}
+			})
+		}
+	})
+
+	t.Run("CreateSharedVolume_ReusedName", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+		input := newTestPendingSharedVolume("team-a", "scratch")
+		if _, err := s.CreateSharedVolume(ctx, input); err != nil {
+			t.Fatalf("CreateSharedVolume failed: %v", err)
+		}
+		if _, err := s.CreateSharedVolume(ctx, input); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Errorf("duplicate CreateSharedVolume = %v, want ErrAlreadyExists", err)
+		}
+
+		stored, err := s.GetSharedVolume(ctx, resources.SharedVolumeRef{Atespace: "team-a", Name: "scratch"})
+		if err != nil {
+			t.Fatalf("GetSharedVolume failed: %v", err)
+		}
+		if stored.GetMetadata().GetVersion() != 1 {
+			t.Errorf("volume version after rejected create = %d, want 1", stored.GetMetadata().GetVersion())
+		}
+	})
+
+	t.Run("CreateSharedVolume_UnknownAtespace", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateSharedVolume(ctx, newTestPendingSharedVolume("team-missing", "scratch")); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("CreateSharedVolume in an unknown atespace = %v, want ErrFailedPrecondition", err)
+		}
+	})
+
+	t.Run("UpdateSharedVolume_MissingPrecondition", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+		created := storeSharedVolume(t, s, newTestPendingSharedVolume("team-a", "scratch"))
+
+		tests := []struct {
+			name         string
+			precondition store.Precondition
+		}{
+			{
+				name:         "no precondition",
+				precondition: store.Precondition{},
+			},
+			{
+				name:         "guarding on only a uid",
+				precondition: store.Precondition{UID: created.GetMetadata().GetUid()},
+			},
+			{
+				name:         "guarding on only a version",
+				precondition: store.Precondition{Version: created.GetMetadata().GetVersion()},
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := s.UpdateSharedVolume(ctx, resources.SharedVolumeRef{Atespace: "team-a", Name: "scratch"}, tt.precondition, func(toUpdate *ateapipb.SharedVolume) error {
+					t.Fatal("mutate ran for a blind write")
+					return nil
+				})
+				if !errors.Is(err, store.ErrPreconditionRequired) {
+					t.Errorf("UpdateSharedVolume error = %v, want one matching store.ErrPreconditionRequired", err)
+				}
+			})
+		}
+	})
+
+	t.Run("UpdateSharedVolume_NotFound", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+
+		_, err := s.UpdateSharedVolume(ctx, resources.SharedVolumeRef{Atespace: "team-a", Name: "missing"}, store.Precondition{UID: "u", Version: 1}, func(*ateapipb.SharedVolume) error { return nil })
+		if !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("UpdateSharedVolume on a missing volume = %v, want ErrNotFound", err)
+		}
+		if _, err := s.DeleteSharedVolume(ctx, resources.SharedVolumeRef{Atespace: "team-a", Name: "missing"}, store.DeletePreconditions{}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("DeleteSharedVolume on a missing volume = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("ListSharedVolumes_PaginationAndScope", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		for _, atespace := range []string{"team-a", "team-b"} {
+			mustCreateAtespace(t, s, atespace)
+			for i := 0; i < 3; i++ {
+				storeSharedVolume(t, s, newTestPendingSharedVolume(atespace, fmt.Sprintf("volume-%d", i)))
+			}
+		}
+
+		var scoped []*ateapipb.SharedVolume
+		for token := ""; ; {
+			page, err := s.ListSharedVolumes(ctx, "team-a", store.ListOptions{PageSize: 2, PageToken: token})
+			if err != nil {
+				t.Fatalf("scoped ListSharedVolumes failed: %v", err)
+			}
+			scoped = append(scoped, page.Items...)
+			if page.NextPageToken == "" {
+				break
+			}
+			token = page.NextPageToken
+		}
+		if len(scoped) != 3 {
+			t.Errorf("scoped ListSharedVolumes returned %d volumes, want 3", len(scoped))
+		}
+
+		var global []*ateapipb.SharedVolume
+		for token := ""; ; {
+			page, err := s.ListSharedVolumes(ctx, "", store.ListOptions{PageSize: 2, PageToken: token})
+			if err != nil {
+				t.Fatalf("global ListSharedVolumes failed: %v", err)
+			}
+			global = append(global, page.Items...)
+			if page.NextPageToken == "" {
+				break
+			}
+			token = page.NextPageToken
+		}
+		if len(global) != 6 {
+			t.Errorf("global ListSharedVolumes returned %d volumes, want 6", len(global))
+		}
+	})
 }
 
 func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {

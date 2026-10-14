@@ -558,6 +558,7 @@ var resourceNames = []string{
 	"Tag",
 	"ActorTemplate",
 	"Atespace",
+	"SharedVolume",
 	"Worker",
 }
 
