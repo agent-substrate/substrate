@@ -17,7 +17,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"strconv"
@@ -66,39 +65,18 @@ func (p *sandboxProcess) Close() {
 // waitGone blocks until the sandbox has exited and been reaped.
 func (p *sandboxProcess) waitGone(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	// The pidfd turns readable once the process exits.
 	for {
-		fds := []unix.PollFd{{Fd: int32(p.pidfd), Events: unix.POLLIN}}
-		n, err := unix.Poll(fds, int(time.Until(deadline).Milliseconds()))
-		if err == unix.EINTR {
-			continue
+		// ESRCH only once the process is reaped. EPERM still means it exists.
+		err := unix.PidfdSendSignal(p.pidfd, 0, nil, 0)
+		if err == unix.ESRCH {
+			return nil
 		}
-		if err != nil {
-			return fmt.Errorf("polling sandbox %d: %w", p.pid, err)
+		if err != nil && err != unix.EPERM {
+			return fmt.Errorf("signaling sandbox %d: %w", p.pid, err)
 		}
-		if n == 0 {
-			return fmt.Errorf("sandbox %d still running after %v", p.pid, timeout)
-		}
-		break
-	}
-	// ateominit reaps it as soon as it exits.
-	for isZombie(p.pid) {
 		if time.Now().After(deadline) {
-			return fmt.Errorf("sandbox %d still unreaped after %v", p.pid, timeout)
+			return fmt.Errorf("sandbox %d still present after %v", p.pid, timeout)
 		}
 		time.Sleep(time.Millisecond)
 	}
-	return nil
-}
-
-// isZombie reports whether pid is an unreaped zombie. Once the pidfd reports
-// the exit, a live process at pid is a reuse, not the sandbox.
-func isZombie(pid int) bool {
-	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
-		return false
-	}
-	// The state follows the parenthesized command, which may itself hold ")".
-	i := bytes.LastIndexByte(b, ')')
-	return i >= 0 && i+2 < len(b) && b[i+2] == 'Z'
 }

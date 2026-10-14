@@ -63,12 +63,10 @@ func TestSandboxWaitGoneWaitsForReap(t *testing.T) {
 	cmd, p := startFakeSandbox(t)
 	defer func() { _ = cmd.Wait() }()
 	// Left a zombie: exited, but nothing reaps it.
-	err := p.waitGone(time.Second)
-	if err == nil || !strings.Contains(err.Error(), "unreaped") {
-		t.Fatalf("waitGone = %v, want an unreaped error", err)
-	}
-	if !isZombie(p.pid) {
-		t.Fatalf("isZombie(%d) = false, want true", p.pid)
+	time.Sleep(200 * time.Millisecond)
+	err := p.waitGone(100 * time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "still present") {
+		t.Fatalf("waitGone = %v, want a still present error", err)
 	}
 }
 
@@ -76,7 +74,7 @@ func TestSandboxWaitGoneTimesOutWhileRunning(t *testing.T) {
 	cmd, p := startFakeSandbox(t)
 	defer func() { _ = cmd.Wait() }()
 	err := p.waitGone(10 * time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "still running") {
-		t.Fatalf("waitGone = %v, want a still running error", err)
+	if err == nil || !strings.Contains(err.Error(), "still present") {
+		t.Fatalf("waitGone = %v, want a still present error", err)
 	}
 }
