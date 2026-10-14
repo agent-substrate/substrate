@@ -139,13 +139,23 @@ pass/fail results and latency.
 
 There are legitimate reasons that actors might not be able to be run; most
 importantly, the operator may not choose to size the worker pool for absolute
-peak capacity. Therefore, the success rate of `ResumeActor` is a critical SLI,
-with one alert for P1 (e.g. pool is not large enough) and a lower threshold for
-P0 (e.g. most or all workers are broken).
+peak capacity. Therefore, the failure rate of `ResumeActor` due to exhaustion is
+a critical SLI, with one alert for P1 (e.g. pool is not large enough) and a
+lower threshold for P0 (e.g. most or all workers are broken). (For failures due
+to causes other than exhaustion, see section A.2).
 
 Note that this configuration uses `ate.actor.lifecycle.operation`, not
-`rpc.server.call`, since request parking bypasses the RPC but not the actor
-operation.
+`rpc.server.call`, since the former correctly (in this case) excludes "resume"
+operations where the actor was already running, while the latter does not.
+
+One current weakness of this alert is that it greatly overcounts failures that
+occur during request parking, since request parking can retry up to 23 times
+(100ms initial delay, 1.1x multiplier, 5s budget). Right now, there's no way to
+tell the difference between "retryable" failures and "final" failures.
+
+**TODO:** Find a way to distinguish between retryable and final failures, e.g.
+by passing in a "retryable" parameter in ResumeActor. See
+[#2650](https://github.com/agent-substrate/substrate/issues/2650).
 
 ```
   # ============================================================================
@@ -163,11 +173,11 @@ operation.
       - record: job:ate_actor_resume_valid:rate5m
         expr: |
           sum(rate({"ate.actor.lifecycle.operation.duration_count", top_level_controller_name="ate-api-server", "ate.actor.operation.name"="resume", "error.type"=~"|ResourceExhausted"}[5m]))
+          or vector(0)
       # 2. Pre-computed multi-window error ratios (rolled up from the 5m rates)
       - record: job:ate_actor_resume_no_capacity:ratio_rate5m
-        # This average-of-average looks weird, but without it the results
-        # are unstable and can go to infinity. There may be a better way
-        # to do this.
+        # This average-of-average looks weird, but without it the results appear to be
+        # numerically unstable. There may be a better way to do this.
         expr: |
           avg_over_time(job:ate_actor_resume_no_capacity:rate5m[5m])
           /
@@ -231,8 +241,13 @@ operation.
 ### \[ICT\] A.2: The API server or its dependencies are broken or degraded
 
 Most operations should be insensitive to the state of the system, and we should
-maintain very high (e.g. \>99.9%) success and low latencies. These are fairly
+maintain very high (e.g. \>99.9%) success rate. These are fairly
 straightforward.
+
+These SLIs/SLOs only track the equivalent of 5xx codes. Notably, resource
+exhaustion is excluded; see section A.1 for that.
+
+**TODO:** Add SLOs for latencies.
 
 ```
 groups:
@@ -252,7 +267,7 @@ groups:
         # depending on an older version of the Prometheus parser this dependency
         # was updated on 23-09-2026 (5c449d70c4) to v3.13.0, which fixes this
         # bug, but it may take some time for this to be released in GKE.
-        # 
+        #
         # NB: the three PRs that fixed this issue appear to be:
         # https://github.com/prometheus/prometheus/pull/14482
         # https://github.com/prometheus/prometheus/pull/15531
@@ -279,12 +294,11 @@ groups:
           )
           or on (rpc_method)
           sum by (rpc_method) (0 * job_rpc_method:ateapi_rpc_calls:rate5m)
- 
+
       # 2. Pre-computed multi-window error ratios per rpc.method (rolled up from the 5m rates)
       - record: job_rpc_method:ateapi_rpc_server_errors:ratio_rate5m
-        # This average-of-average looks weird, but without it the results
-        # are unstable and can go to infinity. There may be a better way
-        # to do this.
+        # This average-of-average looks weird, but without it the results appear to be
+        # numerically unstable. There may be a better way to do this.
         expr: |
           avg_over_time(job_rpc_method:ateapi_rpc_server_errors:rate5m[5m])
           /
