@@ -579,6 +579,63 @@ func dataPlaneWorkloads(t *testing.T, manifest []byte) (daemonSets map[string]ap
 	return daemonSets, deployments
 }
 
+// atelet has to run on every node a worker can land on. GKE taints the nodes
+// it creates for a ComputeClass and adds the matching toleration only to pods
+// that select the class, so atelet tolerates the taint key itself on every
+// path that applies it.
+func TestAteletToleratesComputeClassTaint(t *testing.T) {
+	root := repoRoot(t)
+	want := corev1.Toleration{
+		Key:      "cloud.google.com/compute-class",
+		Operator: corev1.TolerationOpExists,
+		Effect:   corev1.TaintEffectNoSchedule,
+	}
+	for _, tc := range []struct {
+		name string
+		cfg  config.Config
+		path func(e *Env) string
+	}{
+		{
+			name: "base bundle",
+			cfg:  config.Config{Router: config.RouterEnvoy},
+			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+		},
+		{
+			name: "agentgateway bundle",
+			cfg:  config.Config{Router: config.RouterAgentgateway},
+			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+		},
+		{
+			name: "atelet file",
+			path: func(e *Env) string { return e.Cfg.Manifest("atelet.yaml") },
+		},
+		{
+			name: "kind atelet overlay",
+			cfg:  config.Config{Kind: true},
+			path: func(e *Env) string { return e.Cfg.Path(installDir + "/kind/atelet") },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.Root = root
+			e := &Env{Cfg: &cfg}
+
+			rendered, err := e.render(tc.path(e))
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			daemonSets, _ := dataPlaneWorkloads(t, rendered)
+			ds, ok := daemonSets["atelet"]
+			if !ok {
+				t.Fatal("rendered manifest has no DaemonSet atelet")
+			}
+			if tolerations := ds.Spec.Template.Spec.Tolerations; !slices.Contains(tolerations, want) {
+				t.Errorf("atelet tolerations = %v, want them to include %v", tolerations, want)
+			}
+		})
+	}
+}
+
 // Under --fake-data-plane every path that applies atelet or ate-controller
 // carries the fake data plane: fake-atelet in atelet's DaemonSet, with the
 // storage settings the overlay gives atelet's objectstore-plugin, whose
