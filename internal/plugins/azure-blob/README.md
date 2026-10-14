@@ -295,6 +295,10 @@ for `gs://` URLs, which this plugin never reads.
   uncommitted blocks after seven days. `CleanupSnapshot` deletes committed
   blobs under the caller-selected prefix; Azure does not expose uncommitted
   blocks through prefix listing.
+- Native Azure blob snapshots of blobs in the configured `--containers` block
+  actor snapshot deletion until the operator removes them (`CleanupSnapshot`
+  fails with `Internal`, Azure error `SnapshotsPresent`); the plugin never
+  deletes them itself.
 - Upload staging uses at most nine 4 MiB buffers per upload. That bound is per
   RPC, not process-wide, so concurrent uploads multiply the memory use.
 - One plugin process is confined to one storage account and the containers in
