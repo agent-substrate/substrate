@@ -173,3 +173,115 @@ func TestCheckpointPassesAbortThrough(t *testing.T) {
 		})
 	}
 }
+
+// TestRestorePassesFailedPreconditionThrough pins that a FailedPrecondition
+// from the worker's RestoreWorkload, such as guest memory captured on another
+// hypervisor backend, reaches the control plane with its code, and that any
+// other worker error does not become one.
+func TestRestorePassesFailedPreconditionThrough(t *testing.T) {
+	tests := []struct {
+		name      string
+		workerErr error
+		wantCode  codes.Code
+	}{
+		{
+			name:      "failed precondition",
+			workerErr: apierror.FailedPrecondition("snapshot was taken on hypervisor mshv and cannot be restored on a kvm worker"),
+			wantCode:  codes.FailedPrecondition,
+		},
+		{
+			name:      "plain error",
+			workerErr: fmt.Errorf("while resuming restored guest: injected"),
+			wantCode:  codes.Internal,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			ctx := t.Context()
+
+			const (
+				actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
+				workerPodUID = "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
+				snapshotName = "pause-snap-1"
+			)
+			worker := &fakeWorker{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}}
+			serveFakeWorker(t, worker)
+
+			host := imageVolumeTestRegistry(t)
+			pinnedImage := pushTestImage(t, host+"/actor:v1", singleFileLayer(t, "bin/app", "app"))
+			runsc := []byte("runsc binary")
+			s := &Atelet{
+				workerDialer:      newWorkerDialer(1),
+				imageCache:        newImageVolumeStore(t),
+				anonGCSClient:     fakeObjectStorage{data: runsc},
+				systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+				snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+				sandboxAssetCache: newTestAssetCache(t),
+			}
+			assets := &ateletpb.SandboxAssets{
+				SandboxClass: "gvisor",
+				PauseImage:   pinnedImage,
+				Assets: map[string]*ateletpb.ArchAssets{
+					runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+						runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc))},
+					}},
+				},
+			}
+			spec := &ateletpb.WorkloadSpec{
+				Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
+			}
+			snapshot := lifecycleSnapshot(actorUID, snapshotName, 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+			if _, err := s.Run(ctx, &ateletpb.RunRequest{
+				Atespace:              "ate-demo",
+				ActorName:             "counter",
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				WorkerPodUid:          workerPodUID,
+				SandboxAssets:         assets,
+				Spec:                  spec,
+			}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if _, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
+				Atespace:              "ate-demo",
+				ActorName:             "counter",
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				WorkerPodUid:          workerPodUID,
+				Spec:                  spec,
+				Snapshot:              snapshot,
+				UploadConfig:          &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED},
+			}); err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+
+			worker.restoreErr = tc.workerErr
+			_, err := s.Restore(ctx, &ateletpb.RestoreRequest{
+				Atespace:              "ate-demo",
+				ActorName:             "counter",
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				WorkerPodUid:          workerPodUID,
+				SandboxAssets:         assets,
+				Spec:                  spec,
+				Snapshot:              snapshot,
+			})
+			if err == nil {
+				t.Fatal("Restore() = nil, want the worker's error")
+			}
+			if _, ok := worker.fidelities["RestoreWorkload"]; !ok {
+				t.Fatalf("Restore() = %v before calling the worker's RestoreWorkload", err)
+			}
+			// What ate-api-server receives: atelet serves with this interceptor.
+			_, sent := ateinterceptors.InternalServerUnaryInterceptor(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/atelet/Restore"},
+				func(context.Context, any) (any, error) { return nil, err })
+			if got := status.Code(sent); got != tc.wantCode {
+				t.Errorf("atelet sent %v, want code %v", sent, tc.wantCode)
+			}
+		})
+	}
+}

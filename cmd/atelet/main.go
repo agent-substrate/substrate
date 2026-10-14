@@ -1506,6 +1506,13 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	})
 	dWorker = time.Since(tWorker)
 	if err != nil {
+		// A precondition of the placement that no retry on this worker can
+		// fix, such as guest memory captured on another hypervisor backend:
+		// pass the code on, since atelet's interceptor turns any error that
+		// is not an apierror into Internal.
+		if status.Code(err) == codes.FailedPrecondition {
+			return nil, apierror.FailedPrecondition("while calling worker RestoreWorkload: %s", status.Convert(err).Message())
+		}
 		// TODO: classify the errors returned by Worker and crash the actor if needed.
 		return nil, fmt.Errorf("while calling worker RestoreWorkload: %w", err)
 	}

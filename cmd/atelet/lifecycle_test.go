@@ -83,6 +83,8 @@ type fakeWorker struct {
 	fidelities map[string]ateworkerpb.SnapshotFidelity
 	// checkpointErr, when set, fails CheckpointWorkload before it writes anything.
 	checkpointErr error
+	// restoreErr, when set, fails RestoreWorkload after it records the request.
+	restoreErr error
 }
 
 func (f *fakeWorker) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFidelity) {
@@ -129,6 +131,9 @@ func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.Restore
 	f.recordActorDirs("RestoreWorkload", req.GetActorDirs())
 	f.recordFidelity("RestoreWorkload", req.GetFidelity())
 	f.preserveRestoreDir = req.GetPreserveRestoreDir()
+	if f.restoreErr != nil {
+		return nil, f.restoreErr
+	}
 	dir := req.GetActorDirs().GetRestoreDir()
 	f.restored = map[string]string{}
 	for name := range f.snapshotFiles {
