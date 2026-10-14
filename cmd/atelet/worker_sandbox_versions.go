@@ -43,7 +43,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/sandboxversions"
+	"github.com/agent-substrate/substrate/internal/sandboxruntimes"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 )
@@ -184,8 +184,8 @@ func recordForArch(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConf
 // TODO: fetch the default version's assets and pause image through
 // cmd/atelet/internal/filecache here, and remove sandbox_prewarm.go. Other
 // versions stay fetched on demand at Restore.
-func buildFile(ctx context.Context, plan *sandboxPlan) (*sandboxversions.File, error) {
-	out := &sandboxversions.File{}
+func buildFile(ctx context.Context, plan *sandboxPlan) (*sandboxruntimes.File, error) {
+	out := &sandboxruntimes.File{}
 	seen := make(map[string]bool, len(plan.versions))
 	for _, v := range plan.versions {
 		h, err := versionRuntimeHash(v.rec)
@@ -202,7 +202,7 @@ func buildFile(ctx context.Context, plan *sandboxPlan) (*sandboxversions.File, e
 			continue
 		}
 		seen[h] = true
-		attrs := sandboxversions.Attributes{hardware.AttrSandboxRuntimeHash: h}
+		attrs := sandboxruntimes.Attributes{hardware.AttrSandboxRuntimeHash: h}
 		if v.isDefault {
 			out.DefaultRuntime = attrs
 		} else {
@@ -259,11 +259,11 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 	return s.write(ctx, string(pod.UID), plan.config, want)
 }
 
-func (s *workerSandboxSyncer) write(ctx context.Context, uid, config string, want *sandboxversions.File) error {
+func (s *workerSandboxSyncer) write(ctx context.Context, uid, config string, want *sandboxruntimes.File) error {
 	if err := os.MkdirAll(s.podDir(uid), 0o700); err != nil {
 		return fmt.Errorf("while creating worker directory: %w", err)
 	}
-	wrote, err := sandboxversions.Write(s.versionsFile(uid), want)
+	wrote, err := sandboxruntimes.Write(s.versionsFile(uid), want)
 	if err != nil {
 		return err
 	}
@@ -278,5 +278,5 @@ func (s *workerSandboxSyncer) write(ctx context.Context, uid, config string, wan
 }
 
 func (s *workerSandboxSyncer) versionsFile(uid string) string {
-	return filepath.Join(s.podDir(uid), nodepath.SandboxVersionsFileName)
+	return filepath.Join(s.podDir(uid), nodepath.SandboxRuntimesFileName)
 }

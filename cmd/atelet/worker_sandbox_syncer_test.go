@@ -33,7 +33,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
-	"github.com/agent-substrate/substrate/internal/sandboxversions"
+	"github.com/agent-substrate/substrate/internal/sandboxruntimes"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	atefake "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
@@ -297,11 +297,11 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		name string
 		objs []any
 		// existing is written to pod-a's file before processing, when set.
-		existing *sandboxversions.File
+		existing *sandboxruntimes.File
 		// priorRetries is how often pod-a has been retried before.
 		priorRetries int
 		// want is the file afterwards; nil means no file.
-		want    *sandboxversions.File
+		want    *sandboxruntimes.File
 		wantDir bool
 		// wantUntouched is whether the existing file must not be rewritten.
 		wantUntouched bool
@@ -371,7 +371,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 				if err := os.MkdirAll(dir, 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := sandboxversions.Write(s.versionsFile("pod-a"), tt.existing); err != nil {
+				if _, err := sandboxruntimes.Write(s.versionsFile("pod-a"), tt.existing); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -393,7 +393,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 			if _, err := os.Stat(dir); (err == nil) != tt.wantDir {
 				t.Errorf("directory exists = %v (%v), want %v", err == nil, err, tt.wantDir)
 			}
-			got, err := sandboxversions.Read(s.versionsFile("pod-a"))
+			got, err := sandboxruntimes.Read(s.versionsFile("pod-a"))
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				t.Fatal(err)
 			}

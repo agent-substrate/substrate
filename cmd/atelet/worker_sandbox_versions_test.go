@@ -28,7 +28,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/agent-substrate/substrate/internal/hardware"
-	"github.com/agent-substrate/substrate/internal/sandboxversions"
+	"github.com/agent-substrate/substrate/internal/sandboxruntimes"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -305,21 +305,21 @@ func TestVersionRuntimeHash(t *testing.T) {
 
 // wantRuntime is the runtime buildFile builds from multiVersionConfig's
 // version with the given name.
-func wantRuntime(name string) sandboxversions.Attributes {
+func wantRuntime(name string) sandboxruntimes.Attributes {
 	rec := &sandboxAssetsRecord{Assets: map[string]assetEntry{gvisorAssetName: {SHA256: "sha-" + name}}}
-	return sandboxversions.Attributes{hardware.AttrSandboxRuntimeHash: runtimeHash(rec, pauseDigest(name))}
+	return sandboxruntimes.Attributes{hardware.AttrSandboxRuntimeHash: runtimeHash(rec, pauseDigest(name))}
 }
 
 // wantVersions is the file content for multiVersionConfig.
-func wantVersions() *sandboxversions.File {
-	return &sandboxversions.File{
+func wantVersions() *sandboxruntimes.File {
+	return &sandboxruntimes.File{
 		DefaultRuntime:     wantRuntime("v2"),
-		RestorableRuntimes: []sandboxversions.Attributes{wantRuntime("v1")},
+		RestorableRuntimes: []sandboxruntimes.Attributes{wantRuntime("v1")},
 	}
 }
 
 // planAndBuild runs the plan and build steps of syncPod for pod.
-func planAndBuild(s *workerSandboxSyncer, pod *corev1.Pod) (*sandboxversions.File, error) {
+func planAndBuild(s *workerSandboxSyncer, pod *corev1.Pod) (*sandboxruntimes.File, error) {
 	plan, err := s.resolver.plan(pod)
 	if err != nil {
 		return nil, err
@@ -331,7 +331,7 @@ func TestPlanAndBuild(t *testing.T) {
 	defaultNoArch := multiVersionConfig()
 	defaultNoArch.Spec.Versions[3].Assets = map[string]map[string]v1alpha1.AssetFile{"other-arch": defaultNoArch.Spec.Versions[3].Assets[runtime.GOARCH]}
 
-	onlyDefault := &sandboxversions.File{DefaultRuntime: wantRuntime("v2")}
+	onlyDefault := &sandboxruntimes.File{DefaultRuntime: wantRuntime("v2")}
 
 	// sameAsDefault has v1 run the default version's binaries.
 	sameAsDefault := multiVersionConfig()
@@ -354,7 +354,7 @@ func TestPlanAndBuild(t *testing.T) {
 	tests := []struct {
 		name          string
 		cfg           *v1alpha1.SandboxConfig
-		want          *sandboxversions.File
+		want          *sandboxruntimes.File
 		wantErr       bool
 		wantPermanent bool
 	}{{

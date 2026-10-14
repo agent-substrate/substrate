@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sandboxversions
+package sandboxruntimes
 
 import (
 	"errors"
@@ -26,7 +26,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func testVersions(defaultHash string) *File {
+func testRuntimes(defaultHash string) *File {
 	return &File{
 		DefaultRuntime:     Attributes{"sandbox_runtime_hash": defaultHash},
 		RestorableRuntimes: []Attributes{{"sandbox_runtime_hash": "sha256:41ab"}},
@@ -44,22 +44,22 @@ func TestWrite(t *testing.T) {
 		wantErr   bool
 	}{{
 		name:      "new file",
-		v:         testVersions("sha256:7c2e"),
+		v:         testRuntimes("sha256:7c2e"),
 		wantWrote: true,
 	}, {
 		name:      "equal content is not rewritten",
-		existing:  testVersions("sha256:7c2e"),
-		v:         testVersions("sha256:7c2e"),
+		existing:  testRuntimes("sha256:7c2e"),
+		v:         testRuntimes("sha256:7c2e"),
 		wantWrote: false,
 	}, {
 		name:      "different content replaces the file",
-		existing:  testVersions("sha256:7c2e"),
-		v:         testVersions("sha256:9d01"),
+		existing:  testRuntimes("sha256:7c2e"),
+		v:         testRuntimes("sha256:9d01"),
 		wantWrote: true,
 	}, {
 		name:    "missing directory",
 		noDir:   true,
-		v:       testVersions("sha256:7c2e"),
+		v:       testRuntimes("sha256:7c2e"),
 		wantErr: true,
 	}}
 	for _, tt := range tests {
@@ -68,7 +68,7 @@ func TestWrite(t *testing.T) {
 			if tt.noDir {
 				dir = filepath.Join(dir, "missing")
 			}
-			path := filepath.Join(dir, "sandbox-versions.json")
+			path := filepath.Join(dir, "sandbox-runtimes.json")
 			var before time.Time
 			if tt.existing != nil {
 				if _, err := Write(path, tt.existing); err != nil {
@@ -156,7 +156,7 @@ func TestRead(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "sandbox-versions.json")
+			path := filepath.Join(t.TempDir(), "sandbox-runtimes.json")
 			if tt.contents != "" {
 				if err := os.WriteFile(path, []byte(tt.contents), 0o600); err != nil {
 					t.Fatal(err)
