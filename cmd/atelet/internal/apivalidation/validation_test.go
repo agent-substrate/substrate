@@ -1387,8 +1387,8 @@ func TestValidateVolume(t *testing.T) {
 		}
 		return v
 	}
-	external := func(mutate ...func(*ateletpb.ExternalVolumeSource)) *ateletpb.Volume {
-		e := &ateletpb.ExternalVolumeSource{
+	external := func(mutate ...func(*ateletpb.ExternalVolume)) *ateletpb.Volume {
+		e := &ateletpb.ExternalVolume{
 			StorageVolumeId: "projects/p/zones/z/disks/vol-1",
 			VolumeType:      "substrate.io/mock",
 			VolumeContext:   map[string]string{"fsType": "ext4"},
@@ -1444,48 +1444,48 @@ func TestValidateVolume(t *testing.T) {
 		}, {
 			name: "two sources set",
 			obj: durable(func(v *ateletpb.Volume) {
-				v.External = &ateletpb.ExternalVolumeSource{StorageVolumeId: "vol-1"}
+				v.External = &ateletpb.ExternalVolume{StorageVolumeId: "vol-1"}
 			}),
 			want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
 		},
 
-		// ExternalVolumeSource.
+		// ExternalVolume.
 		{
 			name: "valid external",
 			obj:  external(),
 		}, {
 			name: "external: missing storage_volume_id",
-			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.StorageVolumeId = "" }),
+			obj:  external(func(e *ateletpb.ExternalVolume) { e.StorageVolumeId = "" }),
 			want: field.ErrorList{field.Required(extPath.Child("storage_volume_id"), "")},
 		}, {
 			name: "external: storage_volume_id with a control character",
-			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.StorageVolumeId = "vol\x01" }),
+			obj:  external(func(e *ateletpb.ExternalVolume) { e.StorageVolumeId = "vol\x01" }),
 			want: field.ErrorList{field.Invalid(extPath.Child("storage_volume_id"), nil, "")},
 		}, {
 			name: "external: storage_volume_id too long",
-			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.StorageVolumeId = strings.Repeat("x", 257) }),
+			obj:  external(func(e *ateletpb.ExternalVolume) { e.StorageVolumeId = strings.Repeat("x", 257) }),
 			want: field.ErrorList{field.TooLong(extPath.Child("storage_volume_id"), nil, 256).WithOrigin("maxLength")},
 		}, {
 			name: "external: unset volume_type is allowed",
-			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "" }),
+			obj:  external(func(e *ateletpb.ExternalVolume) { e.VolumeType = "" }),
 		}, {
 			name: "external: invalid volume_type: uppercase",
-			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "substrate.io/Mock" }),
+			obj:  external(func(e *ateletpb.ExternalVolume) { e.VolumeType = "substrate.io/Mock" }),
 			want: field.ErrorList{field.Invalid(extPath.Child("volume_type"), nil, "")},
 		}, {
 			name: "external: volume_context with one long value, as a CSI driver may return",
-			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+			obj: external(func(e *ateletpb.ExternalVolume) {
 				e.VolumeContext = map[string]string{"k": strings.Repeat("v", 4000)}
 			}),
 		}, {
 			name: "external: volume_context over the size bound",
-			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+			obj: external(func(e *ateletpb.ExternalVolume) {
 				e.VolumeContext = map[string]string{"k": strings.Repeat("v", 40*1024)}
 			}),
 			want: field.ErrorList{field.TooLong(extPath.Child("volume_context"), nil, 40*1024)},
 		}, {
 			name: "external: publish_context with many entries, as a CSI driver may return",
-			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+			obj: external(func(e *ateletpb.ExternalVolume) {
 				e.PublishContext = make(map[string]string)
 				for i := range 100 {
 					e.PublishContext[fmt.Sprintf("key-%03d", i)] = "v"
@@ -1493,7 +1493,7 @@ func TestValidateVolume(t *testing.T) {
 			}),
 		}, {
 			name: "external: publish_context over the size bound",
-			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+			obj: external(func(e *ateletpb.ExternalVolume) {
 				e.PublishContext = map[string]string{"a": strings.Repeat("v", 20*1024), "b": strings.Repeat("v", 20*1024)}
 			}),
 			want: field.ErrorList{field.TooLong(extPath.Child("publish_context"), nil, 40*1024)},

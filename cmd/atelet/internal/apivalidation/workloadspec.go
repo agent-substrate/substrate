@@ -89,19 +89,19 @@ func ValidateCustom_HttpGetAction_Path(_ context.Context, _ operation.Operation,
 	return resources.ValidateHTTPGetPath(fldPath, *value)
 }
 
-func ValidateCustom_ExternalVolumeSource_StorageVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_ExternalVolume_StorageVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateStorageVolumeID(fldPath, *value)
 }
 
-func ValidateCustom_ExternalVolumeSource_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_ExternalVolume_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateVolumeType(fldPath, *value)
 }
 
-func ValidateCustom_ExternalVolumeSource_VolumeContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
+func ValidateCustom_ExternalVolume_VolumeContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
 	return resources.ValidateCSIMap(fldPath, value)
 }
 
-func ValidateCustom_ExternalVolumeSource_PublishContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
+func ValidateCustom_ExternalVolume_PublishContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
 	return resources.ValidateCSIMap(fldPath, value)
 }
 

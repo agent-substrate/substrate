@@ -1398,13 +1398,13 @@ func Validate_ExternalRestoreConfiguration(
 	return errs
 }
 
-// Validate_ExternalVolumeSource validates an instance of ExternalVolumeSource according
+// Validate_ExternalVolume validates an instance of ExternalVolume according
 // to declarative validation rules in the API schema.
-func Validate_ExternalVolumeSource(
+func Validate_ExternalVolume(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateletpb.ExternalVolumeSource) (errs field.ErrorList) {
+	obj, oldObj *ateletpb.ExternalVolume) (errs field.ErrorList) {
 
-	{ // field ateletpb.ExternalVolumeSource.StorageVolumeId
+	{ // field ateletpb.ExternalVolume.StorageVolumeId
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -1425,7 +1425,7 @@ func Validate_ExternalVolumeSource(
 				return // do not proceed
 			}
 			// custom validation
-			if e := ValidateCustom_ExternalVolumeSource_StorageVolumeId(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := ValidateCustom_ExternalVolume_StorageVolumeId(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256); len(e) != 0 {
@@ -1434,13 +1434,13 @@ func Validate_ExternalVolumeSource(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.ExternalVolumeSource) *string {
+			func(oldObj *ateletpb.ExternalVolume) *string {
 				return &oldObj.StorageVolumeId
 			})
 		errs = append(errs, fn(fldPath.Child("storage_volume_id"), &obj.StorageVolumeId, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.ExternalVolumeSource.VolumeType
+	{ // field ateletpb.ExternalVolume.VolumeType
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -1460,7 +1460,7 @@ func Validate_ExternalVolumeSource(
 				return // do not proceed
 			}
 			// custom validation
-			if e := ValidateCustom_ExternalVolumeSource_VolumeType(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := ValidateCustom_ExternalVolume_VolumeType(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 253); len(e) != 0 {
@@ -1469,13 +1469,13 @@ func Validate_ExternalVolumeSource(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.ExternalVolumeSource) *string {
+			func(oldObj *ateletpb.ExternalVolume) *string {
 				return &oldObj.VolumeType
 			})
 		errs = append(errs, fn(fldPath.Child("volume_type"), &obj.VolumeType, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.ExternalVolumeSource.VolumeContext
+	{ // field ateletpb.ExternalVolume.VolumeContext
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj map[string]string,
@@ -1495,19 +1495,19 @@ func Validate_ExternalVolumeSource(
 				return // do not proceed
 			}
 			// custom validation
-			if e := ValidateCustom_ExternalVolumeSource_VolumeContext(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := ValidateCustom_ExternalVolume_VolumeContext(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.ExternalVolumeSource) map[string]string {
+			func(oldObj *ateletpb.ExternalVolume) map[string]string {
 				return oldObj.VolumeContext
 			})
 		errs = append(errs, fn(fldPath.Child("volume_context"), obj.VolumeContext, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.ExternalVolumeSource.PublishContext
+	{ // field ateletpb.ExternalVolume.PublishContext
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj map[string]string,
@@ -1527,13 +1527,13 @@ func Validate_ExternalVolumeSource(
 				return // do not proceed
 			}
 			// custom validation
-			if e := ValidateCustom_ExternalVolumeSource_PublishContext(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := ValidateCustom_ExternalVolume_PublishContext(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.ExternalVolumeSource) map[string]string {
+			func(oldObj *ateletpb.ExternalVolume) map[string]string {
 				return oldObj.PublishContext
 			})
 		errs = append(errs, fn(fldPath.Child("publish_context"), obj.PublishContext, oldVal, oldObj != nil)...)
@@ -4299,7 +4299,7 @@ func Validate_Volume(
 	{ // field ateletpb.Volume.External
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.ExternalVolumeSource,
+			obj, oldObj *ateletpb.ExternalVolume,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -4316,11 +4316,11 @@ func Validate_Volume(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_ExternalVolumeSource(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ExternalVolume(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.Volume) *ateletpb.ExternalVolumeSource {
+			func(oldObj *ateletpb.Volume) *ateletpb.ExternalVolume {
 				return oldObj.External
 			})
 		errs = append(errs, fn(fldPath.Child("external"), obj.External, oldVal, oldObj != nil)...)

@@ -179,7 +179,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			if vol.GetStorageVolumeId() != "" {
 				workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 					Name: vol.GetName(),
-					External: &ateletpb.ExternalVolumeSource{
+					External: &ateletpb.ExternalVolume{
 						StorageVolumeId: vol.GetStorageVolumeId(),
 						VolumeType:      vol.GetVolumeType(),
 						VolumeContext:   vol.GetVolumeContext(),
@@ -332,7 +332,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
 		for _, vol := range toUpdate.GetStatus().GetExternalVolumes() {
-			vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
+			vol.Status = ateapipb.ExternalVolumeRef_STATUS_DELETING
 		}
 		return nil
 	})

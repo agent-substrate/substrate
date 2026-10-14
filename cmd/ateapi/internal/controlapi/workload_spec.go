@@ -154,12 +154,12 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapi
 		return nil
 	}
 	for _, vol := range template.GetVolumes() {
-		if vol.GetExternalVolumeTemplate() != nil {
+		if vol.GetExternal().GetTemplate() != nil {
 			if !isVolumeMounted(vol.GetName(), template) {
 				continue
 			}
 			if actor == nil {
-				return fmt.Errorf("actor is required when externalVolumeTemplate is present")
+				return fmt.Errorf("actor is required when an external volume is present")
 			}
 
 			var storageVolID string
@@ -178,7 +178,7 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapi
 			}
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name: vol.GetName(),
-				External: &ateletpb.ExternalVolumeSource{
+				External: &ateletpb.ExternalVolume{
 					StorageVolumeId: storageVolID,
 					VolumeType:      volType,
 					VolumeContext:   volCtx,

@@ -441,7 +441,7 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 		t.Fatalf("expected actor to have volumes, got 0")
 	}
 	for _, vol := range actor.GetStatus().GetExternalVolumes() {
-		if vol.Status != ateapipb.ExternalVolume_STATUS_CREATED {
+		if vol.Status != ateapipb.ExternalVolumeRef_STATUS_CREATED {
 			t.Fatalf("expected volume %q to be CREATED, got %s", vol.Name, vol.Status)
 		}
 	}
@@ -1364,10 +1364,10 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 		if !hasExtVol {
 			at.Volumes = append(at.Volumes, &ateapipb.Volume{
 				Name: "external-data",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					Capacity:         "1Gi",
 					StorageClassName: scName,
-				},
+				}},
 			})
 		}
 	}

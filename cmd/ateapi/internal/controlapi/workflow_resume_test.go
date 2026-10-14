@@ -1602,9 +1602,9 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
-			ExternalVolumes: []*ateapipb.ExternalVolume{
-				{Name: "mounted", StorageVolumeId: "storage-mounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
-				{Name: "unmounted", StorageVolumeId: "storage-unmounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
+			ExternalVolumes: []*ateapipb.ExternalVolumeRef{
+				{Name: "mounted", StorageVolumeId: "storage-mounted", VolumeType: "mock", Status: ateapipb.ExternalVolumeRef_STATUS_CREATED},
+				{Name: "unmounted", StorageVolumeId: "storage-unmounted", VolumeType: "mock", Status: ateapipb.ExternalVolumeRef_STATUS_CREATED},
 			},
 		},
 	})
@@ -1622,8 +1622,8 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 	worker := &ateapipb.Worker{NodeName: "node-1"}
 	tmpl := &ateapipb.ActorTemplate{
 		Volumes: []*ateapipb.Volume{
-			{Name: "mounted", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
-			{Name: "unmounted", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
+			{Name: "mounted", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}}},
+			{Name: "unmounted", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}}},
 		},
 		Containers: []*ateapipb.Container{
 			{Name: "main", Image: "img", VolumeMounts: []*ateapipb.VolumeMount{{Name: "mounted", MountPath: "/data"}}},

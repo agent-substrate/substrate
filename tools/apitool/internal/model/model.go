@@ -41,7 +41,7 @@ type API struct {
 	Messages []Message
 	// Enums lists every enum declared in the file, top-level and nested,
 	// flattened the same way as Messages. For example, both the top-level
-	// "ateapi.ActorState" and the nested "ateapi.ExternalVolume.Status"
+	// "ateapi.ActorState" and the nested "ateapi.ExternalVolumeRef.Status"
 	// appear here.
 	Enums []Enum
 }
@@ -101,7 +101,7 @@ type Message struct {
 	// Name is the message's short name, with its enclosing message's name
 	// dotted in front for a nested type. For example, "ResourceMetadata"
 	// for a top-level message. ateapi.proto has no nested message today
-	// (only a nested enum, ExternalVolume.Status - see Enum.Name for that
+	// (only a nested enum, ExternalVolumeRef.Status - see Enum.Name for that
 	// shape); a nested message named "Child" inside "Parent" would read
 	// "Parent.Child" here.
 	Name string
@@ -132,13 +132,13 @@ type Field struct {
 
 	// Repeated is true for a `repeated` field, not a map - see
 	// MapValueKind for those. For example, true for
-	// `repeated ExternalVolume external_volumes = 7;` on ActorStatus; false
+	// `repeated ExternalVolumeRef external_volumes = 7;` on ActorStatus; false
 	// for ResourceMetadata.atespace.
 	Repeated bool
 
 	// TypeDisplay is always a ready-to-render string. For example, "string"
 	// for ResourceMetadata.name, "int64" for ResourceMetadata.version,
-	// "repeated ExternalVolume" for ActorStatus.external_volumes,
+	// "repeated ExternalVolumeRef" for ActorStatus.external_volumes,
 	// "map<string, ArchAssets>" for SandboxAssets.assets, "ActorState" for
 	// ActorStatus.state, or "google.protobuf.Timestamp" for
 	// ResourceMetadata.create_time.
@@ -184,25 +184,25 @@ type Field struct {
 // Enum is one enum declared in the file, top-level or nested.
 type Enum struct {
 	// FullName is the enum's proto full name. For example, "ateapi.ActorState"
-	// for a top-level enum, or "ateapi.ExternalVolume.Status" for one
-	// nested inside the ExternalVolume message.
+	// for a top-level enum, or "ateapi.ExternalVolumeRef.Status" for one
+	// nested inside the ExternalVolumeRef message.
 	FullName string
 	// Name is the enum's short name, with its enclosing message's name
 	// dotted in front for a nested enum. For example, "ActorState" for
-	// the top-level enum, or "ExternalVolume.Status" for the one nested
-	// inside ExternalVolume.
+	// the top-level enum, or "ExternalVolumeRef.Status" for the one nested
+	// inside ExternalVolumeRef.
 	Name string
 	// ParentFullName is the enclosing message's full name, or "" for a
 	// top-level enum. For example, "" for "ateapi.ActorState", or
-	// "ateapi.ExternalVolume" for "ateapi.ExternalVolume.Status".
+	// "ateapi.ExternalVolumeRef" for "ateapi.ExternalVolumeRef.Status".
 	ParentFullName string
 	// Comment is the enum's leading doc comment. ateapi.proto's ActorState
-	// and ExternalVolume.Status have none today, so this is often "" in
+	// and ExternalVolumeRef.Status have none today, so this is often "" in
 	// practice even though the field is populated the same way as for a
 	// message or field.
 	Comment string
 	// Values lists the enum's values, in declaration order. For example,
-	// ExternalVolume.Status's STATUS_UNSPECIFIED, STATUS_PENDING,
+	// ExternalVolumeRef.Status's STATUS_UNSPECIFIED, STATUS_PENDING,
 	// STATUS_CREATED, STATUS_DELETING.
 	Values []EnumValue
 }
@@ -221,13 +221,13 @@ func (e Enum) ValueByNumber(number int32) *EnumValue {
 // EnumValue is one value declared on an Enum.
 type EnumValue struct {
 	// Name is the value's proto name. For example, "STATUS_PENDING" for
-	// ExternalVolume.Status.
+	// ExternalVolumeRef.Status.
 	Name string
 	// Number is the value's proto number. For example, 1 for
 	// `STATUS_PENDING = 1;`.
 	Number int32
 	// Comment is the value's leading doc comment. For example, "Volume
-	// creation pending in the storage system." for ExternalVolume.Status's
+	// creation pending in the storage system." for ExternalVolumeRef.Status's
 	// STATUS_PENDING.
 	Comment string
 }

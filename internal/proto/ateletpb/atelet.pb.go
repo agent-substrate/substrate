@@ -1581,17 +1581,17 @@ func (*DurableDirVolume) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{20}
 }
 
-type ExternalVolumeSource struct {
+type ExternalVolume struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Required, unlike the actor status counterpart: the control plane only
 	// sends volumes that finished provisioning.
 	//
 	// +k8s:required
-	// +k8s:maxLength=256 # matches ExternalVolume.storage_volume_id's bound
+	// +k8s:maxLength=256 # matches ExternalVolumeRef.storage_volume_id's bound
 	// +k8s:customValidation # no control characters
 	StorageVolumeId string `protobuf:"bytes,1,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
 	// +k8s:optional
-	// +k8s:maxLength=253 # matches ExternalVolume.volume_type's bound
+	// +k8s:maxLength=253 # matches ExternalVolumeRef.volume_type's bound
 	// +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
 	VolumeType string `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// volume_context is the driver's provisioning metadata. Its entries are the
@@ -1610,20 +1610,20 @@ type ExternalVolumeSource struct {
 	sizeCache      protoimpl.SizeCache
 }
 
-func (x *ExternalVolumeSource) Reset() {
-	*x = ExternalVolumeSource{}
+func (x *ExternalVolume) Reset() {
+	*x = ExternalVolume{}
 	mi := &file_atelet_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ExternalVolumeSource) String() string {
+func (x *ExternalVolume) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ExternalVolumeSource) ProtoMessage() {}
+func (*ExternalVolume) ProtoMessage() {}
 
-func (x *ExternalVolumeSource) ProtoReflect() protoreflect.Message {
+func (x *ExternalVolume) ProtoReflect() protoreflect.Message {
 	mi := &file_atelet_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1635,33 +1635,33 @@ func (x *ExternalVolumeSource) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ExternalVolumeSource.ProtoReflect.Descriptor instead.
-func (*ExternalVolumeSource) Descriptor() ([]byte, []int) {
+// Deprecated: Use ExternalVolume.ProtoReflect.Descriptor instead.
+func (*ExternalVolume) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{21}
 }
 
-func (x *ExternalVolumeSource) GetStorageVolumeId() string {
+func (x *ExternalVolume) GetStorageVolumeId() string {
 	if x != nil {
 		return x.StorageVolumeId
 	}
 	return ""
 }
 
-func (x *ExternalVolumeSource) GetVolumeType() string {
+func (x *ExternalVolume) GetVolumeType() string {
 	if x != nil {
 		return x.VolumeType
 	}
 	return ""
 }
 
-func (x *ExternalVolumeSource) GetVolumeContext() map[string]string {
+func (x *ExternalVolume) GetVolumeContext() map[string]string {
 	if x != nil {
 		return x.VolumeContext
 	}
 	return nil
 }
 
-func (x *ExternalVolumeSource) GetPublishContext() map[string]string {
+func (x *ExternalVolume) GetPublishContext() map[string]string {
 	if x != nil {
 		return x.PublishContext
 	}
@@ -2025,7 +2025,7 @@ type Volume struct {
 	DurableDir *DurableDirVolume `protobuf:"bytes,2,opt,name=durable_dir,json=durableDir,proto3" json:"durable_dir,omitempty"`
 	// +k8s:optional
 	// +k8s:unionMember
-	External *ExternalVolumeSource `protobuf:"bytes,3,opt,name=external,proto3" json:"external,omitempty"`
+	External *ExternalVolume `protobuf:"bytes,3,opt,name=external,proto3" json:"external,omitempty"`
 	// +k8s:optional
 	// +k8s:unionMember
 	SystemInfo *SystemInfoVolume `protobuf:"bytes,4,opt,name=system_info,json=systemInfo,proto3" json:"system_info,omitempty"`
@@ -2080,7 +2080,7 @@ func (x *Volume) GetDurableDir() *DurableDirVolume {
 	return nil
 }
 
-func (x *Volume) GetExternal() *ExternalVolumeSource {
+func (x *Volume) GetExternal() *ExternalVolume {
 	if x != nil {
 		return x.External
 	}
@@ -3548,13 +3548,13 @@ const file_atelet_proto_rawDesc = "" +
 	"containers\x18\x01 \x03(\v2\x11.atelet.ContainerR\n" +
 	"containers\x12(\n" +
 	"\avolumes\x18\x02 \x03(\v2\x0e.atelet.VolumeR\avolumes\"\x12\n" +
-	"\x10DurableDirVolume\"\x9b\x03\n" +
-	"\x14ExternalVolumeSource\x12*\n" +
+	"\x10DurableDirVolume\"\x89\x03\n" +
+	"\x0eExternalVolume\x12*\n" +
 	"\x11storage_volume_id\x18\x01 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +
 	"\vvolume_type\x18\x02 \x01(\tR\n" +
-	"volumeType\x12V\n" +
-	"\x0evolume_context\x18\x03 \x03(\v2/.atelet.ExternalVolumeSource.VolumeContextEntryR\rvolumeContext\x12Y\n" +
-	"\x0fpublish_context\x18\x04 \x03(\v20.atelet.ExternalVolumeSource.PublishContextEntryR\x0epublishContext\x1a@\n" +
+	"volumeType\x12P\n" +
+	"\x0evolume_context\x18\x03 \x03(\v2).atelet.ExternalVolume.VolumeContextEntryR\rvolumeContext\x12S\n" +
+	"\x0fpublish_context\x18\x04 \x03(\v2*.atelet.ExternalVolume.PublishContextEntryR\x0epublishContext\x1a@\n" +
 	"\x12VolumeContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aA\n" +
@@ -3575,12 +3575,12 @@ const file_atelet_proto_rawDesc = "" +
 	"\x0eactor_metadata\x18\x01 \x01(\v2\x1f.atelet.ActorMetadataDataSourceR\ractorMetadata\x12@\n" +
 	"\ftrust_bundle\x18\x02 \x01(\v2\x1d.atelet.TrustBundleDataSourceR\vtrustBundle\"S\n" +
 	"\x10SystemInfoVolume\x12?\n" +
-	"\fdata_sources\x18\x01 \x03(\v2\x1c.atelet.SystemInfoDataSourceR\vdataSources\"\xfd\x01\n" +
+	"\fdata_sources\x18\x01 \x03(\v2\x1c.atelet.SystemInfoDataSourceR\vdataSources\"\xf7\x01\n" +
 	"\x06Volume\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x129\n" +
 	"\vdurable_dir\x18\x02 \x01(\v2\x18.atelet.DurableDirVolumeR\n" +
-	"durableDir\x128\n" +
-	"\bexternal\x18\x03 \x01(\v2\x1c.atelet.ExternalVolumeSourceR\bexternal\x129\n" +
+	"durableDir\x122\n" +
+	"\bexternal\x18\x03 \x01(\v2\x16.atelet.ExternalVolumeR\bexternal\x129\n" +
 	"\vsystem_info\x18\x04 \x01(\v2\x18.atelet.SystemInfoVolumeR\n" +
 	"systemInfo\x12/\n" +
 	"\x05image\x18\x05 \x01(\v2\x19.atelet.ImageVolumeSourceR\x05image\"@\n" +
@@ -3734,7 +3734,7 @@ var file_atelet_proto_goTypes = []any{
 	(*SandboxAssets)(nil),                   // 21: atelet.SandboxAssets
 	(*WorkloadSpec)(nil),                    // 22: atelet.WorkloadSpec
 	(*DurableDirVolume)(nil),                // 23: atelet.DurableDirVolume
-	(*ExternalVolumeSource)(nil),            // 24: atelet.ExternalVolumeSource
+	(*ExternalVolume)(nil),                  // 24: atelet.ExternalVolume
 	(*ImageVolumeSource)(nil),               // 25: atelet.ImageVolumeSource
 	(*ActorMetadataItem)(nil),               // 26: atelet.ActorMetadataItem
 	(*ActorMetadataDataSource)(nil),         // 27: atelet.ActorMetadataDataSource
@@ -3762,8 +3762,8 @@ var file_atelet_proto_goTypes = []any{
 	(*RestoreResponse)(nil),                 // 49: atelet.RestoreResponse
 	nil,                                     // 50: atelet.ArchAssets.FilesEntry
 	nil,                                     // 51: atelet.SandboxAssets.AssetsEntry
-	nil,                                     // 52: atelet.ExternalVolumeSource.VolumeContextEntry
-	nil,                                     // 53: atelet.ExternalVolumeSource.PublishContextEntry
+	nil,                                     // 52: atelet.ExternalVolume.VolumeContextEntry
+	nil,                                     // 53: atelet.ExternalVolume.PublishContextEntry
 }
 var file_atelet_proto_depIdxs = []int32{
 	7,  // 0: atelet.RegisterWorkerRequest.capacity:type_name -> atelet.WorkerResources
@@ -3781,15 +3781,15 @@ var file_atelet_proto_depIdxs = []int32{
 	51, // 12: atelet.SandboxAssets.assets:type_name -> atelet.SandboxAssets.AssetsEntry
 	33, // 13: atelet.WorkloadSpec.containers:type_name -> atelet.Container
 	31, // 14: atelet.WorkloadSpec.volumes:type_name -> atelet.Volume
-	52, // 15: atelet.ExternalVolumeSource.volume_context:type_name -> atelet.ExternalVolumeSource.VolumeContextEntry
-	53, // 16: atelet.ExternalVolumeSource.publish_context:type_name -> atelet.ExternalVolumeSource.PublishContextEntry
+	52, // 15: atelet.ExternalVolume.volume_context:type_name -> atelet.ExternalVolume.VolumeContextEntry
+	53, // 16: atelet.ExternalVolume.publish_context:type_name -> atelet.ExternalVolume.PublishContextEntry
 	0,  // 17: atelet.ActorMetadataItem.field:type_name -> atelet.ActorMetadataField
 	26, // 18: atelet.ActorMetadataDataSource.items:type_name -> atelet.ActorMetadataItem
 	27, // 19: atelet.SystemInfoDataSource.actor_metadata:type_name -> atelet.ActorMetadataDataSource
 	28, // 20: atelet.SystemInfoDataSource.trust_bundle:type_name -> atelet.TrustBundleDataSource
 	29, // 21: atelet.SystemInfoVolume.data_sources:type_name -> atelet.SystemInfoDataSource
 	23, // 22: atelet.Volume.durable_dir:type_name -> atelet.DurableDirVolume
-	24, // 23: atelet.Volume.external:type_name -> atelet.ExternalVolumeSource
+	24, // 23: atelet.Volume.external:type_name -> atelet.ExternalVolume
 	30, // 24: atelet.Volume.system_info:type_name -> atelet.SystemInfoVolume
 	25, // 25: atelet.Volume.image:type_name -> atelet.ImageVolumeSource
 	37, // 26: atelet.Container.env:type_name -> atelet.EnvEntry

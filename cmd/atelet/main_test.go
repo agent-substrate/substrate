@@ -815,7 +815,7 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 		Volumes: []*ateletpb.Volume{
 			{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
 			{Name: "cache", DurableDir: &ateletpb.DurableDirVolume{}},
-			{Name: "scratch", External: &ateletpb.ExternalVolumeSource{}},
+			{Name: "scratch", External: &ateletpb.ExternalVolume{}},
 			{Name: "system-info", SystemInfo: &ateletpb.SystemInfoVolume{}},
 		},
 		Containers: []*ateletpb.Container{
@@ -917,7 +917,7 @@ func TestBuildAteomWorkloadSpecValidation(t *testing.T) {
 			in: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
 					{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
-					{Name: "data", External: &ateletpb.ExternalVolumeSource{}},
+					{Name: "data", External: &ateletpb.ExternalVolume{}},
 				},
 				Containers: []*ateletpb.Container{
 					{
@@ -1202,7 +1202,7 @@ func TestBuildAteomWorkloadSpec_ImageVolumeMounts(t *testing.T) {
 		Volumes: []*ateletpb.Volume{
 			{Name: "agent", Image: &ateletpb.ImageVolumeSource{}},
 			{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
-			{Name: "ext", External: &ateletpb.ExternalVolumeSource{}},
+			{Name: "ext", External: &ateletpb.ExternalVolume{}},
 		},
 		Containers: []*ateletpb.Container{{
 			Name: "app",
@@ -1543,7 +1543,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
-						{Name: "csi", External: &ateletpb.ExternalVolumeSource{}},
+						{Name: "csi", External: &ateletpb.ExternalVolume{}},
 					},
 				},
 			},
@@ -1556,7 +1556,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
 						{Name: "durable", DurableDir: &ateletpb.DurableDirVolume{}},
-						{Name: "csi", External: &ateletpb.ExternalVolumeSource{}},
+						{Name: "csi", External: &ateletpb.ExternalVolume{}},
 					},
 				},
 			},

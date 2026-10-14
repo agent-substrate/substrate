@@ -371,7 +371,8 @@ message ResourceMetadata {
   google.protobuf.Timestamp update_time = 6;
 }
 
-message ExternalVolume {
+// ExternalVolumeRef is one actor's view of an external volume it mounts.
+message ExternalVolumeRef {
   // Name of the volume specified in the actor template. Template volume
   // names are DNS labels.
   //
@@ -407,6 +408,7 @@ message ExternalVolume {
   // +k8s:customValidation
   string volume_type = 3;
 
+  // Status is the volume's lifecycle state in the storage system.
   enum Status {
     STATUS_UNSPECIFIED = 0;
     // Volume creation pending in the storage system.
@@ -415,9 +417,11 @@ message ExternalVolume {
     STATUS_CREATED = 2;
     // Volume being deleted from the storage system.
     STATUS_DELETING = 3;
-    // Keep this in sync with ExternalVolume.status's maximum.
+    // Keep this in sync with ExternalVolumeRef.status's maximum.
   }
 
+  // status is the volume's lifecycle state in the storage system.
+  //
   // +k8s:optional
   // +k8s:minimum=1
   // +k8s:maximum=3 # keep this in sync with the Status enum
@@ -780,7 +784,7 @@ message ActorStatus {
   // +k8s:maxItems=32 # matches the template's volumes bound
   // +k8s:listType=map
   // +k8s:listMapKey=name
-  repeated ExternalVolume external_volumes = 7;
+  repeated ExternalVolumeRef external_volumes = 7;
 
   // crash records why and when the Actor entered CRASHED. It is set with the
   // CRASHED state and cleared when a revert returns the Actor to SUSPENDED.
@@ -1321,16 +1325,19 @@ message Volume {
   // +k8s:format=k8s-short-name
   string name = 1;
 
-  // Exactly one of durable_dir / external_volume_template / image /
-  // system_info must be set.
+  // Exactly one of durable_dir / external / image / system_info must be
+  // set.
   //
   // +k8s:optional
   // +k8s:unionMember
   DurableDirVolumeSource durable_dir = 2;
 
+  // external is a CSI volume: provisioned for this actor from a template,
+  // or a SharedVolume the actor references.
+  //
   // +k8s:optional
   // +k8s:unionMember
-  ExternalVolumeTemplate external_volume_template = 3;
+  ExternalVolumeSource external = 7;
 
   // +k8s:optional
   // +k8s:unionMember
@@ -1341,6 +1348,16 @@ message Volume {
   // +k8s:optional
   // +k8s:unionMember
   ImageVolumeSource image = 6;
+}
+
+// ExternalVolumeSource is a CSI volume: provisioned for the actor from a
+// template, or a SharedVolume that already exists.
+message ExternalVolumeSource {
+  // Exactly one of template / shared_volume must be set.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  ExternalVolumeTemplate template = 1;
 }
 
 // ImageVolumeSource mounts the contents of an OCI image, read-only. The
