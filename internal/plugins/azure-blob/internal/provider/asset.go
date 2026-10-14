@@ -143,6 +143,9 @@ func (s *AssetServer) parseAssetURI(uri string) (blobstore.Store, string, error)
 // toStatus where FetchAsset's codes carry a narrower meaning: PermissionDenied
 // is reserved for a refused snapshot location, so a storage authorization
 // failure is Internal, and an absent container means the asset is absent.
+// A 401 or 403 refuses the plugin's own identity, not the URL; atelet reads an
+// asset anonymously after Internal only for gs:// URLs, which this plugin
+// never reads.
 func assetStatus(err error) error {
 	switch {
 	case errors.Is(err, blobstore.ErrContainerNotFound):
