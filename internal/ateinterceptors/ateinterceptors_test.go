@@ -444,15 +444,29 @@ func TestInternalServerUnaryInterceptorLogMasksBytesFields(t *testing.T) {
 }
 
 func TestServerUnaryInterceptorLogsNilResponseOnHandlerError(t *testing.T) {
-	log := captureDefaultLog(t)
-	_, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJwtRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJwt"}, func(ctx context.Context, req interface{}) (interface{}, error) {
-		return nil, apierror.PermissionDenied("no")
-	})
-	if status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("err = %v", err)
+	tests := []struct {
+		name   string
+		method string
+		resp   any
+	}{
+		{name: "nil", method: "/ateapi.Control/MintActorJwt", resp: nil},
+		// The generated handlers return a typed nil on error; a List call must
+		// not log it as an elided response.
+		{name: "typed nil List response", method: "/ateapi.Control/ListActors", resp: (*ateapipb.ListActorsResponse)(nil)},
 	}
-	if !strings.Contains(log.String(), `"resp":null`) {
-		t.Errorf("nil response should log as null: %s", log.String())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := captureDefaultLog(t)
+			_, err := ServerUnaryInterceptor(context.Background(), "request", &grpc.UnaryServerInfo{FullMethod: tt.method}, func(ctx context.Context, req interface{}) (interface{}, error) {
+				return tt.resp, apierror.PermissionDenied("no")
+			})
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("err = %v", err)
+			}
+			if !strings.Contains(log.String(), `"resp":null`) {
+				t.Errorf("nil response should log as null: %s", log.String())
+			}
+		})
 	}
 }
 
