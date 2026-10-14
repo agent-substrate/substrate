@@ -35,7 +35,7 @@ docker run -d --name "$name" -p "127.0.0.1:${port}:10000" \
 
 ready=false
 for _ in $(seq 1 60); do
-	if curl -s -o /dev/null "http://127.0.0.1:${port}/"; then
+	if curl -s -o /dev/null --connect-timeout 2 --max-time 5 "http://127.0.0.1:${port}/"; then
 		ready=true
 		break
 	fi
