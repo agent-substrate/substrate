@@ -505,8 +505,8 @@ func (s *WorkerPoolSyncer) reconcileMissingPool(ctx context.Context, key workerK
 
 // poolCleanupPending reports whether the garbage collector will still remove
 // pod. It walks the controller chain pod -> ReplicaSet -> Deployment ->
-// WorkerPool: a gone owner means collection is pending, a cut link means the
-// pod was orphaned.
+// WorkerPool: a gone or deleting owner means collection is pending, a cut link
+// means the pod was orphaned.
 func (s *WorkerPoolSyncer) poolCleanupPending(ctx context.Context, pod *corev1.Pod) (bool, error) {
 	var obj metav1.Object = pod
 	for _, kind := range []string{"ReplicaSet", "Deployment"} {
@@ -518,7 +518,7 @@ func (s *WorkerPoolSyncer) poolCleanupPending(ctx context.Context, pod *corev1.P
 		if err != nil {
 			return false, fmt.Errorf("getting %s %s/%s: %w", ref.Kind, pod.Namespace, ref.Name, err)
 		}
-		if owner == nil {
+		if owner == nil || owner.GetDeletionTimestamp() != nil {
 			return true, nil
 		}
 		obj = owner

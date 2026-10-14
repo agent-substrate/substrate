@@ -744,6 +744,22 @@ func TestSyncer_DeletedWorkerPool(t *testing.T) {
 			},
 		},
 		{
+			name: "deployment deleting, no longer owned by the pool",
+			shape: func(_ *corev1.Pod, rs *appsv1.ReplicaSet, dep *appsv1.Deployment) []runtime.Object {
+				dep.OwnerReferences = nil
+				dep.DeletionTimestamp = ptr.To(metav1.Now())
+				return []runtime.Object{rs, dep}
+			},
+		},
+		{
+			name: "replicaset deleting, deployment orphaned",
+			shape: func(_ *corev1.Pod, rs *appsv1.ReplicaSet, dep *appsv1.Deployment) []runtime.Object {
+				dep.OwnerReferences = nil
+				rs.DeletionTimestamp = ptr.To(metav1.Now())
+				return []runtime.Object{rs, dep}
+			},
+		},
+		{
 			name:    "orphaned deployment",
 			deleted: true,
 			shape: func(_ *corev1.Pod, rs *appsv1.ReplicaSet, dep *appsv1.Deployment) []runtime.Object {
