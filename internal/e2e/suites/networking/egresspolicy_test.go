@@ -182,8 +182,9 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 		Name:       "passthrough-origin",
 		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"http"},
-		Port:       443,
-		TargetPort: 8443,
+		Port:       80,
+		TargetPort: 8080,
+		TLSPort:    443,
 	}, true)
 
 	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-passthrough-refresh", e2e.EgressFixture(), e2e.EgressAllowPassthrough("*"))
@@ -232,17 +233,24 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 
 func TestActorEgressPendingPlaintextHeadersDoNotBlockMITM(t *testing.T) {
 	ctx := t.Context()
+	const mitmBody = "mitm origin"
+	mitm := e2e.DeployServerPod(t, ctx, egressHTTPSTarget("mitm-origin", mitmBody))
+	plaintextSpec := egressHTTPTarget()
+	plaintextSpec.Namespace = mitm.Namespace
+	plaintext := e2e.DeployServerPod(t, ctx, plaintextSpec)
+
 	actorAtespace, actorName, _ := createAndResumeActorWithEgress(
 		t, ctx, "egress-slow-headers", e2e.EgressFixture(),
-		e2e.EgressAllowHTTPS("example.com"),
-		e2e.EgressAllowHTTP("example.net"),
+		e2e.EgressAllowHTTPS(mitm.SvcName()),
+		e2e.EgressAllowHTTP(plaintext.SvcName()),
 	)
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 	waitForActorRoute(t, ctx, router, actorRef)
 
-	slowPayload, err := json.Marshal(map[string]string{"url": "http://example.net/"})
+	plaintextURL := "http://" + plaintext.SvcName() + "/healthz"
+	slowPayload, err := json.Marshal(map[string]string{"url": plaintextURL})
 	if err != nil {
 		t.Fatalf("marshaling /slow-headers request: %v", err)
 	}
@@ -261,17 +269,18 @@ func TestActorEgressPendingPlaintextHeadersDoNotBlockMITM(t *testing.T) {
 	// Allow the plaintext request to send its incomplete headers before issuing the MITM request.
 	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, "80")
 
-	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.com/", notTransient)
+	mitmURL := "https://" + mitm.SvcName() + "/healthz"
+	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, mitmURL, reached)
 	if status != http.StatusOK {
-		t.Fatalf("fetch of https://example.com/ returned HTTP %d, want 200; body: %s", status, body)
+		t.Fatalf("fetch of %s returned HTTP %d, want 200; body: %s", mitmURL, status, body)
 	}
-	if !isMitmCert(string(body)) {
-		t.Fatalf("request to https://example.com/ did not use minted cert; body: %s", body)
+	if got := decodeEgressFetch(t, body); got.Body != mitmBody || !got.TLS {
+		t.Fatalf("fetch of %s = %+v, want verified TLS and body %q", mitmURL, got, mitmBody)
 	}
 
 	pending := <-pendingResult
 	if pending.status != http.StatusOK {
-		t.Fatalf("fetch of http://example.net/ returned HTTP %d, want 200; body: %s", pending.status, pending.body)
+		t.Fatalf("fetch of %s returned HTTP %d, want 200; body: %s", plaintextURL, pending.status, pending.body)
 	}
 }
 
