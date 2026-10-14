@@ -25,6 +25,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // The EgressPolicy half of egress: the other TestActorEgress* tests give their
@@ -170,6 +171,117 @@ func TestActorEgressHTTPSByHostname(t *testing.T) {
 		}
 		t.Logf("fetch of %s was denied as expected: %s", url, body)
 	})
+}
+
+// This test validates that TLS passthrough connection is denied when policy changes
+// even if there are outstanding connections that were allowed by the previous policy.
+func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
+	ctx := t.Context()
+	dataplane := e2e.CurrentAtenetDataplane()
+	_, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
+		Name:       "passthrough-origin",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"http"},
+		Port:       80,
+		TargetPort: 8080,
+		TLSPort:    443,
+	}, true)
+
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-passthrough-refresh", e2e.EgressFixture(), e2e.EgressAllowPassthrough("*"))
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForActorRoute(t, ctx, router, actorRef)
+
+	// Ask egres actor to POST to /fetch on the test server. Test server /fetch handler
+	// waits for the entire body before responding.
+	url := "https://" + address + "/fetch"
+	postPayload, err := json.Marshal(map[string]string{"url": url, "rootCA": rootCA})
+	if err != nil {
+		t.Fatalf("marshaling /post request: %v", err)
+	}
+
+	type postResult struct {
+		status int
+		body   []byte
+	}
+	since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
+	firstResult := make(chan postResult, 1)
+	go func() {
+		status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/post", postPayload, notTransient)
+		firstResult <- postResult{status: status, body: body}
+	}()
+
+	// Allow connection to be fully established before changing the policy.
+	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, "443")
+
+	e2e.EnsureEgressPolicy(t, ctx, e2e.GetClients(), actorRef.ToObjectRef(), e2e.EgressAllowPassthrough("foo.bar.baz"))
+	// Wait for the policy cached in ext_proc server to expire, so it will fetch the new one.
+	// ext_proc cache freshness interval is 10 seconds.
+	time.Sleep(11 * time.Second)
+
+	status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/post", postPayload, notTransient)
+	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
+		t.Fatalf("second POST to %s after policy update returned HTTP %d, want an egress-policy denial; body: %s", url, status, body)
+	}
+
+	first := <-firstResult
+	if first.status != http.StatusOK {
+		t.Fatalf("first POST to %s returned HTTP %d, want 200; body: %s", url, first.status, first.body)
+	}
+}
+
+func TestActorEgressPendingPlaintextHeadersDoNotBlockMITM(t *testing.T) {
+	ctx := t.Context()
+	const mitmBody = "mitm origin"
+	mitm := e2e.DeployServerPod(t, ctx, egressHTTPSTarget("mitm-origin", mitmBody))
+	plaintextSpec := egressHTTPTarget()
+	plaintextSpec.Namespace = mitm.Namespace
+	plaintext := e2e.DeployServerPod(t, ctx, plaintextSpec)
+
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(
+		t, ctx, "egress-slow-headers", e2e.EgressFixture(),
+		e2e.EgressAllowHTTPS(mitm.SvcName()),
+		e2e.EgressAllowHTTP(plaintext.SvcName()),
+	)
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForActorRoute(t, ctx, router, actorRef)
+
+	plaintextURL := "http://" + plaintext.SvcName() + "/healthz"
+	slowPayload, err := json.Marshal(map[string]string{"url": plaintextURL})
+	if err != nil {
+		t.Fatalf("marshaling /slow-headers request: %v", err)
+	}
+
+	type postResult struct {
+		status int
+		body   []byte
+	}
+	since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
+	pendingResult := make(chan postResult, 1)
+	go func() {
+		status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/slow-headers", slowPayload, notTransient)
+		pendingResult <- postResult{status: status, body: body}
+	}()
+
+	// Allow the plaintext request to send its incomplete headers before issuing the MITM request.
+	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, "80")
+
+	mitmURL := "https://" + mitm.SvcName() + "/healthz"
+	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, mitmURL, reached)
+	if status != http.StatusOK {
+		t.Fatalf("fetch of %s returned HTTP %d, want 200; body: %s", mitmURL, status, body)
+	}
+	if got := decodeEgressFetch(t, body); got.Body != mitmBody || !got.TLS {
+		t.Fatalf("fetch of %s = %+v, want verified TLS and body %q", mitmURL, got, mitmBody)
+	}
+
+	pending := <-pendingResult
+	if pending.status != http.StatusOK {
+		t.Fatalf("fetch of %s returned HTTP %d, want 200; body: %s", plaintextURL, pending.status, pending.body)
+	}
 }
 
 // fetchThroughEgressActorUntil is fetchThroughEgressActor with the caller

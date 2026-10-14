@@ -555,8 +555,8 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 		wantState ateapipb.ActorState
 	}{
 		{
-			// The resume edge only exists from SUSPENDED, PAUSED, and
-			// RESUMING; a CRASHED actor is rejected by ensureWorkerAssigned
+			// The resume edge only exists from SUSPENDED and RESUMING; a
+			// CRASHED actor is rejected by ensureWorkerAssigned
 			// and its state is left untouched.
 			name:      "crashed rejected",
 			seedState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
@@ -624,9 +624,9 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 }
 
 // TestEnsureWorkerAssigned_RejectsNonResumableStates verifies the resume
-// edge's state gating: every state outside SUSPENDED, PAUSED, and RESUMING
-// is rejected with FailedPrecondition before any dependency is touched.
-// (SUSPENDED/PAUSED assignment and RESUMING recovery are exercised by the
+// edge's state gating: every state outside SUSPENDED and RESUMING is
+// rejected with FailedPrecondition before any dependency is touched.
+// (SUSPENDED assignment and RESUMING recovery are exercised by the
 // assignment-attempt and worker-validation tests; RUNNING never reaches this
 // step because the orchestrator early-returns.)
 func TestEnsureWorkerAssigned_RejectsNonResumableStates(t *testing.T) {
@@ -634,7 +634,7 @@ func TestEnsureWorkerAssigned_RejectsNonResumableStates(t *testing.T) {
 	w := &ActorWorkflow{}
 	for _, st := range allActorStates {
 		switch st {
-		case ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_RESUMING:
+		case ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_RESUMING:
 			continue
 		}
 		actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: st}, Metadata: &ateapipb.ResourceMetadata{Name: "id1", Uid: "actor-uid-1"}}
@@ -1191,7 +1191,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	// actorSeed is the actor status a row persists before resuming.
 	type actorSeed struct {
 		// localSnapshot seeds a completed local snapshot (the pause checkpoint);
-		// a non-nil value also parks the actor PAUSED instead of SUSPENDED.
+		// a non-nil value also pins the actor to the snapshot's node.
 		localSnapshot *ateapipb.Snapshot
 		// externalSnapshot seeds a completed durable snapshot.
 		externalSnapshot *ateapipb.Snapshot
@@ -1567,14 +1567,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				t.Fatal("created template has no UID; the matching tmplUID case would be vacuous")
 			}
 
-			// A pause checkpoint is what parks an actor PAUSED; without one a
-			// non-running actor resumes from SUSPENDED.
-			actorState := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-			if tt.actor.localSnapshot != nil {
-				actorState = ateapipb.ActorState_ACTOR_STATE_PAUSED
-			}
+			// Paused and suspended actors are both SUSPENDED; a pause
+			// checkpoint is what makes the resume local.
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", actorState, func(a *ateapipb.Actor) {
+			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
 				a.SourceTag = tt.actor.sourceTag
 				a.Status.WorkerAssignment = wireTestAssignment()
 				a.Status.WorkerAssignment.SandboxRuntime = proto.CloneOf(tt.actor.assignedRuntime)
@@ -2307,22 +2303,23 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		ctx := context.Background()
 		st := newTestPersistence(t)
 		seedRuntimeWorker(t, ctx, st, "node1-incompatible", "node-1", arm64RT)
+		// A paused actor: SUSPENDED, pinned to its node by a local snapshot.
 		local := newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1")
 		local.SandboxRuntime = amd64RT
-		actor := seedActorWithSnapshot(t, ctx, st, ateapipb.ActorState_ACTOR_STATE_PAUSED, "node-1", local)
+		actor := seedActorWithSnapshot(t, ctx, st, suspended, "node-1", local)
 
 		_, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, gvisorTemplate())
 		if got := apierror.Code(err); got != codes.ResourceExhausted {
 			t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.ResourceExhausted, err)
 		}
-		// Nothing was written: the actor waits for its node, still PAUSED,
+		// Nothing was written: the actor waits for its node, still paused,
 		// unassigned, and holding no claim anything would have to release.
 		after, err := st.GetActor(ctx, actorRef)
 		if err != nil {
 			t.Fatalf("GetActor: %v", err)
 		}
-		if got := after.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_PAUSED {
-			t.Errorf("state = %v, want PAUSED", got)
+		if got := after.GetStatus().GetState(); got != suspended {
+			t.Errorf("state = %v, want SUSPENDED", got)
 		}
 		if got := after.GetStatus().GetWorkerAssignment(); got != nil {
 			t.Errorf("WorkerAssignment = %v, want none", got)

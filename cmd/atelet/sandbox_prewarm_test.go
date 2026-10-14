@@ -380,7 +380,7 @@ func TestPrewarmDefaultVersionOnly(t *testing.T) {
 	if err := p.prewarm(ctx, cfg); err != nil {
 		t.Fatalf("prewarm: %v", err)
 	}
-	if _, err := os.Stat(ateletpath.RunSCBinaryPath(otherSHA)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(ateletpath.AssetPath(otherSHA)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("non-default version asset was prewarmed (stat err = %v)", err)
 	}
 
@@ -467,7 +467,7 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("prewarm never finished")
 	}
-	wantPath := ateletpath.RunSCBinaryPath(sha)
+	wantPath := ateletpath.AssetPath(sha)
 	if _, err := os.Stat(wantPath); err != nil {
 		t.Fatalf("asset not prewarmed to %s: %v", wantPath, err)
 	}

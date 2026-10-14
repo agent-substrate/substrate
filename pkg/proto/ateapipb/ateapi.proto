@@ -36,13 +36,15 @@ service Control {
   // to the template's commit scope where required (Full capture, Data commit).
   rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
 
-  // Pause a given actor and keep its snapshots on node VM.
+  // Pause a given actor: checkpoint it to its worker's node and leave it
+  // SUSPENDED with that node-local snapshot, pinned to the node. A paused
+  // actor is told from a suspended one by its snapshots, not its state.
   rpc PauseActor(PauseActorRequest) returns (PauseActorResponse) {}
 
   // Resume an actor from its latest snapshot.
   rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {}
 
-  // Revert an actor to SUSPENDED state.
+  // Revert an actor to SUSPENDED state at its durable snapshot.
   // Only crashed, running or paused actors can be reverted.
   rpc RevertActor(RevertActorRequest) returns (RevertActorResponse) {}
 
@@ -755,8 +757,6 @@ enum ActorState {
   ACTOR_STATE_RUNNING = 2;
   ACTOR_STATE_SUSPENDING = 3;
   ACTOR_STATE_SUSPENDED = 4;
-  ACTOR_STATE_PAUSING = 5;
-  ACTOR_STATE_PAUSED = 6;
   ACTOR_STATE_CRASHED = 7;
   ACTOR_STATE_DELETING = 8;
   ACTOR_STATE_REVERTING = 9;
@@ -772,7 +772,7 @@ message ActorStatus {
   ActorState state = 1;
 
   // worker_assignment points at the worker currently hosting this Actor.
-  // Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
+  // Unset whenever the Actor has no worker (SUSPENDED, CRASHED).
   //
   // +k8s:optional
   // +k8s:update=NoModify # can be set and cleared, but not changed in place

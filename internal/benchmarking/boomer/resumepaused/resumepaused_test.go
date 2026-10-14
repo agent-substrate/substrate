@@ -142,7 +142,7 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 	switch f.states[name] {
 	case ateapipb.ActorState_ACTOR_STATE_RUNNING:
 		return &ateapipb.ResumeActorResponse{Resumed: false}, nil
-	case ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
 		f.states[name] = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return &ateapipb.ResumeActorResponse{Resumed: true}, nil
 	}
@@ -160,7 +160,9 @@ func (f *fakeControlClient) PauseActor(ctx context.Context, in *ateapipb.PauseAc
 	if f.states[name] != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		return nil, status.Error(codes.FailedPrecondition, "not running")
 	}
-	f.states[name] = ateapipb.ActorState_ACTOR_STATE_PAUSED
+	// A paused actor is SUSPENDED holding a node-local snapshot; the fake
+	// tracks only the state.
+	f.states[name] = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 	return &ateapipb.PauseActorResponse{}, nil
 }
 
@@ -290,8 +292,8 @@ func TestFirstIterationMakesTheUsersActorCold(t *testing.T) {
 	if !slices.Equal(fake.calls, want) {
 		t.Errorf("calls: got %v, want %v", fake.calls, want)
 	}
-	if got := fake.state(name); got != ateapipb.ActorState_ACTOR_STATE_PAUSED {
-		t.Errorf("actor is %v, want paused", got)
+	if got := fake.state(name); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("actor is %v, want paused (SUSPENDED)", got)
 	}
 	if got := trackedActors(r); !slices.Equal(got, actors) {
 		t.Errorf("tracked %v, want %v", got, actors)
@@ -387,8 +389,8 @@ func TestSetupDeletesAnActorThatDoesNotWarmAndRetries(t *testing.T) {
 	if len(actors) != 1 || actors[0] == created[0] {
 		t.Fatalf("got user actors %v, want a new one", actors)
 	}
-	if got := fake.state(actors[0]); got != ateapipb.ActorState_ACTOR_STATE_PAUSED {
-		t.Errorf("actor is %v, want paused", got)
+	if got := fake.state(actors[0]); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("actor is %v, want paused (SUSPENDED)", got)
 	}
 }
 
@@ -447,8 +449,8 @@ func TestIterateFailsAResumeOfARunningActor(t *testing.T) {
 	if !slices.Equal(fake.calls, want) {
 		t.Errorf("calls: got %v, want %v", fake.calls, want)
 	}
-	if got := fake.state(name); got != ateapipb.ActorState_ACTOR_STATE_PAUSED {
-		t.Errorf("actor is %v, want paused", got)
+	if got := fake.state(name); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("actor is %v, want paused (SUSPENDED)", got)
 	}
 }
 
@@ -463,8 +465,8 @@ func TestIterateKeepsTheActorAfterAFailedResume(t *testing.T) {
 	if got := userActors(r); !slices.Equal(got, []string{name}) {
 		t.Errorf("user actors: got %v, want [%s]", got, name)
 	}
-	if got := fake.state(name); got != ateapipb.ActorState_ACTOR_STATE_PAUSED {
-		t.Errorf("actor is %v, want paused", got)
+	if got := fake.state(name); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("actor is %v, want paused (SUSPENDED)", got)
 	}
 }
 
