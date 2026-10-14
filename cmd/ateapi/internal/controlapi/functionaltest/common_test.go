@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
@@ -76,12 +77,17 @@ const (
 )
 
 var (
-	ignoreUID        = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid")
-	ignoreVersion    = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "version")
-	ignoreTimestamps = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "create_time", "update_time")
+	ignoreUID     = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid")
+	ignoreVersion = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "version")
+	// ignoreTimestamps skips the times the server stamps, in the metadata and
+	// in an actor's status.
+	ignoreTimestamps = cmp.Options{
+		protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "create_time", "update_time"),
+		protocmp.IgnoreFields(&ateapipb.ActorStatus{}, "state_transition_time"),
+	}
 
-	// ignoreServerMetadata skips the ResourceMetadata fields the store assigns.
-	ignoreServerMetadata = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid", "create_time", "update_time")
+	// ignoreServerMetadata skips the fields the server assigns.
+	ignoreServerMetadata = cmp.Options{ignoreUID, ignoreTimestamps}
 )
 
 type testContext struct {
