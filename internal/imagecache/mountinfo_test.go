@@ -59,6 +59,26 @@ func TestMountPointsIn_ExactDirMatch(t *testing.T) {
 	}
 }
 
+// dir is compared in mountinfo's escaped form; a dir with a space must match
+// its own mounts and not a longer sibling.
+func TestMountPointsIn_EscapedDir(t *testing.T) {
+	mountinfo := strings.Join([]string{
+		`40 21 8:1 / /mnt/odd\040name rw - ext4 /dev/sda1 rw`,
+		`41 21 8:1 / /mnt/odd\040name/rootfs rw - overlay overlay rw`,
+		`42 21 8:1 / /mnt/odd\040name2/rootfs rw - overlay overlay rw`,
+		``,
+	}, "\n")
+
+	got, err := mountPointsIn(strings.NewReader(mountinfo), "/mnt/odd name")
+	if err != nil {
+		t.Fatalf("mountPointsIn: %v", err)
+	}
+	want := []string{"/mnt/odd name", "/mnt/odd name/rootfs"}
+	if !slices.Equal(got, want) {
+		t.Errorf("mount points = %v, want %v", got, want)
+	}
+}
+
 // An overlay's record lists every lowerdir path, so one line can be longer
 // than bufio.Scanner's default token size; the lines after it must still be
 // read.
