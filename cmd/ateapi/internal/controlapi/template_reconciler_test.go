@@ -165,6 +165,8 @@ type fakeGoldenControl struct {
 	exists         bool
 	goldenState    ateapipb.ActorState
 	goldenSnapshot string
+	// goldenCrash is the crash message a CRASHED golden actor records.
+	goldenCrash string
 	// snapshot is the external snapshot a completed suspend produces; empty
 	// simulates a suspend that wrote none.
 	snapshot string
@@ -184,6 +186,9 @@ func (c *fakeGoldenControl) CreateAtespace(_ context.Context, req *ateapipb.Crea
 
 func (c *fakeGoldenControl) goldenActorStatus() *ateapipb.ActorStatus {
 	st := &ateapipb.ActorStatus{State: c.goldenState}
+	if c.goldenState == ateapipb.ActorState_ACTOR_STATE_CRASHED && c.goldenCrash != "" {
+		st.Crash = &ateapipb.ActorCrash{Message: c.goldenCrash}
+	}
 	if c.goldenSnapshot != "" {
 		st.LastAssignedGeneration = 1
 		st.Snapshots = []*ateapipb.Snapshot{
@@ -1011,4 +1016,92 @@ func TestReconcileOne_GoldenTagConflict(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTransientGoldenCrash(t *testing.T) {
+	tests := []struct {
+		crash string
+		want  bool
+	}{
+		{"resume failed: " + crashMessageWorkerDraining, true},
+		{"resume failed: " + crashMessageWorkerGone, true},
+		{"resume failed: " + crashMessageWorkerReassigned, true},
+		{crashMessageWorkerPodGone, true},
+		{crashMessageAteomRestarted, true},
+		{"resume failed: atelet RunWorkload: while calling ateom.RunWorkload: rpc error: code = Unavailable desc = connection error: desc = \"transport: Error while dialing: dial unix /var/lib/ate/ateoms/w-1/ateom.sock: connect: no such file or directory\"", true},
+		{"resume failed: atelet Restore: selected atelet \"ate-system/atelet-x\" has no assigned IPs", true},
+		{"resume failed: atelet Restore: found 2 atelet pods on node \"n-1\", expected 1", true},
+		{wakeupProbeCancelledCrash, true},
+		{"resume failed: atelet Run: while creating workload from spec: MANIFEST_UNKNOWN: manifest unknown", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED, Crash: &ateapipb.ActorCrash{Message: tt.crash}}}
+		if got := transientGoldenCrash(actor); got != tt.want {
+			t.Errorf("transientGoldenCrash(%q) = %v, want %v", tt.crash, got, tt.want)
+		}
+	}
+}
+
+// TestReconcileOne_TransientGoldenCrashRetries drives a golden actor that a
+// rolling worker pool crashed: it is deleted, the pass errors for the work
+// queue's backoff with nothing recorded, and the retry once the pool is ready
+// takes the golden. A crash for another cause still fails the template.
+func TestReconcileOne_TransientGoldenCrashRetries(t *testing.T) {
+	goldenSnapshot := "gs://bucket/root/atespaces/ate-golden/actors/" + someActorUID + "/snapshots/snap-1"
+	control := &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+		goldenCrash: "resume failed: " + crashMessageWorkerDraining, snapshot: goldenSnapshot}
+	st := newFakeTemplateStore(testTemplate())
+	r := newTestTemplateReconciler(st, control)
+	defer r.queue.ShutDown()
+
+	if _, err := r.reconcileOne(t.Context(), testTemplateRef); err == nil {
+		t.Fatal("reconcileOne after a transient golden actor crash returned no error, want one for the backoff")
+	}
+	snapshotStatus := st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus()
+	if snapshotStatus.GetErrorMessage() != "" || goldenSnapshotDone(snapshotStatus) {
+		t.Errorf("stored status = %v, want no failure for a transient crash", snapshotStatus)
+	}
+	if control.exists || len(control.deleteReqs) != 1 {
+		t.Error("the crashed golden actor was not deleted")
+	}
+	r.resync(t.Context())
+	if r.queue.Len() != 1 {
+		t.Error("resync did not queue the template for the retry")
+	}
+	if _, err := r.reconcileOne(t.Context(), testTemplateRef); err != nil {
+		t.Fatalf("retry reconcileOne: %v", err)
+	}
+	if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetGoldenTag() == nil {
+		t.Error("the retry recorded no golden tag")
+	}
+
+	t.Run("another cause fails the template", func(t *testing.T) {
+		control := &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			goldenCrash: "resume failed: atelet Run: while creating workload from spec: MANIFEST_UNKNOWN: manifest unknown"}
+		st := newFakeTemplateStore(testTemplate())
+		r := newTestTemplateReconciler(st, control)
+		if _, err := r.reconcileOne(t.Context(), testTemplateRef); err != nil {
+			t.Fatalf("reconcileOne: %v", err)
+		}
+		if msg := st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetErrorMessage(); !strings.HasPrefix(msg, reasonGoldenActorCrashed+": ") {
+			t.Errorf("stored error message = %q, want %s", msg, reasonGoldenActorCrashed)
+		}
+		if len(control.deleteReqs) != 0 {
+			t.Error("the golden actor of a terminal crash was deleted")
+		}
+	})
+
+	t.Run("a failed delete records nothing", func(t *testing.T) {
+		control := &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			goldenCrash: "resume failed: " + crashMessageWorkerDraining, deleteErr: apierror.Unavailable("atelet unreachable")}
+		st := newFakeTemplateStore(testTemplate())
+		r := newTestTemplateReconciler(st, control)
+		if _, err := r.reconcileOne(t.Context(), testTemplateRef); err == nil {
+			t.Fatal("reconcileOne returned no error, want the delete's")
+		}
+		if msg := st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetErrorMessage(); msg != "" {
+			t.Errorf("stored error message = %q, want none", msg)
+		}
+	})
 }
