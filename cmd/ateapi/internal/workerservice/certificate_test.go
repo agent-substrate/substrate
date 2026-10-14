@@ -139,6 +139,7 @@ func TestMintWorkerActorCertificate(t *testing.T) {
 		},
 		ActorUid:                  actor.GetMetadata().GetUid(),
 		CertificateSigningRequest: csr,
+		Worker:                    &ateapipb.ObjectRef{Name: "worker-1"},
 	})
 	if err != nil {
 		t.Fatalf("MintWorkerActorCertificate() failed: %v", err)
@@ -190,6 +191,7 @@ func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 			Actor:                     &ateapipb.ObjectRef{Atespace: "team-a", Name: "my-actor"},
 			ActorUid:                  actor.GetMetadata().GetUid(),
 			CertificateSigningRequest: csr,
+			Worker:                    &ateapipb.ObjectRef{Name: "worker-1"},
 		}
 	}
 	const (
@@ -345,11 +347,35 @@ func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 			want:   codes.NotFound,
 		},
 		{
-			// HostingNode counts a paused actor's checkpoint node as hosting it.
+			// worker-2 runs on the actor's node, but the actor is not its own.
+			name:   "another worker on the actor's node",
+			ctx:    authed,
+			mutate: func(r *ateapipb.MintWorkerActorCertificateRequest) { r.Worker.Name = "worker-2" },
+			want:   codes.NotFound,
+		},
+		{
+			// The worker check also runs before the UID check.
+			name: "another worker on the actor's node, stale uid",
+			ctx:  authed,
+			mutate: func(r *ateapipb.MintWorkerActorCertificateRequest) {
+				r.Worker.Name = "worker-2"
+				r.ActorUid = staleUID
+			},
+			want: codes.NotFound,
+		},
+		{
+			// MintWorkerActorJwt serves a paused actor's checkpoint node. No
+			// worker runs a paused actor, so no worker gets its certificate.
 			name:   "paused actor on this node",
 			ctx:    authed,
 			status: pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"),
-			want:   codes.OK,
+			want:   codes.NotFound,
+		},
+		{
+			name:   "paused actor being suspended on this node",
+			ctx:    authed,
+			status: pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "node-1"),
+			want:   codes.NotFound,
 		},
 		{
 			name:   "paused actor on another node",
@@ -412,13 +438,25 @@ func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 			want:   codes.InvalidArgument,
 		},
 		{
+			name:   "missing worker",
+			ctx:    authed,
+			mutate: func(r *ateapipb.MintWorkerActorCertificateRequest) { r.Worker = nil },
+			want:   codes.InvalidArgument,
+		},
+		{
+			name:   "worker with an atespace",
+			ctx:    authed,
+			mutate: func(r *ateapipb.MintWorkerActorCertificateRequest) { r.Worker.Atespace = "team-a" },
+			want:   codes.InvalidArgument,
+		},
+		{
 			name:   "actor not found",
 			ctx:    authed,
 			mutate: func(r *ateapipb.MintWorkerActorCertificateRequest) { r.Actor.Name = "nonexistent" },
 			want:   codes.NotFound,
 		},
 		{
-			// The hosting node asks for an incarnation that was deleted and
+			// The assigned worker asks for an incarnation that was deleted and
 			// recreated.
 			name:   "stale actor uid",
 			ctx:    authed,

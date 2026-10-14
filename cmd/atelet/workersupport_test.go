@@ -333,6 +333,8 @@ func TestMintActorCertificateForwardsToWorkerService(t *testing.T) {
 	}
 
 	want := []*ateapipb.MintWorkerActorCertificateRequest{{
+		// The worker comes from the caller's certificate.
+		Worker: &ateapipb.ObjectRef{Name: "pod-a"},
 		Actor: &ateapipb.ObjectRef{
 			Atespace: "team-a",
 			Name:     "actor-1",

@@ -38,8 +38,10 @@ type workerSupportServer struct {
 }
 
 func (b *workerSupportServer) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
-	// Check which worker is calling.
-	_, err := authenticatedWorkerIdentity(ctx)
+	// Identity comes only from the mTLS certificate, never from the request:
+	// the control plane mints only for the Worker assigned the actor, so a
+	// worker gets certificates for the actor it hosts and no other.
+	workerIdentity, err := authenticatedWorkerIdentity(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -50,11 +52,9 @@ func (b *workerSupportServer) MintActorCertificate(ctx context.Context, req *ate
 		return nil, resources.ToGRPCStatusError(errs)
 	}
 
-	// TODO(identity): Check that we believe that this worker is running the
-	// requested actor?  ate-api-server will further check that we (the atelet)
-	// are allowed to request a certificate for the actor.
-
 	resp, err := b.workers.MintWorkerActorCertificate(ctx, &ateapipb.MintWorkerActorCertificateRequest{
+		// Workers are global-scoped and named by their pod UID.
+		Worker: &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
 		Actor: &ateapipb.ObjectRef{
 			Atespace: req.GetActorAtespace(),
 			Name:     req.GetActorName(),

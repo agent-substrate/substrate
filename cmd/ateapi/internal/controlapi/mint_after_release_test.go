@@ -41,8 +41,9 @@ import (
 // releases an actor's worker before it rewrites the actor's status into the
 // window between the two, by failing the second write. The status still
 // names the worker there, and keeps doing so until the workflow is retried.
-// The worker's node must not mint a worker-for-actor certificate for the actor
-// in that window, nor once the worker hosts another actor.
+// The worker must not get a worker-for-actor certificate for the actor in that
+// window, nor once it hosts another actor or the status is finalized, and
+// another worker on the node never gets one.
 func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 	// The worker is the one WireTestAssignment names, so a pause or suspend
 	// reaches the workflow's fake atelet on its node.
@@ -54,18 +55,26 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 			persistence := controlapi.NewTestPersistence(t)
 			controlapi.SeedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: controlapi.TestStorageLocation})
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			// wa's worker hosts the actor; the neighbor is another worker on
+			// its node.
 			workerName := wa.GetWorker().GetName()
-			if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
-				Metadata:        &ateapipb.ResourceMetadata{Name: workerName},
-				WorkerNamespace: wa.GetWorkerNamespace(),
-				WorkerPool:      wa.GetWorkerPool(),
-				WorkerPod:       wa.GetWorkerPod(),
-				WorkerPodUid:    wa.GetWorkerPodUid(),
-				NodeName:        node,
-				SandboxClass:    wf.WorkerClass,
-				Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
-			}); err != nil {
-				t.Fatalf("CreateWorker: %v", err)
+			neighborName := "neighbor-1"
+			for _, w := range []struct{ name, pod, podUID string }{
+				{workerName, wa.GetWorkerPod(), wa.GetWorkerPodUid()},
+				{neighborName, "neighbor-pod", "neighbor-pod-uid"},
+			} {
+				if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+					Metadata:        &ateapipb.ResourceMetadata{Name: w.name},
+					WorkerNamespace: wa.GetWorkerNamespace(),
+					WorkerPool:      wa.GetWorkerPool(),
+					WorkerPod:       w.pod,
+					WorkerPodUid:    w.podUID,
+					NodeName:        node,
+					SandboxClass:    wf.WorkerClass,
+					Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+				}); err != nil {
+					t.Fatalf("CreateWorker(%s): %v", w.name, err)
+				}
 			}
 			status := &ateapipb.ActorStatus{
 				State:                  wf.State,
@@ -89,16 +98,24 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 
 			minter := newTestMinter(t, persistence)
 			csr := newTestCSR(t)
-			// mint asks for the actor's certificate from the worker's node and
-			// returns the actor as the mint saw it and the mint's code.
-			mint := func(stage string) (*ateapipb.Actor, codes.Code) {
+			// mintAs asks for the actor's certificate as worker, through the
+			// atelet on node.
+			mintAs := func(worker string) codes.Code {
 				t.Helper()
 				_, err := minter.MintWorkerActorCertificate(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, node)), &ateapipb.MintWorkerActorCertificateRequest{
 					Actor:                     &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 					ActorUid:                  uid,
 					CertificateSigningRequest: csr,
+					Worker:                    &ateapipb.ObjectRef{Name: worker},
 				})
-				code := apierror.Code(err)
+				return apierror.Code(err)
+			}
+			// mint asks for the actor's certificate as the worker assigned the
+			// actor and returns the actor as the mint saw it and the mint's
+			// code.
+			mint := func(stage string) (*ateapipb.Actor, codes.Code) {
+				t.Helper()
+				code := mintAs(workerName)
 				actor, gerr := persistence.GetActor(ctx, actorRef)
 				if gerr != nil {
 					t.Fatalf("GetActor: %v", gerr)
@@ -111,6 +128,9 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 			actor, got := mint("hosted")
 			if got != codes.OK {
 				t.Fatalf("certificate mint while the worker holds the actor: code %v, want OK", got)
+			}
+			if got := mintAs(neighborName); got != codes.NotFound {
+				t.Errorf("certificate mint by another worker on the node: code %v, want NotFound", got)
 			}
 
 			// The release commits; recording the new state fails.
@@ -145,12 +165,9 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 			if actor.GetStatus().GetState() != wf.WantFinalState {
 				t.Errorf("actor state once finalized = %v, want %v", actor.GetStatus().GetState(), wf.WantFinalState)
 			}
-			want := codes.NotFound
-			if wf.WantFinalHosted {
-				want = codes.OK
-			}
-			if got != want {
-				t.Errorf("certificate mint once finalized: code %v, want %v", got, want)
+			// No worker runs the actor once finalized, paused or not.
+			if got != codes.NotFound {
+				t.Errorf("certificate mint once finalized: code %v, want NotFound", got)
 			}
 		})
 	}

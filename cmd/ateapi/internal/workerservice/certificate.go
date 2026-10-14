@@ -19,6 +19,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"path"
 	"time"
@@ -54,12 +55,25 @@ func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapipb.M
 	} else if err != nil {
 		return nil, fmt.Errorf("while retrieving actor: %w", err)
 	}
-	// Only the node hosting the actor may mint, as for MintWorkerActorJwt.
-	// atunnel, through its worker's atelet, mints while the actor resumes and
-	// renews until the worker is released. The node check comes first so a
-	// node that does not host the actor gets NotFound whatever UID it sends.
+	// Only the worker assigned the actor may mint, through its node's atelet.
+	// atunnel runs in that worker: it mints while the actor resumes and
+	// renews until the worker is released. Unlike MintWorkerActorJwt, a paused
+	// actor's node gets nothing, since no worker runs the actor. The node and
+	// worker checks come first so a caller that does not run the actor gets
+	// NotFound whatever UID it sends.
 	if err := s.checkActorOnNode(ctx, dbActor, caller.NodeName); err != nil {
 		return nil, err
+	}
+	// The node check alone would let any worker on the node mint for its
+	// neighbors. HostingNode has checked that the store binds the worker the
+	// status names to the actor; a paused actor's status names none.
+	if assigned := dbActor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); assigned != req.GetWorker().GetName() {
+		slog.WarnContext(ctx, "Refusing a worker-for-actor certificate for an actor another worker runs",
+			slog.String("actor", resources.ActorRefFromActor(dbActor).String()),
+			slog.String("assigned_worker", assigned),
+			slog.String("caller_worker", req.GetWorker().GetName()),
+			slog.String("caller_node", caller.NodeName))
+		return nil, apierror.NotFound("actor not found")
 	}
 	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
 		return nil, apierror.Aborted("conflict; actor has been deleted and recreated")

@@ -65,9 +65,6 @@ type ReleaseWindowWorkflow struct {
 	WantRetry codes.Code
 	// WantFinalState is the actor's state once the retry commits.
 	WantFinalState ateapipb.ActorState
-	// WantFinalHosted is whether the worker's node still hosts the actor
-	// once the retry commits: a paused actor's node holds its snapshot.
-	WantFinalHosted bool
 }
 
 // ReleaseWindowWorkflows returns pause, suspend, crash, and a resume onto an
@@ -91,9 +88,8 @@ func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
 				_, err := w.PauseActor(ctx, actorRef)
 				return err
 			},
-			WantRetry:       codes.OK,
-			WantFinalState:  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			WantFinalHosted: true,
+			WantRetry:      codes.OK,
+			WantFinalState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 		},
 		{
 			Name:  "suspend",

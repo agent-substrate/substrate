@@ -1958,6 +1958,13 @@ type WorkerServiceClient interface {
 	// on behalf of a particular actor.
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// RequestActorSuspend, naming the Worker its caller proved itself to be.
+	// The control plane mints only for the Worker assigned the Actor, and only
+	// to an atelet on that Worker's node. A request from any other node or
+	// Worker gets NotFound; one from the assigned Worker with a stale actor_uid
+	// gets Aborted.
 	MintWorkerActorCertificate(ctx context.Context, in *MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*MintWorkerActorCertificateResponse, error)
 	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
 	// acting on behalf of a particular actor: the JWT counterpart of
@@ -2087,6 +2094,13 @@ type WorkerServiceServer interface {
 	// on behalf of a particular actor.
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// RequestActorSuspend, naming the Worker its caller proved itself to be.
+	// The control plane mints only for the Worker assigned the Actor, and only
+	// to an atelet on that Worker's node. A request from any other node or
+	// Worker gets NotFound; one from the assigned Worker with a stale actor_uid
+	// gets Aborted.
 	MintWorkerActorCertificate(context.Context, *MintWorkerActorCertificateRequest) (*MintWorkerActorCertificateResponse, error)
 	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
 	// acting on behalf of a particular actor: the JWT counterpart of
