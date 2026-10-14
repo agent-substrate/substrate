@@ -470,7 +470,7 @@ func TestAzureContainersShareOneTokenCache(t *testing.T) {
 	server := httptest.NewTLSServer(&recorder{})
 	defer server.Close()
 	credential := &countingCredential{}
-	stores, err := newTokenAzure(server.URL, []string{"snapshots", "other"}, credential, server.Client().Transport, policy.RetryOptions{})
+	stores, err := newTokenAzure(server.URL, []string{"snapshots", "other"}, credential, server.Client().Transport, policy.RetryOptions{}, defaultStallTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
