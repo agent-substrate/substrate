@@ -24,6 +24,9 @@ package kata
 // itself. Rootfs writes therefore cost host disk, not guest RAM, and persist across
 // suspend/resume via the snapshot's rootfs-upper tar.
 //
+// Images cached with EROFS layers mount the overlay inside the guest over
+// virtio-pmem instead (see GuestOverlay below).
+//
 // This file holds the rootfs-staging helpers.
 
 import (
@@ -35,6 +38,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -117,13 +122,16 @@ type VirtiofsdOptions struct {
 	SocketPath string // vhost-user socket CH connects to (VirtiofsdSocketPath)
 	SharedDir  string // directory to serve (SharedDir(id))
 	Log        io.Writer
+	// Xattr enables extended attributes on the share (needed when a guest
+	// overlay puts its upperdir on virtio-fs; see GuestOverlay).
+	Xattr bool
 	// SysProcAttr, when set, is applied to the virtiofsd process.
 	SysProcAttr *syscall.SysProcAttr
 }
 
 // virtiofsdArgs builds the virtiofsd command line for o.
 func virtiofsdArgs(o VirtiofsdOptions) []string {
-	return []string{
+	args := []string{
 		"--socket-path=" + o.SocketPath,
 		"--shared-dir=" + o.SharedDir,
 		"--cache=auto",
@@ -135,6 +143,10 @@ func virtiofsdArgs(o VirtiofsdOptions) []string {
 		// trust bundle. guest-error returns EIO on those inodes instead.
 		"--migration-on-error", "guest-error",
 	}
+	if o.Xattr {
+		args = append(args, "--xattr")
+	}
+	return args
 }
 
 // StartVirtiofsd launches virtiofsd in find-paths migration mode serving o.SharedDir
@@ -473,27 +485,127 @@ func sandboxStorages(opts CreateSandboxOpts) []*agentpb.Storage {
 	return storages
 }
 
-// StartRootfsContainer creates + starts one container on the shared merged rootfs —
-// the stock kata flow: the agent's setup_bundle binds shared/<cid>/rootfs to
-// /run/kata-containers/<cid>/rootfs and the container runs there. Writable: the
-// host-side overlay upper receives the writes (the guest mounts no overlay itself).
-func (a *AgentClient) StartRootfsContainer(ctx context.Context, cid string, spec *specs.Spec) error {
+// StartRootfsContainer creates and starts a container. When ovl is nil, the
+// container runs on the host-merged rootfs at shared/<cid>/rootfs. When ovl is
+// set, the agent mounts the overlay at /run/kata-containers/<cid>/rootfs inside
+// the guest.
+func (a *AgentClient) StartRootfsContainer(ctx context.Context, cid string, spec *specs.Spec, ovl *GuestOverlay) error {
 	pbSpec := SpecToAgentPB(spec)
 	pbSpec.Root = &agentpb.Root{Path: GuestSharedRootfs(cid), Readonly: false}
+	req := &agentpb.CreateContainerRequest{
+		ContainerId: cid,
+		ExecId:      cid,
+		OCI:         pbSpec,
+	}
+	if ovl != nil {
+		pbSpec.Root.Path = GuestContainerRootfs(cid)
+		req.Storages = []*agentpb.Storage{ovl.storage(cid)}
+	}
 	// Per-container cgroup under the shared /actor parent, so the guest
 	// kernel accounts an actor's containers hierarchically (see agentstats).
 	if pbSpec.Linux != nil {
 		pbSpec.Linux.CgroupsPath = "/actor/" + cid
 	}
-	if err := a.CreateContainer(ctx, &agentpb.CreateContainerRequest{
-		ContainerId: cid,
-		ExecId:      cid,
-		OCI:         pbSpec,
-	}); err != nil {
+	if err := a.CreateContainer(ctx, req); err != nil {
 		return fmt.Errorf("creating rootfs container %q: %w", cid, err)
 	}
 	if err := a.StartContainer(ctx, cid); err != nil {
 		return fmt.Errorf("starting rootfs container %q: %w", cid, err)
 	}
 	return nil
+}
+
+// Guest-assembled rootfs over EROFS and virtio-pmem.
+//
+// When OverlaySpec.EROFS is set, each layer image is attached as a read-only
+// virtio-pmem device and mounted in the guest with DAX. The guest kernel
+// mounts an overlayfs combining those lowers with an upperdir and workdir on
+// the virtio-fs share.
+//
+// Because the upper lives on virtio-fs (where virtiofsd drops CAP_SYS_ADMIN),
+// the guest overlay uses userxattr (user.overlay.*) and virtiofsd runs with
+// --xattr. metacopy and index are disabled so the upper stays portable across
+// restores, and volatile skips fsyncs on the throwaway upper.
+
+const (
+	// guestContainerBase is the kata agent's container state directory.
+	guestContainerBase = "/run/kata-containers/"
+	// guestEROFSMountBase is where the guest mounts EROFS layer images.
+	guestEROFSMountBase = "/run/kata-containers/erofs/"
+	// ShareRW is the per-container subdirectory on the share holding the guest
+	// overlay's upperdir and workdir; its presence is how the host tells a
+	// guest-merged container from one served at <cid>/rootfs.
+	ShareRW = "rw"
+	// overlayfsDriver is the agent storage driver for overlay mounts.
+	overlayfsDriver = "overlayfs"
+)
+
+// GuestContainerRootfs is the in-guest rootfs path for cid.
+func GuestContainerRootfs(cid string) string { return guestContainerBase + cid + "/rootfs" }
+
+// EROFSLayerMountPoint returns the in-guest mount point for the i-th EROFS layer.
+func EROFSLayerMountPoint(i int) string { return guestEROFSMountBase + strconv.Itoa(i) }
+
+// PmemDevice returns the guest device node for the pmem device at index i of
+// the VM config's pmem list. virtio-pmem devices probe in config order and
+// carry no identifier the guest could read (the VMM-side Id is not exposed),
+// so the slot is the only handle.
+func PmemDevice(i int) string { return "/dev/pmem" + strconv.Itoa(i) }
+
+// EROFSLayerMount returns the sandbox storage mount for the layer-th EROFS
+// layer, whose image is the device-th entry of the VM config's pmem list.
+func EROFSLayerMount(layer, device int) PmemMount {
+	return PmemMount{
+		Device:     PmemDevice(device),
+		Fstype:     "erofs",
+		Options:    []string{"ro", "dax"},
+		MountPoint: EROFSLayerMountPoint(layer),
+	}
+}
+
+// GuestOverlay describes the rootfs overlay mounted inside the guest.
+type GuestOverlay struct {
+	// LowerDirs are the mounted layer paths, top-most first.
+	LowerDirs []string
+	// UpperDir and WorkDir are sibling directories on the virtio-fs share.
+	UpperDir, WorkDir string
+}
+
+// NewGuestOverlay returns the GuestOverlay for cid using layerMounts as lowers
+// and <cid>/rw on the share for upperdir and workdir.
+func NewGuestOverlay(cid string, layerMounts []string) *GuestOverlay {
+	rw := guestSharedDir + cid + "/" + ShareRW
+	return &GuestOverlay{LowerDirs: layerMounts, UpperDir: rw + "/fs", WorkDir: rw + "/work"}
+}
+
+// MountOptions returns the overlayfs mount options.
+func (o *GuestOverlay) MountOptions() []string {
+	return []string{
+		"lowerdir=" + strings.Join(o.LowerDirs, ":"),
+		"upperdir=" + o.UpperDir,
+		"workdir=" + o.WorkDir,
+		"metacopy=off", "index=off", "volatile", "userxattr",
+	}
+}
+
+func (o *GuestOverlay) storage(cid string) *agentpb.Storage {
+	return &agentpb.Storage{
+		Driver:     overlayfsDriver,
+		Source:     "overlay",
+		Fstype:     "overlay",
+		Options:    o.MountOptions(),
+		MountPoint: GuestContainerRootfs(cid),
+	}
+}
+
+// StageGuestOverlayUpper bind-mounts the container's host upper directory
+// (<upperBase>/<cid>, containing fs/ and work/) to <cid>/rw in the shared tree.
+// A single bind covers both directories so they stay on the same filesystem
+// under virtiofsd --announce-submounts.
+func StageGuestOverlayUpper(ctx context.Context, upperBase, id, cid string) error {
+	if cid == "" {
+		return fmt.Errorf("StageGuestOverlayUpper: empty container id")
+	}
+	upper, _ := UpperWorkDirs(upperBase, cid)
+	return BindIntoShare(ctx, filepath.Dir(upper), id, filepath.Join(cid, ShareRW))
 }
