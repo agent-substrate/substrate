@@ -71,11 +71,7 @@ func TestPutObjectRetriesTransient429(t *testing.T) {
 	// The storage client routes everything, uploads included, at the emulator.
 	t.Setenv("STORAGE_EMULATOR_HOST", srv.URL)
 	ctx := context.Background()
-	store, err := NewGCSClient(ctx)
-	if err != nil {
-		t.Fatalf("storage client: %v", err)
-	}
-	defer store.(*gcsClient).client.Close()
+	store := newTestGCSClient(t)
 
 	if err := store.PutObject(ctx, "snapshots", "snap/pages.img.zstd", strings.NewReader("payload")); err != nil {
 		t.Fatalf("PutObject after a transient 429: %v", err)

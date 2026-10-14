@@ -75,7 +75,7 @@ func (b *s3Body) ObjectSize() int64 { return b.size }
 
 // fetchRange reads one range into buf.
 func (s *s3Client) fetchRange(bucket, object string) fetchRangeFunc {
-	return func(ctx context.Context, _ int, off, n int64, buf []byte) error {
+	return func(ctx context.Context, off, n int64, buf []byte) error {
 		out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 			Bucket: aws.String(bucket),
 			Key:    aws.String(object),
