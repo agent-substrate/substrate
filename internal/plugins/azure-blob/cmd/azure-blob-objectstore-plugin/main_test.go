@@ -392,8 +392,6 @@ func TestNewWorkloadIdentityCredential(t *testing.T) {
 	}
 }
 
-// TestRunFailsClosedWithoutWorkloadIdentity runs the production store factory:
-// startup must stop before serving when workload identity is not configured.
 // TestRunDoesNotReportAccountURLCredentials starts the plugin, with workload
 // identity configured, from a "Blob service SAS URL" an operator copied from
 // the portal. main logs the error run returns, so it must not hold the SAS.
@@ -423,6 +421,8 @@ func TestRunDoesNotReportAccountURLCredentials(t *testing.T) {
 	}
 }
 
+// TestRunFailsClosedWithoutWorkloadIdentity runs the production store factory:
+// startup must stop before serving when workload identity is not configured.
 func TestRunFailsClosedWithoutWorkloadIdentity(t *testing.T) {
 	setCredentialEnv(t, map[string]string{"AZURE_CLIENT_ID": "client-id", "AZURE_CLIENT_SECRET": "secret", "IDENTITY_ENDPOINT": "http://169.254.169.254"})
 	socket := testSocket(t, "plugin.sock")
