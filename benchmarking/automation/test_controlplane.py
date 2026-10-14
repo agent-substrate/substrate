@@ -150,12 +150,29 @@ class PickRoleNodesTest(unittest.TestCase):
         )
 
     def test_no_node_fits(self):
-        with self.assertRaisesRegex(RuntimeError, "8000m CPU for ateapi"):
+        with self.assertRaisesRegex(RuntimeError, "8000m CPU free for ateapi"):
             controlplane.pick_role_nodes(
                 [node("n-a", cpu="4"), node("n-b", cpu="4")], "pg", ateapi_millis=8000)
-        with self.assertRaisesRegex(RuntimeError, "8000m CPU for the runner"):
+        with self.assertRaisesRegex(RuntimeError, "8000m CPU free for the runner"):
             controlplane.pick_role_nodes([node("n-a", cpu="16"), node("n-b", cpu="4")], "pg",
                                          ateapi_millis=8000, runner_millis=8000)
+
+    def test_cpu_already_requested_is_not_free(self):
+        loadgen = [dict(controlplane.LOADGEN_TAINT)]
+        nodes = [node("n-a", cpu="16"), node("n-b", cpu="16"), node("lg-a", taints=loadgen, cpu="16")]
+        self.assertEqual(
+            controlplane.pick_role_nodes(nodes, "pg", ateapi_millis=8000, runner_millis=7000),
+            ("n-a", "lg-a"),
+        )
+        # Pods already on n-a and lg-a leave them 7 and 6 CPUs free.
+        self.assertEqual(
+            controlplane.pick_role_nodes(nodes, "pg", ateapi_millis=8000, runner_millis=7000,
+                                         requested={"n-a": 9000, "lg-a": 10000}),
+            ("n-b", "n-a"),
+        )
+        with self.assertRaisesRegex(RuntimeError, r"\('n-a', 7000\)"):
+            controlplane.pick_role_nodes(nodes, "pg", ateapi_millis=8000, runner_millis=8000,
+                                         requested={"n-a": 9000, "lg-a": 10000})
 
     def test_other_taints_are_no_load_generator_pool(self):
         nodes = [
@@ -165,6 +182,40 @@ class PickRoleNodesTest(unittest.TestCase):
             node("y", taints=[dict(controlplane.LOADGEN_TAINT), {"key": "k", "effect": "NoSchedule"}]),
         ]
         self.assertEqual(controlplane.pick_role_nodes(nodes, "pg"), ("n-a", "n-b"))
+
+
+def pod(node_name, *cpus, namespace="ns", app="x", phase="Running", sidecar=None, init=None):
+    p = {
+        "metadata": {"namespace": namespace, "labels": {"app": app}},
+        "spec": {"containers": [{"resources": {"requests": {"cpu": c}}} for c in cpus],
+                 "initContainers": []},
+        "status": {"phase": phase},
+    }
+    if node_name:
+        p["spec"]["nodeName"] = node_name
+    if sidecar:
+        p["spec"]["initContainers"].append(
+            {"restartPolicy": "Always", "resources": {"requests": {"cpu": sidecar}}})
+    if init:
+        p["spec"]["initContainers"].append({"resources": {"requests": {"cpu": init}}})
+    return p
+
+
+class RequestedMillisTest(unittest.TestCase):
+    def test_sums_the_pods_that_hold_cpu(self):
+        pods = [
+            pod("n-a", "100m", "250m"),
+            pod("n-a", "1", sidecar="10m", init="4"),
+            pod("n-b", "500m"),
+            pod("n-b"),  # no requests
+            pod("n-b", "2", phase="Succeeded"),
+            pod("n-b", "2", phase="Failed"),
+            pod(None, "2", phase="Pending"),
+            # pin_ateapi replaces these, freeing their CPU.
+            pod("n-a", "2", namespace="ate-system", app="ate-api-server"),
+            pod("n-b", "100m", namespace="ate-system", app="postgres"),
+        ]
+        self.assertEqual(controlplane.requested_millis(pods), {"n-a": 1360, "n-b": 600})
 
 
 class CpuMillisTest(unittest.TestCase):
@@ -185,12 +236,12 @@ class LabelNodesTest(unittest.TestCase):
             return "n-a", "n-b"
 
         stub(self,
-             _kubectl_out=lambda args: '{"items": []}' if "nodes" in args else "pg",
+             _kubectl_out=lambda args: '{"items": []}' if {"nodes", "pods"} & set(args) else "pg",
              pick_role_nodes=pick,
              run=lambda *_: None,
              run_no_check=lambda *_: None)
         controlplane.label_nodes(controlplane.config({"cpu": "1500m", "replicas": 2}), "8")
-        self.assertEqual(asked, {"ateapi_millis": 3000, "runner_millis": 8000})
+        self.assertEqual(asked, {"ateapi_millis": 3000, "runner_millis": 8000, "requested": {}})
 
 
 class ShapeTest(unittest.TestCase):
