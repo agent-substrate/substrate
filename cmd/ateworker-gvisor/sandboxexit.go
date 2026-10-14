@@ -43,19 +43,29 @@ type sandboxProcess struct {
 // openSandboxProcess pins the sandbox before it can exit, so a reused pid is
 // never mistaken for it.
 func openSandboxProcess(actorDirs *ateworkerpb.ActorDirs) (*sandboxProcess, error) {
-	b, err := os.ReadFile(pidFilePath(actorDirs, ocispec.PauseContainer))
+	pid, err := sandboxPid(actorDirs)
 	if err != nil {
 		return nil, err
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil {
-		return nil, fmt.Errorf("parsing sandbox pid %q: %w", b, err)
 	}
 	fd, err := unix.PidfdOpen(pid, 0)
 	if err != nil {
 		return nil, fmt.Errorf("opening pidfd for sandbox %d: %w", pid, err)
 	}
 	return &sandboxProcess{pid: pid, pidfd: fd}, nil
+}
+
+// sandboxPid reads the sandbox's pid from the pause container's pid file,
+// which runsc writes for the sandbox.
+func sandboxPid(actorDirs *ateworkerpb.ActorDirs) (int, error) {
+	b, err := os.ReadFile(pidFilePath(actorDirs, ocispec.PauseContainer))
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return 0, fmt.Errorf("parsing sandbox pid %q: %w", b, err)
+	}
+	return pid, nil
 }
 
 func (p *sandboxProcess) Close() {

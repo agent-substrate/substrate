@@ -46,6 +46,9 @@ type hostedActor struct {
 	// ctx is canceled when the actor is replaced or unhosted.
 	ctx    context.Context
 	cancel context.CancelFunc
+	// stopping is set before ateworker itself stops the sandbox, so watchSandbox
+	// can tell that exit from a crash.
+	stopping atomic.Bool
 }
 
 // admitActor reserves capacity before network setup. An actor that is already
