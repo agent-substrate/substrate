@@ -55,7 +55,7 @@ func newTokenAzure(accountURL string, containers []string, credential azcore.Tok
 		return nil, err
 	}
 	if endpoint.Scheme != "https" {
-		return nil, fmt.Errorf("Azure Blob account URL %q must use https", accountURL)
+		return nil, fmt.Errorf("Azure Blob account URL %q must use https", RedactURL(accountURL))
 	}
 	client, err := service.NewClient(accountURL, credential, clientOptions(endpoint, base, retry))
 	if err != nil {
@@ -81,10 +81,16 @@ func newAzure(client *service.Client, containerName string) *Azure {
 
 func parseConfiguration(accountURL string, containers []string) (*url.URL, error) {
 	parsed, err := url.Parse(accountURL)
-	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" ||
-		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
+	if err != nil {
+		// The parse error quotes the whole URL, which may hold a credential.
+		return nil, errors.New("Azure Blob account URL is invalid: it does not parse as a URL")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, fmt.Errorf("Azure Blob account URL %q is invalid: it must not have userinfo, a query or a fragment, such as a SAS token; the plugin authenticates with workload identity", RedactURL(accountURL))
+	}
+	if (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" ||
 		(parsed.Path != "" && parsed.Path != "/" && strings.HasSuffix(parsed.Path, "/")) {
-		return nil, fmt.Errorf("Azure Blob account URL %q is invalid", accountURL)
+		return nil, fmt.Errorf("Azure Blob account URL %q is invalid", RedactURL(accountURL))
 	}
 	if len(containers) == 0 {
 		return nil, errors.New("Azure Blob container is required")
@@ -95,6 +101,18 @@ func parseConfiguration(accountURL string, containers []string) (*url.URL, error
 		}
 	}
 	return parsed, nil
+}
+
+// RedactURL returns raw as scheme://host/path, without the userinfo, query and
+// fragment, where a credential such as a SAS signature would be, so that it
+// can appear in errors and logs. It returns a placeholder for a URL that does
+// not parse.
+func RedactURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "<unparseable URL>"
+	}
+	return (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.Path}).String()
 }
 
 var containerNamePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
