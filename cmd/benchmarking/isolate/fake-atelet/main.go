@@ -58,7 +58,7 @@ var (
 	port             = pflag.Int("port", atelet.DefaultPort, "Port to serve AteomHerder on. ate-api-server dials atelet.DefaultPort.")
 	relayPort        = pflag.Int("relay-port", fakeworker.DefaultRelayPort, "Port to serve fake-workersync's capacity reports on.")
 	relayAllowedID   = pflag.String("relay-allowed-spiffe-id", installdefaults.SPIFFEID("ate-system", "fake-workersync"), "The only SPIFFE ID allowed to send capacity reports.")
-	healthListenAddr = pflag.String("health-listen-addr", ":9090", "Address to serve /healthz and /readyz on.")
+	healthListenAddr = pflag.String("health-listen-addr", ":9091", "Address to serve /healthz and /readyz on.")
 
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle presented as the serving certificate and the ate-api-server client certificate.")
 	clientCACerts        = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify client certificates.")

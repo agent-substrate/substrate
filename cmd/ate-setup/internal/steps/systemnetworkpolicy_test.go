@@ -68,12 +68,15 @@ var unadmittedPorts = map[string][]string{
 }
 
 // installConfigs are the configurations whose ate-system the policies must
-// cover: both dataplanes, on GKE and on kind.
+// cover: both dataplanes, on GKE and on kind, each with the real and the fake
+// data plane.
 func installConfigs() []*config.Config {
 	var out []*config.Config
 	for _, kind := range []bool{false, true} {
 		for _, router := range []string{config.RouterEnvoy, config.RouterAgentgateway} {
-			out = append(out, &config.Config{Kind: kind, Router: router})
+			for _, fake := range []bool{false, true} {
+				out = append(out, &config.Config{Kind: kind, Router: router, FakeDataPlane: fake})
+			}
 		}
 	}
 	return out
@@ -84,7 +87,11 @@ func installName(cfg *config.Config) string {
 	if cfg.Kind {
 		env = "kind"
 	}
-	return env + "-" + cfg.Router
+	name := env + "-" + cfg.Router
+	if cfg.FakeDataPlane {
+		name += "-fake"
+	}
+	return name
 }
 
 func loadSystemInstall(t *testing.T, cfg *config.Config) systemInstall {
@@ -106,7 +113,7 @@ func loadSystemInstall(t *testing.T, cfg *config.Config) systemInstall {
 		objs = append(objs, decoded...)
 	}
 	system := filepath.Join(root, SystemOverlay(cfg))
-	rendered, err := kustomize.Build(system)
+	rendered, err := e.renderDataPlane(system)
 	add(system, rendered, err)
 	rendered, err = e.render(e.postgresManifestPath())
 	add(e.postgresManifestPath(), rendered, err)
@@ -302,6 +309,48 @@ func requireOnlyFromApps(t *testing.T, in systemInstall, pod systemPod, cp corev
 	}
 }
 
+// admitsFrom reports whether a rule admitting the port lets in the ate-system
+// pod client.
+func (in systemInstall) admitsFrom(t *testing.T, pod systemPod, cp corev1.ContainerPort, client systemPod) bool {
+	t.Helper()
+	for _, rule := range in.admittingRules(t, pod, cp) {
+		if len(rule.From) == 0 {
+			return true
+		}
+		for _, peer := range rule.From {
+			if peer.PodSelector != nil && peer.NamespaceSelector == nil && peer.IPBlock == nil &&
+				mustSelector(t, peer.PodSelector).Matches(labels.Set(client.labels)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestSystemNetworkPoliciesAdmitFakeDataPlane requires the fake data plane's
+// own flows to get through the default deny: fake-workersync to
+// ate-api-server, which it calls in ate-controller's place, and to the relay
+// on each fake-atelet.
+func TestSystemNetworkPoliciesAdmitFakeDataPlane(t *testing.T) {
+	for _, cfg := range installConfigs() {
+		if !cfg.FakeDataPlane {
+			continue
+		}
+		t.Run(installName(cfg), func(t *testing.T) {
+			in := loadSystemInstall(t, cfg)
+			workersync := in.pod(t, "fake-workersync")
+			api := in.pod(t, "ate-api-server")
+			if !in.admitsFrom(t, api, numberedPort(t, api, 443), workersync) {
+				t.Error("ate-api-server port 443 does not admit fake-workersync")
+			}
+			atelet := in.pod(t, "atelet")
+			if !in.admitsFrom(t, atelet, namedPort(t, atelet, "relay"), workersync) {
+				t.Error("fake-atelet's relay port does not admit fake-workersync")
+			}
+		})
+	}
+}
+
 // TestSystemNetworkPoliciesDefaultDeny requires every install to carry a
 // policy that selects every ate-system pod for ingress and admits nothing.
 func TestSystemNetworkPoliciesDefaultDeny(t *testing.T) {
@@ -398,6 +447,9 @@ func TestSystemNetworkPoliciesLeastPrivilege(t *testing.T) {
 
 			atelet := in.pod(t, "atelet")
 			requireOnlyFromApps(t, in, atelet, namedPort(t, atelet, "grpc"), "ate-api-server")
+			if cfg.FakeDataPlane {
+				requireOnlyFromApps(t, in, atelet, namedPort(t, atelet, "relay"), "fake-workersync")
+			}
 
 			// The API admits the control plane and opted-in namespaces only.
 			api := in.pod(t, "ate-api-server")

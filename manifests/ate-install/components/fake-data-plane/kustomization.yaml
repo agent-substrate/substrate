@@ -76,6 +76,9 @@ patches:
         # this pod's atelet identity; only fake-workersync's is admitted.
         - name: relay
           containerPort: 8086
+        # atelet's probes, kept from its container, target this port.
+        - name: health
+          containerPort: 9091
       - op: replace
         path: /spec/template/spec/containers/0/securityContext
         value:
@@ -119,6 +122,14 @@ patches:
                   matchLabels:
                     podcert.ate.dev/canarying: live
                 path: trust-bundle.pem
+  # fake-workersync calls ate-api-server in ate-controller's place.
+  - target:
+      kind: NetworkPolicy
+      name: ate-api-server
+    patch: |-
+      - op: add
+        path: /spec/ingress/0/from/0/podSelector/matchExpressions/0/values/-
+        value: fake-workersync
   # fake-workersync stands in for ate-controller, which must not run beside
   # it: its WorkerPool controller would make real worker pods for the same
   # pools, and its worker syncer deletes every Worker with no live pod. Its

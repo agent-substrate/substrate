@@ -136,14 +136,17 @@ spec:
         readinessProbe:
           httpGet:
             path: /readyz
-            port: 9090
+            port: health
           periodSeconds: 2
         livenessProbe:
           httpGet:
             path: /healthz
-            port: 9090
+            port: health
           initialDelaySeconds: 10
           periodSeconds: 10
+        ports:
+        - name: health
+          containerPort: 9091
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -185,3 +188,27 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
+
+---
+
+# Under ate-system's default-deny ingress, admits fake-workersync's capacity
+# reports to the relay on each fake-atelet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fake-atelet-relay
+  namespace: ate-system
+spec:
+  podSelector:
+    matchLabels:
+      app: atelet
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: fake-workersync
+    ports:
+    - protocol: TCP
+      port: relay

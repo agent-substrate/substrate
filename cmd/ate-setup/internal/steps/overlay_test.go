@@ -712,6 +712,16 @@ func TestRenderFakeDataPlane(t *testing.T) {
 						t.Errorf("fake-atelet port %s keeps hostPort %d", p.Name, p.HostPort)
 					}
 				}
+				// The probes are atelet's, kept by name; the ports
+				// replacement must still declare the ones they target.
+				for _, probe := range []*corev1.Probe{c.ReadinessProbe, c.LivenessProbe} {
+					if probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Port.StrVal == "" {
+						continue
+					}
+					if !slices.ContainsFunc(c.Ports, func(p corev1.ContainerPort) bool { return p.Name == probe.HTTPGet.Port.StrVal }) {
+						t.Errorf("fake-atelet probe %s targets port %q, which the container does not declare", probe.HTTPGet.Path, probe.HTTPGet.Port.StrVal)
+					}
+				}
 				env := map[string]string{}
 				for _, v := range c.Env {
 					env[v.Name] = v.Value
@@ -1311,6 +1321,7 @@ func fakeDeleteKube(t *testing.T, typed []runtime.Object, dyn []runtime.Object) 
 	cs.Fake.Resources = []*metav1.APIResourceList{
 		{GroupVersion: "v1", APIResources: []metav1.APIResource{{Name: "serviceaccounts", Kind: "ServiceAccount", Namespaced: true}}},
 		{GroupVersion: "apps/v1", APIResources: []metav1.APIResource{{Name: "deployments", Kind: "Deployment", Namespaced: true}}},
+		{GroupVersion: "networking.k8s.io/v1", APIResources: []metav1.APIResource{{Name: "networkpolicies", Kind: "NetworkPolicy", Namespaced: true}}},
 		{GroupVersion: "rbac.authorization.k8s.io/v1", APIResources: []metav1.APIResource{
 			{Name: "clusterroles", Kind: "ClusterRole"},
 			{Name: "clusterrolebindings", Kind: "ClusterRoleBinding"},

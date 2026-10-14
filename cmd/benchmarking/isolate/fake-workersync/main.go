@@ -75,7 +75,7 @@ var (
 	concurrency  = pflag.Int("concurrency", 32, "Worker calls in flight.")
 	cleanup      = pflag.Bool("cleanup", false, "Delete this run's registered fake Workers, then exit. Stop the serving fake-workersync first, as by scaling its Deployment to zero: it would go on counting the deleted Workers until it restarts.")
 	nodeGrace    = pflag.Duration("node-grace", 5*time.Minute, "How long a node keeps its fake Workers with no fake-atelet pod, as while its fake-atelet is replaced.")
-	healthAddr   = pflag.String("health-listen-addr", ":9090", "Address to serve /healthz and /readyz on.")
+	healthAddr   = pflag.String("health-listen-addr", ":9091", "Address to serve /healthz and /readyz on.")
 	drainGrace   = pflag.Duration("drain-grace", time.Minute, "How long a draining fake Worker waits for its Actors to leave before it is deleted, releasing them. Stands in for the time ateom takes to stop a terminating pod's Actors.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
