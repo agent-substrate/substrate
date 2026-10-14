@@ -21,18 +21,18 @@
 #
 # The sandbox binaries (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs)
 # are FETCHED at runtime from the asset bucket ${ASSET_BUCKET_NAME} under
-# kata-assets/ (the rustfs bucket on kind, its own GCS bucket on GKE), through
-# the node's object-store plugin - NOT baked into the worker image.
+# kata-assets/<arch>/ (the rustfs bucket on kind, its own GCS bucket on GKE),
+# through the node's object-store plugin - NOT baked into the worker image.
 # ${BUCKET_SCHEME} is that store's URL scheme (s3 on kind, gs on GKE): the
 # plugin serves only its own backend's scheme. The assets must stay outside any
 # snapshot location, which the plugin refuses to serve as assets. ateworker
-# boots cloud-hypervisor itself and gives the actor an overlay rootfs (virtio-fs
-# RO lower + guest-tmpfs upper), so it fetches virtiofsd too.
+# boots cloud-hypervisor itself and gives the actor an overlay rootfs
+# (virtio-fs RO lower + guest-tmpfs upper), so it fetches virtiofsd too.
 #
-# The per-arch sha256 values below are the asset sets assembled by
+# The per-arch sha256 values below are the asset sets assembled and verified by
 # cmd/ate-setup/internal/steps/microvm.go; atelet selects the block matching
-# the node's architecture, and each cluster's bucket holds that arch's binaries
-# at these paths.
+# the node's architecture, and ate-setup stages both architectures' binaries at
+# these paths.
 
 apiVersion: ate.dev/v1
 kind: SandboxConfig
@@ -49,28 +49,28 @@ spec:
     assets:
       arm64:
         cloud-hypervisor:
-          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/cloud-hypervisor"
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/arm64/cloud-hypervisor"
           sha256: "f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850"
         # virtiofsd serves the overlay RO lower (virtio-fs).
         virtiofsd:
-          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/virtiofsd"
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/arm64/virtiofsd"
           sha256: "4b43f4f6de6500203b01214a790314eea4182f5f110594ddb28ae2805622f06f"
         kata-kernel:
-          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/vmlinux"
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/arm64/vmlinux"
           sha256: "dece388830720fe8bddb41552fff5f486240aeece5acc0aebc1812761e3e3f66"
         kata-image:
-          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/rootfs.img"
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/arm64/rootfs.img"
           sha256: "69f9a76e5a2563b7c74d1f271f3a904240f50ef405465f832021525894519f97"
       amd64:
         cloud-hypervisor:
-          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/cloud-hypervisor"
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/amd64/cloud-hypervisor"
           sha256: "448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc"
         virtiofsd:
-          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/virtiofsd"
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/amd64/virtiofsd"
           sha256: "15b2e72a78cc08a9bd8a6943e89fb69c88cb3cbeb63069efceade835342ac7d4"
         kata-kernel:
-          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/vmlinux"
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/amd64/vmlinux"
           sha256: "f87d8359035cb7557b16a319e6431ea09b183e62268aef436bf8dc6530d786b6"
         kata-image:
-          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/rootfs.img"
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/amd64/rootfs.img"
           sha256: "6770db2cca5710593f27c9ac5e1d9d7aab836422695a5e5c4807496a92a0f24d"

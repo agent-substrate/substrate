@@ -13,8 +13,28 @@ Complete the
 [Quickstart (Development)](../../README.md#quickstart-development) in the
 README first — it covers the base tooling and the default (gVisor) path this
 guide builds on. For background on the runtime, see
-[architecture.md](../concepts/architecture.md) and
-[hack/microvm-assets/README.md](../../hack/microvm-assets/README.md).
+[architecture.md](../concepts/architecture.md).
+
+The `microvm` runtime (`cmd/ateworker-microvm`) fetches its guest toolchain at
+runtime rather than baking Kata into the worker image. Each actor container's
+rootfs is an overlay of a read-only lower (the OCI image, served into the guest
+over virtio-fs by `virtiofsd`) and a writable upper on a guest tmpfs, so the
+asset set is four files per architecture (`amd64` and `arm64`):
+
+- `cloud-hypervisor` — the VMM binary (from its release)
+- `virtiofsd` — the virtio-fs daemon serving the read-only lower (from `kata-static`)
+- `vmlinux` — the guest kernel (from `kata-static`)
+- `rootfs.img` — the guest rootfs image (from `kata-static`)
+
+`go run ./cmd/ate-setup deploy ate-system` (and `deploy sandboxconfig`)
+assembles both architectures into `bin/microvm-assets/{amd64,arm64}/`, verifies
+their SHA-256 digests against `manifests/microvm/sandboxconfig-microvm.yaml.tmpl`,
+stages them into the cluster's object store under `kata-assets/<arch>/` (the
+shared `rustfs` bucket on kind, and `<BUCKET_NAME>-assets` on GKE, the only
+bucket `setup-gcp` lets nodes read), and applies the cluster-wide `microvm`
+`SandboxConfig`. Assets must not be stored under a snapshot location (an
+ActorTemplate's `snapshotConfig.location` followed by `/atespaces/`), as the
+node's object-store plugin refuses to serve anything there as an asset.
 
 ## Option A: Linux host with KVM
 
@@ -57,7 +77,7 @@ kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.c
 ```
 
 This is a one-shot bring-up: it deploys the control plane (which assembles the
-guest runtime assets for your architecture if not already present under
+guest runtime assets for `amd64` and `arm64` if not already present under
 `bin/microvm-assets/`, stages them into the in-cluster rustfs bucket, and
 applies the cluster-wide `microvm` `SandboxConfig`), then deploys the demo
 worker pool + template.
@@ -158,9 +178,9 @@ cd <your substrate checkout>
 ./hack/run-microvm-demo-kind.sh
 ```
 
-The first run of `run-microvm-demo-kind.sh` downloads about 590 MB of guest
-runtime assets and extracts ~285 MB into `bin/microvm-assets/arm64/`; later runs
-reuse that directory when the version stamp matches.
+The first run of `run-microvm-demo-kind.sh` downloads the guest runtime
+releases and extracts them into `bin/microvm-assets/{amd64,arm64}/`; later runs
+reuse those directories when the version stamps and SHA-256 digests match.
 
 Verify as in Option A, step 4.
 
