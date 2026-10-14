@@ -668,6 +668,7 @@ github.com/jackc/pgx/v5/internal/iobufpool
 github.com/jackc/pgx/v5/internal/pgio
 github.com/jackc/pgx/v5/internal/sanitize
 github.com/jackc/pgx/v5/internal/stmtcache
+github.com/jackc/pgx/v5/multitracer
 github.com/jackc/pgx/v5/pgconn
 github.com/jackc/pgx/v5/pgconn/ctxwatch
 github.com/jackc/pgx/v5/pgconn/internal/bgreader
@@ -1131,6 +1132,7 @@ go.opentelemetry.io/otel/semconv/v1.21.0
 go.opentelemetry.io/otel/semconv/v1.37.0
 go.opentelemetry.io/otel/semconv/v1.37.0/rpcconv
 go.opentelemetry.io/otel/semconv/v1.40.0
+go.opentelemetry.io/otel/semconv/v1.40.0/dbconv
 go.opentelemetry.io/otel/semconv/v1.40.0/otelconv
 go.opentelemetry.io/otel/semconv/v1.41.0
 go.opentelemetry.io/otel/semconv/v1.43.0
