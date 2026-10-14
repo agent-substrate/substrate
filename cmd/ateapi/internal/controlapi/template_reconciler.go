@@ -43,6 +43,12 @@ const (
 	// the golden actor and taking its snapshot, for templates without a
 	// wakeup probe on every container.
 	goldenSnapshotWarmup = 20 * time.Second
+
+	// templateRetryBaseDelay and templateRetryMaxDelay bound the work queue's
+	// per-template backoff. The cap keeps a golden whose take a rolling worker
+	// pool interrupted retried within a minute of the pool settling.
+	templateRetryBaseDelay = 5 * time.Millisecond
+	templateRetryMaxDelay  = time.Minute
 )
 
 const (
@@ -94,7 +100,7 @@ func NewActorTemplateReconciler(persistence templateReconcilerStore, control gol
 		control:        control,
 		resyncInterval: resyncInterval,
 		// Create rate-limiting queue with exponential backoff
-		queue: workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[resources.ActorTemplateRef]()),
+		queue: workqueue.NewTypedRateLimitingQueue(workqueue.NewTypedItemExponentialFailureRateLimiter[resources.ActorTemplateRef](templateRetryBaseDelay, templateRetryMaxDelay)),
 	}
 }
 
@@ -251,6 +257,9 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 
 		switch state := actor.GetStatus().GetState(); state {
 		case ateapipb.ActorState_ACTOR_STATE_CRASHED:
+			if transientGoldenCrash(actor) {
+				return 0, r.releaseTransientlyCrashedGoldenActor(ctx, goldenActorRef, actor)
+			}
 			return 0, r.fail(ctx, tmpl, reasonGoldenActorCrashed, "golden actor crashed before its snapshot was taken")
 
 		case ateapipb.ActorState_ACTOR_STATE_RUNNING:
@@ -316,6 +325,27 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			return r.resyncInterval, nil
 		}
 	}
+}
+
+// transientGoldenCrash reports whether the golden actor crashed for a cause a
+// rolling worker pool produces, so the take is retried, never failed.
+func transientGoldenCrash(actor *ateapipb.Actor) bool {
+	return transientCrashCause(actor.GetStatus().GetCrash().GetMessage())
+}
+
+// releaseTransientlyCrashedGoldenActor deletes a golden actor that crashed for
+// a transient cause, which tears down and frees whatever worker it still
+// holds, so the next pass boots a fresh one; the error it returns requeues the
+// template with the work queue's backoff. Nothing is recorded on the
+// template.
+func (r *ActorTemplateReconciler) releaseTransientlyCrashedGoldenActor(ctx context.Context, goldenActorRef *ateapipb.ObjectRef, actor *ateapipb.Actor) error {
+	crash := actor.GetStatus().GetCrash().GetMessage()
+	slog.WarnContext(ctx, "Golden actor crashed for a transient cause; retrying the golden snapshot",
+		slog.String("goldenActor", resources.ActorRefFromObjectRef(goldenActorRef).String()), slog.String("crash", crash))
+	if _, err := r.control.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: goldenActorRef}); err != nil && apierror.Code(err) != codes.NotFound {
+		return fmt.Errorf("while deleting golden actor crashed for a transient cause: %w", err)
+	}
+	return fmt.Errorf("golden actor crashed for a transient cause, retrying: %s", crash)
 }
 
 // suspendActor waits for the golden actor to produce an external snapshot.
