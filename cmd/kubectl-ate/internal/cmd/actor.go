@@ -47,6 +47,7 @@ var (
 	createActorAtespaceFlag  string
 	createActorTemplateFlag  string
 	createActorTagFlag       string
+	createActorVolumeFlag    map[string]string
 	deleteActorAtespaceFlag  string
 	deleteActorAnyStateFlag  bool
 	pauseActorAtespaceFlag   string
@@ -134,7 +135,7 @@ var createActorCmd = &cobra.Command{
 	Short: "Create an actor",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		request, err := buildCreateActorRequest(args[0], createActorAtespaceFlag, createActorTemplateFlag, createActorTagFlag)
+		request, err := buildCreateActorRequest(args[0], createActorAtespaceFlag, createActorTemplateFlag, createActorTagFlag, createActorVolumeFlag)
 		if err != nil {
 			return err
 		}
@@ -260,7 +261,7 @@ var logsActorsCmd = &cobra.Command{
 	RunE:  runLogsActor,
 }
 
-func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapipb.CreateActorRequest, error) {
+func buildCreateActorRequest(actorName, atespace, template, tag string, volumes map[string]string) (*ateapipb.CreateActorRequest, error) {
 	templateRef, err := parseAtespacedName(template, atespace)
 	if err != nil {
 		return nil, err
@@ -271,6 +272,9 @@ func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapi
 			Name:     actorName,
 		},
 		ActorTemplate: templateRef,
+	}
+	if len(volumes) > 0 {
+		actor.SharedVolumeBindings = volumes
 	}
 
 	if tag != "" {
@@ -735,6 +739,7 @@ func init() {
 	createActorCmd.Flags().StringVarP(&createActorAtespaceFlag, "atespace", "a", "", "Atespace to create the actor in")
 	_ = createActorCmd.MarkFlagRequired("atespace")
 	createActorCmd.Flags().StringVar(&createActorTagFlag, "tag", "", "The name of a Tag to initialize the actor from, as <atespace>/<tag-name>, or just <tag-name> to use the actor's own atespace (--atespace)")
+	createActorCmd.Flags().StringToStringVar(&createActorVolumeFlag, "volume", nil, "Bind an unnamed external.sharedVolume in the template to a SharedVolume, as <volume-name>=<shared-volume-name>; repeatable")
 	createCmd.AddCommand(createActorCmd)
 
 	deleteActorCmd.Flags().StringVarP(&deleteActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")

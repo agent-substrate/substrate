@@ -55,6 +55,12 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 	// already ensured that only one source is set.
 	for _, vol := range actorTemplate.GetVolumes() {
 		switch {
+		case vol.GetExternal().GetSharedVolume() != nil && isGoldenActor(actor):
+			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
+				Name:     vol.GetName(),
+				EmptyDir: &ateletpb.EmptyDirVolume{},
+			})
+
 		case vol.GetDurableDir() != nil:
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name:       vol.GetName(),
@@ -102,8 +108,11 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 				},
 			})
 
+		case vol.GetExternal().GetTemplate() != nil, vol.GetExternal().GetSharedVolume() != nil:
+			continue // appended by appendExternalVolumes from the actor's status
+
 		default:
-			continue // Drop unrecognized volumes.
+			return nil, fmt.Errorf("volume %q has no supported source", vol.GetName())
 		}
 	}
 
@@ -145,17 +154,20 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 	return workloadSpec, nil
 }
 
-// appendExternalVolumes maps template external volumes to resolved actor volumes
-// and appends them to workloadSpec if they are referenced in container
-// volumeMounts. volumePublishContexts carries the attachment metadata of the current
-// resume by volume name; it is nil on paths that do not mount.
+// appendExternalVolumes maps mounted external volumes, owned or referenced, to
+// the handles recorded on the actor and appends them to workloadSpec.
+// volumePublishContexts carries the attachment metadata of the current resume
+// by volume name; it is nil on paths that do not mount.
 func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapipb.ActorTemplate, actor *ateapipb.Actor, volumePublishContexts map[string]map[string]string) error {
 	if template == nil {
 		return nil
 	}
 	for _, vol := range template.GetVolumes() {
-		if vol.GetExternal().GetTemplate() != nil {
+		if vol.GetExternal().GetTemplate() != nil || vol.GetExternal().GetSharedVolume() != nil {
 			if !isVolumeMounted(vol.GetName(), template) {
+				continue
+			}
+			if vol.GetExternal().GetSharedVolume() != nil && isGoldenActor(actor) {
 				continue
 			}
 			if actor == nil {

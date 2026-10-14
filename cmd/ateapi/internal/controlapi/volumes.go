@@ -74,6 +74,11 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 	for idx, vol := range volumesToCreate {
 		currentIdx = idx
 
+		if vol.GetSharedVolumeName() != "" {
+			resultVolumes = append(resultVolumes, vol)
+			continue
+		}
+
 		var specVol *ateapipb.Volume
 		volName := vol.GetName()
 		for _, tVol := range template.GetVolumes() {
@@ -138,13 +143,16 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 	return resultVolumes, nil
 }
 
-// deleteActorVolumes deletes all external volumes in the list.
+// deleteActorVolumes deletes the external volumes the actor owns.
 func deleteActorVolumes(ctx context.Context, registry VolumePluginRegistry, actorUID string, volumes []*ateapipb.ExternalVolumeRef) error {
 	if actorUID == "" {
 		return errors.New("actorUID is required")
 	}
 	var errs []error
 	for _, vol := range volumes {
+		if vol.GetSharedVolumeName() != "" {
+			continue
+		}
 		volID := vol.GetStorageVolumeId()
 		if volID == "" {
 			// If the volume hasn't been successfully created yet, it's possible

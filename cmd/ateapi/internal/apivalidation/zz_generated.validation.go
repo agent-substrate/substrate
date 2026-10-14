@@ -325,6 +325,48 @@ func Validate_Actor(
 		errs = append(errs, fn(fldPath.Child("status"), obj.Status, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.Actor.SharedVolumeBindings
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj map[string]string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.Immutable(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.MaxProperties(ctx, op, fldPath, obj, oldObj, 32).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalMap(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.EachMapKey(ctx, op, fldPath, obj, oldObj, validate.ShortName); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.EachMapVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual, validate.ShortName); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.Actor) map[string]string {
+				return oldObj.SharedVolumeBindings
+			})
+		errs = append(errs, fn(fldPath.Child("shared_volume_bindings"), obj.SharedVolumeBindings, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -4116,10 +4158,46 @@ func Validate_ExternalVolumeRef(
 		errs = append(errs, fn(fldPath.Child("volume_context"), obj.VolumeContext, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.ExternalVolumeRef.SharedVolumeName
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if e := validate.UpdateValue(ctx, op, fldPath, obj, oldObj,
+				func(a string, b string) bool { return a == b }, validate.NoUnset, validate.NoModify).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ExternalVolumeRef) *string {
+				return &oldObj.SharedVolumeName
+			})
+		errs = append(errs, fn(fldPath.Child("shared_volume_name"), &obj.SharedVolumeName, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
-var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_ExternalVolumeSource_ = validate.NewUnionMembership(validate.NewUnionMember("template"))
+var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_ExternalVolumeSource_ = validate.NewUnionMembership(validate.NewUnionMember("template"), validate.NewUnionMember("shared_volume"))
 
 // Validate_ExternalVolumeSource validates an instance of ExternalVolumeSource according
 // to declarative validation rules in the API schema.
@@ -4133,6 +4211,12 @@ func Validate_ExternalVolumeSource(
 				return false
 			}
 			return obj.Template != nil
+		},
+		func(obj *ateapipb.ExternalVolumeSource) bool {
+			if obj == nil {
+				return false
+			}
+			return obj.SharedVolume != nil
 		}); len(e) != 0 {
 		errs = append(errs, e...)
 	}
@@ -4165,6 +4249,36 @@ func Validate_ExternalVolumeSource(
 				return oldObj.Template
 			})
 		errs = append(errs, fn(fldPath.Child("template"), obj.Template, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.ExternalVolumeSource.SharedVolume
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.SharedVolumeRef,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_SharedVolumeRef(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ExternalVolumeSource) *ateapipb.SharedVolumeRef {
+				return oldObj.SharedVolume
+			})
+		errs = append(errs, fn(fldPath.Child("shared_volume"), obj.SharedVolume, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -8031,6 +8145,46 @@ func Validate_SharedVolume(
 				return &oldObj.AccessMode
 			})
 		errs = append(errs, fn(fldPath.Child("access_mode"), &obj.AccessMode, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_SharedVolumeRef validates an instance of SharedVolumeRef according
+// to declarative validation rules in the API schema.
+func Validate_SharedVolumeRef(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.SharedVolumeRef) (errs field.ErrorList) {
+
+	{ // field ateapipb.SharedVolumeRef.Name
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.SharedVolumeRef) *string {
+				return &oldObj.Name
+			})
+		errs = append(errs, fn(fldPath.Child("name"), &obj.Name, oldVal, oldObj != nil)...)
 	}
 
 	return errs

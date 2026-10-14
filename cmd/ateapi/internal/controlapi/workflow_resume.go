@@ -199,12 +199,20 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 			break
 		}
 	}
-	if !pending {
+	borrows := len(borrowedVolumeRefs(actor)) > 0
+	if !pending && !borrows {
 		markSkipped(ctx, "no volumes awaiting creation")
 		return actor, nil
 	}
 
-	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetExternalVolumes())
+	volumes := actor.GetStatus().GetExternalVolumes()
+	if borrows {
+		var err error
+		if volumes, err = claimSharedVolumes(ctx, w.store, actor); err != nil {
+			return nil, err
+		}
+	}
+	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, volumes)
 	// createActorVolumes reports the state it got to even when it fails, so both
 	// paths persist the same field.
 	updatePrecondition := store.PreconditionFrom(actor)
