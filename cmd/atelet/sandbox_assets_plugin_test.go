@@ -224,23 +224,6 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 		}
 	})
 
-	t.Run("public gs asset when plugin returns Internal is read anonymously", func(t *testing.T) {
-		f := newAssetHerderFixture(t, "gs")
-		f.anon.objects["gvisor/release.tar"] = content
-		sum := fmt.Sprintf("%x", sha256.Sum256(content))
-		f.herder.assetPlugin = fakeAssetClient{err: status.Error(codes.Internal, "internal storage failure")}
-		path, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "gs://gvisor/release.tar", SHA256: sum})
-		if err != nil {
-			t.Fatalf("fetchAsset: %v", err)
-		}
-		if got, _ := os.ReadFile(path); !bytes.Equal(got, content) {
-			t.Errorf("cached bytes = %q, want %q", got, content)
-		}
-		if f.anon.gets.Load() != 1 {
-			t.Errorf("anonymous reads = %d, want 1", f.anon.gets.Load())
-		}
-	})
-
 	t.Run("cache hit", func(t *testing.T) {
 		f := newAssetHerderFixture(t, "s3")
 		sum := f.put(t, "kata-assets/vmlinux", content)
@@ -409,6 +392,21 @@ func TestFetchAssetAnonymousFallback(t *testing.T) {
 			}
 			if !strings.Contains(logs.String(), `"code":"`+code.String()+`"`) || strings.Contains(logs.String(), "SECRET") {
 				t.Errorf("logs do not carry the plugin code %s alone:\n%s", code, logs)
+			}
+			// A plugin that failed, rather than declined the URL, must stay
+			// visible even though the anonymous read succeeded.
+			wantLevel := `"level":"INFO"`
+			if code == codes.Internal || code == codes.Unavailable {
+				wantLevel = `"level":"WARN"`
+			}
+			var fallbackLine string
+			for l := range strings.Lines(logs.String()) {
+				if strings.Contains(l, "downloading it anonymously") {
+					fallbackLine = l
+				}
+			}
+			if !strings.Contains(fallbackLine, wantLevel) {
+				t.Errorf("fallback log line is not at %s:\n%s", wantLevel, fallbackLine)
 			}
 		})
 
