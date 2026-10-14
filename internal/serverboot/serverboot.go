@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +44,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
@@ -258,10 +260,11 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 // InitMetricsBridged is for a binary whose scraped endpoint serves a registry
 // it does not own (atecontroller: controller-runtime's), so every metric
 // reaches the backend exactly once on whichever path is active. With the OTLP
-// export, reg is bridged onto the push and the OTel instruments stay off it,
-// since the bridge would otherwise push them a second time. With prometheus
-// alone, nothing is pushed and the OTel instruments register on reg, so its
-// endpoint serves both.
+// export, reg is bridged onto the push and the OTel instruments are pushed
+// natively. With the scraped endpoint on too, the instruments also register on
+// reg, and the bridge skips them so the push does not carry them twice. With
+// prometheus alone, nothing is pushed and the instruments register on reg, so
+// its endpoint serves both.
 //
 // servePull reports whether OTEL_METRICS_EXPORTER leaves the scraped endpoint
 // on, which the caller must then serve from reg: unset, prometheus, or a list
@@ -278,26 +281,90 @@ func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 	}
 	exporters := metricsExporters(ctx, true)
 	servePull = exporters.Has(exporterPrometheus)
-	switch {
-	case exporters.Has(ExporterOTLP):
-		producer := prombridge.NewMetricProducer(prombridge.WithGatherer(reg))
-		if wrapProducer != nil {
-			producer = wrapProducer(producer)
+	push := exporters.Has(ExporterOTLP)
+
+	var producers []sdkmetric.Producer
+	var readers []sdkmetric.Reader
+	var bridge sdkmetric.Producer
+	if push {
+		bridge = prombridge.NewMetricProducer(prombridge.WithGatherer(reg))
+	}
+	if servePull {
+		registerer := promclient.Registerer(reg)
+		if push {
+			// own holds the instruments' families too, only so the bridge can
+			// tell which of reg's families are not its to push.
+			own := promclient.NewRegistry()
+			registerer = teeRegisterer{reg, own}
+			bridge = skipFamilies{inner: bridge, skip: own}
 		}
-		mp, err = newMeterProvider(ctx, serviceName, true, false, nil, []sdkmetric.Producer{producer})
-	case servePull:
-		var promReader *prometheus.Exporter
-		if promReader, err = prometheus.New(prometheus.WithRegisterer(reg)); err != nil {
+		promReader, err := prometheus.New(prometheus.WithRegisterer(registerer))
+		if err != nil {
 			return nil, false, fmt.Errorf("create Prometheus metric exporter: %w", err)
 		}
-		mp, err = newMeterProvider(ctx, serviceName, false, false, nil, nil, promReader)
-	default:
-		mp, err = newMeterProvider(ctx, serviceName, false, false, nil, nil)
+		readers = append(readers, promReader)
 	}
+	if push {
+		if wrapProducer != nil {
+			bridge = wrapProducer(bridge)
+		}
+		producers = append(producers, bridge)
+	}
+	mp, err = newMeterProvider(ctx, serviceName, push, false, nil, producers, readers...)
 	if err != nil {
 		return nil, false, err
 	}
 	return mp, servePull, nil
+}
+
+// teeRegisterer registers each collector on both registries.
+type teeRegisterer [2]promclient.Registerer
+
+func (t teeRegisterer) Register(c promclient.Collector) error {
+	if err := t[0].Register(c); err != nil {
+		return err
+	}
+	if err := t[1].Register(c); err != nil {
+		t[0].Unregister(c)
+		return err
+	}
+	return nil
+}
+
+func (t teeRegisterer) MustRegister(cs ...promclient.Collector) {
+	for _, c := range cs {
+		if err := t.Register(c); err != nil {
+			panic(err)
+		}
+	}
+}
+
+func (t teeRegisterer) Unregister(c promclient.Collector) bool {
+	a, b := t[0].Unregister(c), t[1].Unregister(c)
+	return a && b
+}
+
+// skipFamilies drops the metrics of inner named like a family skip gathers. A
+// failed gather drops the whole batch rather than risk pushing a metric twice.
+type skipFamilies struct {
+	inner sdkmetric.Producer
+	skip  promclient.Gatherer
+}
+
+func (p skipFamilies) Produce(ctx context.Context) ([]metricdata.ScopeMetrics, error) {
+	families, err := p.skip.Gather()
+	if err != nil {
+		return nil, fmt.Errorf("gather the families to skip: %w", err)
+	}
+	skip := make(map[string]bool, len(families))
+	for _, f := range families {
+		skip[f.GetName()] = true
+	}
+	scopes, err := p.inner.Produce(ctx)
+	for i := range scopes {
+		scopes[i].Metrics = slices.DeleteFunc(scopes[i].Metrics, func(m metricdata.Metrics) bool { return skip[m.Name] })
+	}
+	return scopes, err
 }
 
 // InitMetricsPushOnlyVia is InitMetrics without the Prometheus reader, for a
