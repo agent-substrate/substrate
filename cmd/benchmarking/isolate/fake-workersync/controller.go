@@ -420,7 +420,7 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 		Capacity: fixed,
 		DefaultRuntime: &ateapipb.SandboxRuntime{
 			SandboxClass: string(d.pool.Spec.DefaultSandboxClass()),
-			Version:      hostCompat(),
+			Version:      hostCompat(string(d.pool.Spec.DefaultSandboxClass())),
 		},
 	}); err != nil {
 		return fmt.Errorf("while reporting capacity for Worker %s: %w", name, err)
@@ -431,8 +431,8 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	return nil
 }
 
-func hostCompat() *ateapipb.VersionedSandboxCompat {
-	in := hardware.ProbeHost()
+func hostCompat(sandboxClass string) *ateapipb.VersionedSandboxCompat {
+	in := hardware.ProbeHost(hardware.ProfileFor(sandboxClass))
 	out := &ateapipb.VersionedSandboxCompat{SchemaVersion: in.GetSchemaVersion()}
 	for _, a := range in.GetAttributes() {
 		out.Attributes = append(out.Attributes, &ateapipb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})

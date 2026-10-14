@@ -75,7 +75,7 @@ func TestFromFilesMissing(t *testing.T) {
 func TestDefaultRuntime(t *testing.T) {
 	got := defaultRuntime("gvisor")
 	// The class is the ateom's own; the compat identity is the host's, under
-	// the probe's schema version.
+	// the probe's schema version. gVisor reports architecture only for now.
 	want := &ateletpb.SandboxRuntime{
 		SandboxClass: "gvisor",
 		Version: &ateletpb.VersionedSandboxCompat{
@@ -85,6 +85,22 @@ func TestDefaultRuntime(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("defaultRuntime() mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// The class picks the attribute profile: a microVM worker reports the CPU
+// attributes its restore depends on, as far as this host exposes them.
+func TestDefaultRuntimeMicroVM(t *testing.T) {
+	got := defaultRuntime("microvm")
+	if got.GetSandboxClass() != "microvm" {
+		t.Errorf("defaultRuntime() class = %q, want microvm", got.GetSandboxClass())
+	}
+	want := hardware.ProbeHost(hardware.MicroVM)
+	if diff := cmp.Diff(want, got.GetVersion(), protocmp.Transform()); diff != "" {
+		t.Errorf("defaultRuntime() version mismatch (-want +got):\n%s", diff)
+	}
+	if attrs := got.GetVersion().GetAttributes(); len(attrs) == 0 || attrs[0].GetKey() != hardware.AttrArchitecture {
+		t.Errorf("defaultRuntime() attributes = %v, want %s first", attrs, hardware.AttrArchitecture)
 	}
 }
 
