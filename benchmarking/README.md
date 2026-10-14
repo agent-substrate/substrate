@@ -578,22 +578,33 @@ You can find trace IDs by viewing the `logs` tab in the Locust UI
 A dense run meets limits the demo path never reaches. The ones met so far, and
 what to set before the run:
 
-* **Reach the API and the router without `kubectl port-forward`.** The forward
-  resets under load and takes every in-flight resume and pause down with it.
-  Expose `svc/api` and `svc/atenet-router` through a NodePort or LoadBalancer
-  Service and point the load generator at that address. The port-forwards in
-  this document are for the UIs only.
-* **PostgreSQL connection slots.** ateapi's read/write pool holds up to
-  `--postgres-pool-max-conns` connections per replica (default 20) plus a few
-  for its owner and watch pools, against PostgreSQL's default `max_connections`
-  of 100. Keep `replicas x 25` under it, or raise `max_connections` with a `-c`
-  argument on the StatefulSet in `manifests/ate-install/postgres/postgres.yaml`.
-  When the slots run out, requests fail with `INTERNAL` and
-  `remaining connection slots are reserved`.
-* **PostgreSQL probes.** Under load the `nc` and `pg_isready` probes miss their
-  default 1 s timeout; three misses in a row restart postgres mid-run. Give
-  them `timeoutSeconds: 5` and `failureThreshold: 6`, and requests that match
-  the load.
+* **Reaching the API and the router from outside the cluster.** The Locust
+  and boomer workers in this document run in the cluster and reach the
+  Services directly. A load generator outside it must not go through
+  `kubectl port-forward`: the forward resets under load and takes every
+  in-flight resume and pause down with it. Expose `svc/api` and
+  `svc/atenet-router` through a NodePort or LoadBalancer Service instead.
+  The port-forwards in this document are for the UIs only.
+* **PostgreSQL connection slots.** Each ateapi replica opens up to
+  `pool_max_conns` connections in its read/write pool plus 5 for its owner
+  and watch pools. Unset, pgx sizes the pool at the node's CPU count (at
+  least 4), not the container's limit, so on a large node one replica can
+  take most of PostgreSQL's default `max_connections` of 100. Set it with
+  `--ateapi-postgres-pool-max-conns` on ate-setup and keep
+  `replicas x (pool max + 5)` under `max_connections` with slack for `psql`
+  and migrations (see
+  [connection sizing](../docs/dev/cloud-sql-scaling-guide.md#connection-sizing-for-a-target-throughput)).
+  To raise `max_connections`, add a `-c` argument to the StatefulSet in
+  `manifests/ate-install/postgres/postgres.yaml`, or install with
+  `--cluster-size size10`, which sets 300 and pins the pool at 64 but sizes
+  PostgreSQL for a dedicated node. When the slots run out, requests fail with
+  `INTERNAL` and `remaining connection slots are reserved`.
+* **PostgreSQL probes.** Under load the probes miss their default 1 s
+  timeout. Three misses of the liveness probe (`pg_isready`) restart
+  postgres mid-run; three misses of the readiness probe (`nc`) drop the pod
+  from the Service, and ateapi loses its connections without a restart. Give
+  both `timeoutSeconds: 5` and `failureThreshold: 6`, and requests that
+  match the load.
 * **Parking budget.** `--parked-request-budget` (default `5s`) has to cover a
   pause-and-resume cycle under load, tens of seconds, times the
   oversubscription; a 2x run needs minutes. Watch
