@@ -30,11 +30,21 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// revertableStates are the states a revert is accepted from.
+// revertableStates are the states a revert is accepted from. A SUSPENDED
+// actor is also accepted when it is paused, that is, when its latest snapshot
+// is node-local: the revert discards that snapshot and returns the actor to
+// its durable one. See isRevertable.
 var revertableStates = []ateapipb.ActorState{
 	ateapipb.ActorState_ACTOR_STATE_RUNNING,
-	ateapipb.ActorState_ACTOR_STATE_PAUSED,
 	ateapipb.ActorState_ACTOR_STATE_CRASHED,
+}
+
+// isRevertable reports whether a revert is accepted from the actor's current
+// state and snapshot shape.
+func isRevertable(actor *ateapipb.Actor) bool {
+	state := actor.GetStatus().GetState()
+	return slices.Contains(revertableStates, state) ||
+		(state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocalOnly(actor.GetStatus()))
 }
 
 // RevertActor executes the workflow to discard an actor's current execution and
@@ -138,8 +148,8 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 		markSkipped(ctx, "actor already REVERTING")
 		return actor, nil
 	}
-	if !slices.Contains(revertableStates, st) {
-		return nil, apierror.FailedPrecondition("Actor %s is not in a revertable state (got: %v, want one of %v)", actorRef, st, revertableStates)
+	if !isRevertable(actor) {
+		return nil, apierror.FailedPrecondition("Actor %s is not in a revertable state (got: %v, want one of %v, or %s with a node-local snapshot)", actorRef, st, revertableStates, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
@@ -199,9 +209,10 @@ func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, a
 	ctx, done := stepSpan(ctx, "DiscardInProgressSnapshot")
 	defer func() { err = done(err) }()
 
-	inProgress := actor.GetStatus().GetInProgressSnapshotUri()
+	inProgressSnap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+	inProgress := inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	switch {
-	case w.snapshotPlugin == nil:
+	case w.objectStorePlugin == nil:
 		markSkipped(ctx, "no object store configured")
 		return nil
 	case inProgress == "":
@@ -245,9 +256,13 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		toUpdate.Status.WorkerAssignment = nil
 		toUpdate.Status.AssignedNode = ""
-		toUpdate.Status.InProgressSnapshotUri = ""
-		toUpdate.Status.InProgressLocalSnapshotName = ""
-		toUpdate.Status.LocalSnapshot = nil
+		// We revert back to the latest durable snapshot, so all local snapshots
+		// and pending durable snapshots are removed.
+		// We already cleaned up the node before this in ensureWorkerDiscarded,
+		// and any in-progress durable snapshot in ensureInProgressSnapshotDiscarded.
+		// Even during revert, we do not decrease LastAssignedGeneration so that we
+		// can keep track of stale snapshots that need to be cleaned up.
+		pruneSnapshots(toUpdate.Status, nil)
 		toUpdate.Status.Crash = nil
 		return nil
 	})

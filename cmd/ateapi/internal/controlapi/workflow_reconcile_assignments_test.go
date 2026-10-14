@@ -177,7 +177,10 @@ func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 	svc, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
-		a.Status.InProgressLocalSnapshotName = "partial-local-snapshot"
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-local-snapshot", ""),
+		}
 	})
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 	mustRaiseEpoch(t, ctx, svc, persistence, 2)
@@ -204,8 +207,8 @@ func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 	if got.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("actor worker assignment = %v, want it cleared", got.GetStatus().GetWorkerAssignment())
 	}
-	if got.GetStatus().GetInProgressLocalSnapshotName() != "" {
-		t.Errorf("in-progress local checkpoint not cleared: %v", got.GetStatus())
+	if gotSnap := snapshotAtLatestGeneration(got.GetStatus()); gotSnap.GetUuid() != "partial-local-snapshot" {
+		t.Errorf("in-progress local checkpoint = %q, want %q preserved", gotSnap.GetUuid(), "partial-local-snapshot")
 	}
 	if a := firstAssignment(t, persistence, apiWorkerName); a != nil {
 		t.Errorf("worker still hosts %v, want the assignment released", a)
@@ -298,7 +301,6 @@ func TestReconcileAssignments_ReleasesByActorState(t *testing.T) {
 		// touching the Actor.
 		{name: "crashed unassigned is released", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, pointsAt: unassigned, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantRelease: true},
 		{name: "suspended unassigned is released", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, pointsAt: unassigned, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantRelease: true},
-		{name: "paused unassigned is released", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, pointsAt: unassigned, wantState: ateapipb.ActorState_ACTOR_STATE_PAUSED, wantRelease: true},
 		{name: "running elsewhere is released", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, pointsAt: otherWorker, wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantRelease: true},
 		{name: "suspended elsewhere is released", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, pointsAt: otherWorker, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantRelease: true},
 		{name: "resuming crashes", state: ateapipb.ActorState_ACTOR_STATE_RESUMING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantRelease: true},
@@ -598,7 +600,7 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 	}
 
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
+	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
 	stored, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if err != nil {
 		t.Fatalf("assignWorkerAttempt: %v", err)

@@ -31,10 +31,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
-// finalFlushTimeout bounds the flush after a final record. The ateom stays up
-// after a checkpoint, so the flush buys promptness, not delivery.
-const finalFlushTimeout = 500 * time.Millisecond
-
 // Pool is the WorkerPool of the ateom's pod.
 type Pool struct {
 	Namespace string
@@ -46,9 +42,6 @@ type Pool struct {
 type UsageEmitter struct {
 	pool   Pool
 	events *actorevent.Emitter
-	// flush pushes queued OTLP records out after a final record; nil when OTLP
-	// is off.
-	flush func(context.Context) error
 }
 
 // NewUsageEmitter writes the records over OTLP through lp, the provider
@@ -57,7 +50,7 @@ func NewUsageEmitter(lp *sdklog.LoggerProvider, stdout slog.Handler, pool Pool) 
 	if lp == nil {
 		return &UsageEmitter{pool: pool, events: actorevent.NewEmitterTo(noop.NewLoggerProvider(), stdout)}
 	}
-	return &UsageEmitter{pool: pool, events: actorevent.NewEmitterTo(lp, stdout), flush: lp.ForceFlush}
+	return &UsageEmitter{pool: pool, events: actorevent.NewEmitterTo(lp, stdout)}
 }
 
 // Emit writes one record for s, dated when s was read. kind is one of the
@@ -68,25 +61,6 @@ func (e *UsageEmitter) Emit(ctx context.Context, kind string, s *ateompb.Workloa
 	}
 	at := time.Unix(0, s.GetObservedAtUnixNano())
 	e.events.LogAt(ctx, actorevent.UsageSampled, at, UsageAttrs(e.pool, kind, s))
-}
-
-// EmitFinal writes the final record of an activation and flushes it in the
-// background, off the checkpoint's path.
-func (e *UsageEmitter) EmitFinal(ctx context.Context, s *ateompb.WorkloadStatsSample) {
-	if e == nil {
-		return
-	}
-	e.Emit(ctx, ateattr.StatsKindFinal, s)
-	if e.flush == nil {
-		return
-	}
-	go func() {
-		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalFlushTimeout)
-		defer cancel()
-		if err := e.flush(flushCtx); err != nil {
-			slog.DebugContext(ctx, "Usage records not flushed after the final sample", slog.Any("err", err))
-		}
-	}()
 }
 
 // UsageAttrs is the attribute set of ate.actor.usage_sampled for s. The
@@ -101,7 +75,7 @@ func UsageAttrs(pool Pool, kind string, s *ateompb.WorkloadStatsSample) []slog.A
 	}),
 		slog.String(string(ateattr.WorkerPoolNamespaceKey), pool.Namespace),
 		slog.String(string(ateattr.WorkerPoolNameKey), pool.Name),
-		slog.String(string(ateattr.SandboxClassKey), SandboxClassLabel(s.GetSandboxClass())),
+		slog.String(string(ateattr.SandboxClassKey), ateattr.NormalizeSandboxClass(s.GetSandboxClass())),
 		slog.String(string(ateattr.StatsSourceKey), StatsSourceLabel(s.GetSource())),
 		slog.String(string(ateattr.StatsKindKey), kind),
 		slog.Int64(string(ateattr.ActorEpochKey), s.GetEpochUnixNano()),
@@ -118,18 +92,6 @@ func UsageAttrs(pool Pool, kind string, s *ateompb.WorkloadStatsSample) []slog.A
 		attrs = append(attrs, slog.Uint64(string(ateattr.StatsMemoryPeakKey), peak))
 	}
 	return attrs
-}
-
-// SandboxClassLabel maps the wire enum to the ate.sandbox.class values.
-func SandboxClassLabel(c ateompb.SandboxClass) string {
-	switch c {
-	case ateompb.SandboxClass_SANDBOX_CLASS_GVISOR:
-		return "gvisor"
-	case ateompb.SandboxClass_SANDBOX_CLASS_MICROVM:
-		return "microvm"
-	default:
-		return ateattr.SandboxClassUnknown
-	}
 }
 
 // StatsSourceLabel maps the wire enum to the ate.stats.source values.

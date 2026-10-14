@@ -86,18 +86,31 @@ func Serve(ctx context.Context, addr string) error {
 // RecordSuccess reports a successful request to both boomer (→ locust master
 // via ZMQ) and the local Prometheus surface.
 func RecordSuccess(method, name, userClass string, latency time.Duration, responseBytes int64) {
-	ms := latency.Milliseconds()
-	boomer.RecordSuccess(method, name, ms, responseBytes)
-	requestsTotal.WithLabelValues(method, name, "success", userClass).Inc()
-	requestDuration.WithLabelValues(method, name, "success", userClass).Observe(float64(ms))
+	boomer.RecordSuccess(method, name, latency.Milliseconds(), responseBytes)
+	RecordPromSuccess(method, name, userClass, latency)
 }
 
 // RecordFailure reports a failed request to both boomer and Prometheus.
 func RecordFailure(method, name, userClass string, latency time.Duration, errMsg string) {
-	ms := latency.Milliseconds()
-	boomer.RecordFailure(method, name, ms, errMsg)
+	boomer.RecordFailure(method, name, latency.Milliseconds(), errMsg)
+	RecordPromFailure(method, name, userClass, latency)
+}
+
+// RecordPromSuccess reports a successful request to Prometheus only. Use it
+// once boomer.Run has returned: boomer may have stopped draining its stats
+// channel by then, and a send to it blocks once the channel's buffer fills.
+func RecordPromSuccess(method, name, userClass string, latency time.Duration) {
+	ms := float64(latency.Milliseconds())
+	requestsTotal.WithLabelValues(method, name, "success", userClass).Inc()
+	requestDuration.WithLabelValues(method, name, "success", userClass).Observe(ms)
+}
+
+// RecordPromFailure reports a failed request to Prometheus only, as
+// RecordPromSuccess does a successful one.
+func RecordPromFailure(method, name, userClass string, latency time.Duration) {
+	ms := float64(latency.Milliseconds())
 	requestsTotal.WithLabelValues(method, name, "failure", userClass).Inc()
-	requestDuration.WithLabelValues(method, name, "failure", userClass).Observe(float64(ms))
+	requestDuration.WithLabelValues(method, name, "failure", userClass).Observe(ms)
 }
 
 // UpdateUsers shifts the active-users gauge for a class by delta (positive on

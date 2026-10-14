@@ -244,7 +244,7 @@ func TestGetWorkloadStats(t *testing.T) {
 		ActorUid:              "uid-a",
 		ActorTemplateAtespace: "ns-a",
 		ActorTemplateName:     "template-a",
-		SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_MICROVM,
+		SandboxClass:          "microvm",
 		Source:                ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT,
 		MemoryCurrentBytes:    157286400,
 		MemoryPeakBytes:       209715200,
@@ -524,7 +524,7 @@ func pendingFor(attr resources.ActorAttribution) *ateompb.WorkloadStatsSample {
 		ActorUid:              attr.UID,
 		ActorTemplateAtespace: attr.TemplateAtespace,
 		ActorTemplateName:     attr.TemplateName,
-		SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_MICROVM,
+		SandboxClass:          "microvm",
 	}
 }
 

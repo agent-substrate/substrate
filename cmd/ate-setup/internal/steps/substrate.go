@@ -85,7 +85,8 @@ func CreateActorTemplate(ctx context.Context, client *ateclient.Client, template
 }
 
 // WaitActorTemplateGolden blocks until the template's golden snapshot is
-// built. It fails fast when the template reconciler reports an error.
+// built. It fails fast when the template reconciler reports an error, and
+// returns immediately for a template that opted out of the golden snapshot.
 func WaitActorTemplateGolden(ctx context.Context, client *ateclient.Client, ref resources.ActorTemplateRef, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	// The last Get error rides along in the timeout error: a wait that spent
@@ -96,6 +97,11 @@ func WaitActorTemplateGolden(ctx context.Context, client *ateclient.Client, ref 
 		template, err := client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: ref.ToObjectRef()})
 		lastErr = err
 		if err == nil {
+			if template.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+				// The template opted out: no golden snapshot will ever appear,
+				// and none is needed.
+				return nil
+			}
 			goldenStatus := template.GetStatus().GetGoldenSnapshotStatus()
 			if goldenStatus.GetGoldenTag().GetName() != "" {
 				return nil

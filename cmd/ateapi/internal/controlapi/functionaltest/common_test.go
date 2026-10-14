@@ -341,10 +341,11 @@ func assertSnapshotCollected(t *testing.T, tc *testContext, snapshotURI string) 
 	}
 }
 
+const goldenSnapshotName = "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94"
+
 // goldenSnapshotURI is the snapshot owned by the test template's golden tag.
 func goldenSnapshotURI(t *testing.T) string {
 	t.Helper()
-	const goldenSnapshotName = "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94"
 	uri, err := resources.NewTagSnapshotURI(testStorageLocation, resources.GoldenActorAtespace, goldenSnapshotName)
 	if err != nil {
 		t.Fatalf("NewTagSnapshotURI: %v", err)
@@ -372,6 +373,17 @@ func assertSnapshotOwnedByActor(t *testing.T, actor *ateapipb.Actor, snapshotURI
 	if !snapshotOwnedByActor(t, actor, snapshotURI) {
 		t.Errorf("external snapshot %s is not under actor %s's own prefix, want it owned by the actor", snapshotURI, resources.ActorRefFromActor(actor))
 	}
+}
+
+// snapshotName returns the name snapshotURI gives its snapshot in object
+// storage, which the Snapshot's uuid must match.
+func snapshotName(t *testing.T, snapshotURI string) string {
+	t.Helper()
+	uri, err := resources.ParseSnapshotURI(snapshotURI)
+	if err != nil {
+		t.Fatalf("ParseSnapshotURI(%q) = %v", snapshotURI, err)
+	}
+	return uri.Name()
 }
 
 func namespaceForTest(baseName string) string {
@@ -439,7 +451,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 				StorageLocation: testStorageLocation,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				SandboxClass: "gvisor",
 				ConfigName:   "gvisor-default",
 			},
 			Containers: containers,
@@ -459,8 +471,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		SourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapipb.TagStatus{
-			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
-			StorageLocation:  testStorageLocation,
+			Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, created.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
 			ActorTemplateUid: created.GetMetadata().GetUid(),
 		},
 	})
@@ -485,6 +496,69 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		t.Fatalf("failed to record the template's golden snapshot: %v", err)
 	}
 	return updated
+}
+
+func newDurableSnapshot(gen int32, owner ateapipb.SnapshotOwner, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, uri string) *ateapipb.Snapshot {
+	return &ateapipb.Snapshot{
+		Uuid:             uuid,
+		Generation:       gen,
+		Owner:            owner,
+		Fidelity:         fidelity,
+		ActorTemplateUid: templateUID,
+		DurableSnapshot: &ateapipb.SnapshotStorage{
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri},
+		},
+	}
+}
+
+func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality string) *ateapipb.Snapshot {
+	return &ateapipb.Snapshot{
+		Uuid:             uuid,
+		Generation:       gen,
+		Owner:            ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+		Fidelity:         fidelity,
+		ActorTemplateUid: templateUID,
+		Locality:         locality,
+	}
+}
+
+func durableSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
+	var best *ateapipb.Snapshot
+	for _, snap := range status.GetSnapshots() {
+		st := snap.GetDurableSnapshot()
+		if st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+			st.GetObject().GetSnapshotUri() != "" {
+			if best == nil || snap.GetGeneration() > best.GetGeneration() {
+				best = snap
+			}
+		}
+	}
+	return best
+}
+
+func durableSnapshotStorage(status *ateapipb.ActorStatus) *ateapipb.SnapshotStorage {
+	return durableSnapshot(status).GetDurableSnapshot()
+}
+
+func durableSnapshotURI(status *ateapipb.ActorStatus) string {
+	return durableSnapshotStorage(status).GetObject().GetSnapshotUri()
+}
+
+func localSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
+	var best *ateapipb.Snapshot
+	for _, snap := range status.GetSnapshots() {
+		if snap.GetLocality() != "" && snap.GetUuid() != "" {
+			if best == nil || snap.GetGeneration() > best.GetGeneration() {
+				best = snap
+			}
+		}
+	}
+	return best
+}
+
+func tagSnapshotURI(tag *ateapipb.Tag) string {
+	return tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetObject().GetSnapshotUri()
 }
 
 // testPauseImage is the pause image the default test SandboxConfig carries;
@@ -585,7 +659,7 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 				StorageLocation: testStorageLocation,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				SandboxClass: "gvisor",
 				ConfigName:   "gvisor-default",
 			},
 			Containers: []*ateapipb.Container{
@@ -667,6 +741,12 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 		},
 	}); err != nil {
 		t.Fatalf("failed to register worker: %v", err)
+	}
+	// As the syncer does once the pod is Ready.
+	if _, err := tc.client.MarkWorkerAvailable(context.Background(), &ateapipb.MarkWorkerAvailableRequest{
+		Worker: &ateapipb.ObjectRef{Name: string(createdPod.UID)},
+	}); err != nil {
+		t.Fatalf("failed to mark worker available: %v", err)
 	}
 	reportWorkerCapacity(t, tc, string(createdPod.UID), 1)
 

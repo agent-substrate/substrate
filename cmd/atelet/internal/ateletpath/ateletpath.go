@@ -31,13 +31,14 @@ var (
 	ImageCacheDir = filepath.Join(nodepath.BasePath, "image-cache")
 
 	// SnapshotScratchDir holds short-lived directories for snapshot manifests
-	// moved through the snapshot plugin. It lives under BasePath, which the
+	// moved through the object-store plugin. It lives under BasePath, which the
 	// node plugin shares with atelet.
 	SnapshotScratchDir = filepath.Join(nodepath.BasePath, "snapshot-scratch")
 )
 
-func RunSCBinaryPath(sha256 string) string {
-	return filepath.Join(nodepath.StaticFilesDir, "runsc-"+sha256)
+// AssetPath returns the cache path for a single-file sandbox asset
+func AssetPath(sha256 string) string {
+	return filepath.Join(nodepath.StaticFilesDir, "asset-"+sha256)
 }
 
 // GVisorReleaseDir is the directory a gVisor release tarball (gvisor.tar.bz2,

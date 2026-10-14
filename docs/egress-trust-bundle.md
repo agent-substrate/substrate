@@ -30,9 +30,11 @@ CA.  Substrate can automatically inject the root certificates for this CA into
 the actor's filesystem using a SystemInfo volume with a TrustBundle data source.
 
 Note: DNS traffic from the actor (both TCP and UDP) is not forwarded to the
-gateway, and thus cannot be affected by egress policies.  Instead, the DNS
-traffic is allowed to directly exit the worker pod and be answered by the host
-cluster's configured DNS server.
+gateway. Instead, the sandbox's DNS relay forwards a query to the worker pod's
+resolvers, which are the host cluster's configured DNS servers, only when the
+queried hostname matches a host or host wildcard in the actor's egress policy:
+queries from an actor without a policy, or for a hostname not matched by any
+rule, are answered `REFUSED`.
 
 ## Configuring a workload to trust public and man-in-the-middle CAs
 

@@ -24,6 +24,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -36,13 +37,13 @@ import (
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/internal/actorlock"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
+	"github.com/agent-substrate/substrate/internal/ateominit"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
@@ -52,6 +53,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"golang.org/x/sys/unix"
@@ -73,7 +75,7 @@ var (
 
 	tunnelConfig = ateomtunnel.RegisterFlags(pflag.CommandLine)
 
-	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for HTTP readiness checks")
+	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
 	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateom samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
 )
@@ -83,6 +85,7 @@ var (
 const minUsageSampleInterval = 50 * time.Second
 
 func main() {
+	ateominit.RunIfPID1()
 	pflag.Parse()
 	if *showVersion {
 		fmt.Println(version.String())
@@ -171,25 +174,14 @@ func do(ctx context.Context) error {
 
 	// Create ateom dir.
 	ateomDir := nodepath.AteomPath(*podUID)
-	if err := resources.ValidateAteomUID(*podUID); err != nil {
-		return fmt.Errorf("in resources.ValidateAteomUID: %w", err)
+	if err := resources.ValidateWorkerPodUID(*podUID); err != nil {
+		return fmt.Errorf("in resources.ValidateWorkerPodUID: %w", err)
 	}
+	// atelet owns the directory and the sandbox versions file in it; only the
+	// socket below is this process's. Both outlive a container restart.
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
 	}
-	// Clean up the ateom directory during graceful shutdown (#1677).
-	defer func() {
-		if err := os.RemoveAll(ateomDir); err != nil {
-			slog.ErrorContext(ctx, "Failed to remove the ateom directory on shutdown", slog.Any("err", err))
-		}
-	}()
-
-	// Reap children reparented to us: the detached cloud-hypervisor VMM and
-	// virtiofsd. Synchronous subprocesses (mount, umount, cp, ...) instead go
-	// through reaper.Run/RunCombined so this reaper cannot collect them out from
-	// under their own wait (which would surface as "waitid: no child processes").
-	reaper.Start()
-	slog.InfoContext(ctx, "Child process reaper launched")
 
 	// kata's virtio-fs sharing depends on mount propagation: it slave-binds
 	// .../shared (served by virtiofsd) from .../mounts and expects the later
@@ -213,6 +205,11 @@ func do(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("while opening unix socket: %w", err)
 	}
+	defer func() {
+		if err := os.Remove(sockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.ErrorContext(ctx, "Failed to remove the ateom socket on shutdown", slog.Any("err", err))
+		}
+	}()
 
 	// Forward the actor container's stdout/stderr to the worker pod's stdout as
 	// JSON with ate.dev/* labels (logging parity with ateom-gvisor). It shares
@@ -282,13 +279,14 @@ func do(ctx context.Context) error {
 			TrustBundlePath:      tunnelConfig.TrustBundle,
 			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 			Actors:               *maxActors,
+			SandboxClass:         string(atev1alpha1.SandboxClassMicroVM),
 		})
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to report worker capacity", err)
 		}
 	}()
 
-	go serverboot.StartReadinessServer(ctx, *readinessListenAddress, readiness)
+	go serverboot.StartHealthServer(ctx, *readinessListenAddress, readiness)
 
 	slog.InfoContext(ctx, "ateom-microvm serving", slog.String("socket", sockPath))
 	if err := svr.Serve(lis); err != nil {
@@ -417,10 +415,18 @@ func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	return nil
 }
 
+// supportedFidelities are the snapshot fidelities this runtime serves: the
+// rootfs upper is host-backed, so it ships with or without guest memory.
+var supportedFidelities = []ateompb.SnapshotFidelity{
+	ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+	ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+	ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+}
+
 // validateFidelity rejects a checkpoint or restore request whose fidelity
 // this runtime cannot serve.
 func validateFidelity(fidelity ateompb.SnapshotFidelity) error {
-	if errs := resources.ValidateSnapshotFidelity(fidelity, field.NewPath("fidelity")); len(errs) > 0 {
+	if errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity")); len(errs) > 0 {
 		return apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 	return nil

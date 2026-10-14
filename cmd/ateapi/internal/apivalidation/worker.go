@@ -81,6 +81,23 @@ func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateapipb.Reque
 	return Validate_RequestActorSuspendRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateMarkWorkerAvailableRequest(ctx context.Context, req *ateapipb.MarkWorkerAvailableRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_MarkWorkerAvailableRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateMarkWorkerUnavailableRequest(ctx context.Context, req *ateapipb.MarkWorkerUnavailableRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_MarkWorkerUnavailableRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateReportActorSnapshotStateRequest(ctx context.Context, req *ateapipb.ReportActorSnapshotStateRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_ReportActorSnapshotStateRequest(ctx, op, nil, req, nil)
+}
+
 // validateWorkerUpdate validates a Worker against the previous stored value.
 // It is what enforces the immutable fields, which need an old value to compare
 // against.

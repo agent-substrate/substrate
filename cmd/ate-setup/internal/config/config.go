@@ -121,6 +121,10 @@ type Config struct {
 	// pool (ACTOR_JWT_ALGORITHM): ES256 or RS256.
 	ActorJWTAlgorithm string
 
+	// ActorJWTIssuer is the iss claim of actor JWTs (ACTOR_JWT_ISSUER). It
+	// defaults to the in-cluster URL of the install's ate-idp-server Service.
+	ActorJWTIssuer string
+
 	// BucketName is the snapshot bucket demos are templated with.
 	BucketName string
 
@@ -176,6 +180,9 @@ type Config struct {
 	// PodcertWorkersPerSigner overrides WORKERS_PER_SIGNER on podcertificate-controller.
 	PodcertWorkersPerSigner int
 
+	// EnvoyConcurrency overrides --concurrency on the envoy container in atenet-egress.
+	EnvoyConcurrency int
+
 	// ClusterSize is the footprint profile (ATE_INSTALL_CLUSTER_SIZE): size0
 	// or size10.
 	ClusterSize string
@@ -186,6 +193,11 @@ type Config struct {
 	// and a one-node pool labeled and tainted
 	// ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone.
 	CordonControlPlane bool
+
+	// FakeDataPlane installs fake-atelet in place of atelet and
+	// fake-workersync in place of ate-controller
+	// (ATE_INSTALL_FAKE_DATA_PLANE), for control-plane benchmarks.
+	FakeDataPlane bool
 
 	// AdditionalEgressExtprocService is the optional NS/SVC:PORT external processor filter.
 	AdditionalEgressExtprocService string
@@ -412,6 +424,9 @@ func (c *Config) ScriptEnv() []string {
 	if c.PodcertWorkersPerSigner > 0 {
 		merged["ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER"] = strconv.Itoa(c.PodcertWorkersPerSigner)
 	}
+	if c.EnvoyConcurrency > 0 {
+		merged["E2E_ATE_ENVOY_CONCURRENCY"] = strconv.Itoa(c.EnvoyConcurrency)
+	}
 	// Resolved values again, so a flag overrides whatever the environment
 	// carried rather than layering under it.
 	delete(merged, "ATE_INSTALL_CLUSTER_SIZE")
@@ -421,6 +436,10 @@ func (c *Config) ScriptEnv() []string {
 	delete(merged, "ATE_INSTALL_CORDON_CONTROL_PLANE")
 	if c.CordonControlPlane {
 		merged["ATE_INSTALL_CORDON_CONTROL_PLANE"] = "true"
+	}
+	delete(merged, "ATE_INSTALL_FAKE_DATA_PLANE")
+	if c.FakeDataPlane {
+		merged["ATE_INSTALL_FAKE_DATA_PLANE"] = "true"
 	}
 	if c.AdditionalEgressExtprocService != "" {
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"] = c.AdditionalEgressExtprocService

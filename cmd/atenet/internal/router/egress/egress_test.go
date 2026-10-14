@@ -40,9 +40,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -182,6 +184,12 @@ type egressMockClient struct {
 	// policyGate, when non-nil, blocks each GetActorEgressPolicy until it is
 	// closed, so a test can hold several callers on one fetch.
 	policyGate chan struct{}
+
+	// The nth MintActorJwt call returns "jwt-<n>", expiring
+	// expiration_seconds from now. mintErr, when set, is returned instead.
+	mintCalls atomic.Int32
+	lastMint  atomic.Pointer[ateapipb.MintActorJwtRequest]
+	mintErr   error
 }
 
 func (m *egressMockClient) GetActor(context.Context, *ateapipb.GetActorRequest, ...grpc.CallOption) (*ateapipb.Actor, error) {
@@ -191,8 +199,11 @@ func (m *egressMockClient) GetActor(context.Context, *ateapipb.GetActorRequest, 
 	return m.actor, nil
 }
 
-func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, _ *ateapipb.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
 	m.policyCalls.Add(1)
+	if req.GetName() != resources.SingletonName {
+		return nil, status.Errorf(codes.InvalidArgument, "name must be %q", resources.SingletonName)
+	}
 	if m.policyGate != nil {
 		select {
 		case <-m.policyGate:
@@ -209,6 +220,18 @@ func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, _ *ateapipb
 	return m.policy, nil
 }
 
+func (m *egressMockClient) MintActorJwt(_ context.Context, req *ateapipb.MintActorJwtRequest, _ ...grpc.CallOption) (*ateapipb.MintActorJwtResponse, error) {
+	n := m.mintCalls.Add(1)
+	m.lastMint.Store(req)
+	if m.mintErr != nil {
+		return nil, m.mintErr
+	}
+	return &ateapipb.MintActorJwtResponse{
+		ActorJwt:   fmt.Sprintf("jwt-%d", n),
+		ExpireTime: timestamppb.New(time.Now().Add(time.Duration(req.GetExpirationSeconds()) * time.Second)),
+	}, nil
+}
+
 // allowAllPolicy allows every name and address: cleartext HTTP on any port
 // and HTTPS on 443.
 func allowAllPolicy() *ateapipb.EgressPolicy {
@@ -217,31 +240,31 @@ func allowAllPolicy() *ateapipb.EgressPolicy {
 
 func httpPolicy(patterns ...string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Http: &ateapipb.HTTPRule{Hostnames: patterns},
+		Http: &ateapipb.HttpRule{Hostnames: patterns},
 	}}}
 }
 
 func httpPolicyOnPorts(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Http: &ateapipb.HTTPRule{Hostnames: patterns, Ports: ports},
+		Http: &ateapipb.HttpRule{Hostnames: patterns, Ports: ports},
 	}}}
 }
 
 func httpsPolicy(patterns ...string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Https: &ateapipb.HTTPSRule{Hostnames: patterns},
+		Https: &ateapipb.HttpsRule{Hostnames: patterns},
 	}}}
 }
 
 func httpsPolicyOnPorts(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Https: &ateapipb.HTTPSRule{Hostnames: patterns, Ports: ports},
+		Https: &ateapipb.HttpsRule{Hostnames: patterns, Ports: ports},
 	}}}
 }
 
 func passthroughPolicy(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: patterns, Ports: ports},
+		TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: patterns, Ports: ports},
 	}}}
 }
 

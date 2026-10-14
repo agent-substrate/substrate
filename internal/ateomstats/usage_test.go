@@ -33,7 +33,7 @@ var testPool = Pool{Namespace: "team-a", Name: "default"}
 func measuredSample() *ateompb.WorkloadStatsSample {
 	return &ateompb.WorkloadStatsSample{
 		Atespace: "ns", ActorName: "a", ActorUid: "uid-1", ActorTemplateAtespace: "ns", ActorTemplateName: "t",
-		SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
+		SandboxClass:          "gvisor",
 		Source:                ateompb.StatsSource_STATS_SOURCE_CGROUP,
 		MemoryCurrentBytes:    40 << 20,
 		MemoryPeakBytes:       48 << 20,
@@ -111,6 +111,24 @@ func TestUsageAttrsPendingHasNoMeasurements(t *testing.T) {
 	}
 }
 
+func TestUsageAttrsNormalizesSandboxClass(t *testing.T) {
+	t.Parallel()
+	for class, want := range map[string]string{
+		"microvm": "microvm",
+		"gvisor":  "gvisor",
+		"gVisor":  ateattr.SandboxClassUnknown,
+		"":        ateattr.SandboxClassUnknown,
+		"kata":    ateattr.SandboxClassUnknown,
+	} {
+		s := measuredSample()
+		s.SandboxClass = class
+		got := attrMap(UsageAttrs(testPool, ateattr.StatsKindPeriodic, s))
+		if v := got[string(ateattr.SandboxClassKey)].String(); v != want {
+			t.Errorf("sandbox class %q: %s = %q, want %q", class, ateattr.SandboxClassKey, v, want)
+		}
+	}
+}
+
 func TestUsageAttrsOmitsUnreportedPeak(t *testing.T) {
 	t.Parallel()
 	s := measuredSample()
@@ -145,16 +163,14 @@ func (r *recorder) len() int {
 	return len(r.records)
 }
 
-func newTestEmitter(flush func(context.Context) error) (*UsageEmitter, *recorder) {
+func newTestEmitter() (*UsageEmitter, *recorder) {
 	rec := &recorder{}
-	e := NewUsageEmitter(nil, rec, testPool)
-	e.flush = flush
-	return e, rec
+	return NewUsageEmitter(nil, rec, testPool), rec
 }
 
 func TestEmitDatesRecordAtReadTime(t *testing.T) {
 	t.Parallel()
-	e, rec := newTestEmitter(nil)
+	e, rec := newTestEmitter()
 	s := measuredSample()
 	e.Emit(context.Background(), ateattr.StatsKindInitial, s)
 	if rec.len() != 1 {
@@ -169,39 +185,6 @@ func TestNilEmitterWritesNothing(t *testing.T) {
 	t.Parallel()
 	var e *UsageEmitter
 	e.Emit(context.Background(), ateattr.StatsKindInitial, measuredSample())
-	e.EmitFinal(context.Background(), measuredSample())
-}
-
-func TestEmitFinalFlushes(t *testing.T) {
-	t.Parallel()
-	deadlines := make(chan time.Time, 1)
-	e, rec := newTestEmitter(func(ctx context.Context) error {
-		d, _ := ctx.Deadline()
-		deadlines <- d
-		return nil
-	})
-	start := time.Now()
-	e.EmitFinal(context.Background(), measuredSample())
-	if rec.len() != 1 {
-		t.Fatalf("wrote %d records, want 1", rec.len())
-	}
-	if kind := attrMap(recordAttrs(rec.records[0]))[string(ateattr.StatsKindKey)].String(); kind != ateattr.StatsKindFinal {
-		t.Errorf("kind = %q, want final", kind)
-	}
-	select {
-	case d := <-deadlines:
-		if d.IsZero() || d.Sub(start) > finalFlushTimeout+time.Second {
-			t.Errorf("flush deadline = %v, want about %v after the record", d, finalFlushTimeout)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("final record was not flushed")
-	}
-}
-
-func recordAttrs(r slog.Record) []slog.Attr {
-	var attrs []slog.Attr
-	r.Attrs(func(a slog.Attr) bool { attrs = append(attrs, a); return true })
-	return attrs
 }
 
 // TestStartSamplerSweepsOnSchedule runs six intervals and stops: six sweeps,
@@ -240,17 +223,8 @@ func TestStartSamplerSurvivesAPanic(t *testing.T) {
 	})
 }
 
-func TestLabels(t *testing.T) {
+func TestStatsSourceLabel(t *testing.T) {
 	t.Parallel()
-	for c, want := range map[ateompb.SandboxClass]string{
-		ateompb.SandboxClass_SANDBOX_CLASS_GVISOR:      "gvisor",
-		ateompb.SandboxClass_SANDBOX_CLASS_MICROVM:     "microvm",
-		ateompb.SandboxClass_SANDBOX_CLASS_UNSPECIFIED: ateattr.SandboxClassUnknown,
-	} {
-		if got := SandboxClassLabel(c); got != want {
-			t.Errorf("SandboxClassLabel(%v) = %q, want %q", c, got, want)
-		}
-	}
 	for src, want := range map[ateompb.StatsSource]string{
 		ateompb.StatsSource_STATS_SOURCE_CGROUP:      ateattr.StatsSourceCgroup,
 		ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT: ateattr.StatsSourceGuestAgent,

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -25,7 +26,6 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/benchmarking/isolate/internal/fakeworker"
-	"github.com/agent-substrate/substrate/internal/hardware"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
@@ -54,6 +54,13 @@ type fakeControl struct {
 	lostReply error
 	// drainErr, when set, fails every DrainWorker.
 	drainErr error
+	// markErr, when set, fails every MarkWorkerAvailable.
+	markErr error
+	// listFailures fails that many ListWorkers calls with listCode before any
+	// succeeds; Unavailable, as while ate-api-server does not serve yet, when
+	// listCode is unset.
+	listFailures int
+	listCode     codes.Code
 }
 
 func newFakeControl() *fakeControl {
@@ -69,12 +76,40 @@ func (f *fakeControl) CreateWorker(_ context.Context, in *ateapipb.CreateWorkerR
 		return nil, status.Errorf(codes.AlreadyExists, "Worker %s already exists", name)
 	}
 	w := proto.CloneOf(in.GetWorker())
-	w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+	// Like ate-api-server: a Worker takes no Actors until it is marked
+	// available.
+	w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE}
 	f.workers[name] = w
 	if f.lostReply != nil {
 		return nil, f.lostReply
 	}
 	return w, nil
+}
+
+func (f *fakeControl) MarkWorkerAvailable(_ context.Context, in *ateapipb.MarkWorkerAvailableRequest, _ ...grpc.CallOption) (*ateapipb.MarkWorkerAvailableResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.markErr != nil {
+		return nil, f.markErr
+	}
+	w, ok := f.workers[in.GetWorker().GetName()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "no such Worker")
+	}
+	if w.Status.State == ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		return nil, status.Error(codes.FailedPrecondition, "Worker is draining")
+	}
+	w.Status.State = ateapipb.WorkerState_WORKER_STATE_ACTIVE
+	return &ateapipb.MarkWorkerAvailableResponse{Worker: proto.CloneOf(w)}, nil
+}
+
+// state returns the state of the Worker registered for pod, as worker picks
+// it.
+func (f *fakeControl) state(pod string) ateapipb.WorkerState {
+	w := f.worker(pod)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return w.GetStatus().GetState()
 }
 
 func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapipb.DeleteWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
@@ -91,7 +126,7 @@ func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapipb.DeleteWorkerR
 	return w, nil
 }
 
-func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapipb.DrainWorkerResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.drainErr != nil {
@@ -102,7 +137,7 @@ func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerReq
 		return nil, status.Error(codes.NotFound, "no such Worker")
 	}
 	w.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
-	return w, nil
+	return &ateapipb.DrainWorkerResponse{Worker: w}, nil
 }
 
 func (f *fakeControl) GetWorker(_ context.Context, in *ateapipb.GetWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
@@ -139,6 +174,13 @@ func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapipb.UpdateWorkerR
 func (f *fakeControl) ListWorkers(_ context.Context, _ *ateapipb.ListWorkersRequest, _ ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listFailures > 0 {
+		f.listFailures--
+		if f.listCode != codes.OK {
+			return nil, status.Error(f.listCode, "refused")
+		}
+		return nil, status.Error(codes.Unavailable, "no ready endpoints")
+	}
 	return &ateapipb.ListWorkersResponse{Workers: slices.Collect(maps.Values(f.workers))}, nil
 }
 
@@ -216,16 +258,16 @@ func (f *fakeControl) uid(pod string) string {
 type fakeRelay struct {
 	control  *fakeControl
 	mu       sync.Mutex
-	reported map[string]*ateapipb.WorkerResources  // by Worker name
-	hardware map[string]*ateapipb.HardwareIdentity // by Worker name
-	via      map[string]string                     // relay address, by Worker name
+	reported map[string]*ateapipb.WorkerResources // by Worker name
+	runtimes map[string]*ateapipb.SandboxRuntime  // default runtime, by Worker name
+	via      map[string]string                    // relay address, by Worker name
 	reject   map[string]codes.Code
 	calls    int
 	live     map[string]string // as last pruned to
 }
 
 func newFakeRelay() *fakeRelay {
-	return &fakeRelay{reported: map[string]*ateapipb.WorkerResources{}, hardware: map[string]*ateapipb.HardwareIdentity{}, via: map[string]string{}, reject: map[string]codes.Code{}}
+	return &fakeRelay{reported: map[string]*ateapipb.WorkerResources{}, runtimes: map[string]*ateapipb.SandboxRuntime{}, via: map[string]string{}, reject: map[string]codes.Code{}}
 }
 
 func (f *fakeRelay) Report(_ context.Context, addr string, req *ateapipb.RegisterWorkerRequest) error {
@@ -237,12 +279,12 @@ func (f *fakeRelay) Report(_ context.Context, addr string, req *ateapipb.Registe
 		return status.Error(code, "rejected")
 	}
 	f.reported[name] = req.GetCapacity()
-	f.hardware[name] = req.GetHardware()
+	f.runtimes[name] = req.GetDefaultRuntime()
 	f.via[name] = addr
 	if f.control != nil {
 		f.control.mu.Lock()
 		if w, ok := f.control.workers[name]; ok {
-			w.Status.Capacity, w.Status.Hardware = req.GetCapacity(), req.GetHardware()
+			w.Status.Capacity, w.Status.DefaultRuntime = req.GetCapacity(), req.GetDefaultRuntime()
 		}
 		f.control.mu.Unlock()
 	}
@@ -408,10 +450,11 @@ func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
 	if got, want := rel.reported[ctl.uid(name)], wantCapacity(1000, "1500m", "4Gi"); !proto.Equal(got, want) {
 		t.Errorf("reported %v, want %v from the pool's limits", got, want)
 	}
-	if got, want := rel.hardware[ctl.uid(name)], hardware.ProbeHost(); !proto.Equal(got, want) {
-		t.Errorf("hardware %v, want %v, which ate-api-server requires", got, want)
+	wantRuntime := &ateapipb.SandboxRuntime{SandboxClass: "gvisor", Version: hostCompat()}
+	if got := rel.runtimes[ctl.uid(name)]; !proto.Equal(got, wantRuntime) {
+		t.Errorf("default runtime %v, want %v: the pool's class on this host, which ate-api-server requires", got, wantRuntime)
 	}
-	if got, want := cl.statuses["bench"], (atev1alpha1.WorkerPoolStatus{Replicas: 3, ReadyReplicas: 3, Selector: "ate.dev/worker-pool=bench"}); got != want {
+	if got, want := cl.statuses["bench"], (atev1alpha1.WorkerPoolStatus{Replicas: 3, ReadyReplicas: 3, Selector: "ate.dev/worker-pool=bench"}); !reflect.DeepEqual(got, want) {
 		t.Errorf("status = %+v, want %+v", got, want)
 	}
 }
@@ -526,7 +569,7 @@ func TestWorkerOnADepartedNodeIsReplaced(t *testing.T) {
 }
 
 // An empty node list replaces nothing: there is nowhere to put a replacement.
-func TestNoBenchmarkNodeLeavesWorkersInPlace(t *testing.T) {
+func TestNoFakeAteletNodeLeavesWorkersInPlace(t *testing.T) {
 	c, ctl, _, cl := newTestController(pool("bench", 2, nil))
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -824,6 +867,49 @@ func TestLostCreateReplyIsRetiredOrConfirmed(t *testing.T) {
 	}
 }
 
+// Every registered Worker is marked available, or the scheduler would place
+// nothing on it.
+func TestReconcileMarksWorkersAvailable(t *testing.T) {
+	c, ctl, _, _ := newTestController(pool("bench", 2, nil))
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	for _, name := range poolNames("bench", 2) {
+		if got := ctl.state(name); got != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+			t.Errorf("Worker %s state = %v, want %v", name, got, ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+		}
+	}
+}
+
+// A Worker registered but not marked available, whether the mark failed or
+// the controller restarted before making it, is marked by the next pass.
+func TestUnmarkedWorkerIsMarkedByTheNextPass(t *testing.T) {
+	c, ctl, rel, cl := newTestController(pool("bench", 1, nil))
+	ctl.markErr = status.Error(codes.Unavailable, "connection reset")
+	if err := reconcile(t, c); err == nil {
+		t.Fatal("reconcile succeeded with every mark failing")
+	}
+	name := poolNames("bench", 1)[0]
+	if got := ctl.state(name); got != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Fatalf("Worker %s state = %v after a failed mark, want %v", name, got, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	}
+	ctl.markErr = nil
+
+	restarted := newController(ctl, rel, cl, testRun, 4, testDrainGrace)
+	if err := restarted.adopt(context.Background()); err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if err := reconcile(t, restarted); err != nil {
+		t.Fatalf("reconcile after restart: %v", err)
+	}
+	if got := ctl.state(name); got != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+		t.Errorf("Worker %s state = %v after restart, want %v", name, got, ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+	}
+	if got, want := ctl.names(), poolNames("bench", 1); !slices.Equal(got, want) {
+		t.Errorf("registered %v, want %v: the adopted Worker, not a replacement", got, want)
+	}
+}
+
 // A label edit on the pool reaches its Workers in place, as the worker syncer
 // applies it, including Workers adopted after a restart.
 func TestPoolLabelChangeUpdatesWorkers(t *testing.T) {
@@ -992,6 +1078,58 @@ func TestAdoptAfterRestart(t *testing.T) {
 	}
 	if ctl.workers[real.Metadata.Name] == nil || ctl.workers[otherRun.Metadata.Name] == nil {
 		t.Error("a Worker that is not this run's was retired")
+	}
+}
+
+// Installed with ate-api-server, fake-workersync starts before the server
+// serves, and keeps trying to adopt rather than exiting.
+func TestAdoptUntilServedRetries(t *testing.T) {
+	c, ctl, rel, cl := newTestController(pool("bench", 2, nil))
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	ctl.listFailures = 3
+
+	restarted := newController(ctl, rel, cl, testRun, 4, testDrainGrace)
+	if err := restarted.adoptUntilServed(context.Background(), time.Millisecond, 2*time.Millisecond); err != nil {
+		t.Fatalf("adoptUntilServed: %v", err)
+	}
+	if got := len(restarted.workers); got != 2 {
+		t.Errorf("adopted %d Workers, want 2", got)
+	}
+	if ctl.listFailures != 0 {
+		t.Errorf("%d ListWorkers failures left, want every one retried", ctl.listFailures)
+	}
+	// Each adopted Worker's node, so a restart keeps them in the node set.
+	if nodes := restarted.nodes(); len(nodes) == 0 {
+		t.Error("nodes() after adopt is empty, want the adopted Workers' nodes")
+	}
+}
+
+// An error retrying cannot cure, such as a refused identity, ends adopt at
+// once, so the pod fails visibly instead of looking healthy.
+func TestAdoptUntilServedFailsOnAPermanentError(t *testing.T) {
+	c, ctl, _, _ := newTestController()
+	ctl.listFailures, ctl.listCode = 1<<30, codes.PermissionDenied
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := c.adoptUntilServed(ctx, time.Millisecond, 5*time.Millisecond)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("adoptUntilServed() = %v, want PermissionDenied", err)
+	}
+	if ctx.Err() != nil {
+		t.Error("adoptUntilServed retried a permanent error until its context ended")
+	}
+}
+
+// A shutdown during the retries ends them with the last error.
+func TestAdoptUntilServedStopsWithItsContext(t *testing.T) {
+	c, ctl, _, _ := newTestController()
+	ctl.listFailures = 1 << 30
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := c.adoptUntilServed(ctx, time.Millisecond, 5*time.Millisecond); err == nil {
+		t.Error("adoptUntilServed() = nil after its context ended, want the last error")
 	}
 }
 

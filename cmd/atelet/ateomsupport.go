@@ -34,6 +34,7 @@ import (
 type ateomSupportServer struct {
 	ateletpb.UnimplementedAteomSupportServer
 	workers ateapipb.WorkerServiceClient
+	control ateapipb.ControlClient
 }
 
 func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
@@ -102,16 +103,16 @@ func verifyClientOnSameNode(node *substratex509.PodIdentity) func(tls.Connection
 }
 
 // RegisterWorker registers the calling worker with the control plane: what the
-// worker says its capacity and hardware identity are, in one
-// WorkerService.RegisterWorker call so capacity and hardware land atomically.
+// worker says its capacity and sandbox runtimes are, in one
+// WorkerService.RegisterWorker call so capacity and runtimes land atomically.
 //
 // It returns the control plane's error unwrapped so the caller retries: a
 // worker reports once, so an accepted call is the only thing that puts
-// capacity and hardware on the Worker, and a Worker record the syncer has not
+// capacity and runtimes on the Worker, and a Worker record the syncer has not
 // created yet is the ordinary reason for a first attempt to fail.
 func (s *ateomSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.RegisterWorkerRequest) (*ateletpb.RegisterWorkerResponse, error) {
 	// Identity comes only from the mTLS certificate, never from the request:
-	// a worker can report its own capacity and hardware and no one else's.
+	// a worker can report its own capacity and runtimes and no one else's.
 	workerIdentity, err := authenticatedWorkerIdentity(ctx)
 	if err != nil {
 		return nil, err
@@ -124,14 +125,18 @@ func (s *ateomSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.R
 	}
 	if _, err := s.workers.RegisterWorker(ctx, &ateapipb.RegisterWorkerRequest{
 		// Workers are global-scoped and named by their pod UID.
-		Worker:   &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
-		Capacity: toWorkerResources(req.GetCapacity()),
-		Hardware: toHardwareIdentity(req.GetHardware()),
+		Worker:             &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
+		Capacity:           toWorkerResources(req.GetCapacity()),
+		DefaultRuntime:     toAteAPISandboxRuntime(req.GetDefaultRuntime()),
+		RestorableRuntimes: toAteAPISandboxRuntimes(req.GetRestorableRuntimes()),
 	}); err != nil {
 		return nil, err
 	}
-	slog.InfoContext(ctx, "Registered worker capacity and hardware",
-		slog.String("pod_uid", workerIdentity.PodUID), slog.Any("capacity", req.GetCapacity()), slog.Any("hardware", req.GetHardware()))
+	slog.InfoContext(ctx, "Registered worker capacity and sandbox runtimes",
+		slog.String("pod_uid", workerIdentity.PodUID),
+		slog.Any("capacity", req.GetCapacity()),
+		slog.Any("default_runtime", req.GetDefaultRuntime()),
+		slog.Any("restorable_runtimes", req.GetRestorableRuntimes()))
 	return &ateletpb.RegisterWorkerResponse{}, nil
 }
 
@@ -151,18 +156,29 @@ func toWorkerResources(in *ateletpb.WorkerResources) *ateapipb.WorkerResources {
 	return out
 }
 
-// toHardwareIdentity converts atelet's HardwareIdentity to the control plane's,
-// which it mirrors field for field.
-func toHardwareIdentity(in *ateletpb.HardwareIdentity) *ateapipb.HardwareIdentity {
+// toAteAPISandboxRuntime converts atelet's SandboxRuntime to the control
+// plane's, which it mirrors field for field.
+func toAteAPISandboxRuntime(in *ateletpb.SandboxRuntime) *ateapipb.SandboxRuntime {
 	if in == nil {
 		return nil
 	}
-	out := &ateapipb.HardwareIdentity{}
-	if attrs := in.GetAttributes(); attrs != nil {
-		out.Attributes = make(map[string]string, len(attrs))
-		for k, v := range attrs {
-			out.Attributes[k] = v
+	out := &ateapipb.SandboxRuntime{SandboxClass: in.GetSandboxClass()}
+	if v := in.GetVersion(); v != nil {
+		out.Version = &ateapipb.VersionedSandboxCompat{SchemaVersion: v.GetSchemaVersion()}
+		for _, a := range v.GetAttributes() {
+			out.Version.Attributes = append(out.Version.Attributes, &ateapipb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
 		}
+	}
+	return out
+}
+
+func toAteAPISandboxRuntimes(in []*ateletpb.SandboxRuntime) []*ateapipb.SandboxRuntime {
+	if in == nil {
+		return nil
+	}
+	out := make([]*ateapipb.SandboxRuntime, 0, len(in))
+	for _, r := range in {
+		out = append(out, toAteAPISandboxRuntime(r))
 	}
 	return out
 }
@@ -207,4 +223,49 @@ func (s *ateomSupportServer) RequestActorSuspend(ctx context.Context, req *atele
 		slog.String("actor_name", req.GetActorName()),
 		slog.String("actor_uid", req.GetActorUid()))
 	return &ateletpb.RequestActorSuspendResponse{}, nil
+}
+
+// GetActorEgressPolicy reads the egress policy of an actor.
+func (s *ateomSupportServer) GetActorEgressPolicy(
+	ctx context.Context,
+	req *ateletpb.GetActorEgressPolicyRequest,
+) (*ateletpb.GetActorEgressPolicyResponse, error) {
+	workerIdentity, err := authenticatedWorkerIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Validate request.
+	if errs := apivalidation.ValidateGetActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
+	}
+
+	// TODO(bowei): add validation for which Actor requested this.
+
+	policy, err := s.control.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{
+		Actor: &ateapipb.ObjectRef{
+			Atespace: req.GetActorAtespace(),
+			Name:     req.GetActorName(),
+		},
+		Name: resources.SingletonName,
+	})
+
+	// Note: we do not check that the EgressPolicy is directly attached to the
+	// Actor: Policies are applied by (user-given) name as opposed to linked
+	// explicitly to the internal Actor UUID.
+
+	// NotFound is treated as empty policy (block all).
+	if status.Code(err) == codes.NotFound {
+		return &ateletpb.GetActorEgressPolicyResponse{}, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	slog.DebugContext(ctx, "Fetched an actor egress policy",
+		slog.String("pod_uid", workerIdentity.PodUID),
+		slog.String("actor_atespace", req.GetActorAtespace()),
+		slog.String("actor_name", req.GetActorName()))
+
+	return &ateletpb.GetActorEgressPolicyResponse{EgressPolicy: toAteletEgressPolicy(policy)}, nil
 }

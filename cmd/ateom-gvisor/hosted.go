@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -42,6 +43,8 @@ type hostedActor struct {
 	session *workloadSession
 	// usage is this activation's epoch, CPU baseline, and latest sample.
 	usage *ateomstats.Activation
+	// deadReported keeps the usage sweep to one warning per activation.
+	deadReported atomic.Bool
 }
 
 // admitActor reserves capacity before network setup. An actor that is already
@@ -86,6 +89,7 @@ func (s *AteomService) hostActor(ctx context.Context, attribution resources.Acto
 		ActorUID:   uid,
 		Veth:       true,
 		EgressPort: s.tunnel.EgressPort,
+		DNSPolicy:  s.tunnel.ActorEgressPolicy(attribution),
 	}, s.tunnel.Egress, s.tunnel.DNSRelay)
 	if err != nil {
 		s.actorsMu.Lock()

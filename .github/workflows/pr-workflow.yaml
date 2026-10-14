@@ -97,7 +97,7 @@ jobs:
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y -qq --no-install-recommends clang libclang-dev
-        make test-dynamic-modules
+        hack/test-dynamic-modules.sh
     # Root-gated tests (overlay mounts, whiteout mknod, trusted.* xattrs, ...)
     # skip for the unprivileged runner user above; rerun the packages that
     # contain them (any test importing internal/roottest) under sudo.
@@ -109,9 +109,7 @@ jobs:
     # file that was never written fails too.
     - name: Require tests to have run
       if: always()
-      run: |
-        make build-junittool
-        bin/junittool verify -manifest "${ARTIFACTS}/expected-junit.txt"
+      run: go -C tools/junittool run . verify -manifest "${ARTIFACTS}/expected-junit.txt"
     - name: Upload test results
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -254,6 +252,8 @@ jobs:
       run: |
         hack/install-ate-kind.sh --deploy-demo-egress
         hack/install-ate-kind.sh --deploy-demo-egress-microvm
+    - name: Trust local TLS origins in egress gateway
+      run: hack/setup-e2e-egress-tls-kind.sh
     # scale the idle sandbox class's demo pools to zero so each lane has the node
     - name: Focus the node on gVisor
       run: hack/e2e-focus-sandbox-class.sh gvisor
@@ -278,9 +278,7 @@ jobs:
     # run-e2e.sh refuses to run in CI without E2E_JUNIT_FILE.
     - name: Require every lane to have run tests
       if: always()
-      run: |
-        make build-junittool
-        bin/junittool verify -manifest "${ARTIFACTS}/expected-junit.txt"
+      run: go -C tools/junittool run . verify -manifest "${ARTIFACTS}/expected-junit.txt"
     - name: Save Go build cache
       # Main only, so PRs restore the latest main build rather than each
       # storing its own copy.

@@ -38,9 +38,59 @@ var tracer = otel.Tracer("objectstorage")
 // storage backend, as opposed to a transient fetch failure.
 var ErrObjectNotFound = errors.New("object not found in storage backend")
 
+// ServiceError describes a storage service's failed response in terms its
+// backend has judged safe to log: never a URI, header or credential.
+type ServiceError struct {
+	// HTTPStatus is the status of the service's response.
+	HTTPStatus int
+	// Code is the service's error code, such as "PreconditionFailed", if the
+	// backend reports one.
+	Code string
+	// Message is the service's own description, if the backend reports one
+	// it knows names no caller, resource or credential.
+	Message string
+}
+
+// DescribeServiceError describes the storage service response that err
+// carries, if any. Each backend decides what of its errors is safe to
+// describe; an error in err's chain from any other source with an
+// HTTPStatusCode() int method, as the S3 SDK's response errors have, is
+// described by its status alone.
+func DescribeServiceError(err error) (ServiceError, bool) {
+	if desc, ok := describeGCSError(err); ok {
+		return desc, true
+	}
+	var withStatus interface{ HTTPStatusCode() int }
+	if errors.As(err, &withStatus) {
+		return ServiceError{HTTPStatus: withStatus.HTTPStatusCode()}, true
+	}
+	return ServiceError{}, false
+}
+
 type ObjectStorage interface {
 	GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error)
 	PutObject(ctx context.Context, bucket, object string, reader io.Reader) error
+}
+
+// SizedReader is implemented by the readers GetObject returns when the
+// backend reported the object's size as it opened it. The GCS and S3 clients
+// in this package return one whenever the response carries the size.
+type SizedReader interface {
+	io.ReadCloser
+	// ObjectSize is the whole object's size in bytes, as the backend reported
+	// it, or a negative number if it is unknown.
+	ObjectSize() int64
+}
+
+// ObjectSize returns the size of the object r, a reader GetObject returned,
+// reads, and false if its backend did not report one.
+func ObjectSize(r io.Reader) (int64, bool) {
+	s, ok := r.(SizedReader)
+	if !ok {
+		return 0, false
+	}
+	n := s.ObjectSize()
+	return n, n >= 0
 }
 
 func FetchFromGCS(ctx context.Context, client ObjectStorage, gsURL string) ([]byte, error) {
@@ -368,7 +418,7 @@ func fetchFromGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL strin
 	}
 	defer func() {
 		if closeErr := rc.Close(); closeErr != nil {
-			if err != nil {
+			if err == nil {
 				err = closeErr
 			} else {
 				slog.InfoContext(ctx, "Dropped error from rc.Close", slog.Any("err", closeErr))

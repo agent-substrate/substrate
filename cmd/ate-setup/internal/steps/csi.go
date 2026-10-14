@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,23 +39,6 @@ import (
 // CSI drivers need it bind-mounted with bidirectional propagation so volumes
 // they mount inside it are visible to atelet.
 const ateomHostDir = nodepath.BasePath
-
-// csiNFSStorageClass is the StorageClass the external volume demos provision
-// from.
-const csiNFSStorageClass = `
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: csi-nfs-sc
-provisioner: nfs.csi.k8s.io
-parameters:
-  server: nfs-server.default.svc.cluster.local
-  share: /
-reclaimPolicy: Delete
-volumeBindingMode: Immediate
-mountOptions:
-  - nfsvers=4.1
-`
 
 // csiHostpathControllerService fronts the hostpath driver's socat sidecar,
 // which bridges the TCP endpoint atelet dials to the driver's unix socket. The
@@ -307,8 +291,8 @@ spec:
 
 	// The image cache directories under ateomHostDir were just wiped, so
 	// atelet has to recreate them.
-	log.Infof("Restarting the atelet DaemonSets (if present)...")
-	return e.RestartAteletDaemonSets(ctx)
+	log.Infof("Restarting the atelet DaemonSet (if present)...")
+	return e.Kube.RolloutRestart(ctx, e.Namespace(), "atelet", time.Now())
 }
 
 func (e *Env) setupCSINFS(ctx context.Context) error {
@@ -410,7 +394,7 @@ spec:
 	// The driver resolves the server's DNS name at provisioning time, so the
 	// StorageClass can be created before the NFS server has an address.
 	log.Infof("Creating the csi-nfs-sc StorageClass...")
-	if err := e.applyInline(ctx, csiNFSStorageClass); err != nil {
+	if err := e.Kube.ApplyPath(ctx, deployDir+"/example/storageclass-nfs.yaml"); err != nil {
 		return err
 	}
 
@@ -439,8 +423,8 @@ spec:
 		return err
 	}
 
-	log.Infof("Restarting the atelet DaemonSets (if present)...")
-	return e.RestartAteletDaemonSets(ctx)
+	log.Infof("Restarting the atelet DaemonSet (if present)...")
+	return e.Kube.RolloutRestart(ctx, e.Namespace(), "atelet", time.Now())
 }
 
 // checkNFSDSupport verifies the host kernel can serve NFS. The in-cluster NFS

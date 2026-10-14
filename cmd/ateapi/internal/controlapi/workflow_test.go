@@ -57,16 +57,16 @@ func TestActorStateChangeRecords(t *testing.T) {
 			wantStored: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
 		},
 		{
-			name:      "pause marks the actor pausing",
+			name:      "pause marks the actor suspending",
 			seedState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
-				if _, err := w.ensureMarkedPausing(context.Background(), ref, actor); err != nil {
+			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) {
+				if _, err := w.ensureMarkedPausing(context.Background(), ref, actor, tmpl); err != nil {
 					t.Fatalf("ensureMarkedPausing: %v", err)
 				}
 			},
 			wantOp:     ateattr.OperationPause,
-			wantState:  ateattr.ActorStatePausing,
-			wantStored: ateapipb.ActorState_ACTOR_STATE_PAUSING,
+			wantState:  ateattr.ActorStateSuspending,
+			wantStored: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
 		},
 		{
 			name:      "delete marks the actor deleting",
@@ -258,7 +258,10 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 
 	// Bump the stored version so the workflow's precondition is stale.
 	if _, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(stale), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.InProgressSnapshotUri = someActorSnapshotURI(t, testStorageLocation, "team-a", "someone-else")
+		toUpdate.Status.LastAssignedGeneration = 1
+		toUpdate.Status.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "someone-else", someActorSnapshotURI(t, testStorageLocation, "team-a", "someone-else"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		}
 		return nil
 	}); err != nil {
 		t.Fatalf("bump version: %v", err)

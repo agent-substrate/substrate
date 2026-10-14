@@ -100,6 +100,9 @@ usage() {
   echo "  --cordon-control-plane                 Keep the control plane off the worker nodes: assumes a small shared pool labeled and"
   echo "                                         tainted ate.dev/workloadType=ate-control-plane:NoSchedule, and a one-node pool"
   echo "                                         labeled and tainted ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone"
+  echo "  --fake-data-plane                      Install fake-atelet in place of atelet and fake-workersync in place of"
+  echo "                                         ate-controller, for control-plane benchmarks. Actors do not exist; never"
+  echo "                                         use it on a cluster that serves real actors"
   echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
   echo ""
@@ -165,6 +168,8 @@ usage() {
   echo "                                         else the cluster's OIDC discovery document"
   echo "  ACTOR_JWT_ALGORITHM                    Signing algorithm of a newly created actor JWT pool: ES256 (default) | RS256."
   echo "                                         Use RS256 (a 4096-bit RSA key) for relying parties that don't support ES256. Has no effect once the pool exists."
+  echo "  ACTOR_JWT_ISSUER                       iss claim of actor JWTs, verbatim. Relying parties fetch <issuer>/.well-known/openid-configuration."
+  echo "                                         Default: https://idp.<namespace>.svc"
   echo ""
   echo "Benchmarks (see benchmarking/README.md for details and customization):"
   echo ""
@@ -301,6 +306,7 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       GLOBAL_FLAGS+=("--cluster-size=${prescan_args[$((i + 1))]}")
       ;;
     --cordon-control-plane|--cordon-control-plane=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
+    --fake-data-plane|--fake-data-plane=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
     --rollout-timeout=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
     --rollout-timeout)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -363,6 +369,7 @@ while [[ "$#" -gt 0 ]]; do
     --benchmark-worker-count|--benchmark-sandbox-class|--benchmark-actor-memory) shift ;;
     --atenet-dataplane=*|--podcert-workers-per-signer=*|--rollout-timeout=*|--otlp-endpoint=*) ;;
     --cluster-size=*|--cordon-control-plane|--cordon-control-plane=*) ;;
+    --fake-data-plane|--fake-data-plane=*) ;;
     --experimental-additional-egress-extproc-service=*) ;;
     --credential-provider=*) ;;
     --benchmark-worker-count=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;

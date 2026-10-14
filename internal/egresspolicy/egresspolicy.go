@@ -389,11 +389,22 @@ func NormalizeAuthority(authority string) (Destination, error) {
 		return Destination{IP: addr.Unmap(), Port: port}, nil
 	}
 
-	name := lowerASCII(strings.TrimSuffix(host, "."))
-	if !isHostname(name) {
+	name, ok := NormalizeHostname(host)
+	if !ok {
 		return Destination{}, fmt.Errorf("authority %q is neither a DNS hostname nor an IP literal", authority)
 	}
 	return Destination{Hostname: name, Port: port}, nil
+}
+
+// NormalizeHostname turns raw into the canonical form HostnamePattern.Matches
+// expects: ASCII lowercased, one trailing dot removed, and checked as a
+// DNS-1123 subdomain whose last label is not all digits.
+func NormalizeHostname(raw string) (string, bool) {
+	name := lowerASCII(strings.TrimSuffix(raw, "."))
+	if !isHostname(name) {
+		return "", false
+	}
+	return name, true
 }
 
 // isHostname reports whether name is a lowercase DNS-1123 subdomain whose last
@@ -428,4 +439,20 @@ func lowerASCII(s string) string {
 		}
 	}
 	return string(b)
+}
+
+// DNSEgressPolicyEnforceInAtunnel is the --dns-egress-policy mode that
+// enforces an Actor's EgressPolicy on DNS queries in the ateom DNS relay.
+const DNSEgressPolicyEnforceInAtunnel = "enforce-in-atunnel"
+
+// ValidateDNSEgressPolicy checks the --dns-egress-policy flag value.
+func ValidateDNSEgressPolicy(mode string) error {
+	switch mode {
+	case "":
+		return errors.New("--dns-egress-policy is required")
+	case DNSEgressPolicyEnforceInAtunnel:
+		return nil
+	default:
+		return fmt.Errorf("unsupported --dns-egress-policy %q (must be %q)", mode, DNSEgressPolicyEnforceInAtunnel)
+	}
 }

@@ -22,27 +22,68 @@ import (
 )
 
 func TestProbeHost(t *testing.T) {
-	hw := ProbeHost()
-	if got := hw.GetAttributes()[AttrArchitecture]; got != runtime.GOARCH {
-		t.Errorf("ProbeHost() architecture = %q, want %q", got, runtime.GOARCH)
+	compat := ProbeHost()
+	if got := compat.GetSchemaVersion(); got != SchemaVersionV1 {
+		t.Errorf("ProbeHost() schema_version = %q, want %q", got, SchemaVersionV1)
+	}
+	attrs := compat.GetAttributes()
+	if len(attrs) != 1 || attrs[0].GetKey() != AttrArchitecture || attrs[0].GetValue() != runtime.GOARCH {
+		t.Errorf("ProbeHost() attributes = %v, want [{%s: %s}]", attrs, AttrArchitecture, runtime.GOARCH)
 	}
 }
 
 func TestMatches(t *testing.T) {
-	amd64Worker := &ateapipb.HardwareIdentity{Attributes: map[string]string{AttrArchitecture: "amd64"}}
-	arm64Worker := &ateapipb.HardwareIdentity{Attributes: map[string]string{AttrArchitecture: "arm64"}}
+	runtimeWith := func(class, ver string, attrs ...*ateapipb.AttributeEntry) *ateapipb.SandboxRuntime {
+		return &ateapipb.SandboxRuntime{
+			SandboxClass: class,
+			Version: &ateapipb.VersionedSandboxCompat{
+				SchemaVersion: ver,
+				Attributes:    attrs,
+			},
+		}
+	}
+	amd64GVisor := runtimeWith("gvisor", "v1",
+		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+		&ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"},
+	)
+	amd64GVisorReordered := runtimeWith("gvisor", "v1",
+		&ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"},
+		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+	)
+	arm64GVisor := runtimeWith("gvisor", "v1",
+		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "arm64"},
+		&ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"},
+	)
+	amd64MicroVM := runtimeWith("microvm", "v1",
+		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+		&ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"},
+	)
+	amd64GVisorV2 := runtimeWith("gvisor", "v2",
+		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+		&ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"},
+	)
+	amd64GVisorExtraAttr := runtimeWith("gvisor", "v1",
+		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+		&ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"},
+		&ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: "abc"},
+	)
 
 	tests := []struct {
 		name   string
-		worker *ateapipb.HardwareIdentity
-		snap   *ateapipb.HardwareIdentity
+		worker *ateapipb.SandboxRuntime
+		snap   *ateapipb.SandboxRuntime
 		want   bool
 	}{
-		{"nil snapshot imposes no constraint", amd64Worker, nil, true},
-		{"empty snapshot imposes no constraint", amd64Worker, &ateapipb.HardwareIdentity{}, true},
-		{"same architecture matches", amd64Worker, amd64Worker, true},
-		{"different architecture fails", arm64Worker, amd64Worker, false},
-		{"nil worker fails when snapshot is stamped", nil, amd64Worker, false},
+		{"nil snapshot imposes no constraint", amd64GVisor, nil, true},
+		{"exact match", amd64GVisor, amd64GVisor, true},
+		{"attribute order ignored", amd64GVisor, amd64GVisorReordered, true},
+		{"different attribute value fails", arm64GVisor, amd64GVisor, false},
+		{"different sandbox class fails", amd64MicroVM, amd64GVisor, false},
+		{"different schema version fails", amd64GVisorV2, amd64GVisor, false},
+		{"attribute only the worker has is ignored", amd64GVisorExtraAttr, amd64GVisor, true},
+		{"attribute missing on worker fails", amd64GVisor, amd64GVisorExtraAttr, false},
+		{"nil worker fails when snapshot is stamped", nil, amd64GVisor, false},
+		{"nil version fails", &ateapipb.SandboxRuntime{SandboxClass: "gvisor"}, amd64GVisor, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -51,4 +92,125 @@ func TestMatches(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMatchesCompat(t *testing.T) {
+	compat := func(ver string, attrs ...*ateapipb.AttributeEntry) *ateapipb.VersionedSandboxCompat {
+		return &ateapipb.VersionedSandboxCompat{SchemaVersion: ver, Attributes: attrs}
+	}
+	amd64 := &ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"}
+	arm64 := &ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "arm64"}
+	cpu := &ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"}
+	hash := &ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: "abc"}
+
+	tests := []struct {
+		name         string
+		worker, snap *ateapipb.VersionedSandboxCompat
+		want         bool
+	}{
+		{"equal", compat("v1", amd64), compat("v1", amd64), true},
+		{"key only the worker has is ignored", compat("v1", amd64, cpu), compat("v1", amd64), true},
+		{"key only the snapshot has fails", compat("v1", amd64), compat("v1", amd64, cpu), false},
+		{"key only the snapshot has fails even at equal count", compat("v1", amd64, cpu), compat("v1", amd64, hash), false},
+		{"value differs", compat("v1", arm64), compat("v1", amd64), false},
+		{"schema version differs", compat("v2", amd64), compat("v1", amd64), false},
+		{"both schema versions empty", compat("", amd64), compat("", amd64), false},
+		{"no attributes on either", compat("v1"), compat("v1"), true},
+		// Unlike Matches, a nil snapshot identity here is a stamped snapshot
+		// missing its identity, not the absence of a constraint.
+		{"nil snapshot identity", compat("v1", amd64), nil, false},
+		{"nil worker identity", nil, compat("v1", amd64), false},
+		{"both nil", nil, nil, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := MatchesCompat(tc.worker, tc.snap); got != tc.want {
+				t.Errorf("MatchesCompat() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
+	rt := func(class, arch, hash string) *ateapipb.SandboxRuntime {
+		attrs := []*ateapipb.AttributeEntry{{Key: AttrArchitecture, Value: arch}}
+		if hash != "" {
+			attrs = append(attrs, &ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: hash})
+		}
+		return &ateapipb.SandboxRuntime{
+			SandboxClass: class,
+			Version: &ateapipb.VersionedSandboxCompat{
+				SchemaVersion: SchemaVersionV1,
+				Attributes:    attrs,
+			},
+		}
+	}
+
+	defRT := rt("gvisor", "amd64", "v2-hash")
+	restorable1 := rt("gvisor", "amd64", "v1-hash")
+	restorable2 := rt("gvisor", "amd64", "v0-hash")
+	unmatchedRT := rt("gvisor", "arm64", "v2-hash")
+
+	status := &ateapipb.WorkerStatus{
+		DefaultRuntime:     defRT,
+		RestorableRuntimes: []*ateapipb.SandboxRuntime{restorable1, restorable2},
+	}
+
+	t.Run("nil snap matches any worker status and returns DefaultRuntime", func(t *testing.T) {
+		if !WorkerMatches(nil, nil) {
+			t.Errorf("WorkerMatches(nil, nil) = false, want true")
+		}
+		if !WorkerMatches(&ateapipb.WorkerStatus{}, nil) {
+			t.Errorf("WorkerMatches(empty, nil) = false, want true")
+		}
+		if got := MatchingRuntime(status, nil); got != defRT {
+			t.Errorf("MatchingRuntime(status, nil) = %v, want DefaultRuntime", got)
+		}
+	})
+
+	t.Run("matches DefaultRuntime", func(t *testing.T) {
+		if !WorkerMatches(status, defRT) {
+			t.Errorf("WorkerMatches(status, defRT) = false, want true")
+		}
+		if got := MatchingRuntime(status, defRT); got != defRT {
+			t.Errorf("MatchingRuntime(status, defRT) = %v, want defRT", got)
+		}
+	})
+
+	t.Run("matches RestorableRuntimes entry", func(t *testing.T) {
+		if !WorkerMatches(status, restorable2) {
+			t.Errorf("WorkerMatches(status, restorable2) = false, want true")
+		}
+		if got := MatchingRuntime(status, restorable2); got != restorable2 {
+			t.Errorf("MatchingRuntime(status, restorable2) = %v, want restorable2", got)
+		}
+	})
+
+	t.Run("returns nil and false when neither DefaultRuntime nor RestorableRuntimes match", func(t *testing.T) {
+		if WorkerMatches(status, unmatchedRT) {
+			t.Errorf("WorkerMatches(status, unmatchedRT) = true, want false")
+		}
+		if got := MatchingRuntime(status, unmatchedRT); got != nil {
+			t.Errorf("MatchingRuntime(status, unmatchedRT) = %v, want nil", got)
+		}
+		if WorkerMatches(nil, defRT) {
+			t.Errorf("WorkerMatches(nil, defRT) = true, want false")
+		}
+	})
+
+	t.Run("RuntimeFor is the match, else the default a cold boot runs on", func(t *testing.T) {
+		if got := RuntimeFor(status, restorable2); got != restorable2 {
+			t.Errorf("RuntimeFor(status, restorable2) = %v, want restorable2", got)
+		}
+		if got := RuntimeFor(status, unmatchedRT); got != defRT {
+			t.Errorf("RuntimeFor(status, unmatchedRT) = %v, want DefaultRuntime", got)
+		}
+		if got := RuntimeFor(status, nil); got != defRT {
+			t.Errorf("RuntimeFor(status, nil) = %v, want DefaultRuntime", got)
+		}
+		// A worker that reported no runtimes runs the actor under none.
+		if got := RuntimeFor(&ateapipb.WorkerStatus{}, unmatchedRT); got != nil {
+			t.Errorf("RuntimeFor(empty, unmatchedRT) = %v, want nil", got)
+		}
+	})
 }

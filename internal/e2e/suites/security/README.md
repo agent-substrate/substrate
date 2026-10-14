@@ -57,11 +57,11 @@ Fast, no cluster needed. This is what CI's `run-tests` job does, minus the
 JUnit wrapping, and it also type-checks every E2E suite:
 
 ```
-go vet ./... && make verify && (cd tools/apitool && go test -race ./...)
+go vet ./... && go test -race ./... && hack/verify-all.sh && (cd tools/apitool && go test -race ./...)
 ```
 
-`make verify` runs `go test -race ./...` and then `hack/verify-all.sh`
-(gofmt, boilerplate, licenses, go.mod, metrics registry, generated code).
+`hack/verify-all.sh` runs gofmt, boilerplate, licenses, go.mod, metrics
+registry, and generated-code checks.
 Commit or stash first: the generated-code check refuses a dirty tree. The
 metrics check needs Docker or a local `weaver` at the version pinned in
 `hack/verify/metrics.sh`. The root-gated tests CI runs under sudo need Linux:

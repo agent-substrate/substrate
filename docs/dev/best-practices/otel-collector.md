@@ -443,7 +443,7 @@ instead of stdout, and `otlp,console` to both; only the kind overlay sets it, to
 Everything else is stdout. `serverboot.InitLogger` writes structured JSON there,
 and `ateom` wraps actor container output with the `ate.*` metadata labels
 described in [Actor Observability](../../observability.md). The ateom relay
-carries logs, traces, and metrics; worker pods do not emit log records yet.
+carries logs, traces, and metrics.
 
 Those labels sit in a nested group (`labels`, or `logging.googleapis.com/labels`
 on GKE, where the key promotes the group into `LogEntry.labels`). A filelog
