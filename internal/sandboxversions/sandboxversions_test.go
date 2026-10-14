@@ -19,6 +19,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,7 +93,7 @@ func TestWrite(t *testing.T) {
 			if tt.wantErr {
 				if entries, err := os.ReadDir(filepath.Dir(dir)); err == nil {
 					for _, e := range entries {
-						if IsTemp(e.Name()) {
+						if strings.HasPrefix(e.Name(), tempPrefix) {
 							t.Errorf("temporary file %q left behind", e.Name())
 						}
 					}
@@ -170,25 +171,6 @@ func TestRead(t *testing.T) {
 			}
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("Read() mismatch (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestIsTemp(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		want bool
-	}{
-		{name: ".sandbox-versions-123456", want: true},
-		{name: "/var/lib/ate/ateoms/uid/.sandbox-versions-123456", want: true},
-		{name: "sandbox-versions.json", want: false},
-		{name: "/var/lib/ate/ateoms/uid/sandbox-versions.json", want: false},
-		{name: "ateom.sock", want: false},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsTemp(tt.name); got != tt.want {
-				t.Errorf("IsTemp(%q) = %v, want %v", tt.name, got, tt.want)
 			}
 		})
 	}

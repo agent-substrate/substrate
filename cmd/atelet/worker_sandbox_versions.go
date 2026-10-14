@@ -75,9 +75,6 @@ type versionPlan struct {
 type workerSandboxResolver struct {
 	workerPools listersv1alpha1.WorkerPoolLister
 	configs     listersv1alpha1.SandboxConfigLister
-	// synced reports whether every lister has completed its initial list;
-	// atelet never blocks startup on these informers.
-	synced func() bool
 }
 
 // poolConfigName returns the SandboxConfig the atecontroller confirmed for the
@@ -97,9 +94,6 @@ func poolConfigName(pool *v1alpha1.WorkerPool) string {
 // node. Apart from a pod in no pool, every failure can succeed once an
 // informer catches up or the atecontroller resolves the pool.
 func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (v1alpha1.SandboxClass, *v1alpha1.SandboxConfig, error) {
-	if !r.synced() {
-		return "", nil, errors.New("WorkerPool and SandboxConfig caches have not synced yet")
-	}
 	poolName := pod.Labels[workerPoolLabel]
 	if poolName == "" {
 		return "", nil, fmt.Errorf("%w: worker pod %s/%s has no %s label", errPermanent, pod.Namespace, pod.Name, workerPoolLabel)

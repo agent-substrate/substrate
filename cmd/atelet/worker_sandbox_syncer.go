@@ -128,9 +128,6 @@ func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInforme
 	resolver := &workerSandboxResolver{
 		workerPools: workerPools.Lister(),
 		configs:     configs.Lister(),
-		synced: func() bool {
-			return workerPools.Informer().HasSynced() && configs.Informer().HasSynced()
-		},
 	}
 	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), ateomsDir)
 	if err := watch(ctx, "worker pod", pods.Informer(), s.podHandler()); err != nil {
@@ -142,7 +139,7 @@ func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInforme
 	if err := watch(ctx, "SandboxConfig", configs.Informer(), s.sandboxConfigHandler()); err != nil {
 		return nil, err
 	}
-	go s.run(ctx, pods.Informer().HasSynced)
+	go s.run(ctx, pods.Informer().HasSynced, workerPools.Informer().HasSynced, configs.Informer().HasSynced)
 	slog.InfoContext(ctx, "Worker sandbox versions syncer started")
 	return s, nil
 }
@@ -271,19 +268,20 @@ func (s *workerSandboxSyncer) enqueueExistingDirs(ctx context.Context) {
 	}
 }
 
-// run drains the queue until ctx ends. Directories left on disk are only
-// judged once the pod cache has synced, since before that every pod looks
-// gone.
-func (s *workerSandboxSyncer) run(ctx context.Context, podsSynced cache.InformerSynced) {
+// run drains the queue until ctx ends. It starts only once every cache in
+// synced has synced:
+//   - before the pod cache syncs, every pod looks gone
+//   - before the WorkerPool and SandboxConfig caches sync, no pod resolves
+//     and each sync would spend a retry
+func (s *workerSandboxSyncer) run(ctx context.Context, synced ...cache.InformerSynced) {
 	go func() {
 		<-ctx.Done()
 		s.queue.ShutDown()
 	}()
-	go func() {
-		if cache.WaitForCacheSync(ctx.Done(), podsSynced) {
-			s.enqueueExistingDirs(ctx)
-		}
-	}()
+	if !cache.WaitForCacheSync(ctx.Done(), synced...) {
+		return
+	}
+	s.enqueueExistingDirs(ctx)
 	for {
 		uid, shutdown := s.queue.Get()
 		if shutdown {

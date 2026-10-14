@@ -94,7 +94,6 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	s := newWorkerSandboxSyncer(&workerSandboxResolver{
 		workerPools: listersv1alpha1.NewWorkerPoolLister(pools),
 		configs:     listersv1alpha1.NewSandboxConfigLister(configs),
-		synced:      func() bool { return true },
 	}, pods, t.TempDir())
 	// Tests that check the jitter set it.
 	s.maxJitter = 0
@@ -526,30 +525,39 @@ func mkOldDir(t *testing.T, path string) {
 	}
 }
 
-// TestWorkerSandboxSyncerRun verifies that run judges the directories on disk
-// only once the pod cache has synced, since before that every pod looks gone,
-// and that it stops when ctx ends.
+// TestWorkerSandboxSyncerRun verifies that run drains the queue only once
+// every cache has synced: before the pod cache syncs every pod looks gone, and
+// before the WorkerPool cache syncs no pod resolves. It also verifies that run
+// stops when ctx ends.
 func TestWorkerSandboxSyncerRun(t *testing.T) {
 	tests := []struct {
-		name       string
-		podsSynced bool
+		name        string
+		podsSynced  bool
+		poolsSynced bool
 		// wantOrphan is whether the directory of a pod that is gone remains.
 		wantOrphan bool
 		// wantFile is whether the directory of a live pod gets its file.
 		wantFile bool
 	}{{
-		name:       "pod cache not synced",
+		name:       "no cache synced",
 		wantOrphan: true,
 	}, {
-		name:       "pod cache synced",
+		name:       "only the pod cache synced",
 		podsSynced: true,
-		wantFile:   true,
+		wantOrphan: true,
+	}, {
+		name:        "every cache synced",
+		podsSynced:  true,
+		poolsSynced: true,
+		wantFile:    true,
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newTestSyncer(t, workerPod("pod-live", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
 			mkOldDir(t, s.podDir("pod-live"))
 			mkOldDir(t, s.podDir("pod-gone"))
+			// A pod Add event queued before the caches sync.
+			s.queue.Add("pod-live")
 			matches := func() bool {
 				return exists(s.podDir("pod-gone")) == tt.wantOrphan && exists(s.versionsFile("pod-live")) == tt.wantFile
 			}
@@ -559,15 +567,15 @@ func TestWorkerSandboxSyncerRun(t *testing.T) {
 			stopped := make(chan struct{})
 			go func() {
 				defer close(stopped)
-				s.run(ctx, func() bool { return tt.podsSynced })
+				s.run(ctx, func() bool { return tt.podsSynced }, func() bool { return tt.poolsSynced })
 			}()
-			if tt.podsSynced {
+			if tt.podsSynced && tt.poolsSynced {
 				waitFor(t, "the directories to be synced", matches)
 			} else {
 				// cache.WaitForCacheSync polls every 100ms.
 				time.Sleep(300 * time.Millisecond)
 				if !matches() {
-					t.Errorf("before the pod cache synced: pod-gone directory exists = %v, pod-live file exists = %v; want %v, %v",
+					t.Errorf("before every cache synced: pod-gone directory exists = %v, pod-live file exists = %v; want %v, %v",
 						exists(s.podDir("pod-gone")), exists(s.versionsFile("pod-live")), tt.wantOrphan, tt.wantFile)
 				}
 			}

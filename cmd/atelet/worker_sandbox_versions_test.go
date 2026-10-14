@@ -192,7 +192,6 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 	tests := []struct {
 		name          string
 		objs          []any
-		unsynced      bool
 		pod           *corev1.Pod
 		wantConfig    string
 		wantErr       bool
@@ -202,13 +201,6 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 		objs:       []any{resolvedPool("pool", "gvisor-default"), cfg},
 		pod:        workerPod("pod-a", "pool"),
 		wantConfig: "gvisor-default",
-	}, {
-		// Startup never waits on these informers.
-		name:     "caches not synced",
-		objs:     []any{resolvedPool("pool", "gvisor-default"), cfg},
-		unsynced: true,
-		pod:      workerPod("pod-a", "pool"),
-		wantErr:  true,
 	}, {
 		name:          "pod belongs to no pool",
 		objs:          []any{resolvedPool("pool", "gvisor-default"), cfg},
@@ -255,9 +247,6 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newTestSyncer(t, tt.objs...)
-			if tt.unsynced {
-				s.resolver.synced = func() bool { return false }
-			}
 			class, got, err := s.resolver.resolve(tt.pod)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("resolve() error = %v, want error %v", err, tt.wantErr)

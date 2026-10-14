@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // File is the content of a worker's sandbox versions file: the sandbox
@@ -94,9 +93,4 @@ func Read(path string) (*File, error) {
 		return nil, fmt.Errorf("while decoding %s: %w", path, err)
 	}
 	return v, nil
-}
-
-// IsTemp reports whether name is one of Write's temporary files.
-func IsTemp(name string) bool {
-	return strings.HasPrefix(filepath.Base(name), tempPrefix)
 }
