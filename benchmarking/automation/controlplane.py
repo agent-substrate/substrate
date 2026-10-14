@@ -190,15 +190,51 @@ def _allocatable_millis(node: dict[str, Any]) -> int:
     return _cpu_millis(node.get("status", {}).get("allocatable", {}).get("cpu", "0"))
 
 
+def _pod_cpu_millis(pod: dict[str, Any]) -> int:
+    """The CPU a pod holds on its node: its containers' requests plus its
+    sidecars', the init containers that keep running."""
+    spec = pod.get("spec", {})
+    containers = spec.get("containers", []) + [
+        c for c in spec.get("initContainers", []) if c.get("restartPolicy") == "Always"
+    ]
+    return sum(
+        _cpu_millis(c.get("resources", {}).get("requests", {}).get("cpu", 0))
+        for c in containers
+    )
+
+
+def requested_millis(pods: list[dict[str, Any]]) -> dict[str, int]:
+    """CPU already requested on each node by the pods that hold it, but not
+    by ate-api-server's, which pin_ateapi replaces."""
+    out: dict[str, int] = {}
+    for pod in pods:
+        node = pod.get("spec", {}).get("nodeName")
+        if not node or pod.get("status", {}).get("phase") in ("Succeeded", "Failed"):
+            continue
+        meta = pod.get("metadata", {})
+        if meta.get("namespace") == NAMESPACE and meta.get("labels", {}).get("app") == "ate-api-server":
+            continue
+        out[node] = out.get(node, 0) + _pod_cpu_millis(pod)
+    return out
+
+
 def pick_role_nodes(nodes: list[dict[str, Any]], postgres_node: str,
-                    ateapi_millis: int = 0, runner_millis: int = 0) -> tuple[str, str]:
+                    ateapi_millis: int = 0, runner_millis: int = 0,
+                    requested: dict[str, int] | None = None) -> tuple[str, str]:
     """Return (ateapi node, runner node), never the Postgres node: Postgres on
-    size10 requests nearly a whole node. Each node must be able to allocate
-    the CPU its role asks for: ateapi_millis for every ateapi replica, which
-    all share the node, and runner_millis for the runner. ateapi takes the
-    first such untainted schedulable node by name. The runner takes the first
-    such node of the load-generator pool, the one it is meant for, or else
-    the next such untainted node."""
+    size10 requests nearly a whole node. Each node must have free the CPU its
+    role asks for, its allocatable less what requested says pods already
+    hold there: ateapi_millis for every ateapi replica, which all share the
+    node, and runner_millis for the runner. ateapi takes the first such
+    untainted schedulable node by name. The runner takes the first such node
+    of the load-generator pool, the one it is meant for, or else the next
+    such untainted node. Pods scheduled after the pick, such as the
+    benchmark workloads, can still take the runner's CPU."""
+    requested = requested or {}
+
+    def free(n: dict[str, Any]) -> int:
+        return _allocatable_millis(n) - requested.get(n["metadata"]["name"], 0)
+
     schedulable = sorted(
         (n for n in nodes
          if n["metadata"]["name"] != postgres_node
@@ -207,24 +243,24 @@ def pick_role_nodes(nodes: list[dict[str, Any]], postgres_node: str,
     )
     untainted = [n for n in schedulable if not _repelling_taints(n)]
     loadgen = [n for n in schedulable if _repelling_taints(n) == [LOADGEN_TAINT]]
-    ateapi = next((n for n in untainted if _allocatable_millis(n) >= ateapi_millis), None)
+    ateapi = next((n for n in untainted if free(n) >= ateapi_millis), None)
     if ateapi is None:
         raise RuntimeError(
             f"pinNodes needs an untainted node besides the Postgres node {postgres_node!r} "
-            f"that can allocate {ateapi_millis}m CPU for ateapi; found "
-            f"{[(n['metadata']['name'], _allocatable_millis(n)) for n in untainted]}"
+            f"with {ateapi_millis}m CPU free for ateapi; found (node, free millicores) "
+            f"{[(n['metadata']['name'], free(n)) for n in untainted]}"
         )
     runner = next(
         (n for n in loadgen + untainted
-         if n is not ateapi and _allocatable_millis(n) >= runner_millis),
+         if n is not ateapi and free(n) >= runner_millis),
         None,
     )
     if runner is None:
         raise RuntimeError(
             f"pinNodes needs a node besides the Postgres node {postgres_node!r} and the "
-            f"ateapi node that can allocate {runner_millis}m CPU for the runner; found "
-            f"load-generator pool {[n['metadata']['name'] for n in loadgen]}, untainted "
-            f"{[n['metadata']['name'] for n in untainted if n is not ateapi]}"
+            f"ateapi node with {runner_millis}m CPU free for the runner; found (node, free "
+            f"millicores) load-generator pool {[(n['metadata']['name'], free(n)) for n in loadgen]}, "
+            f"untainted {[(n['metadata']['name'], free(n)) for n in untainted if n is not ateapi]}"
         )
     return ateapi["metadata"]["name"], runner["metadata"]["name"]
 
@@ -234,10 +270,12 @@ def label_nodes(cfg: dict[str, Any], runner_cpu: Any) -> None:
         ["-n", NAMESPACE, "get", "pod", "postgres-0", "-o", "jsonpath={.spec.nodeName}"]
     )
     nodes = json.loads(_kubectl_out(["get", "nodes", "-o", "json"]))["items"]
+    pods = json.loads(_kubectl_out(["get", "pods", "--all-namespaces", "-o", "json"]))["items"]
     ateapi_node, runner_node = pick_role_nodes(
         nodes, postgres_node,
         ateapi_millis=cfg["replicas"] * _cpu_millis(cfg["cpu"]),
         runner_millis=_cpu_millis(runner_cpu),
+        requested=requested_millis(pods),
     )
     # A label left by an earlier run on another node would give a role two
     # nodes.
