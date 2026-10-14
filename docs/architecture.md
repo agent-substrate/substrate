@@ -421,14 +421,14 @@ stateDiagram-v2
     RESUMING --> RUNNING : restore / boot complete
     RUNNING --> SUSPENDING : SuspendActor
     SUSPENDING --> SUSPENDED : checkpoint complete
-    RUNNING --> PAUSING : PauseActor
-    PAUSING --> SUSPENDED : node-local checkpoint complete
+    RUNNING --> SUSPENDING : PauseActor
     SUSPENDED --> SUSPENDING : SuspendActor (paused: uploads the node-local snapshot)
     SUSPENDED --> [*] : DeleteActor
 ```
 
-A paused actor and a suspended actor are both `SUSPENDED`. They differ only in
-the shape of `status.snapshots`: after a pause the latest snapshot has a
+A pause and a suspend both pass through `SUSPENDING`, and a paused actor and
+a suspended actor are both `SUSPENDED`. They differ only in the shape of
+`status.snapshots`: after a pause the latest snapshot has a
 `locality` (the node holding its files) and no `durableSnapshot`, and
 `status.assignedNode` pins the actor to that node, so `ResumeActor` restores
 it there from the local files. After a suspend the latest snapshot has a

@@ -103,17 +103,15 @@ groups:
             - id: suspending
               stability: development
               value: suspending
-              brief: ateapi is writing the durable snapshot.
+              brief: >
+                ateapi is writing a snapshot: durable for a suspend,
+                node-local for a pause.
             - id: suspended
               stability: development
               value: suspended
               brief: >
                 The actor holds no worker. Its latest snapshot is durable, or
                 node-local after a pause.
-            - id: pausing
-              stability: development
-              value: pausing
-              brief: ateapi is writing the node-local snapshot.
             - id: crashed
               stability: development
               value: crashed

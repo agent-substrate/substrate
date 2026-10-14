@@ -160,6 +160,18 @@ func withPausedShape(node string) func(*ateapipb.Actor) {
 	}
 }
 
+// withPauseInProgress seeds the shape a pause has between MarkPausing and
+// FinalizePaused: a node-local snapshot at the latest generation that has no
+// locality yet. Pair it with ACTOR_STATE_SUSPENDING.
+func withPauseInProgress() func(*ateapipb.Actor) {
+	return func(a *ateapipb.Actor) {
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", ""),
+		}
+	}
+}
+
 // allActorStates enumerates every ActorState value, for exhaustive
 // CheckPrerequisite table tests. It is derived from the generated enum map so
 // states added to the proto are covered automatically.

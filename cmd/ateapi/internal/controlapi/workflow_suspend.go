@@ -127,6 +127,11 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	defer func() { err = done(err) }()
 
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+		if latestSnapshotIsPendingLocal(actor.GetStatus()) {
+			// The pause workflow owns the actor until it finishes; a suspend
+			// can run once the actor is paused.
+			return nil, apierror.FailedPrecondition("MarkSuspending prerequisite not met for Actor: %s (a pause is in progress)", actorRef)
+		}
 		markSkipped(ctx, "actor already SUSPENDING")
 		return actor, nil
 	}

@@ -109,19 +109,22 @@ func (w *ActorWorkflow) loadActorForPause(ctx context.Context, actorRef resource
 	return actor, actorTemplate, nil
 }
 
-// ensureMarkedPausing transitions a RUNNING actor to PAUSING, minting the
-// local snapshot name. Skips when a previous attempt already marked the
-// actor; the persisted name then stays authoritative for the rest of the
+// ensureMarkedPausing transitions a RUNNING actor to SUSPENDING, minting the
+// local snapshot name. A pause in progress is a SUSPENDING actor whose latest
+// generation is a pending node-local snapshot; a suspend in progress has a
+// pending durable one instead. Skips when a previous attempt already marked
+// the actor; the persisted name then stays authoritative for the rest of the
 // workflow.
 func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "MarkPausing")
 	defer func() { err = done(err) }()
 
-	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSING {
-		markSkipped(ctx, "actor already PAUSING")
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDING && latestSnapshotIsPendingLocal(actor.GetStatus()) {
+		markSkipped(ctx, "actor already SUSPENDING for a pause")
 		return actor, nil
 	}
-	// The pause edge only exists from RUNNING.
+	// The pause edge only exists from RUNNING. A SUSPENDING actor that is not
+	// pausing is suspending, and that suspend owns it.
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		return nil, apierror.FailedPrecondition("MarkPausing prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	}
@@ -133,7 +136,7 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 
 	snapshotUUID := resources.NewSnapshotName()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
 		// Increment last_assigned_generation for the new Pause request.
 		gen := toUpdate.Status.LastAssignedGeneration + 1
 		toUpdate.Status.LastAssignedGeneration = gen
@@ -169,7 +172,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
-		// Missing active worker pod reference in PAUSING state indicates corrupted store state.
+		// Missing active worker pod reference mid-pause indicates corrupted store state.
 		return "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationPause, crashMessageWorkerAssignmentMissing)
 	}
 

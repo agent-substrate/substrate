@@ -180,6 +180,37 @@ func TestEnsureMarkedSuspending_StateMatrix(t *testing.T) {
 	}
 }
 
+// TestEnsureMarkedSuspending_RejectsPauseInProgress verifies a suspend does
+// not adopt a SUSPENDING actor whose latest generation is a pending
+// node-local snapshot: that actor is mid-pause, and the pause owns it until
+// it is paused.
+func TestEnsureMarkedSuspending_RejectsPauseInProgress(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	w := &ActorWorkflow{store: persistence}
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+
+	pausing := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
+	}
+	withPauseInProgress()(pausing)
+	created := storetest.MustCreateActor(t, ctx, persistence, pausing)
+
+	tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"}}
+	_, err := w.ensureMarkedSuspending(ctx, actorRef, created, tmpl)
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
+		t.Errorf("ensureMarkedSuspending on a pause in progress: code = %v, want FailedPrecondition (err: %v)", got, err)
+	}
+	stored, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got := stored.GetStatus().GetLastAssignedGeneration(); got != 1 {
+		t.Errorf("last_assigned_generation = %d, want 1 (the pause's snapshot untouched)", got)
+	}
+}
+
 // TestEnsureMarkedSuspending_PausedPromotesLocalSnapshot verifies the suspend
 // edge from a paused actor (SUSPENDED whose latest snapshot is node-local):
 // it takes the edge and promotes that snapshot in place to a pending durable

@@ -94,6 +94,19 @@ func latestSnapshotIsDurable(status *ateapipb.ActorStatus) bool {
 	return notDurable == nil
 }
 
+// latestSnapshotIsPendingLocal reports whether the actor's latest snapshot is
+// node-local but not yet captured: it has no locality and no durable copy.
+// This is the shape a pause in progress has, and what tells a SUSPENDING
+// pause from a SUSPENDING suspend, whose latest snapshot has a pending
+// durable copy. A pause mints one such snapshot and a retry reuses it, so a
+// pending local snapshot is the latest one.
+func latestSnapshotIsPendingLocal(status *ateapipb.ActorStatus) bool {
+	pending := latestSnapshot(status, func(snap *ateapipb.Snapshot) bool {
+		return snap.GetLocality() == "" && snap.GetDurableSnapshot() == nil
+	})
+	return pending != nil
+}
+
 // clearLocalSnapshots clears Locality across all Snapshots in status.Snapshots
 // without dropping PENDING durable snapshots (so DeleteActor can still collect
 // an in-flight durable snapshot after releasing the worker).

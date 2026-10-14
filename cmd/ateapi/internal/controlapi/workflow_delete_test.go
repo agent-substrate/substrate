@@ -155,7 +155,6 @@ func TestEnsureMarkedDeleting_StateMatrix(t *testing.T) {
 				ateapipb.ActorState_ACTOR_STATE_RUNNING:     true,
 				ateapipb.ActorState_ACTOR_STATE_RESUMING:    true,
 				ateapipb.ActorState_ACTOR_STATE_SUSPENDING:  true,
-				ateapipb.ActorState_ACTOR_STATE_PAUSING:     true,
 				ateapipb.ActorState_ACTOR_STATE_SUSPENDED:   true,
 				ateapipb.ActorState_ACTOR_STATE_CRASHED:     true,
 				ateapipb.ActorState_ACTOR_STATE_REVERTING:   true,
