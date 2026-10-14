@@ -96,7 +96,7 @@ func cpuMemory(cpuMilli, memoryBytes int64) *ateletpb.Resources {
 		limits = append(limits, &ateletpb.Limits{Name: resources.ResourceCPU, Quantity: resource.NewMilliQuantity(cpuMilli, resource.DecimalSI).String()})
 	}
 	if memoryBytes != 0 {
-		limits = append(limits, &ateletpb.Limits{Name: resources.ResourceMemory, Quantity: resource.NewQuantity(memoryBytes, resource.BinarySI).String()})
+		limits = append(limits, &ateletpb.Limits{Name: resources.ResourceMemory, Quantity: resources.FormatQuantity(*resource.NewQuantity(memoryBytes, resource.BinarySI))})
 	}
 	if len(limits) == 0 {
 		return nil

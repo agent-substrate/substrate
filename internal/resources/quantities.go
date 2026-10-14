@@ -120,10 +120,21 @@ func (q Quantities) Proto() *ateapipb.Resources {
 	sort.Strings(names)
 	out := &ateapipb.Resources{Limits: make([]*ateapipb.Limits, 0, len(names))}
 	for _, name := range names {
-		quantity := q[name]
-		out.Limits = append(out.Limits, &ateapipb.Limits{Name: name, Quantity: quantity.String()})
+		out.Limits = append(out.Limits, &ateapipb.Limits{Name: name, Quantity: FormatQuantity(q[name])})
 	}
 	return out
+}
+
+// FormatQuantity writes q so ParseQuantity takes it back. BinarySI writes a
+// whole count that is not a multiple of 1024 with an exponent ("16e3").
+//
+// TODO: Delete after bumping k8s.io/apimachinery to a version with
+// kubernetes/kubernetes#141817, and use String instead.
+func FormatQuantity(q resource.Quantity) string {
+	if v := q.Value(); q.Format == resource.BinarySI && q.CmpInt64(v) == 0 && v%1024 != 0 {
+		return resource.NewQuantity(v, resource.DecimalSI).String()
+	}
+	return q.String()
 }
 
 // ResourceCPU and ResourceMemory are the two dimensions everything declares

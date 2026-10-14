@@ -44,6 +44,10 @@ func TestFromFiles(t *testing.T) {
 		{name: "limits set", cpu: "2000", memory: "4294967296", want: &ateletpb.WorkerResources{Actors: testActors, Resources: &ateletpb.Resources{
 			Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"}},
 		}}},
+		// Not a multiple of 1024: BinarySI would print "1e9", which atelet rejects.
+		{name: "decimal memory", cpu: "500", memory: "1000000000", want: &ateletpb.WorkerResources{Actors: testActors, Resources: &ateletpb.Resources{
+			Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "500m"}, {Name: "memory", Quantity: "1G"}},
+		}}},
 		{name: "unparseable is none", cpu: "2Gi", memory: "", want: &ateletpb.WorkerResources{Actors: testActors}},
 		{name: "negative is none", cpu: "-1", memory: "-1", want: &ateletpb.WorkerResources{Actors: testActors}},
 	} {

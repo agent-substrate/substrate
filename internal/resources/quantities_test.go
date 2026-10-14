@@ -55,6 +55,33 @@ func TestParseQuantity(t *testing.T) {
 	}
 }
 
+// What FormatQuantity writes, ParseQuantity takes back.
+func TestFormatQuantity(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		q    resource.Quantity
+		want string
+	}{
+		{"a multiple of 1024", resource.MustParse("4Gi"), "4Gi"},
+		{"ateom's 1G capacity", *resource.NewQuantity(1e9, resource.BinarySI), "1G"},
+		{"binary input that is not a multiple of 1024", resource.MustParse("15.625Ki"), "16k"},
+	} {
+		got := FormatQuantity(tc.q)
+		if _, err := ParseQuantity(got); got != tc.want || err != nil {
+			t.Errorf("%s: FormatQuantity() = %q, want %q (ParseQuantity: %v)", tc.name, got, tc.want, err)
+		}
+	}
+}
+
+// Proto writes totals with FormatQuantity, so a mixed sum still reads back.
+func TestProtoWritesWhatParseQuantityTakes(t *testing.T) {
+	q := Quantities{"memory": resource.MustParse("1Ki")}
+	q.Add(Quantities{"memory": resource.MustParse("976")})
+	if got := q.Proto().GetLimits()[0].GetQuantity(); got != "2k" {
+		t.Errorf("Proto() wrote %q, want 2k", got)
+	}
+}
+
 func limits(pairs ...string) *ateapipb.Resources {
 	out := &ateapipb.Resources{}
 	for i := 0; i < len(pairs); i += 2 {

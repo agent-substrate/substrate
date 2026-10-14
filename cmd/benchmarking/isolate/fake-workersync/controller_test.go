@@ -1081,9 +1081,9 @@ func TestCapacityFormatsLikeAteom(t *testing.T) {
 		return tmpl.capacity(nil)
 	}
 	got := capacity(pool("p", 1, corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("0.5"), corev1.ResourceMemory: resource.MustParse("1G")}))
-	// ateom spells cpu as decimal milli-cores and memory as a binary-SI byte
-	// count; 1G is not a power of two, so 1e9.
-	if want := wantCapacity(1000, "500m", "1e9"); !proto.Equal(got, want) {
+	// ateom spells cpu as decimal milli-cores and memory with a binary suffix
+	// only for a multiple of 1024, which 1G is not.
+	if want := wantCapacity(1000, "500m", "1G"); !proto.Equal(got, want) {
 		t.Errorf("capacity = %v, want %v", got, want)
 	}
 	if none := capacity(pool("p", 1, nil)); none.GetResources() != nil || none.GetActors() != 1000 {
