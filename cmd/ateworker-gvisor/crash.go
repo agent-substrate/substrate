@@ -53,20 +53,22 @@ func (s *AteWorkerService) watchSandbox(ctx context.Context, hosted *hostedActor
 	}
 	go func() {
 		<-exited
-		if hosted.stopping.Load() || s.shuttingDown.Load() {
+		if s.shuttingDown.Load() {
 			return
 		}
 		ctx := context.Background()
 		const message = "gVisor sandbox exited"
-		slog.WarnContext(ctx, "Sandbox died", slog.String("actorUID", attribution.UID), slog.Int("pid", pid))
 
-		// Not reported under the actor's lock: a suspend in flight holds the
-		// actor's lease while it waits on that lock for its Checkpoint.
+		// stopping is checked under the actor's lock, so an exit during a
+		// checkpoint that then fails is still handled once it gives up.
+		// Not reported under the lock: a suspend in flight holds the actor's
+		// lease while it waits on that lock for its Checkpoint.
 		if !s.locks.Lock(ctx, attribution.UID) {
 			return
 		}
 		ours := s.lookupActor(attribution.UID) == hosted && !hosted.stopping.Load()
 		if ours {
+			slog.WarnContext(ctx, "Sandbox died", slog.String("actorUID", attribution.UID), slog.Int("pid", pid))
 			if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, runscPath, actorDirs, containers); err != nil {
 				slog.WarnContext(ctx, "Failed to tear down the dead sandbox", slog.String("actorUID", attribution.UID), slog.Any("err", err))
 			}

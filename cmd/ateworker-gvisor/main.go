@@ -858,6 +858,11 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 			}
 			err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, fsPaths)
 			if err != nil {
+				// the actor may stay RUNNING, so its sandbox dying is a crash
+				// again, including if this checkpoint stopped it
+				if hosted != nil {
+					hosted.stopping.Store(false)
+				}
 				timing.checkpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing pause: %w", err)
 			}
