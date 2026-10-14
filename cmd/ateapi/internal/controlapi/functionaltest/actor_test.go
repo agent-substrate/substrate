@@ -3780,22 +3780,18 @@ func TestResumeActor_AteletFailureCrashesActor(t *testing.T) {
 	}
 }
 
-// A transient atelet failure, or a caller whose deadline passes during the
-// restore, leaves the actor RESUMING on its worker, and the next resume finishes.
-// Only Unavailable and the caller's own deadline reach the caller with their
-// code. Atelet's own Canceled or DeadlineExceeded reach it as Internal.
+// A transient atelet failure leaves the actor RESUMING on its worker, and the
+// next resume finishes. Only Unavailable reaches the caller with its code;
+// atelet's own Canceled or DeadlineExceeded reach it as Internal.
 func TestResumeActor_AteletTransportErrorLeavesActorResuming(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		fail     error
-		delay    time.Duration
-		deadline time.Duration
 		wantCode codes.Code
 	}{
 		{name: "Unavailable", fail: status.Error(codes.Unavailable, "restore reply lost"), wantCode: codes.Unavailable},
 		{name: "atelet Canceled", fail: status.Error(codes.Canceled, "restore reply lost"), wantCode: codes.Internal},
 		{name: "atelet DeadlineExceeded", fail: status.Error(codes.DeadlineExceeded, "restore reply lost"), wantCode: codes.Internal},
-		{name: "caller deadline", delay: time.Second, deadline: 200 * time.Millisecond, wantCode: codes.DeadlineExceeded},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ns := namespaceForTest("ns-resume-atelet-" + strings.ReplaceAll(strings.ToLower(tt.name), " ", "-"))
@@ -3816,14 +3812,7 @@ func TestResumeActor_AteletTransportErrorLeavesActorResuming(t *testing.T) {
 			}
 
 			tc.fakeAtelet.FailRestore = tt.fail
-			tc.fakeAtelet.RestoreDelay = tt.delay
-			ctx := context.Background()
-			if tt.deadline > 0 {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, tt.deadline)
-				defer cancel()
-			}
-			_, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref})
+			_, err := tc.client.ResumeActor(context.Background(), &ateapi.ResumeActorRequest{Actor: ref})
 			if got := status.Code(err); got != tt.wantCode {
 				t.Fatalf("ResumeActor status code = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
@@ -3842,11 +3831,7 @@ func TestResumeActor_AteletTransportErrorLeavesActorResuming(t *testing.T) {
 				t.Errorf("assigned worker = %q, want %q kept for the retry", got, podUID)
 			}
 
-			// The fake still holds its lock while a delayed restore sleeps.
-			tc.fakeAtelet.Lock.Lock()
 			tc.fakeAtelet.FailRestore = nil
-			tc.fakeAtelet.RestoreDelay = 0
-			tc.fakeAtelet.Lock.Unlock()
 			if _, err := tc.client.ResumeActor(context.Background(), &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
 				t.Fatalf("retried ResumeActor failed: %v", err)
 			}
@@ -3861,6 +3846,61 @@ func TestResumeActor_AteletTransportErrorLeavesActorResuming(t *testing.T) {
 				t.Errorf("assigned worker after retry = %q, want %q", got, podUID)
 			}
 		})
+	}
+}
+
+// A caller whose deadline passes during the restore gets DeadlineExceeded, but
+// the resume runs to its end without it: a retry meanwhile is Aborted by the
+// lease, and the actor reaches RUNNING on the worker it was given.
+func TestResumeActor_CallerDeadlineDoesNotStopTheResume(t *testing.T) {
+	ns := namespaceForTest("ns-resume-caller-deadline")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	name := "id1"
+	ref := &ateapi.ObjectRef{Atespace: testAtespace, Name: name}
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: name}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	tc.fakeAtelet.RestoreDelay = time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref})
+	if got := status.Code(err); got != codes.DeadlineExceeded {
+		t.Fatalf("ResumeActor status code = %v, want DeadlineExceeded (err: %v)", got, err)
+	}
+
+	// The first resume still holds the lease while its restore runs.
+	_, err = tc.client.ResumeActor(context.Background(), &ateapi.ResumeActorRequest{Actor: ref})
+	if got := status.Code(err); got != codes.Aborted {
+		t.Fatalf("ResumeActor during the restore: status code = %v, want Aborted (err: %v)", got, err)
+	}
+
+	var actor *ateapi.Actor
+	err = wait.PollUntilContextTimeout(context.Background(), 20*time.Millisecond, 10*time.Second, true, func(context.Context) (bool, error) {
+		var err error
+		actor, err = tc.persistence.GetActor(context.Background(), actorRef)
+		if err != nil {
+			return false, err
+		}
+		return actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING, nil
+	})
+	if err != nil {
+		t.Fatalf("actor did not reach RUNNING after the caller left (state %v): %v", actor.GetStatus().GetState(), err)
+	}
+	if crash := actor.GetStatus().GetCrash(); crash != nil {
+		t.Errorf("crash recorded: %v", crash)
+	}
+	if got := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != podUID {
+		t.Errorf("assigned worker = %q, want %q", got, podUID)
 	}
 }
 
