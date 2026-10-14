@@ -43,6 +43,7 @@ type Options struct {
 	AdditionalEgressExtprocService string
 	CredentialProvider             string
 	OtlpEndpoint                   string
+	GvisorAssetBaseURL             string
 
 	// Image source selection.
 	ImageRepo string
@@ -91,6 +92,7 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 		{"experimental-additional-egress-extproc-service", opts.AdditionalEgressExtprocService},
 		{"credential-provider", opts.CredentialProvider},
 		{"otlp-endpoint", opts.OtlpEndpoint},
+		{"gvisor-asset-base-url", opts.GvisorAssetBaseURL},
 		{"image-repo", opts.ImageRepo},
 		{"image-tag", opts.ImageTag},
 	} {

@@ -54,6 +54,7 @@ func loadEnv(t *testing.T) {
 		"ATE_API_POSTGRES_SERVER_CA_FILE",
 		"ATE_ATENET_DATAPLANE",
 		"ATE_CREDENTIAL_PROVIDER",
+		"ATE_GVISOR_ASSET_BASE_URL",
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
 		"ATE_INSTALL_CLUSTER_SIZE",
@@ -120,6 +121,90 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.CordonControlPlane {
 		t.Error("CordonControlPlane = true, want false")
+	}
+}
+
+func TestLoadGvisorAssetBaseURL(t *testing.T) {
+	tests := []struct {
+		name string
+		opts Options
+		env  string
+		file string
+		want string
+	}{
+		{name: "unset"},
+		{
+			name: "flag adds trailing slash",
+			opts: Options{GvisorAssetBaseURL: "s3://substrate-assets/gvisor/releases"},
+			want: "s3://substrate-assets/gvisor/releases/",
+		},
+		{
+			name: "environment",
+			env:  "gs://internal-assets/gvisor/releases/",
+			want: "gs://internal-assets/gvisor/releases/",
+		},
+		{
+			name: "configuration file",
+			file: "s3://file-assets/gvisor/releases/",
+			want: "s3://file-assets/gvisor/releases/",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			if tc.env != "" {
+				t.Setenv("ATE_GVISOR_ASSET_BASE_URL", tc.env)
+			}
+			if tc.file != "" {
+				t.Setenv(ConfigPathEnv, writeConfig(t, validHeader+
+					"sandbox:\n  gvisorAssetBaseURL: "+tc.file+"\n"))
+			}
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.GvisorAssetBaseURL != tc.want {
+				t.Errorf("GvisorAssetBaseURL = %q, want %q", cfg.GvisorAssetBaseURL, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidGvisorAssetBaseURL(t *testing.T) {
+	for _, tc := range []struct {
+		raw, wantReason string
+	}{
+		{"https://storage.example.com/gvisor/releases/", `has scheme "https"`},
+		{"s3:///gvisor/releases/", "must name a bucket and an object"},
+		{"s3://user:password@bucket/gvisor/releases/", "must not carry user info"},
+		{"s3://bucket/gvisor/releases/?version=1", "must not carry user info, a query or a fragment"},
+		{"s3://bucket/gvisor/releases/#", "must not carry user info, a query or a fragment"},
+		{"s3://bucket/gvisor//releases/", "empty, '.'-terminated or space-padded path segment"},
+		{"s3://bucket/x%2F", "empty, '.'-terminated or space-padded path segment"},
+		{"s3://bucket/atespaces/team/tags/", "stored under snapshot"},
+		{"s3://bucket:9000/x/", "must name a bucket without a port"},
+		{" s3://bucket/gvisor/releases/", "must not have leading or trailing whitespace"},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_GVISOR_ASSET_BASE_URL", tc.raw)
+			_, err := Load(Options{})
+			if err == nil {
+				t.Fatal("Load() succeeded, want an invalid gVisor asset base URL error")
+			}
+			for _, want := range []string{gvisorAssetBaseURLKey, "ATE_GVISOR_ASSET_BASE_URL", tc.wantReason} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Load() error = %q, want it to contain %q", err, want)
+				}
+			}
+			probe := strings.TrimSuffix(tc.raw, "/") + "/asset"
+			if strings.Contains(err.Error(), "rpc error:") {
+				t.Errorf("Load() error contains gRPC status wrapping: %q", err)
+			}
+			if strings.Contains(err.Error(), probe) {
+				t.Errorf("Load() error exposes the synthetic validation object: %q", err)
+			}
+		})
 	}
 }
 
