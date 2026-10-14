@@ -35,8 +35,19 @@ const (
 	// digest, computed by atelet.
 	AttrSandboxRuntimeHash = "sandbox_runtime_hash"
 
-	// TODO: Add AttrCPUFeatures ("cpu_features") and other compatibility
-	// attributes as snapshot compatibility expands.
+	// AttrCPUFeatures is the set of CPU features `runsc cpu-features` reports
+	// for a gVisor runtime, encoded by EncodeCPUFeatures as a hex bitmask over
+	// the architecture's feature table. A snapshot's set must be a subset of
+	// the worker's.
+	AttrCPUFeatures = "cpu_features"
+
+	// AttrCPUVendor identifies the host CPU vendor (e.g. "GenuineIntel",
+	// "AuthenticAMD", or arm64 implementer "0x41") for microVM compatibility.
+	AttrCPUVendor = "cpu_vendor"
+
+	// AttrCPUModel identifies the host CPU family/model (e.g. "6:143" on amd64
+	// or "0x0:0xd40:1" on arm64) for microVM compatibility.
+	AttrCPUModel = "cpu_model"
 )
 
 // ProbeHost inspects the current host and returns its v1 VersionedSandboxCompat
@@ -71,6 +82,8 @@ func Matches(worker, snap *ateapipb.SandboxRuntime) bool {
 
 // MatchesCompat reports whether worker can restore a snapshot stamped with
 // snap: the same non-empty schema version, and every attribute on snap
+// satisfied by worker. AttrCPUFeatures is satisfied when the snapshot's
+// feature bitmask is a subset of the worker's; every other attribute must be
 // present on worker with an equal value. Keys only the worker has are
 // ignored, so a worker can start reporting a new key under the same schema
 // version without invalidating the snapshots taken before it; removing or
@@ -90,19 +103,30 @@ func MatchesCompat(worker, snap *ateapipb.VersionedSandboxCompat) bool {
 	for _, sa := range sAttrs {
 		found := false
 		for _, wa := range wAttrs {
-			if wa.GetKey() == sa.GetKey() {
-				if wa.GetValue() != sa.GetValue() {
-					return false
-				}
-				found = true
-				break
+			if wa.GetKey() != sa.GetKey() {
+				continue
 			}
+			if !attributeSatisfied(sa.GetKey(), wa.GetValue(), sa.GetValue()) {
+				return false
+			}
+			found = true
+			break
 		}
 		if !found {
 			return false
 		}
 	}
 	return true
+}
+
+// attributeSatisfied reports whether a worker's value for key satisfies a
+// snapshot's. AttrCPUFeatures is a set the worker's must include; every
+// other attribute must be equal.
+func attributeSatisfied(key, workerVal, snapVal string) bool {
+	if key == AttrCPUFeatures {
+		return matchesCPUFeatures(workerVal, snapVal)
+	}
+	return workerVal == snapVal
 }
 
 // MatchingRuntime returns the SandboxRuntime from status that can restore a
