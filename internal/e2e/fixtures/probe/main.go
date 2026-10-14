@@ -452,6 +452,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/whoami", whoami)
 	mux.HandleFunc("/fetch", fetch)
+	mux.HandleFunc("/volume-state", (&volumeStateProbe{}).serveHTTP)
 	mux.HandleFunc("/readfile", readfile)
 	mux.HandleFunc("/writefile", writefile)
 	mux.HandleFunc("/resources", resources)
