@@ -38,6 +38,23 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// TestMain clears the environment run reads its defaults and workload identity
+// from, so a value in the developer's or CI shell cannot change a test; tests
+// that need one set it with t.Setenv.
+func TestMain(m *testing.M) {
+	for _, name := range append([]string{
+		"AZURE_STORAGE_ACCOUNT_URL",
+		"AZURE_STORAGE_CONTAINERS",
+		"AZURE_STORAGE_PREFIX",
+		"AZURE_STORAGE_ASSET_CONTAINERS",
+	}, workloadIdentityEnv...) {
+		if err := os.Unsetenv(name); err != nil {
+			panic(err)
+		}
+	}
+	os.Exit(m.Run())
+}
+
 func TestRunRejectsInvalidConfiguration(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -63,9 +80,6 @@ func TestRunRejectsInvalidConfiguration(t *testing.T) {
 		{name: "invalid asset staging capacity", args: []string{"node", "--socket=/tmp/plugin.sock", "--account-url=https://account.example", "--containers=snapshots", "--asset-containers=assets", "--asset-staging-capacity=lots"}, want: "--asset-staging-capacity"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("AZURE_STORAGE_ACCOUNT_URL", "")
-			t.Setenv("AZURE_STORAGE_CONTAINERS", "")
-			t.Setenv("AZURE_STORAGE_ASSET_CONTAINERS", "")
 			err := run(context.Background(), tc.args, func(string, []string) (map[string]blobstore.Store, error) {
 				t.Fatal("store factory called for invalid configuration")
 				return nil, nil
@@ -148,7 +162,6 @@ func TestRunServesSelectedModeAndHealth(t *testing.T) {
 // TestRunServesAssets runs node mode with asset containers, one shared with
 // the snapshot containers, and fetches an asset from each through the socket.
 func TestRunServesAssets(t *testing.T) {
-	t.Setenv("AZURE_STORAGE_ASSET_CONTAINERS", "")
 	socket := testSocket(t, "plugin.sock")
 	root, staging := t.TempDir(), filepath.Join(t.TempDir(), "asset-staging")
 	ctx, cancel := context.WithCancel(context.Background())
