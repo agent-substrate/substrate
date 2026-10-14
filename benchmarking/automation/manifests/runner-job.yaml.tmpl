@@ -148,6 +148,9 @@ spec:
         operator: Equal
         value: "true"
         effect: NoSchedule
+      # Pins the runner to its node when the test's ateapi.pinNodes is on;
+      # {} otherwise.
+      affinity: ${RUNNER_AFFINITY}
       containers:
       - name: runner
         image: ${IMAGE}
