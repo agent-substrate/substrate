@@ -50,8 +50,10 @@ azblob://<container>/<snapshot-prefix>
 `<container>` must be one of `--containers`, and `CopySnapshot` may copy
 between any two of them. `--prefix`, when set, is prepended to every snapshot
 prefix in every container, allowing all substrate data to live below one
-directory. A bare container, a query or fragment, `\`, and `.`, `..` or other
-path segments made only of dots and spaces are rejected.
+directory. The blob name prefix is the URI's percent-decoded path, so
+`root%2Fsub` and `root/sub` name the same blobs, as they do for the in-tree
+object stores. A bare container, userinfo, a query or fragment, `\`, and `.`,
+`..` or other path segments made only of dots and spaces are rejected.
 
 ## Sandbox assets
 
