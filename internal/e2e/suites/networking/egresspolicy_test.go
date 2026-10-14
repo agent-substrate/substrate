@@ -114,8 +114,13 @@ func TestActorEgressHTTPSByHostname(t *testing.T) {
 	passthroughSpec.Namespace = mitm.Namespace
 	passthrough := e2e.DeployServerPod(t, ctx, passthroughSpec)
 
+	// Include an HTTP rule for the .cluster.local FQDNs so cluster DNS search-path
+	// resolution succeeds while port 443 TLS rules still match only SvcName().
 	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-sni", e2e.EgressFixture(),
-		e2e.EgressAllowHTTPS(mitm.SvcName()), e2e.EgressAllowPassthrough(passthrough.SvcName()))
+		e2e.EgressAllowHTTP(mitm.SvcName()+".cluster.local", passthrough.SvcName()+".cluster.local"),
+		e2e.EgressAllowHTTPS(mitm.SvcName()),
+		e2e.EgressAllowPassthrough(passthrough.SvcName()),
+	)
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -241,8 +246,8 @@ func TestActorEgressPendingPlaintextHeadersDoNotBlockMITM(t *testing.T) {
 
 	actorAtespace, actorName, _ := createAndResumeActorWithEgress(
 		t, ctx, "egress-slow-headers", e2e.EgressFixture(),
-		e2e.EgressAllowHTTPS(mitm.SvcName()),
-		e2e.EgressAllowHTTP(plaintext.SvcName()),
+		e2e.EgressAllowHTTPS(mitm.SvcName(), mitm.SvcName()+".cluster.local"),
+		e2e.EgressAllowHTTP(plaintext.SvcName(), plaintext.SvcName()+".cluster.local"),
 	)
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
