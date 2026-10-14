@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -224,7 +225,7 @@ func decodeOp(od opDoc) (op, error) {
 
 // parseSize reads a Kubernetes quantity as a positive byte count.
 func parseSize(s string) (int64, error) {
-	q, err := resource.ParseQuantity(s)
+	q, err := resources.ParseQuantity(s)
 	if err != nil {
 		return 0, err
 	}
@@ -237,7 +238,7 @@ func parseSize(s string) (int64, error) {
 
 // FormatSize renders a byte count as a Kubernetes quantity (32Mi, 1Gi).
 func FormatSize(n int64) string {
-	return resource.NewQuantity(n, resource.BinarySI).String()
+	return resources.FormatQuantity(*resource.NewQuantity(n, resource.BinarySI))
 }
 
 // Encode renders a Script as YAML in the form Decode reads, with one

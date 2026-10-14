@@ -18,8 +18,8 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // toAteletResources resolves a container's declared limits into the scalars
@@ -29,7 +29,7 @@ import (
 func toAteletResources(r *ateapipb.Resources) (*ateletpb.ResourceLimits, error) {
 	out := &ateletpb.ResourceLimits{}
 	for _, limit := range r.GetLimits() {
-		q, err := resource.ParseQuantity(limit.GetQuantity())
+		q, err := resources.ParseQuantity(limit.GetQuantity())
 		if err != nil {
 			return nil, fmt.Errorf("invalid container resource limit %s=%q: %w", limit.GetName(), limit.GetQuantity(), err)
 		}

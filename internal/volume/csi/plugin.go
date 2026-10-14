@@ -26,12 +26,12 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/nodepath"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -168,7 +168,7 @@ func (p *Plugin) DriverName(ctx context.Context) (string, error) {
 
 // CreateVolume maps to CSI Controller CreateVolume.
 func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
-	qty, err := resource.ParseQuantity(req.Capacity)
+	qty, err := resources.ParseQuantity(req.Capacity)
 	if err != nil {
 		return volume.CreateVolumeResponse{}, fmt.Errorf("failed to parse capacity %q: %w", req.Capacity, err)
 	}

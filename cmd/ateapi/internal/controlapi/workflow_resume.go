@@ -30,7 +30,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
@@ -587,7 +586,7 @@ func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
 // understand rather than the named set placement accounts in.
 func actorResourceLimits(tmpl *ateapipb.ActorTemplate) (cpuMilli, memBytes int64, err error) {
 	for _, limit := range tmpl.GetResources().GetLimits() {
-		q, perr := resource.ParseQuantity(limit.GetQuantity())
+		q, perr := resources.ParseQuantity(limit.GetQuantity())
 		if perr != nil {
 			return 0, 0, fmt.Errorf("invalid template resource limit %s=%q: %w", limit.GetName(), limit.GetQuantity(), perr)
 		}

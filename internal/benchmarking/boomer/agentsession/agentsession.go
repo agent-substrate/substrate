@@ -48,6 +48,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/internal/benchmarking/glutton"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
@@ -58,7 +59,6 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -275,7 +275,7 @@ func memoryLimit(tmpl *ateapipb.ActorTemplate) (limit int64, found bool, err err
 		if l.GetName() != "memory" {
 			continue
 		}
-		q, err := resource.ParseQuantity(l.GetQuantity())
+		q, err := resources.ParseQuantity(l.GetQuantity())
 		if err != nil {
 			return 0, true, fmt.Errorf("memory limit %q: %w", l.GetQuantity(), err)
 		}

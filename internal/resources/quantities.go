@@ -83,7 +83,7 @@ func ParseQuantities(r *ateapipb.Resources) (Quantities, error) {
 	}
 	out := make(Quantities, len(r.GetLimits()))
 	for _, limit := range r.GetLimits() {
-		q, err := resource.ParseQuantity(limit.GetQuantity())
+		q, err := ParseQuantity(limit.GetQuantity())
 		if err != nil {
 			return nil, fmt.Errorf("resource %s has an invalid quantity %q: %w", limit.GetName(), limit.GetQuantity(), err)
 		}

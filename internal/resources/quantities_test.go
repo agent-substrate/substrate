@@ -126,6 +126,12 @@ func TestParseQuantities(t *testing.T) {
 		}
 	})
 
+	t.Run("a quantity ParseQuantity rejects is an error", func(t *testing.T) {
+		if _, err := ParseQuantities(limits("memory", "1e9")); err == nil {
+			t.Error("ParseQuantities() = nil error, want one")
+		}
+	})
+
 	t.Run("nothing declared parses to nothing", func(t *testing.T) {
 		got, err := ParseQuantities(nil)
 		if err != nil || got != nil {
