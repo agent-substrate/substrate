@@ -489,55 +489,6 @@ func TestCheckLocalSnapshotFilesRejectsSymlink(t *testing.T) {
 	}
 }
 
-func TestWriteFileAtomic(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "actor-id")
-
-	// One shared write over an existing value, as happens on every resume;
-	// each subtest checks one postcondition.
-	if err := os.WriteFile(target, []byte("golden-id"), 0o600); err != nil {
-		t.Fatalf("seeding target: %v", err)
-	}
-	if err := writeFileAtomic(target, []byte("counter-1"), 0o644); err != nil {
-		t.Fatalf("writeFileAtomic: %v", err)
-	}
-
-	t.Run("replaces content", func(t *testing.T) {
-		got, err := os.ReadFile(target)
-		if err != nil {
-			t.Fatalf("reading target: %v", err)
-		}
-		if string(got) != "counter-1" {
-			t.Errorf("content = %q, want %q", got, "counter-1")
-		}
-	})
-
-	t.Run("sets permissions", func(t *testing.T) {
-		info, err := os.Stat(target)
-		if err != nil {
-			t.Fatalf("stat target: %v", err)
-		}
-		if perm := info.Mode().Perm(); perm != 0o644 {
-			t.Errorf("perm = %o, want 644", perm)
-		}
-	})
-
-	t.Run("leaves no temp files", func(t *testing.T) {
-		// The directory is visible inside the actor.
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatalf("reading dir: %v", err)
-		}
-		if len(entries) != 1 {
-			names := make([]string, 0, len(entries))
-			for _, e := range entries {
-				names = append(names, e.Name())
-			}
-			t.Errorf("leftover files in identity dir: %v", names)
-		}
-	})
-}
-
 // Every valid atelet scope must map to its ateom counterpart.
 func TestToAteomFidelity(t *testing.T) {
 	tests := []struct {
@@ -1304,6 +1255,12 @@ func writeLocalSnapshot(t *testing.T, dir string, rec sandboxAssetsRecord, conte
 func immediateUploadConfig() *ateletpb.UploadConfig {
 	return &ateletpb.UploadConfig{
 		Mode: ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE,
+	}
+}
+
+func deferredUploadConfig() *ateletpb.UploadConfig {
+	return &ateletpb.UploadConfig{
+		Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED,
 	}
 }
 

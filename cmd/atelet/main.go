@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/credentialprovider"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/snapshottracker"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -488,6 +489,9 @@ type AteomHerder struct {
 	volumePlugins         map[string]volume.VolumePluginWorkerPlane
 	csiDriverConfigGetter csi.CSIDriverConfigGetter
 	systemInfoVolumes     *systemInfoVolumeRefresher
+
+	// snapshots tracks each actor's snapshots on this node.
+	snapshots *snapshottracker.Tracker
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -518,6 +522,7 @@ func NewService(
 		volumePlugins:         volumePlugins,
 		csiDriverConfigGetter: csiDriverConfigGetter,
 		systemInfoVolumes:     systemInfoVolumes,
+		snapshots:             snapshottracker.New(),
 	}
 	return wms
 }
@@ -733,6 +738,9 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		// in the metadata if the error is not retriable.
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
+	// The snapshot commits on this node once ateom has written it, in either
+	// upload mode.
+	snap := snapshottracker.SnapshotRef{Snapshot: req.GetSnapshot(), CommitTime: time.Now()}
 
 	s.systemInfoVolumes.Deregister(actorUID)
 
@@ -746,6 +754,17 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	sandboxRec.ActorTemplateAtespace = req.GetActorTemplateAtespace()
 	sandboxRec.ActorTemplateName = req.GetActorTemplateName()
 	sandboxRec.Fidelity = ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity())
+
+	// Forget the local snapshot before the prune below deletes it, so the
+	// tracker never names a deleted snapshot, even if this checkpoint fails.
+	//
+	// TODO: Revisit this once the durable case can keep its local snapshot too
+	// (see UPLOAD_MODE_IMMEDIATE). Today the prune deletes every local
+	// snapshot, so the tracker forgets the latest one unconditionally. The
+	// snapshot this checkpoint just took is safe: it stays in
+	// CheckpointStateDir until after the prune, and only moveLocalCheckpoint
+	// moves it into LocalCheckpointsDir, the directory the prune empties.
+	s.snapshots.ForgetLocal(actorUID)
 
 	// No earlier pause snapshot can ever be restored again, so remove them
 	// all: the actor's current state was just captured by CheckpointWorkload,
@@ -767,7 +786,14 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	// snapshots on both paths, so timing it as part of an external upload would
 	// mix local disk deletion into the object-storage measurement.
 	tPersist := time.Now()
+	var state *ateletpb.ActorSnapshotState
 	switch mode := req.GetUploadConfig().GetMode(); mode {
+	case ateletpb.UploadMode_UPLOAD_MODE_DEFERRED:
+		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
+			dPersist = time.Since(tPersist)
+			return nil, fmt.Errorf("while moving to local snapshot: %w", err)
+		}
+		state = s.snapshots.CommitLocal(actorUID, snap)
 	case ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE:
 		// CheckpointWorkload has already deleted the workload, so a retried
 		// Checkpoint cannot redo this upload. It waits for the object-store plugin
@@ -778,11 +804,8 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 			dPersist = time.Since(tPersist)
 			return nil, fmt.Errorf("while uploading external snapshot: %w", err)
 		}
-	case ateletpb.UploadMode_UPLOAD_MODE_DEFERRED:
-		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
-			dPersist = time.Since(tPersist)
-			return nil, fmt.Errorf("while moving to local snapshot: %w", err)
-		}
+		snap.UploadTime = time.Now()
+		state = s.snapshots.CommitDurable(actorUID, snap)
 	default:
 		return nil, fmt.Errorf("unexpected upload mode: %v", mode)
 	}
@@ -797,7 +820,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
-	return &ateletpb.CheckpointResponse{}, nil
+	return &ateletpb.CheckpointResponse{State: state}, nil
 }
 
 func checkpointSnapshotFiles(resp *ateompb.CheckpointWorkloadResponse, required bool) (files, dataFiles []string, err error) {
@@ -986,6 +1009,10 @@ func (s *AteomHerder) PromoteSnapshot(ctx context.Context, req *ateletpb.Promote
 		return nil, err
 	}
 
+	// Record the upload before the prune below deletes the local copy, so the
+	// tracker never names a deleted snapshot.
+	state := s.snapshots.CommitPromoted(req.GetActorUid(), snapshottracker.SnapshotRef{Snapshot: req.GetSnapshot(), UploadTime: time.Now()})
+
 	// Best-effort: the snapshot is in object storage now and the actor will
 	// not resume from this node's local copy. Kept outside the persist window
 	// so local disk deletion does not mix into the upload measurement.
@@ -993,7 +1020,7 @@ func (s *AteomHerder) PromoteSnapshot(ctx context.Context, req *ateletpb.Promote
 		slog.WarnContext(ctx, "failed to prune uploaded local checkpoints", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
 	}
 
-	return &ateletpb.PromoteSnapshotResponse{}, nil
+	return &ateletpb.PromoteSnapshotResponse{State: state}, nil
 }
 
 // uploadLocalCheckpointDir uploads the local checkpoint in localDir to uri. It
@@ -1342,6 +1369,9 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	// up the copies on any other NodeVmsWithLocalSnapshots. This is fine *as of
 	// the day this was written* because today NodeVmsWithLocalSnapshots has at
 	// most one item.
+	if err := s.snapshots.Forget(actorUID); err != nil {
+		return nil, fmt.Errorf("failed to delete snapshot state during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	}
 	if err := pruneLocalCheckpoints(ctx, actorUID); err != nil {
 		return nil, fmt.Errorf("failed to prune local checkpoints during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
@@ -1696,30 +1726,6 @@ func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.Cl
 	d.conns.Add(key, conn)
 
 	return conn, nil
-}
-
-// writeFileAtomic writes data to path by writing a temp file in the same
-// directory and renaming it over the target so readers never observe a
-// truncated or partially written value.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name()) // no-op once the rename succeeds
-
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Chmod(perm); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), path)
 }
 
 // resetActorDirs empties the actor's directories and leaves them in place for

@@ -3209,9 +3209,6 @@ type CheckpointResponse struct {
 	// snapshot, unless UPLOAD_MODE_IMMEDIATE kept no local copy. The control
 	// plane can drop its entries for any local-only generation not named here:
 	// atelet has deleted it, and will never upload it.
-	//
-	// TODO: Temporarily, atelet leaves this unset. An unset state says nothing
-	// about which snapshots atelet holds.
 	State         *ActorSnapshotState `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3575,9 +3572,6 @@ type PromoteSnapshotResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor's state once promoted: latest_durable is its latest snapshot,
 	// and latest_local remains set if atelet still holds the local copy.
-	//
-	// TODO: Temporarily, atelet leaves this unset. An unset state says nothing
-	// about which snapshots atelet holds.
 	State         *ActorSnapshotState `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

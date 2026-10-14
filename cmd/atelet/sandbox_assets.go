@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/atomicfile"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -632,7 +633,7 @@ func writeSandboxRecord(actorUID string, rec *sandboxAssetsRecord) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return wrapFileSystemErr("while creating actor dir", err)
 	}
-	if err := writeFileAtomic(path, data, 0o600); err != nil {
+	if err := atomicfile.Write(path, data, 0o600); err != nil {
 		return wrapFileSystemErr("while writing sandbox record", err)
 	}
 	return nil

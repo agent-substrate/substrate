@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/snapshottracker"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
@@ -56,6 +57,7 @@ func newPluginHerder(t *testing.T, store objectstorage.ObjectStorage) *AteomHerd
 	return &AteomHerder{
 		objectStorePlugin:  objectstoreplugintest.NodeClient(plugin),
 		snapshotScratchDir: t.TempDir(),
+		snapshots:          snapshottracker.New(),
 	}
 }
 
