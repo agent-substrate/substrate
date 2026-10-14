@@ -40,22 +40,26 @@ func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapipb.M
 	}
 
 	// TODO(identity): This check should be handled by OpenFGA.
-	if _, err := ateletauth.Authenticate(ctx, s.ateletSPIFFEID); err != nil {
+	caller, err := ateletauth.Authenticate(ctx, s.ateletSPIFFEID)
+	if err != nil {
 		return nil, err
 	}
 
-	// TODO(authz): Authorization layer needs to check whether the caller has
-	// the mintActorCertificate permission/relation with this actor.    This
-	// could be an atelet (via the relationship of the atelet running the
-	// actor), or the egress gateway (via a cluster-level grant?)
+	// TODO(authz): The egress gateway may also need certificates for actors
+	// (via a cluster-level grant?).
 
-	// Verify that this actor exists in the store. It doesn't need to be
-	// running, since we may need to issue certificates during actor boot / resume.
 	dbActor, err := s.store.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("actor not found")
 	} else if err != nil {
 		return nil, fmt.Errorf("while retrieving actor: %w", err)
+	}
+	// Only the node hosting the actor may mint, as for MintWorkerActorJwt.
+	// atunnel, through its worker's atelet, mints while the actor resumes and
+	// renews until the worker is released. The node check comes first so a
+	// node that does not host the actor gets NotFound whatever UID it sends.
+	if err := s.checkActorOnNode(ctx, dbActor, caller.NodeName); err != nil {
+		return nil, err
 	}
 	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
 		return nil, apierror.Aborted("conflict; actor has been deleted and recreated")

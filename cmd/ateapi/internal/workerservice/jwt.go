@@ -108,7 +108,7 @@ func (s *Server) checkActorOnNode(ctx context.Context, actor *ateapipb.Actor, ca
 		return err
 	}
 	if hostingNode == "" || hostingNode != callerNode {
-		slog.WarnContext(ctx, "Refusing a worker-for-actor JWT for an actor the caller's node does not host",
+		slog.WarnContext(ctx, "Refusing a worker-for-actor credential for an actor the caller's node does not host",
 			slog.String("actor", resources.ActorRefFromActor(actor).String()),
 			slog.String("hosting_node", hostingNode),
 			slog.String("caller_node", callerNode))
