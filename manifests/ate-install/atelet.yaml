@@ -31,9 +31,10 @@ rules:
 - apiGroups: ["ate.dev"]
   resources: ["csidriverconfigs"]
   verbs: ["get", "list", "watch"]
-# SandboxConfigs are watched to fetch the assets and pause images of the
-# configs local workers use, and to write them to each worker's sandbox
-# versions file (see cmd/atelet/worker_sandbox_syncer.go).
+# SandboxConfigs are watched to pre-download sandbox assets into the node's
+# cache before the first actor needs them (see cmd/atelet/sandbox_prewarm.go),
+# and to write the runtimes of the configs local workers use to each worker's
+# sandbox versions file (see cmd/atelet/worker_sandbox_syncer.go).
 - apiGroups: ["ate.dev"]
   resources: ["sandboxconfigs"]
   verbs: ["get", "list", "watch"]

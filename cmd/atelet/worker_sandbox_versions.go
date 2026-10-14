@@ -17,9 +17,9 @@ package main
 // This file decides how one worker pod's sandbox versions file is built,
 // in the steps syncPod runs:
 //   - resolve: find the SandboxConfig of the pod's WorkerPool
-//   - plan: pick the config's versions this node can run, with no IO
-//   - fetch: download each version's assets, pull its pause image, and hash
-//     the result into the version's sandbox_runtime_hash
+//   - plan: pick the config's versions this node can run
+//   - build: hash each version's assets and pause image digests into its
+//     sandbox_runtime_hash
 //   - write: replace the file in the worker directory if its content changed
 //
 // worker_sandbox_syncer.go decides when each pod is synced, and creates and
@@ -37,48 +37,25 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"sync"
-	"time"
 
+	"github.com/google/go-containerregistry/pkg/name"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/agent-substrate/substrate/internal/hardware"
-	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/sandboxversions"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 )
 
-// syncTimeout bounds the fetches of one pod's sync. One worker drains the
-// queue, so without it a download that stalls without failing (a wedged
-// bucket read, a registry that accepts the connection and hangs) would block
-// every other worker on the node. The versions are fetched in parallel, so
-// each gets the whole timeout. Generous enough for multi-hundred-MiB micro-VM
-// guest images on a busy node. A var so tests can shorten it.
-var syncTimeout = 5 * time.Minute
-
-// sandboxAssetFetcher is the one slice of AteomHerder the syncer needs.
-// Fetching through the same method as the Run/Restore path keeps the two
-// from ever diverging on cache layout or validation.
-type sandboxAssetFetcher interface {
-	ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error)
-}
-
-// pauseImageFetcher is the one slice of the image cache the syncer needs.
-type pauseImageFetcher interface {
-	EnsureImage(ctx context.Context, ref string) (*imagecache.Image, error)
-}
-
 // errPermanent marks a failure that retrying cannot fix, so the syncer drops
 // the item instead of backing off until the next event for the pod:
 //   - the pod has no worker pool label
-//   - the config's default version is missing or has no assets for this
-//     node's architecture
+//   - the config's default version is missing, has no assets for this
+//     node's architecture, or has a pause image not pinned by digest
 var errPermanent = errors.New("permanent failure")
 
-// sandboxPlan is what one worker's sandbox versions file is built from, before
-// anything is fetched.
+// sandboxPlan is what one worker's sandbox versions file is built from.
 type sandboxPlan struct {
 	config   string
 	versions []versionPlan // the default first
@@ -201,76 +178,63 @@ func recordForArch(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConf
 	return rec, true
 }
 
-// fetch fetches every version in plan to the node, in parallel, and returns
-// the file content naming their runtimes.
-//   - the default version fails: it returns no file, since no worker of the
-//     pool could start actors on this node
-//   - another version fails: it returns the file without that version, and
-//     the error, so the syncer writes the file and retries the rest
-//
+// buildFile returns the file content naming the runtimes of the versions in
+// plan. The hashes come from the SandboxConfig spec alone, so it does no IO.
 // A version whose runtime hash equals an earlier one's is left out, so the
 // file lists each runtime once.
-func (s *workerSandboxSyncer) fetch(ctx context.Context, plan *sandboxPlan) (*sandboxversions.File, error) {
-	ctx, cancel := context.WithTimeout(ctx, syncTimeout)
-	defer cancel()
-
-	hashes := make([]string, len(plan.versions))
-	errs := make([]error, len(plan.versions))
-	var wg sync.WaitGroup
-	for i, v := range plan.versions {
-		wg.Go(func() {
-			h, err := s.fetchVersion(ctx, v.rec)
-			if err != nil {
-				errs[i] = fmt.Errorf("SandboxConfig %q, version %q: %w", plan.config, v.name, err)
-				return
-			}
-			hashes[i] = h
-		})
-	}
-	wg.Wait()
-	// plan.versions[0] is the default.
-	if errs[0] != nil {
-		return nil, errs[0]
-	}
-
+//
+// The file does not promise a runtime's assets are on the node. The
+// prewarmer fetches each config's default version, and Run/Restore fetch any
+// other version on demand.
+//
+// TODO: fetch the default version's assets and pause image through
+// cmd/atelet/internal/filecache here, and remove sandbox_prewarm.go. Other
+// versions stay fetched on demand at Restore.
+func buildFile(ctx context.Context, plan *sandboxPlan) (*sandboxversions.File, error) {
 	out := &sandboxversions.File{}
 	seen := make(map[string]bool, len(plan.versions))
-	for i, v := range plan.versions {
-		if errs[i] != nil || seen[hashes[i]] {
+	for _, v := range plan.versions {
+		h, err := versionRuntimeHash(v.rec)
+		if err != nil {
+			err = fmt.Errorf("SandboxConfig %q, version %q: %w", plan.config, v.name, err)
+			if v.isDefault {
+				// No worker of the pool could start actors on this node.
+				return nil, fmt.Errorf("%w: %w", errPermanent, err)
+			}
+			slog.WarnContext(ctx, "Leaving a sandbox version out of the worker sandbox versions file", slog.Any("err", err))
 			continue
 		}
-		seen[hashes[i]] = true
-		attrs := sandboxversions.Attributes{hardware.AttrSandboxRuntimeHash: hashes[i]}
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		attrs := sandboxversions.Attributes{hardware.AttrSandboxRuntimeHash: h}
 		if v.isDefault {
 			out.DefaultRuntime = attrs
 		} else {
 			out.RestorableRuntimes = append(out.RestorableRuntimes, attrs)
 		}
 	}
-	return out, errors.Join(errs...)
+	return out, nil
 }
 
-// fetchVersion downloads one version's assets and pulls its pause image into
-// the image cache, so the first Run/Restore under it finds both on the node,
-// and returns the version's runtime hash.
-func (s *workerSandboxSyncer) fetchVersion(ctx context.Context, rec *sandboxAssetsRecord) (string, error) {
-	if _, err := s.assets.ensureSandboxAssets(ctx, rec); err != nil {
-		return "", err
-	}
+// versionRuntimeHash returns the runtime hash of one version. The CRD
+// requires every pause image to be pinned by digest, which is the digest the
+// image cache resolves the ref to, so the hash needs no pull.
+func versionRuntimeHash(rec *sandboxAssetsRecord) (string, error) {
 	var pauseDigest string
 	if rec.PauseImage != "" {
-		img, err := s.images.EnsureImage(ctx, rec.PauseImage)
+		ref, err := name.NewDigest(rec.PauseImage)
 		if err != nil {
-			return "", fmt.Errorf("while pulling pause image %q: %w", rec.PauseImage, err)
+			return "", fmt.Errorf("pause image %q is not pinned by digest: %w", rec.PauseImage, err)
 		}
-		pauseDigest = img.Digest.String()
+		pauseDigest = ref.DigestStr()
 	}
 	return runtimeHash(rec, pauseDigest), nil
 }
 
-// runtimeHash is the sandbox_runtime_hash of a version fetched to the node: a
-// sha256 over one sorted "key=value" line per asset digest and pause image
-// digest. Version names and URLs are left out, so the same binaries under
+// runtimeHash is the sandbox_runtime_hash of a version: a sha256 over one
+// sorted "key=value" line per asset digest and pause image digest. Version names and URLs are left out, so the same binaries under
 // another name or in another bucket are the same runtime.
 func runtimeHash(rec *sandboxAssetsRecord, pauseDigest string) string {
 	lines := make([]string, 0, len(rec.Assets)+1)
@@ -286,26 +250,19 @@ func runtimeHash(rec *sandboxAssetsRecord, pauseDigest string) string {
 }
 
 // syncPod writes pod's sandbox versions file:
-//   - plan: resolve the pool's config and its versions for this node, no IO
-//   - fetch: download every version's assets, pull its pause image, and
-//     hash them
+//   - plan: resolve the pool's config and its versions for this node
+//   - build: hash each version's runtime
 //   - write: replace the file if its content changed
-//
-// A failed non-default version is left out of the file and returned as the
-// error, so the syncer retries it.
 func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) error {
 	plan, err := s.resolver.plan(pod)
 	if err != nil {
 		return err
 	}
-	want, fetchErr := s.fetch(ctx, plan)
-	if want == nil {
-		return fetchErr
-	}
-	if err := s.write(ctx, string(pod.UID), plan.config, want); err != nil {
+	want, err := buildFile(ctx, plan)
+	if err != nil {
 		return err
 	}
-	return fetchErr
+	return s.write(ctx, string(pod.UID), plan.config, want)
 }
 
 func (s *workerSandboxSyncer) write(ctx context.Context, uid, config string, want *sandboxversions.File) error {

@@ -64,8 +64,8 @@ func resolvedPool(name, config string) *v1alpha1.WorkerPool {
 }
 
 // newTestSyncer serves objs from synced caches and keeps worker directories
-// under a temp dir. Pause images go to a recordingPuller.
-func newTestSyncer(t *testing.T, fetcher *recordingFetcher, objs ...any) *workerSandboxSyncer {
+// under a temp dir.
+func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	t.Helper()
 	newIndexer := func() cache.Indexer {
 		return cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
@@ -91,14 +91,11 @@ func newTestSyncer(t *testing.T, fetcher *recordingFetcher, objs ...any) *worker
 			t.Fatal(err)
 		}
 	}
-	if fetcher == nil {
-		fetcher = &recordingFetcher{}
-	}
 	s := newWorkerSandboxSyncer(&workerSandboxResolver{
 		workerPools: listersv1alpha1.NewWorkerPoolLister(pools),
 		configs:     listersv1alpha1.NewSandboxConfigLister(configs),
 		synced:      func() bool { return true },
-	}, pods, fetcher, &recordingPuller{}, t.TempDir())
+	}, pods, t.TempDir())
 	// Tests that check the jitter set it.
 	s.maxJitter = 0
 	return s
@@ -217,7 +214,7 @@ func TestWorkerSandboxSyncerEvents(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := newTestSyncer(t, nil, append(pods, pools...)...)
+			s := newTestSyncer(t, append(pods, pools...)...)
 			tt.event(s)
 			if diff := cmp.Diff(tt.want, drain(s)); diff != "" {
 				t.Errorf("enqueued pods mismatch (-want +got):\n%s", diff)
@@ -276,7 +273,7 @@ func TestWorkerSandboxSyncerJitter(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := newTestSyncer(t, nil, append(pods, pool)...)
+			s := newTestSyncer(t, append(pods, pool)...)
 			s.maxJitter = 50 * time.Millisecond
 			tt.event(s)
 			if diff := cmp.Diff(tt.want, drain(s)); diff != "" {
@@ -302,9 +299,6 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		objs []any
 		// existing is written to pod-a's file before processing, when set.
 		existing *sandboxversions.File
-		fetchErr error
-		// failSHA fails only the version whose asset has this sha256.
-		failSHA string
 		// priorRetries is how often pod-a has been retried before.
 		priorRetries int
 		// want is the file afterwards; nil means no file.
@@ -353,32 +347,13 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		wantDir:     true,
 		wantRetries: 1,
 	}, {
-		name:        "failed fetch keeps the existing file",
-		objs:        []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
-		existing:    stale,
-		fetchErr:    errors.New("bucket unavailable"),
-		want:        stale,
-		wantDir:     true,
-		wantRetries: 1,
-	}, {
-		// The worker can start actors under the others meanwhile.
-		name:        "failed non-default version writes the others and retries",
-		objs:        []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
-		existing:    stale,
-		failSHA:     "sha-v1",
-		want:        &sandboxversions.File{DefaultRuntime: wantRuntime("v2")},
-		wantDir:     true,
-		wantRetries: 1,
-	}, {
-		name:         "failed fetch retries up to syncMaxRetries",
-		objs:         []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
-		fetchErr:     errors.New("bucket unavailable"),
+		name:         "unresolved pool retries up to syncMaxRetries",
+		objs:         []any{workerPod("pod-a", "pool"), multiVersionConfig()},
 		priorRetries: syncMaxRetries - 1,
 		wantRetries:  syncMaxRetries,
 	}, {
-		name:         "failed fetch gives up after syncMaxRetries",
-		objs:         []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
-		fetchErr:     errors.New("bucket unavailable"),
+		name:         "unresolved pool gives up after syncMaxRetries",
+		objs:         []any{workerPod("pod-a", "pool"), multiVersionConfig()},
 		priorRetries: syncMaxRetries,
 	}, {
 		name: "pod of no pool is not retried",
@@ -386,7 +361,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := newTestSyncer(t, &recordingFetcher{err: tt.fetchErr, failSHA: tt.failSHA}, tt.objs...)
+			s := newTestSyncer(t, tt.objs...)
 			limiter := workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)
 			for range tt.priorRetries {
 				limiter.When("pod-a")
@@ -485,7 +460,7 @@ func TestWorkerSandboxSyncerExistingDirs(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := newTestSyncer(t, nil)
+			s := newTestSyncer(t)
 			// Short enough to observe a delayed enqueue.
 			s.minAge = 50 * time.Millisecond
 			if tt.entries == nil {
@@ -572,7 +547,7 @@ func TestWorkerSandboxSyncerRun(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := newTestSyncer(t, nil, workerPod("pod-live", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+			s := newTestSyncer(t, workerPod("pod-live", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
 			mkOldDir(t, s.podDir("pod-live"))
 			mkOldDir(t, s.podDir("pod-gone"))
 			matches := func() bool {
@@ -671,7 +646,7 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 				podFactory.Core().V1().Pods(),
 				ateFactory.Api().V1alpha1().WorkerPools(),
 				ateFactory.Api().V1alpha1().SandboxConfigs(),
-				&recordingFetcher{}, &recordingPuller{}, dir)
+				dir)
 			if err != nil {
 				t.Fatalf("startWorkerSandboxSyncer() error = %v", err)
 			}

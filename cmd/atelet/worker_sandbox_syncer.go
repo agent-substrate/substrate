@@ -60,49 +60,44 @@ const podUIDIndex = "uid"
 // directory before its pod reached atelet's cache.
 const orphanMinAge = time.Minute
 
-// syncMaxJitter spreads the fleet's asset downloads after a WorkerPool or
+// syncMaxJitter spreads the fleet's file rewrites after a WorkerPool or
 // SandboxConfig change. Every atelet observes the change within about a
-// second, and without jitter they would all open the same bucket objects at
-// once. The jitter is applied as the enqueue delay, so duplicate events inside
-// the window collapse into one queue entry. A pod bound to this node is
+// second, and each rewrite makes the worker register again, so without
+// jitter every worker in the fleet would hit ateapi at once. The jitter is
+// applied as the enqueue delay, so duplicate events inside the window
+// collapse into one queue entry. A pod bound to this node is
 // enqueued without it, since only this atelet acts on it and its worker waits
-// for the file. It still waits behind the syncs already queued.
+// for the file.
 const syncMaxJitter = 30 * time.Second
 
 // syncMaxRetries bounds how often one pod's failed sync is retried before it
 // is dropped. The pod is synced again only when its pool switches to another
 // SandboxConfig, the config's spec changes, or atelet restarts. The backoff
-// doubles from one second, so this covers bucket or registry outages of a few
-// minutes without retrying a broken config forever.
+// doubles from one second, so this covers a few minutes of informer lag or an
+// unresolved pool without retrying forever.
 const syncMaxRetries = 8
 
 // workerSandboxSyncer keeps a sandbox versions file in each local worker's
-// directory under ateomsDir: the enabled versions of the SandboxConfig the
-// worker's pool uses, each with its assets fetched to the node and its pause
-// image pulled into the image cache. It creates a worker's directory once it
-// writes the pod's file and removes it when the pod is gone.
+// directory under ateomsDir: the runtimes of the enabled versions of the
+// SandboxConfig the worker's pool uses. It creates a worker's directory once
+// it writes the pod's file and removes it when the pod is gone.
 type workerSandboxSyncer struct {
 	resolver *workerSandboxResolver
 	// pods holds this node's worker pods, indexed by podUIDIndex.
-	pods   cache.Indexer
-	assets sandboxAssetFetcher
-	images pauseImageFetcher
+	pods cache.Indexer
 	// queue carries pod UIDs. One worker drains it, so a pod's file is never
-	// written and its directory removed at the same time, and two pods of a
-	// pool never download the same assets at once.
+	// written and its directory removed at the same time.
 	queue     workqueue.TypedRateLimitingInterface[string]
 	ateomsDir string // nodepath.AteomsDir(); a temp dir in tests
 	minAge    time.Duration
 	maxJitter time.Duration
 }
 
-func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, images pauseImageFetcher, ateomsDir string) *workerSandboxSyncer {
+func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, ateomsDir string) *workerSandboxSyncer {
 	return &workerSandboxSyncer{
 		resolver: resolver,
 		pods:     pods,
-		assets:   assets,
-		images:   images,
-		// Failures are asset downloads and unresolved pools, both on the scale
+		// Failures are informer lag and unresolved pools, both on the scale
 		// of seconds to minutes.
 		queue: workqueue.NewTypedRateLimitingQueue(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)),
@@ -120,7 +115,7 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 // The syncer never holds up atelet startup: until the informers sync, or
 // while a list/watch fails (e.g. Forbidden while an RBAC rollout lags the
 // binary), files wait and existing ones stay as they are.
-func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, assets sandboxAssetFetcher, images pauseImageFetcher, ateomsDir string) (*workerSandboxSyncer, error) {
+func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, ateomsDir string) (*workerSandboxSyncer, error) {
 	if err := pods.Informer().AddIndexers(cache.Indexers{podUIDIndex: func(obj any) ([]string, error) {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok {
@@ -137,7 +132,7 @@ func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInforme
 			return workerPools.Informer().HasSynced() && configs.Informer().HasSynced()
 		},
 	}
-	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), assets, images, ateomsDir)
+	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), ateomsDir)
 	if err := watch(ctx, "worker pod", pods.Informer(), s.podHandler()); err != nil {
 		return nil, err
 	}

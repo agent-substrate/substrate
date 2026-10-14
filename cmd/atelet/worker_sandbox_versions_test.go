@@ -19,126 +19,23 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
-	"log"
-	"net/http/httptest"
-	"net/url"
 	"runtime"
-	"slices"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/google/go-containerregistry/pkg/registry"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/empty"
-	"github.com/google/go-containerregistry/pkg/v1/mutate"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
 	"github.com/agent-substrate/substrate/internal/hardware"
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/sandboxversions"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
 )
 
-// pushPauseImage pushes a tiny image to ref and returns its manifest digest,
-// so tests can later assert a cache hit by digest with the registry gone.
-func pushPauseImage(t *testing.T, ref string) v1.Hash {
-	t.Helper()
-	img, err := mutate.AppendLayers(empty.Image, singleFileLayer(t, "pause", "pause bytes"))
-	if err != nil {
-		t.Fatalf("mutate.AppendLayers: %v", err)
-	}
-	digest, err := img.Digest()
-	if err != nil {
-		t.Fatalf("img.Digest: %v", err)
-	}
-	tag, err := name.ParseReference(ref, name.Insecure)
-	if err != nil {
-		t.Fatalf("name.ParseReference(%q): %v", ref, err)
-	}
-	if err := remote.Write(tag, img); err != nil {
-		t.Fatalf("remote.Write(%q): %v", ref, err)
-	}
-	return digest
-}
-
-func gvisorConfig(name, url, sha string) *v1alpha1.SandboxConfig {
-	return &v1alpha1.SandboxConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: v1alpha1.SandboxConfigSpec{
-			SandboxClass:   v1alpha1.SandboxClassGvisor,
-			DefaultVersion: "v1",
-			Versions: []v1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				PauseImage: "registry.k8s.io/pause@sha256:abc",
-				Assets: map[string]map[string]v1alpha1.AssetFile{
-					runtime.GOARCH: {
-						runscAssetName: {URL: url, SHA256: sha},
-					},
-				},
-			}},
-		},
-	}
-}
-
-// recordingFetcher stands in for the AteomHerder's asset fetch, recording
-// every record asked for and placing each asset at /static/<sha256>.
-type recordingFetcher struct {
-	mu  sync.Mutex
-	got []*sandboxAssetsRecord
-	// err fails every fetch.
-	err error
-	// failSHA fails a record with an asset of this sha256.
-	failSHA string
-}
-
-func (f *recordingFetcher) ensureSandboxAssets(_ context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.got = append(f.got, rec)
-	if f.err != nil {
-		return nil, f.err
-	}
-	paths := make(map[string]string, len(rec.Assets))
-	for name, a := range rec.Assets {
-		if a.SHA256 == f.failSHA {
-			return nil, errors.New("bucket unavailable")
-		}
-		paths[name] = "/static/" + a.SHA256
-	}
-	return paths, nil
-}
-
-// recordingPuller stands in for the image cache, recording every pause image
-// asked for.
-type recordingPuller struct {
-	mu  sync.Mutex
-	got []string
-	// failRef fails the pull of this image.
-	failRef string
-}
-
-func (p *recordingPuller) EnsureImage(_ context.Context, ref string) (*imagecache.Image, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.got = append(p.got, ref)
-	if ref == p.failRef {
-		return nil, errors.New("registry unavailable")
-	}
-	return &imagecache.Image{Digest: pauseDigest(ref)}, nil
-}
-
-// pauseDigest is the digest recordingPuller resolves ref to.
-func pauseDigest(ref string) v1.Hash {
-	return v1.Hash{Algorithm: "sha256", Hex: fmt.Sprintf("%x", sha256.Sum256([]byte(ref)))}
+// pauseDigest is the digest of the pause image of multiVersionConfig's
+// version with the given name.
+func pauseDigest(name string) string {
+	return fmt.Sprintf("sha256:%x", sha256.Sum256([]byte("pause-"+name)))
 }
 
 // multiVersionConfig is a gVisor config whose default version "v2" is listed
@@ -149,7 +46,7 @@ func multiVersionConfig() *v1alpha1.SandboxConfig {
 		return v1alpha1.SandboxVersionConfig{
 			Name:       name,
 			State:      state,
-			PauseImage: "pause-" + name,
+			PauseImage: "registry.k8s.io/pause@" + pauseDigest(name),
 			Assets: map[string]map[string]v1alpha1.AssetFile{
 				runtime.GOARCH: {gvisorAssetName: {URL: "gs://bucket/" + name, SHA256: sha}},
 			},
@@ -171,17 +68,6 @@ func multiVersionConfig() *v1alpha1.SandboxConfig {
 		},
 	}
 }
-
-// hangingObjectStorage blocks GetObject until the caller's context ends,
-// simulating a bucket read that stalls without failing.
-type hangingObjectStorage struct{}
-
-func (hangingObjectStorage) GetObject(ctx context.Context, _, _ string) (io.ReadCloser, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
-func (hangingObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) error { return nil }
 
 func TestRecordForArch(t *testing.T) {
 	sha := fmt.Sprintf("%x", sha256.Sum256([]byte("runsc")))
@@ -368,7 +254,7 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := newTestSyncer(t, nil, tt.objs...)
+			s := newTestSyncer(t, tt.objs...)
 			if tt.unsynced {
 				s.resolver.synced = func() bool { return false }
 			}
@@ -389,11 +275,50 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 	}
 }
 
-// wantRuntime is the runtime planAndFetch builds from multiVersionConfig's
-// version name under recordingPuller.
+func TestVersionRuntimeHash(t *testing.T) {
+	gvisor := map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"}}
+	pause := "sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+
+	tests := []struct {
+		name       string
+		pauseImage string
+		want       string
+		wantErr    bool
+	}{{
+		name:       "pause image pinned by digest",
+		pauseImage: "registry.k8s.io/pause:3.10.2@" + pause,
+		want:       runtimeHash(&sandboxAssetsRecord{Assets: gvisor}, pause),
+	}, {
+		name:       "pause image pinned by digest only",
+		pauseImage: "gcr.io/gke-release/pause@" + pause,
+		want:       runtimeHash(&sandboxAssetsRecord{Assets: gvisor}, pause),
+	}, {
+		name: "no pause image",
+		want: runtimeHash(&sandboxAssetsRecord{Assets: gvisor}, ""),
+	}, {
+		// The CRD rejects this shape.
+		name:       "pause image by tag",
+		pauseImage: "registry.k8s.io/pause:3.10.2",
+		wantErr:    true,
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := versionRuntimeHash(&sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: tt.pauseImage, Assets: gvisor})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("versionRuntimeHash() error = %v, want error %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("versionRuntimeHash() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// wantRuntime is the runtime buildFile builds from multiVersionConfig's
+// version with the given name.
 func wantRuntime(name string) sandboxversions.Attributes {
 	rec := &sandboxAssetsRecord{Assets: map[string]assetEntry{gvisorAssetName: {SHA256: "sha-" + name}}}
-	return sandboxversions.Attributes{hardware.AttrSandboxRuntimeHash: runtimeHash(rec, pauseDigest("pause-"+name).String())}
+	return sandboxversions.Attributes{hardware.AttrSandboxRuntimeHash: runtimeHash(rec, pauseDigest(name))}
 }
 
 // wantVersions is the file content for multiVersionConfig.
@@ -404,16 +329,16 @@ func wantVersions() *sandboxversions.File {
 	}
 }
 
-// planAndFetch runs the plan and fetch steps of syncPod for pod.
-func planAndFetch(s *workerSandboxSyncer, pod *corev1.Pod) (*sandboxversions.File, error) {
+// planAndBuild runs the plan and build steps of syncPod for pod.
+func planAndBuild(s *workerSandboxSyncer, pod *corev1.Pod) (*sandboxversions.File, error) {
 	plan, err := s.resolver.plan(pod)
 	if err != nil {
 		return nil, err
 	}
-	return s.fetch(context.Background(), plan)
+	return buildFile(context.Background(), plan)
 }
 
-func TestPlanAndFetch(t *testing.T) {
+func TestPlanAndBuild(t *testing.T) {
 	defaultNoArch := multiVersionConfig()
 	defaultNoArch.Spec.Versions[3].Assets = map[string]map[string]v1alpha1.AssetFile{"other-arch": defaultNoArch.Spec.Versions[3].Assets[runtime.GOARCH]}
 
@@ -430,40 +355,34 @@ func TestPlanAndFetch(t *testing.T) {
 	v3.Name = "v3"
 	v1Twice.Spec.Versions = append(v1Twice.Spec.Versions, v3)
 
+	// The CRD rejects a pause image not pinned by digest.
+	tagged := func(i int) *v1alpha1.SandboxConfig {
+		cfg := multiVersionConfig()
+		cfg.Spec.Versions[i].PauseImage = "registry.k8s.io/pause:3.10.2"
+		return cfg
+	}
+
 	tests := []struct {
-		name     string
-		cfg      *v1alpha1.SandboxConfig
-		fetchErr error
-		// failSHA fails only the version whose asset has this sha256.
-		failSHA string
-		// failRef fails only the pull of this pause image.
-		failRef       string
+		name          string
+		cfg           *v1alpha1.SandboxConfig
 		want          *sandboxversions.File
 		wantErr       bool
 		wantPermanent bool
-		wantFetched   int
-		wantPulled    []string
 	}{{
 		// Disabled versions and versions with nothing for this node's
 		// architecture are left out; the default leads.
-		name:        "default first, then the other enabled versions",
-		cfg:         multiVersionConfig(),
-		want:        wantVersions(),
-		wantFetched: 2,
-		wantPulled:  []string{"pause-v1", "pause-v2"},
+		name: "default first, then the other enabled versions",
+		cfg:  multiVersionConfig(),
+		want: wantVersions(),
 	}, {
 		// The proto keeps default_runtime out of restorable_runtimes.
-		name:        "a version with the default's binaries is left out",
-		cfg:         sameAsDefault,
-		want:        onlyDefault,
-		wantFetched: 2,
-		wantPulled:  []string{"pause-v2", "pause-v2"},
+		name: "a version with the default's binaries is left out",
+		cfg:  sameAsDefault,
+		want: onlyDefault,
 	}, {
-		name:        "versions with equal binaries are listed once",
-		cfg:         v1Twice,
-		want:        wantVersions(),
-		wantFetched: 3,
-		wantPulled:  []string{"pause-v1", "pause-v1", "pause-v2"},
+		name: "versions with equal binaries are listed once",
+		cfg:  v1Twice,
+		want: wantVersions(),
 	}, {
 		name:          "default version has no assets for this architecture",
 		cfg:           defaultNoArch,
@@ -471,42 +390,14 @@ func TestPlanAndFetch(t *testing.T) {
 		wantPermanent: true,
 	}, {
 		// No worker of the pool could start actors on this node.
-		name:        "a failed default version asset writes no file",
-		cfg:         multiVersionConfig(),
-		failSHA:     "sha-v2",
-		wantErr:     true,
-		wantFetched: 2,
-		wantPulled:  []string{"pause-v1"},
+		name:          "default version pause image not pinned by digest",
+		cfg:           tagged(3),
+		wantErr:       true,
+		wantPermanent: true,
 	}, {
-		name:        "a failed default version pause image writes no file",
-		cfg:         multiVersionConfig(),
-		failRef:     "pause-v2",
-		wantErr:     true,
-		wantFetched: 2,
-		wantPulled:  []string{"pause-v1", "pause-v2"},
-	}, {
-		// The syncer writes the file and retries.
-		name:        "a failed non-default version asset is left out and surfaced",
-		cfg:         multiVersionConfig(),
-		failSHA:     "sha-v1",
-		want:        onlyDefault,
-		wantErr:     true,
-		wantFetched: 2,
-		wantPulled:  []string{"pause-v2"},
-	}, {
-		name:        "a failed non-default version pause image is left out and surfaced",
-		cfg:         multiVersionConfig(),
-		failRef:     "pause-v1",
-		want:        onlyDefault,
-		wantErr:     true,
-		wantFetched: 2,
-		wantPulled:  []string{"pause-v1", "pause-v2"},
-	}, {
-		name:        "surfaces a failed fetch",
-		cfg:         multiVersionConfig(),
-		fetchErr:    errors.New("bucket unavailable"),
-		wantErr:     true,
-		wantFetched: 2,
+		name: "non-default version pause image not pinned by digest is left out",
+		cfg:  tagged(1),
+		want: onlyDefault,
 	}, {
 		name:    "surfaces an unresolved config",
 		wantErr: true,
@@ -517,130 +408,18 @@ func TestPlanAndFetch(t *testing.T) {
 			if tt.cfg != nil {
 				objs = append(objs, tt.cfg)
 			}
-			fetcher := &recordingFetcher{err: tt.fetchErr, failSHA: tt.failSHA}
-			s := newTestSyncer(t, fetcher, objs...)
-			puller := &recordingPuller{failRef: tt.failRef}
-			s.images = puller
+			s := newTestSyncer(t, objs...)
 
-			got, err := planAndFetch(s, workerPod("pod-a", "pool"))
+			got, err := planAndBuild(s, workerPod("pod-a", "pool"))
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("planAndFetch() error = %v, want error %v", err, tt.wantErr)
+				t.Fatalf("planAndBuild() error = %v, want error %v", err, tt.wantErr)
 			}
 			if errors.Is(err, errPermanent) != tt.wantPermanent {
-				t.Errorf("planAndFetch() error = %v, want permanent %v", err, tt.wantPermanent)
+				t.Errorf("planAndBuild() error = %v, want permanent %v", err, tt.wantPermanent)
 			}
 			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("planAndFetch() mismatch (-want +got):\n%s", diff)
-			}
-			if len(fetcher.got) != tt.wantFetched {
-				t.Errorf("fetched %d versions, want %d", len(fetcher.got), tt.wantFetched)
-			}
-			// The versions are fetched concurrently, so the order is not fixed.
-			slices.Sort(puller.got)
-			if diff := cmp.Diff(tt.wantPulled, puller.got); diff != "" {
-				t.Errorf("pulled pause images mismatch (-want +got):\n%s", diff)
+				t.Errorf("planAndBuild() mismatch (-want +got):\n%s", diff)
 			}
 		})
-	}
-}
-
-// TestFetchPausePull runs the pause image pull against a real image cache and
-// registry: the image lands in the cache once the version's assets are
-// fetched.
-func TestFetchPausePull(t *testing.T) {
-	origDir := nodepath.StaticFilesDir
-	nodepath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { nodepath.StaticFilesDir = origDir })
-
-	content := []byte("runsc binary bytes")
-
-	tests := []struct {
-		name    string
-		storage objectstorage.ObjectStorage
-		// sha is the runsc digest in the config. Each case uses its own so
-		// the shared static-files cache never satisfies the fetch.
-		sha         string
-		wantErr     bool
-		wantInCache bool
-	}{{
-		name:        "asset fetch succeeds",
-		storage:     fakeObjectStorage{data: content},
-		sha:         fmt.Sprintf("%x", sha256.Sum256(content)),
-		wantInCache: true,
-	}, {
-		// The version failed, so its pause image is not pulled.
-		name:    "asset fetch fails",
-		storage: fakeObjectStorage{err: errors.New("bucket unavailable")},
-		sha:     fmt.Sprintf("%x", sha256.Sum256([]byte("other runsc"))),
-		wantErr: true,
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(registry.New(registry.Logger(log.New(io.Discard, "", 0))))
-			defer srv.Close()
-			u, err := url.Parse(srv.URL)
-			if err != nil {
-				t.Fatalf("parsing registry URL: %v", err)
-			}
-			pauseRef := u.Host + "/pause:3.10"
-			pauseDigest := pushPauseImage(t, pauseRef)
-			cfg := gvisorConfig("gvisor-release", "gs://bucket/runsc", tt.sha)
-			cfg.Spec.Versions[0].PauseImage = pauseRef
-			s := newTestSyncer(t, nil, workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), cfg)
-			s.assets = &AteomHerder{anonGCSClient: tt.storage}
-			store, err := imagecache.New(t.TempDir())
-			if err != nil {
-				t.Fatalf("imagecache.New: %v", err)
-			}
-			s.images = store
-
-			got, err := planAndFetch(s, workerPod("pod-a", "pool"))
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("planAndFetch() error = %v, want error %v", err, tt.wantErr)
-			}
-			if !tt.wantErr {
-				// The hash covers the digest the tag resolved to.
-				rec, _ := recordForArch(cfg, &cfg.Spec.Versions[0])
-				want := &sandboxversions.File{DefaultRuntime: sandboxversions.Attributes{hardware.AttrSandboxRuntimeHash: runtimeHash(rec, pauseDigest.String())}}
-				if diff := cmp.Diff(want, got); diff != "" {
-					t.Errorf("planAndFetch() mismatch (-want +got):\n%s", diff)
-				}
-			}
-			// With the registry gone, only a cache hit can satisfy a digest
-			// ref.
-			srv.Close()
-			if _, err := store.EnsureImage(context.Background(), u.Host+"/pause@"+pauseDigest.String()); (err == nil) != tt.wantInCache {
-				t.Errorf("pause image in the cache = %v (%v), want %v", err == nil, err, tt.wantInCache)
-			}
-		})
-	}
-}
-
-// TestFetchTimeout verifies one pod's fetches are bounded by
-// syncTimeout: the queue has one worker, so a fetch that never returned would
-// block every other worker on the node.
-func TestFetchTimeout(t *testing.T) {
-	origDir, origTimeout := nodepath.StaticFilesDir, syncTimeout
-	nodepath.StaticFilesDir = t.TempDir()
-	syncTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { nodepath.StaticFilesDir, syncTimeout = origDir, origTimeout })
-
-	cfg := gvisorConfig("gvisor-release", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("hung runsc"))))
-	cfg.Spec.Versions[0].PauseImage = ""
-	s := newTestSyncer(t, nil, workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), cfg)
-	s.assets = &AteomHerder{anonGCSClient: hangingObjectStorage{}}
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := planAndFetch(s, workerPod("pod-a", "pool"))
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Error("planAndFetch returned nil despite the download hanging")
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("planAndFetch never returned; a hung download would block the syncer forever")
 	}
 }

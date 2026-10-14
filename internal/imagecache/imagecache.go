@@ -468,7 +468,7 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err erro
 	// Collapse concurrent pulls of the same digest (e.g. several containers of
 	// one actor, or several actors landing at once). Callers with very
 	// different lifetimes share these flights — a serving Restore, a
-	// best-effort pause-image pull bounded by its own deadline, a caller whose daemon
+	// best-effort prewarm bounded by its own deadline, a caller whose daemon
 	// is draining — so the pull runs on a context detached from whichever
 	// caller happened to start the flight, bounded only by the store's pull
 	// timeout: a waiter must only ever see a real pull failure, never another
