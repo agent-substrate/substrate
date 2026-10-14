@@ -270,6 +270,37 @@ nothing. Durations are in milliseconds.
   are canceled: interrupted tasks log no task record, and startup failures logged after it
   belong to the teardown, not the run.
 
+### ate-env Benchmark
+
+The `ate-env` benchmark (`--user-class ate_env`) exercises the
+[`ate-env-guest`](https://github.com/agent-substrate/env/tree/main/cmd/ate-env-guest)
+sandbox image from `agent-substrate/env`. `workloads/deploy.sh` deploys and
+deletes the `ate-env` `ActorTemplate` by default using the pinned release guest
+image (see
+[`workloads/manifests/ate-env-template.yaml.tmpl`](workloads/manifests/ate-env-template.yaml.tmpl)
+to override the guest image with a custom build). It follows `glutton`'s
+wake/hold/hibernate lifecycle, but replaces synthetic HTTP `/ping` calls with a
+real `"hello world"` process execution inside the guest (`StartProcess(["echo",
+"hello world"])` + `StreamProcessOutput(follow: true)`) over gRPC directly
+through `atenet-router` (`1 dns:///` gRPC channel per VU).
+
+#### ate-env Configuration Knobs
+
+Reuses `glutton`'s runtime and startup knobs:
+`--min-wait-time`, `--max-wait-time`, `--min-live-time`, `--max-live-time`,
+`--max-pings-per-wake`, `--lifecycle-mode` (`suspend` | `pause` | `none`),
+`--trace-probability`, and `--actors-per-user`.
+
+#### ate-env Reported Metrics
+
+* `CreateAtespace`, `CreateActor`, `ResumeActorFirstResume`, `ResumeActor`,
+  `SuspendActor`, `SuspendActorAsync`, `DeleteActor`: Control-plane lifecycle
+  RPC latencies.
+* `AteEnvExec`: Combined end-to-end latency of `"hello world"` (`StartProcess` +
+  `StreamProcessOutput` to exit with `exit_code == 0` and
+  `stdout == "hello world\n"`).
+* `CrashCount`: Actors that entered `ACTOR_STATE_CRASHED` during resume.
+
 ### Agent-Session Benchmark
 
 The agent-session benchmark (`--user-class agentsession`) emulates a fleet of

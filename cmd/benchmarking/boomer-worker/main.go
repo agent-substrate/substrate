@@ -37,6 +37,7 @@ import (
 
 	// Register user classes via init():
 	"go.ate.dev/substrate/internal/benchmarking/boomer/agentsession"
+	_ "go.ate.dev/substrate/internal/benchmarking/boomer/ateenv"
 	_ "go.ate.dev/substrate/internal/benchmarking/boomer/glutton"
 	_ "go.ate.dev/substrate/internal/benchmarking/boomer/resumepaused"
 	_ "go.ate.dev/substrate/internal/benchmarking/boomer/sweperf"

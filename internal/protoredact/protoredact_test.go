@@ -23,6 +23,7 @@ import (
 	"sync"
 	"testing"
 
+	ateenvv1alpha "go.ate.dev/substrate/internal/proto/ateenv/v1alpha"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/proto/glutton"
@@ -380,6 +381,7 @@ func TestNeedsRedactionIsSafeUnderConcurrentFirstUse(t *testing.T) {
 // the .proto files on disk.
 var ourProtoFiles = []protoreflect.FileDescriptor{
 	ateapipb.File_ateapi_proto,
+	ateenvv1alpha.File_guest_proto,
 	ateletpb.File_atelet_proto,
 	ateworkerpb.File_ateworker_proto,
 	ateconfigpb.File_apiconfig_proto,
