@@ -245,5 +245,16 @@ kubectl ate create actor consumer-42 -a demo --template consumer --volume shared
 ```
 
 Bindings are validated and recorded when the actor is created and cannot change
-afterwards. Golden actors never reference a shared volume; they warm up against
-an empty directory at the same mount path.
+afterwards.
+
+The golden snapshot is not used for templates that reference a `SharedVolume`. The
+first resume of such an actor is a cold boot from the image, and later resumes
+restore the actor's own snapshot, which was taken over the real volume. An
+explicit `sourceTag` is refused at actor creation. The reason is in gVisor:
+the golden actor warms up against a local empty directory at the mount path,
+but runsc derives the `disable_file_handle_sharing` mount option from the bind
+source's filesystem (NFS and FUSE get it, local disks do not) and refuses a
+restore whose mount options differ from the checkpoint's. Supporting golden
+restores here is follow-up work; the candidate approaches are a golden actor
+that warms up on a scratch volume from the same driver, or an upstream runsc
+change that excludes host-derived mount options from restore validation.

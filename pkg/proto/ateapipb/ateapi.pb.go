@@ -4409,6 +4409,10 @@ func (x *ExternalVolumeTemplate) GetStorageClassName() string {
 
 // SharedVolumeRef mounts a SharedVolume in the actor's atespace. The
 // volume outlives the actor, so several actors can mount it in turn.
+//
+// Actors created from a template with a SharedVolumeRef do not start from
+// the template's golden snapshot: the first resume boots from the image, and
+// later resumes restore the actor's own snapshot.
 type SharedVolumeRef struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name of the SharedVolume. Left empty, the actor names it at creation in
