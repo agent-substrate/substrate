@@ -37,6 +37,15 @@ type sharedVolumeDeleter interface {
 	DeleteSharedVolume(ctx context.Context, volumeRef resources.SharedVolumeRef, precondition store.DeletePreconditions) (*ateapipb.SharedVolume, error)
 }
 
+func templateHasSharedVolumeRef(template *ateapipb.ActorTemplate) bool {
+	for _, vol := range template.GetVolumes() {
+		if vol.GetExternal().GetSharedVolume() != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveSharedVolumeRefs checks the actor's bindings against the template
 // and returns a mount for every SharedVolume the actor references.
 func resolveSharedVolumeRefs(ctx context.Context, st sharedVolumeRefStore, actor *ateapipb.Actor, template *ateapipb.ActorTemplate) ([]*ateapipb.ExternalVolumeRef, error) {
