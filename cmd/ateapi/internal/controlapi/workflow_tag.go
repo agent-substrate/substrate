@@ -218,16 +218,8 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	if snap == nil {
 		return nil, nil, apierror.FailedPrecondition("Actor %s holds no external snapshot to tag", actorRef)
 	}
-	// A paused actor can hold a node-local snapshot newer than its external one,
-	// and a tag of the external one would miss the paused state.
-	// - Suspending a paused actor uploads the local snapshot in place, so the
-	//   external copy shares its generation and does not count as older.
-	// - Compare against the newest local snapshot rather than
-	//   last_assigned_generation: because revert drops that generation's snapshot
-	//   without lowering the counter.
-	// - Only a local snapshot can be newer: every path to SUSPENDED starts from
-	//   local snapshots.
-	if local := findLatestLocalSnapshot(actor.GetStatus()); local.GetGeneration() > snap.GetGeneration() {
+	// The actor's latest snapshot is local only. It must be uploaded before it can be tagged.
+	if latestSnapshotIsLocalOnly(actor.GetStatus()) {
 		return nil, nil, apierror.FailedPrecondition("Actor %s holds no external snapshot of its latest state to tag: suspend it first", actorRef)
 	}
 	// Every way an Actor comes to hold an external snapshot records the
