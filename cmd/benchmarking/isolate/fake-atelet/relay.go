@@ -37,7 +37,10 @@ type capacityClient interface {
 // capacity, and ate-api-server checks the Worker is on this node.
 //
 // It serves WorkerService so the request and ate-api-server's status pass
-// through unchanged; every other WorkerService call is Unimplemented.
+// through unchanged; every other WorkerService call is Unimplemented. Unlike
+// the herder it keeps UnimplementedWorkerServiceServer on purpose: refusing
+// every call but RegisterWorker is what keeps the relay from lending this
+// pod's atelet identity to anything else.
 type relay struct {
 	ateapipb.UnimplementedWorkerServiceServer
 
