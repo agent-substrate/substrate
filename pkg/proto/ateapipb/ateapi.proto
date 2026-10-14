@@ -2537,7 +2537,8 @@ service WorkerService {
   // The control plane mints only for the Worker assigned the Actor, and only
   // to an atelet on that Worker's node. A request from any other node or
   // Worker gets NotFound; one from the assigned Worker with a stale actor_uid
-  // gets Aborted.
+  // gets Aborted. Unlike MintWorkerActorJwt, a paused Actor gets NotFound,
+  // since it has no Worker to bind the certificate to.
   rpc MintWorkerActorCertificate(MintWorkerActorCertificateRequest) returns (MintWorkerActorCertificateResponse);
 
   // MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker

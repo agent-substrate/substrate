@@ -118,8 +118,9 @@ func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
 			WantFinalState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
-			// The retry finds the worker no longer hosts the actor and crashes
-			// it.
+			// A resume that finds its worker ineligible releases it, then
+			// crashes the actor. The retry finds the worker no longer hosts
+			// the actor and crashes it.
 			Name:        "resume onto an ineligible worker",
 			State:       ateapipb.ActorState_ACTOR_STATE_RESUMING,
 			WorkerClass: "microvm",
