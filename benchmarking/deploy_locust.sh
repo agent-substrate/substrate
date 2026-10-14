@@ -28,6 +28,8 @@ BENCHMARKING_DIR="${ROOT}/benchmarking"
 WORKER_COUNT=1
 SANDBOX_CLASS=gvisor
 SKIP_BUILD=0
+# Empty keeps the default in locust/deploy.sh (glutton).
+BENCHMARK_USER_CLASS=""
 OTLP_ENDPOINT=""
 # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm minimum).
 ACTOR_MEMORY=""
@@ -55,6 +57,8 @@ usage() {
   echo "                          external volume; setting it deploys glutton-storage."
   echo "  --wait-timeout SECONDS  Forwarded to workloads/deploy.sh. The timeout in seconds for"
   echo "                          waiting for the ateom workers to be ready (default: 300)"
+  echo "  --user-class NAME       Forwarded to locust/deploy.sh. Locust user class,"
+  echo "                          lowercase; runs locust/tests/NAME.py (default: glutton)."
   echo "  --skip-build            Skip locust image build/push (use the existing :latest image)"
   echo "  -h|--help               Show this help message"
   echo ""
@@ -87,6 +91,8 @@ while [[ "$#" -gt 0 ]]; do
     --storage-class-name=*) STORAGE_CLASS_NAME="${1#*=}" ;;
     --wait-timeout) shift; WAIT_TIMEOUT_SECS="$1" ;;
     --wait-timeout=*) WAIT_TIMEOUT_SECS="${1#*=}" ;;
+    --user-class) shift; BENCHMARK_USER_CLASS="$1" ;;
+    --user-class=*) BENCHMARK_USER_CLASS="${1#*=}" ;;
     --skip-build) SKIP_BUILD=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -145,7 +151,14 @@ if [[ "${action}" == "deploy" ]]; then
 
   echo
   echo "=== Deploying locust ==="
-  "${BENCHMARKING_DIR}/locust/deploy.sh" --deploy
+  # An empty --user-class must not be forwarded, or it would override the
+  # default in locust/deploy.sh with an empty string and fail the
+  # tests/<name>.py existence check.
+  locust_args=(--deploy)
+  if [[ -n "${BENCHMARK_USER_CLASS}" ]]; then
+    locust_args+=(--user-class "${BENCHMARK_USER_CLASS}")
+  fi
+  "${BENCHMARKING_DIR}/locust/deploy.sh" "${locust_args[@]}"
 elif [[ "${action}" == "delete" ]]; then
   echo "=== Deleting locust ==="
   "${BENCHMARKING_DIR}/locust/deploy.sh" --delete
