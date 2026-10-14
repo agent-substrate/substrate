@@ -184,7 +184,7 @@ class PickRoleNodesTest(unittest.TestCase):
         self.assertEqual(controlplane.pick_role_nodes(nodes, "pg"), ("n-a", "n-b"))
 
 
-def pod(node_name, *cpus, namespace="ns", app="x", phase="Running", sidecar=None, init=None):
+def pod(node_name, *cpus, namespace="ns", app="x", phase="Running", inits=(), overhead=None):
     p = {
         "metadata": {"namespace": namespace, "labels": {"app": app}},
         "spec": {"containers": [{"resources": {"requests": {"cpu": c}}} for c in cpus],
@@ -193,11 +193,14 @@ def pod(node_name, *cpus, namespace="ns", app="x", phase="Running", sidecar=None
     }
     if node_name:
         p["spec"]["nodeName"] = node_name
-    if sidecar:
-        p["spec"]["initContainers"].append(
-            {"restartPolicy": "Always", "resources": {"requests": {"cpu": sidecar}}})
-    if init:
-        p["spec"]["initContainers"].append({"resources": {"requests": {"cpu": init}}})
+    # Each of inits is (cpu, sidecar).
+    for c, sidecar in inits:
+        init = {"resources": {"requests": {"cpu": c}}}
+        if sidecar:
+            init["restartPolicy"] = "Always"
+        p["spec"]["initContainers"].append(init)
+    if overhead:
+        p["spec"]["overhead"] = {"cpu": overhead}
     return p
 
 
@@ -205,7 +208,7 @@ class RequestedMillisTest(unittest.TestCase):
     def test_sums_the_pods_that_hold_cpu(self):
         pods = [
             pod("n-a", "100m", "250m"),
-            pod("n-a", "1", sidecar="10m", init="4"),
+            pod("n-a", "1", inits=[("10m", True)], overhead="250m"),
             pod("n-b", "500m"),
             pod("n-b"),  # no requests
             pod("n-b", "2", phase="Succeeded"),
@@ -215,7 +218,23 @@ class RequestedMillisTest(unittest.TestCase):
             pod("n-a", "2", namespace="ate-system", app="ate-api-server"),
             pod("n-b", "100m", namespace="ate-system", app="postgres"),
         ]
-        self.assertEqual(controlplane.requested_millis(pods), {"n-a": 1360, "n-b": 600})
+        self.assertEqual(controlplane.requested_millis(pods), {"n-a": 1610, "n-b": 600})
+
+    def test_pod_reserves_what_the_scheduler_does(self):
+        cases = [
+            # Containers and sidecars run together.
+            (pod("n", "1", inits=[("200m", True)]), 1200),
+            # An init container larger than that sets the reservation, with
+            # the sidecars started before it, though not those after.
+            (pod("n", "1", inits=[("200m", True), ("2", False), ("300m", True)]), 2200),
+            # A smaller one changes nothing.
+            (pod("n", "1", inits=[("500m", False)]), 1000),
+            # RuntimeClass overhead comes on top.
+            (pod("n", "1", inits=[("3", False)], overhead="250m"), 3250),
+        ]
+        for p, want in cases:
+            with self.subTest(want=want):
+                self.assertEqual(controlplane._pod_cpu_millis(p), want)
 
 
 class CpuMillisTest(unittest.TestCase):
