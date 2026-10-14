@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -44,6 +45,7 @@ const networkingAtespace = "networking-e2e"
 func egressFixture() e2e.Fixture { return e2e.EgressFixture() }
 
 func TestActorDirectAccess(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, actorName, actor := createAndResumeSubstrateActor(t, ctx, "direct", e2e.SubstrateCounterFixture())
 	router := mustRouterClient(t, ctx)
@@ -102,6 +104,7 @@ func egressHTTPTarget() e2e.ServerPod {
 // would reach it just as well; the access-log assertion is what proves the
 // traffic went through the gateway.
 func TestActorEgress(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Deploy the origin first so a fixture failure costs no Actor resume.
@@ -139,6 +142,10 @@ func TestActorEgress(t *testing.T) {
 	})
 }
 
+// TestActorEgressMultiplexing is the one test in this suite that does not
+// call t.Parallel: it asserts an exact delta in the gateway's CONNECT
+// counters, which this suite's other egress traffic would add to. Go runs
+// the serial tests before releasing the parallel ones.
 func TestActorEgressMultiplexing(t *testing.T) {
 	ctx := context.Background()
 	dataplane := e2e.CurrentAtenetDataplane()
@@ -208,6 +215,7 @@ func egressHTTPSTarget(name, body string) e2e.ServerPod {
 // TestActorEgressHTTPS covers the same path as TestActorEgress with a TLS
 // origin, through the gateway's TLS interception.
 func TestActorEgressHTTPS(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	const originBody = "https origin"
 	target := e2e.DeployServerPod(t, ctx, egressHTTPSTarget("httpstarget", originBody))
@@ -257,6 +265,7 @@ var httpTarget = e2e.ServerPod{
 // port were defaulted from the scheme, because 80 and 443 are exactly what such
 // a default would produce.
 func TestActorEgressNonStandardPort(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Stand the target up first: a fixture failure here should not leave a
@@ -363,31 +372,40 @@ func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.
 	want := fmt.Sprintf("a CONNECT to port %s by actor %s/%s", port, atespace, actorName)
 	waitForAccessLog(t, ctx, since, want, func(lines []gatewayAccessLogLine) bool {
 		for _, line := range lines {
-			switch line.container {
-			case "envoy":
-				authority, ok := accessLogField(line.text, "authority")
-				if !ok {
-					continue
-				}
-				if !strings.HasSuffix(authority, ":"+port) {
-					continue
-				}
-				spiffeSlug := "/worker-for-actor/" + atespace + "/" + actorName
-				if !strings.Contains(line.text, spiffeSlug) {
-					continue
+			if egressConnectAccessLogMatches(line, atespace, actorName, port) {
+				if line.container == "agentgateway" {
+					t.Logf("egress gateway tunneled the request: %s", line.text)
 				}
 				return true
-			case "agentgateway":
-				if strings.Contains(line.text, "CONNECT tunnel terminated") &&
-					strings.Contains(line.text, "target=") &&
-					strings.Contains(line.text, ":"+port) {
-					t.Logf("egress gateway tunneled the request: %s", line.text)
-					return true
-				}
 			}
 		}
 		return false
 	})
+}
+
+// egressConnectAccessLogMatches reports whether entry records a CONNECT to
+// port by the actor atespace/actorName. Both dataplanes' records name the
+// actor, so parallel tests' CONNECTs to the same port cannot satisfy it.
+func egressConnectAccessLogMatches(entry gatewayAccessLogLine, atespace, actorName, port string) bool {
+	switch entry.container {
+	case "envoy":
+		authority, ok := accessLogField(entry.text, "authority")
+		if !ok || !strings.HasSuffix(authority, ":"+port) {
+			return false
+		}
+		peers, _ := accessLogField(entry.text, "peer_san")
+		identity := resources.WorkerForActorSPIFFEID(resources.ActorRef{Atespace: atespace, Name: actorName}).String()
+		return slices.Contains(strings.Split(peers, ","), identity)
+	case "agentgateway":
+		if !strings.Contains(entry.text, "CONNECT tunnel terminated") {
+			return false
+		}
+		target, _ := accessLogField(entry.text, "target")
+		tunnelActor, _ := accessLogField(entry.text, "actor_name")
+		tunnelSpace, _ := accessLogField(entry.text, "atespace")
+		return strings.HasSuffix(target, ":"+port) && tunnelActor == actorName && tunnelSpace == atespace
+	}
+	return false
 }
 
 type gatewayAccessLogLine struct {
@@ -473,11 +491,21 @@ func accessLogField(line, key string) (string, bool) {
 
 // createAndResumeActorWithEgress creates an actor from template, gives it an
 // EgressPolicy of exactly rules (none leaves it without one) and resumes it.
+// Every caller passes the egress demo, so it first takes one of that pool's
+// workers from egressWorkers.
 func createAndResumeActorWithEgress(t *testing.T, ctx context.Context, prefix string, template e2e.Fixture, rules ...*ateapi.EgressRule) (string, string, *ateapi.Actor) {
 	t.Helper()
+	egressWorkers.Acquire(t, ctx)
 	actor := &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Atespace: template.Namespace, Name: template.Name}}
 	return createAndResume(t, ctx, prefix, actor, template.Namespace+"/"+template.Name, template.DeployWith, rules)
 }
+
+// egressWorkers queues this suite's parallel tests for the egress demo's
+// WorkerPool, which has fewer workers than the suite has tests using it.
+var egressWorkers = e2e.NewWorkerSlots("the egress demo", func(ctx context.Context) (int, error) {
+	fixture := e2e.EgressFixture()
+	return e2e.WorkerPoolReplicas(ctx, fixture.Namespace, fixture.Name)
+})
 
 // createAndResumeSubstrateActor is createAndResumeActor for a substrate
 // ActorTemplate fixture, referenced by atespace/name instead of the CRD pair.
@@ -487,13 +515,17 @@ func createAndResumeSubstrateActor(t *testing.T, ctx context.Context, prefix str
 	return createAndResume(t, ctx, prefix, actor, template.Atespace+"/"+template.Name, template.DeployWith, e2e.EgressAllowAll())
 }
 
+// actorSeq keeps the names of actors created in the same instant by parallel
+// tests distinct.
+var actorSeq atomic.Int64
+
 // createAndResume creates the actor, gives it an EgressPolicy with rules (none
 // when rules is nil), and resumes it. The policy goes in before the resume so
 // the actor's first outbound connection already finds it.
 func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *ateapi.Actor, source, deployWith string, rules []*ateapi.EgressRule) (string, string, *ateapi.Actor) {
 	t.Helper()
 	clients := e2e.GetClients()
-	actorName := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+	actorName := fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), actorSeq.Add(1))
 	actorRef := &ateapi.ObjectRef{Atespace: networkingAtespace, Name: actorName}
 
 	t.Logf("creating actor %s/%s", networkingAtespace, actorName)
@@ -588,6 +620,7 @@ func assertDirectActorAccess(t *testing.T, ctx context.Context, clients *e2e.Cli
 // TestActorEgressHTTPSNonStandardPort verifies HTTP/1.1 inside TLS while
 // preserving the original destination port through the egress tunnel.
 func TestActorEgressHTTPSNonStandardPort(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	const expectedBody = "https nonstandard origin"
 	target, address, _ := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
@@ -882,6 +915,7 @@ func protocolOriginRequest(target e2e.Server) string {
 }
 
 func TestProtocolOriginRequest(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, ip string
 		tlsPort  int
@@ -901,6 +935,7 @@ func TestProtocolOriginRequest(t *testing.T) {
 }
 
 func TestBoundedOriginDiagnosticText(t *testing.T) {
+	t.Parallel()
 	got := boundedOriginDiagnosticText("one\ntwo\nthree\nfour", 2, 16)
 	if got != "three\nfour" {
 		t.Fatalf("bounded diagnostic text = %q, want %q", got, "three\\nfour")
