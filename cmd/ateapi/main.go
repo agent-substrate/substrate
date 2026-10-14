@@ -37,6 +37,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workerservice"
 	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/cachesync"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/localca"
@@ -70,6 +71,9 @@ import (
 const maxRPCDeadline = 10 * time.Minute
 
 const minResyncInterval = 250 * time.Millisecond
+
+// cacheSyncTimeout bounds the startup wait for required Kubernetes caches.
+const cacheSyncTimeout = time.Minute
 
 var (
 	configFile = pflag.String("config-file", "", "API server config file")
@@ -295,7 +299,16 @@ func main() {
 	ateFactory.Start(stopCh)
 	scInformerFactory.Start(stopCh)
 
-	if err := waitForAPICaches(shutdownCtx, cacheSyncTimeout, *watchNamespace, ateFactory.Api().V1alpha1().WorkerPools().Informer().HasSynced, map[string]cache.InformerSynced{
+	// WorkerPools only seed zero-valued metric series, so their informer is
+	// optional: it keeps retrying past the diagnostic timeout without gating
+	// API availability.
+	cachesync.OptionalSync(shutdownCtx, cacheSyncTimeout, map[string]cache.InformerSynced{
+		"WorkerPools": ateFactory.Api().V1alpha1().WorkerPools().Informer().HasSynced,
+	}, func(ctx context.Context, err error) {
+		slog.WarnContext(ctx, "WorkerPool cache has not synced; worker-count metrics may omit empty pools",
+			"watch-namespace", *watchNamespace, "all-namespaces", *watchNamespace == "", "err", err)
+	})
+	if err := cachesync.WaitForCacheSync(shutdownCtx, cacheSyncTimeout, map[string]cache.InformerSynced{
 		"atelet Pods":      ateletPodInformer.HasSynced,
 		"SandboxConfigs":   ateFactory.Api().V1alpha1().SandboxConfigs().Informer().HasSynced,
 		"CSIDriverConfigs": ateFactory.Api().V1alpha1().CSIDriverConfigs().Informer().HasSynced,
