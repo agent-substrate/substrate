@@ -27,9 +27,10 @@
 //     opaque directories need trusted.* xattrs (CAP_SYS_ADMIN). The 0:0 char
 //     devices used as whiteouts have a separate kernel permission check and
 //     can be created without CAP_MKNOD since Linux 5.8.
-//   - worker finalizes layers, materializing the recorded whiteout state once per
-//     layer, and mounts the overlay rootfs (SetupBundleRootfs) just before
-//     `runsc create` / staging the micro-VM virtio-fs lower.
+//   - worker finalizes fs/ layers, materializing the recorded whiteout state
+//     once per layer, and mounts the overlay rootfs (SetupBundleRootfs) just
+//     before `runsc create`. The microVM worker mounts nothing on the host; it
+//     attaches layer.erofs images to the guest.
 //
 // On-disk layout under the cache root (a directory on the BasePath hostPath,
 // so the same absolute paths resolve in atelet and every worker pod):
