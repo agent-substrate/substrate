@@ -193,6 +193,10 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 // Envoy. Its PodMonitoring kind exists only where Google Managed Prometheus
 // does, so the object is skipped on a cluster that does not serve it, not
 // allowed to fail the install. Kind scrapes through its own collector.
+//
+// This is a temporary, GKE-specific skip, not an extension point. Do not extend
+// it to other in-tree provider CRDs: provider-specific CRDs belong out of tree,
+// and this one should move there longer term.
 func (e *Env) applyRouterMonitoring(ctx context.Context) error {
 	if e.Cfg.Kind {
 		return nil
