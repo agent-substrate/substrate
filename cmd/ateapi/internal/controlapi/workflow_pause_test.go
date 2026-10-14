@@ -573,7 +573,8 @@ func TestPauseActor_MarkedPausing_GoldenAtespaceRejected(t *testing.T) {
 }
 
 // TestPauseActor_AteletPaused_ForwardsPreferredFidelity verifies that local pause
-// checkpoints forward the template's PreferredFidelity to atelet.
+// checkpoints forward the template's PreferredFidelity to atelet, and label the
+// pause's lifecycle-op metric with it.
 func TestPauseActor_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 	tests := []struct {
 		preferred ateapipb.SnapshotFidelity
@@ -590,6 +591,8 @@ func TestPauseActor_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 			persistence := newTestPersistence(t)
 			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{PreferredFidelity: tc.preferred})
 			w, atelet := newWireCaptureWorkflow(t, persistence)
+			inst, reader := newTestInstruments(t)
+			w.instruments = inst
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 			storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
@@ -628,6 +631,8 @@ func TestPauseActor_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 			if got := req.GetUploadConfig().GetMode(); got != ateletpb.UploadMode_UPLOAD_MODE_DEFERRED {
 				t.Errorf("CheckpointRequest.UploadConfig.Mode = %v, want UPLOAD_MODE_DEFERRED", got)
 			}
+			// The fidelity sent to atelet labels the pause's lifecycle-op metric.
+			assertLifecycleFidelity(t, reader, ateattr.SnapshotFidelityValue(tc.want))
 		})
 	}
 }

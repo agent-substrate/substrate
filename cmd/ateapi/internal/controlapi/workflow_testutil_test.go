@@ -23,11 +23,13 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc/codes"
 )
 
@@ -289,6 +291,16 @@ func assertStoppedAtDial(t *testing.T, err error) {
 	t.Helper()
 	if !errors.Is(err, ErrNoAteletOnNode) {
 		t.Fatalf("err = %v, want ErrNoAteletOnNode from the atelet dial", err)
+	}
+}
+
+// assertLifecycleFidelity verifies the one lifecycle-op datapoint reader
+// collected carries want as its snapshot fidelity label.
+func assertLifecycleFidelity(t *testing.T, reader *sdkmetric.ManualReader, want string) {
+	t.Helper()
+	dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)
+	if got, ok := attrString(dp, ateattr.SnapshotFidelityKey); !ok || got != want {
+		t.Errorf("lifecycle-op snapshot fidelity = %q (present %t), want %q", got, ok, want)
 	}
 }
 

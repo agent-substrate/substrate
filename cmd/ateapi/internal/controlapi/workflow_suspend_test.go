@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -431,6 +432,8 @@ func TestSuspendActor_AteletSuspended_WireRequest(t *testing.T) {
 	persistence := newTestPersistence(t)
 	seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY})
 	w, atelet := newWireCaptureWorkflow(t, persistence)
+	inst, reader := newTestInstruments(t)
+	w.instruments = inst
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 	snapshotName := "2026-01-01t00-00-00z-abc"
@@ -469,6 +472,8 @@ func TestSuspendActor_AteletSuspended_WireRequest(t *testing.T) {
 	if got := req.GetUploadConfig(); !proto.Equal(got, wantConfig) {
 		t.Errorf("CheckpointRequest.UploadConfig = %v, want %v", got, wantConfig)
 	}
+	// The fidelity sent to atelet labels the suspend's lifecycle-op metric.
+	assertLifecycleFidelity(t, reader, ateattr.SnapshotFidelityMemory)
 }
 
 // TestSuspendActor_Finalized_NoAssignment verifies finalization runs even
@@ -482,6 +487,8 @@ func TestSuspendActor_Finalized_NoAssignment(t *testing.T) {
 	persistence := newTestPersistence(t)
 	seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation})
 	w, atelet := newWireCaptureWorkflow(t, persistence)
+	inst, reader := newTestInstruments(t)
+	w.instruments = inst
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
 	snapshotURI := someActorSnapshotURI(t, testStorageLocation, "team-a", "2026-01-01t00-00-00z-abc")
@@ -515,6 +522,9 @@ func TestSuspendActor_Finalized_NoAssignment(t *testing.T) {
 	if got := promote.GetSnapshot().GetObject().GetSnapshotUri(); got != snapshotURI {
 		t.Errorf("PromoteSnapshotRequest.Snapshot.Object.SnapshotUri = %q, want %q", got, snapshotURI)
 	}
+	// The template's preferred fidelity, which the store defaults to MEMORY,
+	// labels the suspend's lifecycle-op metric.
+	assertLifecycleFidelity(t, reader, ateattr.SnapshotFidelityMemory)
 
 	if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", stored.GetStatus().GetState())
@@ -1088,19 +1098,40 @@ var suspendModes = []struct {
 
 // suspendOutcome is what one suspend workflow does to a seeded actor.
 type suspendOutcome struct {
-	code codes.Code
-	// atelet describes the RPC sent, see describeAteletCall.
-	atelet       string
+	code         codes.Code
+	atelet       ateletCall
 	state        ateapipb.ActorState
 	assignedNode string
-	generation   int32
-	// snapshots describes the stored snapshots, see describeSnapshots.
-	snapshots []string
+	// workerHeld is whether the worker wireTestAssignment names still holds
+	// the actor's assignment.
+	workerHeld bool
+	generation int32
+	snapshots  []snapshotOutcome
+}
+
+// ateletCall is the suspend RPC atelet received; the zero value is none.
+type ateletCall struct {
+	checkpoints, promotes int
+	// fidelity and object describe the request sent; uploadMode is set only
+	// on a Checkpoint.
+	fidelity   ateletpb.SnapshotFidelity
+	uploadMode ateletpb.UploadMode
+	object     bool
+}
+
+// snapshotOutcome is the part of a stored snapshot the matrix pins.
+type snapshotOutcome struct {
+	generation int32
+	fidelity   ateapipb.SnapshotFidelity
+	locality   string
+	// durable is the durable copy's status, UNSPECIFIED when there is none.
+	durable ateapipb.SnapshotStorageStatus
 }
 
 // TestSuspendAndPause_CharacteristicMatrix pins, for each actor shape either
 // workflow can be called on, what SuspendActor (sync) and PauseActor (async)
-// do: the code returned, the atelet RPC sent, and the record left behind.
+// do: the code returned, the atelet RPC sent, the record left behind, and
+// whether the actor's worker was released.
 func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 	const node = "node-1"
 	volumes := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
@@ -1113,16 +1144,17 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 	}
 	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	noDurable := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED
 	promoting := durable(1, pending)
 	promoting.Locality = node
 
-	const (
-		checkpointSync  = "Checkpoint VOLUMES IMMEDIATE object=true"
-		checkpointAsync = "Checkpoint VOLUMES DEFERRED object=false"
-		promote         = "PromoteSnapshot VOLUMES object=true"
-	)
-	rejected := func(state ateapipb.ActorState, assignedNode string, generation int32, snapshots ...string) suspendOutcome {
-		return suspendOutcome{codes.FailedPrecondition, "none", state, assignedNode, generation, snapshots}
+	ateletVolumes := ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	immediate := ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE
+	checkpointSync := ateletCall{checkpoints: 1, fidelity: ateletVolumes, uploadMode: immediate, object: true}
+	checkpointAsync := ateletCall{checkpoints: 1, fidelity: ateletVolumes, uploadMode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED}
+	promote := ateletCall{promotes: 1, fidelity: ateletVolumes, object: true}
+	rejected := func(state ateapipb.ActorState, assignedNode string, workerHeld bool, generation int32, snapshots ...snapshotOutcome) suspendOutcome {
+		return suspendOutcome{codes.FailedPrecondition, ateletCall{}, state, assignedNode, workerHeld, generation, snapshots}
 	}
 	suspended := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 
@@ -1136,8 +1168,8 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 		{
 			name:   "RUNNING",
 			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment()},
-			sync:   suspendOutcome{codes.OK, checkpointSync, suspended, "", 1, []string{"g1 VOLUMES locality= durable=COMPLETED"}},
-			async:  suspendOutcome{codes.OK, checkpointAsync, suspended, node, 1, []string{"g1 VOLUMES locality=node-1 durable=none"}},
+			sync:   suspendOutcome{codes.OK, checkpointSync, suspended, "", false, 1, []snapshotOutcome{{1, volumes, "", completed}}},
+			async:  suspendOutcome{codes.OK, checkpointAsync, suspended, node, false, 1, []snapshotOutcome{{1, volumes, node, noDurable}}},
 		},
 		{
 			name: "RUNNING resumed from pause",
@@ -1145,8 +1177,8 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 				State: ateapipb.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
 				LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{local(1, node)},
 			},
-			sync:  suspendOutcome{codes.OK, checkpointSync, suspended, "", 2, []string{"g2 VOLUMES locality= durable=COMPLETED"}},
-			async: suspendOutcome{codes.OK, checkpointAsync, suspended, node, 2, []string{"g2 VOLUMES locality=node-1 durable=none"}},
+			sync:  suspendOutcome{codes.OK, checkpointSync, suspended, "", false, 2, []snapshotOutcome{{2, volumes, "", completed}}},
+			async: suspendOutcome{codes.OK, checkpointAsync, suspended, node, false, 2, []snapshotOutcome{{2, volumes, node, noDurable}}},
 		},
 		{
 			name: "RUNNING resumed from a durable snapshot",
@@ -1154,20 +1186,20 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 				State: ateapipb.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
 				LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, completed)},
 			},
-			sync:  suspendOutcome{codes.OK, checkpointSync, suspended, "", 2, []string{"g2 VOLUMES locality= durable=COMPLETED"}},
-			async: suspendOutcome{codes.OK, checkpointAsync, suspended, node, 2, []string{"g1 VOLUMES locality= durable=COMPLETED", "g2 VOLUMES locality=node-1 durable=none"}},
+			sync:  suspendOutcome{codes.OK, checkpointSync, suspended, "", false, 2, []snapshotOutcome{{2, volumes, "", completed}}},
+			async: suspendOutcome{codes.OK, checkpointAsync, suspended, node, false, 2, []snapshotOutcome{{1, volumes, "", completed}, {2, volumes, node, noDurable}}},
 		},
 		{
 			name:   "SUSPENDED with a durable snapshot",
 			status: &ateapipb.ActorStatus{State: suspended, LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, completed)}},
-			sync:   suspendOutcome{codes.OK, "none", suspended, "", 1, []string{"g1 VOLUMES locality= durable=COMPLETED"}},
-			async:  rejected(suspended, "", 1, "g1 VOLUMES locality= durable=COMPLETED"),
+			sync:   suspendOutcome{codes.OK, ateletCall{}, suspended, "", false, 1, []snapshotOutcome{{1, volumes, "", completed}}},
+			async:  rejected(suspended, "", false, 1, snapshotOutcome{1, volumes, "", completed}),
 		},
 		{
 			name:   "paused",
 			status: &ateapipb.ActorStatus{State: suspended, AssignedNode: node, LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{local(1, node)}},
-			sync:   suspendOutcome{codes.OK, promote, suspended, "", 1, []string{"g1 VOLUMES locality= durable=COMPLETED"}},
-			async:  suspendOutcome{codes.OK, "none", suspended, node, 1, []string{"g1 VOLUMES locality=node-1 durable=none"}},
+			sync:   suspendOutcome{codes.OK, promote, suspended, "", false, 1, []snapshotOutcome{{1, volumes, "", completed}}},
+			async:  suspendOutcome{codes.OK, ateletCall{}, suspended, node, false, 1, []snapshotOutcome{{1, volumes, node, noDurable}}},
 		},
 		{
 			name: "suspend from RUNNING in progress",
@@ -1175,8 +1207,8 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 				State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
 				LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, pending)},
 			},
-			sync:  suspendOutcome{codes.OK, checkpointSync, suspended, "", 1, []string{"g1 VOLUMES locality= durable=COMPLETED"}},
-			async: rejected(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, node, 1, "g1 VOLUMES locality= durable=PENDING"),
+			sync:  suspendOutcome{codes.OK, checkpointSync, suspended, "", false, 1, []snapshotOutcome{{1, volumes, "", completed}}},
+			async: rejected(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, node, true, 1, snapshotOutcome{1, volumes, "", pending}),
 		},
 		{
 			name: "suspend from paused in progress",
@@ -1184,8 +1216,8 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 				State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, AssignedNode: node,
 				LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{promoting},
 			},
-			sync:  suspendOutcome{codes.OK, promote, suspended, "", 1, []string{"g1 VOLUMES locality= durable=COMPLETED"}},
-			async: rejected(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, node, 1, "g1 VOLUMES locality=node-1 durable=PENDING"),
+			sync:  suspendOutcome{codes.OK, promote, suspended, "", false, 1, []snapshotOutcome{{1, volumes, "", completed}}},
+			async: rejected(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, node, false, 1, snapshotOutcome{1, volumes, node, pending}),
 		},
 		{
 			name: "pause in progress",
@@ -1193,26 +1225,26 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 				State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
 				LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{local(1, "")},
 			},
-			sync:  rejected(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, node, 1, "g1 VOLUMES locality= durable=none"),
-			async: suspendOutcome{codes.OK, checkpointAsync, suspended, node, 1, []string{"g1 VOLUMES locality=node-1 durable=none"}},
+			sync:  rejected(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, node, true, 1, snapshotOutcome{1, volumes, "", noDurable}),
+			async: suspendOutcome{codes.OK, checkpointAsync, suspended, node, false, 1, []snapshotOutcome{{1, volumes, node, noDurable}}},
 		},
 		{
 			name:   "RESUMING",
 			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RESUMING},
-			sync:   rejected(ateapipb.ActorState_ACTOR_STATE_RESUMING, "", 0),
-			async:  rejected(ateapipb.ActorState_ACTOR_STATE_RESUMING, "", 0),
+			sync:   rejected(ateapipb.ActorState_ACTOR_STATE_RESUMING, "", false, 0),
+			async:  rejected(ateapipb.ActorState_ACTOR_STATE_RESUMING, "", false, 0),
 		},
 		{
 			name:   "CRASHED",
 			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED},
-			sync:   rejected(ateapipb.ActorState_ACTOR_STATE_CRASHED, "", 0),
-			async:  rejected(ateapipb.ActorState_ACTOR_STATE_CRASHED, "", 0),
+			sync:   rejected(ateapipb.ActorState_ACTOR_STATE_CRASHED, "", false, 0),
+			async:  rejected(ateapipb.ActorState_ACTOR_STATE_CRASHED, "", false, 0),
 		},
 		{
 			name:   "DELETING",
 			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING},
-			sync:   rejected(ateapipb.ActorState_ACTOR_STATE_DELETING, "", 0),
-			async:  rejected(ateapipb.ActorState_ACTOR_STATE_DELETING, "", 0),
+			sync:   rejected(ateapipb.ActorState_ACTOR_STATE_DELETING, "", false, 0),
+			async:  rejected(ateapipb.ActorState_ACTOR_STATE_DELETING, "", false, 0),
 		},
 		{
 			// A golden actor commits MEMORY whatever the template prefers, and
@@ -1220,14 +1252,10 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 			name:     "golden RUNNING",
 			atespace: resources.GoldenActorAtespace,
 			status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment()},
-			sync:     suspendOutcome{codes.OK, "Checkpoint MEMORY IMMEDIATE object=true", suspended, "", 1, []string{"g1 MEMORY locality= durable=COMPLETED"}},
-			async:    rejected(ateapipb.ActorState_ACTOR_STATE_RUNNING, node, 0),
+			sync:     suspendOutcome{codes.OK, ateletCall{checkpoints: 1, fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, uploadMode: immediate, object: true}, suspended, "", false, 1, []snapshotOutcome{{1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", completed}}},
+			async:    rejected(ateapipb.ActorState_ACTOR_STATE_RUNNING, node, true, 0),
 		},
 	}
-
-	ctx := context.Background()
-	persistence := newTestPersistence(t)
-	seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation, PreferredFidelity: volumes})
 
 	for i, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1241,29 +1269,37 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 					if atespace == "" {
 						atespace = "team-a"
 					}
+					// Each run gets its own store, so it can seed the one worker
+					// wireTestAssignment names.
+					ctx := context.Background()
+					persistence := newTestPersistence(t)
+					seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation, PreferredFidelity: volumes})
 					actorRef := resources.ActorRef{Atespace: atespace, Name: fmt.Sprintf("row%d-%s", i, mode.name)}
-					storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+					created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 						Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 						ActorTemplate: suspendTestTemplateRef(),
 						Status:        proto.CloneOf(tc.status),
 					})
+					var assignment *ateapipb.ActorAssignment
+					if tc.status.GetWorkerAssignment() != nil {
+						assignment = assignmentOf(created)
+					}
+					seedWireWorker(t, ctx, persistence, assignment)
 					w, atelet := newWireCaptureWorkflow(t, persistence)
 
 					_, err := mode.run(w, ctx, actorRef)
-					if got := apierror.Code(err); got != want.code {
-						t.Errorf("code = %v, want %v (err: %v)", got, want.code, err)
-					}
 					stored := mustReadActor(t, ctx, persistence, actorRef)
 					got := suspendOutcome{
 						code:         apierror.Code(err),
 						atelet:       describeAteletCall(atelet),
 						state:        stored.GetStatus().GetState(),
 						assignedNode: stored.GetStatus().GetAssignedNode(),
+						workerHeld:   firstAssignment(t, persistence, wireTestAssignment().GetWorker().GetName()) != nil,
 						generation:   stored.GetStatus().GetLastAssignedGeneration(),
 						snapshots:    describeSnapshots(stored.GetStatus()),
 					}
-					if diff := cmp.Diff(want, got, cmp.AllowUnexported(suspendOutcome{})); diff != "" {
-						t.Errorf("outcome mismatch (-want +got):\n%s", diff)
+					if diff := cmp.Diff(want, got, cmp.AllowUnexported(suspendOutcome{}, ateletCall{}, snapshotOutcome{})); diff != "" {
+						t.Errorf("outcome mismatch (-want +got):\n%s (err: %v)", diff, err)
 					}
 					if got.state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && stored.GetStatus().GetWorkerAssignment() != nil {
 						t.Errorf("WorkerAssignment = %v, want cleared on SUSPENDED", stored.GetStatus().GetWorkerAssignment())
@@ -1276,13 +1312,15 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 }
 
 // TestSuspendAndPause_FinalizeWithoutAssignment pins where the two finalize
-// steps differ when the worker assignment is gone by the time the workflow
-// finalizes (#2676): the pause leaves the record as it is and reports
-// success, while the suspend commits SUSPENDED anyway.
+// steps differ when the DeleteWorker workflow crashes the actor, clearing its
+// worker assignment, between the atelet call and finalize. The pause keeps
+// the crash and reports success, which is the intended behavior. The suspend
+// commits SUSPENDED over the crash, which is the bug tracked in #2676: fixing
+// it changes the sync pin to CRASHED.
 func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 	wantState := map[string]ateapipb.ActorState{
 		"sync":  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-		"async": ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+		"async": ateapipb.ActorState_ACTOR_STATE_CRASHED,
 	}
 	for _, mode := range suspendModes {
 		t.Run(mode.name, func(t *testing.T) {
@@ -1301,6 +1339,7 @@ func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 				},
 			})
 			updateDuringCheckpoint(t, atelet, persistence, actorRef, func(s *ateapipb.ActorStatus) {
+				s.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 				s.WorkerAssignment = nil
 			})
 
@@ -1318,44 +1357,34 @@ func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 	}
 }
 
-// describeAteletCall summarizes the suspend RPC atelet received: none, one
-// Checkpoint (fidelity, upload mode, and whether it names an object
-// destination), or one PromoteSnapshot.
-func describeAteletCall(atelet *capturingAtelet) string {
-	fidelity := func(f ateletpb.SnapshotFidelity) string {
-		return strings.TrimPrefix(f.String(), "SNAPSHOT_FIDELITY_")
+// describeAteletCall summarizes the suspend RPCs atelet received: how many
+// of each, and the fidelity, upload mode, and object destination requested.
+func describeAteletCall(atelet *capturingAtelet) ateletCall {
+	var call ateletCall
+	call.checkpoints, call.promotes = atelet.calls()
+	var snap *ateletpb.Snapshot
+	if req := atelet.checkpointRequest(); req != nil {
+		snap = req.GetSnapshot()
+		call.uploadMode = req.GetUploadConfig().GetMode()
+	} else if req := atelet.promoteRequest(); req != nil {
+		snap = req.GetSnapshot()
 	}
-	switch checkpoints, promotes := atelet.calls(); {
-	case checkpoints == 0 && promotes == 0:
-		return "none"
-	case checkpoints == 1 && promotes == 0:
-		req := atelet.checkpointRequest()
-		return fmt.Sprintf("Checkpoint %s %s object=%t",
-			fidelity(req.GetSnapshot().GetFidelity()),
-			strings.TrimPrefix(req.GetUploadConfig().GetMode().String(), "UPLOAD_MODE_"),
-			req.GetSnapshot().GetObject() != nil)
-	case checkpoints == 0 && promotes == 1:
-		req := atelet.promoteRequest()
-		return fmt.Sprintf("PromoteSnapshot %s object=%t", fidelity(req.GetSnapshot().GetFidelity()), req.GetSnapshot().GetObject() != nil)
-	default:
-		return fmt.Sprintf("%d Checkpoint, %d PromoteSnapshot", checkpoints, promotes)
-	}
+	call.fidelity = snap.GetFidelity()
+	call.object = snap.GetObject() != nil
+	return call
 }
 
 // describeSnapshots summarizes each stored snapshot as its generation,
 // fidelity, locality, and durable copy's status.
-func describeSnapshots(status *ateapipb.ActorStatus) []string {
-	var out []string
+func describeSnapshots(status *ateapipb.ActorStatus) []snapshotOutcome {
+	var out []snapshotOutcome
 	for _, snap := range status.GetSnapshots() {
-		durable := "none"
-		if d := snap.GetDurableSnapshot(); d != nil {
-			durable = strings.TrimPrefix(d.GetStatus().String(), "SNAPSHOT_STORAGE_STATUS_")
-		}
-		out = append(out, fmt.Sprintf("g%d %s locality=%s durable=%s",
-			snap.GetGeneration(),
-			strings.TrimPrefix(snap.GetFidelity().String(), "SNAPSHOT_FIDELITY_"),
-			snap.GetLocality(),
-			durable))
+		out = append(out, snapshotOutcome{
+			generation: snap.GetGeneration(),
+			fidelity:   snap.GetFidelity(),
+			locality:   snap.GetLocality(),
+			durable:    snap.GetDurableSnapshot().GetStatus(),
+		})
 	}
 	return out
 }
