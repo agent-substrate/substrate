@@ -77,8 +77,8 @@ func TestRequestActorSuspend(t *testing.T) {
 		Metadata: actor.GetMetadata(),
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
-	suspender := &fakeSuspender{resp: &ateapipb.SuspendActorResponse{Actor: suspended}}
-	s := New(st, suspender, testAteletSPIFFEID, nil, "", nil)
+	control := &fakeControl{resp: &ateapipb.SuspendActorResponse{Actor: suspended}}
+	s := New(st, control, testAteletSPIFFEID, nil, "", nil)
 
 	got, err := s.RequestActorSuspend(
 		ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)),
@@ -89,7 +89,7 @@ func TestRequestActorSuspend(t *testing.T) {
 	want := []*ateapipb.SuspendActorRequest{{
 		Actor: &ateapipb.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
 	}}
-	if diff := cmp.Diff(want, suspender.calls, protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(want, control.calls, protocmp.Transform()); diff != "" {
 		t.Errorf("suspend calls mismatch (-want +got):\n%s", diff)
 	}
 	// The caller gets the actor as the workflow left it, so a worker can see
@@ -125,8 +125,8 @@ func TestRequestActorSuspend_OnlyForHostedActors(t *testing.T) {
 			defer cleanup()
 			seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 			actor := seedHostedActor(t, st, tc.assignedWorker)
-			suspender := &fakeSuspender{}
-			s := New(st, suspender, testAteletSPIFFEID, nil, "", nil)
+			control := &fakeControl{}
+			s := New(st, control, testAteletSPIFFEID, nil, "", nil)
 
 			uid := tc.requestedUID
 			if uid == "" {
@@ -138,8 +138,8 @@ func TestRequestActorSuspend_OnlyForHostedActors(t *testing.T) {
 			if got := apierror.Code(err); got != codes.NotFound {
 				t.Fatalf("code = %v (err %v), want NotFound", got, err)
 			}
-			if len(suspender.calls) != 0 {
-				t.Errorf("refused request still reached the suspend: %v", suspender.calls)
+			if len(control.calls) != 0 {
+				t.Errorf("refused request still reached the suspend: %v", control.calls)
 			}
 		})
 	}
@@ -151,8 +151,8 @@ func TestRequestActorSuspend_Errors(t *testing.T) {
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 	actor := seedHostedActor(t, st, testWorkerName)
 	uid := actor.GetMetadata().GetUid()
-	suspender := &fakeSuspender{}
-	s := New(st, suspender, testAteletSPIFFEID, nil, "", nil)
+	control := &fakeControl{}
+	s := New(st, control, testAteletSPIFFEID, nil, "", nil)
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
 	tests := []struct {
@@ -203,8 +203,8 @@ func TestRequestActorSuspend_Errors(t *testing.T) {
 			}
 		})
 	}
-	if len(suspender.calls) != 0 {
-		t.Errorf("a malformed or unauthorized request reached the suspend: %v", suspender.calls)
+	if len(control.calls) != 0 {
+		t.Errorf("a malformed or unauthorized request reached the suspend: %v", control.calls)
 	}
 }
 
@@ -216,8 +216,8 @@ func TestRequestActorSuspend_PassesThroughTheWorkflowsRefusal(t *testing.T) {
 	defer cleanup()
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 	actor := seedHostedActor(t, st, testWorkerName)
-	suspender := &fakeSuspender{err: apierror.FailedPrecondition("Actor is RESUMING")}
-	s := New(st, suspender, testAteletSPIFFEID, nil, "", nil)
+	control := &fakeControl{err: apierror.FailedPrecondition("Actor is RESUMING")}
+	s := New(st, control, testAteletSPIFFEID, nil, "", nil)
 
 	_, err := s.RequestActorSuspend(
 		ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)),

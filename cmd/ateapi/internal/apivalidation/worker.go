@@ -82,6 +82,11 @@ func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateapipb.Reque
 	return Validate_RequestActorSuspendRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateReportActorCrashedRequest(ctx context.Context, req *ateapipb.ReportActorCrashedRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_ReportActorCrashedRequest(ctx, op, nil, req, nil)
+}
+
 func ValidateMarkWorkerAvailableRequest(ctx context.Context, req *ateapipb.MarkWorkerAvailableRequest) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Create}

@@ -51,6 +51,11 @@ service WorkerSupport {
   // Control.GetActorEgressPolicy. An error is the control plane's, passed
   // through as it was given.
   rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (GetActorEgressPolicyResponse) {}
+
+  // ReportActorCrashed reports that the sandbox of the actor this worker
+  // hosts died on its own, for atelet to forward to the control plane's
+  // WorkerService, which this mirrors.
+  rpc ReportActorCrashed(ReportActorCrashedRequest) returns (ReportActorCrashedResponse) {}
 }
 
 message RegisterWorkerRequest {
@@ -211,6 +216,31 @@ message RequestActorSuspendRequest {
 }
 
 message RequestActorSuspendResponse {
+}
+
+message ReportActorCrashedRequest {
+  // The actor the calling worker is hosting, as for RequestActorSuspend.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_atespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_name = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 3;
+
+  // What the worker saw, e.g. how the sandbox exited.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096
+  string message = 4;
+}
+
+message ReportActorCrashedResponse {
 }
 
 message GetActorEgressPolicyRequest {
