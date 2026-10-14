@@ -327,7 +327,7 @@ The node-level subsystem manages the physical execution of sandboxes and the mov
 
   * **Lifecycle Management**: The `ateom` process invokes the sandbox runtime to checkpoint or restore processes within the physical pod boundaries — `runsc` for gVisor, or the Kata + Cloud Hypervisor stack for micro-VMs. (Note: the gVisor backend currently requires a `runsc` version with the `--allow-connected-on-save` flag to work around a bug in networking resumption during checkpointing.)
 
-  * **Storage Mover**: External snapshots move through a *snapshot plugin*, a sidecar that serves the `objectstore.v1` gRPC API over a Unix socket in its pod. `atelet`'s sidecar (`NodeProvider`) uploads and fetches a snapshot's files; `ate-api-server`'s sidecar (`ControlProvider`) copies and deletes whole snapshots. Neither main process talks to object storage for snapshots. The in-tree plugin, `cmd/snapshot-plugin`, backs the API with GCS or S3; `ATE_STORAGE_BACKEND` on the sidecar (unset or `gcs`, or `s3` with the `AWS_*` variables) selects which, see `manifests/ate-install/atelet.yaml`, `ate-api-server.yaml`, and the kind overlay for an S3 example. `atelet` keeps a storage client of its own only for sandbox asset downloads.
+  * **Storage Mover**: External snapshots move through an *object-store plugin*, a sidecar that serves the `objectstore.v1` gRPC API over a Unix socket in its pod. `atelet`'s sidecar (`NodeProvider`) uploads and fetches a snapshot's files; `ate-api-server`'s sidecar (`ControlProvider`) copies and deletes whole snapshots. Neither main process talks to object storage for snapshots. The in-tree plugin, `cmd/objectstore-plugin`, backs the API with GCS or S3; `ATE_STORAGE_BACKEND` on the sidecar (unset or `gcs`, or `s3` with the `AWS_*` variables) selects which, see `manifests/ate-install/atelet.yaml`, `ate-api-server.yaml`, and the kind overlay for an S3 example. The same `atelet` sidecar serves `AssetProvider`, which fetches every sandbox asset; `atelet` reads a `gs://` asset anonymously only when the plugin cannot serve it, which covers public buckets such as `gs://gvisor`. The plugin stages each download where `atelet` cannot read it, and copies it into `atelet`'s cache only if its sha256 matches; it refuses any URL under a snapshot location. `atelet` verifies the sha256 again and has no object storage credentials or settings of its own.
 
 ### Sandbox Classes
 
@@ -335,7 +335,7 @@ A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and e
 
   * **gVisor** (`ateom-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree.
 
-  * **micro-VM** (`ateom-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging. Container rootfs writes are host-backed: the overlay is assembled on the host (read-only OCI image lower plus a per-actor writable upper) and served to the guest over the single virtio-fs share, so they cost reclaimable host page cache rather than guest RAM, and a `MEMORY` snapshot ships the upper as its own tar. `DurableDir` volumes travel over that same share and are likewise shipped as a tar, so a `VOLUMES` snapshot can capture them without any guest memory. Each volume is a subdirectory of the share, so an actor can have several at no extra cost in devices, which is why the micro-VM class lifts the single-`DurableDir` limit that still applies to gVisor.
+  * **micro-VM** (`ateom-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging. Container rootfs writes are host-backed: the overlay is assembled on the host (read-only OCI image lower plus a per-actor writable upper) and served to the guest over the single virtio-fs share, so they cost reclaimable host page cache rather than guest RAM, and `ROOTFS` and `MEMORY` snapshots ship the upper as its own tar (a `ROOTFS` restore puts it back and cold-boots on it). `DurableDir` volumes travel over that same share and are likewise shipped as a tar, so a `VOLUMES` snapshot can capture them without any guest memory. Each volume is a subdirectory of the share, so an actor can have several at no extra cost in devices, which is why the micro-VM class lifts the single-`DurableDir` limit that still applies to gVisor.
 
 ### Networking Stack (`atenet` + `atunnel`)
 
@@ -349,10 +349,11 @@ Handles actor-aware routing and automatic re-animation.
     not select the Actor.
 
   * **Worker Tunnel**: After resolving the assignment, `atenet-router` opens an
-    authenticated TLS tunnel to the worker's `atunnel` listener on port 443.
+    mTLS `CONNECT` tunnel to the worker's `atunnel` listener on port 8443.
     `atunnel`, hosted by `ateom`, forwards the request to the active Actor over
     its private veth interface. Worker pod port 80 is not a direct Actor ingress
-    path.
+    path. With `--upstream-connect=false`, the Envoy router instead reaches
+    `atunnel` over HTTPS on port 443.
 
   * **Arbitrary-Port Ingress**: A client reaches a port on the Actor other than
     its default (80) with an HTTP `CONNECT` request naming the port in the
@@ -420,12 +421,18 @@ stateDiagram-v2
     RESUMING --> RUNNING : restore / boot complete
     RUNNING --> SUSPENDING : SuspendActor
     SUSPENDING --> SUSPENDED : checkpoint complete
-    RUNNING --> PAUSING : PauseActor
-    PAUSING --> PAUSED : node-local checkpoint complete
-    PAUSED --> RESUMING : ResumeActor (pinned to the snapshot's node)
-    PAUSED --> SUSPENDING : SuspendActor (uploads the node-local snapshot)
+    RUNNING --> SUSPENDING : PauseActor
+    SUSPENDED --> SUSPENDING : SuspendActor (paused: uploads the node-local snapshot)
     SUSPENDED --> [*] : DeleteActor
 ```
+
+A pause and a suspend both pass through `SUSPENDING`, and a paused actor and
+a suspended actor are both `SUSPENDED`. They differ only in the shape of
+`status.snapshots`: after a pause the latest snapshot has a
+`locality` (the node holding its files) and no `durableSnapshot`, and
+`status.assignedNode` pins the actor to that node, so `ResumeActor` restores
+it there from the local files. After a suspend the latest snapshot has a
+`COMPLETED` `durableSnapshot` and the actor is pinned to no node.
 
 ### Phase 1: Creation (`CreateActor`)
 
@@ -485,9 +492,9 @@ tags cannot be deleted until they are.
 
 ### Phase 4: Recovery (`RevertActor`) and Deletion (`DeleteActor`)
 
-An actor in `ACTOR_STATE_RUNNING`, `ACTOR_STATE_PAUSED`, or `ACTOR_STATE_CRASHED` can be reverted back to `ACTOR_STATE_SUSPENDED` via `RevertActor`. Reverting terminates any active sandbox, discards any local pause checkpoint or partial in-progress snapshot, and preserves the actor's last completed external snapshot so a subsequent `ResumeActor` restores from that checkpoint.
+An actor in `ACTOR_STATE_RUNNING` or `ACTOR_STATE_CRASHED`, or a paused actor (`ACTOR_STATE_SUSPENDED` with a node-local latest snapshot), can be reverted back to `ACTOR_STATE_SUSPENDED` at its durable snapshot via `RevertActor`. Reverting terminates any active sandbox, discards any local pause checkpoint or partial in-progress snapshot, and preserves the actor's last completed external snapshot so a subsequent `ResumeActor` restores from that checkpoint.
 
-By default, only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` state can be deleted from the Control Plane. With the `any_state` flag enabled, an actor in any state (such as `ACTOR_STATE_RUNNING` or `ACTOR_STATE_PAUSED`) can be deleted directly; the workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
+By default, only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` state can be deleted from the Control Plane. With the `any_state` flag enabled, an actor in any state (such as `ACTOR_STATE_RUNNING`) can be deleted directly; the workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
 
 After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage collected.
 

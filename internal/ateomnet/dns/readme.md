@@ -7,7 +7,7 @@ Actor DNS relays DNS requests from the actor to the external world.
 ### Relay
 
 - `Relay` -- one per Ateom, holds upstream resolvers, and is used to create the per-Actor `Server`.
-- `Relay.Serve()` -- creates a per-Actor `Server` that manages DNS requests for the Actor. Returns a `*Server`.
+- `Relay.Serve()` -- creates a per-Actor `Server` that manages DNS requests for the Actor, checked against the Actor's egress policy (see [Egress policy](#egress-policy)). Returns a `*Server`.
 
 ### Server
 
@@ -54,7 +54,7 @@ UDP and TCP call up to the DNS protocol layer (`golang.org/x/net/dns/dnsmessage`
   - **Reply** (synthesized response without upstream round-trip):
     - `FORMERR` (`RCode = 1`): malformed header/question or `QDCOUNT != 1`.
     - `NOTIMP` (`RCode = 4`): `OpCode != 0` (non-standard query) or zone transfer `QTYPE` (`AXFR`, `IXFR`).
-    - `REFUSED` (`RCode = 5`): disallowed by domain or record-type policy.
+    - `REFUSED` (`RCode = 5`): disallowed by the Actor's egress policy (see [Egress policy](#egress-policy)).
 - `onUDPRequest(raw []byte, clientAddr net.Addr, upstreams []string)` -> `action`:
   - Acquires an `inFlight` slot, runs `validateRequest()`, and on `actionForward` records the query in `pendingRequests` with a rewritten `upstreamID`.
 - `onUDPResponse(raw []byte, from net.Addr)` -> `action`:
@@ -64,3 +64,12 @@ UDP and TCP call up to the DNS protocol layer (`golang.org/x/net/dns/dnsmessage`
   - Runs `validateRequest()` and returns **Drop**, **Reply**, or **Forward** (unmodified frame).
 - `onTCPResponse(raw []byte)` -> `action`:
   - Validates `QR == 1` and parses header + question, returning **Drop** or **Deliver**.
+
+#### Egress policy
+
+`policy.go` and `evaluator.go`: DNS bypasses the egress gateway, so the relay enforces the Actor's egress policy itself.
+
+- `PolicySource` supplies the Actor's `EgressPolicy`. The ateom passes atunnel's per-Actor source, which caches the policy for a few seconds so a policy created, updated, or deleted while the Actor runs takes effect without a restart, and keeps serving the stale cached entry if `atelet` is temporarily unreachable.
+- `evaluator` (`evaluator.go`) compiles the hostname and wildcard patterns from an `EgressPolicy`'s `http`, `https`, and `tls_passthrough` rules and evaluates normalized `QNAME`s via `allowsHostname(qname)`.
+- `egressPolicyCheck` adapts the source to the `dnsHandler`'s `queryPolicy` hook, caching the compiled `*evaluator` for the current `*ateletpb.EgressPolicy` pointer and consulting it for every query. Fetching uses the `Server`'s context, so `Stop()` cancels a fetch in progress.
+- `allowQuery` evaluates a single `dnsmessage.Question` against a policy using `evaluator`.

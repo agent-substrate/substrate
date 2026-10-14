@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
@@ -119,7 +120,7 @@ func serve(t *testing.T, backend *memObjects, root string) *grpc.ClientConn {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(sockDir) })
-	lis, err := Listen(filepath.Join(sockDir, "plugin.sock"))
+	lis, err := pluginsocket.Listen(filepath.Join(sockDir, "plugin.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +135,7 @@ func serve(t *testing.T, backend *memObjects, root string) *grpc.ClientConn {
 	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 
-	conn, err := Dial(filepath.Join(sockDir, "plugin.sock"), ReadyWait)
+	conn, err := pluginsocket.Dial(filepath.Join(sockDir, "plugin.sock"), pluginsocket.ReadyWait)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,22 +146,8 @@ func serve(t *testing.T, backend *memObjects, root string) *grpc.ClientConn {
 func TestWaitReady(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := WaitReady(ctx, serve(t, newMemObjects(), t.TempDir())); err != nil {
+	if err := pluginsocket.WaitReady(ctx, serve(t, newMemObjects(), t.TempDir())); err != nil {
 		t.Errorf("WaitReady against a serving plugin = %v", err)
-	}
-
-	// A socket nobody listens on must fail when ctx ends, not hang: WaitReady
-	// waits for the plugin as long as ctx allows.
-	conn, err := Dial(filepath.Join(t.TempDir(), "missing.sock"), ReadyWait)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	short, cancelShort := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancelShort()
-	err = WaitReady(short, conn)
-	if status.Code(err) != codes.DeadlineExceeded {
-		t.Errorf("WaitReady against a missing socket = %v, want %s", err, codes.DeadlineExceeded)
 	}
 }
 
@@ -177,10 +164,14 @@ func TestUploadFetchRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Mkdir(filepath.Join(src, "fs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	files := map[string][]byte{
-		"memory.img": bytes.Repeat([]byte("abcdefgh"), 1<<16),
-		"state.bin":  []byte("vm state"),
-		manifestFile: []byte(`{"snapshotFiles":["memory.img","state.bin"]}`),
+		"memory.img":         bytes.Repeat([]byte("abcdefgh"), 1<<16),
+		"state.bin":          []byte("vm state"),
+		"fs/fscheckpoint.pb": []byte("fs manifest"),
+		manifestFile:         []byte(`{"snapshotFiles":["memory.img","state.bin","fs/fscheckpoint.pb"]}`),
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(src, name), content, 0o644); err != nil {
@@ -189,7 +180,7 @@ func TestUploadFetchRoundTrip(t *testing.T) {
 	}
 
 	if _, err := client.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{
-		SnapshotUri: testURI, LocalPath: src, Files: []string{"memory.img", "state.bin"},
+		SnapshotUri: testURI, LocalPath: src, Files: []string{"memory.img", "state.bin", "fs/fscheckpoint.pb"},
 	}); err != nil {
 		t.Fatalf("UploadSnapshot(data) = %v", err)
 	}
@@ -201,6 +192,7 @@ func TestUploadFetchRoundTrip(t *testing.T) {
 
 	// The stored layout is the one atelet has always written.
 	want := []string{
+		testBucket + "/" + testPrefix + "/fs/fscheckpoint.pb.zstd",
 		testBucket + "/" + testPrefix + "/manifest.json",
 		testBucket + "/" + testPrefix + "/memory.img.zstd",
 		testBucket + "/" + testPrefix + "/state.bin.zstd",
@@ -208,12 +200,12 @@ func TestUploadFetchRoundTrip(t *testing.T) {
 	if got := backend.keys(); !equal(got, want) {
 		t.Fatalf("stored objects = %v, want %v", got, want)
 	}
-	if got := backend.m[want[0]]; !bytes.Equal(got, files[manifestFile]) {
+	if got := backend.m[want[1]]; !bytes.Equal(got, files[manifestFile]) {
 		t.Errorf("stored manifest = %q, want it uncompressed", got)
 	}
 
 	if _, err := client.FetchSnapshot(ctx, &objectstorev1.FetchSnapshotRequest{
-		SnapshotUri: testURI, WritePath: dst, Files: []string{manifestFile, "memory.img", "state.bin"},
+		SnapshotUri: testURI, WritePath: dst, Files: []string{manifestFile, "memory.img", "state.bin", "fs/fscheckpoint.pb"},
 	}); err != nil {
 		t.Fatalf("FetchSnapshot = %v", err)
 	}

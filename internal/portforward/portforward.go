@@ -51,6 +51,17 @@ func ServicePortForward(ctx context.Context, config *rest.Config, clientset kube
 	return PodPortForward(ctx, config, clientset, namespace, pod.Name, targetPort)
 }
 
+// ServicePodPortForward forwards a random local port straight to
+// containerPort on a ready pod behind the named Service, for ports the
+// Service does not publish. Otherwise it behaves like ServicePortForward.
+func ServicePodPortForward(ctx context.Context, config *rest.Config, clientset kubernetes.Interface, namespace, service string, containerPort int32) (int, func(), error) {
+	pod, _, err := firstReadyPodForService(ctx, clientset, namespace, service)
+	if err != nil {
+		return 0, nil, err
+	}
+	return PodPortForward(ctx, config, clientset, namespace, pod.Name, containerPort)
+}
+
 func firstReadyPodForService(ctx context.Context, clientset kubernetes.Interface, namespace, service string) (*corev1.Pod, *corev1.Service, error) {
 	svc, err := clientset.CoreV1().Services(namespace).Get(ctx, service, metav1.GetOptions{})
 	if err != nil {
@@ -102,9 +113,6 @@ func resolveTargetPort(svc *corev1.Service, pod *corev1.Pod, servicePort int32) 
 	return 0, fmt.Errorf("service %s has no port %d", svc.Name, servicePort)
 }
 
-// PodPortForward forwards a random local port to targetPort of the named pod.
-// It returns the chosen local port and a stop func the caller must invoke to
-// tear the tunnel down.
 func PodPortForward(ctx context.Context, config *rest.Config, clientset kubernetes.Interface, namespace, podName string, targetPort int32) (int, func(), error) {
 	req := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").

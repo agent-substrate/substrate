@@ -50,6 +50,9 @@ type gcsReader struct {
 	cancel context.CancelFunc
 }
 
+// ObjectSize implements SizedReader.
+func (r *gcsReader) ObjectSize() int64 { return r.Attrs.Size }
+
 func (r *gcsReader) Close() error {
 	// Cancel before closing so a blocked read cannot reopen the GCS request.
 	r.cancel()

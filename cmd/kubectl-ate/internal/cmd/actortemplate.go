@@ -20,7 +20,6 @@ import (
 	"os"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -40,14 +39,6 @@ var getActorTemplatesCmd = &cobra.Command{
 	Short:   "List all actor templates or get one or more actor templates",
 	Long:    "List or get actor templates.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := cmd.Context()
-
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
-		if err != nil {
-			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
-		}
-		defer apiClient.Close()
-
 		if len(args) > 0 {
 			// A template is addressed by (atespace, name), so the atespace is
 			// mandatory and "all atespaces" is meaningless here.
@@ -57,7 +48,25 @@ var getActorTemplatesCmd = &cobra.Command{
 			if getActorTemplateAtespaceFlag == "" {
 				return fmt.Errorf("--atespace is required when getting actor templates")
 			}
+		} else {
+			// Listing requires exactly one of --atespace (one atespace) or -A (all
+			// atespaces). There is no default atespace to fall back on.
+			if getActorTemplateAllAtespacesFlag && getActorTemplateAtespaceFlag != "" {
+				return fmt.Errorf("--atespace and -A/--all-atespaces are mutually exclusive")
+			}
+			if !getActorTemplateAllAtespacesFlag && getActorTemplateAtespaceFlag == "" {
+				return fmt.Errorf("specify --atespace <name> to list one atespace, or -A/--all-atespaces for all")
+			}
+		}
 
+		ctx := cmd.Context()
+		apiClient, err := newAPIClient(cmd)
+		if err != nil {
+			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+		}
+		defer apiClient.Close()
+
+		if len(args) > 0 {
 			templates := make([]*ateapipb.ActorTemplate, 0, len(args))
 			for _, name := range args {
 				resp, err := apiClient.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{
@@ -74,22 +83,12 @@ var getActorTemplatesCmd = &cobra.Command{
 			return printer.PrintActorTemplatesTo(cmd.OutOrStdout(), templates, outputFmt)
 		}
 
-		// Listing requires exactly one of --atespace (one atespace) or -A (all
-		// atespaces). There is no default atespace to fall back on.
-		if getActorTemplateAllAtespacesFlag && getActorTemplateAtespaceFlag != "" {
-			return fmt.Errorf("--atespace and -A/--all-atespaces are mutually exclusive")
-		}
-		if !getActorTemplateAllAtespacesFlag && getActorTemplateAtespaceFlag == "" {
-			return fmt.Errorf("specify --atespace <name> to list one atespace, or -A/--all-atespaces for all")
-		}
-
 		var allTemplates []*ateapipb.ActorTemplate
 		pageToken := ""
 		for {
 			resp, err := apiClient.ListActorTemplates(ctx, &ateapipb.ListActorTemplatesRequest{
-				PageSize:  100,
-				PageToken: pageToken,
-				Atespace:  getActorTemplateAtespaceFlag,
+				Options:  &ateapipb.ListOptions{PageSize: 100, PageToken: pageToken},
+				Atespace: getActorTemplateAtespaceFlag,
 			})
 			if err != nil {
 				return fmt.Errorf("failed to list actor templates: %w", err)
@@ -130,7 +129,7 @@ Actor templates are immutable: there is no update; delete and recreate to change
 		}
 
 		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		apiClient, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -153,7 +152,7 @@ The server also deletes the template's golden actor and golden snapshot.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		c, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		c, err := newAPIClient(cmd)
 		if err != nil {
 			return err
 		}

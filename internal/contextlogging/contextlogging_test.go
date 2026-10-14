@@ -143,14 +143,14 @@ func TestHandleUngroupedKeepsTraceFieldsTopLevel(t *testing.T) {
 // tokenValuer stands in for a type that implements slog.LogValuer and
 // resolves to a proto; the handler must resolve it before deciding.
 type tokenValuer struct {
-	m *ateapipb.MintActorJWTResponse
+	m *ateapipb.MintActorJwtResponse
 }
 
 func (v tokenValuer) LogValue() slog.Value { return slog.AnyValue(v.m) }
 
 func TestHandleRedactsProtoAttrsAnywhereInTheRecord(t *testing.T) {
 	const token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhY3RvciJ9.c2lnbmF0dXJl"
-	resp := &ateapipb.MintActorJWTResponse{ActorJwt: token}
+	resp := &ateapipb.MintActorJwtResponse{ActorJwt: token}
 	ref := &ateapipb.ObjectRef{Atespace: "ate-demo-sandbox", Name: "agent"}
 	tpl := &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{
 		Name: "c", Env: []*ateapipb.EnvVar{{Name: "API_KEY", Value: "sk-secret"}},
@@ -202,7 +202,7 @@ func (stringValuer) LogValue() slog.Value { return slog.StringValue("resolved") 
 // groupValuer resolves to a group that holds a proto, the shape a typed
 // reference with a nested message would take.
 type groupValuer struct {
-	m *ateapipb.MintActorJWTResponse
+	m *ateapipb.MintActorJwtResponse
 }
 
 func (g groupValuer) LogValue() slog.Value {
@@ -215,7 +215,7 @@ type countingValuer struct{ n *int }
 func (c countingValuer) LogValue() slog.Value { *c.n++; return slog.StringValue("once") }
 
 func TestRedactValueReportsWhatItChanges(t *testing.T) {
-	sensitive := &ateapipb.MintActorJWTResponse{ActorJwt: "token"}
+	sensitive := &ateapipb.MintActorJwtResponse{ActorJwt: "token"}
 	envless := &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Name: "c"}}}
 	for _, tc := range []struct {
 		name    string
@@ -228,7 +228,7 @@ func TestRedactValueReportsWhatItChanges(t *testing.T) {
 		{"nil any", slog.AnyValue(nil), false},
 		{"clean type", slog.AnyValue(&ateapipb.ObjectRef{Name: "n"}), false},
 		{"labeled type, nothing set", slog.AnyValue(envless), false},
-		{"typed nil labeled type", slog.AnyValue((*ateapipb.MintActorJWTResponse)(nil)), false},
+		{"typed nil labeled type", slog.AnyValue((*ateapipb.MintActorJwtResponse)(nil)), false},
 		{"group of plain values", slog.GroupValue(slog.String("a", "b"), slog.Any("ref", &ateapipb.ObjectRef{})), false},
 		{"empty group", slog.GroupValue(), false},
 		{"sensitive", slog.AnyValue(sensitive), true},
@@ -261,23 +261,23 @@ func TestRedactAttrsReturnsTheInputWhenNothingChanges(t *testing.T) {
 	if len(out) != len(in) || &out[0] != &in[0] {
 		t.Fatal("redactAttrs copied a slice with nothing to change")
 	}
-	sensitive := &ateapipb.MintActorJWTResponse{ActorJwt: "token"}
+	sensitive := &ateapipb.MintActorJwtResponse{ActorJwt: "token"}
 	in = append(in, slog.Group("g2", slog.Any("r", sensitive)))
 	out = redactAttrs(in)
 	if &out[0] == &in[0] {
 		t.Fatal("redactAttrs returned the input although an attribute changed")
 	}
-	if in[3].Value.Group()[0].Value.Any().(*ateapipb.MintActorJWTResponse).GetActorJwt() != "token" {
+	if in[3].Value.Group()[0].Value.Any().(*ateapipb.MintActorJwtResponse).GetActorJwt() != "token" {
 		t.Fatal("redactAttrs modified the input slice")
 	}
-	if out[3].Value.Group()[0].Value.Any().(*ateapipb.MintActorJWTResponse).GetActorJwt() != protoredact.Placeholder {
+	if out[3].Value.Group()[0].Value.Any().(*ateapipb.MintActorJwtResponse).GetActorJwt() != protoredact.Placeholder {
 		t.Fatal("redactAttrs did not mask the group member")
 	}
 }
 
 func TestHandleCoversGroupsBoundAttrsAndNilsTogether(t *testing.T) {
 	const token = "eyJhbGciOiJSUzI1NiJ9.token"
-	sensitive := &ateapipb.MintActorJWTResponse{ActorJwt: token}
+	sensitive := &ateapipb.MintActorJwtResponse{ActorJwt: token}
 	var buf bytes.Buffer
 	base := slog.New(NewHandler(slog.NewJSONHandler(&buf, &slog.HandlerOptions{ReplaceAttr: dropTime})))
 
@@ -288,7 +288,7 @@ func TestHandleCoversGroupsBoundAttrsAndNilsTogether(t *testing.T) {
 		With(slog.Group("bound", slog.Any("resp", sensitive))).
 		WithGroup("inner").
 		Info("x",
-			slog.Any("nilresp", (*ateapipb.MintActorJWTResponse)(nil)),
+			slog.Any("nilresp", (*ateapipb.MintActorJwtResponse)(nil)),
 			slog.Any("valuer", groupValuer{sensitive}),
 			slog.String("plain", "keep"),
 		)
@@ -313,7 +313,7 @@ func TestHandleResolvesLogValuersOnce(t *testing.T) {
 		calls := 0
 		attrs := []slog.Attr{slog.Any("v", countingValuer{&calls}), slog.String("a", "b")}
 		if withProto {
-			attrs = append(attrs, slog.Any("resp", &ateapipb.MintActorJWTResponse{ActorJwt: "t"}))
+			attrs = append(attrs, slog.Any("resp", &ateapipb.MintActorJwtResponse{ActorJwt: "t"}))
 		}
 		slog.New(NewHandler(slog.NewJSONHandler(io.Discard, nil))).LogAttrs(context.Background(), slog.LevelInfo, "x", attrs...)
 		if calls != 1 {
@@ -419,12 +419,12 @@ func BenchmarkHandle(b *testing.B) {
 // with ==: a value receiver and a slice field. Comparing two of them as
 // interfaces panics at run time.
 type uncomparableMsg struct {
-	*ateapipb.MintActorJWTResponse
+	*ateapipb.MintActorJwtResponse
 	_ []int
 }
 
 func (u uncomparableMsg) ProtoReflect() protoreflect.Message {
-	return u.MintActorJWTResponse.ProtoReflect()
+	return u.MintActorJwtResponse.ProtoReflect()
 }
 
 func TestHandleToleratesUncomparableMessageTypes(t *testing.T) {
@@ -435,8 +435,8 @@ func TestHandleToleratesUncomparableMessageTypes(t *testing.T) {
 		msg  uncomparableMsg
 		want string
 	}{
-		{"nothing to mask", uncomparableMsg{MintActorJWTResponse: &ateapipb.MintActorJWTResponse{}}, `"v":{}`},
-		{"secret set", uncomparableMsg{MintActorJWTResponse: &ateapipb.MintActorJWTResponse{ActorJwt: "token"}}, protoredact.Placeholder},
+		{"nothing to mask", uncomparableMsg{MintActorJwtResponse: &ateapipb.MintActorJwtResponse{}}, `"v":{}`},
+		{"secret set", uncomparableMsg{MintActorJwtResponse: &ateapipb.MintActorJwtResponse{ActorJwt: "token"}}, protoredact.Placeholder},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer

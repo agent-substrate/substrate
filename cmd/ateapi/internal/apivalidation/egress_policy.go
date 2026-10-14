@@ -73,13 +73,15 @@ func validateEgressPolicyParentAtespace(actor *ateapipb.ObjectRef, policy *ateap
 }
 
 func ValidateCustom_EgressPolicy_Metadata(_ context.Context, _ operation.Operation, root *field.Path, meta, _ *ateapipb.ResourceMetadata) field.ErrorList {
-	if meta == nil || meta.Name == "" {
-		return nil // regular DV will handle it
-	}
-	if meta.Name != "default" {
-		return field.ErrorList{field.Invalid(root.Child("name"), meta.Name, `must be "default"`).WithOrigin("custom=default")}
-	}
-	return nil
+	return validateSingletonName(root.Child("name"), meta.GetName())
+}
+
+func ValidateCustom_GetActorEgressPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
+	return validateSingletonName(p, *name)
+}
+
+func ValidateCustom_DeleteActorEgressPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
+	return validateSingletonName(p, *name)
 }
 
 // ValidateCustom_EgressPolicy_Rules rejects two rules that tie on a pattern
@@ -158,15 +160,15 @@ func (k portKey) String() string {
 	return fmt.Sprintf("port %d", k.number)
 }
 
-func ValidateCustom_HTTPRule_Hostnames(_ context.Context, _ operation.Operation, p *field.Path, patterns, _ []string) field.ErrorList {
+func ValidateCustom_HttpRule_Hostnames(_ context.Context, _ operation.Operation, p *field.Path, patterns, _ []string) field.ErrorList {
 	return validateHostnamePatterns(patterns, p)
 }
 
-func ValidateCustom_HTTPSRule_Hostnames(_ context.Context, _ operation.Operation, p *field.Path, patterns, _ []string) field.ErrorList {
+func ValidateCustom_HttpsRule_Hostnames(_ context.Context, _ operation.Operation, p *field.Path, patterns, _ []string) field.ErrorList {
 	return validateHostnamePatterns(patterns, p)
 }
 
-func ValidateCustom_TLSPassthroughRule_Hostnames(_ context.Context, _ operation.Operation, p *field.Path, patterns, _ []string) field.ErrorList {
+func ValidateCustom_TlsPassthroughRule_Hostnames(_ context.Context, _ operation.Operation, p *field.Path, patterns, _ []string) field.ErrorList {
 	return validateHostnamePatterns(patterns, p)
 }
 

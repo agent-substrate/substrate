@@ -22,7 +22,7 @@ import (
 	"io"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
-	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -50,9 +50,8 @@ var getEgressPolicyCmd = &cobra.Command{
 }
 
 var createEgressPolicyCmd = &cobra.Command{
-	Use:     "egress-policy <actor-name> -f <manifest>",
-	Aliases: []string{"egress-policies"},
-	Short:   "Create an actor's egress policy from a manifest",
+	Use:   "egress-policy <actor-name> -f <manifest>",
+	Short: "Create an actor's egress policy from a manifest",
 	Long: `Create the egress policy of an actor from a manifest file.
 
 The manifest is a YAML or JSON EgressPolicy, as printed by
@@ -63,9 +62,8 @@ Its metadata may be omitted.`,
 }
 
 var updateEgressPolicyCmd = &cobra.Command{
-	Use:     "egress-policy <actor-name> -f <manifest>",
-	Aliases: []string{"egress-policies"},
-	Short:   "Replace an actor's egress policy from a manifest",
+	Use:   "egress-policy <actor-name> -f <manifest>",
+	Short: "Replace an actor's egress policy from a manifest",
 	Long: `Replace the egress policy of an actor from a manifest file.
 
 The manifest is a YAML or JSON EgressPolicy, as printed by
@@ -77,11 +75,10 @@ rejects the update when they no longer match those of the stored egress policy.`
 }
 
 var deleteEgressPolicyCmd = &cobra.Command{
-	Use:     "egress-policy <actor-name>",
-	Aliases: []string{"egress-policies"},
-	Short:   "Delete the egress policy of an actor",
-	Args:    cobra.ExactArgs(1),
-	RunE:    runDeleteEgressPolicy,
+	Use:   "egress-policy <actor-name>",
+	Short: "Delete the egress policy of an actor",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runDeleteEgressPolicy,
 }
 
 // egressPolicyFromManifest parses a single protojson-shaped YAML or JSON
@@ -129,7 +126,6 @@ func manifestToJSON(data []byte) ([]byte, error) {
 // metadata.name the manifest leaves empty, then checks that both match the
 // command line: the atespace flag and the fixed policy name.
 func overrideEgressPolicyMetadata(policy *ateapipb.EgressPolicy, atespace string) error {
-	const policyNameDefault = "default"
 	if policy.Metadata == nil {
 		policy.Metadata = &ateapipb.ResourceMetadata{}
 	}
@@ -137,13 +133,13 @@ func overrideEgressPolicyMetadata(policy *ateapipb.EgressPolicy, atespace string
 		policy.Metadata.Atespace = atespace
 	}
 	if policy.Metadata.Name == "" {
-		policy.Metadata.Name = policyNameDefault
+		policy.Metadata.Name = resources.SingletonName
 	}
 	if policy.Metadata.Atespace != atespace {
 		return fmt.Errorf("manifest metadata.atespace %q does not match --atespace %q", policy.Metadata.Atespace, atespace)
 	}
-	if policy.Metadata.Name != policyNameDefault {
-		return fmt.Errorf("manifest metadata.name %q must be %q", policy.Metadata.Name, policyNameDefault)
+	if policy.Metadata.Name != resources.SingletonName {
+		return fmt.Errorf("manifest metadata.name %q must be %q", policy.Metadata.Name, resources.SingletonName)
 	}
 	return nil
 }
@@ -198,7 +194,7 @@ type getEgressPolicyRunner struct {
 }
 
 func (r *getEgressPolicyRunner) Run(ctx context.Context) error {
-	policy, err := r.getter.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: r.actor})
+	policy, err := r.getter.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: r.actor, Name: resources.SingletonName})
 	if status.Code(err) == codes.NotFound {
 		if err := requireActor(ctx, r.getter, r.actor); err != nil {
 			return err
@@ -216,7 +212,7 @@ func (r *getEgressPolicyRunner) Run(ctx context.Context) error {
 func runGetEgressPolicy(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 
-	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+	apiClient, err := newAPIClient(cmd)
 	if err != nil {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 	}
@@ -264,7 +260,7 @@ func runCreateEgressPolicy(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := cmd.Context()
-	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+	apiClient, err := newAPIClient(cmd)
 	if err != nil {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 	}
@@ -340,7 +336,7 @@ func runUpdateEgressPolicy(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := cmd.Context()
-	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+	apiClient, err := newAPIClient(cmd)
 	if err != nil {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 	}
@@ -372,7 +368,7 @@ type deleteEgressPolicyRunner struct {
 }
 
 func (r *deleteEgressPolicyRunner) Run(ctx context.Context) error {
-	_, err := r.deleter.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{Actor: r.actor, Options: r.options})
+	_, err := r.deleter.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{Actor: r.actor, Name: resources.SingletonName, Options: r.options})
 	if status.Code(err) == codes.NotFound {
 		if err := requireActor(ctx, r.deleter, r.actor); err != nil {
 			return err
@@ -423,7 +419,7 @@ func runDeleteEgressPolicy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+	apiClient, err := newAPIClient(cmd)
 	if err != nil {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 	}

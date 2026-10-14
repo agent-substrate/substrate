@@ -473,6 +473,17 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 				ConfigName:   "gvisor-default",
 			},
 		},
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "ate-demo-counter-substrate",
+				Name:       "counter-3",
+				CreateTime: timestamppb.New(now.Add(-15 * time.Minute)),
+			},
+			SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+			SnapshotConfig: &ateapipb.SnapshotConfig{
+				GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
+			},
+		},
 	}
 
 	if err := PrintActorTemplatesTo(&buf, templates, "table"); err != nil {
@@ -484,6 +495,7 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 	expected := `ATESPACE                             NAME              SANDBOX CLASS           GOLDEN TAG   ERROR   AGE
 ate-demo-counter-substrate           counter           SANDBOX_CLASS_GVISOR    golden-tag           5m
 ate-demo-counter-substrate           counter-2         SANDBOX_CLASS_GVISOR                         3d
+ate-demo-counter-substrate           counter-3         SANDBOX_CLASS_GVISOR    DISABLED             15m
 ate-demo-counter-substrate-microvm   counter-microvm   SANDBOX_CLASS_MICROVM                ERROR   5h
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
@@ -600,12 +612,11 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 			Status: &ateapipb.TagStatus{
 				Snapshot: &ateapipb.Snapshot{
-					Storage: []*ateapipb.SnapshotStorage{{
-						Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-						Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-						Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-						Object:     &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2"},
-					}},
+					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					DurableSnapshot: &ateapipb.SnapshotStorage{
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2"},
+					},
 				},
 			},
 		},
@@ -618,12 +629,11 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			Status: &ateapipb.TagStatus{
 				Snapshot: &ateapipb.Snapshot{
-					Storage: []*ateapipb.SnapshotStorage{{
-						Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-						Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-						Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-						Object:     &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1"},
-					}},
+					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					DurableSnapshot: &ateapipb.SnapshotStorage{
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1"},
+					},
 				},
 			},
 		},
@@ -638,12 +648,11 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			Status: &ateapipb.TagStatus{
 				Snapshot: &ateapipb.Snapshot{
-					Storage: []*ateapipb.SnapshotStorage{{
-						Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-						Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS,
-						Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-						Object:     &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v3"},
-					}},
+					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					DurableSnapshot: &ateapipb.SnapshotStorage{
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v3"},
+					},
 				},
 			},
 		},

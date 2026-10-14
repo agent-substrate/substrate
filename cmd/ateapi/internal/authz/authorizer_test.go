@@ -46,6 +46,11 @@ func TestContextualTuples(t *testing.T) {
 			want:   []*openfgav1.TupleKey{parentGlobal("atespace:team-a")},
 		},
 		{
+			name:   "worker",
+			object: WorkerObject("w-1"),
+			want:   []*openfgav1.TupleKey{parentGlobal("worker:w-1")},
+		},
+		{
 			name:   "actor",
 			object: ActorObject("team-a", "runner"),
 			want: []*openfgav1.TupleKey{

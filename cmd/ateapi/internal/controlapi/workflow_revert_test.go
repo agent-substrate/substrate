@@ -31,11 +31,12 @@ import (
 //
 // SUSPENDED is the load-bearing rejection: it is revert's own destination, and
 // also what a suspend that won the race leaves behind, so accepting it would
-// report success for the opposite of what was asked.
+// report success for the opposite of what was asked. A SUSPENDED actor that
+// holds a node-local snapshot is paused, not reverted, and is accepted; see
+// TestEnsureMarkedReverting_AcceptsPaused.
 func TestEnsureMarkedReverting_StateMatrix(t *testing.T) {
 	allowed := map[ateapipb.ActorState]bool{
 		ateapipb.ActorState_ACTOR_STATE_RUNNING: true,
-		ateapipb.ActorState_ACTOR_STATE_PAUSED:  true,
 		ateapipb.ActorState_ACTOR_STATE_CRASHED: true,
 		// Re-entry: a previous attempt already marked it, so the step skips
 		// rather than re-committing.
@@ -65,6 +66,31 @@ func TestEnsureMarkedReverting_StateMatrix(t *testing.T) {
 	}
 }
 
+// TestEnsureMarkedReverting_AcceptsPaused verifies a paused actor (SUSPENDED
+// whose latest snapshot is node-local) takes the revert edge: the revert
+// discards that snapshot and returns the actor to its durable one.
+func TestEnsureMarkedReverting_AcceptsPaused(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, withPausedShape("node-1"))
+	actor, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("get seeded actor: %v", err)
+	}
+
+	updated, err := w.ensureMarkedReverting(ctx, actorRef, actor)
+	if err != nil {
+		t.Fatalf("ensureMarkedReverting: %v", err)
+	}
+	if got := updated.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_REVERTING {
+		t.Errorf("state = %v, want REVERTING", got)
+	}
+}
+
 // TestRevertActor_ReturnsActorToItsSnapshot covers the whole workflow from each
 // accepted origin: the actor lands SUSPENDED holding the same external snapshot
 // it started with, and every pointer to the discarded execution is gone.
@@ -73,14 +99,22 @@ func TestEnsureMarkedReverting_StateMatrix(t *testing.T) {
 // exercised here; it needs the atelet rig, and the unit workflow is built with
 // a nil dialer on purpose so an unexpected dial fails loudly.
 func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
-	for _, seedState := range []ateapipb.ActorState{
-		ateapipb.ActorState_ACTOR_STATE_RUNNING,
-		ateapipb.ActorState_ACTOR_STATE_PAUSED,
-		ateapipb.ActorState_ACTOR_STATE_CRASHED,
+	for _, tc := range []struct {
+		name      string
+		seedState ateapipb.ActorState
+		// paused seeds the paused shape: the latest snapshot is node-local
+		// and the actor is pinned to its node. Only meaningful with
+		// SUSPENDED, which the revert otherwise rejects.
+		paused bool
+	}{
+		{name: "RUNNING", seedState: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+		{name: "paused", seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, paused: true},
+		{name: "CRASHED", seedState: ateapipb.ActorState_ACTOR_STATE_CRASHED},
 		// A revert that died partway is retried, not rejected.
-		ateapipb.ActorState_ACTOR_STATE_REVERTING,
+		{name: "REVERTING", seedState: ateapipb.ActorState_ACTOR_STATE_REVERTING},
 	} {
-		t.Run(seedState.String(), func(t *testing.T) {
+		seedState := tc.seedState
+		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			st, cleanup := storetest.SetupTestStore(t)
 			defer cleanup()
@@ -94,14 +128,19 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			}
 
 			// The snapshot revert must preserve, plus the node-local state a
-			// pause left behind, which it must not.
+			// pause left behind, which it must not. A paused actor's latest
+			// snapshot is the completed local one; the other origins also carry
+			// the half-written local snapshot an interrupted pause leaves.
 			const keptURI = "gs://snapshots/team-a/actors/keep/snapshot"
 			mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
 				s.LastAssignedGeneration = 3
 				s.Snapshots = []*ateapipb.Snapshot{
-					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", keptURI, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-					newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-					newLocalSnapshot(3, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-in-progress", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "kept", keptURI, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1"),
+					newLocalSnapshot(3, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-in-progress", ""),
+				}
+				if tc.paused {
+					s.Snapshots[2].Locality = "node-1"
 				}
 			})
 
@@ -120,24 +159,24 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			if got := gotStatus.GetLastAssignedGeneration(); got != 3 {
 				t.Errorf("last_assigned_generation = %d, want 3", got)
 			}
-			gotSnap, gotSt := findLatestSnapshotStorage(gotStatus, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			gotSnap := findLatestDurableSnapshot(gotStatus, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 			if got := gotSnap.GetGeneration(); got != 1 {
 				t.Errorf("retained snapshot generation = %d, want 1", got)
 			}
-			if got := gotSt.GetObject().GetSnapshotUri(); got != keptURI {
+			if got := gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(); got != keptURI {
 				t.Errorf("external snapshot = %q, want it untouched at %q", got, keptURI)
 			}
 			// Resume prefers a local snapshot over the external one, so a
 			// surviving LocalSnapshot would restore the execution this
 			// revert just discarded.
-			if _, got := findLatestSnapshotStorage(gotStatus, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); got != nil {
+			if got := findLatestLocalSnapshot(gotStatus); got != nil {
 				t.Errorf("local snapshot info = %v, want nil", got)
 			}
-			if _, got := findLatestSnapshotStorage(gotStatus, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS); got != nil {
+			if got := findLatestDurableSnapshot(gotStatus, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING); got != nil {
 				t.Errorf("in-progress durable snapshot = %v, want nil", got)
 			}
-			if _, got := findLatestSnapshotStorage(gotStatus, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS); got != nil {
-				t.Errorf("in-progress local snapshot = %v, want nil", got)
+			if got := len(gotStatus.GetSnapshots()); got != 1 {
+				t.Errorf("len(snapshots) = %d, want 1 (only the completed durable snapshot should remain)", got)
 			}
 			if got := gotStatus.GetAssignedNode(); got != "" {
 				t.Errorf("assigned node = %q, want empty", got)
@@ -251,8 +290,8 @@ func TestRevertActor_NoSnapshotToRevertTo(t *testing.T) {
 	if got := reverted.GetStatus().GetCrash(); got != nil {
 		t.Errorf("Crash = %v, want cleared by the revert", got)
 	}
-	_, gotSt := findLatestSnapshotStorage(reverted.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
-	if got := gotSt.GetObject().GetSnapshotUri(); got != "" {
+	gotSnap := findLatestDurableSnapshot(reverted.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	if got := gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(); got != "" {
 		t.Errorf("external snapshot = %q, want none", got)
 	}
 }
@@ -332,11 +371,11 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 				s.LastAssignedGeneration = 1
 				s.Snapshots = []*ateapipb.Snapshot{
-					newDurableSnapshot(1, currentType, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					newDurableSnapshot(1, currentType, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 				}
 				if tt.inFlight != "" {
 					s.LastAssignedGeneration = 2
-					s.Snapshots = append(s.Snapshots, newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS))
+					s.Snapshots = append(s.Snapshots, newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING))
 				}
 			})
 
@@ -385,7 +424,7 @@ func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 			AssignedNode:           "node-1",
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapipb.Snapshot{
-				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", someActorSnapshotURI(t, testStorageLocation, "team-a", "abandoned"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "abandoned", someActorSnapshotURI(t, testStorageLocation, "team-a", "abandoned"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 			},
 		},
 	})
@@ -405,7 +444,7 @@ func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 	if got := finalized.GetStatus().GetAssignedNode(); got != "" {
 		t.Errorf("assigned node = %q, want empty", got)
 	}
-	if _, got := findLatestSnapshotStorage(finalized.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS); got != nil {
+	if got := findLatestDurableSnapshot(finalized.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING); got != nil {
 		t.Errorf("in-progress durable snapshot = %v, want nil", got)
 	}
 }

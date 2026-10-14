@@ -58,6 +58,7 @@ func loadEnv(t *testing.T) {
 		"ATE_IMAGE_TAG",
 		"ATE_INSTALL_CLUSTER_SIZE",
 		"ATE_INSTALL_CORDON_CONTROL_PLANE",
+		"ATE_INSTALL_FAKE_DATA_PLANE",
 		"ATE_INSTALL_KIND",
 		"ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
 		"ATE_INSTALL_ROLLOUT_TIMEOUT",
@@ -67,6 +68,7 @@ func loadEnv(t *testing.T) {
 		"CLUSTER_LOCATION",
 		"CLUSTER_NAME",
 		"DOCKER_BUILD_FLAGS",
+		"E2E_ATE_ENVOY_CONCURRENCY",
 		"EXPECTED_JWT_ISSUER",
 		"KIND_CLUSTER_NAME",
 		"KO_DEFAULTPLATFORMS",
@@ -202,6 +204,34 @@ func TestLoadCordonControlPlane(t *testing.T) {
 			_, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_CORDON_CONTROL_PLANE"]
 			if exported != tc.want {
 				t.Errorf("ScriptEnv() exports ATE_INSTALL_CORDON_CONTROL_PLANE = %v, want %v", exported, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadFakeDataPlane(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts Options
+		env  string
+		want bool
+	}{
+		{name: "off by default"},
+		{name: "flag", opts: Options{FakeDataPlane: true}, want: true},
+		{name: "environment", env: "true", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_INSTALL_FAKE_DATA_PLANE", tc.env)
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.FakeDataPlane != tc.want {
+				t.Errorf("FakeDataPlane = %v, want %v", cfg.FakeDataPlane, tc.want)
+			}
+			if _, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_FAKE_DATA_PLANE"]; exported != tc.want {
+				t.Errorf("ScriptEnv() exports ATE_INSTALL_FAKE_DATA_PLANE = %v, want %v", exported, tc.want)
 			}
 		})
 	}
@@ -794,6 +824,30 @@ func TestLoadRejectsInvalidPodcertWorkersEnv(t *testing.T) {
 			t.Setenv("ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER", val)
 			if _, err := Load(Options{}); err == nil {
 				t.Fatalf("Load() with env %q succeeded, want an error", val)
+			}
+		})
+	}
+}
+
+func TestLoadEnvoyConcurrency(t *testing.T) {
+	loadEnv(t)
+	cfg, err := Load(Options{EnvoyConcurrency: 4})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.EnvoyConcurrency != 4 {
+		t.Errorf("EnvoyConcurrency = %d, want 4", cfg.EnvoyConcurrency)
+	}
+	if got := scriptEnvMap(t, cfg)["E2E_ATE_ENVOY_CONCURRENCY"]; got != "4" {
+		t.Errorf("ScriptEnv()[E2E_ATE_ENVOY_CONCURRENCY] = %q, want 4", got)
+	}
+
+	for _, val := range []string{"0", "-1", "abc"} {
+		t.Run("invalid_"+val, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("E2E_ATE_ENVOY_CONCURRENCY", val)
+			if _, err := Load(Options{}); err == nil {
+				t.Fatalf("Load() with E2E_ATE_ENVOY_CONCURRENCY=%q succeeded, want an error", val)
 			}
 		})
 	}

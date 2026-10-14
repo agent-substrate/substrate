@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -87,12 +88,22 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 		t.Fatalf("creating OpenFGA server: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
-	_, policyManager, err := authz.New(ctx, pool, fgaServer, nil)
+	_, policyManager, err := authz.New(ctx, pool, fgaServer, nil, DefaultSystemPrincipals())
 	if err != nil {
 		t.Fatalf("initializing OpenFGA authz: %v", err)
 	}
 	persistence.SetPolicyManager(policyManager)
 	return persistence
+}
+
+// DefaultSystemPrincipals returns valid SystemPrincipals for tests that
+// initialize authz.New without testing system component roles.
+func DefaultSystemPrincipals() authz.SystemPrincipals {
+	return authz.SystemPrincipals{
+		ControllerSPIFFEID:    installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
+		EgressGatewaySPIFFEID: installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace),
+		IngressRouterSPIFFEID: installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
+	}
 }
 
 // MustCreateAtespace creates name unless it already exists. PostgreSQL enforces

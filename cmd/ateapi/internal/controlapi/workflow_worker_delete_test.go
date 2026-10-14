@@ -111,9 +111,9 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 		// shared crash path, which cannot know which workflow was in flight.
 		a.Status.LastAssignedGeneration = 3
 		a.Status.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-			newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
-			newLocalSnapshot(3, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-local-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "last", someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-snapshot", someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			newLocalSnapshot(3, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-local-snapshot", ""),
 		}
 	})
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
@@ -137,19 +137,19 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	}
 	// In-progress checkpoints are kept so delete or revert can clean them up
 	// while assigned_node or the object prefix is still recorded.
-	if _, gotSt := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS); gotSt.GetLocal().GetSnapshotName() != "partial-local-snapshot" {
-		t.Errorf("in-progress local checkpoint = %q, want %q preserved", gotSt.GetLocal().GetSnapshotName(), "partial-local-snapshot")
+	if gotSnap := snapshotAtLatestGeneration(got.GetStatus()); gotSnap.GetUuid() != "partial-local-snapshot" {
+		t.Errorf("in-progress local checkpoint = %q, want %q preserved", gotSnap.GetUuid(), "partial-local-snapshot")
 	}
 	// The durable one is kept: it names the prefix whatever atelet already
 	// uploaded lives under, which delete or revert needs to collect it.
-	_, gotInProgressSt := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS)
-	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot"); gotInProgressSt.GetObject().GetSnapshotUri() != want {
+	gotInProgressSnap := findLatestDurableSnapshot(got.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot"); gotInProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri() != want {
 		t.Errorf("in-progress external checkpoint not preserved: %v", got.GetStatus())
 	}
 	// The last completed snapshot is what makes the actor resumable, so it stays.
-	_, gotCompletedSt := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
-	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"); gotCompletedSt.GetObject().GetSnapshotUri() != want {
-		t.Errorf("external snapshot = %q, want it preserved as %q", gotCompletedSt.GetObject().GetSnapshotUri(), want)
+	gotCompletedSnap := findLatestDurableSnapshot(got.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"); gotCompletedSnap.GetDurableSnapshot().GetObject().GetSnapshotUri() != want {
+		t.Errorf("external snapshot = %q, want it preserved as %q", gotCompletedSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(), want)
 	}
 }
 
@@ -159,8 +159,11 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 // crashed is released again without being counted twice.
 func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 	tests := []struct {
-		name       string
-		start      ateapipb.ActorState
+		name  string
+		start ateapipb.ActorState
+		// pausing seeds the pause-in-progress shape (a pending node-local
+		// snapshot), which labels a SUSPENDING crash as a pause.
+		pausing    bool
 		wantState  ateapipb.ActorState
 		wantOp     string
 		wantMetric bool
@@ -168,8 +171,9 @@ func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 		{name: "running becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationUnknown, wantMetric: true},
 		{name: "resuming becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_RESUMING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationResume, wantMetric: true},
 		{name: "suspending becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationSuspend, wantMetric: true},
-		{name: "pausing becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_PAUSING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationPause, wantMetric: true},
+		{name: "pausing becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, pausing: true, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationPause, wantMetric: true},
 		{name: "reverting becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_REVERTING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationRevert, wantMetric: true},
+		{name: "deleting becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_DELETING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationDelete, wantMetric: true},
 		{name: "suspended stays suspended", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantMetric: false},
 		{name: "crashed is not counted twice", start: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantMetric: false},
 	}
@@ -183,7 +187,11 @@ func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 			ctx := context.Background()
 			wf, persistence := newWorkerDeleteWorkflow(t)
 			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
-			actor := seedAPIActor(t, ctx, persistence, tc.start)
+			var opts []func(*ateapipb.Actor)
+			if tc.pausing {
+				opts = append(opts, withPauseInProgress())
+			}
+			actor := seedAPIActor(t, ctx, persistence, tc.start, opts...)
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
 			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
