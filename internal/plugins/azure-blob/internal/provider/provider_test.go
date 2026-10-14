@@ -734,6 +734,68 @@ func TestRPCContextErrors(t *testing.T) {
 	}
 }
 
+// TestSnapshotURIsUseTheDecodedPath runs a snapshot's lifecycle under a
+// storageLocation with percent-encoded characters. ate-api-server sends the
+// upload URI as the template's location spells it, but derives the copy and
+// cleanup URIs by parsing and re-encoding it (root%2Fsub becomes root/sub),
+// so each must name the same blobs.
+func TestSnapshotURIsUseTheDecodedPath(t *testing.T) {
+	for _, tc := range []struct {
+		name, location, reencoded, key string
+	}{
+		{name: "encoded slash", location: "azblob://snapshots/root%2Fsub", reencoded: "azblob://snapshots/root/sub", key: "tenant/root/sub"},
+		{name: "encoded space", location: "azblob://snapshots/root%20dir", reencoded: "azblob://snapshots/root%20dir", key: "tenant/root dir"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			root := t.TempDir()
+			source := filepath.Join(root, "source")
+			dest := filepath.Join(root, "dest")
+			for _, dir := range []string{source, dest} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(source, "manifest.json"), []byte("manifest"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store := newFakeStore()
+			server := newTestServer(t, store, root)
+			const actor, snapshot, tag = "/atespaces/a/actors/u", "/snapshots/one", "/atespaces/a/tags/t"
+
+			if _, err := server.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{
+				SnapshotUri: tc.location + actor + snapshot, LocalPath: source, Files: []string{"manifest.json"},
+			}); err != nil {
+				t.Fatalf("UploadSnapshot: %v", err)
+			}
+			if _, ok := store.blobs[tc.key+actor+snapshot+"/manifest.json"]; !ok {
+				t.Fatalf("blobs = %v, want the snapshot under %q", slices.Sorted(maps.Keys(store.blobs)), tc.key)
+			}
+			if _, err := server.FetchSnapshot(ctx, &objectstorev1.FetchSnapshotRequest{
+				SnapshotUri: tc.reencoded + actor + snapshot, WritePath: dest, Files: []string{"manifest.json"},
+			}); err != nil {
+				t.Fatalf("FetchSnapshot(re-encoded URI): %v", err)
+			}
+			if _, err := server.CopySnapshot(ctx, &objectstorev1.CopySnapshotRequest{
+				SrcUri: tc.reencoded + actor + snapshot, DstUri: tc.reencoded + tag,
+			}); err != nil {
+				t.Fatalf("CopySnapshot(re-encoded URIs): %v", err)
+			}
+			if _, ok := store.blobs[tc.key+tag+"/manifest.json"]; !ok {
+				t.Fatalf("blobs = %v, want the tag copy under %q", slices.Sorted(maps.Keys(store.blobs)), tc.key)
+			}
+			for _, prefix := range []string{tc.reencoded + actor, tc.location + tag} {
+				if _, err := server.CleanupSnapshot(ctx, &objectstorev1.CleanupSnapshotRequest{SnapshotUri: prefix}); err != nil {
+					t.Fatalf("CleanupSnapshot(%s): %v", prefix, err)
+				}
+			}
+			if len(store.blobs) != 0 {
+				t.Fatalf("blobs left after cleanup: %v", slices.Sorted(maps.Keys(store.blobs)))
+			}
+		})
+	}
+}
+
 func TestRejectsInvalidRequests(t *testing.T) {
 	root := t.TempDir()
 	server := newTestServer(t, newFakeStore(), root)
@@ -744,6 +806,13 @@ func TestRejectsInvalidRequests(t *testing.T) {
 		"azblob://other/prefix",
 		"azblob://snapshots/../escape",
 		"azblob://snapshots/a?query",
+		"azblob://snapshots/a?",
+		"azblob://snapshots/a#fragment",
+		"azblob://user@snapshots/a",
+		"azblob://snapshots/a%zz",
+		"azblob://snapshots/a%2F..%2F..%2Fescape",
+		"azblob://snapshots/a%5Cb",
+		"azblob://snapshots/a%2F%2Fb",
 		`azblob://snapshots/a\b`,
 		"azblob://snapshots/a/.../b",
 		"azblob://snapshots/a/ . /b",
