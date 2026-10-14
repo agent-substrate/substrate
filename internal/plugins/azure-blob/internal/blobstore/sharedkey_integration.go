@@ -36,7 +36,7 @@ func NewAzureWithSharedKey(accountURL, containerName, accountName, accountKey st
 	if err != nil {
 		return nil, fmt.Errorf("creating Azure shared key credential: %w", err)
 	}
-	client, err := service.NewClientWithSharedKeyCredential(accountURL, credential, clientOptions(endpoint, defaultTransport(), policy.RetryOptions{}))
+	client, err := service.NewClientWithSharedKeyCredential(accountURL, credential, clientOptions(endpoint, defaultTransport(), policy.RetryOptions{}, defaultStallTimeout))
 	if err != nil {
 		return nil, fmt.Errorf("creating Azure Blob service client: %w", err)
 	}

@@ -17,11 +17,15 @@ package blobstore
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -105,7 +109,7 @@ func TestEndpointTransportRejectsOtherEndpoints(t *testing.T) {
 	other := &recorder{}
 	otherServer := httptest.NewTLSServer(other)
 	defer otherServer.Close()
-	transport := newEndpointTransport(mustParseURL(t, server.URL), server.Client().Transport)
+	transport := newEndpointTransport(mustParseURL(t, server.URL), server.Client().Transport, defaultStallTimeout)
 
 	for _, tc := range []struct {
 		name   string
@@ -147,6 +151,138 @@ func TestEndpointTransportRejectsOtherEndpoints(t *testing.T) {
 	}
 }
 
+const testStallTimeout = 200 * time.Millisecond
+
+// newStallStore returns a store for server that cancels a request after
+// testStallTimeout without progress and does not retry it.
+func newStallStore(t *testing.T, server *httptest.Server) Store {
+	t.Helper()
+	stores, err := newTokenAzure(server.URL, []string{"snapshots"}, staticCredential{}, server.Client().Transport, policy.RetryOptions{MaxRetries: -1}, testStallTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stores["snapshots"]
+}
+
+// stall blocks a handler until the client gives up on the request.
+func stall(t *testing.T, r *http.Request) {
+	select {
+	case <-r.Context().Done():
+	case <-time.After(30 * time.Second):
+		t.Error("client did not cancel the stalled request")
+	}
+}
+
+func TestStalledRequestsAreUnavailable(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			// Accept the block, then never answer.
+			_, _ = io.Copy(io.Discard, r.Body)
+		}
+		stall(t, r)
+	}))
+	defer server.Close()
+	store := newStallStore(t, server)
+	ctx := t.Context()
+
+	for name, call := range map[string]func() error{
+		"Delete":     func() error { return store.Delete(ctx, "prefix/file") },
+		"List":       func() error { _, err := store.List(ctx, "prefix/"); return err },
+		"Download":   func() error { _, err := store.Download(ctx, "prefix/file"); return err },
+		"StageBlock": func() error { return store.StageBlock(ctx, "prefix/file", "YmxvY2s=", []byte("data"), nil) },
+	} {
+		start := time.Now()
+		err := call()
+		if !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "no progress") {
+			t.Errorf("%s against a stalled endpoint = %v, want ErrUnavailable for no progress", name, err)
+		}
+		if elapsed := time.Since(start); elapsed > 10*time.Second {
+			t.Errorf("%s took %s against a stalled endpoint", name, elapsed)
+		}
+	}
+}
+
+// TestStalledDownloadResumes stalls the first response after one byte of the
+// body; the download resumes from that byte with a new request.
+func TestStalledDownloadResumes(t *testing.T) {
+	const data = "snapshot bytes"
+	var mu sync.Mutex
+	var ranges []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		ranges = append(ranges, r.Header.Get("x-ms-range"))
+		mu.Unlock()
+		offset := 0
+		if rng := r.Header.Get("x-ms-range"); rng != "" {
+			if _, err := fmt.Sscanf(rng, "bytes=%d-", &offset); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		remaining := data[offset:]
+		w.Header().Set("ETag", `"v1"`)
+		w.Header().Set("Content-Length", fmt.Sprint(len(remaining)))
+		if offset > 0 {
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", offset, len(data)-1, len(data)))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = io.WriteString(w, remaining)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, remaining[:1])
+		w.(http.Flusher).Flush()
+		stall(t, r)
+	}))
+	defer server.Close()
+
+	download, err := newStallStore(t, server).Download(t.Context(), "prefix/file")
+	if err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	defer download.Body.Close()
+	got, err := io.ReadAll(download.Body)
+	if err != nil || string(got) != data {
+		t.Fatalf("reading the body = %q, %v; want %q", got, err, data)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"", "bytes=1-"}; !slices.Equal(ranges, want) {
+		t.Fatalf("GET ranges = %q, want %q", ranges, want)
+	}
+}
+
+// TestSlowDownloadConsumerIsNotStalled pauses between reads of a download for
+// longer than the stall timeout: only time spent waiting on the endpoint counts.
+func TestSlowDownloadConsumerIsNotStalled(t *testing.T) {
+	const data = "snapshot bytes"
+	var requests atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("ETag", `"v1"`)
+		w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+		_, _ = io.WriteString(w, data)
+	}))
+	defer server.Close()
+
+	download, err := newStallStore(t, server).Download(t.Context(), "prefix/file")
+	if err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	defer download.Body.Close()
+	first := make([]byte, 1)
+	if _, err := io.ReadFull(download.Body, first); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(3 * testStallTimeout)
+	rest, err := io.ReadAll(download.Body)
+	if err != nil || string(first)+string(rest) != data {
+		t.Fatalf("reading the body = %q, %v; want %q", string(first)+string(rest), err, data)
+	}
+	if n := requests.Load(); n != 1 {
+		t.Fatalf("server saw %d requests, want 1", n)
+	}
+}
+
 func TestNewAzureRequiresHTTPS(t *testing.T) {
 	_, err := NewAzure("http://account.blob.core.windows.net", []string{"snapshots"}, staticCredential{})
 	if err == nil || !strings.Contains(err.Error(), "must use https") {
@@ -158,7 +294,7 @@ func TestNewAzureRequiresHTTPS(t *testing.T) {
 // accountURL.
 func newTokenStore(t *testing.T, accountURL string, credential azcore.TokenCredential, base http.RoundTripper, retry policy.RetryOptions) Store {
 	t.Helper()
-	stores, err := newTokenAzure(accountURL, []string{"snapshots"}, credential, base, retry)
+	stores, err := newTokenAzure(accountURL, []string{"snapshots"}, credential, base, retry, defaultStallTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
