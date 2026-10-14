@@ -65,6 +65,8 @@ func (p *sandboxProcess) Close() {
 // waitGone blocks until the sandbox has exited and been reaped.
 func (p *sandboxProcess) waitGone(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	// usually gone within a few milliseconds of the checkpoint returning
+	backoff := time.Millisecond
 	for {
 		// ESRCH only once the process is reaped. EPERM still means it exists.
 		err := unix.PidfdSendSignal(p.pidfd, 0, nil, 0)
@@ -77,6 +79,7 @@ func (p *sandboxProcess) waitGone(timeout time.Duration) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("sandbox %d still present after %v", p.pid, timeout)
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(backoff)
+		backoff = min(backoff*2, 50*time.Millisecond)
 	}
 }
