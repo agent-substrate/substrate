@@ -18,13 +18,14 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -34,10 +35,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/render"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/render"
 )
 
 func silenceStepLog(t *testing.T) {
@@ -46,28 +47,69 @@ func silenceStepLog(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(os.Stdout) })
 }
 
-func TestMicroVMConfigResolution(t *testing.T) {
-	t.Run("ARCH env beats KO_DEFAULTPLATFORMS and GOARCH", func(t *testing.T) {
-		t.Setenv("ARCH", "arm64")
-		e := &Env{Cfg: &config.Config{KODefaultPlatforms: "linux/amd64"}}
-		if got := e.microvmArch(); got != "arm64" {
-			t.Errorf("microvmArch() = %q, want arm64", got)
+func sha256HexString(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+func TestVerifyMicroVMAssetDigests(t *testing.T) {
+	origDigests := microvmAssetDigests["amd64"]
+	microvmAssetDigests["amd64"] = map[string]string{
+		"cloud-hypervisor": sha256HexString("ch-bytes"),
+		"virtiofsd":        sha256HexString("virtiofsd-bytes"),
+		"vmlinux":          sha256HexString("vmlinux-bytes"),
+		"rootfs.img":       sha256HexString("rootfs-bytes"),
+	}
+	t.Cleanup(func() { microvmAssetDigests["amd64"] = origDigests })
+
+	writeValidAssets := func(t *testing.T, dir string) {
+		t.Helper()
+		for name, body := range map[string]string{
+			"cloud-hypervisor": "ch-bytes",
+			"virtiofsd":        "virtiofsd-bytes",
+			"vmlinux":          "vmlinux-bytes",
+			"rootfs.img":       "rootfs-bytes",
+		} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	t.Run("matching digests succeed", func(t *testing.T) {
+		dir := t.TempDir()
+		writeValidAssets(t, dir)
+		if err := verifyMicroVMAssetDigests(dir, "amd64"); err != nil {
+			t.Fatalf("verifyMicroVMAssetDigests() = %v, want nil", err)
 		}
 	})
 
-	t.Run("KO_DEFAULTPLATFORMS suffix beats GOARCH", func(t *testing.T) {
-		t.Setenv("ARCH", "")
-		e := &Env{Cfg: &config.Config{KODefaultPlatforms: "linux/arm64"}}
-		if got := e.microvmArch(); got != "arm64" {
-			t.Errorf("microvmArch() = %q, want arm64", got)
+	t.Run("mismatched digest fails", func(t *testing.T) {
+		dir := t.TempDir()
+		writeValidAssets(t, dir)
+		if err := os.WriteFile(filepath.Join(dir, "vmlinux"), []byte("corrupted"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := verifyMicroVMAssetDigests(dir, "amd64")
+		if err == nil || !strings.Contains(err.Error(), "sha256 =") {
+			t.Fatalf("verifyMicroVMAssetDigests() = %v, want sha256 mismatch error", err)
 		}
 	})
 
-	t.Run("falls back to runtime.GOARCH", func(t *testing.T) {
-		t.Setenv("ARCH", "")
-		e := &Env{Cfg: &config.Config{}}
-		if got := e.microvmArch(); got != runtime.GOARCH {
-			t.Errorf("microvmArch() = %q, want %q", got, runtime.GOARCH)
+	t.Run("missing file fails", func(t *testing.T) {
+		dir := t.TempDir()
+		writeValidAssets(t, dir)
+		if err := os.Remove(filepath.Join(dir, "rootfs.img")); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyMicroVMAssetDigests(dir, "amd64"); err == nil {
+			t.Fatal("verifyMicroVMAssetDigests() succeeded with missing file, want error")
+		}
+	})
+
+	t.Run("unknown arch fails", func(t *testing.T) {
+		if err := verifyMicroVMAssetDigests(t.TempDir(), "riscv64"); err == nil {
+			t.Fatal("verifyMicroVMAssetDigests() succeeded with unknown arch, want error")
 		}
 	})
 }
@@ -383,9 +425,17 @@ func TestMicroVMSandboxConfigTemplate(t *testing.T) {
 			if strings.Contains(string(rendered), "${") {
 				t.Errorf("rendered manifest still contains unexpanded placeholder:\n%s", rendered)
 			}
-			wantURL := tc.scheme + "://" + tc.bucket + "/kata-assets/cloud-hypervisor"
-			if !strings.Contains(string(rendered), wantURL) {
-				t.Errorf("rendered manifest missing expected bucket URL %q:\n%s", wantURL, rendered)
+			for _, arch := range microvmArches {
+				for _, asset := range microvmAssets {
+					wantURL := tc.scheme + "://" + tc.bucket + "/kata-assets/" + arch + "/" + asset
+					if !strings.Contains(string(rendered), wantURL) {
+						t.Errorf("rendered manifest missing expected bucket URL %q:\n%s", wantURL, rendered)
+					}
+					wantDigest := microvmAssetDigests[arch][asset]
+					if !strings.Contains(string(rendered), wantDigest) {
+						t.Errorf("rendered manifest missing expected %s/%s digest %q:\n%s", arch, asset, wantDigest, rendered)
+					}
+				}
 			}
 			objs, err := kube.DecodeManifestBytes(rendered)
 			if err != nil {
