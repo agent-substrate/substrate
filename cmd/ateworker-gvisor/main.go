@@ -642,6 +642,8 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
 		flags:          s.flags,
+		attribution:    attribution,
+		actorLogger:    s.actorLogger,
 	}
 	var containersToDelete []string
 	defer func() {
@@ -777,10 +779,12 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	// Checkpoint only saves state; no sizing is applied, so size is left zero.
 	rcmd := &runsc{
-		path:      req.GetRunscPath(),
-		actorUID:  req.GetActorUid(),
-		actorDirs: req.GetActorDirs(),
-		flags:     s.flags,
+		path:        req.GetRunscPath(),
+		actorUID:    req.GetActorUid(),
+		actorDirs:   req.GetActorDirs(),
+		flags:       s.flags,
+		attribution: attribution,
+		actorLogger: s.actorLogger,
 	}
 
 	checkpointPath := req.GetActorDirs().GetCheckpointDir()
@@ -799,7 +803,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	terminate := func() error {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		err := s.terminateWorkload(cleanupCtx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), containers)
+		err := s.terminateWorkload(cleanupCtx, attribution, req.GetRunscPath(), req.GetActorDirs(), containers)
 		if err != nil {
 			slog.WarnContext(cleanupCtx, "failed to terminate workload after checkpoint",
 				slog.String("actor", attribution.Ref.String()),
@@ -1029,6 +1033,8 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
 		flags:          s.flags,
+		attribution:    attribution,
+		actorLogger:    s.actorLogger,
 	}
 	var containersToDelete []string
 	defer func() {
@@ -1188,7 +1194,7 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 	if hosted != nil {
 		s.readFinal(ctx, hosted)
 	}
-	err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
+	err := s.terminateWorkload(ctx, attribution, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
 	s.recordFinalIfEnded(ctx, hosted)
 	if err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
@@ -1199,17 +1205,19 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 	return &ateworkerpb.TerminateWorkloadResponse{}, nil
 }
 
-func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) error {
+func (s *AteWorkerService) terminateWorkload(ctx context.Context, attribution resources.ActorAttribution, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) error {
 	var errs []error
-	if err := s.tunnel.Deactivate(ctx, resources.ActorAttribution{Ref: actorRef, UID: actorUID}); err != nil {
+	if err := s.tunnel.Deactivate(ctx, attribution); err != nil {
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))
 	}
 
 	rcmd := &runsc{
-		path:      runscPath,
-		actorUID:  actorUID,
-		actorDirs: actorDirs,
-		flags:     s.flags,
+		path:        runscPath,
+		actorUID:    attribution.UID,
+		actorDirs:   actorDirs,
+		flags:       s.flags,
+		attribution: attribution,
+		actorLogger: s.actorLogger,
 	}
 
 	// Detached from the caller: a deadline mid-`runsc delete` would leave the
@@ -1240,7 +1248,7 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 		errs = append(errs, fmt.Errorf("while unmounting bundle rootfs overlays: %w", err))
 	}
 
-	if err := s.unhostActor(ctx, actorUID); err != nil {
+	if err := s.unhostActor(ctx, attribution.UID); err != nil {
 		errs = append(errs, fmt.Errorf("while cleaning up actor network: %w", err))
 	}
 
