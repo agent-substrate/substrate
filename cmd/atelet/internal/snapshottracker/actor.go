@@ -106,4 +106,12 @@ type actorSnapshots struct {
 
 	// actorSnapshotsRecord holds what the snapshot state file keeps.
 	actorSnapshotsRecord
+
+	// op is the actor's background operation in progress, or nil. An actor
+	// has at most one. The entry stays in memory while op is set.
+	op *actorOp
+	// unsaved is set while the snapshot state file lacks a change to the
+	// entry because writing the file failed. The entry stays in memory while
+	// unsaved is set.
+	unsaved bool
 }

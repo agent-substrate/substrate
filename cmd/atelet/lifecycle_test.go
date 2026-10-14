@@ -38,6 +38,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
+	"k8s.io/utils/clock"
 )
 
 // useTempNodeDirs roots atelet's on-node state in temp directories so a test
@@ -210,7 +211,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 		imageCache:        newImageVolumeStore(t),
 		anonGCSClient:     fakeObjectStorage{data: runsc},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
-		snapshots:         snapshottracker.New(),
+		snapshots:         snapshottracker.New(t.Context(), clock.RealClock{}),
 	}
 	sandboxAssets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
@@ -401,7 +402,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		imageCache:        newImageVolumeStore(t),
 		anonGCSClient:     fakeObjectStorage{data: runsc},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
-		snapshots:         snapshottracker.New(),
+		snapshots:         snapshottracker.New(t.Context(), clock.RealClock{}),
 	}
 	assetsWithPause := func(pause string) *ateletpb.SandboxAssets {
 		return &ateletpb.SandboxAssets{
@@ -556,7 +557,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			if tc.failure == "asset" {
 				storage.err = fmt.Errorf("asset unavailable")
 			}
-			s := &Atelet{anonGCSClient: storage, systemInfoVolumes: refresher, snapshots: snapshottracker.New()}
+			s := &Atelet{anonGCSClient: storage, systemInfoVolumes: refresher, snapshots: snapshottracker.New(t.Context(), clock.RealClock{})}
 			assets := &ateletpb.SandboxAssets{
 				SandboxClass: "gvisor", PauseImage: testPauseImage,
 				Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
@@ -630,7 +631,7 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		anonGCSClient:     fakeObjectStorage{data: content},
 		imageCache:        newImageVolumeStore(t),
 		systemInfoVolumes: refresher,
-		snapshots:         snapshottracker.New(),
+		snapshots:         snapshottracker.New(t.Context(), clock.RealClock{}),
 	}
 	spec := &ateletpb.WorkloadSpec{
 		Volumes: []*ateletpb.Volume{{
@@ -698,7 +699,7 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		anonGCSClient:     fakeObjectStorage{data: content},
 		imageCache:        newImageVolumeStore(t),
 		systemInfoVolumes: refresher,
-		snapshots:         snapshottracker.New(),
+		snapshots:         snapshottracker.New(t.Context(), clock.RealClock{}),
 	}
 	_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
 		Atespace:     "team-a",
@@ -990,7 +991,7 @@ func TestTerminateWithoutWorkerPodUID(t *testing.T) {
 	s := &Atelet{
 		workerDialer:      newWorkerDialer(1),
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
-		snapshots:         snapshottracker.New(),
+		snapshots:         snapshottracker.New(t.Context(), clock.RealClock{}),
 	}
 	spec := &ateletpb.WorkloadSpec{
 		Containers: []*ateletpb.Container{{Name: "app", Image: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},

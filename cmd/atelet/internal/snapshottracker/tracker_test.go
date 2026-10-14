@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	clocktesting "k8s.io/utils/clock/testing"
 )
 
 const trackedActorUID = "actor-uid-1"
@@ -43,6 +44,12 @@ func useTempNodeDirs(t *testing.T) {
 	t.Cleanup(func() {
 		nodepath.ActorsDir, nodepath.StaticFilesDir = origActors, origStatic
 	})
+}
+
+// newTracker returns a tracker on a fake clock whose context ends with the
+// test. Its workers are not started.
+func newTracker(t *testing.T) *Tracker {
+	return New(t.Context(), clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)))
 }
 
 // testRef is a MEMORY snapshot of the tracked actor.
@@ -78,7 +85,7 @@ func TestTrackerState(t *testing.T) {
 	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	tr := New()
+	tr := newTracker(t)
 	t0 := time.Now()
 	st := tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
 	if got := st.GetLatestLocal(); uuidOf(got) != "s1" || !timeOf(got.GetLocalCommitTime()).Equal(t0) {
@@ -111,7 +118,7 @@ func TestTrackerState(t *testing.T) {
 	if got := tr.State(trackedActorUID); !proto.Equal(got, st) {
 		t.Errorf("State() = %v, want %v, as CommitLocal returned", got, st)
 	}
-	if got := New().State(trackedActorUID); !proto.Equal(got, st) {
+	if got := newTracker(t).State(trackedActorUID); !proto.Equal(got, st) {
 		t.Errorf("State() on a fresh tracker = %v, want %v from the state file", got, st)
 	}
 
@@ -133,7 +140,7 @@ func TestTrackerForgetLocal(t *testing.T) {
 	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	tr := New()
+	tr := newTracker(t)
 	tr.ForgetLocal(trackedActorUID)
 	if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(trackedActorUID)); !os.IsNotExist(err) {
 		t.Errorf("state file after forgetting nothing: stat = %v, want none written", err)
@@ -143,7 +150,7 @@ func TestTrackerForgetLocal(t *testing.T) {
 	tr.CommitDurable(trackedActorUID, testRef("s1", 1, t0))
 	tr.CommitLocal(trackedActorUID, testRef("s2", 2, t0.Add(time.Minute)))
 	tr.ForgetLocal(trackedActorUID)
-	if st := New().State(trackedActorUID); st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
+	if st := newTracker(t).State(trackedActorUID); st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
 		t.Errorf("state from the file = %v, want no local snapshot and s1 still durable", st)
 	}
 	if len(tr.actors) != 0 {
@@ -159,7 +166,7 @@ func TestTrackerCommitPromoted(t *testing.T) {
 	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	tr := New()
+	tr := newTracker(t)
 	t0 := time.Now()
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
 
@@ -172,7 +179,7 @@ func TestTrackerCommitPromoted(t *testing.T) {
 	if got := st.GetLatestDurable(); uuidOf(got) != "s1" || !timeOf(got.GetLocalCommitTime()).Equal(t0) || !timeOf(got.GetDurableCompleteTime()).Equal(promoted.UploadTime) {
 		t.Errorf("latest_durable = %v, want s1 committed at %v and uploaded at %v", got, t0, promoted.UploadTime)
 	}
-	if got := New().State(trackedActorUID); !proto.Equal(got, st) {
+	if got := newTracker(t).State(trackedActorUID); !proto.Equal(got, st) {
 		t.Errorf("State() on a fresh tracker = %v, want %v from the state file", got, st)
 	}
 
@@ -201,7 +208,7 @@ func TestTrackerKeepsUnsavedStateInMemory(t *testing.T) {
 	if err := os.MkdirAll(stateFile, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	tr := New()
+	tr := newTracker(t)
 	t0 := time.Now()
 	st := tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
 	if len(tr.actors) != 1 {
@@ -218,7 +225,7 @@ func TestTrackerKeepsUnsavedStateInMemory(t *testing.T) {
 	if len(tr.actors) != 0 {
 		t.Errorf("in-memory actors = %d after a successful save, want 0", len(tr.actors))
 	}
-	if got := New().State(trackedActorUID); !proto.Equal(got, st) {
+	if got := newTracker(t).State(trackedActorUID); !proto.Equal(got, st) {
 		t.Errorf("State() on a fresh tracker = %v, want %v from the state file", got, st)
 	}
 }
@@ -227,7 +234,7 @@ func TestTrackerKeepsUnsavedStateInMemory(t *testing.T) {
 // terminated on this node, writes nothing and drops the entry.
 func TestTrackerDropsActorWithoutDirectory(t *testing.T) {
 	useTempNodeDirs(t)
-	tr := New()
+	tr := newTracker(t)
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, time.Now()))
 	if len(tr.actors) != 0 {
 		t.Errorf("in-memory actors = %d, want 0 for an actor whose directory is gone", len(tr.actors))
@@ -250,7 +257,7 @@ func TestTrackerSerializesEachActor(t *testing.T) {
 	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	tr := New()
+	tr := newTracker(t)
 	t0 := time.Now()
 	for i := range 20 {
 		local := testRef(fmt.Sprintf("local-%d", i), int32(2*i+1), t0)
@@ -271,7 +278,7 @@ func TestTrackerSerializesEachActor(t *testing.T) {
 // A caller holding one actor's lock does not hold up another actor's commit.
 func TestTrackerLocksEachActorSeparately(t *testing.T) {
 	useTempNodeDirs(t)
-	tr := New()
+	tr := newTracker(t)
 	tr.lock("other-actor-uid")
 	defer tr.unlock("other-actor-uid")
 
@@ -296,7 +303,7 @@ func TestTrackerSkipsUnreadableSnapshotState(t *testing.T) {
 	if err := os.WriteFile(ateletpath.ActorSnapshotStateFile(trackedActorUID), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	tr := New()
+	tr := newTracker(t)
 	if got := tr.State(trackedActorUID); !proto.Equal(got, &ateletpb.ActorSnapshotState{}) {
 		t.Errorf("state with a broken file = %v, want empty", got)
 	}

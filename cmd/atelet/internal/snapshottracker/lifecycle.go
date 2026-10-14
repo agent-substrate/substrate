@@ -25,7 +25,11 @@ func (t *Tracker) CommitLocal(actorUID string, snap SnapshotRef) *ateletpb.Actor
 	defer t.unlock(actorUID)
 	a := t.findOrAddLocked(actorUID)
 	a.LatestLocal = snap.clone()
+	// TODO: Use succeededLocked here once UPLOAD_MODE_DEFERRED uploads are
+	// implemented: a deferred checkpoint is then a successful end state, which
+	// starts the actor's backoff over.
 	t.saveLocked(a)
+	t.requeueLocked(a)
 	return t.stateLocked(a)
 }
 
@@ -39,7 +43,7 @@ func (t *Tracker) CommitDurable(actorUID string, snap SnapshotRef) *ateletpb.Act
 	a.LatestDurable = snap.clone()
 	// TODO: change this when we add detach.
 	a.LatestLocal = nil
-	t.saveLocked(a)
+	t.succeededLocked(a)
 	return t.stateLocked(a)
 }
 
@@ -56,6 +60,7 @@ func (t *Tracker) ForgetLocal(actorUID string) {
 	a.LatestLocal = nil
 	t.addLocked(a)
 	t.saveLocked(a)
+	t.requeueLocked(a)
 }
 
 // CommitPromoted records snap, the local snapshot PromoteSnapshot just
@@ -76,14 +81,28 @@ func (t *Tracker) CommitPromoted(actorUID string, snap SnapshotRef) *ateletpb.Ac
 	}
 	// TODO: change this when PromoteSnapshot keeps the local copy.
 	a.LatestLocal = nil
-	t.saveLocked(a)
+	t.succeededLocked(a)
 	return t.stateLocked(a)
 }
 
-// Forget drops the actor's state, in memory and on disk.
+// Forget drops the actor's state, in memory and on disk. It does not wait for
+// the actor's background operation in progress: it cancels it, and the
+// operation finds itself abandoned when it ends.
 func (t *Tracker) Forget(actorUID string) error {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
+	t.abandonOpLocked(actorUID)
+	t.resetBackoffLocked(actorUID)
 	t.dropLocked(actorUID)
 	return removeSnapshotState(actorUID)
+}
+
+// succeededLocked finishes a change that leaves the actor in a successful end
+// state, such as its latest snapshot being durable: it starts the actor's
+// backoff over, saves the actor's state, and queues the actor for its next
+// background work.
+func (t *Tracker) succeededLocked(a *actorSnapshots) {
+	t.resetBackoffLocked(a.actorUID)
+	t.saveLocked(a)
+	t.requeueLocked(a)
 }

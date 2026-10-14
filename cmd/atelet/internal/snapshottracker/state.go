@@ -23,28 +23,28 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/atomicfile"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 )
 
 // saveLocked writes what atelet tracks of the actor to its snapshot state
-// file, and drops the in-memory entry once written. An actor whose directory
-// is gone was terminated on this node, so its entry is dropped unwritten.
-// Best-effort: if writing fails, atelet carries on from memory, and a restart
-// loses what changed.
+// file. An actor whose directory is gone was terminated on this node, so it is
+// not written, and requeueLocked drops its entry as it does once the file is
+// written. Best-effort: if writing fails, the entry stays in memory and atelet
+// carries on from it, and a restart loses what changed.
 func (t *Tracker) saveLocked(a *actorSnapshots) {
 	if _, err := os.Stat(ateletpath.ActorPath(a.actorUID)); errors.Is(err, os.ErrNotExist) {
 		slog.Warn("Dropping the snapshot state of an actor whose directory is gone", slog.String("actorUID", a.actorUID))
-		t.dropLocked(a.actorUID)
+		a.unsaved = false
 		return
 	}
 	data, err := json.Marshal(a.actorSnapshotsRecord)
 	if err == nil {
 		err = atomicfile.Write(ateletpath.ActorSnapshotStateFile(a.actorUID), data, 0o600)
 	}
+	a.unsaved = err != nil
 	if err != nil {
 		slog.Warn("Failed to save the actor's snapshot state", slog.String("actorUID", a.actorUID), slog.Any("err", err))
-		return
 	}
-	t.dropLocked(a.actorUID)
 }
 
 // readSnapshotState reads what atelet tracked of the actor from its snapshot
@@ -72,4 +72,28 @@ func removeSnapshotState(actorUID string) error {
 		return fmt.Errorf("while deleting the actor's snapshot state: %w", err)
 	}
 	return nil
+}
+
+// savedActorUIDs returns the UIDs of the actors with a snapshot state file on
+// this node. A node with no actor directories yet has none. An actor whose
+// file cannot be checked is included, so reading the file reports why.
+func savedActorUIDs() ([]string, error) {
+	entries, err := os.ReadDir(nodepath.ActorsDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while listing actor directories: %w", err)
+	}
+	var actorUIDs []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(entry.Name())); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		actorUIDs = append(actorUIDs, entry.Name())
+	}
+	return actorUIDs, nil
 }

@@ -84,6 +84,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/utils/clock"
 	"k8s.io/utils/lru"
 )
 
@@ -303,6 +304,11 @@ func main() {
 		serverboot.Fatal(ctx, "Object-store plugin is not serving", err)
 	}
 
+	// The snapshot tracker's workers get a context of their own, cancelled only
+	// once the gRPC server has drained, so background snapshot work keeps
+	// running while in-flight RPCs finish.
+	trackerCtx, stopTracker := context.WithCancel(ctx)
+	snapshots := snapshottracker.New(trackerCtx, clock.RealClock{})
 	wmService := NewService(
 		ctx,
 		workerDialer,
@@ -315,7 +321,9 @@ func main() {
 		volPlugins,
 		csiDriverConfigGetter,
 		systemInfoVolumes,
+		snapshots,
 	)
+	snapshots.Start()
 	go systemInfoVolumes.run(ctx)
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
@@ -437,6 +445,14 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to serve", err)
 	}
 	<-drainDone
+	stopTracker()
+	// Workers stop once their operations see the cancellation. The bound keeps
+	// one that does not from holding atelet past its telemetry flushes.
+	waitCtx, cancelWait := context.WithTimeout(ctx, 30*time.Second)
+	if err := snapshots.Wait(waitCtx); err != nil {
+		slog.WarnContext(ctx, "Background snapshot work did not stop in time; exiting anyway", slog.Any("err", err))
+	}
+	cancelWait()
 	slog.InfoContext(ctx, "Shutdown complete")
 }
 
@@ -547,6 +563,7 @@ func NewService(
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
 	csiDriverConfigGetter csi.CSIDriverConfigGetter,
 	systemInfoVolumes *systemInfoVolumeRefresher,
+	snapshots *snapshottracker.Tracker,
 ) *Atelet {
 	wms := &Atelet{
 		workerDialer:          workerDialer,
@@ -560,7 +577,7 @@ func NewService(
 		volumePlugins:         volumePlugins,
 		csiDriverConfigGetter: csiDriverConfigGetter,
 		systemInfoVolumes:     systemInfoVolumes,
-		snapshots:             snapshottracker.New(),
+		snapshots:             snapshots,
 	}
 	return wms
 }

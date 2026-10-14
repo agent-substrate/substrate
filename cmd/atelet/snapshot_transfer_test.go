@@ -43,6 +43,7 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
+	"k8s.io/utils/clock"
 )
 
 // newPluginHerder returns an Atelet whose snapshots go through the
@@ -57,7 +58,7 @@ func newPluginHerder(t *testing.T, store objectstorage.ObjectStorage) *Atelet {
 	return &Atelet{
 		objectStorePlugin:  objectstoreplugintest.NodeClient(plugin),
 		snapshotScratchDir: t.TempDir(),
-		snapshots:          snapshottracker.New(),
+		snapshots:          snapshottracker.New(t.Context(), clock.RealClock{}),
 	}
 }
 
