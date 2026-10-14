@@ -40,9 +40,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/plugins/azure-blob/internal/provider"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -278,7 +280,17 @@ func logRPC(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler gr
 	start := time.Now()
 	slog.InfoContext(ctx, "handling RPC", slog.String("method", info.FullMethod))
 	resp, err := handler(ctx, req)
-	slog.InfoContext(ctx, "handled RPC",
+	// atelet keeps only the code of a failed FetchAsset, so this line is the
+	// one record of why the plugin failed. Internal and Unavailable mean it
+	// failed rather than declined the URL: warn.
+	level := slog.LevelInfo
+	if info.FullMethod == objectstorev1.AssetProvider_FetchAsset_FullMethodName {
+		switch status.Code(err) {
+		case codes.Internal, codes.Unavailable:
+			level = slog.LevelWarn
+		}
+	}
+	slog.Log(ctx, level, "handled RPC",
 		slog.String("method", info.FullMethod),
 		slog.Duration("duration", time.Since(start)),
 		slog.Any("err", err))
