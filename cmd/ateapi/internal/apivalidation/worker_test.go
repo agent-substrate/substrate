@@ -697,8 +697,14 @@ func TestValidateReportActorSnapshotStateRequest(t *testing.T) {
 			r.State.UploadDueTime = nil
 		}),
 	}, {
-		name: "valid empty state",
+		name: "empty state",
 		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State = &ateapipb.ActorSnapshotState{} }),
+		want: field.ErrorList{field.Required(field.NewPath("state", "latest_durable"), "")},
+	}, {
+		name: "valid upload in flight with no local snapshot",
+		req: valid(func(r *ateapipb.ReportActorSnapshotStateRequest) {
+			r.State = &ateapipb.ActorSnapshotState{Uploading: r.State.GetUploading()}
+		}),
 	}, {
 		name: "missing actor",
 		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.Actor = nil }),

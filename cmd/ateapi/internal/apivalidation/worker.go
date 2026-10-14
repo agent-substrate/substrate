@@ -96,7 +96,13 @@ func ValidateMarkWorkerUnavailableRequest(ctx context.Context, req *ateapipb.Mar
 
 func ValidateReportActorSnapshotStateRequest(ctx context.Context, req *ateapipb.ReportActorSnapshotStateRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
-	return Validate_ReportActorSnapshotStateRequest(ctx, op, nil, req, nil)
+	errs := Validate_ReportActorSnapshotStateRequest(ctx, op, nil, req, nil)
+	// A report with neither latest_local nor uploading is a detach, which
+	// names the snapshot it made durable.
+	if st := req.GetState(); st != nil && st.GetLatestLocal() == nil && st.GetUploading() == nil && st.GetLatestDurable() == nil {
+		errs = append(errs, field.Required(field.NewPath("state", "latest_durable"), "a report with neither latest_local nor uploading must set latest_durable"))
+	}
+	return errs
 }
 
 // validateWorkerUpdate validates a Worker against the previous stored value.
