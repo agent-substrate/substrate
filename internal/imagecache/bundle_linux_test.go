@@ -195,8 +195,8 @@ func TestSetupBundleRootfs_DirModes(t *testing.T) {
 	}
 }
 
-// An upperdir that already exists keeps its mode.
-func TestSetupBundleRootfs_ExistingUpperKeepsMode(t *testing.T) {
+// An upperdir that already exists (gVisor: pre-created 0700) is widened too.
+func TestSetupBundleRootfs_ExistingUpperIsWidened(t *testing.T) {
 	bundle := t.TempDir()
 	if err := WriteSpec(bundle, &OverlaySpec{}); err != nil {
 		t.Fatalf("WriteSpec: %v", err)
@@ -210,8 +210,8 @@ func TestSetupBundleRootfs_ExistingUpperKeepsMode(t *testing.T) {
 	}
 	if fi, err := os.Stat(upper); err != nil {
 		t.Errorf("stat upper: %v", err)
-	} else if fi.Mode().Perm() != 0o700 {
-		t.Errorf("existing upper mode = %v, want 0700 untouched", fi.Mode().Perm())
+	} else if fi.Mode().Perm() != 0o755 {
+		t.Errorf("existing upper mode = %v, want 0755", fi.Mode().Perm())
 	}
 }
 

@@ -22,7 +22,6 @@ package imagecache
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -105,17 +104,14 @@ func SetupBundleRootfs(bundlePath string) error {
 	return nil
 }
 
-// upperDirMode is the mode of a new upperdir. overlayfs presents it as the
+// upperDirMode is the mode of the upperdir. overlayfs presents it as the
 // container's /, so 0700 would keep every non-root user out of the rootfs.
 const upperDirMode = 0o755
 
-// mkdirUpper creates the upperdir with exactly upperDirMode, whatever the
-// umask, and leaves an existing one as it is.
+// mkdirUpper creates the upperdir and sets it to exactly upperDirMode,
+// whatever the umask or the mode of one that already exists.
 func mkdirUpper(dir string) error {
-	if err := os.Mkdir(dir, upperDirMode); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return nil
-		}
+	if err := os.MkdirAll(dir, upperDirMode); err != nil {
 		return err
 	}
 	return os.Chmod(dir, upperDirMode)
