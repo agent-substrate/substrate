@@ -31,6 +31,7 @@ resources:
   - ../ate-controller.yaml
   - ./atelet
   - ../atenet-router.yaml
+  - ../ate-system-networkpolicies.yaml
   - ate-otel-config.yaml
   - rustfs.yaml
   - ./otel-collector.yaml

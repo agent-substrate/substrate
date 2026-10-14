@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -485,6 +486,10 @@ func (f egressDialerFunc) DialContext(ctx context.Context, destination string) (
 	return f(ctx, destination)
 }
 
+func (f egressDialerFunc) Close() error {
+	return nil
+}
+
 type fakeActorCertificateSource struct {
 	expiresAt time.Time
 	err       error
@@ -540,4 +545,64 @@ func TestEgressIsArmedPerActor(t *testing.T) {
 	if _, ok := egress.active["actor-uid-2"]; !ok {
 		t.Error("actor-uid-2 lost its egress when another actor was torn down")
 	}
+}
+
+func TestEgressDeactivateClosesIdleH2Connection(t *testing.T) {
+	ca := newTestCA(t)
+	gatewayAddr, _ := serveTestH2ConnectGateway(t, ca, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+	}))
+
+	connClosed := make(chan struct{})
+	client := newTestClient(t, ca, WithDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		c, err := (&net.Dialer{}).DialContext(ctx, network, gatewayAddr)
+		if err != nil {
+			return nil, err
+		}
+		return &closeNotifyingConn{Conn: c, closed: connClosed}, nil
+	}))
+
+	egress, err := NewEgress(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := egress.Activate(testActorUID, client, fakeActorCertificateSource{expiresAt: time.Now().Add(time.Hour)}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open and close a stream so the Client retains an idle HTTP/2 connection.
+	stream, err := client.DialContext(context.Background(), "192.0.2.10:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-connClosed:
+		t.Fatal("HTTP/2 connection closed while actor was still active")
+	default:
+	}
+
+	if err := egress.Deactivate(context.Background(), testActorUID); err != nil {
+		t.Fatal(err)
+	}
+	receiveWithin(t, connClosed, "idle HTTP/2 connection closed on Deactivate")
+}
+
+type closeNotifyingConn struct {
+	net.Conn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (c *closeNotifyingConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() { close(c.closed) })
+	return err
 }

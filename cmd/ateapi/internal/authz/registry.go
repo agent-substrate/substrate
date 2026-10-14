@@ -218,11 +218,6 @@ var defaultRPCPermissions = map[string]rpcRule{
 		return onActor(RelationCanDelete, r.GetActor(), field.NewPath("actor"))
 	})),
 
-	// TODO: grant the system components that call the RPCs below
-	// (atenet-router: ResumeActor; atenet-egress: GetActor,
-	// GetActorEgressPolicy; ate-controller: worker RPCs) through system roles
-	// in model.fga.
-
 	// Actor lifecycle.
 	ateapipb.Control_PauseActor_FullMethodName: rule(checksOf(func(r *ateapipb.PauseActorRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanPause, r.GetActor(), field.NewPath("actor"))

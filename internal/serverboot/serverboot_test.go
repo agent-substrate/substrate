@@ -179,10 +179,7 @@ func TestMeterProviderRelayAttribute(t *testing.T) {
 
 func TestReadyzDrainsWhileHealthzStaysUp(t *testing.T) {
 	readiness := &Readiness{}
-	mux := metricsMux(MetricsServerOptions{
-		Readiness:     readiness,
-		EnableHealthz: true,
-	})
+	mux := healthMux(readiness)
 
 	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
 		t.Errorf("/readyz before drain = %d, want %d", got, http.StatusOK)
@@ -202,40 +199,45 @@ func TestReadyzDrainsWhileHealthzStaysUp(t *testing.T) {
 }
 
 func TestReadyzStaticWithZeroValueReadiness(t *testing.T) {
-	mux := metricsMux(MetricsServerOptions{Readiness: &Readiness{}})
+	mux := healthMux(&Readiness{})
 	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
 		t.Errorf("/readyz with zero-value Readiness = %d, want %d", got, http.StatusOK)
 	}
 }
 
-func TestReadinessMux(t *testing.T) {
-	readiness := &Readiness{}
-	mux := readinessMux(readiness)
-
-	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
-		t.Errorf("/readyz before drain = %d, want %d", got, http.StatusOK)
+// The probes and /metrics live on separate servers, so turning one off can
+// never take the other with it.
+func TestMetricsAndHealthServeSeparateEndpoints(t *testing.T) {
+	servers := map[string]*http.ServeMux{
+		"metrics": metricsMux(),
+		"health":  healthMux(&Readiness{}),
 	}
-	if got := getCode(t, mux, "/metrics"); got != http.StatusNotFound {
-		t.Errorf("/metrics = %d, want %d", got, http.StatusNotFound)
-	}
-
-	readiness.MarkNotReady()
-	if got := getCode(t, mux, "/readyz"); got != http.StatusServiceUnavailable {
-		t.Errorf("/readyz during drain = %d, want %d", got, http.StatusServiceUnavailable)
+	for _, tc := range []struct {
+		server string
+		path   string
+		want   int
+	}{
+		{server: "metrics", path: "/metrics", want: http.StatusOK},
+		{server: "metrics", path: "/readyz", want: http.StatusNotFound},
+		{server: "metrics", path: "/healthz", want: http.StatusNotFound},
+		{server: "health", path: "/metrics", want: http.StatusNotFound},
+		{server: "health", path: "/readyz", want: http.StatusOK},
+		{server: "health", path: "/healthz", want: http.StatusOK},
+	} {
+		t.Run(tc.server+tc.path, func(t *testing.T) {
+			if got := getCode(t, servers[tc.server], tc.path); got != tc.want {
+				t.Errorf("%s server GET %s = %d, want %d", tc.server, tc.path, got, tc.want)
+			}
+		})
 	}
 }
 
-func TestReadyzAbsentWithoutReadiness(t *testing.T) {
-	mux := metricsMux(MetricsServerOptions{})
-	if got := getCode(t, mux, "/readyz"); got != http.StatusNotFound {
-		t.Errorf("/readyz with nil Readiness = %d, want %d", got, http.StatusNotFound)
-	}
-}
-
-func TestHealthzAbsentUnlessEnabled(t *testing.T) {
-	mux := metricsMux(MetricsServerOptions{Readiness: &Readiness{}})
-	if got := getCode(t, mux, "/healthz"); got != http.StatusNotFound {
-		t.Errorf("/healthz without EnableHealthz = %d, want %d", got, http.StatusNotFound)
+// A server with no ReadHeaderTimeout lets a slow client hold a connection
+// open forever.
+func TestHTTPServerBoundsHeaderRead(t *testing.T) {
+	srv := newHTTPServer(":0", http.NewServeMux())
+	if srv.ReadHeaderTimeout <= 0 {
+		t.Errorf("ReadHeaderTimeout = %v, want > 0", srv.ReadHeaderTimeout)
 	}
 }
 

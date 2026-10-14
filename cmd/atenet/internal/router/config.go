@@ -155,6 +155,7 @@ type routerConfig struct {
 	ExtprocPort       int
 	ExtprocAddr       string
 	StatusPort        int
+	StatusAddr        string
 	HealthInterval    time.Duration
 	HttpsPort         int
 	// ConnectPlainTextPort and ConnectTLSPort are the plaintext and TLS
@@ -173,6 +174,8 @@ type routerConfig struct {
 	// UpstreamSpiffePrefix validates the actor's atunnel server cert by its
 	// SPIFFE URI SAN prefix (trust domain) instead of the dialed pod IP.
 	UpstreamSpiffePrefix string
+	// UpstreamConnect tunnels actor traffic to atunnel's CONNECT listener.
+	UpstreamConnect bool
 
 	// ActorIdentityCAFile is the PEM trust bundle for the actor-identity CA,
 	// used by the egress gateway's ext_proc sidecar to verify the actor client
@@ -195,6 +198,7 @@ type routerConfig struct {
 
 	LogLevel    string
 	MetricsAddr string
+	HealthAddr  string
 	// OtlpCollectorAddress is the OTLP gRPC collector that Envoy reports
 	// tracing spans to, as host:port or an http:// URL. It defaults to
 	// OTEL_EXPORTER_OTLP_ENDPOINT — Envoy gets its whole configuration over
@@ -318,6 +322,9 @@ func (c routerConfig) validate() error {
 	if c.ExtProcMaxRequests > 0 && c.ParkedRequest.Max > 0 && c.ExtProcMaxRequests < c.ParkedRequest.Max {
 		return fmt.Errorf("--extproc-max-requests (%d) must be >= --parked-request-max (%d): a circuit breaker below the parking lot silently truncates it with Envoy-generated 503s",
 			c.ExtProcMaxRequests, c.ParkedRequest.Max)
+	}
+	if c.UpstreamConnect && c.UpstreamCredentialBundlePath == "" {
+		return fmt.Errorf("--upstream-connect requires --upstream-credential-bundle: atunnel's CONNECT listener accepts only mTLS")
 	}
 	if c.EgressPolicyCacheTTL < 0 {
 		return fmt.Errorf("--egress-policy-cache-ttl must not be negative, got %s (0 disables the cache)", c.EgressPolicyCacheTTL)

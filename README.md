@@ -105,6 +105,7 @@ goals in the near term.
 To quickly set up the complete environment:
 
 1. Make sure you have [Go](https://go.dev/doc/install), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [`docker`](https://www.docker.com/) installed and configured on your dev machine. We will automatically manage other dependencies via Go, including [`kind`](https://kind.sigs.k8s.io/).
+   A Linux host that will run more than about a thousand sandboxes also needs a larger kernel neighbor table (`net.ipv4.neigh.default.gc_thresh1/2/3` = 4096/16384/32768); `hack/create-kind-cluster.sh` warns when the host is at the default of 1024.
 
 2. Run the following steps:
 ```shell
@@ -140,15 +141,6 @@ curl -X POST \
    -H "ate-target-actor: ate-demo-counter/my-counter-1" \
    -i http://localhost:8000/
 ```
-
-Worker capacity is versioned: the dataplane (the atelet DaemonSet and the
-worker pods) schedules only on nodes that carry the
-`ate.dev/substrate-version` label, and the install stamps it on every node
-that exists when it runs. A node added later hosts no workers until you label
-it with the installed version
-(`kubectl label node <node> ate.dev/substrate-version=<build version>`).
-`kubectl get ds -n ate-system -l app=atelet -L ate.dev/substrate-version`
-prints the installed version, off the atelet DaemonSet the install created.
 
 ### GKE Quickstart (Development)
 
@@ -192,11 +184,6 @@ prints the installed version, off the atelet DaemonSet the install created.
    starts with an empty, default-deny one, so it resolves no Secrets until you
    grant each atespace the namespaces it may read; see
    [Enable it](docs/egress-credential-injection.md#enable-it).
-
-   Nodes that GKE adds later (autoscaling, auto-repair, node upgrades) are
-   born with the node pool's labels, so the pool needs
-   `ate.dev/substrate-version` too; see
-   [Node version labels](tools/setup-gcp/README.md).
 
 5. You can then deploy the sample applications. See [demos/counter/README.md](demos/counter/README.md) or [demos/sandbox/README.md](demos/sandbox/README.md) for detailed walkthroughs.
    ```bash

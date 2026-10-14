@@ -20,7 +20,6 @@ import (
 	"os"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -61,7 +60,7 @@ var getActorTemplatesCmd = &cobra.Command{
 		}
 
 		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		apiClient, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -88,9 +87,8 @@ var getActorTemplatesCmd = &cobra.Command{
 		pageToken := ""
 		for {
 			resp, err := apiClient.ListActorTemplates(ctx, &ateapipb.ListActorTemplatesRequest{
-				PageSize:  100,
-				PageToken: pageToken,
-				Atespace:  getActorTemplateAtespaceFlag,
+				Options:  &ateapipb.ListOptions{PageSize: 100, PageToken: pageToken},
+				Atespace: getActorTemplateAtespaceFlag,
 			})
 			if err != nil {
 				return fmt.Errorf("failed to list actor templates: %w", err)
@@ -131,7 +129,7 @@ Actor templates are immutable: there is no update; delete and recreate to change
 		}
 
 		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		apiClient, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -154,7 +152,7 @@ The server also deletes the template's golden actor and golden snapshot.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		c, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		c, err := newAPIClient(cmd)
 		if err != nil {
 			return err
 		}

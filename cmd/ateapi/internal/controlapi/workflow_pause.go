@@ -60,9 +60,10 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 	if err != nil {
 		return nil, err
 	}
-	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED {
-		// Fully paused already: FinalizePaused commits PAUSED and the cleared
-		// worker assignment in a single update, so there is nothing left to do.
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocalOnly(actor.GetStatus()) {
+		// Fully paused already: FinalizePaused commits SUSPENDED, the local
+		// snapshot's locality, and the cleared worker assignment in a single
+		// update, so there is nothing left to do.
 		// This success reports no pool, and cannot: the previous attempt
 		// released the worker, so the record names none (#957).
 		return actor, nil
@@ -108,19 +109,22 @@ func (w *ActorWorkflow) loadActorForPause(ctx context.Context, actorRef resource
 	return actor, actorTemplate, nil
 }
 
-// ensureMarkedPausing transitions a RUNNING actor to PAUSING, minting the
-// local snapshot name. Skips when a previous attempt already marked the
-// actor; the persisted name then stays authoritative for the rest of the
+// ensureMarkedPausing transitions a RUNNING actor to SUSPENDING, minting the
+// local snapshot name. A pause in progress is a SUSPENDING actor whose latest
+// generation is a pending node-local snapshot; a suspend in progress has a
+// pending durable one instead. Skips when a previous attempt already marked
+// the actor; the persisted name then stays authoritative for the rest of the
 // workflow.
 func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "MarkPausing")
 	defer func() { err = done(err) }()
 
-	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSING {
-		markSkipped(ctx, "actor already PAUSING")
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDING && latestSnapshotIsPendingLocal(actor.GetStatus()) {
+		markSkipped(ctx, "actor already SUSPENDING for a pause")
 		return actor, nil
 	}
-	// The pause edge only exists from RUNNING.
+	// The pause edge only exists from RUNNING. A SUSPENDING actor that is not
+	// pausing is suspending, and that suspend owns it.
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		return nil, apierror.FailedPrecondition("MarkPausing prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	}
@@ -132,7 +136,7 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 
 	snapshotUUID := resources.NewSnapshotName()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
 		// Increment last_assigned_generation for the new Pause request.
 		gen := toUpdate.Status.LastAssignedGeneration + 1
 		toUpdate.Status.LastAssignedGeneration = gen
@@ -168,7 +172,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
-		// Missing active worker pod reference in PAUSING state indicates corrupted store state.
+		// Missing active worker pod reference mid-pause indicates corrupted store state.
 		return "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationPause, crashMessageWorkerAssignmentMissing)
 	}
 
@@ -194,16 +198,16 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 		ActorTemplateName:     actor.GetActorTemplate().GetName(),
 		Spec:                  workloadSpec,
-		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		Config: &ateletpb.CheckpointRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{
-				SnapshotName: inProgressSnap.GetUuid(),
-			},
+		Snapshot: &ateletpb.Snapshot{
+			SnapshotUuid: inProgressSnap.GetUuid(),
+			Fidelity:     fidelityToAtelet(actorTemplate.GetSnapshotConfig().GetPreferredFidelity()),
 		},
-		Fidelity: fidelityToAtelet(actorTemplate.GetSnapshotConfig().GetPreferredFidelity()),
+		UploadConfig: &ateletpb.UploadConfig{
+			Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED,
+		},
 		ActorUid: actor.GetMetadata().Uid,
 	}
-	wireFidelity = ateattr.SnapshotFidelityValue(req.Fidelity)
+	wireFidelity = ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity())
 
 	if _, err = client.Checkpoint(ctx, req); err != nil {
 		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationPause, "Checkpoint", false, err)
@@ -213,7 +217,9 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 
 // ensurePausedFinalized releases the actor's worker (only when it is still
 // owned by this actor), records where the local snapshot lives, and commits
-// PAUSED with the assignment cleared in a single update. When the worker's
+// SUSPENDED with the assignment cleared in a single update. The actor keeps
+// its assigned node: a paused actor is a SUSPENDED actor whose latest
+// snapshot is node-local, and it resumes on that node. When the worker's
 // node name was lost or the latest local snapshot entry is missing, the actor
 // can never be resumed from local state, so it commits CRASHED instead and
 // fails the step with FailedPrecondition. It re-reads the actor first so an
@@ -234,8 +240,8 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		if latestActor.GetStatus().GetAssignedNode() == "" {
 			// Without a node name we cannot record where the local snapshot lives,
 			// so the actor can never be resumed (the scheduler would search for a
-			// worker on an unknown node forever). Crash it instead of leaving it
-			// stuck in PAUSED.
+			// worker on an unknown node forever). Crash it instead of committing
+			// SUSPENDED with a snapshot nothing can find.
 			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationPause, crashMessageLocalSnapshotNodeUnknown)
 		}
 		if snapshotAtLatestGeneration(latestActor.GetStatus()) == nil {
@@ -264,7 +270,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		// precondition pins the version checked above, so an out-of-band write
 		// since then fails the update instead of being overwritten.
 		storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
-			toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSED
+			toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 			// Record the node locality of the local checkpoint and clear older local checkpoints.
 			snap := snapshotAtLatestGeneration(toUpdate.Status)
 			snap.Locality = toUpdate.GetStatus().GetAssignedNode()

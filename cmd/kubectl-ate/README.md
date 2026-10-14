@@ -69,6 +69,9 @@ These flags can be appended to any command:
 | `--token-file` | | Path to a bearer token for ate-api authentication, or `-` for stdin | Kubernetes ServiceAccount token |
 | `--output` | `-o` | Output format (`table`, `json`, `yaml`) | `table` |
 | `--trace` | | Enable on-demand tracing for the request | `false` |
+| `--verbose` | `-v` | Increase output verbosity; may be repeated or stacked (e.g., `-v`, `-vv`, `-vvvvv`) | `0` |
+
+Pass `--version` (`kubectl ate --version`) to print the CLI version and exit.
 
 ---
 
@@ -109,7 +112,7 @@ kubectl ate get workers -l <label-selector>
 | `ATESPACE` | The atespace the actor belongs to. Part of the actor's identity; folded into the storage key as `actor:<atespace>:<name>`. |
 | `NAME` | The actor's name. User-provided for application actors; UUID for the golden actor that each template materialises while building its golden tag. |
 | `TEMPLATE` | The `ActorTemplate` the actor was created from, displayed as `<atespace>/<name>`. |
-| `STATE` | Current lifecycle state (`ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`, `ACTOR_STATE_PAUSING`, `ACTOR_STATE_PAUSED`, `ACTOR_STATE_CRASHED`, `ACTOR_STATE_DELETING`, `ACTOR_STATE_REVERTING`). |
+| `STATE` | Current lifecycle state (`ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`, `ACTOR_STATE_CRASHED`, `ACTOR_STATE_DELETING`, `ACTOR_STATE_REVERTING`). |
 | `WORKER POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
 | `WORKER IP` | The pod IP of that worker. Empty while suspended. |
 | `VERSION` | Monotonic integer that increments on every state transition (resume / suspend / checkpoint). Useful for distinguishing snapshots. |
@@ -208,7 +211,7 @@ kubectl ate revert actor my-actor -a <atespace>
 # Delete an actor (by default, requires the actor to be SUSPENDED or CRASHED).
 kubectl ate delete actor my-actor -a <atespace>
 
-# Delete an actor from any state (e.g. RUNNING, PAUSED), terminating workloads and detaching volumes.
+# Delete an actor from any state (e.g. RUNNING), terminating workloads and detaching volumes.
 kubectl ate delete actor my-actor -a <atespace> --any-state
 ```
 

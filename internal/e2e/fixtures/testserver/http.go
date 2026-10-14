@@ -16,6 +16,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -39,6 +40,7 @@ type echoedHeaders struct {
 // port. The optional body makes the same fixture useful for assertions about a
 // response inside the egress tunnel. /echoheaders returns the request headers as
 // they arrived, which is how a suite sees what the gateway put on the wire.
+// The /fetch handler for e2e tests that need test requests with bodies.
 func newHTTPHandler(body string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -57,6 +59,13 @@ func newHTTPHandler(body string) http.Handler {
 			log.Printf("testserver http: encoding /echoheaders response: %v", err)
 		}
 	})
+	mux.HandleFunc("POST /fetch", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			http.Error(w, fmt.Sprintf("reading request body: %v", err), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 	return mux
 }
 
@@ -69,7 +78,7 @@ func newHTTPCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "http",
-		Short: "Serve an HTTP/1.1 origin answering /healthz and /echoheaders.",
+		Short: "Serve an HTTP/1.1 origin answering /healthz, /echoheaders and POST /fetch.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			server := &http.Server{
@@ -82,9 +91,9 @@ func newHTTPCmd() *cobra.Command {
 			return serveHTTP(server, certFile, keyFile)
 		},
 	}
-	cmd.Flags().StringVar(&listenAddress, "listen", ":8080", "Address the HTTP origin listens on.")
-	cmd.Flags().StringVar(&certFile, "tls-cert", "", "PEM certificate file; enables HTTPS when paired with --tls-key.")
-	cmd.Flags().StringVar(&keyFile, "tls-key", "", "PEM private key file; enables HTTPS when paired with --tls-cert.")
+	cmd.Flags().StringVar(&listenAddress, "listen", ":8080", "Address the origin serves cleartext HTTP on.")
+	cmd.Flags().StringVar(&certFile, "tls-cert", "", "PEM certificate file; with --tls-key, also serves HTTPS on :8443.")
+	cmd.Flags().StringVar(&keyFile, "tls-key", "", "PEM private key file; with --tls-cert, also serves HTTPS on :8443.")
 	cmd.Flags().StringVar(&body, "body", "", "Response body for /healthz.")
 	return cmd
 }

@@ -21,7 +21,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/spf13/cobra"
@@ -54,7 +53,7 @@ var makeCaPoolCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
-		kc, err := newKubeClient()
+		kc, err := newKubeClient(cmd.ErrOrStderr())
 		if err != nil {
 			return err
 		}
@@ -125,7 +124,7 @@ var makeJwtPoolCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
-		kc, err := newKubeClient()
+		kc, err := newKubeClient(cmd.ErrOrStderr())
 		if err != nil {
 			return err
 		}
@@ -149,7 +148,7 @@ var listJwtKeysCmd = &cobra.Command{
 	Use:   "list-jwt-keys",
 	Short: "List the keys in a JWT authority pool secret",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		kc, err := newKubeClient()
+		kc, err := newKubeClient(cmd.ErrOrStderr())
 		if err != nil {
 			return err
 		}
@@ -171,7 +170,7 @@ The key is published to relying parties but signs nothing until activate-jwt-key
 makes it the signing key. Activate it only once relying parties have refetched
 the key set.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		kc, err := newKubeClient()
+		kc, err := newKubeClient(cmd.ErrOrStderr())
 		if err != nil {
 			return err
 		}
@@ -180,7 +179,7 @@ the key set.`,
 		if err != nil {
 			return fmt.Errorf("while generating JWT authority: %w", err)
 		}
-		if err := updateJWTPool(cmd.Context(), kc.CoreV1().Secrets(poolSecretNamespaceFlag), poolSecretNameFlag, func(pool *localjwtauthority.ConcretePool) error {
+		if err := updateJWTPool(cmd.Context(), cmd.ErrOrStderr(), kc.CoreV1().Secrets(poolSecretNamespaceFlag), poolSecretNameFlag, func(pool *localjwtauthority.ConcretePool) error {
 			return pool.AddAuthority(authority)
 		}); err != nil {
 			return err
@@ -195,12 +194,12 @@ var activateJwtKeyCmd = &cobra.Command{
 	Use:   "activate-jwt-key",
 	Short: "Make a key in a JWT authority pool secret the one that signs",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		kc, err := newKubeClient()
+		kc, err := newKubeClient(cmd.ErrOrStderr())
 		if err != nil {
 			return err
 		}
 
-		if err := updateJWTPool(cmd.Context(), kc.CoreV1().Secrets(poolSecretNamespaceFlag), poolSecretNameFlag, func(pool *localjwtauthority.ConcretePool) error {
+		if err := updateJWTPool(cmd.Context(), cmd.ErrOrStderr(), kc.CoreV1().Secrets(poolSecretNamespaceFlag), poolSecretNameFlag, func(pool *localjwtauthority.ConcretePool) error {
 			return pool.Activate(jwtKeyIDFlag)
 		}); err != nil {
 			return err
@@ -219,12 +218,12 @@ var removeJwtKeyCmd = &cobra.Command{
 Tokens the key signed stop verifying once relying parties refetch the key set,
 so remove it only after the last of them has expired.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		kc, err := newKubeClient()
+		kc, err := newKubeClient(cmd.ErrOrStderr())
 		if err != nil {
 			return err
 		}
 
-		if err := updateJWTPool(cmd.Context(), kc.CoreV1().Secrets(poolSecretNamespaceFlag), poolSecretNameFlag, func(pool *localjwtauthority.ConcretePool) error {
+		if err := updateJWTPool(cmd.Context(), cmd.ErrOrStderr(), kc.CoreV1().Secrets(poolSecretNamespaceFlag), poolSecretNameFlag, func(pool *localjwtauthority.ConcretePool) error {
 			return pool.RemoveAuthority(jwtKeyIDFlag)
 		}); err != nil {
 			return err
@@ -238,8 +237,13 @@ so remove it only after the last of them has expired.`,
 // updateJWTPool applies change to the pool in the named secret and writes it
 // back. The write is conditional on the secret's resourceVersion, and a
 // conflict reruns change against the current pool.
-func updateJWTPool(ctx context.Context, secrets typedcorev1.SecretInterface, name string, change func(*localjwtauthority.ConcretePool) error) error {
+func updateJWTPool(ctx context.Context, errOut io.Writer, secrets typedcorev1.SecretInterface, name string, change func(*localjwtauthority.ConcretePool) error) error {
+	attempt := 0
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		attempt++
+		if attempt > 1 {
+			vlogf(errOut, vBasic, "Conflict updating secret %q (attempt %d); retrying...", name, attempt)
+		}
 		secret, pool, err := getJWTPool(ctx, secrets, name)
 		if err != nil {
 			return err
@@ -294,8 +298,8 @@ func printJWTKeys(out io.Writer, pool *localjwtauthority.ConcretePool) error {
 }
 
 // newKubeClient builds a client from the --kubeconfig and --context flags.
-func newKubeClient() (kubernetes.Interface, error) {
-	kconfig, err := ateclient.LoadKubeConfig(kubeconfig, k8sContext)
+func newKubeClient(errOut io.Writer) (kubernetes.Interface, error) {
+	kconfig, err := loadKubeConfig(errOut, kubeconfig, k8sContext)
 	if err != nil {
 		return nil, fmt.Errorf("while reading kubeconfig: %w", err)
 	}

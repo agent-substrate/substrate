@@ -254,7 +254,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			return 0, r.fail(ctx, tmpl, reasonGoldenActorCrashed, "golden actor crashed before its snapshot was taken")
 
 		case ateapipb.ActorState_ACTOR_STATE_RUNNING:
-			takeAt := goldenSnapshotStatus.GetTakeGoldenSnapshotAt()
+			takeAt := goldenSnapshotStatus.GetSnapshotTime()
 			if takeAt == nil {
 				// Resumed, but the deadline write was lost (a replica died
 				// after ResumeActor). The elapsed warmup is unknowable, so
@@ -262,7 +262,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				slog.WarnContext(ctx, "Golden actor running without a snapshot deadline; restarting warmup", slog.String("ActorTemplate", ref.String()))
 				deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl.GetContainers()))
 				if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
-					snapshotStatus.TakeGoldenSnapshotAt = timestamppb.New(deadline)
+					snapshotStatus.SnapshotTime = timestamppb.New(deadline)
 				}); err != nil {
 					return 0, err
 				}
@@ -303,12 +303,12 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			}
 			deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl.GetContainers()))
 			if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
-				snapshotStatus.TakeGoldenSnapshotAt = timestamppb.New(deadline)
+				snapshotStatus.SnapshotTime = timestamppb.New(deadline)
 			}); err != nil {
 				return 0, err
 			}
-		case ateapipb.ActorState_ACTOR_STATE_DELETING, ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_PAUSING, ateapipb.ActorState_ACTOR_STATE_REVERTING:
-			// Nothing in the golden flow deletes, pauses, or reverts the actor before
+		case ateapipb.ActorState_ACTOR_STATE_DELETING, ateapipb.ActorState_ACTOR_STATE_REVERTING:
+			// Nothing in the golden flow deletes or reverts the actor before
 			// the snapshot is taken; someone else interfered.
 			return 0, r.fail(ctx, tmpl, reasonUnexpectedState, fmt.Sprintf("golden actor in unexpected state %v", state))
 

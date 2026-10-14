@@ -324,7 +324,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatal(err)
 	}
-	if got := tc.fakeAtelet.lastRestoreRequest().GetExternalConfig().GetSnapshotUri(); got != snapshotURI {
+	if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetObject().GetSnapshotUri(); got != snapshotURI {
 		t.Fatalf("restored snapshot = %q, want actor's snapshot %q", got, snapshotURI)
 	}
 	if err := assertNoGolden(ctx); err != nil {
@@ -347,7 +347,7 @@ func TestListActorTemplates_InvalidPageToken(t *testing.T) {
 	defer tc.cleanup()
 
 	_, err := tc.client.ListActorTemplates(context.Background(),
-		&ateapipb.ListActorTemplatesRequest{PageToken: "%%%"})
+		&ateapipb.ListActorTemplatesRequest{Options: &ateapipb.ListOptions{PageToken: "%%%"}})
 	assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
 }
 

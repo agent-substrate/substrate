@@ -190,7 +190,7 @@ func TestObjectStorePluginErrorCodeThroughAtelet(t *testing.T) {
 		{"paused upload", true, func(ctx context.Context, s *AteomHerder) error {
 			dir := t.TempDir()
 			writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
-			_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri)
+			_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
 			return err
 		}},
 		{"checkpoint upload", false, func(ctx context.Context, s *AteomHerder) error {
@@ -256,7 +256,7 @@ func TestObjectStorePluginErrorKeepsCredentialsOut(t *testing.T) {
 		{"paused upload", "", func(ctx context.Context, s *AteomHerder) error {
 			dir := t.TempDir()
 			writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
-			_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri)
+			_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
 			return err
 		}},
 	}
@@ -408,7 +408,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 		}
 	}
 
-	if _, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), pausedDir, uri); apierror.Code(err) != codes.Unavailable {
+	if _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), pausedDir, uri); apierror.Code(err) != codes.Unavailable {
 		t.Fatalf("paused upload during the outage = %v, want %s", err, codes.Unavailable)
 	}
 

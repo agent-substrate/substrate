@@ -391,6 +391,8 @@ github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3
 github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3
 github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/original_dst/v3
 github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3
+github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3
+github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3
 github.com/envoyproxy/go-control-plane/envoy/extensions/load_balancing_policies/client_side_weighted_round_robin/v3
 github.com/envoyproxy/go-control-plane/envoy/extensions/load_balancing_policies/common/v3
 github.com/envoyproxy/go-control-plane/envoy/extensions/load_balancing_policies/least_request/v3
@@ -1853,6 +1855,7 @@ k8s.io/client-go/discovery
 k8s.io/client-go/discovery/cached/memory
 k8s.io/client-go/discovery/fake
 k8s.io/client-go/dynamic
+k8s.io/client-go/dynamic/fake
 k8s.io/client-go/features
 k8s.io/client-go/gentype
 k8s.io/client-go/informers
