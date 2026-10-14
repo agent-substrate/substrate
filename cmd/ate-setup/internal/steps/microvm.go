@@ -17,7 +17,6 @@ package steps
 import (
 	"archive/tar"
 	"bufio"
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -28,7 +27,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -41,9 +39,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/render"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/render"
 )
 
 const (
@@ -54,7 +52,7 @@ const (
 	defaultKataVersion            = "4.1.0"
 	defaultCloudHypervisorVersion = "v53.0"
 	// virtiofsdVersion is the version bundled inside kata-static for
-	// defaultKataVersion (not env-overridable; verified before stamping).
+	// defaultKataVersion (verified before stamping).
 	virtiofsdVersion = "1.14.0"
 
 	assetStampFile               = ".asset-versions"
@@ -73,7 +71,27 @@ const (
 	maxMicroVMAssetBytes int64 = 8 << 30
 )
 
-var microvmAssets = []string{"cloud-hypervisor", "virtiofsd", "vmlinux", "rootfs.img"}
+var (
+	microvmArches = []string{"amd64", "arm64"}
+	microvmAssets = []string{"cloud-hypervisor", "virtiofsd", "vmlinux", "rootfs.img"}
+
+	// microvmAssetDigests pins the expected sha256 digest of each assembled
+	// file in microvmAssets, matching manifests/microvm/sandboxconfig-microvm.yaml.tmpl.
+	microvmAssetDigests = map[string]map[string]string{
+		"arm64": {
+			"cloud-hypervisor": "f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850",
+			"virtiofsd":        "3aa9240045d2261930ef04138fe05cf288f94c867e63e5d0845758bac5e3d458",
+			"vmlinux":          "4960f6cf781274eaa445fc9f88bb8c5ce951649278bc9caa13afb1e99cfe80e6",
+			"rootfs.img":       "7e3bdd500eb92de17c377bd84f8ed57e50d6bb68c7ec08c88f5e1916cd49f30d",
+		},
+		"amd64": {
+			"cloud-hypervisor": "448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc",
+			"virtiofsd":        "15b2e72a78cc08a9bd8a6943e89fb69c88cb3cbeb63069efceade835342ac7d4",
+			"vmlinux":          "8e9dbc3a6e4c26adb089d23d31201edebce905c7f3e31aa67b32bdd41df1b86f",
+			"rootfs.img":       "96497f64da1de9c7473fef46c3d29ddd0805d334731cf9d903a21a5b2c33cefb",
+		},
+	}
+)
 
 var sandboxConfigGVK = schema.GroupVersionKind{
 	Group:   "ate.dev",
@@ -84,48 +102,47 @@ var sandboxConfigGVK = schema.GroupVersionKind{
 // microvmReleaseBaseURL is overridden in unit tests to point at an httptest.Server.
 var microvmReleaseBaseURL = "https://github.com"
 
-// DeployMicroVMDeps installs the micro-VM prerequisites: the guest assets and
-// the cluster-wide `microvm` SandboxConfig.
+// DeployMicroVMDeps installs the micro-VM prerequisites: the guest assets for
+// each supported architecture and the cluster-wide `microvm` SandboxConfig.
 func (e *Env) DeployMicroVMDeps(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	log.Step("deploy_microvm_deps")
 
-	arch := e.microvmArch()
-	if _, err := cloudHypervisorAssetName(arch); err != nil {
-		return err
-	}
 	bucket, err := e.microVMBucket()
 	if err != nil {
 		return err
 	}
-	outDir := cmp.Or(e.getenv("OUT"), e.Cfg.Path("bin", "microvm-assets", arch))
-	kataVer := cmp.Or(e.getenv("KATA_VER"), defaultKataVersion)
-	chVer := cmp.Or(e.getenv("CH_VER"), defaultCloudHypervisorVersion)
 
-	wantStamp := microvmAssetStamp(arch, kataVer, chVer)
-	needAssemble, stale := microvmAssetsNeedAssemble(outDir, wantStamp)
-	if stale {
-		log.Infof("Asset set in %s is stale (version stamp mismatch); re-assembling.", outDir)
-	}
-	if needAssemble {
-		log.Infof("Assembling micro-VM assets into %s (ARCH=%s)...", outDir, arch)
-		if err := assembleMicroVMAssets(ctx, outDir, arch, kataVer, chVer); err != nil {
+	for _, arch := range microvmArches {
+		outDir := e.Cfg.Path("bin", "microvm-assets", arch)
+		wantStamp := microvmAssetStamp(arch, defaultKataVersion, defaultCloudHypervisorVersion)
+		needAssemble, stale := microvmAssetsNeedAssemble(outDir, wantStamp)
+		if stale {
+			log.Infof("Asset set in %s is stale (version stamp mismatch); re-assembling.", outDir)
+		}
+		if needAssemble {
+			log.Infof("Assembling micro-VM assets into %s (arch=%s)...", outDir, arch)
+			if err := assembleMicroVMAssets(ctx, outDir, arch, defaultKataVersion, defaultCloudHypervisorVersion); err != nil {
+				return err
+			}
+		} else {
+			log.Infof("Assets already present in %s; skipping assemble.", outDir)
+		}
+		if err := verifyMicroVMAssetDigests(outDir, arch); err != nil {
 			return err
 		}
-	} else {
-		log.Infof("Assets already present in %s; skipping assemble.", outDir)
 	}
 
 	if e.Cfg.Kind {
 		log.Infof("Staging assets to in-cluster rustfs bucket %s (kata-assets/)...", bucket)
-		if err := e.stageMicroVMAssetsToRustfs(ctx, outDir, bucket); err != nil {
+		if err := e.stageMicroVMAssetsToRustfs(ctx, bucket); err != nil {
 			return err
 		}
 	} else {
 		log.Infof("Uploading assets to gs://%s/kata-assets/ ...", bucket)
-		if err := e.stageMicroVMAssetsToGCS(ctx, outDir, bucket); err != nil {
+		if err := e.stageMicroVMAssetsToGCS(ctx, bucket); err != nil {
 			return err
 		}
 	}
@@ -191,35 +208,6 @@ func (e *Env) microVMBucketScheme() string {
 	return "gs"
 }
 
-func (e *Env) microvmArch() string {
-	if arch := e.getenv("ARCH"); arch != "" {
-		return arch
-	}
-	if e.Cfg != nil && e.Cfg.KODefaultPlatforms != "" {
-		if _, arch, ok := strings.Cut(e.Cfg.KODefaultPlatforms, "/"); ok {
-			return arch
-		}
-		return e.Cfg.KODefaultPlatforms
-	}
-	return runtime.GOARCH
-}
-
-func (e *Env) getenv(key string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	if e.Cfg == nil {
-		return ""
-	}
-	prefix := key + "="
-	for _, kv := range e.Cfg.ScriptEnv() {
-		if val, ok := strings.CutPrefix(kv, prefix); ok {
-			return val
-		}
-	}
-	return ""
-}
-
 func cloudHypervisorAssetName(arch string) (string, error) {
 	switch arch {
 	case "arm64":
@@ -227,7 +215,7 @@ func cloudHypervisorAssetName(arch string) (string, error) {
 	case "amd64":
 		return "cloud-hypervisor-static", nil
 	default:
-		return "", fmt.Errorf("unsupported ARCH=%s", arch)
+		return "", fmt.Errorf("unsupported arch %q", arch)
 	}
 }
 
@@ -243,6 +231,37 @@ func checkMicroVMAssets(outDir string) error {
 		}
 	}
 	return nil
+}
+
+func verifyMicroVMAssetDigests(outDir, arch string) error {
+	digests, ok := microvmAssetDigests[arch]
+	if !ok {
+		return fmt.Errorf("no pinned micro-VM asset digests for arch %q", arch)
+	}
+	for _, f := range microvmAssets {
+		p := filepath.Join(outDir, f)
+		got, err := fileSHA256(p)
+		if err != nil {
+			return err
+		}
+		if want := digests[f]; got != want {
+			return fmt.Errorf("micro-VM asset %s sha256 = %s, want %s (pinned in %s)", p, got, want, microvmSandboxConfigTemplate)
+		}
+	}
+	return nil
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 func microvmAssetsNeedAssemble(outDir, wantStamp string) (needAssemble, stale bool) {
@@ -304,19 +323,13 @@ func assembleMicroVMAssets(ctx context.Context, outDir, arch, kataVer, chVer str
 		return fmt.Errorf("while writing %s: %w", stampPath, err)
 	}
 
-	log.Infof(">> sha256 (paste all four into the per-arch block in %s):", microvmSandboxConfigTemplate)
+	log.Infof(">> sha256 (paste all four into the %s block in %s):", arch, microvmSandboxConfigTemplate)
 	for _, f := range microvmAssets {
-		file, err := os.Open(filepath.Join(outDir, f))
+		sum, err := fileSHA256(filepath.Join(outDir, f))
 		if err != nil {
 			return err
 		}
-		h := sha256.New()
-		_, copyErr := io.Copy(h, file)
-		_ = file.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		log.Infof("%x  %s", h.Sum(nil), f)
+		log.Infof("%s  %s", sum, f)
 	}
 	return nil
 }
@@ -346,6 +359,13 @@ func downloadAndExtractKataAssets(ctx context.Context, kataURL, workDir, outDir 
 		mode        fs.FileMode
 	}{
 		{archivePath: kataKernelSymlink, outName: "vmlinux", mode: 0o644},
+		// rootfs.img is attached over virtio-pmem and mounted with DAX (cmd/ateworker-microvm/run.go).
+		// The image must meet the following requirements:
+		//   - a size that is a multiple of 2 MiB (cloud-hypervisor)
+		//   - partition 1 aligned to the guest page size
+		//   - a filesystem block size equal to the guest page size
+		// The kata-containers.img used here is built for this, and vmlinux.container uses 4 KiB pages.
+		// See https://github.com/kata-containers/kata-containers/blob/main/tools/osbuilder/image-builder/image_builder.sh
 		{archivePath: kataRootfsSymlink, outName: "rootfs.img", mode: 0o644},
 		{archivePath: kataLibexecVirtiofsd, outName: "virtiofsd", mode: 0o755},
 	} {
@@ -483,7 +503,7 @@ func verifyVirtiofsdVersion(ctx context.Context, virtiofsdPath, kataVer, wantVer
 	return nil
 }
 
-func (e *Env) stageMicroVMAssetsToRustfs(ctx context.Context, outDir, bucket string) error {
+func (e *Env) stageMicroVMAssetsToRustfs(ctx context.Context, bucket string) error {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return fmt.Errorf("'docker' is required to run the S3 client but was not found in PATH: %w", err)
 	}
@@ -511,13 +531,14 @@ func (e *Env) stageMicroVMAssetsToRustfs(ctx context.Context, outDir, bucket str
 	}
 	endpoint := fmt.Sprintf("http://%s:9000", svc.Spec.ClusterIP)
 
+	// Credentials and region are fixed in manifests/ate-install/kind/rustfs.yaml.
 	awsCLI := func(stdin io.Reader, args ...string) error {
 		dockerArgs := append([]string{
 			"run", "--rm", "-i",
 			"--network", "container:" + node,
-			"-e", "AWS_ACCESS_KEY_ID=" + cmp.Or(e.getenv("AWS_ACCESS_KEY_ID"), "rustfsadmin"),
-			"-e", "AWS_SECRET_ACCESS_KEY=" + cmp.Or(e.getenv("AWS_SECRET_ACCESS_KEY"), "rustfsadmin"),
-			"-e", "AWS_REGION=" + cmp.Or(e.getenv("AWS_REGION"), "us-east-1"),
+			"-e", "AWS_ACCESS_KEY_ID=rustfsadmin",
+			"-e", "AWS_SECRET_ACCESS_KEY=rustfsadmin",
+			"-e", "AWS_REGION=us-east-1",
 			"-e", "AWS_ENDPOINT_URL=" + endpoint,
 			rustfsAWSCLIImage,
 		}, args...)
@@ -525,21 +546,24 @@ func (e *Env) stageMicroVMAssetsToRustfs(ctx context.Context, outDir, bucket str
 	}
 
 	log.Infof(">> Uploading assets to s3://%s/kata-assets/ via %s (netns of %s)...", bucket, endpoint, node)
-	for _, f := range microvmAssets {
-		log.Infof("   %s", f)
-		file, err := os.Open(filepath.Join(outDir, f))
-		if err != nil {
-			return err
-		}
-		err = awsCLI(file, "s3", "cp", "-", fmt.Sprintf("s3://%s/kata-assets/%s", bucket, f))
-		_ = file.Close()
-		if err != nil {
-			return fmt.Errorf("while uploading %s to rustfs: %w", f, err)
+	for _, arch := range microvmArches {
+		outDir := e.Cfg.Path("bin", "microvm-assets", arch)
+		for _, f := range microvmAssets {
+			log.Infof("   %s/%s", arch, f)
+			file, err := os.Open(filepath.Join(outDir, f))
+			if err != nil {
+				return err
+			}
+			err = awsCLI(file, "s3", "cp", "-", fmt.Sprintf("s3://%s/kata-assets/%s/%s", bucket, arch, f))
+			_ = file.Close()
+			if err != nil {
+				return fmt.Errorf("while uploading %s/%s to rustfs: %w", arch, f, err)
+			}
 		}
 	}
 
 	log.Infof(">> Done. Verify:")
-	return awsCLI(nil, "s3", "ls", fmt.Sprintf("s3://%s/kata-assets/", bucket))
+	return awsCLI(nil, "s3", "ls", "--recursive", fmt.Sprintf("s3://%s/kata-assets/", bucket))
 }
 
 func (e *Env) waitJobComplete(ctx context.Context, namespace, name string, timeout time.Duration) error {
@@ -564,23 +588,26 @@ func (e *Env) waitJobComplete(ctx context.Context, namespace, name string, timeo
 	})
 }
 
-func (e *Env) stageMicroVMAssetsToGCS(ctx context.Context, outDir, bucket string) error {
+func (e *Env) stageMicroVMAssetsToGCS(ctx context.Context, bucket string) error {
 	var projectFlag []string
 	if e.Cfg.ProjectID != "" {
 		projectFlag = []string{"--project=" + e.Cfg.ProjectID}
 	}
 
-	for _, f := range microvmAssets {
-		log.Infof("   %s", f)
-		args := append(append([]string{"storage", "cp"}, projectFlag...),
-			filepath.Join(outDir, f), fmt.Sprintf("gs://%s/kata-assets/%s", bucket, f))
-		if err := e.runCmd(ctx, nil, "gcloud", args...); err != nil {
-			return fmt.Errorf("while uploading %s to GCS: %w", f, err)
+	for _, arch := range microvmArches {
+		outDir := e.Cfg.Path("bin", "microvm-assets", arch)
+		for _, f := range microvmAssets {
+			log.Infof("   %s/%s", arch, f)
+			args := append(append([]string{"storage", "cp"}, projectFlag...),
+				filepath.Join(outDir, f), fmt.Sprintf("gs://%s/kata-assets/%s/%s", bucket, arch, f))
+			if err := e.runCmd(ctx, nil, "gcloud", args...); err != nil {
+				return fmt.Errorf("while uploading %s/%s to GCS: %w", arch, f, err)
+			}
 		}
 	}
 
 	log.Infof(">> Done. Verify:")
-	lsArgs := append(append([]string{"storage", "ls"}, projectFlag...), fmt.Sprintf("gs://%s/kata-assets/", bucket))
+	lsArgs := append(append([]string{"storage", "ls", "--recursive"}, projectFlag...), fmt.Sprintf("gs://%s/kata-assets/", bucket))
 	return e.runCmd(ctx, nil, "gcloud", lsArgs...)
 }
 

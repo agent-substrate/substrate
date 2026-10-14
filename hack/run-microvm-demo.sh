@@ -37,8 +37,6 @@
 #                    required on GKE).
 #   KUBECTL_CONTEXT  (optional) kube context; threaded into install + ko apply + kubectl.
 #   PROJECT_ID       (optional) GCP project for the GCS asset upload (GKE path).
-#   ARCH             target arch (default: from KO_DEFAULTPLATFORMS, else host arch).
-#   OUT              asset dir (default: $PWD/bin/microvm-assets/$ARCH, gitignored).
 #   ATE_INSTALL_KIND "true" for the kind path (stage assets to rustfs + install-ate-kind.sh);
 #                    default false uploads assets to GCS + uses install-ate.sh.
 
@@ -79,7 +77,7 @@ log() {
 # --- 1. deploy the control plane (includes micro-VM assets + SandboxConfig) -
 log "Deploying the ate control plane (--deploy-ate-system)..."
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
-  # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ARCH/ATE_INSTALL_KIND itself.
+  # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ATE_INSTALL_KIND itself.
   KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-ate-system
 else
   # GKE path: pass KO_DOCKER_REPO/BUCKET_NAME/KUBECTL_CONTEXT through the env.
