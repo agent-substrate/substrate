@@ -229,7 +229,7 @@ func (rh *routerHealth) checkAteAPI(ctx context.Context) (bool, string) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, dependencyHealthCheckTimeout)
 	defer cancel()
 
-	_, err := rh.apiClient.ListActors(timeoutCtx, &ateapipb.ListActorsRequest{PageSize: 1})
+	_, err := rh.apiClient.ListActors(timeoutCtx, &ateapipb.ListActorsRequest{Options: &ateapipb.ListOptions{PageSize: 1}})
 	if err != nil {
 		return false, err.Error()
 	}

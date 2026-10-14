@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -103,7 +104,107 @@ func TestSyncer_RaisesEpochOnAteomRestart(t *testing.T) {
 	}
 }
 
-func TestSyncer_NotReadyUnregisteredPodIsNotRegistered(t *testing.T) {
+// TestSyncer_NoPlacementUnderAnEarlierEpoch walks an ateom restart through
+// the pod states kubelet reports, and pins that no write leaves the Worker
+// ACTIVE while its epoch trails the ateom that is running. An Actor placed
+// then would be stamped with the earlier epoch and crashed with the Actors the
+// restart lost.
+func TestSyncer_NoPlacementUnderAnEarlierEpoch(t *testing.T) {
+	ctx := context.Background()
+	ns, podName, poolName := "ns-syncer-placement", "worker-placement-1", "pool1"
+	notReady := func(pod *corev1.Pod) *corev1.Pod {
+		pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}}
+		return pod
+	}
+
+	for _, tc := range []struct {
+		name  string
+		steps []*corev1.Pod
+		want  []ateapipb.WorkerState
+	}{
+		{
+			name: "every transition observed",
+			steps: []*corev1.Pod{
+				// ateom exited; kubelet has not started it again.
+				notReady(withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 0)),
+				// ateom running again, readiness probe not yet passed.
+				notReady(withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 1)),
+				withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 1),
+			},
+			want: []ateapipb.WorkerState{
+				ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE,
+				ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE,
+				ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			},
+		},
+		{
+			// The informer coalesces updates, so the syncer may only see the
+			// pod Ready again after the restart.
+			name: "not Ready never observed",
+			steps: []*corev1.Pod{
+				withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 1),
+			},
+			want: []ateapipb.WorkerState{ateapipb.WorkerState_WORKER_STATE_ACTIVE},
+		},
+		{
+			// The epoch has to be raised before the Worker is marked available.
+			name: "Ready again under a new epoch",
+			steps: []*corev1.Pod{
+				notReady(withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 0)),
+				withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 1),
+			},
+			want: []ateapipb.WorkerState{
+				ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE,
+				ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			},
+		},
+		{
+			// The restart is first seen with ateom running again but not Ready.
+			name: "not Ready under a new epoch",
+			steps: []*corev1.Pod{
+				notReady(withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 1)),
+				withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 1),
+			},
+			want: []ateapipb.WorkerState{
+				ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE,
+				ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newFakeControl()
+			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+			key := seedPod(t, pods, withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 0))
+			mustReconcile(t, ctx, s, key)
+			if state := api.get(testPodUID).GetStatus().GetState(); state != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+				t.Fatalf("state after registering = %v, want %v", state, ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+			}
+			api.writes()
+
+			for i, pod := range tc.steps {
+				if err := pods.Update(pod); err != nil {
+					t.Fatalf("step %d: updating pod: %v", i, err)
+				}
+				mustReconcile(t, ctx, s, key)
+				if state := api.get(testPodUID).GetStatus().GetState(); state != tc.want[i] {
+					t.Errorf("step %d: state = %v, want %v", i, state, tc.want[i])
+				}
+				for j, w := range api.writes() {
+					if w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_ACTIVE && w.GetEpoch() < podEpoch(pod) {
+						t.Errorf("step %d, write %d: worker ACTIVE at epoch %d while the pod reports epoch %d", i, j, w.GetEpoch(), podEpoch(pod))
+					}
+				}
+			}
+			if got := api.get(testPodUID).GetEpoch(); got != 2 {
+				t.Errorf("epoch after the restart = %d, want 2", got)
+			}
+		})
+	}
+}
+
+// A pod first seen not Ready after ateom restarts registers unavailable at
+// the epoch of the ateom it is running.
+func TestSyncer_NotReadyPodRegistersAtItsEpoch(t *testing.T) {
 	ctx := context.Background()
 	ns, poolName := "ns-syncer-notready-restart", "pool1"
 
@@ -114,8 +215,12 @@ func TestSyncer_NotReadyUnregisteredPodIsNotRegistered(t *testing.T) {
 	key := seedPod(t, pods, pod)
 
 	mustReconcile(t, ctx, s, key)
-	if got := api.names(); len(got) != 0 {
-		t.Errorf("registry holds %v for a not-Ready pod, want it empty", got)
+	got := api.get(testPodUID)
+	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Errorf("state = %v, want %v", got.GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	}
+	if got.GetEpoch() != 4 {
+		t.Errorf("epoch = %d, want 4", got.GetEpoch())
 	}
 }
 

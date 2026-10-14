@@ -103,19 +103,15 @@ groups:
             - id: suspending
               stability: development
               value: suspending
-              brief: ateapi is writing the durable snapshot.
+              brief: >
+                ateapi is writing a snapshot: durable for a suspend,
+                node-local for a pause.
             - id: suspended
               stability: development
               value: suspended
-              brief: The actor has a durable snapshot and holds no worker.
-            - id: pausing
-              stability: development
-              value: pausing
-              brief: ateapi is writing the node-local snapshot.
-            - id: paused
-              stability: development
-              value: paused
-              brief: The actor has a node-local snapshot.
+              brief: >
+                The actor holds no worker. Its latest snapshot is durable, or
+                node-local after a pause.
             - id: crashed
               stability: development
               value: crashed
@@ -708,17 +704,6 @@ groups:
         type: string
         brief: The RPC system. otelgrpc always sets the value grpc.
         examples: ["grpc"]
-      - id: server.address
-        stability: stable
-        type: string
-        brief: >
-          The address of the server that a gRPC client called. otelgrpc reads it
-          from the remote address of the connection, so it holds an IP address
-          and not the name in the dial target. For a unix socket it holds the
-          path of the socket. atelet calls each ateom on a socket path that holds
-          the UID of the worker pod, so on atelet this key has one value for
-          each worker pod.
-        examples: ["10.8.2.14", "/var/lib/ate/ateoms/<pod-uid>/ateom.sock"]
       - id: server.port
         stability: stable
         type: int
@@ -1325,7 +1310,10 @@ groups:
       This is the client half of rpc.server.call.duration. Compare the two to
       find the time that the network and the queues add. If the client duration
       is much larger than the server duration of the same method, the delay is
-      not in the handler.
+      not in the handler. otelgrpc also sets server.address, but serverboot
+      removes it with a View. The key holds the IP address of one server pod,
+      or the ateom socket path with the pod UID, so it has one value for each
+      pod.
     annotations:
       substrate:
         emitted_by: [ateapi, atelet, atecontroller, atenet-router]
@@ -1341,9 +1329,6 @@ groups:
         requirement_level: required
       - ref: rpc.response.status_code
         requirement_level: required
-      - ref: server.address
-        requirement_level:
-          conditionally_required: The client sent the request headers on a connection.
       - ref: server.port
         requirement_level:
           conditionally_required: The client called the server over TCP. A call on a unix socket has no port.

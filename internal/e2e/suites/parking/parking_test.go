@@ -206,7 +206,7 @@ func deployParkingFixture(t *testing.T, ctx context.Context, clients *e2e.Client
 	_, templates := e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/probe/probe-parking.yaml.tmpl",
 		Template: "internal/e2e/fixtures/probe/probe-parking-template.yaml.tmpl",
-	}, env["BUCKET_NAME"], "parking", false)
+	}, env["BUCKET_NAME"], "parking", nil)
 	return templates[0]
 }
 

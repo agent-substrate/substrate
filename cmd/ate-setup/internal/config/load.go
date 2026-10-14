@@ -259,6 +259,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		EnvoyConcurrency:               envoyConcurrency,
 		ClusterSize:                    r.String("clusterSize"),
 		CordonControlPlane:             r.Bool("cordonControlPlane"),
+		FakeDataPlane:                  r.Bool("fakeDataPlane.enabled"),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
 		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),

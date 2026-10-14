@@ -24,6 +24,41 @@ import orchestrator
 from testtypes import locust
 
 
+class DeployWorkloadsFakeAteletTest(unittest.TestCase):
+    @mock.patch("orchestrator.run")
+    def test_fake_atelet_tuning_goes_to_deploy_sh(self, run):
+        orchestrator.deploy_workloads(
+            fake_atelet_args=["--fake-atelet-env", "FAKE_ATELET_DELAY=500ms"],
+        )
+        cmd = run.call_args.args[0]
+        i = cmd.index("--fake-atelet-env")
+        self.assertEqual(cmd[i + 1], "FAKE_ATELET_DELAY=500ms")
+
+
+class SubstrateArgsTest(unittest.TestCase):
+    def test_ate_args_only(self):
+        self.assertEqual(
+            orchestrator.substrate_args({"ateArgs": ["--cluster-size=size10"]}),
+            ["--cluster-size=size10"],
+        )
+
+    def test_isolate_installs_the_fake_data_plane(self):
+        self.assertEqual(
+            orchestrator.substrate_args({
+                "ateArgs": ["--cluster-size=size10"],
+                "isolate": {"delay": "500ms"},
+            }),
+            # The delay tunes fake-atelet through deploy.sh, not the install.
+            ["--cluster-size=size10", "--fake-data-plane"],
+        )
+
+    def test_neither(self):
+        self.assertEqual(orchestrator.substrate_args({}), [])
+
+    def test_bare_isolate_key(self):
+        self.assertEqual(orchestrator.substrate_args({"isolate": None}), ["--fake-data-plane"])
+
+
 class DeployWorkloadsTest(unittest.TestCase):
     @mock.patch("orchestrator.run")
     def test_defaults_omit_optional_flags(self, run):
@@ -98,6 +133,39 @@ class RunnerSizingTest(unittest.TestCase):
         subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "t", "NAME": "n", "DEST": "d"}
         subs.update(locust.job_subs({"file": "f", "duration": "1m", "users": 1}))
         self.assertNotIn("${", orchestrator.render_template(self.TMPL, subs))
+
+
+class RunnerNamespaceTest(unittest.TestCase):
+    """Every runner Job's namespace carries the label ate-system's
+    NetworkPolicy admits API clients by; without it the runner cannot reach
+    ate-api-server."""
+
+    HERE = os.path.dirname(__file__)
+    POLICIES = os.path.join(HERE, "..", "..", "manifests", "ate-install", "ate-system-networkpolicies.yaml")
+
+    def api_client_labels(self):
+        for doc in yaml.safe_load_all(open(self.POLICIES)):
+            if not doc or doc["metadata"]["name"] != "ate-api-server":
+                continue
+            for rule in doc["spec"]["ingress"]:
+                for peer in rule.get("from", []):
+                    if "namespaceSelector" in peer:
+                        return peer["namespaceSelector"]["matchLabels"]
+        self.fail("ate-api-server NetworkPolicy admits no namespace by label")
+
+    def test_namespace_has_api_access_label(self):
+        want = self.api_client_labels()
+        for name in ("runner-job.yaml.tmpl", "nighthawk-ingress-runner-job.yaml.tmpl"):
+            with self.subTest(template=name):
+                text = open(os.path.join(self.HERE, "manifests", name)).read()
+                ns = next(
+                    yaml.safe_load(d)
+                    for d in text.split("\n---\n")
+                    if "kind: Namespace" in d
+                )
+                self.assertEqual(ns["metadata"]["name"], "benchmarking")
+                for k, v in want.items():
+                    self.assertEqual(ns["metadata"].get("labels", {}).get(k), v)
 
 
 class JobNameTest(unittest.TestCase):

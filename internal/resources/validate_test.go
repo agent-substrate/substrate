@@ -124,7 +124,7 @@ func TestValidateWorkerPodUID(t *testing.T) {
 	}
 }
 
-func TestValidateRunscHash(t *testing.T) {
+func TestValidateAssetHash(t *testing.T) {
 	const valid = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 	tests := []struct {
@@ -142,8 +142,8 @@ func TestValidateRunscHash(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := ValidateRunscHash(tt.hash); (err != nil) != tt.wantErr {
-				t.Errorf("ValidateRunscHash(%q) err = %v, wantErr %v", tt.hash, err, tt.wantErr)
+			if err := ValidateAssetHash(tt.hash); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateAssetHash(%q) err = %v, wantErr %v", tt.hash, err, tt.wantErr)
 			}
 		})
 	}
@@ -257,6 +257,26 @@ func TestValidateUUID(t *testing.T) {
 					t.Errorf("expected message matching %q, got %q", tt.wantMsg, got)
 				}
 			}
+		})
+	}
+}
+
+func TestValidateSandboxClass(t *testing.T) {
+	path := field.NewPath("sandbox_class")
+	tests := []struct {
+		name  string
+		class string
+		want  field.ErrorList
+	}{
+		{name: "gvisor", class: "gvisor"},
+		{name: "microvm", class: "microvm"},
+		{name: "empty left to tags", class: ""},
+		{name: "unknown class", class: "kata", want: field.ErrorList{field.NotSupported[string](path, nil, nil)}},
+		{name: "case-sensitive", class: "GVISOR", want: field.ErrorList{field.NotSupported[string](path, nil, nil)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateSandboxClass(path, tt.class))
 		})
 	}
 }

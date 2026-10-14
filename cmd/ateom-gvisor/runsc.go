@@ -19,7 +19,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -28,7 +27,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -47,6 +45,30 @@ type runsc struct {
 	durableVolumes []string
 	// containers are the workload's containers, from the request.
 	containers []*ateompb.Container
+	// flags holds the configured flags; must not be nil.
+	flags *flagStore
+}
+
+// buildArgs constructs the runsc argument vector for command, appending
+// containerName at the end if non-empty:
+//
+//	<combined globalFlags> -root <stateDir> <command> <subcommandFlags> <extraArgs> [<containerName>]
+func (r *runsc) buildArgs(command, containerName string, extraArgs ...string) []string {
+	cfg := r.flags.get()
+	globalFlags := cfg.globalFlags(command)
+	subcommandFlags := cfg.subcommandFlags(command)
+
+	args := make([]string, 0,
+		len(globalFlags)+2+1+len(subcommandFlags)+len(extraArgs)+1)
+	args = append(args, globalFlags...)
+	args = append(args, "-root", runscStateDir(r.actorDirs))
+	args = append(args, command)
+	args = append(args, subcommandFlags...)
+	args = append(args, extraArgs...)
+	if containerName != "" {
+		args = append(args, containerName)
+	}
+	return args
 }
 
 // durableVolumeNames returns the sorted, deduplicated durable-dir volume names
@@ -101,37 +123,22 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 		return fmt.Errorf("while writing the OCI spec for %q: %w", containerName, err)
 	}
 
-	args := []string{
-		"-log-format", "json",
-		"--alsologtostderr",
-		// "-debug",
-		// "-debug-log", filepath.Join(r.actorDirs.GetRootDir(), "runsc-debug-logs", containerName) + "/",
-		// "-debug-to-user-log",
-		// "-log-packets",
-		// "-strace",
-		"-root", runscStateDir(r.actorDirs),
-		// Provision the sentry's vCPU count from the cgroup CPU quota written by
-		// sizing.ApplyToOCISpec, so the sandbox is sized to the pod's limit (runsc
-		// otherwise sizes to all host CPUs). Global flag: before the subcommand.
-		"--cpu-num-from-quota",
-	}
+	args := make([]string, 0, 4+len(additionalArgs))
 	args = append(args,
-		"create",
 		"-bundle", ociBundlePath(r.actorDirs, containerName),
 		"-pid-file", pidFilePath(r.actorDirs, containerName),
 	)
-
 	args = append(args, additionalArgs...)
-	args = append(args, containerName) // Name of the container
+
 	cmd := exec.CommandContext(
 		ctx,
 		r.path,
-		args...,
+		r.buildArgs("create", containerName, args...)...,
 	)
 	cmd.Stdout = out
 	cmd.Stderr = out
 
-	err := reaper.RunCommand(cmd)
+	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("while running `runsc create`: %w", err)
 	}
@@ -142,23 +149,11 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName string) error {
 	slog.InfoContext(ctx, "About to run runsc start", slog.String("container", containerName))
 
-	startArgs := []string{
-		"-log-format", "json",
-		"--alsologtostderr",
-		// "-debug",
-		// "-debug-log", filepath.Join(r.actorDirs.GetRootDir(), "runsc-debug-logs", containerName) + "/",
-		// "-debug-to-user-log",
-		// "-log-packets",
-		// "-strace",
-		"-allow-connected-on-save",
-		"-root", runscStateDir(r.actorDirs),
-	}
-	startArgs = append(startArgs, "start", containerName)
-	cmd := exec.CommandContext(ctx, r.path, startArgs...)
+	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("start", containerName)...)
 	cmd.Stdout = out
 	cmd.Stderr = out
 
-	err := reaper.RunCommand(cmd)
+	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("while running `runsc start`: %w", err)
 	}
@@ -169,23 +164,11 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 // checkpointArgs builds the argv for `runsc checkpoint <container>`. Factored
 // out so the argument construction can be unit-tested without executing runsc.
 func (r *runsc) checkpointArgs(containerName, checkpointPath string, fsCheckpointPaths []string) []string {
-	args := []string{
-		"-log-format", "json",
-		"--alsologtostderr",
-		// "-debug",
-		// "-debug-log", filepath.Join(r.actorDirs.GetRootDir(), "runsc-debug-logs", containerName) + "/",
-		// "-debug-to-user-log",
-		// "-log-packets",
-		// "-strace",
-		"-root", runscStateDir(r.actorDirs),
-		"checkpoint",
-		"-image-path", checkpointPath,
-	}
+	extra := []string{"-image-path", checkpointPath}
 	if len(fsCheckpointPaths) > 0 {
-		args = append(args, "-fs-checkpoint-paths", strings.Join(fsCheckpointPaths, ","))
+		extra = append(extra, "-fs-checkpoint-paths", strings.Join(fsCheckpointPaths, ","))
 	}
-	args = append(args, containerName)
-	return args
+	return r.buildArgs("checkpoint", containerName, extra...)
 }
 
 func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath string, fsCheckpointPaths []string) error {
@@ -194,7 +177,7 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 	cmd := exec.CommandContext(ctx, r.path, r.checkpointArgs(containerName, checkpointPath, fsCheckpointPaths)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	err := reaper.RunCommand(cmd)
+	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("while running `runsc checkpoint`: %w", err)
 	}
@@ -205,25 +188,12 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 // Factored out so the argument construction can be unit-tested without
 // executing runsc.
 func (r *runsc) fsCheckpointArgs(containerName, checkpointPath string, fsCheckpointPaths []string) []string {
-	args := []string{
-		"-log-format", "json",
-		"--alsologtostderr",
-		// "-debug",
-		// "-debug-log", filepath.Join(r.actorDirs.GetRootDir(), "runsc-debug-logs", containerName) + "/",
-		// "-debug-to-user-log",
-		// "-log-packets",
-		// "-strace",
-		"-root", runscStateDir(r.actorDirs),
-		"fscheckpoint",
-		"-image-path", filepath.Join(checkpointPath, resources.FSCheckpointSubdir),
-	}
+	extra := make([]string, 0, 2+2*len(fsCheckpointPaths))
+	extra = append(extra, "-image-path", filepath.Join(checkpointPath, resources.FSCheckpointSubdir))
 	for _, ddv := range fsCheckpointPaths {
-		args = append(args, "-path", ddv)
+		extra = append(extra, "-path", ddv)
 	}
-
-	// name of the container must be the last parameter.
-	args = append(args, containerName)
-	return args
+	return r.buildArgs("fscheckpoint", containerName, extra...)
 }
 
 func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPath string, fsCheckpointPaths []string) error {
@@ -232,7 +202,7 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 	cmd := exec.CommandContext(ctx, r.path, r.fsCheckpointArgs(containerName, checkpointPath, fsCheckpointPaths)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	err := reaper.RunCommand(cmd)
+	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("while running `runsc fscheckpoint`: %w", err)
 	}
@@ -242,25 +212,11 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 // restoreArgs builds the argv for `runsc restore <container>`. Factored out so
 // the argument construction can be unit-tested without executing runsc.
 func (r *runsc) restoreArgs(containerName, checkpointPath string) []string {
-	return []string{
-		"-log-format", "json",
-		"--alsologtostderr",
-		// "-debug",
-		// "-debug-log", filepath.Join(r.actorDirs.GetRootDir(), "runsc-debug-logs", containerName) + "/",
-		// "-debug-to-user-log",
-		// "-log-packets",
-		// "-strace",
-		"-root", runscStateDir(r.actorDirs),
-		// Match cmdCreate: size the restored sentry from the cgroup CPU quota.
-		"--cpu-num-from-quota",
-		"restore",
+	return r.buildArgs("restore", containerName,
 		"-bundle", ociBundlePath(r.actorDirs, containerName),
 		"-image-path", checkpointPath,
 		"-pid-file", pidFilePath(r.actorDirs, containerName),
-		"-background",
-		"-detach",
-		containerName,
-	}
+	)
 }
 
 // We take a checkpoint only of the root container of the sandbox, but we need
@@ -275,7 +231,7 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 	cmd := exec.CommandContext(ctx, r.path, r.restoreArgs(containerName, checkpointPath)...)
 	cmd.Stdout = out
 	cmd.Stderr = out
-	if err := reaper.RunCommand(cmd); err != nil {
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("while running `runsc restore`: %w", err)
 	}
 	return nil
@@ -285,17 +241,11 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 	cmd := exec.CommandContext(
 		ctx,
 		r.path,
-		"-log-format", "json",
-		"--alsologtostderr",
-		// "-debug",
-		"-root", runscStateDir(r.actorDirs),
-		"delete",
-		"-force",
-		containerName,
+		r.buildArgs("delete", containerName)...,
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	err := reaper.RunCommand(cmd)
+	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("while running `runsc delete`: %w", err)
 	}
@@ -306,15 +256,11 @@ func (r *runsc) cmdState(ctx context.Context, containerName string) error {
 	cmd := exec.CommandContext(
 		ctx,
 		r.path,
-		"-log-format", "json",
-		"--alsologtostderr",
-		"-root", runscStateDir(r.actorDirs),
-		"state",
-		containerName,
+		r.buildArgs("state", containerName)...,
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := reaper.RunCommand(cmd); err != nil {
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("while running `runsc state`: %w", err)
 	}
 	return nil
@@ -325,32 +271,15 @@ func (r *runsc) cmdList(ctx context.Context) ([]string, error) {
 	cmd := exec.CommandContext(
 		ctx,
 		r.path,
-		"-log-format", "json",
-		"--alsologtostderr",
-		"-root", runscStateDir(r.actorDirs),
-		"list",
-		"-quiet",
+		r.buildArgs("list", "")...,
 	)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = os.Stderr
-	if err := reaper.RunCommand(cmd); err != nil {
+	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("while running `runsc list`: %w", err)
 	}
 	return strings.Fields(out.String()), nil
-}
-
-// killArgs builds the argv for `runsc kill <container> <signal>`. Factored out
-// so the argument construction can be unit-tested without executing runsc.
-func (r *runsc) killArgs(containerName, signal string) []string {
-	return []string{
-		"-log-format", "json",
-		"--alsologtostderr",
-		"-root", runscStateDir(r.actorDirs),
-		"kill",
-		containerName,
-		signal,
-	}
 }
 
 // cmdKill sends signal to the given container's process(es) inside the gVisor
@@ -358,49 +287,24 @@ func (r *runsc) killArgs(containerName, signal string) []string {
 func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error {
 	slog.InfoContext(ctx, "About to run runsc kill", slog.String("container", containerName), slog.String("signal", signal))
 
-	cmd := exec.CommandContext(ctx, r.path, r.killArgs(containerName, signal)...)
+	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("kill", "", containerName, signal)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := reaper.RunCommand(cmd); err != nil {
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("while running `runsc kill`: %w", err)
 	}
 	return nil
 }
 
-// waitArgs builds the argv for `runsc wait <container>`. Factored out so the
-// argument construction can be unit-tested without executing runsc.
-func (r *runsc) waitArgs(containerName string) []string {
-	return []string{
-		"-log-format", "json",
-		"--alsologtostderr",
-		"-root", runscStateDir(r.actorDirs),
-		"wait",
-		containerName,
-	}
-}
-
 // cmdWait blocks until the given container's process exits. Used during
 // graceful shutdown to confirm the actor has stopped before ateom exits.
-//
-// Deliberately outside the reaper: this blocks for as long as the actor runs,
-// and an entry held that long would hold off reaping and, past MaxDefer, every
-// other runsc invocation with it.
 func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
 	slog.InfoContext(ctx, "About to run runsc wait", slog.String("container", containerName))
 
-	cmd := exec.CommandContext(ctx, r.path, r.waitArgs(containerName)...)
+	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("wait", containerName)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		// Running outside the reaper means the reaper can collect this process
-		// first, leaving os/exec nothing to wait for. `runsc wait` only exits
-		// once the container has, so that is the answer we came for -- and
-		// reporting it as a failure would stop the caller escalating to
-		// SIGKILL.
-		if errors.Is(err, syscall.ECHILD) {
-			slog.DebugContext(ctx, "runsc wait was collected by the child reaper", slog.String("container", containerName))
-			return nil
-		}
 		return fmt.Errorf("while running `runsc wait`: %w", err)
 	}
 	return nil
