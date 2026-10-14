@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -46,10 +47,10 @@ type Azure struct {
 // token cache. accountURL must use https, and the stores send requests, and
 // with them the credential, only to that scheme and host.
 func NewAzure(accountURL string, containers []string, credential azcore.TokenCredential) (map[string]Store, error) {
-	return newTokenAzure(accountURL, containers, credential, defaultTransport(), policy.RetryOptions{})
+	return newTokenAzure(accountURL, containers, credential, defaultTransport(), policy.RetryOptions{}, defaultStallTimeout)
 }
 
-func newTokenAzure(accountURL string, containers []string, credential azcore.TokenCredential, base http.RoundTripper, retry policy.RetryOptions) (map[string]Store, error) {
+func newTokenAzure(accountURL string, containers []string, credential azcore.TokenCredential, base http.RoundTripper, retry policy.RetryOptions, stallTimeout time.Duration) (map[string]Store, error) {
 	endpoint, err := parseConfiguration(accountURL, containers)
 	if err != nil {
 		return nil, err
@@ -57,7 +58,7 @@ func newTokenAzure(accountURL string, containers []string, credential azcore.Tok
 	if endpoint.Scheme != "https" {
 		return nil, fmt.Errorf("Azure Blob account URL %q must use https", RedactURL(accountURL))
 	}
-	client, err := service.NewClient(accountURL, credential, clientOptions(endpoint, base, retry))
+	client, err := service.NewClient(accountURL, credential, clientOptions(endpoint, base, retry, stallTimeout))
 	if err != nil {
 		return nil, fmt.Errorf("creating Azure Blob service client: %w", err)
 	}
@@ -68,9 +69,9 @@ func newTokenAzure(accountURL string, containers []string, credential azcore.Tok
 	return stores, nil
 }
 
-func clientOptions(endpoint *url.URL, base http.RoundTripper, retry policy.RetryOptions) *service.ClientOptions {
+func clientOptions(endpoint *url.URL, base http.RoundTripper, retry policy.RetryOptions, stallTimeout time.Duration) *service.ClientOptions {
 	return &service.ClientOptions{ClientOptions: azcore.ClientOptions{
-		Transport: newEndpointTransport(endpoint, base),
+		Transport: newEndpointTransport(endpoint, base, stallTimeout),
 		Retry:     retry,
 	}}
 }
