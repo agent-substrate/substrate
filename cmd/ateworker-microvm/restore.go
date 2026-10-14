@@ -281,10 +281,14 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	}()
 	s.cleanupSandboxState(ctx, actorUID)
 
+	erofsRec, err := readEROFSLayers(restoreDir)
+	if err != nil {
+		return err
+	}
 	// Repoint the snapshot's per-actor paths to this actor's: its VMDir
 	// sockets and files, and the kernel and guest image atelet staged under
 	// this actor's own directory.
-	if err := rewriteSnapshotPaths(restoreDir, actorUID, kernel, image); err != nil {
+	if err := rewriteSnapshotPaths(restoreDir, actorUID, kernel, image, erofsRec); err != nil {
 		return fmt.Errorf("while rewriting snapshot paths: %w", err)
 	}
 	srcID := actorUID
@@ -298,7 +302,8 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	}
 	tPrep := time.Now()
 
-	// MEMORY snapshots carry each container's upper as a tar (rootfsUpperTarFile).
+	// MEMORY snapshots carry each container's upper as a tar (rootfsUpperTarFile;
+	// the record says which layout a container's tar holds).
 	// Start re-materializing the upper contents NOW, in the background: the
 	// untar scales with the actor's data and is joined right before the host
 	// overlay mounts need it, so it hides behind the bundle preparation below.
@@ -309,7 +314,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	untarDone := make(chan error, 1)
 	untarJoined := false
 	go func() {
-		untarDone <- untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir, containerNames(p.containers))
+		untarDone <- untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir, containerNames(p.containers), erofsRec)
 	}()
 	defer func() {
 		if !untarJoined {
@@ -323,11 +328,16 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// sockets in the snapshot config are repointed to this VMDir by
 	// rewriteSnapshotPaths above. Cross-node consistency relies on a
 	// deterministic unpack of the same image at the same <cid>/rootfs path
-	// (plus, for merged rootfs, the upper re-materialized from the tar).
+	// (plus, for merged rootfs, the upper re-materialized from the tar). A
+	// guest-merged rootfs needs the layer images the guest mapped at the
+	// paths in the snapshot config; verify checks their recorded digests.
 	containers := p.containers
-	ctrs, err := s.buildActorContainers(p.actorUID, p.actorDirs, containers)
+	ctrs, err := s.buildActorContainers(p.actorUID, p.actorDirs, containers, erofsRec)
 	if err != nil {
 		return err
+	}
+	if err := erofsRec.verify(ctrs); err != nil {
+		return fmt.Errorf("while checking the snapshot's layer images: %w", err)
 	}
 	tBundles := time.Now()
 	// The overlay mounts need the upper on disk: join the background untar (still
@@ -623,8 +633,10 @@ func restoreGuestReadyError(ctx context.Context, step string, err error) error {
 // image, which atelet stages under each actor's own directory and removes
 // with the actor, so the source actor's copies may be gone. How atelet
 // identifies the runtime (asset URLs today, a SandboxConfig hash later)
-// changes none of this. The overlay has no per-actor disk to repoint.
-func rewriteSnapshotPaths(snapshotDir, id, kernel, image string) error {
+// changes none of this. The overlay has no per-actor disk to repoint, and
+// EROFS layer images (erofs.go) sit in the node-wide image cache, so they
+// stay as recorded.
+func rewriteSnapshotPaths(snapshotDir, id, kernel, image string, layers *erofsLayers) error {
 	cfgPath := filepath.Join(snapshotDir, "config.json")
 	b, err := os.ReadFile(cfgPath)
 	if err != nil {
@@ -709,6 +721,20 @@ func rewriteSnapshotPaths(snapshotDir, id, kernel, image string) error {
 				changed = true
 			}
 		default:
+			if strings.HasPrefix(pmID, erofsPmemIDPrefix) {
+				// A layer image keeps its image-cache path, which is the
+				// same on every node; erofsLayers.verify checks this node's
+				// copy. Accept only files the record names, and only with
+				// discard_writes, since every actor on the node maps them.
+				file, _ := pmm["file"].(string)
+				if !layers.hasImage(file) {
+					return fmt.Errorf("snapshot config %q maps pmem device %q to %q, which is not a layer image in %s", cfgPath, pmID, file, erofsLayersSnapshotFile)
+				}
+				if discard, _ := pmm["discard_writes"].(bool); !discard {
+					return fmt.Errorf("snapshot config %q has layer image device %q without discard_writes", cfgPath, pmID)
+				}
+				continue
+			}
 			return fmt.Errorf("snapshot config %q has pmem device with unknown id %q", cfgPath, pmID)
 		}
 	}

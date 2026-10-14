@@ -154,6 +154,16 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	if hosted != nil {
 		s.readFinal(ctx, hosted)
 	}
+	// Read the containers' rootfs modes before the pause, so an unreadable
+	// bundle or share fails the checkpoint without freezing the guest.
+	var ctrs []actorContainer
+	if includesRootfs(scope) {
+		var err error
+		ctrs, err = checkpointContainers(kata.SharedDir(actorUID), actorDirs, req.GetSpec().GetContainers())
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	tPause := time.Now()
 	dPrep = tPause.Sub(tStart)
@@ -187,6 +197,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	//   - Rootfs upper tars (ROOTFS and MEMORY): host-backed like the durable
 	//     volumes — the memory snapshot does not carry rootfs writes. Under
 	//     VOLUMES the workload cold-starts on restore, discarding rootfs state.
+	//     A guest-merged rootfs (erofs.go) ships upper and work together,
+	//     plus a record of the layer images the guest mapped.
 	shipsRootfs := includesRootfs(scope)
 	var durableFiles []string
 	g, gctx := errgroup.WithContext(ctx)
@@ -213,10 +225,13 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	if shipsRootfs {
 		g.Go(func() error {
 			t := time.Now()
-			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, containerNames(req.GetSpec().GetContainers()))
+			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, ctrs)
 			dUpper = time.Since(t)
 			return err
 		})
+		// Record the layer images the guest mapped; a restore checks them
+		// against this node's image cache.
+		g.Go(func() error { return writeEROFSLayers(checkpointDir, ctrs) })
 	}
 	if err := g.Wait(); err != nil {
 		return nil, err

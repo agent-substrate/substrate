@@ -45,6 +45,10 @@ func upperDirWith(t *testing.T, files map[string]string) string {
 	return dir
 }
 
+// noEROFS is the record of a snapshot whose containers all ran on a
+// host-merged rootfs.
+var noEROFS = &erofsLayers{}
+
 func TestRootfsUpperRoundTrip(t *testing.T) {
 	// Checkpoint: every container's upper, archived while the guest is paused.
 	// The fs/ layout under the dir is exactly what find-paths re-opens; the
@@ -56,7 +60,7 @@ func TestRootfsUpperRoundTrip(t *testing.T) {
 		"app_ovl/work/#1/tmp.bin":         "in-flight copy-up temp",
 		"sidecar_ovl/fs/var/log/s.log":    "sidecar write",
 	}
-	containers := []string{"app_ovl", "sidecar_ovl"}
+	containers := []actorContainer{{name: "app_ovl"}, {name: "sidecar_ovl"}}
 	src := upperDirWith(t, files)
 	// The upperdir's own mode is the container's /, so it must survive too.
 	if err := os.Chmod(filepath.Join(src, "app_ovl/fs"), 0o750); err != nil {
@@ -69,7 +73,7 @@ func TestRootfsUpperRoundTrip(t *testing.T) {
 	// Restore: onto a directory holding a stale previous activation's contents,
 	// which must not leak into the restored overlay state.
 	dst := upperDirWith(t, map[string]string{"app_ovl/fs/stale.txt": "stale"})
-	if err := untarRootfsUpper(dst, checkpointDir, containers); err != nil {
+	if err := untarRootfsUpper(dst, checkpointDir, []string{"app_ovl", "sidecar_ovl"}, noEROFS); err != nil {
 		t.Fatalf("untarRootfsUpper: %v", err)
 	}
 	for rel, want := range files {
@@ -105,7 +109,7 @@ func TestStageRootfsUpper(t *testing.T) {
 	containers := []string{"app_ovl"}
 	src := upperDirWith(t, map[string]string{"app_ovl/fs/home/agent/notes.txt": "rootfs write"})
 	snapshotDir := t.TempDir()
-	if err := tarRootfsUpper(t.Context(), src, snapshotDir, containers); err != nil {
+	if err := tarRootfsUpper(t.Context(), src, snapshotDir, []actorContainer{{name: "app_ovl"}}); err != nil {
 		t.Fatalf("tarRootfsUpper: %v", err)
 	}
 
@@ -115,7 +119,7 @@ func TestStageRootfsUpper(t *testing.T) {
 		if err := os.Rename(stale, rootfsUpperDir(dirs)); err != nil {
 			t.Fatal(err)
 		}
-		if err := stageRootfsUpper(dirs, "", containers); err != nil {
+		if err := stageRootfsUpper(dirs, "", containers, noEROFS); err != nil {
 			t.Fatalf("stageRootfsUpper: %v", err)
 		}
 		entries, err := os.ReadDir(rootfsUpperDir(dirs))
@@ -130,7 +134,7 @@ func TestStageRootfsUpper(t *testing.T) {
 		if err := os.Rename(stale, rootfsUpperDir(dirs)); err != nil {
 			t.Fatal(err)
 		}
-		if err := stageRootfsUpper(dirs, snapshotDir, containers); err != nil {
+		if err := stageRootfsUpper(dirs, snapshotDir, containers, noEROFS); err != nil {
 			t.Fatalf("stageRootfsUpper: %v", err)
 		}
 		got, err := os.ReadFile(filepath.Join(rootfsUpperDir(dirs), "app_ovl/fs/home/agent/notes.txt"))
@@ -162,7 +166,7 @@ func TestUntarRootfsUpperCannotPlantLayout(t *testing.T) {
 	}
 
 	dst := t.TempDir()
-	if err := untarRootfsUpper(dst, snapshotDir, []string{"app"}); err != nil {
+	if err := untarRootfsUpper(dst, snapshotDir, []string{"app"}, noEROFS); err != nil {
 		t.Fatalf("untarRootfsUpper: %v", err)
 	}
 	if fi, err := os.Lstat(filepath.Join(dst, "app")); err != nil || !fi.IsDir() {
@@ -185,7 +189,7 @@ func TestUntarRootfsUpperModes(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(t.TempDir(), "upper")
-	if err := untarRootfsUpper(dst, snapshotDir, []string{"app"}); err != nil {
+	if err := untarRootfsUpper(dst, snapshotDir, []string{"app"}, noEROFS); err != nil {
 		t.Fatalf("untarRootfsUpper: %v", err)
 	}
 	for rel, want := range map[string]os.FileMode{".": 0o700, "app": 0o700, "app/fs": 0o755, "app/work": 0o700} {
@@ -198,11 +202,11 @@ func TestUntarRootfsUpperModes(t *testing.T) {
 
 func TestRootfsUpperTarFileRejectsBadNames(t *testing.T) {
 	for _, cid := range []string{"", ".", "..", "a/b", "/abs", "../x"} {
-		if _, err := rootfsUpperTarFile(cid); err == nil {
+		if _, err := rootfsUpperTarFile(cid, false); err == nil {
 			t.Errorf("rootfsUpperTarFile(%q) = nil error, want one", cid)
 		}
 	}
-	if err := untarRootfsUpper(t.TempDir(), t.TempDir(), []string{"../x"}); err == nil {
+	if err := untarRootfsUpper(t.TempDir(), t.TempDir(), []string{"../x"}, noEROFS); err == nil {
 		t.Error("untarRootfsUpper with container ../x = nil error, want one")
 	}
 }
@@ -210,7 +214,7 @@ func TestRootfsUpperTarFileRejectsBadNames(t *testing.T) {
 // A container in the request without a tar in the snapshot fails the restore
 // rather than starting it on a silently empty rootfs upper.
 func TestUntarRootfsUpperMissingTar(t *testing.T) {
-	if err := untarRootfsUpper(t.TempDir(), t.TempDir(), []string{"app"}); err == nil {
+	if err := untarRootfsUpper(t.TempDir(), t.TempDir(), []string{"app"}, noEROFS); err == nil {
 		t.Error("untarRootfsUpper with no tar = nil error, want one")
 	}
 }
