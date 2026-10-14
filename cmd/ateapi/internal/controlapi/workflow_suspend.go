@@ -62,7 +62,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	if err != nil {
 		return nil, err
 	}
-	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsDurable(actor.GetStatus()) {
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && !latestSnapshotIsLocalOnly(actor.GetStatus()) {
 		// Fully suspended already: FinalizeSuspended commits SUSPENDED and the
 		// cleared worker assignment in a single update, so there is nothing
 		// left to do. A SUSPENDED actor whose latest snapshot is node-local is
@@ -136,19 +136,16 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 		return actor, nil
 	}
 	state := actor.GetStatus().GetState()
-	paused := state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocalOnly(actor.GetStatus())
-	if got := state; got != ateapipb.ActorState_ACTOR_STATE_RUNNING && !paused {
-		return nil, apierror.FailedPrecondition("MarkSuspending prerequisite not met for Actor: %s (got: %v, want %s or %s with a node-local snapshot)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	paused := isPausedOriginSuspend(actor)
+	if state != ateapipb.ActorState_ACTOR_STATE_RUNNING && !paused {
+		return nil, apierror.FailedPrecondition("MarkSuspending prerequisite not met for Actor: %s (got: %v, want %s or %s with a node-local snapshot)", actorRef, state, ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 	}
 	// A paused actor's durable snapshot is an upload of its local checkpoint,
 	// so it keeps that checkpoint's name; a running actor's is a new one.
 	var snapshotName string
 	if paused {
-		localSnap := findLatestLocalSnapshot(actor.GetStatus())
-		if localSnap == nil {
-			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
-		}
-		snapshotName = localSnap.GetUuid()
+		// paused implies a snapshot with a locality, so this is never nil.
+		snapshotName = findLatestLocalSnapshot(actor.GetStatus()).GetUuid()
 	} else {
 		snapshotName = resources.NewSnapshotName()
 	}
