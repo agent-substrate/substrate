@@ -15,6 +15,7 @@
 package steps
 
 import (
+	"path/filepath"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -163,5 +164,51 @@ func TestRouterMonitoringManifest(t *testing.T) {
 	}
 	if len(objs) != 1 || objs[0].GetKind() != "PodMonitoring" || objs[0].GetNamespace() != "ate-system" {
 		t.Errorf("manifest holds %v, want one PodMonitoring in ate-system", objs)
+	}
+}
+
+// Runs over the real generated manifests: EnsureCRDs and DeployCRDs act on what
+// generatedCRDs returns, so it has to hold every CRD file and no RBAC.
+func TestGeneratedCRDsLeavesOutRBAC(t *testing.T) {
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t)}}
+	crds, err := e.generatedCRDs()
+	if err != nil {
+		t.Fatalf("loading the generated CRDs: %v", err)
+	}
+	for _, crd := range crds {
+		if crd.GetKind() != "CustomResourceDefinition" {
+			t.Errorf("generatedCRDs returned %s/%s", crd.GetKind(), crd.GetName())
+		}
+	}
+	files, err := filepath.Glob(filepath.Join(e.Cfg.Manifest("generated"), "ate.dev_*.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(crds) != len(files) {
+		t.Errorf("generatedCRDs returned %d CRDs, want one per CRD file: %v", len(crds), files)
+	}
+}
+
+// A component redeploy creates only the CRDs the cluster lacks. One that is
+// already there, even at an older schema, is left to DeployCRDs.
+func TestMissingCRDsLeavesPresentOnesAlone(t *testing.T) {
+	crd := func(name string) *unstructured.Unstructured {
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(crdGVK)
+		obj.SetName(name)
+		return obj
+	}
+	crds := []*unstructured.Unstructured{crd("workerpools.ate.dev"), crd("sandboxconfigs.ate.dev"), crd("csidriverconfigs.ate.dev")}
+	present := map[string]bool{"workerpools.ate.dev": true, "sandboxconfigs.ate.dev": true}
+	missing, err := missingCRDs(crds, func(name string) (bool, error) { return present[name], nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 1 || missing[0].GetName() != "csidriverconfigs.ate.dev" {
+		var names []string
+		for _, m := range missing {
+			names = append(names, m.GetName())
+		}
+		t.Errorf("missingCRDs = %v, want only csidriverconfigs.ate.dev", names)
 	}
 }

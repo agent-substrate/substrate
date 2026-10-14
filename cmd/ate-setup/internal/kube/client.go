@@ -69,6 +69,12 @@ func New(kubeconfig, kubeContext string) (*Client, error) {
 		return nil, fmt.Errorf("while creating the discovery client: %w", err)
 	}
 
+	return NewFromClients(restCfg, typed, dyn, disco), nil
+}
+
+// NewFromClients builds a Client on clients already made, mapping resources
+// through a cache of disco's discovery data.
+func NewFromClients(restCfg *rest.Config, typed kubernetes.Interface, dyn dynamic.Interface, disco discovery.DiscoveryInterface) *Client {
 	cached := memory.NewMemCacheClient(disco)
 	return &Client{
 		Config:    restCfg,
@@ -76,7 +82,7 @@ func New(kubeconfig, kubeContext string) (*Client, error) {
 		Dynamic:   dyn,
 		discovery: cached,
 		mapper:    restmapper.NewDeferredDiscoveryRESTMapper(cached),
-	}, nil
+	}
 }
 
 // InvalidateDiscovery drops the cached discovery data so newly installed CRDs

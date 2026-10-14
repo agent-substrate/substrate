@@ -55,26 +55,22 @@ func writeOriginCertificate(t *testing.T) originCertificate {
 	return originCertificate{caPEM: material.RootCA, certFile: certFile, keyFile: keyFile}
 }
 
+// startOriginServer serves handler the way serveHTTP does: in cleartext on one
+// loopback listener and, given a certificate, over TLS on a second. The URLs of
+// a scheme the server does not serve are empty.
 func startOriginServer(t *testing.T, handler http.Handler, certFile, keyFile string) originServer {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen on loopback: %v", err)
-	}
 	server := &http.Server{Handler: handler}
-	if certFile != "" || keyFile != "" {
-		if err := configureTLSServer(server, certFile, keyFile); err != nil {
-			t.Fatalf("configure TLS: %v", err)
-		}
+	if err := configureTLSServer(server, certFile, keyFile); err != nil {
+		t.Fatalf("configure TLS: %v", err)
+	}
+	cleartext := listenLoopback(t)
+	var encrypted net.Listener
+	if server.TLSConfig != nil {
+		encrypted = listenLoopback(t)
 	}
 	serveErr := make(chan error, 1)
-	go func() {
-		if certFile == "" && keyFile == "" {
-			serveErr <- server.Serve(listener)
-			return
-		}
-		serveErr <- server.ServeTLS(listener, "", "")
-	}()
+	go func() { serveErr <- serveListeners(server, cleartext, encrypted) }()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -86,11 +82,22 @@ func startOriginServer(t *testing.T, handler http.Handler, certFile, keyFile str
 		}
 	})
 
-	address := listener.Addr().String()
-	return originServer{
-		httpURL:  "http://" + address,
-		httpsURL: "https://" + address,
-		wsURL:    "ws://" + address,
-		wssURL:   "wss://" + address,
+	origin := originServer{
+		httpURL: "http://" + cleartext.Addr().String(),
+		wsURL:   "ws://" + cleartext.Addr().String(),
 	}
+	if encrypted != nil {
+		origin.httpsURL = "https://" + encrypted.Addr().String()
+		origin.wssURL = "wss://" + encrypted.Addr().String()
+	}
+	return origin
+}
+
+func listenLoopback(t *testing.T) net.Listener {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen on loopback: %v", err)
+	}
+	return listener
 }

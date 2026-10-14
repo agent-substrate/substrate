@@ -161,7 +161,10 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 		// under, as every real path to holding one does. Only the case that
 		// exercises the missing record leaves it false.
 		builtOnTemplate bool
-		wantCode        codes.Code
+		// paused adds a node-local snapshot above the external one, the
+		// shape a pause leaves behind.
+		paused   bool
+		wantCode codes.Code
 	}{
 		{
 			name:            "the actor is not suspended",
@@ -180,6 +183,14 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 			state:        ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			withSnapshot: true,
 			wantCode:     codes.Internal,
+		},
+		{
+			name:            "the actor is paused above its external snapshot",
+			state:           ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			withSnapshot:    true,
+			builtOnTemplate: true,
+			paused:          true,
+			wantCode:        codes.FailedPrecondition,
 		},
 	}
 
@@ -208,6 +219,10 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 					s.Snapshots = []*ateapipb.Snapshot{
 						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 					}
+					if tt.paused {
+						s.LastAssignedGeneration = 2
+						s.Snapshots = append(s.Snapshots, newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, "paused", "node-1"))
+					}
 				})
 			}
 
@@ -218,6 +233,62 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 			// A rejected create takes the name with it.
 			if _, err := persistence.GetTag(ctx, resources.TagRef{Atespace: "team-a", Name: "v1"}); !errors.Is(err, store.ErrNotFound) {
 				t.Errorf("GetTag = %v, want ErrNotFound: the rejected create reserved the name", err)
+			}
+		})
+	}
+}
+
+// TestTagActorSnapshot_TagsNewestExternalSnapshot verifies that a tag is
+// accepted when no snapshot is newer than the actor's external one, even when
+// that external snapshot is not at last_assigned_generation.
+func TestTagActorSnapshot_TagsNewestExternalSnapshot(t *testing.T) {
+	tests := []struct {
+		name string
+		// lastAssigned is the actor's last_assigned_generation. The external
+		// snapshot is always at generation extGen.
+		lastAssigned int32
+		extGen       int32
+		// locality is set on the external snapshot, as when a paused actor's
+		// local snapshot was uploaded in place.
+		locality string
+	}{
+		{
+			name:         "a revert dropped the newest generation",
+			lastAssigned: 2,
+			extGen:       1,
+		},
+		{
+			name:         "a paused actor's local snapshot was uploaded at the same generation",
+			lastAssigned: 2,
+			extGen:       2,
+			locality:     "node-1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+			w, objects := newFinalizeWorkflow(persistence)
+
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			})
+			uri := mustActorSnapshotURI(t, template, actor, "actor-1-snapshot")
+			objects.PutSnapshot(t, uri, "manifest.json")
+			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+				snap := newDurableSnapshot(tt.extGen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+				snap.Locality = tt.locality
+				s.LastAssignedGeneration = tt.lastAssigned
+				s.Snapshots = []*ateapipb.Snapshot{snap}
+			})
+
+			if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); err != nil {
+				t.Fatalf("TagActorSnapshot: %v", err)
 			}
 		})
 	}

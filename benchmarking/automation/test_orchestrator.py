@@ -24,6 +24,41 @@ import orchestrator
 from testtypes import locust
 
 
+class DeployWorkloadsFakeAteletTest(unittest.TestCase):
+    @mock.patch("orchestrator.run")
+    def test_fake_atelet_tuning_goes_to_deploy_sh(self, run):
+        orchestrator.deploy_workloads(
+            fake_atelet_args=["--fake-atelet-env", "FAKE_ATELET_DELAY=500ms"],
+        )
+        cmd = run.call_args.args[0]
+        i = cmd.index("--fake-atelet-env")
+        self.assertEqual(cmd[i + 1], "FAKE_ATELET_DELAY=500ms")
+
+
+class SubstrateArgsTest(unittest.TestCase):
+    def test_ate_args_only(self):
+        self.assertEqual(
+            orchestrator.substrate_args({"ateArgs": ["--cluster-size=size10"]}),
+            ["--cluster-size=size10"],
+        )
+
+    def test_isolate_installs_the_fake_data_plane(self):
+        self.assertEqual(
+            orchestrator.substrate_args({
+                "ateArgs": ["--cluster-size=size10"],
+                "isolate": {"delay": "500ms"},
+            }),
+            # The delay tunes fake-atelet through deploy.sh, not the install.
+            ["--cluster-size=size10", "--fake-data-plane"],
+        )
+
+    def test_neither(self):
+        self.assertEqual(orchestrator.substrate_args({}), [])
+
+    def test_bare_isolate_key(self):
+        self.assertEqual(orchestrator.substrate_args({"isolate": None}), ["--fake-data-plane"])
+
+
 class DeployWorkloadsTest(unittest.TestCase):
     @mock.patch("orchestrator.run")
     def test_defaults_omit_optional_flags(self, run):

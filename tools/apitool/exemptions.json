@@ -417,7 +417,7 @@
   {
     "rule": "list-method-shape",
     "subject": "ateapi.Control.ListWorkerActorAssignments",
-    "message": "field \"worker\" is not part of the standard List request shape - only atespace, page_size, and page_token are allowed (sorting/filtering per AIP-132 is not supported)"
+    "message": "field \"worker\" is not part of the standard List request shape - only atespace and an options field of type ateapi.ListOptions are allowed (sorting/filtering per AIP-132 is not supported)"
   },
   {
     "rule": "list-method-shape",

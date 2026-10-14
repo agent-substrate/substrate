@@ -78,6 +78,7 @@ import (
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
@@ -311,22 +312,6 @@ func main() {
 	)
 	go systemInfoVolumes.run(ctx)
 
-	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
-	// Run/Restore on this node hits the cache. Best-effort: on failure the
-	// on-demand fetch in ensureSandboxAssets still covers correctness.
-	//
-	// We intentionally never WaitForCacheSync on this factory, so a failing
-	// list/watch (e.g. Forbidden while the ClusterRole rollout lags the
-	// binary) cannot hold up atelet startup: the reflector retries in the
-	// background and prewarm stays cold until it recovers.
-	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	sandboxConfigInformer := ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
-	if _, err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
-		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
-	}
-	// Start after the informer is registered: the factory only runs informers
-	// that exist when Start is called.
-	ateFactory.Start(stopCh)
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
 		CAFile:           *ateapiCAFile,
@@ -362,6 +347,50 @@ func main() {
 	if ateletIdentity == nil {
 		serverboot.Fatal(ctx, "Failed to load atelet Pod identity", fmt.Errorf("credential bundle has no Pod identity"))
 	}
+
+	// SandboxConfigs feed the asset prewarmer and workerSandboxSyncer.
+	// WorkerPools tell the syncer which SandboxConfig each local worker's pool
+	// uses.
+	//
+	// We intentionally never WaitForCacheSync on these factories, so a failing
+	// list/watch (e.g. Forbidden while the ClusterRole rollout lags the
+	// binary) cannot hold up atelet startup: the reflector retries in the
+	// background and the prewarmer and syncer wait until it recovers.
+	//
+	// 0 disables periodic resync. Both react to watch events and retry on their own.
+	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
+	// Watch only worker pods on this node, the same way the kubelet watches only its own pods.
+	// The apiserver indexes pods by spec.nodeName, so list and watch cost scales with
+	// the pods on this node, not the whole cluster.
+	workerPodFactory := kubeinformers.NewSharedInformerFactoryWithOptions(k8sClient, 0,
+		kubeinformers.WithTweakListOptions(func(o *metav1.ListOptions) {
+			o.FieldSelector = "spec.nodeName=" + ateletIdentity.NodeName
+			o.LabelSelector = workerPoolLabel
+		}))
+	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
+	// Run/Restore on this node hits the cache. Best-effort: on failure the
+	// on-demand fetch in ensureSandboxAssets still covers correctness.
+	//
+	// TODO: remove once the worker sandbox syncer fetches assets through
+	// cmd/atelet/internal/filecache.
+	sandboxConfigInformer := ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
+	if _, err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
+		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
+	}
+	// Keep a sandbox versions file in each local worker's directory: the
+	// runtime hashes of the enabled versions of its pool's SandboxConfig,
+	// rewritten when the config changes.
+	if _, err := startWorkerSandboxSyncer(ctx,
+		workerPodFactory.Core().V1().Pods(),
+		ateFactory.Api().V1alpha1().WorkerPools(),
+		ateFactory.Api().V1alpha1().SandboxConfigs(),
+		nodepath.AteomsDir()); err != nil {
+		slog.ErrorContext(ctx, "Worker sandbox versions syncer disabled", slog.Any("err", err))
+	}
+	// Start after the informers are registered: a factory only runs
+	// informers that exist when Start is called.
+	ateFactory.Start(stopCh)
+	workerPodFactory.Start(stopCh)
 
 	ateomFacingTLS := tlsCfg.Clone()
 	ateomFacingTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)
@@ -659,7 +688,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
 		kind:              checkpointSnapshotKind(req),
-		fidelity:          ateattr.SnapshotFidelityValue(req.GetFidelity()),
+		fidelity:          ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity()),
 	}
 	attribution := resources.ActorAttribution{
 		Ref:              actorRef,
@@ -723,7 +752,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		RunscPath:             runscPathFor(assetPaths),
 		RuntimeAssetPaths:     assetPaths,
 		Spec:                  spec,
-		Fidelity:              toAteomFidelity(req.GetFidelity()),
+		Fidelity:              toAteomFidelity(req.GetSnapshot().GetFidelity()),
 		ActorUid:              actorUID,
 		ActorDirs:             ateletpath.ActorDirs(actorUID),
 	})
@@ -745,7 +774,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	sandboxRec.ActorUID = req.GetActorUid()
 	sandboxRec.ActorTemplateAtespace = req.GetActorTemplateAtespace()
 	sandboxRec.ActorTemplateName = req.GetActorTemplateName()
-	sandboxRec.Fidelity = ateattr.SnapshotFidelityValue(req.GetFidelity())
+	sandboxRec.Fidelity = ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity())
 
 	// No earlier pause snapshot can ever be restored again, so remove them
 	// all: the actor's current state was just captured by CheckpointWorkload,
@@ -767,8 +796,8 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	// snapshots on both paths, so timing it as part of an external upload would
 	// mix local disk deletion into the object-storage measurement.
 	tPersist := time.Now()
-	switch req.GetType() {
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
+	switch mode := req.GetUploadConfig().GetMode(); mode {
+	case ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE:
 		// CheckpointWorkload has already deleted the workload, so a retried
 		// Checkpoint cannot redo this upload. It waits for the object-store plugin
 		// as long as ctx allows, and a plugin error reaches the control plane as
@@ -778,13 +807,13 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 			dPersist = time.Since(tPersist)
 			return nil, fmt.Errorf("while uploading external snapshot: %w", err)
 		}
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
+	case ateletpb.UploadMode_UPLOAD_MODE_DEFERRED:
 		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
 			dPersist = time.Since(tPersist)
 			return nil, fmt.Errorf("while moving to local snapshot: %w", err)
 		}
 	default:
-		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
+		return nil, fmt.Errorf("unexpected upload mode: %v", mode)
 	}
 	dPersist = time.Since(tPersist)
 
@@ -843,7 +872,8 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 	if err != nil {
 		return err
 	}
-	localDir, err := filepath.Rel(actorDir, ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalConfig().GetSnapshotName()))
+	snapshotName := req.GetSnapshot().GetSnapshotUuid()
+	localDir, err := filepath.Rel(actorDir, ateletpath.LocalSnapshotDir(req.GetActorUid(), snapshotName))
 	if err != nil {
 		return err
 	}
@@ -886,7 +916,7 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 
 // shouldHaveSnapshots returns true if the checkpoint request is expected to produce snapshot files.
 func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
-	if req.GetFidelity() != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+	if req.GetSnapshot().GetFidelity() != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
 		return true
 	}
 
@@ -903,7 +933,7 @@ func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
 // outage for as long as ctx allows rather than only pluginsocket's ready
 // wait, and their errors are not reported as retryable: see Checkpoint.
 func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
-	uri, err := resources.ParseSnapshotURI(req.GetExternalConfig().GetSnapshotUri())
+	uri, err := resources.ParseSnapshotURI(req.GetSnapshot().GetObject().GetSnapshotUri())
 	if err != nil {
 		return err
 	}
@@ -945,12 +975,13 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 	return nil
 }
 
-// UploadPausedCheckpoint copies a paused actor's local checkpoint to object
-// storage. It drives no ateom — the actor's sandbox is gone; the checkpoint
-// files and their self-describing manifest already sit under the actor's
-// local-checkpoints directory, written by an earlier local Checkpoint (pause).
-func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (_ *ateletpb.UploadPausedCheckpointResponse, err error) {
-	if errs := apivalidation.ValidateUploadPausedCheckpointRequest(ctx, req); len(errs) > 0 {
+// PromoteSnapshot uploads a paused actor's local checkpoint to object
+// storage so the actor can be suspended and is no longer tied to this node. It
+// drives no ateom — the actor's sandbox is gone; the checkpoint files and their
+// self-describing manifest already sit under the actor's local-checkpoints
+// directory, written by an earlier local Checkpoint (pause).
+func (s *AteomHerder) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (_ *ateletpb.PromoteSnapshotResponse, err error) {
+	if errs := apivalidation.ValidatePromoteSnapshotRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 
@@ -962,7 +993,7 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 		// Always the actor's durable latest: golden actors are never paused
 		// (validation above rejects the golden atespace).
 		kind:     ateattr.SnapshotKindLatest,
-		fidelity: ateattr.SnapshotFidelityValue(req.GetDesiredFidelity()),
+		fidelity: ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity()),
 	}
 	defer func() {
 		s.instruments.recordCheckpoint(ctx, op,
@@ -970,11 +1001,11 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 			phase{ateattr.SnapshotPhaseTotal, time.Since(tStart)})
 	}()
 
-	uri, err := resources.ParseSnapshotURI(req.GetDestinationSnapshotUri())
+	uri, err := resources.ParseSnapshotURI(req.GetSnapshot().GetObject().GetSnapshotUri())
 	if err != nil {
 		return nil, apierror.InvalidArgument("%v", err)
 	}
-	localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalSnapshotName())
+	localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetSnapshot().GetSnapshotUuid())
 
 	tPersist := time.Now()
 	sandboxClass, err := s.uploadLocalCheckpointDir(ctx, req, localDir, uri)
@@ -984,20 +1015,21 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 		return nil, err
 	}
 
-	// The uploaded snapshot supersedes every local pause snapshot of this
-	// actor; free the node's disk (best-effort, like Checkpoint).
+	// Best-effort: the snapshot is in object storage now and the actor will
+	// not resume from this node's local copy. Kept outside the persist window
+	// so local disk deletion does not mix into the upload measurement.
 	if err := pruneLocalCheckpoints(ctx, req.GetActorUid()); err != nil {
 		slog.WarnContext(ctx, "failed to prune uploaded local checkpoints", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
 	}
 
-	return &ateletpb.UploadPausedCheckpointResponse{}, nil
+	return &ateletpb.PromoteSnapshotResponse{}, nil
 }
 
-// uploadLocalCheckpointDir uploads the local checkpoint in localDir to uri,
-// converting the captured scope to the requested one where possible. It
+// uploadLocalCheckpointDir uploads the local checkpoint in localDir to uri. It
 // returns the sandbox class recorded in the snapshot manifest (empty when the
 // manifest was not read). Parameterized by localDir for tests.
-func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest, localDir string, uri resources.SnapshotURI) (string, error) {
+func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.PromoteSnapshotRequest, localDir string, uri resources.SnapshotURI) (string, error) {
+	localSnapshotName := req.GetSnapshot().GetSnapshotUuid()
 	manifest, err := readSnapshotManifest(localDir)
 	if errors.Is(err, os.ErrNotExist) {
 		// The local snapshot is gone. A previous invocation may have uploaded
@@ -1007,12 +1039,12 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 		// unrecoverable.
 		_, fetchErr := s.fetchManifest(ctx, uri.String())
 		if fetchErr == nil {
-			slog.InfoContext(ctx, "Local snapshot already uploaded and pruned; nothing to do", slog.String("snapshot_uri", req.GetDestinationSnapshotUri()))
+			slog.InfoContext(ctx, "Local snapshot already uploaded and pruned; nothing to do", slog.String("snapshot_uri", uri.String()))
 			return "", nil
 		}
 		if status.Code(fetchErr) == codes.NotFound {
 			return "", fmt.Errorf("local snapshot %q is gone and no uploaded copy exists: %w",
-				req.GetLocalSnapshotName(), fetchErr)
+				localSnapshotName, fetchErr)
 		}
 		return "", fmt.Errorf("while probing for an already-uploaded snapshot manifest: %w", fetchErr)
 	}
@@ -1027,13 +1059,13 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 
 	capturedFidelity := rec.Fidelity
 	if capturedFidelity == "" {
-		return rec.SandboxClass, apierror.FailedPrecondition("local snapshot %q has no fidelity recorded in its manifest; resume and pause the actor again before suspending it", req.GetLocalSnapshotName())
+		return rec.SandboxClass, apierror.FailedPrecondition("local snapshot %q has no fidelity recorded in its manifest; resume and pause the actor again before suspending it", localSnapshotName)
 	}
 	// Pause and suspend capture the template's one preferred fidelity, and a
 	// paused actor's template cannot change, so the upload is always of what
 	// the pause captured. A mismatch means the store or the control plane
 	// drifted; refuse rather than guess.
-	if desiredFidelity := ateattr.SnapshotFidelityValue(req.GetDesiredFidelity()); capturedFidelity != desiredFidelity {
+	if desiredFidelity := ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity()); capturedFidelity != desiredFidelity {
 		return rec.SandboxClass, apierror.FailedPrecondition("pause snapshot captured %s; upload asks for %s", capturedFidelity, desiredFidelity)
 	}
 
@@ -1078,7 +1110,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	op := snapshotOp{
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
-		fidelity:          ateattr.SnapshotFidelityValue(req.GetFidelity()),
+		fidelity:          ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity()),
 		sandboxClass:      req.GetSandboxAssets().GetSandboxClass(),
 	}
 	attribution := resources.ActorAttribution{
@@ -1119,9 +1151,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	checkpointDir := ateletpath.RestoreStateDir(actorUID)
-	directLocal := req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+	directLocal := req.GetSnapshot().GetObject() == nil
 	if directLocal {
-		checkpointDir = ateletpath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName())
+		checkpointDir = ateletpath.LocalSnapshotDir(actorUID, req.GetSnapshot().GetSnapshotUuid())
 	}
 
 	// Fetch the snapshot manifest stored beside the checkpoint images
@@ -1135,25 +1167,22 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		}
 	}()
 	var sandboxRec *sandboxAssetsRecord
-	switch req.GetType() {
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		manifest, err := s.fetchManifest(ctx, req.GetExternalConfig().GetSnapshotUri())
-		if err != nil {
-			return nil, fmt.Errorf("while fetching snapshot manifest: %w", err)
-		}
-		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
-			return nil, fmt.Errorf("while unmarshalling sandbox record: %w", err)
-		}
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		manifest, err := readSnapshotManifest(ateletpath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName()))
+	if directLocal {
+		manifest, err := readSnapshotManifest(checkpointDir)
 		if err != nil {
 			return nil, wrapFileSystemErr("while reading local snapshot manifest", err)
 		}
 		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
 			return nil, fmt.Errorf("while unmarshalling sandbox record: %w", err)
 		}
-	default:
-		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
+	} else {
+		manifest, err := s.fetchManifest(ctx, req.GetSnapshot().GetObject().GetSnapshotUri())
+		if err != nil {
+			return nil, fmt.Errorf("while fetching snapshot manifest: %w", err)
+		}
+		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
+			return nil, fmt.Errorf("while unmarshalling sandbox record: %w", err)
+		}
 	}
 
 	dManifest = time.Since(tManifest)
@@ -1191,18 +1220,11 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			}
 			downloadErr = err
 		}()
-		switch req.GetType() {
-		case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-			if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
-				return err
-			}
-		case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
+		if directLocal {
 			// Restore in place from LocalSnapshotDir; no staging.
-			if err := checkLocalSnapshotFiles(checkpointDir, sandboxRec.SnapshotFiles); err != nil {
-				return err
-			}
+			return checkLocalSnapshotFiles(checkpointDir, sandboxRec.SnapshotFiles)
 		}
-		return nil
+		return s.downloadExternalCheckpoint(gctx, req.GetSnapshot().GetObject().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles)
 	})
 	g.Go(func() (err error) {
 		defer func() { prepErr = err }()
@@ -1262,7 +1284,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		RunscPath:             runscPathFor(assetPaths),
 		RuntimeAssetPaths:     assetPaths,
 		Spec:                  spec,
-		Fidelity:              toAteomFidelity(req.GetFidelity()),
+		Fidelity:              toAteomFidelity(req.GetSnapshot().GetFidelity()),
 		ActorUid:              req.GetActorUid(),
 		ActorDirs:             actorDirs,
 		PreserveRestoreDir:    directLocal,
