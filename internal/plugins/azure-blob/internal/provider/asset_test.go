@@ -411,14 +411,18 @@ func TestNewAssetServerRejectsInvalidConfiguration(t *testing.T) {
 		{"invalid container", testAccount, map[string]blobstore.Store{"Assets": newFakeStore()}, root, t.TempDir(), testCapacity},
 		{"nil store", testAccount, map[string]blobstore.Store{"assets": nil}, root, t.TempDir(), testCapacity},
 		{"account without host", "https://", stores, root, t.TempDir(), testCapacity},
-		{"account with query", testAccount + "?sig=x", stores, root, t.TempDir(), testCapacity},
+		{"account with query", testAccount + "?sig=secret", stores, root, t.TempDir(), testCapacity},
+		{"account with userinfo", "https://user:secret@" + strings.TrimPrefix(testAccount, "https://"), stores, root, t.TempDir(), testCapacity},
 		{"staging is root", testAccount, stores, root, root, testCapacity},
 		{"staging below root", testAccount, stores, root, filepath.Join(root, "staging"), testCapacity},
 		{"relative root", testAccount, stores, "relative", t.TempDir(), testCapacity},
 		{"zero staging capacity", testAccount, stores, root, t.TempDir(), 0},
 	} {
-		if _, err := NewAssetServer(tc.account, tc.stores, tc.root, tc.staging, tc.capacity); err == nil {
+		_, err := NewAssetServer(tc.account, tc.stores, tc.root, tc.staging, tc.capacity)
+		if err == nil {
 			t.Errorf("%s: NewAssetServer succeeded, want an error", tc.name)
+		} else if strings.Contains(err.Error(), "secret") {
+			t.Errorf("%s: NewAssetServer error %q repeats the account URL credential", tc.name, err)
 		}
 	}
 }
