@@ -370,14 +370,12 @@ func (s *AteWorkerService) teardownActor(ctx context.Context, id string, actorDi
 		}
 
 		// Kill the CH process ateworker launched.
-		if ra.chCmd != nil && ra.chCmd.Process != nil {
-			_ = ra.chCmd.Process.Kill()
-			_, _ = ra.chCmd.Process.Wait()
+		if ra.chProc != nil {
+			ra.chProc.Stop()
 		}
 		// Kill the virtiofsd (after CH, its only client).
-		if ra.vfsdCmd != nil && ra.vfsdCmd.Process != nil {
-			_ = ra.vfsdCmd.Process.Kill()
-			_, _ = ra.vfsdCmd.Process.Wait()
+		if ra.vfsdProc != nil {
+			ra.vfsdProc.Stop()
 		}
 	}
 
