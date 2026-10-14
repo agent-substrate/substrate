@@ -36,12 +36,14 @@ import (
 	promclient "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/instrumentation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -327,7 +329,7 @@ func newMeterProvider(ctx context.Context, serviceName string, push, relayCapabl
 	if err != nil {
 		return nil, fmt.Errorf("create metric resource: %w", err)
 	}
-	opts := []sdkmetric.Option{sdkmetric.WithResource(res)}
+	opts := []sdkmetric.Option{sdkmetric.WithResource(res), sdkmetric.WithView(dropRPCServerAddress)}
 	if push {
 		expOpts := []otlpmetricgrpc.Option{
 			// GKE managed metrics doesn't support validating the TLS certs of the collector.
@@ -355,6 +357,16 @@ func newMeterProvider(ctx context.Context, serviceName string, push, relayCapabl
 	otel.SetMeterProvider(mp)
 	return mp, nil
 }
+
+// dropRPCServerAddress removes server.address from the otelgrpc instruments.
+// otelgrpc reads it from the remote address of the client connection: the
+// socket path atelet dials holds the ateom pod UID, and a TCP address is the IP
+// of one server pod. Either way the key has one value per pod. server.port stays,
+// because it has one value per service.
+var dropRPCServerAddress = sdkmetric.NewView(
+	sdkmetric.Instrument{Scope: instrumentation.Scope{Name: otelgrpc.ScopeName}},
+	sdkmetric.Stream{AttributeFilter: attribute.NewDenyKeysFilter(semconv.ServerAddressKey)},
+)
 
 // Fatal logs msg + err and exits with status 1. For startup-time
 // fail-fast where there's no recovery path.

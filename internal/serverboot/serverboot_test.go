@@ -29,6 +29,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -37,6 +39,8 @@ import (
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 )
@@ -174,6 +178,63 @@ func TestMeterProviderRelayAttribute(t *testing.T) {
 	// about which path they took.
 	if got, ok := collectedResource(t, false, nil)[string(ateattr.OTLPRelayKey)]; ok {
 		t.Errorf("%s = %q, want absent for a component with no relay", string(ateattr.OTLPRelayKey), got)
+	}
+}
+
+// A real call through the otelgrpc client handler, so the test covers the
+// scope name and the key that otelgrpc uses, not only the View.
+func TestMeterProviderDropsRPCServerAddress(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp, err := newMeterProvider(context.Background(), "atelet", false, false, nil, nil, reader)
+	if err != nil {
+		t.Fatalf("newMeterProvider: %v", err)
+	}
+	t.Cleanup(func() { mp.Shutdown(context.Background()) })
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := grpc.NewServer()
+	healthpb.RegisterHealthServer(srv, health.NewServer())
+	go srv.Serve(lis)
+	t.Cleanup(srv.Stop)
+
+	conn, err := grpc.NewClient(lis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler(otelgrpc.WithMeterProvider(mp))),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if _, err := healthpb.NewHealthClient(conn).Check(context.Background(), &healthpb.HealthCheckRequest{}); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	var points []metricdata.HistogramDataPoint[float64]
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == "rpc.client.call.duration" {
+				points = append(points, m.Data.(metricdata.Histogram[float64]).DataPoints...)
+			}
+		}
+	}
+	if len(points) != 1 {
+		t.Fatalf("rpc.client.call.duration has %d data points, want 1", len(points))
+	}
+	attrs := points[0].Attributes
+	if v, ok := attrs.Value("server.address"); ok {
+		t.Errorf("server.address = %q, want absent", v.String())
+	}
+	for _, key := range []attribute.Key{"server.port", "rpc.method"} {
+		if _, ok := attrs.Value(key); !ok {
+			t.Errorf("%s is absent, want present", key)
+		}
 	}
 }
 

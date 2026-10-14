@@ -481,6 +481,8 @@ func TestUnaryServerInterceptor_LifecycleEgressAndWorkerChecks(t *testing.T) {
 	}}}
 	deleteWorker := rpcCall{ateapipb.Control_DeleteWorker_FullMethodName, &ateapipb.DeleteWorkerRequest{Worker: worker}}
 	drainWorker := rpcCall{ateapipb.Control_DrainWorker_FullMethodName, &ateapipb.DrainWorkerRequest{Worker: worker}}
+	markAvailable := rpcCall{ateapipb.Control_MarkWorkerAvailable_FullMethodName, &ateapipb.MarkWorkerAvailableRequest{Worker: worker}}
+	markUnavailable := rpcCall{ateapipb.Control_MarkWorkerUnavailable_FullMethodName, &ateapipb.MarkWorkerUnavailableRequest{Worker: worker}}
 	listAssignments := rpcCall{ateapipb.Control_ListWorkerActorAssignments_FullMethodName, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: worker}}
 
 	tests := []struct {
@@ -534,6 +536,11 @@ func TestUnaryServerInterceptor_LifecycleEgressAndWorkerChecks(t *testing.T) {
 		{"atespace editor cannot list workers", "editor", listWorkers, codes.PermissionDenied},
 		{"atespace editor cannot get worker", "editor", getWorker, codes.PermissionDenied},
 		{"atespace editor cannot drain worker", "editor", drainWorker, codes.PermissionDenied},
+		{"global owner marks worker available", "global-owner", markAvailable, codes.OK},
+		{"global owner marks worker unavailable", "global-owner", markUnavailable, codes.OK},
+		{"global viewer cannot mark worker available", "global-viewer", markAvailable, codes.PermissionDenied},
+		{"global viewer cannot mark worker unavailable", "global-viewer", markUnavailable, codes.PermissionDenied},
+		{"atespace editor cannot mark worker available", "editor", markAvailable, codes.PermissionDenied},
 	}
 
 	interceptor := UnaryServerInterceptor(authorizer, true)
@@ -601,6 +608,8 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 	}}}
 	deleteWorker := rpcCall{ateapipb.Control_DeleteWorker_FullMethodName, &ateapipb.DeleteWorkerRequest{Worker: worker}}
 	drainWorker := rpcCall{ateapipb.Control_DrainWorker_FullMethodName, &ateapipb.DrainWorkerRequest{Worker: worker}}
+	markAvailable := rpcCall{ateapipb.Control_MarkWorkerAvailable_FullMethodName, &ateapipb.MarkWorkerAvailableRequest{Worker: worker}}
+	markUnavailable := rpcCall{ateapipb.Control_MarkWorkerUnavailable_FullMethodName, &ateapipb.MarkWorkerUnavailableRequest{Worker: worker}}
 	listAssignments := rpcCall{ateapipb.Control_ListWorkerActorAssignments_FullMethodName, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: worker}}
 
 	mtls := func(id string) principal.PrincipalInfo {
@@ -623,6 +632,8 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"controller updates worker", mtls(controllerID), updateWorker, codes.OK},
 		{"controller deletes worker", mtls(controllerID), deleteWorker, codes.OK},
 		{"controller drains worker", mtls(controllerID), drainWorker, codes.OK},
+		{"controller marks worker available", mtls(controllerID), markAvailable, codes.OK},
+		{"controller marks worker unavailable", mtls(controllerID), markUnavailable, codes.OK},
 		{"controller cannot list worker assignments", mtls(controllerID), listAssignments, codes.PermissionDenied},
 		{"controller cannot get actor", mtls(controllerID), getActor, codes.PermissionDenied},
 		{"controller cannot resume actor", mtls(controllerID), resume, codes.PermissionDenied},
