@@ -1,44 +1,28 @@
 # Security Policy
 
-Agent Substrate is in a pre-release (preview) state. This policy is
-intentionally minimal for that stage and will be revisited as part of the
-General Availability (GA) milestone, see [Road to GA](#road-to-ga) below.
-
-In particular, all of the following currently apply:
-
-- Reports can be made exclusively via GitHub advisories.
-- Maintainers triage and fix advisories on a best-effort basis.
-- There is no bug bounty.
-- There is no security mailing list for announcements.
-- There are no SLOs on fix timeline.
-- There are no embargos.
-- Though we do wait to publish advisories until fixes have been merged,
-  details may appear in PRs prior to publishing.
-
 ## Reporting a Vulnerability
 
 **Do not open a public GitHub issue or pull request for security
 vulnerabilities.**
 
 Use [GitHub Private Vulnerability Reporting](https://github.com/agent-substrate/substrate/security/advisories/new)
-to report privately. This is the only supported reporting channel; there is
-no security mailing list at this stage. There is no bug bounty, and this
-project is not eligible for the
+to report security vulnerabilities privately. Note that this project is not
+eligible for the
 [Google Open Source Software Vulnerability Rewards Program](https://bughunters.google.com/open-source-security).
 
 Please include:
 
-- The affected component and version (commit SHA).
+- The affected component and version or commit SHA.
 - Steps to reproduce, or a proof of concept.
 - The potential impact, and mitigations if known.
 
 ### When to report
 
-- You think you found a potential security vulnerability in Agent Substrate.
-- You are unsure whether an issue affects Agent Substrate.
+- You found a potential security vulnerability in Agent Substrate.
+- You are unsure whether a security issue affects Agent Substrate.
 - You found a vulnerability in a project Agent Substrate depends on and it
   is exploitable through Agent Substrate. If that project has its own
-  disclosure process, please report it there first.
+  disclosure process, please report it there as well.
 
 ### When not to report
 
@@ -48,16 +32,20 @@ Please include:
 
 ## What Counts as a Vulnerability
 
-See the [threat model](../docs/threat-model.md) for the trust boundaries and
-assumptions this section is based on.
+See the [Security Guide](../docs/security.md) and
+[Threat Model](../docs/threat-model.md) for the security architecture, trust
+boundaries, and assumptions this section is based on.
 
-In scope: the Agent Substrate control plane (`ateapi`), node supervisor
-(`atelet`, `ateworker`), networking stack (`atenet`), and CLI (`kubectl-ate`).
+In scope: the Agent Substrate control plane (`ateapi`, `atecontroller`,
+`podcertcontroller`), node and sandbox supervisors (`atelet`, `ateworker-gvisor`,
+`ateworker-microvm`, `objectstore-plugin`), networking and credential plane
+(`atenet`, `cmd/credential-provider/kubernetes-secrets`), and CLI
+(`kubectl-ate`, `ate-setup`).
 
-Agent Substrate multiplexes many actors onto a smaller pool of shared
-workers, so its most important security boundaries are between actors and
-between actors and the platform. Reports in these classes are the most
-valuable, listed roughly from most to least severe:
+Agent Substrate multiplexes untrusted actors onto a shared pool of workers, so
+its primary security boundaries are between actors and between actors and the
+platform. Reports in these classes are the highest priority, listed roughly
+from most to least severe:
 
 - **Cross-actor access**: an actor reading or modifying another actor's
   state (memory, filesystem, working memory) on a shared worker, or acting
@@ -65,67 +53,79 @@ valuable, listed roughly from most to least severe:
 - **Snapshot integrity and confidentiality**: reading another actor's
   suspend/resume snapshot, or resuming an actor from a tampered snapshot.
 - **Routing**: traffic intended for one actor delivered to another.
-- **Identity**: forging actor identity (for example actor JWTs).
+- **Identity**: forging actor identity (such as actor SPIFFE X.509
+  certificates or JWTs) or component PodCertificates.
 - **Control-plane authentication and authorization bypass**: reaching
   `ateapi` RPCs without valid credentials (mTLS or JWT auth modes),
-  misusing workerpool client certificates, or acting beyond what valid
-  credentials are authorized to do.
+  bypassing OpenFGA authorization checks, misusing worker or node client
+  certificates, or acting beyond what valid credentials are authorized to do.
 - **Actor-to-platform escalation**: an actor compromising `atelet`, `ateworker`,
-  or the control plane, whether while the actor is still actively running
-  or beyond its own lifecycle.
+  `atenet`, or the control plane, whether while the actor is actively running
+  or across lifecycle transitions.
 - **Node lateral movement**: using a compromised worker node to reach other
-  nodes, atespaces, or the control plane.
-- **Network isolation bypass**: an actor sending or receiving traffic that
-  `atenet` policy was meant to prevent.
+  nodes, unscheduled actors, other atespaces, or the control plane.
+- **Network or credential isolation bypass**: an actor sending or receiving
+  traffic that `atenet` policy blocks, or accessing credentials outside its
+  authorized `EgressPolicy`.
 
 ### Out of scope
 
 - The underlying Kubernetes cluster or cloud infrastructure.
-- The sandbox runtimes (gVisor, Kata Containers); report those to their
-  respective projects.
-- The demo applications under `demos/`; they are examples, not production
-  code.
-- Known limitations listed in [docs/roadmap.md](../docs/roadmap.md) and
-  [AGENTS.md](../AGENTS.md), at the time of your report. These are living
-  docs and can lag reality; if you're unsure whether a listed limitation is
-  still accurate, report it anyway and let a maintainer make the call.
+- Upstream sandbox runtimes (gVisor, Cloud Hypervisor); report vulnerabilities
+  contained within those runtimes to their respective projects.
+- Sample applications under `demos/` and load-testing harnesses under
+  `benchmarking/`.
+- Documented scope boundaries and future capabilities listed in
+  [docs/security.md](../docs/security.md) and
+  [docs/roadmap.md](../docs/roadmap.md) at the time of your report. If you are
+  unsure whether a finding is covered by a documented limitation, report it
+  privately anyway and let a maintainer make the call.
 
 ### What usually does not qualify
 
 - Denial of service against workloads deployed without resource limits.
 - Issues that require cluster-admin permissions or root on the node; that
   level of access already controls the platform.
+- Issues that require attacker control of the ActorTemplate.
 - Vulnerability scanner or CVE reports about dependencies without an
   exploitable path through Agent Substrate (see
   [Dependencies](#dependencies)).
-- Sandbox escapes contained entirely within gVisor or Kata Containers;
-  report those upstream (see [Out of scope](#out-of-scope)).
 
 If you are unsure whether something qualifies, report it privately anyway.
 
-## Triage and Response
+## Triage, Coordinated Disclosure, and Advisories
 
-While the project is in preview there is no dedicated security team or
-response committee. Reports are triaged and fixed by the project maintainers,
-who own the repository.
+Reports are promptly triaged by the Agent Substrate maintainers. When a valid
+vulnerability is confirmed:
 
-What to expect at this stage:
+- We work with the reporter on the private advisory thread to validate the
+  issue and develop a remediation.
+- Fixes are prepared and patched on supported releases.
+- We coordinate disclosure timing with the reporter and publish a
+  [GitHub Security Advisory](https://github.com/agent-substrate/substrate/security/advisories)
+  describing the vulnerability, affected versions, and remediation, requesting
+  a CVE through GitHub when warranted.
 
-- We aim to acknowledge reports within a few business days, but there are no
-  formal response or fix time SLOs yet.
-- Fixes are best effort and land on `main`. All valid reports will be
-  patched by GA.
-- There is no embargo process and no pre-disclosure notification to
-  downstream users or vendors. Though we do wait to publish advisories until
-  fixes have been merged, some details may appear in PRs prior to publishing.
+We ask reporters to keep vulnerability details private until the coordinated
+advisory is published. Reporters are credited in the advisory unless they
+prefer to remain anonymous.
 
-We ask reporters to keep vulnerability details private until an advisory is
-published; we prefer to disclose as soon as a fix is available.
+## Supported Versions
+
+After release 1.0.0, security fixes will be applied to `main` and to supported
+stable releases.
+
+## Dependencies
+
+Container images are built on distroless bases. If a dependency vulnerability
+is exploitable through Agent Substrate, report it to us privately as well as
+upstream; otherwise a regular issue or pull request bumping the dependency is
+sufficient.
 
 ## Good-Faith Research
 
-We expect security research against Agent Substrate to be done in good
-faith, meaning:
+We expect security research against Agent Substrate to be conducted in good
+faith:
 
 - Test only against clusters and deployments you own or are authorized to
   test.
@@ -134,46 +134,5 @@ faith, meaning:
 - Do not degrade service for others while testing.
 
 This policy covers the Agent Substrate open source project only. It does not
-authorize testing of anyone else's deployment of Agent Substrate; those are
-governed by the respective operator's own policies.
-
-## Dependencies
-
-Dependency vulnerabilities are tracked with `govulncheck` in CI, and fixes
-are applied by updating the dependency on `main`. If a dependency
-vulnerability is exploitable through Agent Substrate, report it to us
-privately as well as upstream; otherwise a regular issue or pull request
-bumping the dependency is enough.
-
-## Supported Versions
-
-There are no stable releases yet. Security fixes are applied to `main` only;
-there are no release branches and no backports.
-
-## Disclosure
-
-After a fix is merged, we publish a
-[GitHub Security Advisory](https://github.com/agent-substrate/substrate/security/advisories)
-describing the vulnerability and the fix, and request a CVE through GitHub
-when warranted. We publish as soon as the fix is verified on `main`; there
-is no coordinated embargo or pre-disclosure period at this stage.
-
-Reporters are credited in the advisory unless they prefer to remain
-anonymous.
-
-## Road to GA
-
-As the project matures we expect to define, at or before GA:
-
-- What triggers the switch from this preview policy to the full process.
-- A defined triage process and ownership (for example a security response
-  committee or rotation).
-- Response and fix SLOs by severity.
-- A security announcements channel (for example a mailing list).
-- An embargo and coordinated disclosure process, including pre-disclosure
-  notification for downstream distributors.
-- A patch and release process for supported release branches, including
-  backports.
-- Whether to incentivize reports with a bug bounty program.
-
-Until then, the preview-state process above applies.
+authorize testing of third-party deployments of Agent Substrate, which are
+governed by their respective operators' policies.
