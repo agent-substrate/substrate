@@ -24,12 +24,14 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/volumepath"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/distribution/reference"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -142,6 +144,29 @@ func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, supported []ate
 		names = append(names, f.String())
 	}
 	return field.ErrorList{field.NotSupported(fldPath, fidelity, names)}
+}
+
+// sandboxClasses are the ate.dev/v1alpha1 SandboxClass values: the sandbox
+// runtime families a WorkerPool, a SandboxConfig, and an ActorTemplate can
+// name.
+var sandboxClasses = []string{
+	string(atev1alpha1.SandboxClassGvisor),
+	string(atev1alpha1.SandboxClassMicroVM),
+}
+
+// IsSandboxClass reports whether class is one of the ate.dev/v1alpha1
+// SandboxClass values. The match is case-sensitive.
+func IsSandboxClass(class string) bool {
+	return slices.Contains(sandboxClasses, class)
+}
+
+// ValidateSandboxClass requires one of the ate.dev/v1alpha1 SandboxClass
+// values. An empty value is left to the required tag.
+func ValidateSandboxClass(fldPath *field.Path, value string) field.ErrorList {
+	if value == "" || IsSandboxClass(value) {
+		return nil
+	}
+	return field.ErrorList{field.NotSupported(fldPath, value, sandboxClasses)}
 }
 
 func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {

@@ -99,9 +99,9 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
-| `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`) picks the runtime family this template's actors require — only `WorkerPool`s whose `sandboxClasses` entry matches are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox binaries. It must reference an existing config of the matching class; `CreateActorTemplate` rejects the template otherwise. |
+| `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `gvisor` or `microvm`) picks the runtime family this template's actors require — only `WorkerPool`s whose `sandboxClasses` entry matches are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox binaries. It must reference an existing config of the matching class; `CreateActorTemplate` rejects the template otherwise. |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
-| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures (`SNAPSHOT_FIDELITY_ROOTFS` requires `sandboxClass: SANDBOX_CLASS_MICROVM`), and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures (`SNAPSHOT_FIDELITY_ROOTFS` requires `sandboxClass: microvm`), and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
 | `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
@@ -327,12 +327,12 @@ containers:
 workerSelector:
   matchLabels:
     workload: secret-agent
-# sandboxClass (required) picks the runtime family (set SANDBOX_CLASS_MICROVM
-# to require micro-VM pools); configName (required) names the cluster-scoped
+# sandboxClass (required) picks the runtime family (set microvm to require
+# micro-VM pools); configName (required) names the cluster-scoped
 # SandboxConfig supplying the sandbox binaries (see section 3).
 # gvisor-default is the SandboxConfig that manifests/ate-install ships.
 sandboxConfig:
-  sandboxClass: SANDBOX_CLASS_GVISOR
+  sandboxClass: gvisor
   configName: gvisor-default
 snapshotConfig:
   storageLocation: gs://my-bucket/secret-agent
@@ -389,6 +389,28 @@ a `Snapshot` with the following fields:
   written and `COMPLETED` once it can be restored from. A snapshot that exists
   only on a node has no `durableSnapshot`. A tag's snapshot always has one, and
   the tag can seed actors only once it is `COMPLETED`.
+- `sandboxRuntime`: The sandbox runtime and hardware compatibility attributes the
+  guest state was captured under, copied from `status.workerAssignment.sandboxRuntime`
+  when the checkpoint is taken. A resume that restores memory or rootfs state
+  (`SNAPSHOT_FIDELITY_MEMORY` or `SNAPSHOT_FIDELITY_ROOTFS`) first schedules onto
+  an eligible worker whose `defaultRuntime` or `restorableRuntimes` is compatible
+  with `sandboxRuntime` (same sandbox class, same schema version, and every
+  attribute recorded on the snapshot present on the worker with the same
+  value; attributes only the worker reports are ignored). When no compatible worker has
+  capacity:
+  - A durable snapshot — the actor's own, a `sourceTag` clone, or the
+    template's golden snapshot a new actor starts from — falls back to any eligible
+    worker and downgrades the restore to `SNAPSHOT_FIDELITY_VOLUMES`, preserving
+    the snapshot's volume data while booting the guest fresh under the new
+    worker's `defaultRuntime`.
+  - A local pause checkpoint (with `locality` and no `durableSnapshot`) is not
+    relaxed; the resume returns `RESOURCE_EXHAUSTED` and the actor remains
+    `PAUSED` on its node until a compatible worker there has room. Suspending
+    the actor uploads the checkpoint and lifts the node pin, after which its
+    next resume may fall back like a durable snapshot.
+
+  A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_VOLUMES` imposes
+  no runtime placement constraint.
 
 An `ActorTemplate` references its golden tag with the `ObjectRef` in
 `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned
@@ -432,7 +454,7 @@ Each entry of `versions` (`SandboxVersionConfig`):
 | `name` | `string` | **Required.** Identifies the version within the config. A DNS label (lower-case alphanumerics and `-`, at most 63 characters). |
 | `state` | `string` | Optional. `Enabled` (default) or `Disabled`. The version named by `defaultVersion` cannot be `Disabled`. |
 | `pauseImage` | `string` | **Required for `gvisor`; not allowed for `microvm`**, which runs no pause container. The image for the sandbox's root container (e.g. `registry.k8s.io/pause`, or `gcr.io/gke-release/pause` on GKE). Must include a digest (`...@sha256:...`) — it is recorded in each snapshot's manifest so a restore rebuilds the sandbox from the same image. |
-| `assets` | `map[arch]map[name]AssetFile` | Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair; `url` is at most 2048 bytes. A `ValidatingAdmissionPolicy` enforces each class's required assets on every version. atelet holds no storage credentials: it fetches every URL through the node's object-store plugin (`AssetProvider`), with the plugin's credentials. Which schemes work depends on the plugin; the in-tree one serves only its storage backend's scheme, `gs://` on GCS and `s3://` on S3, as `<bucket>/<object>`, and rejects other schemes without reading them. A `gs://` URL the plugin cannot serve (it has no such object, rejects the URL, does not implement `AssetProvider`, or is unreachable) is then read anonymously, which serves public buckets such as `gs://gvisor`; a refusal by the plugin is final. The plugin returns an object only if its content matches `sha256`, and refuses any URL under a snapshot location (an `ActorTemplate`'s `snapshotConfig.location` followed by `/atespaces/`), so assets may share the snapshot bucket but must not be stored there. atelet verifies the sha256 again before using an asset. Its logs and errors show an asset URL as `scheme://host/path`. |
+| `assets` | `map[arch]map[name]AssetFile` | Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair; `url` is at most 2048 bytes. A `ValidatingAdmissionPolicy` enforces each class's required assets on every version. atelet holds no storage credentials: it fetches every URL through the node's object-store plugin (`AssetProvider`), with the plugin's credentials. Which schemes work depends on the plugin; the in-tree one serves only its storage backend's scheme, `gs://` on GCS and `s3://` on S3, as `<bucket>/<object>`, and rejects other schemes without reading them. A `gs://` URL the plugin cannot serve (it has no such object, rejects the URL, does not implement `AssetProvider`, is unreachable, or fails with an error it does not recognize, such as GCS refusing its credentials for a public bucket) is then read anonymously, which serves public buckets such as `gs://gvisor`; any other refusal by the plugin is final. The plugin returns an object only if its content matches `sha256`, and refuses any URL under a snapshot location (an `ActorTemplate`'s `snapshotConfig.location` followed by `/atespaces/`), so assets may share the snapshot bucket but must not be stored there. atelet verifies the sha256 again before using an asset. Its logs and errors show an asset URL as `scheme://host/path`. |
 
 A cluster-wide gVisor `SandboxConfig` (`gvisor-default`) is installed with the platform, so gVisor templates can name it via `sandboxConfig.configName` without any extra setup.
 
@@ -571,7 +593,7 @@ Replaces the mutable fields of an existing actor with the ones in the request.
 Because the guards are required and only a read supplies them, an update is always a read-modify-write. To Update an `Actor`, you must first `GetActor`/`CreateActor`, instead of building a new one — see [§7.2 of the API style guide](api-style-guide.md#72-using-version-and-uid-to-guard-writes) for why reconstructing the message can silently drop data.
 
 #### `ResumeActor`
-Activates a suspended actor by restoring it onto a physical worker.
+Activates a suspended or paused actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment`).

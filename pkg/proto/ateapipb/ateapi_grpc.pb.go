@@ -58,6 +58,8 @@ const (
 	Control_UpdateWorker_FullMethodName               = "/ateapi.Control/UpdateWorker"
 	Control_DeleteWorker_FullMethodName               = "/ateapi.Control/DeleteWorker"
 	Control_DrainWorker_FullMethodName                = "/ateapi.Control/DrainWorker"
+	Control_MarkWorkerAvailable_FullMethodName        = "/ateapi.Control/MarkWorkerAvailable"
+	Control_MarkWorkerUnavailable_FullMethodName      = "/ateapi.Control/MarkWorkerUnavailable"
 	Control_ListWorkerActorAssignments_FullMethodName = "/ateapi.Control/ListWorkerActorAssignments"
 	Control_ListActors_FullMethodName                 = "/ateapi.Control/ListActors"
 	Control_CreateAtespace_FullMethodName             = "/ateapi.Control/CreateAtespace"
@@ -142,7 +144,8 @@ type ControlClient interface {
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
 	// Get a Worker.
 	GetWorker(ctx context.Context, in *GetWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
-	// Register a Worker. Called once its Pod is Ready and has an IP.
+	// Register a Worker. Called once its Pod has an IP. A Worker is registered
+	// UNAVAILABLE and takes no Actors until MarkWorkerAvailable.
 	CreateWorker(ctx context.Context, in *CreateWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
 	// Update observed pool state on a Worker.
 	UpdateWorker(ctx context.Context, in *UpdateWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
@@ -153,6 +156,18 @@ type ControlClient interface {
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
 	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error)
+	// Mark an UNAVAILABLE Worker ACTIVE so the scheduler places Actors on it.
+	// Idempotent. Returns FAILED_PRECONDITION for a DRAINING Worker, and ABORTED
+	// if another write lands on the Worker first; retry.
+	//
+	// Every Actor placed after this call is stamped with the Worker's epoch as
+	// it stands then, so a caller raises epoch for a restarted ateom first.
+	MarkWorkerAvailable(ctx context.Context, in *MarkWorkerAvailableRequest, opts ...grpc.CallOption) (*MarkWorkerAvailableResponse, error)
+	// Mark an ACTIVE Worker UNAVAILABLE so the scheduler stops placing Actors on
+	// it, as while its Pod is not Ready. Idempotent. Leaves any bound Actor
+	// alone. Returns FAILED_PRECONDITION for a DRAINING Worker, and ABORTED if
+	// another write lands on the Worker first; retry.
+	MarkWorkerUnavailable(ctx context.Context, in *MarkWorkerUnavailableRequest, opts ...grpc.CallOption) (*MarkWorkerUnavailableResponse, error)
 	// List the Actors hosted by a given Worker.
 	ListWorkerActorAssignments(ctx context.Context, in *ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
@@ -451,6 +466,26 @@ func (c *controlClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest,
 	return out, nil
 }
 
+func (c *controlClient) MarkWorkerAvailable(ctx context.Context, in *MarkWorkerAvailableRequest, opts ...grpc.CallOption) (*MarkWorkerAvailableResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarkWorkerAvailableResponse)
+	err := c.cc.Invoke(ctx, Control_MarkWorkerAvailable_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) MarkWorkerUnavailable(ctx context.Context, in *MarkWorkerUnavailableRequest, opts ...grpc.CallOption) (*MarkWorkerUnavailableResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarkWorkerUnavailableResponse)
+	err := c.cc.Invoke(ctx, Control_MarkWorkerUnavailable_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) ListWorkerActorAssignments(ctx context.Context, in *ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ListWorkerActorAssignmentsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListWorkerActorAssignmentsResponse)
@@ -686,7 +721,8 @@ type ControlServer interface {
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
 	// Get a Worker.
 	GetWorker(context.Context, *GetWorkerRequest) (*Worker, error)
-	// Register a Worker. Called once its Pod is Ready and has an IP.
+	// Register a Worker. Called once its Pod has an IP. A Worker is registered
+	// UNAVAILABLE and takes no Actors until MarkWorkerAvailable.
 	CreateWorker(context.Context, *CreateWorkerRequest) (*Worker, error)
 	// Update observed pool state on a Worker.
 	UpdateWorker(context.Context, *UpdateWorkerRequest) (*Worker, error)
@@ -697,6 +733,18 @@ type ControlServer interface {
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
 	DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error)
+	// Mark an UNAVAILABLE Worker ACTIVE so the scheduler places Actors on it.
+	// Idempotent. Returns FAILED_PRECONDITION for a DRAINING Worker, and ABORTED
+	// if another write lands on the Worker first; retry.
+	//
+	// Every Actor placed after this call is stamped with the Worker's epoch as
+	// it stands then, so a caller raises epoch for a restarted ateom first.
+	MarkWorkerAvailable(context.Context, *MarkWorkerAvailableRequest) (*MarkWorkerAvailableResponse, error)
+	// Mark an ACTIVE Worker UNAVAILABLE so the scheduler stops placing Actors on
+	// it, as while its Pod is not Ready. Idempotent. Leaves any bound Actor
+	// alone. Returns FAILED_PRECONDITION for a DRAINING Worker, and ABORTED if
+	// another write lands on the Worker first; retry.
+	MarkWorkerUnavailable(context.Context, *MarkWorkerUnavailableRequest) (*MarkWorkerUnavailableResponse, error)
 	// List the Actors hosted by a given Worker.
 	ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
@@ -819,6 +867,12 @@ func (UnimplementedControlServer) DeleteWorker(context.Context, *DeleteWorkerReq
 }
 func (UnimplementedControlServer) DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DrainWorker not implemented")
+}
+func (UnimplementedControlServer) MarkWorkerAvailable(context.Context, *MarkWorkerAvailableRequest) (*MarkWorkerAvailableResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MarkWorkerAvailable not implemented")
+}
+func (UnimplementedControlServer) MarkWorkerUnavailable(context.Context, *MarkWorkerUnavailableRequest) (*MarkWorkerUnavailableResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MarkWorkerUnavailable not implemented")
 }
 func (UnimplementedControlServer) ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListWorkerActorAssignments not implemented")
@@ -1342,6 +1396,42 @@ func _Control_DrainWorker_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_MarkWorkerAvailable_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkWorkerAvailableRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).MarkWorkerAvailable(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_MarkWorkerAvailable_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).MarkWorkerAvailable(ctx, req.(*MarkWorkerAvailableRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_MarkWorkerUnavailable_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkWorkerUnavailableRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).MarkWorkerUnavailable(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_MarkWorkerUnavailable_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).MarkWorkerUnavailable(ctx, req.(*MarkWorkerUnavailableRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_ListWorkerActorAssignments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListWorkerActorAssignmentsRequest)
 	if err := dec(in); err != nil {
@@ -1756,6 +1846,14 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_DrainWorker_Handler,
 		},
 		{
+			MethodName: "MarkWorkerAvailable",
+			Handler:    _Control_MarkWorkerAvailable_Handler,
+		},
+		{
+			MethodName: "MarkWorkerUnavailable",
+			Handler:    _Control_MarkWorkerUnavailable_Handler,
+		},
+		{
 			MethodName: "ListWorkerActorAssignments",
 			Handler:    _Control_ListWorkerActorAssignments_Handler,
 		},
@@ -1831,6 +1929,7 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 const (
 	WorkerService_RegisterWorker_FullMethodName            = "/ateapi.WorkerService/RegisterWorker"
 	WorkerService_MintAteomActorCertificate_FullMethodName = "/ateapi.WorkerService/MintAteomActorCertificate"
+	WorkerService_MintAteomActorJwt_FullMethodName         = "/ateapi.WorkerService/MintAteomActorJwt"
 	WorkerService_RequestActorSuspend_FullMethodName       = "/ateapi.WorkerService/RequestActorSuspend"
 	WorkerService_ReportActorSnapshotState_FullMethodName  = "/ateapi.WorkerService/ReportActorSnapshotState"
 )
@@ -1860,6 +1959,17 @@ type WorkerServiceClient interface {
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
 	MintAteomActorCertificate(ctx context.Context, in *MintAteomActorCertificateRequest, opts ...grpc.CallOption) (*MintAteomActorCertificateResponse, error)
+	// MintAteomActorJwt creates a Substrate-issued JWT that asserts an ateom
+	// acting on behalf of a particular actor: the JWT counterpart of
+	// MintAteomActorCertificate. atelet calls it with its own client
+	// certificate and hands the JWT to node-side plugins, which exchange it for
+	// credentials scoped to that actor.
+	//
+	// The token speaks for the ateom, not the actor: its subject is
+	// `ateom-for-actor/<atespace>/<name>` and its claims sit under
+	// `ateom-for-actor.ate.dev`, see MintAteomActorJwtResponse. The lifetime is
+	// fixed at one hour.
+	MintAteomActorJwt(ctx context.Context, in *MintAteomActorJwtRequest, opts ...grpc.CallOption) (*MintAteomActorJwtResponse, error)
 	// RequestActorSuspend asks the control plane to suspend an Actor that the
 	// calling Worker hosts. Only the Worker can observe what makes an Actor
 	// worth reclaiming -- whether its workload still has anything to do -- and
@@ -1923,6 +2033,16 @@ func (c *workerServiceClient) MintAteomActorCertificate(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *workerServiceClient) MintAteomActorJwt(ctx context.Context, in *MintAteomActorJwtRequest, opts ...grpc.CallOption) (*MintAteomActorJwtResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MintAteomActorJwtResponse)
+	err := c.cc.Invoke(ctx, WorkerService_MintAteomActorJwt_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RequestActorSuspendResponse)
@@ -1968,6 +2088,17 @@ type WorkerServiceServer interface {
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
 	MintAteomActorCertificate(context.Context, *MintAteomActorCertificateRequest) (*MintAteomActorCertificateResponse, error)
+	// MintAteomActorJwt creates a Substrate-issued JWT that asserts an ateom
+	// acting on behalf of a particular actor: the JWT counterpart of
+	// MintAteomActorCertificate. atelet calls it with its own client
+	// certificate and hands the JWT to node-side plugins, which exchange it for
+	// credentials scoped to that actor.
+	//
+	// The token speaks for the ateom, not the actor: its subject is
+	// `ateom-for-actor/<atespace>/<name>` and its claims sit under
+	// `ateom-for-actor.ate.dev`, see MintAteomActorJwtResponse. The lifetime is
+	// fixed at one hour.
+	MintAteomActorJwt(context.Context, *MintAteomActorJwtRequest) (*MintAteomActorJwtResponse, error)
 	// RequestActorSuspend asks the control plane to suspend an Actor that the
 	// calling Worker hosts. Only the Worker can observe what makes an Actor
 	// worth reclaiming -- whether its workload still has anything to do -- and
@@ -2016,6 +2147,9 @@ func (UnimplementedWorkerServiceServer) RegisterWorker(context.Context, *Registe
 }
 func (UnimplementedWorkerServiceServer) MintAteomActorCertificate(context.Context, *MintAteomActorCertificateRequest) (*MintAteomActorCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintAteomActorCertificate not implemented")
+}
+func (UnimplementedWorkerServiceServer) MintAteomActorJwt(context.Context, *MintAteomActorJwtRequest) (*MintAteomActorJwtResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MintAteomActorJwt not implemented")
 }
 func (UnimplementedWorkerServiceServer) RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RequestActorSuspend not implemented")
@@ -2080,6 +2214,24 @@ func _WorkerService_MintAteomActorCertificate_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_MintAteomActorJwt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MintAteomActorJwtRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).MintAteomActorJwt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_MintAteomActorJwt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).MintAteomActorJwt(ctx, req.(*MintAteomActorJwtRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_RequestActorSuspend_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RequestActorSuspendRequest)
 	if err := dec(in); err != nil {
@@ -2130,6 +2282,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MintAteomActorCertificate",
 			Handler:    _WorkerService_MintAteomActorCertificate_Handler,
+		},
+		{
+			MethodName: "MintAteomActorJwt",
+			Handler:    _WorkerService_MintAteomActorJwt_Handler,
 		},
 		{
 			MethodName: "RequestActorSuspend",

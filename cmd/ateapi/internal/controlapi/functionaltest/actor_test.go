@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -197,7 +198,7 @@ func TestCreateActor_SubstrateTemplateRef(t *testing.T) {
 			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "sub-tmpl"},
 			Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
 		},
 	}); err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
@@ -320,7 +321,7 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl1"},
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"},
 			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				SandboxClass: "gvisor",
 				ConfigName:   "gvisor-default",
 			},
 			Containers: []*ateapipb.Container{{
@@ -767,7 +768,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 						}},
 						Volumes:        tmpl.volumes,
 						SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-						SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: tmpl.configName},
+						SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: tmpl.configName},
 					},
 				}); err != nil {
 					t.Fatalf("CreateActorTemplate %s failed: %v", name, err)
@@ -3098,7 +3099,7 @@ func createDataFidelityTemplate(t *testing.T, tc *testContext, ns string) *ateap
 				PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				SandboxClass: "gvisor",
 				ConfigName:   "gvisor-default",
 			},
 			Containers: []*ateapipb.Container{{
@@ -5308,8 +5309,12 @@ func TestMintActorJWT_Success(t *testing.T) {
 	if want := "actor/" + testAtespace + "/id1"; claims.Subject != want {
 		t.Errorf("sub = %q, want %q", claims.Subject, want)
 	}
-	if want := createResp.GetMetadata().GetUid(); claims.Substrate.ActorUID != want {
-		t.Errorf("ate.dev.actorUID = %q, want the stored actor's %q", claims.Substrate.ActorUID, want)
+	kind, substrate, ok := claims.Substrate()
+	if !ok || kind != actoridjwt.KindActor {
+		t.Fatalf("token kind = %v (ok %v), want KindActor under actor.ate.dev", kind, ok)
+	}
+	if want := createResp.GetMetadata().GetUid(); substrate.ActorUID != want {
+		t.Errorf("actor.ate.dev.actorUID = %q, want the stored actor's %q", substrate.ActorUID, want)
 	}
 	assertActorJWTLifetime(t, mintResp, claims, 30*time.Minute)
 }
@@ -5823,4 +5828,310 @@ func TestDeleteActor_Preconditions(t *testing.T) {
 	}
 	_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
 	assertGrpcError(t, err, codes.NotFound, "Actor "+actorRef.String()+" not found")
+}
+
+// reportWorkerRuntime writes defaultRT and restorableRTs to workerName's status
+// and waits for the worker cache to observe the update.
+func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defaultRT *ateapipb.SandboxRuntime, restorableRTs ...*ateapipb.SandboxRuntime) {
+	t.Helper()
+	ctx := context.Background()
+	cur, err := tc.persistence.GetWorker(ctx, workerName)
+	if err != nil {
+		t.Fatalf("GetWorker(%s): %v", workerName, err)
+	}
+	if _, err := tc.persistence.UpdateWorker(ctx, workerName, store.PreconditionFrom(cur), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Status.DefaultRuntime = proto.Clone(defaultRT).(*ateapipb.SandboxRuntime)
+		toUpdate.Status.RestorableRuntimes = nil
+		for _, r := range restorableRTs {
+			toUpdate.Status.RestorableRuntimes = append(toUpdate.Status.RestorableRuntimes, proto.Clone(r).(*ateapipb.SandboxRuntime))
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateWorker(%s): %v", workerName, err)
+	}
+	if err := wait.PollUntilContextTimeout(ctx, 10*time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
+		got, err := tc.workerCache.Worker(workerName)
+		return err == nil &&
+			proto.Equal(got.GetStatus().GetDefaultRuntime(), defaultRT) &&
+			slices.EqualFunc(got.GetStatus().GetRestorableRuntimes(), restorableRTs, func(a, b *ateapipb.SandboxRuntime) bool { return proto.Equal(a, b) }), nil
+	}); err != nil {
+		t.Fatalf("worker %s runtime never reached worker cache: %v", workerName, err)
+	}
+}
+
+// TestResumeActor_SandboxRuntimePlacementAndFallback exercises the end-to-end
+// runtime stamping, placement, and fallback lifecycle across two workers
+// advertising different SandboxRuntimes:
+//  1. CreateActor -> ResumeActor -> SuspendActor stamps the worker's runtime
+//     onto WorkerAssignment and then onto the resulting Snapshot.
+//  2. A subsequent ResumeActor places the actor onto the runtime-compatible
+//     worker and restores at full MEMORY fidelity when that worker has room.
+//  3. When the compatible worker is full, ResumeActor falls back to the other
+//     worker, downgrades the restore to VOLUMES whether the snapshot is the
+//     actor's own or a borrowed golden, and re-stamps the new worker's runtime
+//     on the next SuspendActor.
+//  4. When the other worker advertises the snapshot's runtime in
+//     restorable_runtimes, ResumeActor restores at full MEMORY fidelity,
+//     records the matched restorable runtime on WorkerAssignment, and preserves
+//     that stamp through PauseActor and SuspendActor-from-PAUSED.
+func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
+	ns := namespaceForTest("ns-runtime-fallback")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	ctx := context.Background()
+	tmpl := createTemplate(t, tc, ns)
+
+	rtA := &ateapipb.SandboxRuntime{
+		SandboxClass: "gvisor",
+		Version: &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateapipb.AttributeEntry{
+				{Key: "architecture", Value: "amd64"},
+				{Key: "gvisor_asset_hash", Value: "hash-a"},
+			},
+		},
+	}
+	rtB := &ateapipb.SandboxRuntime{
+		SandboxClass: "gvisor",
+		Version: &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateapipb.AttributeEntry{
+				{Key: "architecture", Value: "amd64"},
+				{Key: "gvisor_asset_hash", Value: "hash-b"},
+			},
+		},
+	}
+
+	// Start with worker-a advertising rtA so the initial resume lands on rtA.
+	workerA := createWorkerPod(t, tc, ns, "worker-a", "node1", "pool1")
+	reportWorkerRuntime(t, tc, workerA, rtA)
+
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-1"}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "actor-1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	resumed1, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("initial ResumeActor failed: %v", err)
+	}
+	if got := resumed1.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(); !proto.Equal(got, rtA) {
+		t.Fatalf("initial WorkerAssignment.SandboxRuntime = %v, want %v", got, rtA)
+	}
+
+	suspended1, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("first SuspendActor failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerA)
+	if got := durableSnapshot(suspended1.GetActor().GetStatus()).GetSandboxRuntime(); !proto.Equal(got, rtA) {
+		t.Fatalf("first Snapshot.SandboxRuntime = %v, want %v", got, rtA)
+	}
+
+	// Add worker-b advertising an incompatible runtime (rtB). With both workers
+	// idle, resuming actor-1 must select worker-a and restore at MEMORY fidelity.
+	workerB := createWorkerPod(t, tc, ns, "worker-b", "node1", "pool1")
+	reportWorkerRuntime(t, tc, workerB, rtB)
+
+	resumed2, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("second ResumeActor failed: %v", err)
+	}
+	if got := resumed2.GetActor().GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "worker-a" {
+		t.Fatalf("second ResumeActor placed on %q, want worker-a", got)
+	}
+	if got := resumed2.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(); !proto.Equal(got, rtA) {
+		t.Fatalf("second WorkerAssignment.SandboxRuntime = %v, want %v", got, rtA)
+	}
+	if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		t.Fatalf("second RestoreRequest.Fidelity = %v, want MEMORY", got)
+	}
+
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("second SuspendActor failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerA)
+
+	// Tag actor-1's rtA snapshot and occupy worker-a with a blocker actor seeded
+	// from that tag so the rtA worker is at capacity.
+	tagRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag-rt-a"}
+	tag, err := tc.client.CreateTag(ctx, &ateapipb.CreateTagRequest{
+		Tag: &ateapipb.Tag{
+			Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag-rt-a"},
+			SourceActor: actorRef,
+			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTag failed: %v", err)
+	}
+	if got := tag.GetStatus().GetSnapshot().GetSandboxRuntime(); !proto.Equal(got, rtA) {
+		t.Fatalf("Tag.Snapshot.SandboxRuntime = %v, want %v", got, rtA)
+	}
+
+	blockerRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "blocker"}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "blocker"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     tagRef,
+	}}); err != nil {
+		t.Fatalf("CreateActor(blocker) failed: %v", err)
+	}
+	blockerResumed, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: blockerRef})
+	if err != nil {
+		t.Fatalf("ResumeActor(blocker) failed: %v", err)
+	}
+	if got := blockerResumed.GetActor().GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "worker-a" {
+		t.Fatalf("blocker placed on %q, want worker-a", got)
+	}
+
+	// With worker-a full, resuming actor-1 must fall back to worker-b, downgrade
+	// the restore to VOLUMES fidelity, and re-stamp rtB on the next suspend.
+	resumed3, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("fallback ResumeActor failed: %v", err)
+	}
+	if got := resumed3.GetActor().GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "worker-b" {
+		t.Fatalf("fallback ResumeActor placed on %q, want worker-b", got)
+	}
+	if got := resumed3.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(); !proto.Equal(got, rtB) {
+		t.Fatalf("fallback WorkerAssignment.SandboxRuntime = %v, want %v", got, rtB)
+	}
+	if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		t.Fatalf("fallback RestoreRequest.Fidelity = %v, want VOLUMES", got)
+	}
+
+	suspended3, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("SuspendActor after fallback failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerB)
+	if got := durableSnapshot(suspended3.GetActor().GetStatus()).GetSandboxRuntime(); !proto.Equal(got, rtB) {
+		t.Fatalf("Snapshot.SandboxRuntime after fallback suspend = %v, want %v", got, rtB)
+	}
+
+	// Point the template's golden tag at a golden snapshot stamped with rtA and
+	// verify that a newly created actor borrowing the golden snapshot, when
+	// worker-a is full and it falls back onto worker-b, restores the golden at
+	// VOLUMES fidelity like any other durable snapshot rather than cold-booting.
+	goldenSnap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t))
+	goldenSnap.SandboxRuntime = proto.Clone(rtA).(*ateapipb.SandboxRuntime)
+	stampedGoldenTag, err := tc.persistence.CreateTag(ctx, &ateapipb.Tag{
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: "golden-rt-a"},
+		SourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()},
+		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
+		Status: &ateapipb.TagStatus{
+			Snapshot:         goldenSnap,
+			ActorTemplateUid: tmpl.GetMetadata().GetUid(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTag(golden-rt-a): %v", err)
+	}
+	curTmpl, err := tc.persistence.GetActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl))
+	if err != nil {
+		t.Fatalf("GetActorTemplate: %v", err)
+	}
+	if _, err := tc.persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(curTmpl), store.PreconditionFrom(curTmpl), func(dbTemplate *ateapipb.ActorTemplate) error {
+		dbTemplate.Status.GoldenSnapshotStatus.GoldenTag = resources.TagRefFromTag(stampedGoldenTag).ToObjectRef()
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateActorTemplate(golden): %v", err)
+	}
+
+	goldenActorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "golden-actor"}
+	goldenCreated, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "golden-actor"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}})
+	if err != nil {
+		t.Fatalf("CreateActor(golden-actor) failed: %v", err)
+	}
+	if got := durableSnapshot(goldenCreated.GetStatus()).GetSandboxRuntime(); !proto.Equal(got, rtA) {
+		t.Fatalf("golden-actor initial Snapshot.SandboxRuntime = %v, want %v", got, rtA)
+	}
+
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.RunCalled = false
+	tc.fakeAtelet.RestoreCalled = false
+	tc.fakeAtelet.Lock.Unlock()
+
+	goldenResumed, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: goldenActorRef})
+	if err != nil {
+		t.Fatalf("ResumeActor(golden-actor) failed: %v", err)
+	}
+	if got := goldenResumed.GetActor().GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "worker-b" {
+		t.Fatalf("golden-actor placed on %q, want worker-b", got)
+	}
+	if got := goldenResumed.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(); !proto.Equal(got, rtB) {
+		t.Fatalf("golden-actor WorkerAssignment.SandboxRuntime = %v, want %v", got, rtB)
+	}
+	tc.fakeAtelet.Lock.Lock()
+	runCalled := tc.fakeAtelet.RunCalled
+	restoreCalled := tc.fakeAtelet.RestoreCalled
+	tc.fakeAtelet.Lock.Unlock()
+	if runCalled || !restoreCalled {
+		t.Fatalf("golden-actor fallback: RunCalled=%v RestoreCalled=%v, want RunCalled=false RestoreCalled=true", runCalled, restoreCalled)
+	}
+	goldenRestore := tc.fakeAtelet.lastRestoreRequest()
+	if got := goldenRestore.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		t.Fatalf("golden-actor RestoreRequest.Fidelity = %v, want VOLUMES", got)
+	}
+	if got, want := goldenRestore.GetSnapshot().GetObject().GetSnapshotUri(), goldenSnapshotURI(t); got != want {
+		t.Fatalf("golden-actor RestoreRequest.SnapshotUri = %q, want golden %q", got, want)
+	}
+
+	// Free worker-b and have it advertise rtA in restorable_runtimes while
+	// keeping rtB as its default. Resuming an actor whose snapshot requires rtA
+	// onto worker-b (with worker-a still full) must restore at MEMORY fidelity,
+	// record the matched restorable entry (rtA, not rtB) on WorkerAssignment,
+	// and preserve rtA through PauseActor and SuspendActor-from-PAUSED.
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: goldenActorRef}); err != nil {
+		t.Fatalf("SuspendActor(golden-actor) failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerB)
+	reportWorkerRuntime(t, tc, workerB, rtB, rtA)
+
+	restorableRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "restorable-actor"}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "restorable-actor"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     tagRef,
+	}}); err != nil {
+		t.Fatalf("CreateActor(restorable-actor) failed: %v", err)
+	}
+	restorableResumed, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: restorableRef})
+	if err != nil {
+		t.Fatalf("ResumeActor(restorable-actor) failed: %v", err)
+	}
+	if got := restorableResumed.GetActor().GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "worker-b" {
+		t.Fatalf("restorable-actor placed on %q, want worker-b", got)
+	}
+	if got := restorableResumed.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(); !proto.Equal(got, rtA) {
+		t.Fatalf("restorable-actor WorkerAssignment.SandboxRuntime = %v, want matched restorable %v", got, rtA)
+	}
+	if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		t.Fatalf("restorable-actor RestoreRequest.Fidelity = %v, want MEMORY", got)
+	}
+
+	pausedResp, err := tc.client.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: restorableRef})
+	if err != nil {
+		t.Fatalf("PauseActor(restorable-actor) failed: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerB)
+	if got := localSnapshot(pausedResp.GetActor().GetStatus()).GetSandboxRuntime(); !proto.Equal(got, rtA) {
+		t.Fatalf("paused local Snapshot.SandboxRuntime = %v, want %v", got, rtA)
+	}
+
+	suspendedFromPaused, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: restorableRef})
+	if err != nil {
+		t.Fatalf("SuspendActor from PAUSED(restorable-actor) failed: %v", err)
+	}
+	if got := durableSnapshot(suspendedFromPaused.GetActor().GetStatus()).GetSandboxRuntime(); !proto.Equal(got, rtA) {
+		t.Fatalf("durable Snapshot.SandboxRuntime after SuspendActor from PAUSED = %v, want %v", got, rtA)
+	}
 }
