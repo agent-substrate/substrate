@@ -130,7 +130,7 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 
 	// Start before the factory: the informer's initial list is what seeds the
 	// queue with the pods that already exist.
-	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer).Start(ctx)
+	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer, 2).Start(ctx)
 	workerFactory.Start(ctx.Done())
 	workerFactory.WaitForCacheSync(ctx.Done())
 
@@ -149,7 +149,7 @@ func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1alpha
 	_, workerInformer := WorkerPodInformer(fakeK8s)
 	workerPoolInformer, poolIndexer := newWorkerPoolInformer(t, initPools...)
 
-	return NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer), workerInformer.GetIndexer(), poolIndexer
+	return NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer, 2), workerInformer.GetIndexer(), poolIndexer
 }
 
 // seedPod puts a pod in the syncer's cache as though the informer had delivered
@@ -519,7 +519,7 @@ func TestSyncer_EnqueueRegisteredWorkers_StreamsPagesAndRetriesLatePage(t *testi
 	// The second page fails once before serving.
 	failed := false
 	api.setListHook(func(req *ateapipb.ListWorkersRequest) error {
-		if req.GetPageToken() == "1" && !failed {
+		if req.GetOptions().GetPageToken() == "1" && !failed {
 			failed = true
 			return status.Error(codes.Unavailable, "transient failure on page")
 		}

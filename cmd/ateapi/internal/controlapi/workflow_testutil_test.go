@@ -42,7 +42,7 @@ func testWorkerUID(podName string) string {
 // unit tests never reach (worker cache, atelet dialer, k8s clients) are nil,
 // so a step that unexpectedly executes against them fails the test loudly.
 // External snapshots go to an in-memory object store through the control
-// snapshot plugin.
+// object-store plugin.
 func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplName string) *ActorWorkflow {
 	t.Helper()
 	storetest.MustCreateAtespace(t, context.Background(), st, tmplAtespace)
@@ -66,7 +66,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 // directly rather than going through newTestActorWorkflow.
 func newFinalizeWorkflow(persistence store.Interface) (*ActorWorkflow, *objectstoretest.Fake) {
 	objects := objectstoretest.New()
-	return &ActorWorkflow{store: persistence, snapshotPlugin: objectstoreplugintest.ControlClient(objects)}, objects
+	return &ActorWorkflow{store: persistence, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}, objects
 }
 
 // mustActorSnapshotURI builds the URI of a snapshot the actor took under
@@ -147,6 +147,31 @@ func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, ac
 	storetest.MustCreateActor(t, ctx, st, actor)
 }
 
+// withPausedShape seeds the shape a pause leaves behind: a node-local
+// snapshot at the latest generation, pinned to node. Pair it with
+// ACTOR_STATE_SUSPENDED to seed a paused actor.
+func withPausedShape(node string) func(*ateapipb.Actor) {
+	return func(a *ateapipb.Actor) {
+		a.Status.AssignedNode = node
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", node),
+		}
+	}
+}
+
+// withPauseInProgress seeds the shape a pause has between MarkPausing and
+// FinalizePaused: a node-local snapshot at the latest generation that has no
+// locality yet. Pair it with ACTOR_STATE_SUSPENDING.
+func withPauseInProgress() func(*ateapipb.Actor) {
+	return func(a *ateapipb.Actor) {
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", ""),
+		}
+	}
+}
+
 // allActorStates enumerates every ActorState value, for exhaustive
 // CheckPrerequisite table tests. It is derived from the generated enum map so
 // states added to the proto are covered automatically.
@@ -179,5 +204,52 @@ func assertPrerequisiteResult(t *testing.T, st ateapipb.ActorState, err error, w
 	}
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Errorf("state %v: status.Code = %v, want %v", st, got, codes.FailedPrecondition)
+	}
+}
+
+// workerDeletedDuringReleaseStore runs the DeleteWorker workflow's release of
+// an actor right after a finalize step frees the actor's worker. That workflow
+// takes no actor lease, so its crash can land between the step's read of the
+// actor and its write.
+type workerDeletedDuringReleaseStore struct {
+	store.Interface
+}
+
+func (s workerDeletedDuringReleaseStore) ReleaseActorFromWorker(ctx context.Context, workerName, actorUID string) (*ateapipb.Worker, error) {
+	worker, err := s.Interface.GetWorker(ctx, workerName)
+	if err != nil {
+		return nil, err
+	}
+	assignment, err := s.Interface.GetWorkerAssignment(ctx, workerName, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	released, err := s.Interface.ReleaseActorFromWorker(ctx, workerName, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	if err := NewWorkerWorkflow(s.Interface).releaseBoundActor(ctx, worker, assignment); err != nil {
+		return nil, err
+	}
+	return released, nil
+}
+
+// assertConcurrentCrashKept verifies that a finalize step racing
+// workerDeletedDuringReleaseStore failed as Aborted and left the actor CRASHED
+// with the crash DeleteWorker recorded, rather than committing over it.
+func assertConcurrentCrashKept(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, finalizeErr error, wantCrash string) {
+	t.Helper()
+	if got := apierror.Code(finalizeErr); got != codes.Aborted {
+		t.Errorf("finalize error = %v, want code %v", finalizeErr, codes.Aborted)
+	}
+	got, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
+	}
+	if msg := got.GetStatus().GetCrash().GetMessage(); msg != wantCrash {
+		t.Errorf("crash message = %q, want %q", msg, wantCrash)
 	}
 }

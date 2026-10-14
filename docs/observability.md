@@ -28,7 +28,7 @@ Agent Substrate captures container standard output/error, wraps them into struct
 For quick, on-demand debugging of an active actor, use the Agent Substrate CLI:
 
 ```bash
-kubectl ate logs actors <actor-name> --atespace <atespace> [--follow / -f]
+kubectl ate logs actor <actor-name> --atespace <atespace> [--follow / -f]
 ```
 
 `--atespace` (short form `-a`) is required: actor names are only unique within
@@ -40,7 +40,7 @@ an atespace, so an actor is always addressed by `(atespace, name)`.
 If an actor is suspended or not assigned to a worker pod, the CLI informs you immediately:
 
 ```bash
-$ kubectl ate logs actors test -a demo
+$ kubectl ate logs actor test -a demo
 Error: actor test is not currently running on any worker pod
 ```
 
@@ -48,7 +48,7 @@ Error: actor test is not currently running on any worker pod
 When an active actor is assigned to a worker pod, the CLI outputs clean, uniform JSON lines stripped of Substrate metadata, perfectly matching standard `kubectl logs` behavior:
 
 ```bash
-$ kubectl ate logs actors test -a demo
+$ kubectl ate logs actor test -a demo
 {"time":"2026-05-22T21:49:15.23700774Z","message":"Actor started"}
 {"time":"2026-05-22T21:49:15.23700774Z","level":"INFO","msg":"Starting counter server on port 80"}
 {"time":"2026-05-22T21:49:15.255765354Z","count":0,"fshash":"mCY7G4S318ztOUojPTF2NA/W+ZSmWyr+T5K3udFuP50","level":"INFO","msg":"Count"}
@@ -59,7 +59,7 @@ $ kubectl ate logs actors test -a demo
 To stream actor logs in real-time, append the `--follow` (or `-f`) flag. The CLI is fully actor-aware, automatically resuming the stream if the actor is suspended or migrates to a different worker pod:
 
 ```bash
-$ kubectl ate logs actors test -a demo -f
+$ kubectl ate logs actor test -a demo -f
 Actor is currently running on pod ate-demo-counter/counter-d8f99-m7d96
 {"time":"2026-05-22T21:49:15.255765354Z","count":0,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 {"time":"2026-05-22T21:49:25.263744806Z","count":1,"fshash":"mCY7...","level":"INFO","msg":"Count"}
@@ -71,13 +71,13 @@ Actor is currently running on pod ate-demo-counter/counter-ab123-x4y5z
 An actor can run several containers. By default every line is shown, including the synthetic lifecycle events (`Actor starting`, `Actor started`, `Actor checkpointing`, `Actor checkpointed`, `Actor restoring`, `Actor restored`, `Actor terminated`). `--container` (short form `-c`) restricts the output to the named container's logs:
 
 ```bash
-kubectl ate logs actors <actor-name> -a <atespace> -c <container-name>
+kubectl ate logs actor <actor-name> -a <atespace> -c <container-name>
 ```
 
 `--source` selects a class of lines instead of a container. `containers` shows every container's output with the lifecycle events removed; `lifecycle` shows only the lifecycle events, which is the quickest way to see how often an actor has been suspended and restored on its current worker (a migration moves the actor to another pod, whose log holds none of the earlier workers' events):
 
 ```bash
-$ kubectl ate logs actors test -a demo --source=lifecycle
+$ kubectl ate logs actor test -a demo --source=lifecycle
 {"time":"2026-10-07T21:31:48.648599369Z","message":"Actor checkpointing","span_id":"c475...","trace_flags":"01","trace_id":"e617..."}
 {"time":"2026-10-07T21:31:48.791435032Z","message":"Actor checkpointed","span_id":"c475...","trace_flags":"01","trace_id":"e617..."}
 {"time":"2026-10-07T21:31:59.772566601Z","message":"Actor restoring","span_id":"a68c...","trace_flags":"01","trace_id":"b387..."}
@@ -214,7 +214,7 @@ Three `event.name` values, which is the OTLP LogRecord's own field rather than a
 
 `ate.actor.usage_sampled` is the ateoms' record: one per actor per sampling interval, plus an `initial` record per activation and a `final` one when the ateom tears it down, told apart by `ate.stats.kind`. Its timestamp is when the measurement was read. Its measurements are named after the `ate.actor.stats.*` instruments and share their units, so `ate.stats.cpu.time` is seconds. They are absent, not zero, while the actor is not measurable, which the record says with `ate.stats.source` unspecified. `ate.stats.cpu.time` restarts at zero with each `ate.actor.epoch`, the unix-nano time the activation began, so a lifetime figure is the sum over epochs of each epoch's highest value; `ate.stats.memory.usage` and `ate.stats.memory.working_set` are absolute, and `ate.stats.memory.peak` is as the source reports it. The same measurements ride `WorkloadStatsSample` on the stats RPCs, with the epoch beside them.
 
-A crash is its own name because an event name promises a set of attributes and a crash has a different severity and shape. There is no name per state: `ate.actor.state` already says which transition happened, so a consumer still selects on that one attribute and needs no map from a name to a state. All three names are in [`docs/metrics/registry/events.yaml`](metrics/registry/events.yaml), which `make verify` checks.
+A crash is its own name because an event name promises a set of attributes and a crash has a different severity and shape. There is no name per state: `ate.actor.state` already says which transition happened, so a consumer still selects on that one attribute and needs no map from a name to a state. All three names are in [`docs/metrics/registry/events.yaml`](metrics/registry/events.yaml), which `hack/verify-all.sh` checks.
 
 The attributes are the same flat `ate.*` keys as the stdout record, so they arrive as real log attributes with no transform in front of them. Trace context is not among them: it goes on the record's own `TraceId` and `SpanId` fields, where the stdout record's top-level `trace_id`/`span_id` would be mapped to anyway. The instrumentation scope is `github.com/agent-substrate/substrate/internal/actorevent` for every actor event. Select or drop a stream by `event.name`: the lifecycle events must never be sampled, the usage samples may be.
 
@@ -264,7 +264,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
-| `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
+| `rpc.server.call.duration` | ateapi, atelet, atenet-router, ateom-gvisor, ateom-microvm & credprovider (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
 | `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` (labels `ate.actor.operation.name`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.atespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed allocated size in bytes of each snapshot image written during checkpoint (`st_blocks * 512`, excluding sparse holes in micro-VM `memory-ranges`) (labels `file.name`, `ate.template.atespace`, `ate.template.name`) |
@@ -273,7 +273,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `ate.workerpool.ready_workers` | atecontroller | up/down counter | number of worker pods currently ready for a WorkerPool, from `status.readyReplicas` (labels
 `ate.workerpool.namespace`, `ate.workerpool.name`) |
 | `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`partial`/`at_capacity`/`unschedulable`) and sandbox class to provide fleet capacity and saturation at a glance |
-| `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/pause/delete/revert) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool (`ate.workerpool.namespace` + `ate.workerpool.name`), sandbox class, and snapshot kind and scope on resume; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
+| `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/pause/delete/revert) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool (`ate.workerpool.namespace` + `ate.workerpool.name`), sandbox class, snapshot kind on resume, and snapshot fidelity on resume, suspend, and pause; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
 | `ate.scheduler.assignment.duration` | ateapi | histogram | time of one attempt to assign a worker to an actor, with one record for each resume (ateapi retries an attempt that loses a race for a worker and records only the last attempt), with the outcome (`assigned` / `no_capacity` / `error`), the assigned pool (`ate.workerpool.namespace` + `ate.workerpool.name`) and sandbox class to catch scheduling latency and capacity starvation problems |
 | `ate.actor.restore.duration` | atelet | histogram | how long each phase of a restore takes on the worker node, which is where cold-start latency actually goes once ateapi hands off (labels `ate.snapshot.phase`, `ate.snapshot.kind`, `ate.snapshot.fidelity`, `ate.template.atespace`, `ate.template.name`, `ate.sandbox.class`) |
 | `ate.actor.checkpoint.duration` | atelet | histogram | the same phase breakdown for writing a snapshot, so a slow suspend can be attributed to ateom or to the upload (same labels as the restore histogram) |
@@ -320,7 +320,7 @@ hack/verify/metrics.sh                           # the command that CI uses
 weaver registry check -r docs/metrics/registry   # the same command, direct
 ```
 
-`make verify` runs the script. It uses a local `weaver` binary if there is one, and the official image if there is none.
+`hack/verify-all.sh` runs the script. It uses a local `weaver` binary if there is one, and the official image if there is none.
 
 **To add or change an instrument:** follow [Metrics Best Practices](dev/best-practices/metrics.md), which covers the instrument choice, the labels, the Go, the test, and the registry entry; then change `metrics.yaml` and run the script.
 
@@ -344,7 +344,7 @@ Weaver permits only `groups` and `imports` at the top level of a registry file, 
 
 ### Bridged controller-runtime metrics (atecontroller)
 
-atecontroller bridges controller-runtime's private Prometheus registry, which the manager serves on an unscraped `:8080`, onto its OTLP reader. So `controller_runtime_*`, `workqueue_*`, `certwatcher_*`, `rest_client_*`, `leader_election_*`, `go_*`, and `process_*` reach the collector too, keeping their Prometheus names because they are upstream instruments and renaming them would break existing controller-runtime dashboards.
+atecontroller bridges controller-runtime's private Prometheus registry, which the manager serves on `:8080` only while `OTEL_METRICS_EXPORTER` leaves it on (see [Scraping instead of pushing](#scraping-instead-of-pushing)), onto its OTLP reader. So `controller_runtime_*`, `workqueue_*`, `certwatcher_*`, `rest_client_*`, `leader_election_*`, `go_*`, and `process_*` reach the collector too, keeping their Prometheus names because they are upstream instruments and renaming them would break existing controller-runtime dashboards.
 
 These can be used to answer whether the controller is keeping up, e.g. rising `workqueue_depth` or `workqueue_queue_duration_seconds` means reconciles are falling behind, and `controller_runtime_reconcile_errors_total` says which controller.
 
@@ -356,7 +356,9 @@ A queue that has never processed an item bridges as an exponential histogram wit
 
 ### Scraping instead of pushing
 
-ateapi, atelet, atenet-router and the credential provider also serve every instrument on their Prometheus `/metrics` endpoint. A cluster that scrapes those endpoints sets `OTEL_METRICS_EXPORTER=none` on the components, so each series reaches the backend once. With `none` the components install no OTLP metric reader and keep the Prometheus one; traces and logs are unaffected. atecontroller then registers its instruments (`ate.workerpool.*`) on controller-runtime's registry, so the manager's `:8080` serves them next to the controller-runtime families. ateom serves no endpoint of its own, so leave the variable unset on the worker pods, or it exports no metrics at all. The variable takes a comma-separated list, with the same rules as `OTEL_LOGS_EXPORTER`. `otlp` (the default) keeps the push, and `prometheus` or `none` stops it. `/metrics` stays on for each value. ateom serves no `/metrics`, so there `prometheus` is skipped as unknown with a warning, and the push stays on unless the variable is `none`.
+ateapi, atelet, atenet-router and the credential provider also serve every instrument on their Prometheus `/metrics` endpoint. A cluster that scrapes those endpoints sets `OTEL_METRICS_EXPORTER=prometheus` on the components, so each series reaches the backend once. With `prometheus` the components install no OTLP metric reader and keep the Prometheus one; traces and logs are unaffected. `none` stops the push too. For now `/metrics` stays on for every value, including `otlp` and `none`. This is temporary until the probes move off `:9090`; `otlp` and `none` will then turn it off ([#2067](https://github.com/agent-substrate/substrate/issues/2067)). The variable takes a comma-separated list, with the same rules as `OTEL_LOGS_EXPORTER`. Unset is `otlp,prometheus`, or `otlp` alone on ateom. `otlp` keeps the push, and `prometheus` or `none` stops it. ateom serves no `/metrics`, so there `prometheus` is skipped as unknown with a warning, and the push stays on unless the variable is `none`.
+
+atecontroller's `:8080` listener follows the variable. When the variable is unset or `otlp,prometheus`, atecontroller pushes every metric over OTLP, and `:8080` serves only the controller-runtime families ([#2402](https://github.com/agent-substrate/substrate/issues/2402)). With `otlp`, atecontroller pushes every metric and closes `:8080`. With `prometheus`, atecontroller does not push, and `:8080` serves the controller-runtime families and the `ate.workerpool.*` instruments. With `none`, atecontroller does not push and closes `:8080`.
 
 ### Local Metrics with Prometheus (Kind Cluster)
 

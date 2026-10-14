@@ -48,8 +48,7 @@ func (s *RPCService) ListWorkerActorAssignments(ctx context.Context, req *ateapi
 		return nil, fmt.Errorf("while fetching worker %s: %w", name, err)
 	}
 
-	page, err := s.impl.ListWorkerAssignments(ctx, name,
-		store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListWorkerAssignments(ctx, name, toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing the assignments of worker %s: %w", name, err))
 	}
@@ -64,7 +63,7 @@ func (s *RPCService) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersR
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListWorkers(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListWorkers(ctx, toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing workers in db: %w", err))
 	}
@@ -132,10 +131,11 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 		ObservedEpoch: inWorker.GetEpoch(),
 	}
 
-	// Capacity and hardware are left unset: a Worker holds nothing until its
-	// own ateom says what it has, through WorkerService.RegisterWorker. Nothing is placed
-	// on it in the meantime, which is the point -- the alternative is guessing
-	// on the Worker's behalf and placing against the guess.
+	// Capacity and runtimes are left unset: a Worker holds nothing and runs no
+	// sandbox until its own ateom says what it has, through
+	// WorkerService.RegisterWorker. Nothing is placed on it in the meantime,
+	// which is the point -- the alternative is guessing on the Worker's behalf
+	// and placing against the guess.
 
 	// Verify that the result is properly valid before storing it.
 	if errs := apivalidation.ValidateWorkerUpdate(ctx, field.NewPath("worker"), outWorker, inWorker, true); len(errs) > 0 {
@@ -251,7 +251,7 @@ func (s *ServiceImpl) DeleteWorker(ctx context.Context, name string, preconditio
 	return s.store.DeleteWorker(ctx, name, precondition)
 }
 
-func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerRequest) (*ateapipb.Worker, error) {
+func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerRequest) (*ateapipb.DrainWorkerResponse, error) {
 	if errs := apivalidation.ValidateDrainWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -269,7 +269,7 @@ func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerR
 		return nil, fmt.Errorf("while getting worker to drain: %w", err)
 	}
 
-	return s.mutateWorker(ctx, name, store.PreconditionFrom(observed), func(toUpdate *ateapipb.Worker) error {
+	drained, err := s.mutateWorker(ctx, name, store.PreconditionFrom(observed), func(toUpdate *ateapipb.Worker) error {
 		if toUpdate.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
 			// already draining, do nothing
 			return &workerUnchanged{worker: proto.Clone(toUpdate).(*ateapipb.Worker)}
@@ -279,6 +279,10 @@ func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerR
 		// until something releases them. Draining only stops new placements.
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &ateapipb.DrainWorkerResponse{Worker: drained}, nil
 }
 
 // mutateWorker runs mutate against the named Worker and translates what comes

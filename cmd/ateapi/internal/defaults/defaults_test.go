@@ -19,6 +19,7 @@ import (
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
@@ -44,7 +45,8 @@ func TestApply(t *testing.T) {
 		name: "empty snapshot_config gets every default",
 		in:   &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{}},
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			PreferredFidelity: scopeFull,
+			PreferredFidelity:    scopeFull,
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		}},
 	}, {
 		name: "set scopes are kept",
@@ -52,7 +54,8 @@ func TestApply(t *testing.T) {
 			PreferredFidelity: scopeData,
 		}},
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			PreferredFidelity: scopeData,
+			PreferredFidelity:    scopeData,
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		}},
 	}, {
 		name: "container without wakeup probe stays without one",
@@ -61,47 +64,47 @@ func TestApply(t *testing.T) {
 	}, {
 		name: "wakeup probe gets timeout and path",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HTTPGetAction{Port: 8080}}},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 8080}}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{
-				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080, Path: "/"},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{
+				HttpGet:        &ateapipb.HttpGetAction{Port: 8080, Path: "/"},
 				TimeoutSeconds: 30,
 			}},
 		}},
 	}, {
 		name: "wakeup probe without http_get gets only the timeout",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{}},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{TimeoutSeconds: 30}},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{TimeoutSeconds: 30}},
 		}},
 	}, {
 		name: "set wakeup probe fields are kept",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{
-				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080, Path: "/healthz"},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{
+				HttpGet:        &ateapipb.HttpGetAction{Port: 8080, Path: "/healthz"},
 				TimeoutSeconds: 5,
 			}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{
-				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080, Path: "/healthz"},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{
+				HttpGet:        &ateapipb.HttpGetAction{Port: 8080, Path: "/healthz"},
 				TimeoutSeconds: 5,
 			}},
 		}},
 	}, {
 		name: "every container is defaulted",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "a", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HTTPGetAction{Port: 1}}},
+			{Name: "a", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 1}}},
 			{Name: "b"},
-			{Name: "c", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HTTPGetAction{Port: 3}}},
+			{Name: "c", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 3}}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "a", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HTTPGetAction{Port: 1, Path: "/"}, TimeoutSeconds: 30}},
+			{Name: "a", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 1, Path: "/"}, TimeoutSeconds: 30}},
 			{Name: "b"},
-			{Name: "c", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HTTPGetAction{Port: 3, Path: "/"}, TimeoutSeconds: 30}},
+			{Name: "c", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 3, Path: "/"}, TimeoutSeconds: 30}},
 		}},
 	}, {
 		name: "actor has no defaults",
@@ -114,17 +117,17 @@ func TestApply(t *testing.T) {
 	}, {
 		name: "egress policy defaults http and https ports only",
 		in: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HTTPRule{Hostnames: []string{"a.example.com"}}},
-			{Https: &ateapipb.HTTPSRule{Hostnames: []string{"b.example.com"}}},
-			{Http: &ateapipb.HTTPRule{Hostnames: []string{"c.example.com"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
-			{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"d.example.com"}}},
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"a.example.com"}}},
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"b.example.com"}}},
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"c.example.com"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
+			{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"d.example.com"}}},
 			{},
 		}},
 		want: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HTTPRule{Hostnames: []string{"a.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}},
-			{Https: &ateapipb.HTTPSRule{Hostnames: []string{"b.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
-			{Http: &ateapipb.HTTPRule{Hostnames: []string{"c.example.com"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
-			{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"d.example.com"}}},
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"a.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}},
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"b.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"c.example.com"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
+			{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"d.example.com"}}},
 			{},
 		}},
 	}, {
@@ -147,6 +150,46 @@ func TestApply(t *testing.T) {
 			Apply(again)
 			if diff := cmp.Diff(got, again, protocmp.Transform()); diff != "" {
 				t.Errorf("Apply is not idempotent (-once +twice):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestGoldenSnapshotDefaults(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		config string
+		mode   ateapipb.GoldenSnapshotMode
+	}{
+		{"omitted config", `{}`, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+		{"omitted mode", `{"goldenSnapshotConfig": {}}`, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+		{"unspecified mode", `{"goldenSnapshotConfig": {"mode": "GOLDEN_SNAPSHOT_MODE_UNSPECIFIED"}}`, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+		{"explicit zero", `{"goldenSnapshotConfig": {"mode": 0}}`, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+		{"enabled", `{"goldenSnapshotConfig": {"mode": "GOLDEN_SNAPSHOT_MODE_ENABLED"}}`, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+		{"disabled", `{"goldenSnapshotConfig": {"mode": "GOLDEN_SNAPSHOT_MODE_DISABLED"}}`, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ateapipb.ActorTemplate{}
+			if err := protojson.Unmarshal([]byte(`{"snapshotConfig": `+tt.config+`}`), tmpl); err != nil {
+				t.Fatal(err)
+			}
+			// JSON and gRPC use the enum value rather than field presence.
+			data, err := proto.Marshal(tmpl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := proto.Unmarshal(data, tmpl); err != nil {
+				t.Fatal(err)
+			}
+			Apply(tmpl)
+			want := &ateapipb.GoldenSnapshotConfig{Mode: tt.mode}
+			if diff := cmp.Diff(want, tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig(), protocmp.Transform()); diff != "" {
+				t.Fatalf("golden snapshot default mismatch (-want +got):\n%s", diff)
+			}
+			again := proto.Clone(tmpl)
+			Apply(again)
+			if !proto.Equal(tmpl, again) {
+				t.Fatal("golden snapshot defaulting is not idempotent")
 			}
 		})
 	}

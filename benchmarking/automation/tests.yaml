@@ -54,6 +54,22 @@
 #                  as one YAML string, '--credential-provider={"name":"k8s.io"}'
 #                  (no shell quoting: the args are passed without a shell),
 #                  or as ATE_CREDENTIAL_PROVIDER in .ate-dev-env.sh.
+#   isolate        Optional. Isolate mode: installs substrate with the fake
+#                  data plane (hack/install-ate.sh --fake-data-plane), which
+#                  serves the WorkerPool without worker pods: fake-atelet
+#                  takes atelet's place on every atelet node and answers each
+#                  lifecycle call after a delay, and fake-workersync honors
+#                  the pool with workerCount fake Workers on them, each
+#                  reporting the capacity a real worker would.
+#                  ate-api-server and Postgres can then be driven past what
+#                  real nodes restore. The keys tune fake-atelet, through
+#                  workloads/deploy.sh --fake-atelet-env: delay (default 0s),
+#                  delayRun, delayRestore, delayCheckpoint,
+#                  delayPromoteSnapshot, and delayTerminate, which
+#                  override delay for one call, and mintActorCertificate
+#                  (default true). A bare `isolate:` selects the mode with
+#                  the defaults. Actors do not exist, so the entry's user
+#                  class must send them no requests.
 #
 # ---- type: locust -----------------------------------------------------------
 #
@@ -84,6 +100,13 @@
 # when the step starts, and the new rate stays until another step changes it.
 # `--trace-probability` in `flags` is the rate before the first such step.
 # Thus a ladder with no probability in any step keeps the rate of the flag.
+#
+# A step can end in `@target_rps` (e.g. `200:3m@4000`), which caps the
+# requests per second of the whole boomer worker from the step's start; 0
+# removes the cap. Boomer users that pace themselves (resumepaused) honor it.
+# Keep `users` at or above the rate times the p99 of one user iteration in
+# seconds, or the step falls short of its rate. A resumepaused iteration is a
+# resume plus a pause, so size it by the p99 of both together.
 #
 # ---- type: nighthawk-ingress --------------------------------------------------------
 #

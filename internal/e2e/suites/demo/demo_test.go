@@ -220,46 +220,85 @@ func TestDurableDirLifecycle(t *testing.T) {
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				wantMemoryAfterPause:   2,
 				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
 				wantMemoryAfterSuspend: 3,
 				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
 			},
 		},
 		{
-			// Pause captures the same Data scope as suspend, so memory
-			// cold-boots on every resume.
+			// Pause captures the same VOLUMES fidelity as suspend, so memory
+			// and rootfs writes cold-boot on every resume.
 			name: "preferredFidelity:VOLUMES",
 			tc: actorLifecycleTestCase{
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				wantMemoryAfterPause:   1,
 				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   1,
 				wantMemoryAfterSuspend: 1,
 				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 1,
 			},
 		},
 		{
-			// Suspend from PAUSED uploads the Full local snapshot.
-			name: "preferredFidelity:MEMORY, suspend from PAUSED",
+			// ROOTFS keeps the rootfs writes across a cold boot: the memory
+			// counter restarts while the rootfs counter continues.
+			name: "preferredFidelity:ROOTFS",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				wantMemoryAfterPause:   1,
+				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
+				wantMemoryAfterSuspend: 1,
+				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
+				microVMOnly:            true,
+			},
+		},
+		{
+			// Suspend from paused uploads the MEMORY local snapshot.
+			name: "preferredFidelity:MEMORY, suspend from paused",
 			tc: actorLifecycleTestCase{
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				wantMemoryAfterPause:   2,
 				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
 				wantMemoryAfterSuspend: 3,
 				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
 				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				suspendWhilePaused:     true,
 			},
 		},
 		{
-			// Suspend from PAUSED uploads the Data local snapshot.
-			name: "preferredFidelity:VOLUMES, suspend from PAUSED",
+			// Suspend from paused uploads the VOLUMES local snapshot.
+			name: "preferredFidelity:VOLUMES, suspend from paused",
 			tc: actorLifecycleTestCase{
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				wantMemoryAfterPause:   1,
 				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   1,
 				wantMemoryAfterSuspend: 1,
 				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 1,
 				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				suspendWhilePaused:     true,
+			},
+		},
+		{
+			// Suspend from paused uploads the ROOTFS local snapshot.
+			name: "preferredFidelity:ROOTFS, suspend from paused",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				wantMemoryAfterPause:   1,
+				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
+				wantMemoryAfterSuspend: 1,
+				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
+				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				suspendWhilePaused:     true,
+				microVMOnly:            true,
 			},
 		},
 	}
@@ -267,7 +306,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if test.tc.microVMOnly && !e2e.IsMicroVM() {
-				t.Skipf("Skipping %s: micro-VM-only case (durable-data extraction from a Full capture)", test.name)
+				t.Skipf("Skipping %s: only the micro-VM runtime serves this fidelity", test.name)
 			}
 			t.Parallel()
 			runActorLifecycleTestCase(t, "durabledir-lifecycle", createActorTemplate, test.tc)
@@ -305,6 +344,20 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 				wantMemoryAfterSuspend: 1,
 				wantFileAfterSuspend:   3,
 				checkSecondFileCounter: true,
+			},
+		},
+		{
+			name: "preferredFidelity:ROOTFS",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				wantMemoryAfterPause:   1,
+				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
+				wantMemoryAfterSuspend: 1,
+				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
+				checkSecondFileCounter: true,
+				microVMOnly:            true,
 			},
 		},
 	}
@@ -514,6 +567,12 @@ type actorLifecycleTestCase struct {
 	wantMemoryAfterSuspend int
 	wantFileAfterSuspend   int
 
+	// wantRootfsAfterPause and wantRootfsAfterSuspend assert the counter the
+	// workload keeps in a file on its root filesystem: ROOTFS and MEMORY
+	// snapshots carry it, VOLUMES resets it. Zero skips the check.
+	wantRootfsAfterPause   int
+	wantRootfsAfterSuspend int
+
 	// checkSecondFileCounter also asserts the counter kept in a SECOND durable
 	// volume. Both volumes are written on every request, so it must track the
 	// first counter exactly — if one volume were dropped or restored into the
@@ -528,7 +587,7 @@ type actorLifecycleTestCase struct {
 	microVMOnly bool
 
 	// suspendWhilePaused pauses the actor again before the suspend step, so
-	// the suspend runs from PAUSED: it must upload the node-local pause
+	// the suspend runs from paused: it must upload the node-local pause
 	// snapshot instead of checkpointing a running workload. The counter
 	// expectations are unchanged — both origins capture the state after the
 	// second call.
@@ -585,6 +644,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	if tc.checkSecondFileCounter {
 		validateSecondFileCounter(t, resp, "after creation", 1)
 	}
+	if tc.wantRootfsAfterPause != 0 {
+		validateRootfsCounter(t, resp, "after creation", 1)
+	}
 
 	//
 	// Pausing the actor
@@ -595,7 +657,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorPaused(ctx, t, clients, actorID)
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q again...", actorID)
@@ -614,6 +676,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	if tc.checkSecondFileCounter {
 		validateSecondFileCounter(t, resp, "after pause", tc.wantFileAfterPause)
 	}
+	if tc.wantRootfsAfterPause != 0 {
+		validateRootfsCounter(t, resp, "after pause", tc.wantRootfsAfterPause)
+	}
 
 	//
 	// Suspending the actor
@@ -625,7 +690,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		}); err != nil {
 			t.Fatalf("failed to pause Actor before suspend: %v", err)
 		}
-		waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+		waitForActorPaused(ctx, t, clients, actorID)
 	}
 	t.Logf("Suspending Actor %q...", actorID)
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
@@ -670,6 +735,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	if tc.checkSecondFileCounter {
 		validateSecondFileCounter(t, resp, "after suspend", tc.wantFileAfterSuspend)
 	}
+	if tc.wantRootfsAfterSuspend != 0 {
+		validateRootfsCounter(t, resp, "after suspend", tc.wantRootfsAfterSuspend)
+	}
 }
 
 // validateSnapshotFidelity asserts the content scope recorded on the
@@ -685,7 +753,7 @@ func validateSnapshotFidelity(ctx context.Context, t *testing.T, clients *e2e.Cl
 	if durableSnapshotURI(actor.GetStatus()) == "" {
 		t.Fatal("suspended Actor has no external snapshot")
 	}
-	if got := durableSnapshotStorage(actor.GetStatus()).GetFidelity(); got != want {
+	if got := durableSnapshot(actor.GetStatus()).GetFidelity(); got != want {
 		t.Errorf("snapshot %q content scope = %v, want %v", durableSnapshotURI(actor.GetStatus()), got, want)
 	}
 }
@@ -693,13 +761,11 @@ func validateSnapshotFidelity(ctx context.Context, t *testing.T, clients *e2e.Cl
 func durableSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
 	var best *ateapipb.Snapshot
 	for _, snap := range status.GetSnapshots() {
-		for _, st := range snap.GetStorage() {
-			if st.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE &&
-				st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
-				st.GetObject().GetSnapshotUri() != "" {
-				if best == nil || snap.GetGeneration() > best.GetGeneration() {
-					best = snap
-				}
+		st := snap.GetDurableSnapshot()
+		if st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+			st.GetObject().GetSnapshotUri() != "" {
+			if best == nil || snap.GetGeneration() > best.GetGeneration() {
+				best = snap
 			}
 		}
 	}
@@ -707,13 +773,7 @@ func durableSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
 }
 
 func durableSnapshotStorage(status *ateapipb.ActorStatus) *ateapipb.SnapshotStorage {
-	snap := durableSnapshot(status)
-	for _, st := range snap.GetStorage() {
-		if st.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE {
-			return st
-		}
-	}
-	return nil
+	return durableSnapshot(status).GetDurableSnapshot()
 }
 
 func durableSnapshotURI(status *ateapipb.ActorStatus) string {
@@ -722,22 +782,15 @@ func durableSnapshotURI(status *ateapipb.ActorStatus) string {
 
 func hasLocalSnapshot(status *ateapipb.ActorStatus) bool {
 	for _, snap := range status.GetSnapshots() {
-		for _, st := range snap.GetStorage() {
-			if st.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL {
-				return true
-			}
+		if snap.GetLocality() != "" && snap.GetUuid() != "" {
+			return true
 		}
 	}
 	return false
 }
 
 func tagSnapshotURI(tag *ateapipb.Tag) string {
-	for _, st := range tag.GetStatus().GetSnapshot().GetStorage() {
-		if st.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE {
-			return st.GetObject().GetSnapshotUri()
-		}
-	}
-	return ""
+	return tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetObject().GetSnapshotUri()
 }
 
 // validateSecondFileCounter checks the counter the workload keeps in its second
@@ -747,6 +800,15 @@ func validateSecondFileCounter(t *testing.T, resp string, stage string, want int
 	const prefix = "preserved second file counter: "
 	if !strings.Contains(resp, prefix+fmt.Sprintf("%d", want)) {
 		t.Errorf("[%s] expected second file count %d, got response: %s", stage, want, resp)
+	}
+}
+
+// validateRootfsCounter asserts the counter the workload keeps in a file on
+// its root filesystem, the one layer that tells ROOTFS apart from VOLUMES.
+func validateRootfsCounter(t *testing.T, resp string, stage string, want int) {
+	t.Helper()
+	if !strings.Contains(resp, fmt.Sprintf("preserved rootfs counter: %d", want)) {
+		t.Errorf("[%s] expected rootfs counter %d, got response: %s", stage, want, resp)
 	}
 }
 
@@ -851,7 +913,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorPaused(ctx, t, clients, actorName)
 
 	// Resuming the actor again
 	t.Logf("Resuming Actor %q again...", actorName)
@@ -1049,26 +1111,26 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	}
 	validateCounterResponse(t, resp, "after revert from RUNNING", 2, 2)
 
-	// Revert from PAUSED. Resume prefers a local snapshot over the external
+	// Revert from paused. Resume prefers a local snapshot over the external
 	// one, so clearing LocalSnapshot is what prevents this pause's count=2
 	// checkpoint from restoring on the next resume.
 	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorPaused(ctx, t, clients, actorName)
 
 	reverted, err = clients.SubstrateAPI.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef})
 	if err != nil {
-		t.Fatalf("RevertActor from PAUSED: %v", err)
+		t.Fatalf("RevertActor from paused: %v", err)
 	}
 	if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Fatalf("state after revert from PAUSED = %v, want SUSPENDED", got)
+		t.Fatalf("state after revert from paused = %v, want SUSPENDED", got)
 	}
 	if hasLocalSnapshot(reverted.GetActor().GetStatus()) {
-		t.Fatal("local snapshot pointer survived revert from PAUSED")
+		t.Fatal("local snapshot pointer survived revert from paused")
 	}
 	if got := durableSnapshotURI(reverted.GetActor().GetStatus()); got != snapshotURI {
-		t.Fatalf("snapshot URI after revert from PAUSED = %q, want %q", got, snapshotURI)
+		t.Fatalf("snapshot URI after revert from paused = %q, want %q", got, snapshotURI)
 	}
 
 	// SUSPENDED is rejected with FailedPrecondition rather than no-oping.
@@ -1079,15 +1141,15 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	// Final resume: if the pause checkpoint had been restored, the counter
 	// would advance from 2 to 3. Expecting 2 proves the external snapshot won.
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
-		t.Fatalf("failed to resume Actor after PAUSED revert: %v", err)
+		t.Fatalf("failed to resume Actor after paused revert: %v", err)
 	}
 	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
-		t.Fatalf("failed to call actor after PAUSED revert: %v", err)
+		t.Fatalf("failed to call actor after paused revert: %v", err)
 	}
-	validateCounterResponse(t, resp, "after revert from PAUSED", 2, 2)
+	validateCounterResponse(t, resp, "after revert from paused", 2, 2)
 
 	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef, AnyState: true}); err != nil {
 		t.Fatalf("failed to delete Actor: %v", err)
@@ -1214,7 +1276,7 @@ func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.C
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorPaused(ctx, t, clients, actorName)
 
 	// 4. Delete the paused actor with any-state
 	t.Logf("Deleting paused Actor %q with any-state...", actorName)
@@ -1351,6 +1413,26 @@ func hasStorageClass(ctx context.Context, clients *e2e.Clients, name string) boo
 
 func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedState ateapipb.ActorState) {
 	waitForActorStateWithTimeout(ctx, t, clients, actorName, expectedState, 60*time.Second)
+}
+
+// waitForActorPaused waits for the shape a pause leaves behind: SUSPENDED,
+// holding a node-local snapshot and pinned to its node. A plain suspend
+// leaves neither.
+func waitForActorPaused(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string) {
+	t.Helper()
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	})
+	if err != nil {
+		t.Fatalf("GetActor %q after pause: %v", actorName, err)
+	}
+	if !hasLocalSnapshot(resp.GetStatus()) {
+		t.Fatalf("Actor %q is SUSPENDED after pause but holds no local snapshot: %v", actorName, resp.GetStatus())
+	}
+	if resp.GetStatus().GetAssignedNode() == "" {
+		t.Fatalf("Actor %q is paused but not pinned to a node: %v", actorName, resp.GetStatus())
+	}
 }
 
 func waitForActorStateWithTimeout(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedState ateapipb.ActorState, timeout time.Duration) {

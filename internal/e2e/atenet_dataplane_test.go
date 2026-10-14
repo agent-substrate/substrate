@@ -33,3 +33,31 @@ func TestAtenetDataplaneEgressPolicyDenial(t *testing.T) {
 		}
 	})
 }
+
+func TestAtenetDataplaneEgressConnectStats(t *testing.T) {
+	const before = `# TYPE envoy_http_downstream_cx_http2_total counter
+envoy_http_downstream_cx_http2_total{envoy_http_conn_manager_prefix="egress_connect"} 1
+envoy_http_downstream_rq_xx{envoy_response_code_class="2",envoy_http_conn_manager_prefix="egress_connect"} 2
+`
+	const after = `# TYPE envoy_http_downstream_cx_http2_total counter
+envoy_http_downstream_cx_http2_total{envoy_http_conn_manager_prefix="egress_connect"} 4
+envoy_http_downstream_rq_xx{envoy_response_code_class="2",envoy_http_conn_manager_prefix="egress_connect"} 252
+`
+
+	t.Run("envoy", func(t *testing.T) {
+		t.Setenv(AtenetDataplaneEnv, "")
+		got := CurrentAtenetDataplane().EgressConnectStats(before, after)
+		want := EgressConnectStats{Connections: 3, Requests: 250}
+		if got != want {
+			t.Errorf("EgressConnectStats() = %+v, want %+v", got, want)
+		}
+	})
+	t.Run("agentgateway", func(t *testing.T) {
+		t.Setenv(AtenetDataplaneEnv, "agentgateway")
+		got := CurrentAtenetDataplane().EgressConnectStats(before, after)
+		want := EgressConnectStats{Connections: -1, Requests: -1}
+		if got != want {
+			t.Errorf("EgressConnectStats() = %+v, want %+v", got, want)
+		}
+	})
+}

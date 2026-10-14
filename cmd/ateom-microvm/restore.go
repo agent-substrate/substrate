@@ -95,6 +95,9 @@ func newReseedNonce() ([]byte, error) {
 //
 //   - MEMORY: relaunch cloud-hypervisor from the snapshot and resume the guest
 //     (restoreMemoryFidelity).
+//   - ROOTFS: as VOLUMES, but each container's rootfs upper is re-materialized
+//     from its tar first, so the cold boot sees the rootfs writes the actor had
+//     made.
 //   - VOLUMES: there is no guest to resume — re-materialize the durable-dir
 //     volumes and cold-boot the actor, which starts its containers afresh from
 //     the OCI image.
@@ -151,10 +154,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, err
 	}
 	// Publish attribution before restore, so a stats read during it is
-	// attributed. A VOLUMES restore cold-boots, so its CPU counts from zero; the other
-	// scopes resume the guest's counters, so theirs counts from the first
-	// reading.
-	resumesGuest := req.GetFidelity() != ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	// attributed. Only a MEMORY restore resumes the guest and its CPU counters,
+	// so only it counts from the first reading; the lower fidelities cold-boot
+	// a fresh guest whose CPU counts from zero.
+	resumesGuest := includesMemory(req.GetFidelity())
 	if _, err := s.hostActor(ctx, attribution, resumesGuest); err != nil {
 		return nil, err
 	}
@@ -168,8 +171,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}()
 
 	// Restore the durable-dir volumes before anything can observe them: for MEMORY
-	// that means before the share's virtiofsd starts, for VOLUMES before the workload
-	// cold-starts.
+	// that means before the share's virtiofsd starts, for the lower fidelities
+	// before the workload cold-starts.
 	if hasDurableVolumes(p.containers) {
 		if err := untarDurableVolumes(durableDir, restoreDir, durableVolumeNames(p.containers)); err != nil {
 			return nil, err
@@ -181,6 +184,20 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		if err := s.restoreMemoryFidelity(ctx, p, scope, restoreDir, req.GetPreserveRestoreDir(), tStart); err != nil {
 			return nil, err
 		}
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		// A ROOTFS snapshot holds no guest state either, but it carries each
+		// container's rootfs upper. The cold boot re-materializes the uppers
+		// from the snapshot instead of starting from a pristine dir, overlapped
+		// with its bundle preparation like the MEMORY path does.
+		p.rootfsUpperSnapshotDir = restoreDir
+		if err := s.coldBootActorRetrying(ctx, p); err != nil {
+			return nil, err
+		}
+		dTotal := time.Since(tStart)
+		slog.InfoContext(ctx, "Actor restored (rootfs upper + durable-dir volumes, cold boot)",
+			slog.String("id", p.actorUID), slog.Duration("total", dTotal))
+		ateomphaselog.LogSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
+			ateomphaselog.RestoreDurationKey, nil, []ateomphaselog.Phase{{Name: phaseTotal, D: dTotal}})
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		// A VOLUMES snapshot holds no guest state, so this is a cold boot that
 		// happens to start with the volumes already populated. wakeup probe gating comes
@@ -349,8 +366,7 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 		restoredNets = append(restoredNets, rn)
 	}
 
-	// Relaunch CH and restore with the tap FDs attached (SCM_RIGHTS). CH reopens
-	// /dev/vda (image) + each /dev/vd{b+i} (actor rootfs) from the snapshot config paths.
+	// Relaunch CH and restore with the tap FDs attached (SCM_RIGHTS).
 	apiSocket := filepath.Join(kata.VMDir(actorUID), "clh-api-restore.sock")
 	tTap := time.Now()
 	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
@@ -384,6 +400,17 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 		return fmt.Errorf("while restoring VM with net FDs: %w", err)
 	}
 	tVMRestore := time.Now()
+	// An eager restore has read the whole snapshot into guest memory, and nothing
+	// merges against it afterwards, so drop the staged memory image and evict its
+	// page cache before resuming the VM so guest RAM and snapshot page cache do
+	// not overlap during Resume and wakeup probe gating.
+	//
+	// Dropping ahead of Resume means a Resume, agent dial, or wakeup failure leaves
+	// restore-state empty; atelet re-downloads with O_TRUNC and resetActorDirs
+	// wipes the directory on retry, so this costs a re-download on retry rather
+	// than correctness.
+	maybeDropStagedMemoryImage(ctx, restoreDir, memMode, preserveRestoreDir)
+	dropActorSnapshotCacheAsync(restoreDir, memMode == ch.MemRestoreEager)
 	if err := client.Resume(ctx); err != nil {
 		return fmt.Errorf("while resuming restored guest: %w", err)
 	}
@@ -487,9 +514,6 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 	}
 	s.setRunningVM(actorUID, ra)
 
-	// After the last error return, so a failed restore stays retryable.
-	maybeDropStagedMemoryImage(ctx, restoreDir, memMode, preserveRestoreDir)
-
 	// Publish the guest to GetWorkloadStats, past the last error return above
 	// for the same reason as in coldBootActor. Same client the forwarding above
 	// reads over.
@@ -505,26 +529,21 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 	return nil
 }
 
-// maybeDropStagedMemoryImage deletes memory-ranges after an eager restore (it is
-// fully in guest memory and nothing merges against it), unless restoreDir is a
-// preserved snapshot.
+// maybeDropStagedMemoryImage deletes the staged memory-ranges file and
+// already-extracted tar archives after an eager restore (it is fully in guest
+// memory and nothing merges against it), unless restoreDir is a preserved
+// snapshot.
 func maybeDropStagedMemoryImage(ctx context.Context, restoreDir, memMode string, preserveRestoreDir bool) {
 	if memMode != ch.MemRestoreEager || preserveRestoreDir {
 		return
 	}
-	staged := filepath.Join(restoreDir, "memory-ranges")
-	if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
-		// Not fatal: it only costs disk until the actor is torn down.
-		slog.WarnContext(ctx, "could not drop the staged memory image", "error", err)
-	} else {
-		slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
-	}
+	dropStagedMemoryImage(ctx, restoreDir)
 }
 
 // rewriteSnapshotSocketPaths repoints the snapshot config.json's per-VMDir paths from
 // the source actor's VMDir to the restoring actor's: the hybrid-vsock socket, the
 // File serial console, and each virtio-fs socket, so the sockets/files we create are
-// the ones CH reopens. The kernel and /dev/vda kata image are content-addressed static
+// the ones CH reopens. The kernel and the kata image are content-addressed static
 // files with identical paths on every node, so they need no rewrite, and the overlay
 // has no per-actor disk to repoint.
 func rewriteSnapshotSocketPaths(snapshotDir, id string) error {

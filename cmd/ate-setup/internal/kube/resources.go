@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -132,6 +133,25 @@ func (c *Client) GetDeployment(ctx context.Context, namespace, name string) (*ap
 	return dep, nil
 }
 
+// DeleteDeploymentAndWait deletes a Deployment in the foreground and waits
+// until it is gone, which is once its pods are. A missing Deployment is not an
+// error.
+func (c *Client) DeleteDeploymentAndWait(ctx context.Context, namespace, name string, timeout time.Duration) error {
+	foreground := metav1.DeletePropagationForeground
+	err := c.Typed.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &foreground})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("while deleting deployment %s/%s: %w", namespace, name, err)
+	}
+	err = poll(ctx, timeout, func(ctx context.Context) (bool, error) {
+		dep, err := c.GetDeployment(ctx, namespace, name)
+		return dep == nil, err
+	})
+	if err != nil {
+		return fmt.Errorf("waiting for deployment %s/%s to be deleted: %w", namespace, name, err)
+	}
+	return nil
+}
+
 // DeploymentExists reports whether a Deployment is present. delete_demo_actors
 // used this to decide whether the control plane is still up before trying to
 // talk to it.
@@ -153,21 +173,6 @@ func (c *Client) PatchDeployment(ctx context.Context, namespace, name string, pa
 		return fmt.Errorf("while patching deployment %s/%s: %w", namespace, name, err)
 	}
 	return nil
-}
-
-// DaemonSetNames lists the DaemonSets in a namespace matching a label
-// selector. The atelet DaemonSet name carries a substrate version suffix, so
-// the installed versions can only be found by label.
-func (c *Client) DaemonSetNames(ctx context.Context, namespace, selector string) ([]string, error) {
-	list, err := c.Typed.AppsV1().DaemonSets(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
-	if err != nil {
-		return nil, fmt.Errorf("while listing daemonsets in %s matching %q: %w", namespace, selector, err)
-	}
-	names := make([]string, 0, len(list.Items))
-	for _, ds := range list.Items {
-		names = append(names, ds.Name)
-	}
-	return names, nil
 }
 
 // SetServiceAccountAnnotation adds or removes one annotation on a

@@ -21,7 +21,11 @@ import (
 	"testing"
 
 	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
 func TestNewControllerRuntimeLoggerVerbosity(t *testing.T) {
@@ -76,5 +80,63 @@ func TestBridgedRegistryProducesBeforeManagerStart(t *testing.T) {
 	}
 	if !slices.ContainsFunc(names, func(n string) bool { return strings.HasPrefix(n, "go_") }) {
 		t.Errorf("no go_* family in %v", names)
+	}
+}
+
+// The manager opens its metrics listener only when OTEL_METRICS_EXPORTER leaves
+// the scrape endpoint on.
+func TestManagerOptionsMetricsListener(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		servePull  bool
+		wantAddr   string
+		wantServed bool
+	}{
+		{"serving", true, metricsPullAddr, true},
+		{"disabled", false, metricsOffAddr, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			opts := managerOptions(types.NamespacedName{Namespace: "ate-system", Name: "pool"}, tt.servePull)
+
+			if opts.Metrics.BindAddress != tt.wantAddr {
+				t.Errorf("metrics address = %q, want %q", opts.Metrics.BindAddress, tt.wantAddr)
+			}
+			srv, err := metricsserver.NewServer(opts.Metrics, nil, nil)
+			if err != nil {
+				t.Fatalf("NewServer: %v", err)
+			}
+			if served := srv != nil; served != tt.wantServed {
+				t.Errorf("serves a metrics listener = %t, want %t", served, tt.wantServed)
+			}
+		})
+	}
+}
+
+func TestManagerOptionsScopeSecretCache(t *testing.T) {
+	t.Parallel()
+
+	ref := types.NamespacedName{Namespace: "ate-system", Name: "pool"}
+	opts := managerOptions(ref, true)
+
+	var byObject cache.ByObject
+	found := false
+	for obj, by := range opts.Cache.ByObject {
+		if _, isSecret := obj.(*corev1.Secret); isSecret {
+			byObject, found = by, true
+		}
+	}
+	if !found {
+		t.Fatal("no cache scope for Secrets")
+	}
+	cfg, ok := byObject.Namespaces[ref.Namespace]
+	if !ok || len(byObject.Namespaces) != 1 {
+		t.Fatalf("Secret cache namespaces = %v, want only %q", byObject.Namespaces, ref.Namespace)
+	}
+	if got := cfg.FieldSelector.String(); got != "metadata.name="+ref.Name {
+		t.Errorf("Secret field selector = %q, want %q", got, "metadata.name="+ref.Name)
 	}
 }

@@ -249,6 +249,11 @@ var Registry = []Setting{
 		Flag: "podcert-workers-per-signer", Kind: KindInt, Default: "0",
 		Usage: "Worker goroutines per signer in podcertificate-controller",
 	},
+	{
+		Key: "e2e.envoyConcurrency", Env: "E2E_ATE_ENVOY_CONCURRENCY",
+		Flag: "e2e-envoy-concurrency", Kind: KindInt, Default: "0",
+		Usage: "Worker threads (--concurrency) for the Envoy container in atenet-egress",
+	},
 
 	{
 		Key: "rolloutTimeout", Env: "ATE_INSTALL_ROLLOUT_TIMEOUT", Flag: "rollout-timeout",
@@ -266,6 +271,13 @@ var Registry = []Setting{
 		Usage: "Keep the control plane off the worker nodes. Assumes a small shared pool labeled " +
 			"and tainted ate.dev/workloadType=ate-control-plane:NoSchedule, and a one-node pool " +
 			"labeled and tainted ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone",
+	},
+	{
+		Key: "fakeDataPlane.enabled", Env: "ATE_INSTALL_FAKE_DATA_PLANE", Flag: "fake-data-plane",
+		Kind: KindBool, Default: "false",
+		Usage: "Install the fake data plane for control-plane benchmarks: fake-atelet in place of " +
+			"atelet, and fake-workersync in place of ate-controller. Actors do not exist; never " +
+			"use it on a cluster that serves real actors",
 	},
 	{
 		Key: "otlpEndpoint", Env: "ATE_OTLP_ENDPOINT", Flag: "otlp-endpoint", Kind: KindString,

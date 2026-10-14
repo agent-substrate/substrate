@@ -263,9 +263,10 @@ func TestDrainWorker(t *testing.T) {
 		t.Fatalf("DrainWorker failed: %v", err)
 	}
 
-	want := newTestWorker(ns)
-	want.Metadata.Version = 2
-	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
+	wantWorker := newTestWorker(ns)
+	wantWorker.Metadata.Version = 2
+	wantWorker.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
+	want := &ateapipb.DrainWorkerResponse{Worker: wantWorker}
 	if diff := cmp.Diff(want, drained, protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("DrainWorker response mismatch (-want +got):\n%s", diff)
 	}
@@ -314,12 +315,12 @@ func TestValidation_Worker(t *testing.T) {
 	defer tc.cleanup()
 
 	t.Run("ListWorkers", func(t *testing.T) {
-		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{PageSize: -1})
+		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{Options: &ateapipb.ListOptions{PageSize: -1}})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
 	t.Run("ListWorkers invalid token", func(t *testing.T) {
-		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{PageToken: "%%%"})
+		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{Options: &ateapipb.ListOptions{PageToken: "%%%"}})
 		assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
 	})
 }

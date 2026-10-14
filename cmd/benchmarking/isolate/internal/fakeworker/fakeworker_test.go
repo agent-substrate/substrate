@@ -109,7 +109,7 @@ func TestValidateRun(t *testing.T) {
 }
 
 func TestVerifyPeerID(t *testing.T) {
-	const want = "spiffe://cluster.local/ns/benchmark-workloads/sa/fake-workersync"
+	const want = "spiffe://cluster.local/ns/ate-system/sa/fake-workersync"
 	state := func(path string) tls.ConnectionState {
 		cert := &x509.Certificate{}
 		if path != "" {
@@ -117,7 +117,7 @@ func TestVerifyPeerID(t *testing.T) {
 		}
 		return tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
 	}
-	if err := VerifyPeerID(state("/ns/benchmark-workloads/sa/fake-workersync"), want); err != nil {
+	if err := VerifyPeerID(state("/ns/ate-system/sa/fake-workersync"), want); err != nil {
 		t.Errorf("VerifyPeerID(matching) = %v", err)
 	}
 	if err := VerifyPeerID(state("/ns/ate-system/sa/atelet"), want); err == nil {
