@@ -171,47 +171,43 @@ func TestSetupBundleRootfs_ZeroLayers(t *testing.T) {
 
 // overlayfs presents the upperdir's mode as the container's /, so the upperdir
 // is 0755 (a non-root workload needs to traverse /) while the dirs only root
-// uses stay 0700. Needs no privileges.
+// uses stay 0700, whether the upperdir is created fresh or already exists
+// narrower. Needs no privileges.
 func TestSetupBundleRootfs_DirModes(t *testing.T) {
-	// A restrictive umask must not narrow the upperdir.
-	old := unix.Umask(0o077)
-	t.Cleanup(func() { unix.Umask(old) })
+	for _, tc := range []struct {
+		name     string
+		preUpper bool
+	}{
+		{"created", false},
+		{"existing 0700 upper", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A restrictive umask must not narrow the upperdir.
+			old := unix.Umask(0o077)
+			t.Cleanup(func() { unix.Umask(old) })
 
-	bundle := t.TempDir()
-	if err := WriteSpec(bundle, &OverlaySpec{}); err != nil {
-		t.Fatalf("WriteSpec: %v", err)
-	}
-	if err := SetupBundleRootfs(bundle); err != nil {
-		t.Fatalf("SetupBundleRootfs: %v", err)
-	}
-	for d, want := range map[string]os.FileMode{"rootfs": 0o700, "upper": 0o755, "work": 0o700} {
-		fi, err := os.Stat(filepath.Join(bundle, d))
-		if err != nil {
-			t.Fatalf("stat %s: %v", d, err)
-		}
-		if fi.Mode().Perm() != want {
-			t.Errorf("%s mode = %v, want %v", d, fi.Mode().Perm(), want)
-		}
-	}
-}
-
-// An upperdir that already exists (gVisor: pre-created 0700) is widened too.
-func TestSetupBundleRootfs_ExistingUpperIsWidened(t *testing.T) {
-	bundle := t.TempDir()
-	if err := WriteSpec(bundle, &OverlaySpec{}); err != nil {
-		t.Fatalf("WriteSpec: %v", err)
-	}
-	upper := filepath.Join(bundle, "upper")
-	if err := os.Mkdir(upper, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := SetupBundleRootfs(bundle); err != nil {
-		t.Fatalf("SetupBundleRootfs: %v", err)
-	}
-	if fi, err := os.Stat(upper); err != nil {
-		t.Errorf("stat upper: %v", err)
-	} else if fi.Mode().Perm() != 0o755 {
-		t.Errorf("existing upper mode = %v, want 0755", fi.Mode().Perm())
+			bundle := t.TempDir()
+			if err := WriteSpec(bundle, &OverlaySpec{}); err != nil {
+				t.Fatalf("WriteSpec: %v", err)
+			}
+			if tc.preUpper {
+				if err := os.Mkdir(filepath.Join(bundle, "upper"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := SetupBundleRootfs(bundle); err != nil {
+				t.Fatalf("SetupBundleRootfs: %v", err)
+			}
+			for d, want := range map[string]os.FileMode{"rootfs": 0o700, "upper": 0o755, "work": 0o700} {
+				fi, err := os.Stat(filepath.Join(bundle, d))
+				if err != nil {
+					t.Fatalf("stat %s: %v", d, err)
+				}
+				if fi.Mode().Perm() != want {
+					t.Errorf("%s mode = %v, want %v", d, fi.Mode().Perm(), want)
+				}
+			}
+		})
 	}
 }
 
