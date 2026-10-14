@@ -52,7 +52,7 @@ func TestTwoActorsShareOneWorker(t *testing.T) {
 	e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/probe/probe-multiactor.yaml.tmpl",
 		Template: "internal/e2e/fixtures/probe/probe-multiactor-template.yaml.tmpl",
-	}, env["BUCKET_NAME"], "multiactor", false)
+	}, env["BUCKET_NAME"], "multiactor", nil)
 
 	names := []string{"ma-first", "ma-second"}
 	pods := map[string]string{}

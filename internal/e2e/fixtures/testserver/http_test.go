@@ -193,3 +193,38 @@ func TestHTTPHandlerFetch(t *testing.T) {
 		}
 	})
 }
+
+func TestHTTPServesCleartextBesideTLS(t *testing.T) {
+	cert := writeOriginCertificate(t)
+	server := startOriginServer(t, newHTTPHandler("both schemes"), cert.certFile, cert.keyFile)
+
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(cert.caPEM) {
+		t.Fatal("adding fixture CA to trust pool")
+	}
+	client := &http.Client{
+		Timeout:   2 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "127.0.0.1"}},
+	}
+	for _, url := range []string{server.httpURL + "/healthz", server.httpsURL + "/healthz"} {
+		response, err := client.Get(url)
+		if err != nil {
+			t.Fatalf("GET %s: %v", url, err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatalf("reading %s: %v", url, err)
+		}
+		if response.StatusCode != http.StatusOK || string(body) != "both schemes" {
+			t.Errorf("GET %s = %d %q, want 200 %q", url, response.StatusCode, body, "both schemes")
+		}
+	}
+}
+
+func TestHTTPWithoutCertificateServesOnlyCleartext(t *testing.T) {
+	server := startOriginServer(t, newHTTPHandler(""), "", "")
+	if server.httpsURL != "" {
+		t.Errorf("origin without a certificate serves HTTPS at %s, want cleartext only", server.httpsURL)
+	}
+}

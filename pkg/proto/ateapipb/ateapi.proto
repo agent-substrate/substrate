@@ -2416,6 +2416,20 @@ service WorkerService {
   // retries a suspend it had already been granted therefore sees a failure
   // rather than a repeat of its success.
   rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse);
+
+  // ReportActorSnapshotState records which snapshots of an Actor the calling
+  // atelet holds on its node, and which of them are durable. Only atelet can
+  // observe when an upload finishes or a local copy is deleted, and the
+  // control plane needs both to decide where the Actor can resume.
+  //
+  // Only atelet should call this, with its own client certificate. The
+  // control plane serves it only for an Actor on the caller's node.
+  // Idempotent: each report carries the whole state and replaces the previous
+  // one. Returns ABORTED while another operation holds the Actor; retry.
+  //
+  // TODO(#2570): not served yet. Every call returns UNIMPLEMENTED until the
+  // handler lands.
+  rpc ReportActorSnapshotState(ReportActorSnapshotStateRequest) returns (ReportActorSnapshotStateResponse);
 }
 
 message RegisterWorkerRequest {
@@ -2516,6 +2530,96 @@ message RequestActorSuspendRequest {
 message RequestActorSuspendResponse {
   // The Actor as the suspend workflow left it.
   Actor actor = 1;
+}
+
+message ReportActorSnapshotStateRequest {
+  // The Actor the report is about.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+
+  // The UID of the Actor atelet holds snapshots for, which pins the report to
+  // one incarnation, as on RequestActorSuspendRequest.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 2;
+
+  // +k8s:required
+  ActorSnapshotState state = 3;
+}
+
+message ReportActorSnapshotStateResponse {}
+
+// ActorSnapshotState is what atelet holds for one Actor on its node. It
+// mirrors atelet's ActorSnapshotState, flattened: atelet's SnapshotReport
+// nests its own Snapshot message, which this API's Snapshot is not.
+message ActorSnapshotState {
+  // The snapshot atelet restores the Actor from locally. Unset once a detach
+  // has made the snapshot durable and begun deleting it; latest_durable is
+  // then the Actor's latest snapshot.
+  //
+  // +k8s:optional
+  SnapshotReport latest_local = 1;
+
+  // The snapshot an in-flight upload is reading, if any.
+  //
+  // +k8s:optional
+  SnapshotReport uploading = 2;
+
+  // The newest snapshot atelet knows is durable, whether or not the control
+  // plane has recorded it. Unset says nothing about older durable snapshots.
+  //
+  // +k8s:optional
+  SnapshotReport latest_durable = 3;
+
+  // When atelet next plans to upload latest_local. Advisory: a promote or
+  // detach can upload it sooner.
+  //
+  // +k8s:optional
+  google.protobuf.Timestamp upload_due_time = 4;
+}
+
+// SnapshotReport is one of an Actor's snapshots, named by the uuid and
+// generation the control plane gave it.
+message SnapshotReport {
+  // Snapshot.uuid.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string uuid = 1;
+
+  // Snapshot.generation.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  int32 generation = 2;
+
+  // The fidelity the snapshot holds, read from its manifest.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  SnapshotFidelity fidelity = 3;
+
+  // Where the snapshot's durable copy is, or will be, uploaded.
+  //
+  // +k8s:required
+  ObjectSnapshot object = 4;
+
+  // When the checkpoint that produced the snapshot committed on the node.
+  // Unset when this atelet did not take it, as for a snapshot it restored
+  // from object storage.
+  //
+  // +k8s:optional
+  google.protobuf.Timestamp local_commit_time = 5;
+
+  // When the snapshot's manifest was written to object storage. Set only in
+  // latest_durable, and only when this atelet wrote it.
+  //
+  // +k8s:optional
+  google.protobuf.Timestamp durable_complete_time = 6;
 }
 
 // AccessPolicy is an access policy resource nested under a parent resource (or
