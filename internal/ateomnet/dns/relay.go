@@ -15,6 +15,7 @@
 package dns
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -92,4 +93,10 @@ func NewRelayForUpstreams(upstreams []string) (*Relay, error) {
 		upstreams: upstreams,
 		dialer:    &net.Dialer{Timeout: dnsExchangeTimeout},
 	}, nil
+}
+
+// serveOn serves DNS on netC's sockets, which the caller has already bound,
+// and dials upstreams with netC's dialer.
+func (r *Relay) serveOn(ctx context.Context, netC *netConn, policy PolicySource) (*Server, error) {
+	return newServer(ctx, &serverConfig{upstreams: r.upstreams, policy: policy}, netC)
 }
