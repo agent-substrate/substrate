@@ -2765,11 +2765,11 @@ type GoldenSnapshotStatus struct {
 	// +k8s:optional
 	// +k8s:subfield(atespace)=+k8s:required
 	GoldenTag *ObjectRef `protobuf:"bytes,1,opt,name=golden_tag,json=goldenTag,proto3" json:"golden_tag,omitempty"`
-	// take_golden_snapshot_at is when the golden-actor warmup ends and the
+	// snapshot_time is when the golden-actor warmup ends and the
 	// golden snapshot may be taken.
 	//
 	// +k8s:optional
-	TakeGoldenSnapshotAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=take_golden_snapshot_at,json=takeGoldenSnapshotAt,proto3" json:"take_golden_snapshot_at,omitempty"`
+	SnapshotTime *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=snapshot_time,json=snapshotTime,proto3" json:"snapshot_time,omitempty"`
 	// error_message is set when the golden snapshot build fails and will not be
 	// retried, formatted as "<Reason>: <detail>". A nonempty value is terminal.
 	//
@@ -2817,9 +2817,9 @@ func (x *GoldenSnapshotStatus) GetGoldenTag() *ObjectRef {
 	return nil
 }
 
-func (x *GoldenSnapshotStatus) GetTakeGoldenSnapshotAt() *timestamppb.Timestamp {
+func (x *GoldenSnapshotStatus) GetSnapshotTime() *timestamppb.Timestamp {
 	if x != nil {
-		return x.TakeGoldenSnapshotAt
+		return x.SnapshotTime
 	}
 	return nil
 }
@@ -3119,7 +3119,7 @@ type Container struct {
 	// as soon as the container has started, which may be before it listens.
 	//
 	// +k8s:optional
-	WakeupProbe *ContainerWakeupProbe `protobuf:"bytes,6,opt,name=wakeup_probe,json=wakeupProbe,proto3" json:"wakeup_probe,omitempty"`
+	WakeupProbe *WakeupProbe `protobuf:"bytes,6,opt,name=wakeup_probe,json=wakeupProbe,proto3" json:"wakeup_probe,omitempty"`
 	// Keyed by mount_path: each path hosts exactly one mount, while a volume
 	// may be mounted at multiple paths.
 	//
@@ -3208,7 +3208,7 @@ func (x *Container) GetEnv() []*EnvVar {
 	return nil
 }
 
-func (x *Container) GetWakeupProbe() *ContainerWakeupProbe {
+func (x *Container) GetWakeupProbe() *WakeupProbe {
 	if x != nil {
 		return x.WakeupProbe
 	}
@@ -3418,11 +3418,11 @@ func (x *EnvVar) GetValue() string {
 	return ""
 }
 
-// ContainerWakeupProbe tells the platform when a container is serving. It is
+// WakeupProbe tells the platform when a container is serving. It is
 // polled on every wakeup, whether the actor cold-boots or is restored from a
 // snapshot, and not again while the actor stays running. A probe that does
 // not answer 200 within timeout_seconds crashes the actor.
-type ContainerWakeupProbe struct {
+type WakeupProbe struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// http_get is the request to poll.
 	//
@@ -3439,20 +3439,20 @@ type ContainerWakeupProbe struct {
 	sizeCache      protoimpl.SizeCache
 }
 
-func (x *ContainerWakeupProbe) Reset() {
-	*x = ContainerWakeupProbe{}
+func (x *WakeupProbe) Reset() {
+	*x = WakeupProbe{}
 	mi := &file_ateapi_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ContainerWakeupProbe) String() string {
+func (x *WakeupProbe) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ContainerWakeupProbe) ProtoMessage() {}
+func (*WakeupProbe) ProtoMessage() {}
 
-func (x *ContainerWakeupProbe) ProtoReflect() protoreflect.Message {
+func (x *WakeupProbe) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3464,19 +3464,19 @@ func (x *ContainerWakeupProbe) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ContainerWakeupProbe.ProtoReflect.Descriptor instead.
-func (*ContainerWakeupProbe) Descriptor() ([]byte, []int) {
+// Deprecated: Use WakeupProbe.ProtoReflect.Descriptor instead.
+func (*WakeupProbe) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{36}
 }
 
-func (x *ContainerWakeupProbe) GetHttpGet() *HttpGetAction {
+func (x *WakeupProbe) GetHttpGet() *HttpGetAction {
 	if x != nil {
 		return x.HttpGet
 	}
 	return nil
 }
 
-func (x *ContainerWakeupProbe) GetTimeoutSeconds() int32 {
+func (x *WakeupProbe) GetTimeoutSeconds() int32 {
 	if x != nil {
 		return x.TimeoutSeconds
 	}
@@ -5716,8 +5716,8 @@ type MintActorJwtResponse struct {
 	// * `ate.dev`: A JSON object with the actor's `atespace`, `actorName`, and
 	//   `actorUID`.
 	ActorJwt string `protobuf:"bytes,1,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
-	// When actor_jwt expires. Equal to its exp claim.
-	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	// expire_time is when actor_jwt expires. Equal to its exp claim.
+	ExpireTime    *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5759,9 +5759,9 @@ func (x *MintActorJwtResponse) GetActorJwt() string {
 	return ""
 }
 
-func (x *MintActorJwtResponse) GetExpiresAt() *timestamppb.Timestamp {
+func (x *MintActorJwtResponse) GetExpireTime() *timestamppb.Timestamp {
 	if x != nil {
-		return x.ExpiresAt
+		return x.ExpireTime
 	}
 	return nil
 }
@@ -8677,11 +8677,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x06limits\x18\x01 \x03(\v2\x0e.ateapi.LimitsR\x06limits\"8\n" +
 	"\x06Limits\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
-	"\bquantity\x18\x02 \x01(\tR\bquantity\"\xc0\x01\n" +
+	"\bquantity\x18\x02 \x01(\tR\bquantity\"\xae\x01\n" +
 	"\x14GoldenSnapshotStatus\x120\n" +
 	"\n" +
-	"golden_tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\tgoldenTag\x12Q\n" +
-	"\x17take_golden_snapshot_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x14takeGoldenSnapshotAt\x12#\n" +
+	"golden_tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\tgoldenTag\x12?\n" +
+	"\rsnapshot_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\fsnapshotTime\x12#\n" +
 	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"i\n" +
 	"\x13ActorTemplateStatus\x12R\n" +
 	"\x16golden_snapshot_status\x18\x01 \x01(\v2\x1c.ateapi.GoldenSnapshotStatusR\x14goldenSnapshotStatus\"k\n" +
@@ -8694,14 +8694,14 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x12preferred_fidelity\x18\x02 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\x11preferredFidelity\x12R\n" +
 	"\x16golden_snapshot_config\x18\x05 \x01(\v2\x1c.ateapi.GoldenSnapshotConfigR\x14goldenSnapshotConfig\"F\n" +
 	"\x14GoldenSnapshotConfig\x12.\n" +
-	"\x04mode\x18\x01 \x01(\x0e2\x1a.ateapi.GoldenSnapshotModeR\x04mode\"\xf5\x02\n" +
+	"\x04mode\x18\x01 \x01(\x0e2\x1a.ateapi.GoldenSnapshotModeR\x04mode\"\xec\x02\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x18\n" +
 	"\acommand\x18\x03 \x03(\tR\acommand\x12\x12\n" +
 	"\x04args\x18\x04 \x03(\tR\x04args\x12 \n" +
-	"\x03env\x18\x05 \x03(\v2\x0e.ateapi.EnvVarR\x03env\x12?\n" +
-	"\fwakeup_probe\x18\x06 \x01(\v2\x1c.ateapi.ContainerWakeupProbeR\vwakeupProbe\x128\n" +
+	"\x03env\x18\x05 \x03(\v2\x0e.ateapi.EnvVarR\x03env\x126\n" +
+	"\fwakeup_probe\x18\x06 \x01(\v2\x13.ateapi.WakeupProbeR\vwakeupProbe\x128\n" +
 	"\rvolume_mounts\x18\a \x03(\v2\x13.ateapi.VolumeMountR\fvolumeMounts\x12B\n" +
 	"\x10security_context\x18\b \x01(\v2\x17.ateapi.SecurityContextR\x0fsecurityContext\x12/\n" +
 	"\tresources\x18\t \x01(\v2\x11.ateapi.ResourcesR\tresources\"K\n" +
@@ -8712,8 +8712,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x04drop\x18\x02 \x03(\tR\x04drop\"7\n" +
 	"\x06EnvVar\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
-	"\x05value\x18\x02 \x01(\tB\x03\x80\x01\x01R\x05value\"q\n" +
-	"\x14ContainerWakeupProbe\x120\n" +
+	"\x05value\x18\x02 \x01(\tB\x03\x80\x01\x01R\x05value\"h\n" +
+	"\vWakeupProbe\x120\n" +
 	"\bhttp_get\x18\x01 \x01(\v2\x15.ateapi.HttpGetActionR\ahttpGet\x12'\n" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
 	"\rHttpGetAction\x12\x12\n" +
@@ -8824,11 +8824,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x13MintActorJwtRequest\x12'\n" +
 	"\x05actor\x18\x05 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1c\n" +
 	"\taudiences\x18\x01 \x03(\tR\taudiences\x12-\n" +
-	"\x12expiration_seconds\x18\b \x01(\x03R\x11expirationSeconds\"s\n" +
+	"\x12expiration_seconds\x18\b \x01(\x03R\x11expirationSeconds\"u\n" +
 	"\x14MintActorJwtResponse\x12 \n" +
-	"\tactor_jwt\x18\x01 \x01(\tB\x03\x80\x01\x01R\bactorJwt\x129\n" +
-	"\n" +
-	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xa3\x01\n" +
+	"\tactor_jwt\x18\x01 \x01(\tB\x03\x80\x01\x01R\bactorJwt\x12;\n" +
+	"\vexpire_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"expireTime\"\xa3\x01\n" +
 	"\x1bMintActorCertificateRequest\x12'\n" +
 	"\x05actor\x18\x06 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\a \x01(\tR\bactorUid\x12>\n" +
@@ -9133,7 +9133,7 @@ var file_ateapi_proto_goTypes = []any{
 	(*SecurityContext)(nil),                    // 42: ateapi.SecurityContext
 	(*Capabilities)(nil),                       // 43: ateapi.Capabilities
 	(*EnvVar)(nil),                             // 44: ateapi.EnvVar
-	(*ContainerWakeupProbe)(nil),               // 45: ateapi.ContainerWakeupProbe
+	(*WakeupProbe)(nil),                        // 45: ateapi.WakeupProbe
 	(*HttpGetAction)(nil),                      // 46: ateapi.HttpGetAction
 	(*Volume)(nil),                             // 47: ateapi.Volume
 	(*ImageVolumeSource)(nil),                  // 48: ateapi.ImageVolumeSource
@@ -9272,19 +9272,19 @@ var file_ateapi_proto_depIdxs = []int32{
 	37,  // 47: ateapi.ActorTemplate.status:type_name -> ateapi.ActorTemplateStatus
 	35,  // 48: ateapi.Resources.limits:type_name -> ateapi.Limits
 	32,  // 49: ateapi.GoldenSnapshotStatus.golden_tag:type_name -> ateapi.ObjectRef
-	131, // 50: ateapi.GoldenSnapshotStatus.take_golden_snapshot_at:type_name -> google.protobuf.Timestamp
+	131, // 50: ateapi.GoldenSnapshotStatus.snapshot_time:type_name -> google.protobuf.Timestamp
 	36,  // 51: ateapi.ActorTemplateStatus.golden_snapshot_status:type_name -> ateapi.GoldenSnapshotStatus
 	5,   // 52: ateapi.SandboxConfig.sandbox_class:type_name -> ateapi.SandboxClass
 	2,   // 53: ateapi.SnapshotConfig.preferred_fidelity:type_name -> ateapi.SnapshotFidelity
 	40,  // 54: ateapi.SnapshotConfig.golden_snapshot_config:type_name -> ateapi.GoldenSnapshotConfig
 	6,   // 55: ateapi.GoldenSnapshotConfig.mode:type_name -> ateapi.GoldenSnapshotMode
 	44,  // 56: ateapi.Container.env:type_name -> ateapi.EnvVar
-	45,  // 57: ateapi.Container.wakeup_probe:type_name -> ateapi.ContainerWakeupProbe
+	45,  // 57: ateapi.Container.wakeup_probe:type_name -> ateapi.WakeupProbe
 	56,  // 58: ateapi.Container.volume_mounts:type_name -> ateapi.VolumeMount
 	42,  // 59: ateapi.Container.security_context:type_name -> ateapi.SecurityContext
 	34,  // 60: ateapi.Container.resources:type_name -> ateapi.Resources
 	43,  // 61: ateapi.SecurityContext.capabilities:type_name -> ateapi.Capabilities
-	46,  // 62: ateapi.ContainerWakeupProbe.http_get:type_name -> ateapi.HttpGetAction
+	46,  // 62: ateapi.WakeupProbe.http_get:type_name -> ateapi.HttpGetAction
 	49,  // 63: ateapi.Volume.durable_dir:type_name -> ateapi.DurableDirVolumeSource
 	50,  // 64: ateapi.Volume.external_volume_template:type_name -> ateapi.ExternalVolumeTemplate
 	51,  // 65: ateapi.Volume.system_info:type_name -> ateapi.SystemInfoVolumeSource
@@ -9326,7 +9326,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	93,  // 101: ateapi.DeleteActorEgressPolicyRequest.options:type_name -> ateapi.DeleteOptions
 	32,  // 102: ateapi.GetTagRequest.tag:type_name -> ateapi.ObjectRef
 	32,  // 103: ateapi.MintActorJwtRequest.actor:type_name -> ateapi.ObjectRef
-	131, // 104: ateapi.MintActorJwtResponse.expires_at:type_name -> google.protobuf.Timestamp
+	131, // 104: ateapi.MintActorJwtResponse.expire_time:type_name -> google.protobuf.Timestamp
 	32,  // 105: ateapi.MintActorCertificateRequest.actor:type_name -> ateapi.ObjectRef
 	30,  // 106: ateapi.ListTagsResponse.tags:type_name -> ateapi.Tag
 	30,  // 107: ateapi.CreateTagRequest.tag:type_name -> ateapi.Tag

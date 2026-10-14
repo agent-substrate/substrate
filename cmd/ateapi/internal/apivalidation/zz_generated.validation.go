@@ -1752,7 +1752,7 @@ func Validate_Container(
 	{ // field ateapipb.Container.WakeupProbe
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateapipb.ContainerWakeupProbe,
+			obj, oldObj *ateapipb.WakeupProbe,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -1769,11 +1769,11 @@ func Validate_Container(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_ContainerWakeupProbe(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_WakeupProbe(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.Container) *ateapipb.ContainerWakeupProbe {
+			func(oldObj *ateapipb.Container) *ateapipb.WakeupProbe {
 				return oldObj.WakeupProbe
 			})
 		errs = append(errs, fn(fldPath.Child("wakeup_probe"), obj.WakeupProbe, oldVal, oldObj != nil)...)
@@ -1887,81 +1887,6 @@ func Validate_Container(
 				return oldObj.Resources
 			})
 		errs = append(errs, fn(fldPath.Child("resources"), obj.Resources, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
-// Validate_ContainerWakeupProbe validates an instance of ContainerWakeupProbe according
-// to declarative validation rules in the API schema.
-func Validate_ContainerWakeupProbe(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.ContainerWakeupProbe) (errs field.ErrorList) {
-
-	{ // field ateapipb.ContainerWakeupProbe.HttpGet
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateapipb.HttpGetAction,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// call the type's validation function
-			errs = append(errs, Validate_HttpGetAction(ctx, op, fldPath, obj, oldObj)...)
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.ContainerWakeupProbe) *ateapipb.HttpGetAction {
-				return oldObj.HttpGet
-			})
-		errs = append(errs, fn(fldPath.Child("http_get"), obj.HttpGet, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateapipb.ContainerWakeupProbe.TimeoutSeconds
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *int32,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 3600); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.ContainerWakeupProbe) *int32 {
-				return &oldObj.TimeoutSeconds
-			})
-		errs = append(errs, fn(fldPath.Child("timeout_seconds"), &obj.TimeoutSeconds, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -4540,7 +4465,7 @@ func Validate_GoldenSnapshotStatus(
 		errs = append(errs, fn(fldPath.Child("golden_tag"), obj.GoldenTag, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.GoldenSnapshotStatus.TakeGoldenSnapshotAt
+	{ // field ateapipb.GoldenSnapshotStatus.SnapshotTime
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *timestamppb.Timestamp,
@@ -4563,9 +4488,9 @@ func Validate_GoldenSnapshotStatus(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateapipb.GoldenSnapshotStatus) *timestamppb.Timestamp {
-				return oldObj.TakeGoldenSnapshotAt
+				return oldObj.SnapshotTime
 			})
-		errs = append(errs, fn(fldPath.Child("take_golden_snapshot_at"), obj.TakeGoldenSnapshotAt, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("snapshot_time"), obj.SnapshotTime, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.GoldenSnapshotStatus.ErrorMessage
@@ -8986,6 +8911,81 @@ func Validate_VolumeMount(
 				return &oldObj.MountPath
 			})
 		errs = append(errs, fn(fldPath.Child("mount_path"), &obj.MountPath, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_WakeupProbe validates an instance of WakeupProbe according
+// to declarative validation rules in the API schema.
+func Validate_WakeupProbe(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.WakeupProbe) (errs field.ErrorList) {
+
+	{ // field ateapipb.WakeupProbe.HttpGet
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.HttpGetAction,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_HttpGetAction(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.WakeupProbe) *ateapipb.HttpGetAction {
+				return oldObj.HttpGet
+			})
+		errs = append(errs, fn(fldPath.Child("http_get"), obj.HttpGet, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.WakeupProbe.TimeoutSeconds
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int32,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 3600); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.WakeupProbe) *int32 {
+				return &oldObj.TimeoutSeconds
+			})
+		errs = append(errs, fn(fldPath.Child("timeout_seconds"), &obj.TimeoutSeconds, oldVal, oldObj != nil)...)
 	}
 
 	return errs

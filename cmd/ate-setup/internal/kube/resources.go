@@ -155,21 +155,6 @@ func (c *Client) PatchDeployment(ctx context.Context, namespace, name string, pa
 	return nil
 }
 
-// DaemonSetNames lists the DaemonSets in a namespace matching a label
-// selector. The atelet DaemonSet name carries a substrate version suffix, so
-// the installed versions can only be found by label.
-func (c *Client) DaemonSetNames(ctx context.Context, namespace, selector string) ([]string, error) {
-	list, err := c.Typed.AppsV1().DaemonSets(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
-	if err != nil {
-		return nil, fmt.Errorf("while listing daemonsets in %s matching %q: %w", namespace, selector, err)
-	}
-	names := make([]string, 0, len(list.Items))
-	for _, ds := range list.Items {
-		names = append(names, ds.Name)
-	}
-	return names, nil
-}
-
 // SetServiceAccountAnnotation adds or removes one annotation on a
 // ServiceAccount; an empty value removes it. A missing ServiceAccount is not
 // an error, matching the `|| true` the shell installer removed one under.

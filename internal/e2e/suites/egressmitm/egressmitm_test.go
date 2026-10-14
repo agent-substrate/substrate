@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -32,29 +33,75 @@ import (
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	corev1 "k8s.io/api/core/v1"
 )
 
 const probeTemplate = "probe"
 
 var probeNamespace string
 
+// servingBundle is the echo-https pod's certificate chain and key, in one file.
+const servingBundle = "/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+
+// The origins the intercepted fetches reach, one per scheme. They run in the
+// cluster so the lane does not depend on a public origin answering.
+var (
+	// echoHTTPSServer serves the certificate kubelet requests for it from the
+	// cluster's service-DNS signer, which names the Services selecting the pod
+	// as <name>.<namespace>.svc. The egress gateway trusts that signer once
+	// hack/setup-e2e-egress-tls-kind.sh has run.
+	echoHTTPSServer = e2e.ServerPod{
+		Name:         "echo-https",
+		ImportPath:   "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:         []string{"http", "--tls-cert=" + servingBundle, "--tls-key=" + servingBundle},
+		Port:         443,
+		TargetPort:   8443,
+		HealthScheme: corev1.URISchemeHTTPS,
+		Volumes: []corev1.Volume{{
+			Name: "servicedns",
+			VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{{PodCertificate: &corev1.PodCertificateProjection{
+					SignerName:           "servicedns.podcert.ate.dev/identity",
+					KeyType:              "ECDSAP256",
+					CredentialBundlePath: path.Base(servingBundle),
+				}}},
+			}},
+		}},
+		VolumeMounts: []corev1.VolumeMount{{Name: "servicedns", MountPath: path.Dir(servingBundle), ReadOnly: true}},
+	}
+	echoHTTPServer = e2e.ServerPod{
+		Name:       "echo-http",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"http"},
+		Port:       80,
+		TargetPort: 8080,
+	}
+)
+
 // TestActorEgressMITMTrust proves an actor can do TLS through the MITM
 // egress gateway using only the projected trust bundle:
 //
-//   - positive: /fetch with roots=bundle succeeds — the gateway's per-SNI
-//     minted leaf (signed from the egress-mitm-ca-pool) validates against
-//     the anchors atelet projected from the reconciler-published bundle.
-//     The bundle holds no public CAs, so a pass certifies interception is
-//     on.
+//   - positive: /fetch of the in-cluster echo origin with roots=bundle
+//     succeeds — the gateway's per-SNI minted leaf (signed from the
+//     egress-mitm-ca-pool) validates against the anchors atelet projected
+//     from the reconciler-published bundle. The bundle holds neither a public
+//     CA nor the signer of the origin's own certificate, so a pass certifies
+//     interception is on.
 //   - negative: /fetch with roots=system fails certificate verification —
-//     the minted leaf chains to no public CA, proving the traffic really is
-//     intercepted rather than relayed (were it relayed this fetch would
-//     succeed, and the positive case would be meaningless).
+//     the minted leaf chains to no public CA, so the positive case trusted
+//     the projected bundle and nothing else.
+//
+// Only TLS passthrough reaches a public origin: the proof that the relay did
+// not intercept is the origin's own certificate validating against the system
+// roots, which no in-cluster certificate does. The echo origins' certificates
+// come from the service-DNS signer, which the gateway trusts once
+// hack/setup-e2e-egress-tls-kind.sh has run after the install.
 //
 // CI runs this in both lanes (see pr-workflow.yaml) — once per sandbox class,
 // since trust delivery differs per class (gVisor RO bind vs the micro-VM
 // unified virtio-fs share). Locally:
 //
+//	hack/setup-e2e-egress-tls-kind.sh
 //	hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
 //	E2E_SANDBOX_CLASS=microvm hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
 //
@@ -67,6 +114,14 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	}
 	ctx := context.Background()
 	clients := e2e.GetClients()
+
+	echoHTTPS := e2e.DeployServerPod(t, ctx, echoHTTPSServer)
+	httpSpec := echoHTTPServer
+	httpSpec.Namespace = echoHTTPS.Namespace
+	echoHTTP := e2e.DeployServerPod(t, ctx, httpSpec)
+	// The names the service-DNS signer certifies.
+	httpsHost := echoHTTPSServer.Name + "." + echoHTTPS.Namespace + ".svc"
+	httpHost := echoHTTPServer.Name + "." + echoHTTP.Namespace + ".svc"
 
 	// Ensure, never replace: the gateway signs with the pool mounted into its
 	// pod, and kubelet propagates Secret updates into that mount on
@@ -81,7 +136,7 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	probeNamespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egressmitm", e2e.WithTrustBundle())
 
 	const id = "probe-mitm"
-	createAndResumeActor(t, ctx, clients, id)
+	createAndResumeActor(t, ctx, clients, id, httpsHost, httpHost)
 	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	rc, err := e2e.NewRouterClient(ctx)
@@ -90,29 +145,14 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	}
 	defer rc.Close()
 
-	const origin = "https://" + egressOriginHost + "/"
+	origin := "https://" + httpsHost + "/healthz"
 
-	// The gateway signs with the pool mounted into its pod, and kubelet
-	// propagates Secret contents into that mount on its own schedule (up to
-	// ~1 minute). In CI the pool predates the gateway pod, but a LOCAL rerun
-	// can recreate the pool moments before this fetch (a prior run's cleanup
-	// deleted it), leaving the gateway briefly signing with the old CA — so
-	// certificate failures retry for one propagation window before counting.
-	deadline := time.Now().Add(2 * time.Minute)
-	var pos fetchResponse
-	for {
-		pos = probeFetch(t, ctx, rc, id, origin, "bundle")
-		isCertErr := strings.Contains(pos.Error, "certificate") || strings.Contains(pos.Error, "x509")
-		if pos.Error == "" || !isCertErr || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(5 * time.Second)
-	}
+	pos := fetchUntilReached(t, ctx, rc, id, origin, "bundle")
 	if pos.Error != "" {
 		t.Fatalf("TLS through the MITM egress gateway with the projected trust bundle failed: %s — the projected anchors did not validate the gateway's minted leaf (or interception/minting is broken)", pos.Error)
 	}
 	if pos.Status != "200" {
-		t.Fatalf("fetch %s via projected bundle: status %s, want 200", origin, pos.Status)
+		t.Fatalf("fetch %s via projected bundle: status %s, want 200 (a 5xx is the gateway failing to reach or trust the echo origin; has hack/setup-e2e-egress-tls-kind.sh run?) body %q", origin, pos.Status, pos.Body)
 	}
 
 	neg := probeFetch(t, ctx, rc, id, origin, "system")
@@ -126,8 +166,8 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	// dials the Host's name on the port the actor dialed, and nothing answers
 	// on port 1.
 	for _, tc := range []struct{ origin, dial string }{
-		{origin: "https://" + egressOriginHost + ":1/", dial: egressOriginHost + ":443"},
-		{origin: "http://" + egressOriginHost + ":1/", dial: egressOriginHost + ":80"},
+		{origin: "https://" + httpsHost + ":1/healthz", dial: echoHTTPS.Address()},
+		{origin: "http://" + httpHost + ":1/healthz", dial: echoHTTP.Address()},
 	} {
 		res := probeFetch(t, ctx, rc, id, tc.origin, "bundle", "dial="+url.QueryEscape(tc.dial))
 		switch {
@@ -142,16 +182,16 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	// must validate with the system roots. That is also the proof it was not
 	// intercepted.
 	const passthroughOrigin = "https://" + egressOriginPassthroughHost + "/"
-	pt := probeFetch(t, ctx, rc, id, passthroughOrigin, "system")
+	pt := fetchUntilReached(t, ctx, rc, id, passthroughOrigin, "system")
 	if pt.Error != "" {
 		t.Fatalf("TLS passthrough to %s failed: %s — the origin's certificate did not validate against the system roots, so the connection was intercepted, misrouted, or closed", passthroughOrigin, pt.Error)
 	}
 	if pt.Status != "200" {
-		t.Fatalf("passthrough fetch %s: status %s, want 200", passthroughOrigin, pt.Status)
+		t.Fatalf("passthrough fetch %s: status %s, want 200; body %q", passthroughOrigin, pt.Status, pt.Body)
 	}
 
 	// The gateway dials the name the SNI claims.
-	bySNI := probeFetch(t, ctx, rc, id, passthroughOrigin, "system", "dial="+url.QueryEscape(unreachableAddress))
+	bySNI := fetchUntilReached(t, ctx, rc, id, passthroughOrigin, "system", "dial="+url.QueryEscape(unreachableAddress))
 	switch {
 	case bySNI.Error != "":
 		t.Errorf("TLS passthrough to %s dialed at %s failed: %s — the gateway dialed the actor's address instead of resolving the SNI", passthroughOrigin, unreachableAddress, bySNI.Error)
@@ -182,9 +222,10 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	}
 }
 
-// egressOriginHost is the one host the probe actor's EgressPolicy allows.
+// The public hosts of the passthrough cases.
 const (
-	egressOriginHost            = "example.com"
+	// egressOriginPassthroughHost is relayed unread, so the certificate the
+	// probe sees is the origin's own and validates against the system roots.
 	egressOriginPassthroughHost = "example.edu"
 	// egressOriginPassthroughWrongPortHost is allowed by passthrough on 8443
 	// only, while the probe dials 443.
@@ -197,6 +238,46 @@ const (
 type fetchResponse struct {
 	Status string `json:"status"`
 	Error  string `json:"error"`
+	Body   string `json:"body"`
+}
+
+// reachWindow bounds the retries of a fetch that must return 200.
+const reachWindow = 2 * time.Minute
+
+// fetchUntilReached is probeFetch for a fetch that must return 200. It retries
+// transient failures for up to reachWindow, then returns the last result for
+// the caller to fail on. A denial or any other final status returns at once.
+// The failures it rides out:
+//
+//   - a certificate error: the gateway signs with the pool mounted into its
+//     pod, and kubelet propagates Secret contents into that mount on its own
+//     schedule (up to ~1 minute). In CI the pool predates the gateway pod,
+//     but a LOCAL rerun can recreate the pool moments before this fetch (a
+//     prior run's cleanup deleted it), leaving the gateway briefly signing
+//     with the old CA;
+//   - any other transport error, and a 5xx: the actor's route is still
+//     propagating, or the public passthrough origin reset, timed out or
+//     answered 5xx.
+//
+// It never skips. The passthrough origin's reachability is part of what the
+// lane proves, and a skip would report that as a pass
+// (docs/dev/best-practices/ci-fail-closed.md).
+func fetchUntilReached(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, origin, roots string, extraParams ...string) fetchResponse {
+	t.Helper()
+	deadline := time.Now().Add(reachWindow)
+	for {
+		resp := probeFetch(t, ctx, rc, id, origin, roots, extraParams...)
+		if !transientFailure(resp) || time.Now().After(deadline) {
+			return resp
+		}
+		t.Logf("fetch of %s: transient failure (status %q, error %q), retrying", origin, resp.Status, resp.Error)
+		time.Sleep(5 * time.Second)
+	}
+}
+
+// transientFailure reports whether fetchUntilReached should retry resp.
+func transientFailure(resp fetchResponse) bool {
+	return resp.Error != "" || strings.HasPrefix(resp.Status, "5")
 }
 
 // probeFetch asks the probe to fetch origin with the given roots mode;
@@ -239,9 +320,9 @@ func probeFetch(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, ori
 
 // createAndResumeActor mirrors the identity suite's self-healing actor
 // lifecycle (actor records outlive the fixture namespace); DeployProbe has
-// already waited for the template's golden snapshot.
-
-func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
+// already waited for the template's golden snapshot. httpsHost and httpHost
+// are the echo origins' names, the hosts the actor's policy intercepts.
+func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id, httpsHost, httpHost string) {
 	t.Helper()
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
 	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
@@ -253,10 +334,10 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
 	// The gateway refuses every tunnel for an actor without a policy. Naming
-	// only the origin also lets the same actor show a denial.
+	// only the origins also lets the same actor show a denial.
 	e2e.EnsureEgressPolicy(t, ctx, clients, ref,
-		e2e.EgressAllowHTTP(egressOriginHost),
-		e2e.EgressAllowHTTPS(egressOriginHost),
+		e2e.EgressAllowHTTP(httpHost),
+		e2e.EgressAllowHTTPS(httpsHost),
 		e2e.EgressAllowPassthrough(egressOriginPassthroughHost),
 		e2e.EgressAllowPassthroughOnPorts([]int32{8443}, egressOriginPassthroughWrongPortHost),
 	)
