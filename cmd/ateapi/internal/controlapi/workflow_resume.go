@@ -42,6 +42,7 @@ import (
 // and passed by value to the restore step — never mutated after resolution.
 type resumeSnapshotSource struct {
 	SnapshotUUID string
+	Generation   int32
 	// SnapshotURI is the storage location of the durable snapshot to restore
 	// from: the actor's latest snapshot, including a tag borrowed at creation.
 	// Zero means cold boot from the spec (unless the actor holds a local
@@ -187,6 +188,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			return nil, nil, src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
 		}
 		src.SnapshotUUID = snap.GetUuid()
+		src.Generation = snap.GetGeneration()
 		src.Fidelity = snap.GetFidelity()
 		capturedUnder := snap.GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
@@ -807,6 +809,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			Spec:                  workloadSpec,
 			Snapshot: &ateletpb.Snapshot{
 				SnapshotUuid: localSnap.GetUuid(),
+				Generation:   localSnap.GetGeneration(),
 				Fidelity:     fidelity,
 			},
 			SandboxAssets: sandboxAssets,
@@ -841,6 +844,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			Spec:                  workloadSpec,
 			Snapshot: &ateletpb.Snapshot{
 				SnapshotUuid: src.SnapshotUUID,
+				Generation:   src.Generation,
 				Fidelity:     scope,
 				Object: &ateletpb.ObjectStorage{
 					SnapshotUri: src.SnapshotURI.String(),

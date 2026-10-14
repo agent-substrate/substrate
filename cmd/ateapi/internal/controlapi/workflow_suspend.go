@@ -272,6 +272,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 		Spec:                  workloadSpec,
 		Snapshot: &ateletpb.Snapshot{
 			SnapshotUuid: inProgressSnap.GetUuid(),
+			Generation:   inProgressSnap.GetGeneration(),
 			Fidelity:     fidelity,
 			Object: &ateletpb.ObjectStorage{
 				SnapshotUri: inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(),
@@ -334,6 +335,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		ActorTemplateName:     actor.GetActorTemplate().GetName(),
 		Snapshot: &ateletpb.Snapshot{
 			SnapshotUuid: localSnap.GetUuid(),
+			Generation:   localSnap.GetGeneration(),
 			Fidelity:     fidelity,
 			Object: &ateletpb.ObjectStorage{
 				SnapshotUri: snapshotAtLatestGeneration(actor.GetStatus()).GetDurableSnapshot().GetObject().GetSnapshotUri(),

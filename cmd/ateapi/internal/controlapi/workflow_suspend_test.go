@@ -451,6 +451,9 @@ func TestEnsureAteletSuspended_WireRequest(t *testing.T) {
 	if got := req.GetSnapshot().GetSnapshotUuid(); got != snapshotName {
 		t.Errorf("CheckpointRequest.Snapshot.SnapshotUuid = %q, want %q", got, snapshotName)
 	}
+	if got := req.GetSnapshot().GetGeneration(); got != 1 {
+		t.Errorf("CheckpointRequest.Snapshot.Generation = %d, want 1, the in-progress snapshot's", got)
+	}
 	if got := req.GetSnapshot().GetObject().GetSnapshotUri(); got != snapshotURI {
 		t.Errorf("CheckpointRequest.Snapshot.Object.SnapshotUri = %q, want %q", got, snapshotURI)
 	}
@@ -964,6 +967,51 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 			t.Errorf("state = %v, want SUSPENDING (retryable, not crashed)", stored.GetStatus().GetState())
 		}
 	})
+}
+
+// TestEnsurePausedSnapshotUploaded_WireRequest verifies the PromoteSnapshot
+// request names the paused actor's local snapshot, with its generation, and
+// the destination the suspend recorded for it.
+func TestEnsurePausedSnapshotUploaded_WireRequest(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	w, atelet := newWireCaptureWorkflow(t, persistence)
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	destURI := someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-dest")
+	snap := newDurableSnapshot(3, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", destURI, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+	snap.Locality = "node-1"
+	created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns", Name: "tmpl1"},
+		Status: &ateapipb.ActorStatus{
+			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			AssignedNode:           "node-1",
+			LastAssignedGeneration: 3,
+			Snapshots:              []*ateapipb.Snapshot{snap},
+		},
+	})
+	tmpl := &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+	}
+
+	if _, err := w.ensurePausedSnapshotUploaded(ctx, actorRef, created, tmpl); err != nil {
+		t.Fatalf("ensurePausedSnapshotUploaded: %v", err)
+	}
+	req := atelet.promoteRequest()
+	if req == nil {
+		t.Fatal("expected PromoteSnapshot RPC to be called")
+	}
+	want := &ateletpb.Snapshot{
+		SnapshotUuid: "pause-snap",
+		Generation:   3,
+		Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Object:       &ateletpb.ObjectStorage{SnapshotUri: destURI},
+	}
+	if got := req.GetSnapshot(); !proto.Equal(got, want) {
+		t.Errorf("PromoteSnapshotRequest.Snapshot = %v, want %v", got, want)
+	}
 }
 
 // TestEnsureSuspendedFinalized_MissingDurableSnapshotClearsAssignment verifies

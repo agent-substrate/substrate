@@ -1048,8 +1048,8 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	}
 }
 
-// capturingAtelet records the last Restore and Run request it receives, so a
-// test can assert on the exact wire request the resume workflow sends.
+// capturingAtelet records the last request of each RPC it receives, so a test
+// can assert on the exact wire request a workflow sends.
 type capturingAtelet struct {
 	ateletpb.UnimplementedAteomHerderServer
 
@@ -1057,6 +1057,7 @@ type capturingAtelet struct {
 	restore    *ateletpb.RestoreRequest
 	run        *ateletpb.RunRequest
 	checkpoint *ateletpb.CheckpointRequest
+	promote    *ateletpb.PromoteSnapshotRequest
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1080,6 +1081,13 @@ func (f *capturingAtelet) Checkpoint(ctx context.Context, req *ateletpb.Checkpoi
 	return &ateletpb.CheckpointResponse{}, nil
 }
 
+func (f *capturingAtelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (*ateletpb.PromoteSnapshotResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.promote = proto.Clone(req).(*ateletpb.PromoteSnapshotRequest)
+	return &ateletpb.PromoteSnapshotResponse{}, nil
+}
+
 func (f *capturingAtelet) checkpointRequest() *ateletpb.CheckpointRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1087,6 +1095,15 @@ func (f *capturingAtelet) checkpointRequest() *ateletpb.CheckpointRequest {
 		return nil
 	}
 	return proto.Clone(f.checkpoint).(*ateletpb.CheckpointRequest)
+}
+
+func (f *capturingAtelet) promoteRequest() *ateletpb.PromoteSnapshotRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.promote == nil {
+		return nil
+	}
+	return proto.Clone(f.promote).(*ateletpb.PromoteSnapshotRequest)
 }
 
 // requests returns the recorded Restore and Run requests, nil for an RPC that
@@ -1582,6 +1599,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			// Paused and suspended actors are both SUSPENDED; a pause
 			// checkpoint is what makes the resume local.
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			var extGen, localGen int32
 			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
 				a.SourceTag = tt.actor.sourceTag
 				a.Status.WorkerAssignment = wireTestAssignment()
@@ -1593,6 +1611,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				var gen int32
 				if tt.actor.externalSnapshot != nil {
 					gen++
+					extGen = gen
 					ext := proto.CloneOf(tt.actor.externalSnapshot)
 					ext.Generation = gen
 					if ext.ActorTemplateUid == "" {
@@ -1602,6 +1621,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				}
 				if tt.actor.localSnapshot != nil {
 					gen++
+					localGen = gen
 					a.Status.AssignedNode = "node-1"
 					loc := proto.CloneOf(tt.actor.localSnapshot)
 					loc.Generation = gen
@@ -1652,6 +1672,13 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			}
 			if got := restore.GetSnapshot().GetFidelity(); got != tt.want.scope {
 				t.Errorf("restore scope = %v, want %v", got, tt.want.scope)
+			}
+			wantGen := extGen
+			if tt.want.snapshotName == localSnapshotName {
+				wantGen = localGen
+			}
+			if got := restore.GetSnapshot().GetGeneration(); got != wantGen {
+				t.Errorf("Snapshot.Generation = %d, want %d, the restored snapshot's", got, wantGen)
 			}
 		})
 	}

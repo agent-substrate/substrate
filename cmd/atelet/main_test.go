@@ -1275,6 +1275,7 @@ func validCheckpointRequest() *ateletpb.CheckpointRequest {
 		Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
 		Snapshot: &ateletpb.Snapshot{
 			SnapshotUuid: "snap-1",
+			Generation:   1,
 			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			Object:       &ateletpb.ObjectStorage{SnapshotUri: testSnapshotURI},
 		},
@@ -1291,6 +1292,7 @@ func validPromoteSnapshotRequest() *ateletpb.PromoteSnapshotRequest {
 		ActorTemplateName:     "counter",
 		Snapshot: &ateletpb.Snapshot{
 			SnapshotUuid: "pause-snap-1",
+			Generation:   1,
 			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			Object:       &ateletpb.ObjectStorage{SnapshotUri: pausedSnapshotURI},
 		},

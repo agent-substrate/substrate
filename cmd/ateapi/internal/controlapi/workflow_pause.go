@@ -204,6 +204,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		Spec:                  workloadSpec,
 		Snapshot: &ateletpb.Snapshot{
 			SnapshotUuid: inProgressSnap.GetUuid(),
+			Generation:   inProgressSnap.GetGeneration(),
 			Fidelity:     fidelityToAtelet(actorTemplate.GetSnapshotConfig().GetPreferredFidelity()),
 		},
 		UploadConfig: &ateletpb.UploadConfig{
