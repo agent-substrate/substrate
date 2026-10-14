@@ -52,7 +52,7 @@ func TestHostActorReplacesSameActor(t *testing.T) {
 		}
 	})
 	for range 2 {
-		if _, err := service.hostActor(ctx, resources.ActorAttribution{UID: actorUID}, false); err != nil {
+		if _, err := service.hostActor(ctx, resources.ActorAttribution{UID: actorUID}, false, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -88,7 +88,7 @@ func TestSetupActorTap(t *testing.T) {
 	ctx := context.Background()
 	ns := tapNetNS(t, "microvm-tap-test")
 
-	fds, err := setupActorTap(ctx, ns, "tap0_kata", 1)
+	fds, err := setupActorTap(ctx, ns, "tap0_kata", 1, 0)
 	if err != nil {
 		t.Fatalf("setupActorTap: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestSetupActorTapReplacesALeftover(t *testing.T) {
 	ctx := context.Background()
 	ns := tapNetNS(t, "microvm-tap-replace")
 
-	first, err := setupActorTap(ctx, ns, "tap0_kata", 1)
+	first, err := setupActorTap(ctx, ns, "tap0_kata", 1, 0)
 	if err != nil {
 		t.Fatalf("first setupActorTap: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestSetupActorTapReplacesALeftover(t *testing.T) {
 		defer f.Close()
 	}
 
-	second, err := setupActorTap(ctx, ns, "tap0_kata", 2)
+	second, err := setupActorTap(ctx, ns, "tap0_kata", 2, 0)
 	if err != nil {
 		t.Fatalf("second setupActorTap over a leftover: %v", err)
 	}

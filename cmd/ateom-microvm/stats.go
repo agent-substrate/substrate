@@ -360,7 +360,15 @@ func (s *AteomService) sampleGuest(ctx context.Context, h *hostedActor) (*ateomp
 		return nil, nil, fmt.Errorf("no container stats from the guest agent: %w", err)
 	}
 
+	s.actorsMu.Lock()
+	network := h.network
+	s.actorsMu.Unlock()
+	var networkStats *ateompb.NetworkStats
+	if network != nil {
+		networkStats, _ = network.NetworkStats(ctx)
+	}
 	return &ateompb.WorkloadStatsSample{
+		Network:               networkStats,
 		Atespace:              active.Ref.Atespace,
 		ActorName:             active.Ref.Name,
 		ActorUid:              active.UID,

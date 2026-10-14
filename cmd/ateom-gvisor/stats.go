@@ -253,6 +253,14 @@ func (s *AteomService) measure(ctx context.Context, h *hostedActor) (*ateompb.Wo
 	sample, err := h.usage.Measure(ctx, func() (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
 		sample, r, err := s.sampleSandbox(&h.attribution)
 		raw = r
+		if err == nil {
+			s.actorsMu.Lock()
+			network := h.network
+			s.actorsMu.Unlock()
+			if network != nil {
+				sample.Network, _ = network.NetworkStats(ctx)
+			}
+		}
 		return sample, nil, err
 	})
 	return sample, raw, err

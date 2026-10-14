@@ -256,15 +256,16 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	p := actorBootParams{
-		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
-		actorUID:         req.GetActorUid(),
-		actorDirs:        req.GetActorDirs(),
-		templateAtespace: req.GetActorTemplateAtespace(),
-		templateName:     req.GetActorTemplateName(),
-		containers:       req.GetSpec().GetContainers(),
-		assetPaths:       req.GetRuntimeAssetPaths(),
-		egressGateway:    req.GetEgressGateway(),
-		size:             sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		actorRef:             resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
+		actorUID:             req.GetActorUid(),
+		actorDirs:            req.GetActorDirs(),
+		templateAtespace:     req.GetActorTemplateAtespace(),
+		templateName:         req.GetActorTemplateName(),
+		containers:           req.GetSpec().GetContainers(),
+		egressBytesPerSecond: req.GetSpec().GetEgressBytesPerSecond(),
+		assetPaths:           req.GetRuntimeAssetPaths(),
+		egressGateway:        req.GetEgressGateway(),
+		size:                 sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 	}
 
 	attribution := p.actorAttribution()
@@ -274,7 +275,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	if _, err := s.hostActor(ctx, attribution, false); err != nil {
+	if _, err := s.hostActor(ctx, attribution, false, req.GetSpec().GetEgressBytesPerSecond()); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -298,13 +299,14 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 // request, or from a Restore request whose snapshot fidelity covers only the
 // durable-dir volumes (the workload itself cold-starts).
 type actorBootParams struct {
-	actorRef         resources.ActorRef
-	actorUID         string
-	actorDirs        *ateompb.ActorDirs
-	templateAtespace string
-	templateName     string
-	containers       []*ateompb.Container
-	assetPaths       map[string]string
+	egressBytesPerSecond int64
+	actorRef             resources.ActorRef
+	actorUID             string
+	actorDirs            *ateompb.ActorDirs
+	templateAtespace     string
+	templateName         string
+	containers           []*ateompb.Container
+	assetPaths           map[string]string
 	// egressGateway is nil unless actor TCP should be redirected through atunnel.
 	egressGateway *ateompb.EgressGateway
 	// size is the actor's declared limits (from the ActorTemplate), supplied on
@@ -365,7 +367,7 @@ func (s *AteomService) coldBootActorRetrying(ctx context.Context, p actorBootPar
 			slog.String("id", p.actorUID), slog.Int("attempt", attempt), slog.Any("err", err))
 		// The failed attempt deactivated egress, which retires the listener
 		// bound to it, so the network is rebuilt. The actor keeps its slot.
-		if _, err := s.hostActor(ctx, p.attribution(), false); err != nil {
+		if _, err := s.hostActor(ctx, p.attribution(), false, p.egressBytesPerSecond); err != nil {
 			return err
 		}
 	}
@@ -538,7 +540,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 
 	// Network device: build the actor's tap and add a virtio-net to the created
 	// (pre-boot) VM with its FDs (SCM_RIGHTS).
-	tapFiles, err := setupActorTap(ctx, s.sandboxNetNS(actorUID), "tap0_kata", 1)
+	tapFiles, err := setupActorTap(ctx, s.sandboxNetNS(actorUID), "tap0_kata", 1, p.egressBytesPerSecond)
 	if err != nil {
 		return fmt.Errorf("while building tap: %w", err)
 	}

@@ -91,6 +91,13 @@ func UsageAttrs(pool Pool, kind string, s *ateompb.WorkloadStatsSample) []slog.A
 	if peak := s.GetMemoryPeakBytes(); peak > 0 {
 		attrs = append(attrs, slog.Uint64(string(ateattr.StatsMemoryPeakKey), peak))
 	}
+	if network := s.GetNetwork(); network != nil {
+		attrs = append(attrs,
+			slog.Int64(string(ateattr.StatsNetworkEgressRateKey), network.GetEgressBytesPerSecond()),
+			slog.Uint64(string(ateattr.StatsNetworkEgressBytesKey), network.GetEgressBytes()),
+			slog.Uint64(string(ateattr.StatsNetworkEgressDropsKey), uint64(network.GetEgressDroppedPackets())),
+		)
+	}
 	return attrs
 }
 

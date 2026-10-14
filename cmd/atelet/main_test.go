@@ -1548,3 +1548,15 @@ func TestShouldHaveSnapshots(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildAteomWorkloadSpecEgressBandwidth(t *testing.T) {
+	for _, rate := range []int64{0, 1048576, 1000000000} {
+		out, err := buildAteomWorkloadSpec(&ateletpb.WorkloadSpec{EgressBytesPerSecond: rate}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.GetEgressBytesPerSecond() != rate {
+			t.Fatalf("rate = %d, want %d", out.GetEgressBytesPerSecond(), rate)
+		}
+	}
+}

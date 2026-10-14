@@ -71,7 +71,7 @@ func (s *AteomService) admitActor(attribution resources.ActorAttribution, resume
 
 // hostActor sets up the actor's network, replacing any stale one. resumesGuest
 // is as for admitActor.
-func (s *AteomService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, error) {
+func (s *AteomService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool, egressBytesPerSecond int64) (*hostedActor, error) {
 	uid := attribution.UID
 	if uid == "" {
 		return nil, fmt.Errorf("actor UID is required")
@@ -92,9 +92,10 @@ func (s *AteomService) hostActor(ctx context.Context, attribution resources.Acto
 
 	// The tap and atunnel share a namespace; the guest owns the other end.
 	session, err := ateomnet.ServeSandbox(ctx, ateomnet.SandboxNetworkConfig{
-		ActorUID:   uid,
-		EgressPort: s.tunnel.EgressPort,
-		DNSPolicy:  s.tunnel.ActorEgressPolicy(attribution),
+		ActorUID:             uid,
+		EgressPort:           s.tunnel.EgressPort,
+		DNSPolicy:            s.tunnel.ActorEgressPolicy(attribution),
+		EgressBytesPerSecond: egressBytesPerSecond,
 	}, s.tunnel.Egress, s.tunnel.DNSRelay)
 	if err != nil {
 		s.actorsMu.Lock()

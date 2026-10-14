@@ -127,6 +127,9 @@ var (
 			string(ateattr.StatsMemoryPeakKey),
 			string(ateattr.StatsMemoryWorkingSetKey),
 			string(ateattr.StatsCPUTimeKey),
+			string(ateattr.StatsNetworkEgressRateKey),
+			string(ateattr.StatsNetworkEgressBytesKey),
+			string(ateattr.StatsNetworkEgressDropsKey),
 		},
 	}
 )

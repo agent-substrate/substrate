@@ -49,7 +49,7 @@ func toAteletResources(r *ateapipb.Resources) (*ateletpb.ResourceLimits, error) 
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;
 // container env is copied verbatim.
 func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor, volumePublishContexts map[string]map[string]string) (*ateletpb.WorkloadSpec, error) {
-	workloadSpec := &ateletpb.WorkloadSpec{}
+	workloadSpec := &ateletpb.WorkloadSpec{EgressBytesPerSecond: effectiveEgressBandwidth(actorTemplate, actor)}
 
 	// Convert volumes to atelet's representation.  ActorTemplate validation has
 	// already ensured that only one source is set.
@@ -248,4 +248,13 @@ func toAteletSecurityContext(in *ateapipb.SecurityContext) *ateletpb.SecurityCon
 			Drop: caps.GetDrop(),
 		},
 	}
+}
+
+// effectiveEgressBandwidth resolves the Actor override without treating explicit
+// zero (unlimited) as an absent value.
+func effectiveEgressBandwidth(template *ateapipb.ActorTemplate, actor *ateapipb.Actor) int64 {
+	if bandwidth := actor.GetNetworkBandwidth(); bandwidth != nil && bandwidth.EgressBytesPerSecond != nil {
+		return bandwidth.GetEgressBytesPerSecond()
+	}
+	return template.GetNetworkBandwidth().GetEgressBytesPerSecond()
 }

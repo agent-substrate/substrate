@@ -39,6 +39,7 @@ func measuredSample() *ateompb.WorkloadStatsSample {
 		MemoryPeakBytes:       48 << 20,
 		MemoryWorkingSetBytes: 32 << 20,
 		CpuUsageUsec:          1_500_000,
+		Network:               &ateompb.NetworkStats{EgressBytesPerSecond: 1048576, EgressBytes: 2097152, EgressDroppedPackets: 12},
 		ObservedAtUnixNano:    1_700_000_000_000_000_000,
 		EpochUnixNano:         1_699_999_990_000_000_000,
 	}
@@ -233,5 +234,22 @@ func TestStatsSourceLabel(t *testing.T) {
 		if got := StatsSourceLabel(src); got != want {
 			t.Errorf("StatsSourceLabel(%v) = %q, want %q", src, got, want)
 		}
+	}
+}
+
+func TestUsageAttrsOmitsUnavailableNetwork(t *testing.T) {
+	sample := measuredSample()
+	sample.Network = nil
+	got := attrMap(UsageAttrs(testPool, ateattr.StatsKindPeriodic, sample))
+	for _, key := range []string{string(ateattr.StatsNetworkEgressRateKey), string(ateattr.StatsNetworkEgressBytesKey), string(ateattr.StatsNetworkEgressDropsKey)} {
+		if _, present := got[key]; present {
+			t.Errorf("unavailable network contains %s", key)
+		}
+	}
+}
+func TestUsageAttrsNetwork(t *testing.T) {
+	got := attrMap(UsageAttrs(testPool, ateattr.StatsKindPeriodic, measuredSample()))
+	if got[string(ateattr.StatsNetworkEgressRateKey)].Int64() != 1048576 || got[string(ateattr.StatsNetworkEgressBytesKey)].Uint64() != 2097152 || got[string(ateattr.StatsNetworkEgressDropsKey)].Uint64() != 12 {
+		t.Fatalf("network attrs = %v", got)
 	}
 }

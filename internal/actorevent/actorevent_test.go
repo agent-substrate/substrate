@@ -75,6 +75,9 @@ func usageSampledAttrs() []slog.Attr {
 		slog.Uint64(string(ateattr.StatsMemoryPeakKey), 48<<20),
 		slog.Uint64(string(ateattr.StatsMemoryWorkingSetKey), 32<<20),
 		slog.Float64(string(ateattr.StatsCPUTimeKey), 1.5),
+		slog.Int64(string(ateattr.StatsNetworkEgressRateKey), 12),
+		slog.Int64(string(ateattr.StatsNetworkEgressBytesKey), 12),
+		slog.Int64(string(ateattr.StatsNetworkEgressDropsKey), 12),
 		slog.Int64(string(ateattr.ActorEpochKey), 1_699_999_990_000_000_000))
 }
 

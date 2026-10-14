@@ -66,7 +66,7 @@ func (s *AteomService) admitActor(attribution resources.ActorAttribution) (*host
 }
 
 // hostActor sets up the actor's network, replacing any stale one.
-func (s *AteomService) hostActor(ctx context.Context, attribution resources.ActorAttribution, actorDirs *ateompb.ActorDirs) (*hostedActor, error) {
+func (s *AteomService) hostActor(ctx context.Context, attribution resources.ActorAttribution, actorDirs *ateompb.ActorDirs, egressBytesPerSecond int64) (*hostedActor, error) {
 	uid := attribution.UID
 	if uid == "" {
 		return nil, fmt.Errorf("actor UID is required")
@@ -86,10 +86,11 @@ func (s *AteomService) hostActor(ctx context.Context, attribution resources.Acto
 	}
 
 	session, err := ateomnet.ServeSandbox(ctx, ateomnet.SandboxNetworkConfig{
-		ActorUID:   uid,
-		Veth:       true,
-		EgressPort: s.tunnel.EgressPort,
-		DNSPolicy:  s.tunnel.ActorEgressPolicy(attribution),
+		ActorUID:             uid,
+		Veth:                 true,
+		EgressPort:           s.tunnel.EgressPort,
+		DNSPolicy:            s.tunnel.ActorEgressPolicy(attribution),
+		EgressBytesPerSecond: egressBytesPerSecond,
 	}, s.tunnel.Egress, s.tunnel.DNSRelay)
 	if err != nil {
 		s.actorsMu.Lock()

@@ -51,7 +51,7 @@ var gatewayHWAddr = ateomnet.MustParseMAC(gatewayMAC)
 
 // setupActorTap creates the guest's tap with a fixed gateway address and MAC.
 // Returns the FDs cloud-hypervisor adopts on boot or restore.
-func setupActorTap(ctx context.Context, actorNetNS netns.Handle, name string, queuePairs int) ([]*os.File, error) {
+func setupActorTap(ctx context.Context, actorNetNS netns.Handle, name string, queuePairs int, egressBytesPerSecond int64) ([]*os.File, error) {
 	var fds []*os.File
 	err := netns.Do(ctx, actorNetNS, func(ctx context.Context) error {
 		if old, lerr := netlink.LinkByName(name); lerr == nil {
@@ -89,6 +89,12 @@ func setupActorTap(ctx context.Context, actorNetNS netns.Handle, name string, qu
 		return nil
 	})
 	if err != nil {
+		for _, f := range fds {
+			_ = f.Close()
+		}
+		return nil, err
+	}
+	if err := ateomnet.ApplyEgressBandwidth(ctx, actorNetNS, name, egressBytesPerSecond); err != nil {
 		for _, f := range fds {
 			_ = f.Close()
 		}

@@ -133,15 +133,16 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 
 	p := actorBootParams{
-		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
-		actorUID:         req.GetActorUid(),
-		actorDirs:        req.GetActorDirs(),
-		templateAtespace: req.GetActorTemplateAtespace(),
-		templateName:     req.GetActorTemplateName(),
-		containers:       req.GetSpec().GetContainers(),
-		assetPaths:       req.GetRuntimeAssetPaths(),
-		egressGateway:    req.GetEgressGateway(),
-		size:             sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		actorRef:             resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
+		actorUID:             req.GetActorUid(),
+		actorDirs:            req.GetActorDirs(),
+		templateAtespace:     req.GetActorTemplateAtespace(),
+		templateName:         req.GetActorTemplateName(),
+		containers:           req.GetSpec().GetContainers(),
+		egressBytesPerSecond: req.GetSpec().GetEgressBytesPerSecond(),
+		assetPaths:           req.GetRuntimeAssetPaths(),
+		egressGateway:        req.GetEgressGateway(),
+		size:                 sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 	}
 	restoreDir := p.actorDirs.GetRestoreDir()
 	durableDir := p.actorDirs.GetDurableDirVolumeMountsDir()
@@ -158,7 +159,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// so only it counts from the first reading; the lower fidelities cold-boot
 	// a fresh guest whose CPU counts from zero.
 	resumesGuest := includesMemory(req.GetFidelity())
-	if _, err := s.hostActor(ctx, attribution, resumesGuest); err != nil {
+	if _, err := s.hostActor(ctx, attribution, resumesGuest, req.GetSpec().GetEgressBytesPerSecond()); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -346,6 +347,9 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 	if err != nil {
 		return fmt.Errorf("while reading snapshot net devices: %w", err)
 	}
+	if p.egressBytesPerSecond != 0 && len(netDevs) != 1 {
+		return apierror.Unimplemented("egress bandwidth requires exactly one network device")
+	}
 	var restoredNets []ch.RestoredNet
 	var tapFiles []*os.File
 	defer func() {
@@ -354,7 +358,7 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 		}
 	}()
 	for i, nd := range netDevs {
-		files, terr := setupActorTap(ctx, s.sandboxNetNS(actorUID), fmt.Sprintf("tap%d_kata", i), nd.QueuePairs)
+		files, terr := setupActorTap(ctx, s.sandboxNetNS(actorUID), fmt.Sprintf("tap%d_kata", i), nd.QueuePairs, p.egressBytesPerSecond)
 		if terr != nil {
 			return fmt.Errorf("while building restore tap for %s: %w", nd.ID, terr)
 		}

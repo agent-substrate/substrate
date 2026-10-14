@@ -642,3 +642,29 @@ func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
 		t.Errorf("unlimited container Resources = %v, want nil", r)
 	}
 }
+
+func TestWorkloadSpecEgressBandwidth(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		template, actor *int64
+		want            int64
+	}{
+		{"unlimited", nil, nil, 0}, {"template default", bandwidthRate(1048576), nil, 1048576},
+		{"actor override", bandwidthRate(1048576), bandwidthRate(2097152), 2097152},
+		{"explicit unlimited", bandwidthRate(1048576), bandwidthRate(0), 0},
+		{"actor only", nil, bandwidthRate(2097152), 2097152},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			template := &ateapipb.ActorTemplate{NetworkBandwidth: &ateapipb.NetworkBandwidth{EgressBytesPerSecond: tc.template}}
+			actor := &ateapipb.Actor{NetworkBandwidth: &ateapipb.NetworkBandwidth{EgressBytesPerSecond: tc.actor}}
+			spec, err := workloadSpecFromActorTemplate(template, actor, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := spec.GetEgressBytesPerSecond(); got != tc.want {
+				t.Fatalf("rate = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+func bandwidthRate(rate int64) *int64 { return &rate }

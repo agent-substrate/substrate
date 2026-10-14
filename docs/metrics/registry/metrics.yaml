@@ -629,6 +629,25 @@ groups:
           of the highest value in each. The unit is that of the instrument
           ate.actor.stats.cpu.time, thus one query serves both signals.
         examples: [1.5]
+      - id: ate.stats.network.egress.limit
+        stability: development
+        type: int
+        brief: The effective egress limit in bytes per second; zero means unlimited.
+        note: Logs only. Absent when network counters are unavailable. Not a metric label.
+        examples: [1048576]
+      - id: ate.stats.network.egress.bytes
+        stability: development
+        type: int
+        brief: Cumulative bytes sent to the network peer in this activation, including packets subsequently dropped.
+        note: Logs only. Absent when network counters are unavailable. Not a metric label.
+        examples: [1048576]
+      - id: ate.stats.network.egress.dropped_packets
+        stability: development
+        type: int
+        brief: Cumulative packets dropped by egress bandwidth policing in this activation.
+        note: Logs only. Absent when network counters are unavailable. Not a metric label.
+        examples: [12]
+
 
   - id: registry.ate.deviation
     type: attribute_group

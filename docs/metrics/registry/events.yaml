@@ -174,3 +174,12 @@ groups:
       - ref: ate.stats.cpu.time
         requirement_level:
           conditionally_required: ate.stats.source is not unspecified.
+      - ref: ate.stats.network.egress.limit
+        requirement_level:
+          conditionally_required: Network counters are available and ate.stats.source is not unspecified.
+      - ref: ate.stats.network.egress.bytes
+        requirement_level:
+          conditionally_required: Network counters are available and ate.stats.source is not unspecified.
+      - ref: ate.stats.network.egress.dropped_packets
+        requirement_level:
+          conditionally_required: Network counters are available and ate.stats.source is not unspecified.

@@ -60,7 +60,8 @@ func (n *SandboxNetwork) holdsNetNS() bool { return n.RuntimeNetNS > 0 }
 
 // SandboxNetworkConfig describes one actor's private networking.
 type SandboxNetworkConfig struct {
-	ActorUID string
+	ActorUID             string
+	EgressBytesPerSecond int64
 
 	// Veth separates gVisor's interfaces from the kernel-owned gateway.
 	// MicroVMs use a tap in a single namespace instead.
@@ -113,6 +114,11 @@ func SetupSandboxNetwork(ctx context.Context, cfg SandboxNetworkConfig) (_ *Sand
 			}
 		}()
 		atunnelNS = outer
+	}
+	if cfg.Veth {
+		if err := ApplyEgressBandwidth(ctx, atunnelNS, gatewayVethName, cfg.EgressBytesPerSecond); err != nil {
+			return nil, err
+		}
 	}
 	if err := setupGatewaySide(ctx, atunnelNS, cfg.EgressPort); err != nil {
 		return nil, err
@@ -404,9 +410,11 @@ func serveSandboxEgress(ctx context.Context, e egressServer, actorUID string, ns
 type SandboxSession struct {
 	Network *SandboxNetwork
 
-	mu      sync.Mutex
-	dns     *dns.Server
-	sockets []io.Closer
+	egressBytesPerSecond int64
+	egressLink           string
+	mu                   sync.Mutex
+	dns                  *dns.Server
+	sockets              []io.Closer
 	// serving counts the egress goroutines, so Close can wait for them rather
 	// than just closing their sockets. dns.Server waits for its own.
 	serving sync.WaitGroup
@@ -420,7 +428,11 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 	if err != nil {
 		return nil, err
 	}
-	session := &SandboxSession{Network: network}
+	egressLink := "tap0_kata"
+	if cfg.Veth {
+		egressLink = gatewayVethName
+	}
+	session := &SandboxSession{Network: network, egressBytesPerSecond: cfg.EgressBytesPerSecond, egressLink: egressLink}
 	defer func() {
 		if retErr != nil {
 			_ = session.Close(ctx)

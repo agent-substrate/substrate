@@ -614,7 +614,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs())
+	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), req.GetSpec().GetEgressBytesPerSecond())
 	if err != nil {
 		return nil, err
 	}
@@ -983,7 +983,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err != nil {
 		return nil, err
 	}
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs())
+	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), req.GetSpec().GetEgressBytesPerSecond())
 	timing.netSetup = lap(&tLast)
 	if err != nil {
 		return nil, err

@@ -177,12 +177,15 @@ const (
 // unix-nano time it began. It is the boundary of ate.stats.cpu.time, which
 // restarts at zero with each activation.
 const (
-	ActorEpochKey            = attribute.Key("ate.actor.epoch")
-	StatsKindKey             = attribute.Key("ate.stats.kind")
-	StatsMemoryUsageKey      = attribute.Key("ate.stats.memory.usage")
-	StatsMemoryPeakKey       = attribute.Key("ate.stats.memory.peak")
-	StatsMemoryWorkingSetKey = attribute.Key("ate.stats.memory.working_set")
-	StatsCPUTimeKey          = attribute.Key("ate.stats.cpu.time")
+	ActorEpochKey              = attribute.Key("ate.actor.epoch")
+	StatsKindKey               = attribute.Key("ate.stats.kind")
+	StatsMemoryUsageKey        = attribute.Key("ate.stats.memory.usage")
+	StatsMemoryPeakKey         = attribute.Key("ate.stats.memory.peak")
+	StatsMemoryWorkingSetKey   = attribute.Key("ate.stats.memory.working_set")
+	StatsNetworkEgressRateKey  = attribute.Key("ate.stats.network.egress.limit")
+	StatsNetworkEgressBytesKey = attribute.Key("ate.stats.network.egress.bytes")
+	StatsNetworkEgressDropsKey = attribute.Key("ate.stats.network.egress.dropped_packets")
+	StatsCPUTimeKey            = attribute.Key("ate.stats.cpu.time")
 )
 
 // SandboxOOMKillsKey is memory.events' oom_kill for the sandbox cgroup leaf, on
