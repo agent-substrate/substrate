@@ -289,7 +289,7 @@ var Registry = []Setting{
 		// registry has no list kind, so the value is carried as written and
 		// split where it is used.
 		Key: "preview", Env: "ATE_PREVIEW", Flag: "preview", Kind: KindString,
-		Usage: "Preview gates every substrate component runs with, comma-separated; '*' enables all",
+		Usage: "Preview gates every substrate component runs with, comma-separated; ALL enables all",
 	},
 
 	{

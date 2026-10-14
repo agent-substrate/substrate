@@ -121,7 +121,7 @@ func TestInjectPreviewArg(t *testing.T) {
 		enabled []string
 		arg     string
 	}{
-		{enabled: []string{"*"}, arg: "--preview=*"},
+		{enabled: []string{"ALL"}, arg: "--preview=ALL"},
 		{enabled: nil, arg: "--preview="},
 	} {
 		t.Run(tc.arg, func(t *testing.T) {
@@ -158,7 +158,7 @@ func TestInjectPreviewArg(t *testing.T) {
 
 func TestInjectPreviewArgLeavesOtherManifestsAlone(t *testing.T) {
 	in := []byte("apiVersion: v1\nkind: Pod\nmetadata:   {name: x}\nspec:\n  containers:\n  - {name: c, image: busybox}\n")
-	for _, enabled := range [][]string{{"*"}, {}} {
+	for _, enabled := range [][]string{{"ALL"}, {}} {
 		out, err := injectPreviewArg(in, enabled)
 		if err != nil {
 			t.Fatalf("injectPreviewArg: %v", err)
@@ -243,7 +243,7 @@ func TestResolveManifestInjectsPreview(t *testing.T) {
 		},
 	}
 	for _, src := range sources {
-		for _, enabled := range [][]string{{"*"}, {}} {
+		for _, enabled := range [][]string{{"ALL"}, {}} {
 			arg := previewArg(enabled)
 			t.Run(src.name+"/"+arg, func(t *testing.T) {
 				cfg := src.cfg

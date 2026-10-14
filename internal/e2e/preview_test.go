@@ -32,7 +32,7 @@ func TestPreviewGates(t *testing.T) {
 		{name: "unset locally"},
 		{name: "unset in CI", ci: "true", wantErr: true},
 		{name: "empty in CI", ci: "true", value: ptr.To("")},
-		{name: "star", ci: "true", value: ptr.To("*"), want: []string{"*"}},
+		{name: "ALL", ci: "true", value: ptr.To("ALL"), want: []string{"ALL"}},
 		{name: "list", value: ptr.To("A, B C"), want: []string{"A", "B", "C"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

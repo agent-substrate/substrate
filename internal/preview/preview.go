@@ -43,6 +43,9 @@ const (
 	GateExternalVolumes Gate = "ExternalVolumes"
 )
 
+// All is the pseudo-gate name that enables every known gate.
+const All = "ALL"
+
 // realKnownGates lists all declared preview gates. Preview gates are disabled by
 // default and enabled via the --preview flag.
 var realKnownGates = []Gate{
@@ -76,7 +79,7 @@ func init() {
 }
 
 // Init sets the process-wide preview gates from the --preview flag values.
-// The special value "*" enables all known gates. With no values, all gates are
+// The special value All enables all known gates. With no values, all gates are
 // disabled. It panics if called again after the first successful call.
 func Init(values ...string) error {
 	globalInitLock.Lock()
@@ -124,12 +127,12 @@ func newGateMap(knownGates []Gate, values ...string) (map[string]bool, error) {
 	all := false
 	// add all the specified gates
 	for _, v := range values {
-		if v == "*" {
+		if v == All {
 			all = true
 		} else if slices.Contains(knownGates, Gate(v)) {
 			tmpMap[string(v)] = true
 		} else {
-			return nil, fmt.Errorf("unknown preview gate %q: supported gates: %q", v, append([]Gate{"*"}, knownGates...))
+			return nil, fmt.Errorf("unknown preview gate %q: supported gates: %q", v, append([]Gate{All}, knownGates...))
 		}
 	}
 	// add the rest

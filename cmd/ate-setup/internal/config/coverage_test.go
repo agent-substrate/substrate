@@ -103,7 +103,7 @@ func valueFor(key string) string {
 	case "csi.setup":
 		return "none"
 	case "preview":
-		return "*"
+		return "ALL"
 	}
 	return "set"
 }

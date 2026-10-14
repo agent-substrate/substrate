@@ -29,7 +29,7 @@ import (
 
 // previewFlag lists the preview gates the install under test enabled, in the
 // same syntax as ate-setup's ATE_PREVIEW: comma- or space-separated gate
-// names, or "*" for all of them. Empty means none.
+// names, or "ALL" for all of them. Empty means none.
 var previewFlag string
 
 // previewRequired reports whether --preview must be passed. A lane that

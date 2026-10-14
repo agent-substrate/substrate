@@ -164,7 +164,7 @@ jobs:
       # features", not an unset value. The e2e steps pass it to the suites as
       # --preview, so tests of a disabled gate skip themselves (see
       # internal/e2e/preview.go).
-      ATE_PREVIEW: ${{ matrix.preview == 'on' && '*' || '' }}
+      ATE_PREVIEW: ${{ matrix.preview == 'on' && 'ALL' || '' }}
       # Appended to the lane and artifact names: e2e-gvisor runs without
       # preview features, e2e-gvisor-preview with them.
       LANE_SUFFIX: ${{ matrix.preview == 'on' && '-preview' || '' }}

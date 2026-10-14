@@ -268,15 +268,15 @@ func TestLoadPreviewGates(t *testing.T) {
 		want            []string
 	}{
 		{name: "default"},
-		{name: "flag all", flag: val("*"), want: []string{"*"}},
+		{name: "flag all", flag: val("ALL"), want: []string{"ALL"}},
 		{name: "flag list", flag: val("A,B"), want: []string{"A", "B"}},
 		{name: "file", file: val("A, B"), want: []string{"A", "B"}},
-		{name: "environment", env: val("*"), want: []string{"*"}},
+		{name: "environment", env: val("ALL"), want: []string{"ALL"}},
 		{name: "empty items dropped", env: val(",A,,"), want: []string{"A"}},
-		{name: "file beats environment", file: val("A"), env: val("*"), want: []string{"A"}},
+		{name: "file beats environment", file: val("A"), env: val("ALL"), want: []string{"A"}},
 		{name: "flag beats file", flag: val("B"), file: val("A"), want: []string{"B"}},
-		{name: "empty flag beats environment", flag: val(""), env: val("*")},
-		{name: "empty file beats environment", file: val(""), env: val("*")},
+		{name: "empty flag beats environment", flag: val(""), env: val("ALL")},
+		{name: "empty file beats environment", file: val(""), env: val("ALL")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			loadEnv(t)
@@ -321,10 +321,10 @@ func TestLoadRejectsUnknownPreviewGates(t *testing.T) {
 		env     string
 		wantErr string
 	}{
-		{name: "all", env: "*"},
+		{name: "all", env: "ALL"},
 		{name: "known gate", env: "Fake"},
 		{name: "unknown gate", env: "NoSuchGate", wantErr: "ATE_PREVIEW"},
-		{name: "unknown among known", env: "*,NoSuchGate", wantErr: "ATE_PREVIEW"},
+		{name: "unknown among known", env: "ALL,NoSuchGate", wantErr: "ATE_PREVIEW"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			loadEnv(t)

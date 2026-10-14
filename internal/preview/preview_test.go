@@ -52,13 +52,15 @@ func TestInit(t *testing.T) {
 		want    map[string]bool
 	}{
 		{name: "no values", want: map[string]bool{"Fake": false, "Phony": false}},
-		{name: "wildcard", values: []string{"*"}, want: map[string]bool{"Fake": true, "Phony": true}},
+		{name: "ALL", values: []string{"ALL"}, want: map[string]bool{"Fake": true, "Phony": true}},
 		{name: "Fake", values: []string{"Fake"}, want: map[string]bool{"Fake": true, "Phony": false}},
 		{name: "Phony", values: []string{"Phony"}, want: map[string]bool{"Fake": false, "Phony": true}},
 		{name: "Fake and Phony", values: []string{"Phony", "Fake"}, want: map[string]bool{"Fake": true, "Phony": true}},
-		{name: "repeated wildcard", values: []string{"*", "*"}, want: map[string]bool{"Fake": true, "Phony": true}},
+		{name: "repeated ALL", values: []string{"ALL", "ALL"}, want: map[string]bool{"Fake": true, "Phony": true}},
 		{name: "unknown", values: []string{"Bogus"}, wantErr: true},
 		{name: "empty", values: []string{""}, wantErr: true},
+		{name: "star is not a wildcard", values: []string{"*"}, wantErr: true},
+		{name: "lowercase all", values: []string{"all"}, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -110,18 +112,18 @@ func TestInitTwicePanics(t *testing.T) {
 	if err := Init(); err != nil {
 		t.Fatalf("Init(): %v", err)
 	}
-	wantPanic(t, "more than once", func() { _ = Init("*") })
+	wantPanic(t, "more than once", func() { _ = Init("ALL") })
 }
 
 func TestIsEnabledKnownGate(t *testing.T) {
-	InitForTestFake(t, []Gate{"Fake"}, "*")
+	InitForTestFake(t, []Gate{"Fake"}, "ALL")
 	if !IsEnabled(Gate("Fake")) {
 		t.Errorf("IsEnabled(unknown) = false, want true")
 	}
 }
 
 func TestIsEnabledUnknownGate(t *testing.T) {
-	InitForTestFake(t, []Gate{"Fake"}, "*")
+	InitForTestFake(t, []Gate{"Fake"}, "ALL")
 	if IsEnabled(Gate("Bogus")) {
 		t.Errorf("IsEnabled(unknown) = true, want false")
 	}
@@ -135,11 +137,11 @@ func TestVerify(t *testing.T) {
 		wantErr bool
 	}{
 		{values: nil},
-		{values: []string{"*"}},
+		{values: []string{"ALL"}},
 		{values: []string{"Fake"}},
 		{values: []string{"Fake", "Other"}},
 		{values: []string{"Bogus"}, wantErr: true},
-		{values: []string{"*", "Bogus"}, wantErr: true},
+		{values: []string{"ALL", "Bogus"}, wantErr: true},
 	} {
 		if err := doVerify(fakeGates, tc.values...); (err != nil) != tc.wantErr {
 			t.Errorf("Verify(%q) = %v, want error %v", tc.values, err, tc.wantErr)
@@ -150,7 +152,7 @@ func TestVerify(t *testing.T) {
 func TestSetForTest(t *testing.T) {
 	resetGlobalsForTest()
 	t.Run("enabled", func(t *testing.T) {
-		InitForTestFake(t, []Gate{"Fake"}, "*")
+		InitForTestFake(t, []Gate{"Fake"}, "ALL")
 		if !IsEnabled("Fake") {
 			t.Errorf("IsEnabled(%q) = false, want true", "Fake")
 		}

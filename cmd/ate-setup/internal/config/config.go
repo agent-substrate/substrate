@@ -213,7 +213,7 @@ type Config struct {
 	// (ATE_OTLP_ENDPOINT). Benchmark actors are pointed at it too.
 	OtlpEndpoint string
 	// PreviewGates is the --preview value (ATE_PREVIEW) every substrate
-	// component is deployed with: gate names, or "*" for all of them.
+	// component is deployed with: gate names, or "ALL" for all of them.
 	PreviewGates []string
 	// BenchmarkActorMemory is the memory limit for benchmark actors
 	// (BENCHMARK_ACTOR_MEMORY). Empty leaves the workload default in place.

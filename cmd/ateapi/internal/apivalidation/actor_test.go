@@ -598,7 +598,7 @@ func TestValidateActorUpdate(t *testing.T) {
 		oldVal:          validActor(withActorStatus()),
 		newVal:          validActor(withActorStatus()),
 		want:            nil,
-		wantWithPreview: map[string]field.ErrorList{"*": nil},
+		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
 	}, {
 		// Set-once fields permit the nil->set transition, so a volume added
 		// in an update validates like one added at creation.
@@ -608,7 +608,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
 		want:            nil,
-		wantWithPreview: map[string]field.ErrorList{"*": nil},
+		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
 	}, {
 		name:   "adding a volume to an actor with no status",
 		oldVal: validActor(),
@@ -616,7 +616,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
 		want:            nil,
-		wantWithPreview: map[string]field.ErrorList{"*": nil},
+		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
 	}, {
 		name: "provisioning transition on an existing volume",
 		oldVal: validInput(withStatus(func(s *ateapipb.ActorStatus) {
@@ -631,7 +631,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			}}
 		})),
 		want:            nil,
-		wantWithPreview: map[string]field.ErrorList{"*": nil},
+		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
 	}, {
 		name:   "duplicate external_volumes volume_name",
 		oldVal: validActor(withActorStatus()),
@@ -643,7 +643,7 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		want: field.ErrorList{field.Duplicate(field.NewPath("status", "external_volumes").Index(1), nil)},
 		wantWithPreview: map[string]field.ErrorList{
-			"*": {field.Duplicate(field.NewPath("status", "external_volumes").Index(1), nil)},
+			"ALL": {field.Duplicate(field.NewPath("status", "external_volumes").Index(1), nil)},
 		},
 	}, {
 		name:   "too many external_volumes",
@@ -657,7 +657,7 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		want: field.ErrorList{field.TooMany(field.NewPath("status", "external_volumes"), 33, 32).WithOrigin("maxItems")},
 		wantWithPreview: map[string]field.ErrorList{
-			"*": {field.TooMany(field.NewPath("status", "external_volumes"), 33, 32).WithOrigin("maxItems")},
+			"ALL": {field.TooMany(field.NewPath("status", "external_volumes"), 33, 32).WithOrigin("maxItems")},
 		},
 	}}
 	for _, tt := range tests {

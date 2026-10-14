@@ -60,7 +60,7 @@ func bindFlags() {
 	pflag.StringVar(&KubeConfig, "kube-config", "", "Location of the kubeconfig")
 	pflag.StringVar(&KubeContext, "kube-context", "", "Kubernetes context to use")
 	pflag.StringVar(&StorageClass, "storage-class", "csi-nfs-sc", "StorageClass to use for external volume tests")
-	pflag.StringVar(&previewFlag, "preview", "", `Preview gates the install under test enabled, as in ATE_PREVIEW ("*" for all, "" for none); required in CI`)
+	pflag.StringVar(&previewFlag, "preview", "", `Preview gates the install under test enabled, as in ATE_PREVIEW ("ALL" for all, "" for none); required in CI`)
 }
 
 // RunTestMain should be used to run your e2e test suite.

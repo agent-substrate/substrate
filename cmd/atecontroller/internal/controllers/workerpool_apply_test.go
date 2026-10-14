@@ -1081,7 +1081,7 @@ func TestBuildDeploymentPreview(t *testing.T) {
 	}{
 		{name: "disabled", want: []string{"--preview="}},
 		{name: "named", gates: []string{"Fake"}, want: []string{"--preview=Fake"}},
-		{name: "wildcard", gates: []string{"*"}, want: []string{"--preview=Fake,Phony"}},
+		{name: "ALL", gates: []string{"ALL"}, want: []string{"--preview=Fake,Phony"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			preview.InitForTestFake(t, []preview.Gate{"Fake", "Phony"}, tc.gates...)

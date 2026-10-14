@@ -77,7 +77,7 @@ which skips them unless the `--preview` flag names that gate. It takes the same
 syntax as `ATE_PREVIEW` and should match what the cluster was installed with:
 
 ```shell
-$ hack/run-e2e-kind.sh -v -args --no-color --preview='*'
+$ hack/run-e2e-kind.sh -v -args --no-color --preview=ALL
 ```
 
 Unset or empty means no gates. CI must pass it, even if only as empty, so a

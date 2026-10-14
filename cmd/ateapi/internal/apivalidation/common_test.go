@@ -54,7 +54,7 @@ func assertValidate(t *testing.T, validate func() field.ErrorList, want field.Er
 }
 
 // setPreviewForTest enables the preview gates named by gates, a --preview
-// value such as "*", for the duration of t. An empty value enables none.
+// value such as "ALL", for the duration of t. An empty value enables none.
 func setPreviewForTest(t *testing.T, gates string) {
 	t.Helper()
 	var values []string
