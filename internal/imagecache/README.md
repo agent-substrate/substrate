@@ -200,9 +200,9 @@ rootfs with ExtraDirs and no mount.
 Actor semantics are unchanged from the untar era: the upper is wiped by
 atelet's `resetActorDirs` between runs, so every run still starts from a
 bit-exact, pristine image rootfs — it just costs a mount instead of an
-extraction. The micro-VM path is nearly untouched: it bind-mounts the (now
-overlay-composed) bundle rootfs into virtiofsd's shared dir and the guest
-keeps building its own tmpfs upper, as before.
+extraction. The micro-VM worker does not mount the bundle rootfs at all: it
+attaches the bundle's EROFS layer images as virtio-pmem devices and the guest
+mounts the overlay (see `PrepareEROFSUpper` below for the upper it prepares).
 
 ## Merged view without a host mount (`PrepareEROFSUpper`)
 

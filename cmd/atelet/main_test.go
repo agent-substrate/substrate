@@ -341,7 +341,7 @@ func TestPrepareOCIBundlesPause(t *testing.T) {
 			useTempNodeDirs(t)
 			const actorUID = "actor-uid-1"
 			s := &Atelet{imageCache: newImageVolumeStore(t)}
-			if _, err := s.prepareOCIBundles(t.Context(), actorUID, resources.ActorRef{}, spec, tc.pauseImage); err != nil {
+			if _, err := s.prepareOCIBundles(t.Context(), actorUID, resources.ActorRef{}, spec, tc.pauseImage, imagecache.Form{}); err != nil {
 				t.Fatalf("prepareOCIBundles: %v", err)
 			}
 			if _, err := os.Stat(filepath.Join(ateletpath.OCIBundlePath(actorUID, "app"), imagecache.OverlaySpecFileName)); err != nil {
@@ -377,7 +377,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 	}
 
 	s := &Atelet{imageCache: newImageVolumeStore(t)}
-	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec, "")
+	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec, "", imagecache.Form{})
 	if err != nil {
 		t.Fatalf("prepareOCIBundles: %v", err)
 	}
@@ -1676,5 +1676,15 @@ func TestServingCheck(t *testing.T) {
 	close(served)
 	if err := check(context.Background()); err != nil {
 		t.Errorf("servingCheck after the port opened = %v, want nil", err)
+	}
+}
+
+// rootfsForm picks EROFS layer images for micro-VM actors and fs/ trees for
+// everything else.
+func TestRootfsForm(t *testing.T) {
+	for class, want := range map[string]imagecache.Form{"microvm": {EROFS: true}, "gvisor": {}, "": {}} {
+		if got := rootfsForm(class); got != want {
+			t.Errorf("rootfsForm(%q) = %+v, want %+v", class, got, want)
+		}
 	}
 }

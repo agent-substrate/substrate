@@ -26,9 +26,10 @@
 //     overlayfs whiteouts are char devices (CAP_MKNOD) with trusted.* xattrs
 //     for opaque dirs (CAP_SYS_ADMIN).
 //   - worker (privileged; it already owns every mount on the node) finalizes
-//     layers — materializing the recorded whiteout state, once per layer —
+//     fs/ layers — materializing the recorded whiteout state, once per layer —
 //     and mounts the overlay rootfs (SetupBundleRootfs) just before
-//     `runsc create` / staging the micro-VM virtio-fs lower.
+//     `runsc create`. The micro-VM worker attaches layer.erofs images to the
+//     guest instead and mounts nothing on the host.
 //
 // On-disk layout under the cache root (a directory on the BasePath hostPath,
 // so the same absolute paths resolve in atelet and every worker pod):
