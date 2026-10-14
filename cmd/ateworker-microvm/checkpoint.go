@@ -342,6 +342,9 @@ func (s *AteWorkerService) teardownActor(ctx context.Context, id string, actorDi
 	// FAILED_PRECONDITION path ("no numbers right now") instead of surfacing a
 	// closed connection as a failed read.
 	s.setGuestStats(id, nil)
+	if ra != nil {
+		ra.stopping.Store(true)
+	}
 
 	var errs []error
 	if client != nil {

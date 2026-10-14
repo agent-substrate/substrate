@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -66,6 +67,10 @@ type runningActor struct {
 	vfsdProc *child.Process
 	// apiSocket is the CH api-socket for this ateworker-owned VMM.
 	apiSocket string
+	// stopping is set once teardown starts, so watchVM can tell an expected
+	// exit from a crash: shutting the VM down makes cloud-hypervisor exit, and
+	// virtiofsd exits once its only client is gone.
+	stopping atomic.Bool
 
 	// restoreSourceDir is the snapshot dir this actor was OnDemand-restored from
 	// (CH demand-pages its guest RAM from it). Set when restored via OnDemand.
@@ -603,6 +608,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		return err
 	}
 	s.setRunningVM(actorUID, ra)
+	go s.watchVM(p.attribution(), p.actorDirs, ra)
 
 	// Forward each container's stdout/stderr into the pod logs, keyed by the
 	// container id (see StartRootfsContainer). The goroutines read over ac for
