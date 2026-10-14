@@ -441,6 +441,38 @@ warm-up until they have all joined at the spawn rate.
 * `CreateActor`, `ResumeActorWarmup`, `PauseActorWarmup`: A user's warm-up of
   its actor, in the step that added the user.
 
+#### Analyzing a ResumePaused Ladder Run
+
+`stats.csv` and `stats.jsonl` cover a whole run, so they blend every step of a
+ladder. [`automation/analyze_ladder.py`](automation/analyze_ladder.py) splits a
+run into its steps: it reads each step's start and end from the run's
+`logs.txt` and queries the benchmarking Prometheus over the step's steady
+window, from 30 s after the step starts to 5 s before it ends. It prints one
+JSON object per step: the cold resume and pause rates, failures, client and
+server latency, the CPU and memory of ate-api-server, Postgres and
+fake-atelet, and Postgres's connections, commits and waits.
+
+Run it against the cluster that ran the test, while its Prometheus still holds
+the run's samples:
+
+```bash
+RUN=<dest>/runs/<test>/run_date=<YYYY-MM-DD>/run_ts=<ts>/run_tag=<commit>
+RESULT_DIR=results/<test>
+mkdir -p "$RESULT_DIR"
+gcloud storage cp "$RUN/logs.txt" "$RESULT_DIR/"
+kubectl -n benchmarking port-forward svc/prometheus 19090:9090 &
+python3 benchmarking/automation/analyze_ladder.py "$RESULT_DIR" > "$RESULT_DIR/steps.jsonl"
+```
+
+`<dest>` is the orchestrator's `--dest`, and its log has the full `RUN` path
+on each `Uploaded ... -> gs://...` line. `RESULT_DIR` is any local directory
+for the run's files and the summary. A second argument points the script
+at a Prometheus other than `http://localhost:19090`. The script skips, with a
+note on stderr, a step with no end in the log and a step too short to leave a
+window after the trim. A query that fails stops the script rather than
+leaving a gap in its output. Read a step's figures against its `target_rps`:
+a `resume_rps` below it means the step fell short of its rate.
+
 ### Isolate Mode
 
 A real cold resume is limited by the node's restore capacity, which hides the
