@@ -1,6 +1,8 @@
 # Substrate Security
 
-Agent Substrate executes untrusted actors at scale in a multi-tenant environment where workloads are dynamic and memory states migrate continuously across physical infrastructure. All security controls must operate within Substrate's sub-100ms cold-start and resume latency budget. This document defines the high-level security principles. More detailed security risks are documented [in the threat model](threat-model.md).
+Substrate delivers zero trust for agents. Every agent has an identity, but no credentials, no open network, and no way out of the sandbox.
+
+Agent Substrate executes untrusted actors at scale in a multi-tenant environment where workloads are dynamic and memory states migrate continuously across physical infrastructure. All security controls must operate within Substrate's cold-start and resume latency budget. This document defines the high-level security principles. More detailed security risks are documented [in the threat model](threat-model.md).
 
 ## Security Scope
 
