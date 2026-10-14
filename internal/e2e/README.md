@@ -56,6 +56,20 @@ installs the fixtures elsewhere: `E2E_SUBSTRATE_TEMPLATE_ATESPACE` /
 gVisor, 10m on micro-VM, where the golden is a cloud-hypervisor cold boot plus
 a checkpoint).
 
+## Settings
+
+The installer reads this setting in addition to those in
+[docs/operator-install.md](../../docs/operator-install.md#settings), through the same
+flag, environment variable, and configuration document channels. It sets the
+worker thread count (`--concurrency`) of the Envoy container in `atenet-egress`;
+`0` leaves the manifest unchanged. The
+[nighthawk egress benchmark](../../benchmarking/nighthawk-egress/README.md) sets
+it to `1` to measure single-CPU Envoy performance.
+
+| Key                    | Environment variable        | Flag                      | Default | Applies to |
+|------------------------|-----------------------------|---------------------------|---------|------------|
+| `e2e.envoyConcurrency` | `E2E_ATE_ENVOY_CONCURRENCY` | `--e2e-envoy-concurrency` | `0`     | (global)   |
+
 ## After a failure
 
 A suite deletes the namespaces it created only when it passed. A failed run

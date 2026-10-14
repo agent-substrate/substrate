@@ -327,6 +327,7 @@ func (s *Server) ServeConnectHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	active, ctx, release, ok := s.authorize(r)
 	if !ok {
+		slog.DebugContext(r.Context(), "atunnel CONNECT rejected", slog.Any("actor_header", r.Header.Values(atenet.TargetActorHeader)))
 		s.reject(w)
 		return
 	}
@@ -334,10 +335,12 @@ func (s *Server) ServeConnectHTTP(w http.ResponseWriter, r *http.Request) {
 
 	_, port, err := net.SplitHostPort(r.Host)
 	if err != nil {
+		slog.DebugContext(r.Context(), "atunnel CONNECT rejected: no port", slog.Any("actor", active.ref), slog.String("authority", r.Host))
 		http.Error(w, "CONNECT authority must include a port", http.StatusBadRequest)
 		return
 	}
 	if _, ok := ParsePort(port); !ok {
+		slog.DebugContext(r.Context(), "atunnel CONNECT rejected: invalid port", slog.Any("actor", active.ref), slog.String("authority", r.Host))
 		http.Error(w, "invalid CONNECT port", http.StatusBadRequest)
 		return
 	}
@@ -346,30 +349,32 @@ func (s *Server) ServeConnectHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancelDial()
 	upstream, err := active.dial(dialCtx, "tcp", net.JoinHostPort(s.upstream.Hostname(), port))
 	if err != nil {
-		slog.WarnContext(r.Context(), "atunnel CONNECT upstream failed", slog.Any("actor", active.ref), slog.Any("err", err))
+		slog.WarnContext(r.Context(), "atunnel CONNECT upstream failed", slog.Any("actor", active.ref), slog.String("port", port), slog.Any("err", err))
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 		return
 	}
 	defer upstream.Close()
 
+	log := slog.With(slog.Any("actor", active.ref), slog.String("port", port), slog.String("proto", r.Proto))
+	log.DebugContext(ctx, "atunnel CONNECT opened")
 	if r.ProtoMajor == 2 {
-		s.serveH2Connect(w, r, upstream, ctx)
+		s.serveH2Connect(w, r, upstream, ctx, log)
 		return
 	}
-	s.serveH1Connect(w, upstream, ctx)
+	s.serveH1Connect(w, upstream, ctx, log)
 }
 
-func (s *Server) serveH1Connect(w http.ResponseWriter, upstream net.Conn, ctx context.Context) {
+func (s *Server) serveH1Connect(w http.ResponseWriter, upstream net.Conn, ctx context.Context, log *slog.Logger) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "CONNECT hijacking unsupported", http.StatusInternalServerError)
 		return
 	}
-	client, rw, err := hj.Hijack()
+	downstream, rw, err := hj.Hijack()
 	if err != nil {
 		return
 	}
-	defer client.Close()
+	defer downstream.Close()
 	if _, err := rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
@@ -377,10 +382,10 @@ func (s *Server) serveH1Connect(w http.ResponseWriter, upstream net.Conn, ctx co
 		return
 	}
 
-	relayIngressWithHalfClose(ctx, upstream, rw, client, client)
+	relayIngressWithHalfClose(ctx, log, upstream, rw, downstream, downstream)
 }
 
-func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream net.Conn, ctx context.Context) {
+func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream net.Conn, ctx context.Context, log *slog.Logger) {
 	// A HTTP/2 CONNECT tunnel is a pair of streams, not a hijackable TCP
 	// socket. Send the response headers before copying so the peer can start
 	// sending DATA frames, then flush each upstream write promptly.
@@ -389,32 +394,33 @@ func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream
 		return
 	}
 
-	relayIngressWithHalfClose(ctx, upstream, r.Body, flushingWriter{ResponseWriter: w}, r.Body)
+	relayIngressWithHalfClose(ctx, log, upstream, r.Body, flushingWriter{ResponseWriter: w}, r.Body)
 }
 
-// relayIngressWithHalfClose copies a CONNECT stream. When the client request
-// stream ends, it half-closes the actor connection and continues forwarding
-// actor output until that stream ends too.
-func relayIngressWithHalfClose(ctx context.Context, upstream net.Conn, clientReader io.Reader, clientWriter io.Writer, clientCloser io.Closer) {
-	done := make(chan struct{}, 2)
+// relayIngressWithHalfClose copies a CONNECT stream between the router
+// (downstream) and the actor (upstream). It half-closes the actor connection
+// when the router stops sending, and closes the downstream when the actor
+// does, so a router that reuses tunnels doesn't send into a dead one.
+func relayIngressWithHalfClose(ctx context.Context, log *slog.Logger, upstream net.Conn, downstreamReader io.Reader, downstreamWriter io.Writer, downstreamCloser io.Closer) {
+	start := time.Now()
 	go func() {
-		_, _ = io.Copy(upstream, clientReader)
+		n, err := io.Copy(upstream, downstreamReader)
+		log.DebugContext(ctx, "atunnel CONNECT router stopped sending", slog.Int64("bytes", n), slog.Any("err", err), slog.Duration("after", time.Since(start)))
 		closeWrite(upstream)
-		done <- struct{}{}
 	}()
+	actorDone := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(clientWriter, upstream)
-		done <- struct{}{}
+		n, err := io.Copy(downstreamWriter, upstream)
+		log.DebugContext(ctx, "atunnel CONNECT actor stopped sending", slog.Int64("bytes", n), slog.Any("err", err), slog.Duration("after", time.Since(start)))
+		close(actorDone)
 	}()
-	for range 2 {
-		select {
-		case <-ctx.Done():
-			_ = upstream.Close()
-			_ = clientCloser.Close()
-			return
-		case <-done:
-		}
+	select {
+	case <-ctx.Done():
+		log.DebugContext(ctx, "atunnel CONNECT canceled", slog.Any("cause", context.Cause(ctx)), slog.Duration("after", time.Since(start)))
+		_ = upstream.Close()
+	case <-actorDone:
 	}
+	_ = downstreamCloser.Close()
 }
 
 type flushingWriter struct {
@@ -555,15 +561,19 @@ func (s *Server) authorize(r *http.Request) (*activation, context.Context, func(
 	}
 	active.wg.Add(1)
 	s.mu.Unlock()
-	requestCtx, cancel := context.WithCancel(r.Context())
-	stop := context.AfterFunc(active.ctx, cancel)
+	requestCtx, cancel := context.WithCancelCause(r.Context())
+	stop := context.AfterFunc(active.ctx, func() { cancel(errActorDeactivated) })
 	release := func() {
 		active.wg.Done()
 		stop()
-		cancel()
+		cancel(nil)
 	}
 	return active, requestCtx, release, true
 }
+
+// errActorDeactivated is the cancel cause of a request whose actor was
+// deactivated, which tells a suspend apart from the router hanging up.
+var errActorDeactivated = errors.New("atunnel: actor deactivated")
 
 func (s *Server) reject(w http.ResponseWriter) {
 	w.Header().Set(StaleAssignmentHeader, "true")

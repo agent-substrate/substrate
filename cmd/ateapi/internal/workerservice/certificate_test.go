@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 )
 
@@ -135,8 +136,13 @@ func TestMintAteomActorCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ActorIdentityFromCertificate: %v", err)
 	}
-	if identity != nil {
-		t.Errorf("ActorIdentity = %+v, want nil (ateom certificates should not carry ActorIdentity)", identity)
+	wantIdentity := &substratex509.ActorIdentity{
+		Atespace:  "team-a",
+		ActorName: "my-actor",
+		ActorUid:  actor.GetMetadata().GetUid(),
+	}
+	if diff := cmp.Diff(wantIdentity, identity); diff != "" {
+		t.Errorf("ActorIdentity mismatch (-want +got):\n%s", diff)
 	}
 }
 

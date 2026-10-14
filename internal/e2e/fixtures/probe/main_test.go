@@ -16,6 +16,8 @@ package main
 
 import (
 	"encoding/json"
+	"encoding/pem"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -24,6 +26,8 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/agent-substrate/substrate/internal/testcert"
 )
 
 // The capabilities e2e assertions are only as trustworthy as this decoder and
@@ -260,6 +264,70 @@ func TestFetchRejectsMalformedDial(t *testing.T) {
 	}
 	if resp["status"] != "" {
 		t.Errorf("status = %q, want none", resp["status"])
+	}
+}
+
+// roots=pem trusts exactly the certificates in ca, which is how a suite
+// verifies an origin's own certificate rather than one the gateway minted.
+func TestFetchTrustsOnlyTheGivenCA(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer origin.Close()
+	originCA := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: origin.Certificate().Raw}))
+	unrelatedCA := string(testcert.NewServerTLS(t, net.ParseIP("127.0.0.1")).RootCA)
+
+	for _, tc := range []struct {
+		name   string
+		ca     string
+		wantOK bool
+	}{
+		{"origin's CA", originCA, true},
+		{"origin's CA among others", unrelatedCA + originCA, true},
+		{"unrelated CA", unrelatedCA, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := doFetchQuery(t, url.Values{"url": {origin.URL}, "roots": {"pem"}, "ca": {tc.ca}})
+			if tc.wantOK {
+				if resp["error"] != "" || resp["status"] != "200" {
+					t.Errorf("fetch = status %q, error %q; want 200", resp["status"], resp["error"])
+				}
+				return
+			}
+			if !strings.Contains(resp["error"], "certificate") {
+				t.Errorf("error = %q, want a certificate verification failure", resp["error"])
+			}
+		})
+	}
+}
+
+// roots=pem and ca come together, and ca must hold a certificate; anything
+// else fails before the request is sent.
+func TestFetchRejectsMismatchedCA(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("fetch sent the request despite a bad ca parameter")
+	}))
+	defer origin.Close()
+
+	for _, tc := range []struct {
+		name    string
+		query   url.Values
+		wantErr string
+	}{
+		{"roots=pem without ca", url.Values{"roots": {"pem"}}, "ca parameter"},
+		{"ca without roots=pem", url.Values{"roots": {"system"}, "ca": {"x"}}, "ca parameter"},
+		{"ca without a certificate", url.Values{"roots": {"pem"}, "ca": {"not a certificate"}}, "no certificates parsed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.query.Set("url", origin.URL)
+			resp := doFetchQuery(t, tc.query)
+			if !strings.Contains(resp["error"], tc.wantErr) {
+				t.Errorf("error = %q, want one mentioning %q", resp["error"], tc.wantErr)
+			}
+			if resp["status"] != "" {
+				t.Errorf("status = %q, want none", resp["status"])
+			}
+		})
 	}
 }
 

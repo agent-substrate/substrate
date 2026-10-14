@@ -17,6 +17,8 @@
 import unittest
 from unittest import mock
 
+import yaml
+
 import util
 
 
@@ -49,6 +51,65 @@ class BuildAndPushTest(unittest.TestCase):
         self.assertEqual(build_cmd[build_cmd.index("-t") + 1], "gcr.io/p/repo/img:tag")
         self.assertEqual(build_cmd[build_cmd.index("-f") + 1], "path/Dockerfile")
         self.assertEqual(push_cmd, ["docker", "push", "gcr.io/p/repo/img:tag"])
+
+
+class IsolateTest(unittest.TestCase):
+    def test_absent(self):
+        test = {"name": "t"}
+        self.assertIsNone(util.isolate_block(test))
+        self.assertEqual(util.isolate_install_args(test), [])
+        self.assertEqual(util.isolate_workload_args(test), [])
+
+    def test_empty_block_selects_the_mode_with_defaults(self):
+        test = {"isolate": {}}
+        self.assertEqual(util.isolate_install_args(test), ["--fake-data-plane"])
+        self.assertEqual(util.isolate_workload_args(test), [])
+
+    def test_bare_key_selects_the_mode(self):
+        # `isolate:` with nothing after it, as YAML loads it.
+        test = yaml.safe_load("name: t\nisolate:\n")
+        self.assertEqual(util.isolate_install_args(test), ["--fake-data-plane"])
+        self.assertEqual(util.isolate_workload_args(test), [])
+
+    def test_tuning_goes_to_deploy_sh_not_the_install(self):
+        test = {"isolate": {
+            "delay": "500ms",
+            "delayRestore": "2s",
+            "mintActorCertificate": False,
+        }}
+        self.assertEqual(util.isolate_install_args(test), ["--fake-data-plane"])
+        self.assertEqual(
+            util.isolate_workload_args(test),
+            [
+                "--fake-atelet-env", "FAKE_ATELET_DELAY=500ms",
+                "--fake-atelet-env", "FAKE_ATELET_DELAY_RESTORE=2s",
+                "--fake-atelet-env", "FAKE_ATELET_MINT_ACTOR_CERTIFICATE=false",
+            ],
+        )
+
+    def test_durations(self):
+        for delay in ("0", "0s", "1.5s", "1m30s", "250ms", "100us"):
+            with self.subTest(delay=delay):
+                self.assertEqual(
+                    util.isolate_workload_args({"isolate": {"delayCheckpoint": delay}}),
+                    ["--fake-atelet-env", f"FAKE_ATELET_DELAY_CHECKPOINT={delay}"],
+                )
+
+    def test_invalid(self):
+        for block in (
+            # Every fake-atelet node serves the pool; there is no node count.
+            {"nodes": 4},
+            {"run": "nightly"},
+            {"delay": "fast"},
+            {"delay": "500"},
+            {"delay": "-1s"},
+            {"delay": 0},
+            {"delayRun": "soon"},
+            {"mintActorCertificate": "no"},
+            ["nodes"],
+        ):
+            with self.subTest(block=block), self.assertRaises(ValueError):
+                util.isolate_block({"isolate": block})
 
 
 if __name__ == "__main__":
