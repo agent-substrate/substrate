@@ -22,15 +22,24 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	kyaml "sigs.k8s.io/kustomize/kyaml/yaml"
 	"sigs.k8s.io/yaml"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 )
 
 // Splicing the provider selection into the real egress manifest replaces the
@@ -542,6 +551,230 @@ func TestRenderWithoutCordonLeavesManifestsAlone(t *testing.T) {
 	}
 }
 
+// dataPlaneWorkloads returns the DaemonSets and Deployments in a rendered
+// manifest, by name.
+func dataPlaneWorkloads(t *testing.T, manifest []byte) (daemonSets map[string]appsv1.DaemonSet, deployments map[string]appsv1.Deployment) {
+	t.Helper()
+	daemonSets, deployments = map[string]appsv1.DaemonSet{}, map[string]appsv1.Deployment{}
+	for _, doc := range strings.Split(string(manifest), "\n---\n") {
+		var meta metav1.TypeMeta
+		if err := yaml.Unmarshal([]byte(doc), &meta); err != nil {
+			t.Fatalf("rendered document is not valid YAML: %v", err)
+		}
+		switch meta.Kind {
+		case "DaemonSet":
+			var ds appsv1.DaemonSet
+			if err := yaml.Unmarshal([]byte(doc), &ds); err != nil {
+				t.Fatalf("decoding DaemonSet: %v", err)
+			}
+			daemonSets[ds.Name] = ds
+		case "Deployment":
+			var d appsv1.Deployment
+			if err := yaml.Unmarshal([]byte(doc), &d); err != nil {
+				t.Fatalf("decoding Deployment: %v", err)
+			}
+			deployments[d.Name] = d
+		}
+	}
+	return daemonSets, deployments
+}
+
+// Under --fake-data-plane every path that applies atelet or ate-controller
+// carries the fake data plane: fake-atelet in atelet's DaemonSet, with the
+// storage settings the overlay gives atelet's objectstore-plugin, whose
+// writes it takes over, ate-controller at zero replicas, and fake-workersync
+// beside them.
+func TestRenderFakeDataPlane(t *testing.T) {
+	root := repoRoot(t)
+	const ateletDS = "atelet"
+	for _, tc := range []struct {
+		name           string
+		cfg            config.Config
+		path           func(e *Env) string
+		wantAtelet     bool
+		wantController bool
+		// wantStorage is the ATE_STORAGE_BACKEND the overlay gives
+		// atelet's objectstore-plugin.
+		wantStorage string
+	}{
+		{
+			name:       "base bundle",
+			cfg:        config.Config{Router: config.RouterEnvoy},
+			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			wantAtelet: true, wantController: true, wantStorage: "gcs",
+		},
+		{
+			name:       "kind bundle",
+			cfg:        config.Config{Router: config.RouterEnvoy, Kind: true},
+			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			wantAtelet: true, wantController: true, wantStorage: "s3",
+		},
+		{
+			name:       "agentgateway bundle",
+			cfg:        config.Config{Router: config.RouterAgentgateway},
+			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			wantAtelet: true, wantController: true, wantStorage: "gcs",
+		},
+		{
+			name:       "kind agentgateway bundle",
+			cfg:        config.Config{Router: config.RouterAgentgateway, Kind: true},
+			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			wantAtelet: true, wantController: true, wantStorage: "s3",
+		},
+		{
+			name:       "atelet file",
+			path:       func(e *Env) string { return e.Cfg.Manifest("atelet.yaml") },
+			wantAtelet: true, wantStorage: "gcs",
+		},
+		{
+			name:       "kind atelet overlay",
+			cfg:        config.Config{Kind: true},
+			path:       func(e *Env) string { return e.Cfg.Path(installDir + "/kind/atelet") },
+			wantAtelet: true, wantStorage: "s3",
+		},
+		{
+			name:           "controller file",
+			path:           func(e *Env) string { return e.Cfg.Manifest("ate-controller.yaml") },
+			wantController: true,
+		},
+		{
+			name:           "controller file under cordon",
+			cfg:            config.Config{CordonControlPlane: true},
+			path:           func(e *Env) string { return e.Cfg.Manifest("ate-controller.yaml") },
+			wantController: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.Root = root
+			cfg.FakeDataPlane = true
+			e := &Env{Cfg: &cfg}
+
+			rendered, err := e.renderDataPlane(tc.path(e))
+			if err != nil {
+				t.Fatalf("renderDataPlane: %v", err)
+			}
+			daemonSets, deployments := dataPlaneWorkloads(t, rendered)
+
+			if d, ok := deployments[fakeWorkersyncDeployment]; !ok {
+				t.Errorf("rendered manifest has no Deployment %s", fakeWorkersyncDeployment)
+			} else if d.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
+				// A rolling update would run two at once.
+				t.Errorf("%s strategy = %q, want %s", fakeWorkersyncDeployment, d.Spec.Strategy.Type, appsv1.RecreateDeploymentStrategyType)
+			}
+
+			if ds, ok := daemonSets[ateletDS]; ok != tc.wantAtelet {
+				t.Errorf("DaemonSet %s present = %v, want %v", ateletDS, ok, tc.wantAtelet)
+			} else if ok {
+				pod := ds.Spec.Template
+				if pod.Labels["ate.dev/fake-atelet"] != "true" {
+					t.Errorf("fake-atelet pods carry labels %v, want ate.dev/fake-atelet=true", pod.Labels)
+				}
+				if len(pod.Spec.InitContainers) != 0 {
+					t.Errorf("fake-atelet pods keep atelet's init containers %v", pod.Spec.InitContainers)
+				}
+				for _, v := range pod.Spec.Volumes {
+					if v.HostPath != nil {
+						t.Errorf("fake-atelet pods keep atelet's hostPath volume %s", v.Name)
+					}
+				}
+				if _, ok := pod.Annotations["prometheus.io/scrape"]; ok {
+					t.Error("fake-atelet pods keep atelet's scrape annotation, but fake-atelet serves no metrics")
+				}
+				if pod.Spec.ServiceAccountName != "atelet" {
+					t.Errorf("fake-atelet runs as %q, want atelet's service account", pod.Spec.ServiceAccountName)
+				}
+				c := pod.Spec.Containers[0]
+				if want := images.KoReference("cmd/benchmarking/isolate/fake-atelet"); c.Image != want {
+					t.Errorf("atelet container image = %q, want %q", c.Image, want)
+				}
+				// fake-atelet runs with its defaults, tuned only through the
+				// ConfigMap a benchmark writes, beside atelet's own envFrom.
+				if len(c.Args) != 0 {
+					t.Errorf("fake-atelet args = %v, want none", c.Args)
+				}
+				var tuning *corev1.ConfigMapEnvSource
+				for _, src := range c.EnvFrom {
+					if src.ConfigMapRef != nil && src.ConfigMapRef.Name == "fake-atelet-tuning" {
+						tuning = src.ConfigMapRef
+					}
+				}
+				if tuning == nil || tuning.Optional == nil || !*tuning.Optional {
+					t.Errorf("fake-atelet envFrom = %+v, want the optional fake-atelet-tuning ConfigMap", c.EnvFrom)
+				}
+				if !slices.ContainsFunc(c.EnvFrom, func(src corev1.EnvFromSource) bool {
+					return src.ConfigMapRef != nil && src.ConfigMapRef.Name == otelConfigMap
+				}) {
+					t.Errorf("fake-atelet envFrom = %+v, lost atelet's %s", c.EnvFrom, otelConfigMap)
+				}
+				for _, p := range c.Ports {
+					if p.HostPort != 0 {
+						t.Errorf("fake-atelet port %s keeps hostPort %d", p.Name, p.HostPort)
+					}
+				}
+				// The probes are atelet's, kept by name; the ports
+				// replacement must still declare the ones they target.
+				for _, probe := range []*corev1.Probe{c.ReadinessProbe, c.LivenessProbe} {
+					if probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Port.StrVal == "" {
+						continue
+					}
+					if !slices.ContainsFunc(c.Ports, func(p corev1.ContainerPort) bool { return p.Name == probe.HTTPGet.Port.StrVal }) {
+						t.Errorf("fake-atelet probe %s targets port %q, which the container does not declare", probe.HTTPGet.Path, probe.HTTPGet.Port.StrVal)
+					}
+				}
+				env := map[string]string{}
+				for _, v := range c.Env {
+					env[v.Name] = v.Value
+				}
+				if env["ATE_STORAGE_BACKEND"] != tc.wantStorage {
+					t.Errorf("fake-atelet ATE_STORAGE_BACKEND = %q, want objectstore-plugin's %q", env["ATE_STORAGE_BACKEND"], tc.wantStorage)
+				}
+				if tc.wantStorage == "s3" && env["AWS_ENDPOINT_URL"] == "" {
+					t.Error("fake-atelet lacks objectstore-plugin's AWS_ENDPOINT_URL")
+				}
+			}
+
+			if d, ok := deployments["ate-controller"]; ok != tc.wantController {
+				t.Errorf("Deployment ate-controller present = %v, want %v", ok, tc.wantController)
+			} else if ok && (d.Spec.Replicas == nil || *d.Spec.Replicas != 0) {
+				t.Errorf("ate-controller replicas = %v, want 0", d.Spec.Replicas)
+			}
+
+			// Both components compose: the cordon pinning survives the fake
+			// one, and reaches fake-workersync, which stands in for
+			// ate-controller.
+			if cfg.CordonControlPlane {
+				pinned, _ := pinnedWorkloads(t, rendered)
+				for _, name := range []string{"ate-controller", fakeWorkersyncDeployment} {
+					if pinned[name] != "ate-control-plane" {
+						t.Errorf("under --cordon-control-plane %s is pinned to %q, want ate-control-plane", name, pinned[name])
+					}
+				}
+			}
+		})
+	}
+}
+
+// Without --fake-data-plane the data plane renders as it always has.
+func TestRenderDataPlaneWithoutFakeIsRender(t *testing.T) {
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t), Router: config.RouterEnvoy, Kind: true}}
+	path := e.Cfg.Path(SystemOverlay(e.Cfg))
+	got, err := e.renderDataPlane(path)
+	if err != nil {
+		t.Fatalf("renderDataPlane: %v", err)
+	}
+	want, err := e.render(path)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Error("renderDataPlane without --fake-data-plane differs from render")
+	}
+	if _, deployments := dataPlaneWorkloads(t, got); deployments[fakeWorkersyncDeployment].Name != "" {
+		t.Errorf("render without --fake-data-plane has a %s Deployment", fakeWorkersyncDeployment)
+	}
+}
+
 // The agentgateway egress overlay mounts the CA pool Secret
 // EnsureEgressMITMCAPoolSecret generates; without it atenet-egress waits on a
 // Secret nobody creates.
@@ -772,13 +1005,10 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 	})
 
 	t.Run("patches and restarts the consumers", func(t *testing.T) {
-		// The atelet DaemonSet name carries a substrate version suffix, so it
-		// can only be found by label.
 		atelet := &appsv1.DaemonSet{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: NamespaceAteSystem,
-				Name:      "atelet-v1-2-3",
-				Labels:    map[string]string{"app": "atelet"},
+				Name:      "atelet",
 			},
 		}
 		e := &Env{
@@ -799,7 +1029,7 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 		if !restartedAt(t, e, "deployment", "ate-api-server") {
 			t.Error("ate-api-server was not restarted")
 		}
-		if !restartedAt(t, e, "daemonset", "atelet-v1-2-3") {
+		if !restartedAt(t, e, "daemonset", "atelet") {
 			t.Error("the atelet DaemonSet was not restarted")
 		}
 	})
@@ -944,4 +1174,219 @@ func TestRenderAtenetEgressManifestEnvoyConcurrency(t *testing.T) {
 			t.Errorf("envoy args = %v, want %v", args, want)
 		}
 	})
+}
+
+// Without --fake-data-plane there is no fake-workersync rollout to wait for.
+func TestWaitFakeWorkersyncWithoutTheFlagIsANoOp(t *testing.T) {
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t)}, Kube: fakeKube(t)}
+	if err := e.waitFakeWorkersync(context.Background()); err != nil {
+		t.Errorf("waitFakeWorkersync() without --fake-data-plane = %v, want nil", err)
+	}
+}
+
+// Switching to the real data plane stops fake-workersync, so it is gone
+// before ate-controller starts; with none running there is nothing to stop.
+func TestStopFakeWorkersync(t *testing.T) {
+	fakeWorkersync := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: NamespaceAteSystem, Name: fakeWorkersyncDeployment}}
+	for _, tc := range []struct {
+		name    string
+		objects []runtime.Object
+	}{
+		{name: "running", objects: []runtime.Object{fakeWorkersync}},
+		{name: "absent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Env{Cfg: &config.Config{Root: repoRoot(t), RolloutTimeout: time.Second}, Kube: fakeKube(t, tc.objects...)}
+			if err := e.stopFakeWorkersync(context.Background()); err != nil {
+				t.Fatalf("stopFakeWorkersync() = %v, want nil", err)
+			}
+			if running, err := e.Kube.DeploymentExists(context.Background(), NamespaceAteSystem, fakeWorkersyncDeployment); err != nil || running {
+				t.Errorf("after stopFakeWorkersync, DeploymentExists() = %v, %v, want false, nil", running, err)
+			}
+		})
+	}
+}
+
+// The fake data plane does not go in beside real worker pods, running or
+// terminating, which would keep their Workers registered with no real atelet
+// left to serve them. A pool scaled to zero has no pods and is no obstacle.
+func TestRequireNoWorkerPods(t *testing.T) {
+	workerPod := func(name string, terminating bool) *corev1.Pod {
+		p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Namespace: "benchmark-workloads", Name: name,
+			Labels: map[string]string{workerPoolLabel: "benchmark-ateom"},
+		}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
+		if terminating {
+			now := metav1.Now()
+			p.DeletionTimestamp = &now
+			p.Finalizers = []string{"test"}
+		}
+		return p
+	}
+	scaledToZero := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "benchmark-workloads", Name: "idle",
+		Labels: map[string]string{workerPoolLabel: "idle"},
+	}}
+	evicted := workerPod("w-evicted", false)
+	evicted.Status = corev1.PodStatus{Phase: corev1.PodFailed, Reason: "Evicted"}
+	other := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: NamespaceAteSystem, Name: "ate-api-server-0", Labels: map[string]string{"app": "ate-api-server"}}}
+	for _, tc := range []struct {
+		name    string
+		fake    bool
+		objects []runtime.Object
+		wantErr bool
+	}{
+		{name: "real install with worker pods", objects: []runtime.Object{workerPod("w-0", false), other}},
+		{name: "fake install without worker pods", fake: true, objects: []runtime.Object{other}},
+		{name: "fake install beside a pool scaled to zero", fake: true, objects: []runtime.Object{scaledToZero, other}},
+		{name: "fake install beside evicted worker pods", fake: true, objects: []runtime.Object{evicted, other}},
+		{name: "fake install with worker pods", fake: true, objects: []runtime.Object{workerPod("w-0", false), workerPod("w-1", false), other}, wantErr: true},
+		{name: "fake install with terminating worker pods", fake: true, objects: []runtime.Object{workerPod("w-0", true), other}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Env{Cfg: &config.Config{Root: repoRoot(t), FakeDataPlane: tc.fake}, Kube: fakeKube(t, tc.objects...)}
+			err := e.requireNoWorkerPods(context.Background())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("requireNoWorkerPods() = %v, want error %v", err, tc.wantErr)
+			}
+			if err != nil && strings.Count(err.Error(), "benchmark-workloads/benchmark-ateom") != 1 {
+				t.Errorf("error %q does not name the WorkerPool exactly once", err)
+			}
+		})
+	}
+}
+
+// What a real install removes and delete ate-system deletes is the component's
+// own fake-workersync manifest, cluster-scoped RBAC included.
+func TestFakeWorkersyncPathIsTheComponentsManifest(t *testing.T) {
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t)}}
+	objs, err := kube.LoadPath(e.fakeWorkersyncPath())
+	if err != nil {
+		t.Fatalf("LoadPath(%s): %v", e.fakeWorkersyncPath(), err)
+	}
+	var kinds []string
+	for _, obj := range objs {
+		kinds = append(kinds, obj.GetKind()+"/"+obj.GetName())
+	}
+	for _, want := range []string{"Deployment/" + fakeWorkersyncDeployment, "ClusterRole/fake-workersync", "ClusterRoleBinding/fake-workersync"} {
+		if !slices.Contains(kinds, want) {
+			t.Errorf("%s has no %s (found %v)", e.fakeWorkersyncPath(), want, kinds)
+		}
+	}
+	component, err := os.ReadFile(e.Cfg.Path(fakeDataPlaneComponent, "kustomization.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(component), "- fake-workersync.yaml") {
+		t.Errorf("the fake-data-plane component does not list fake-workersync.yaml as a resource")
+	}
+}
+
+// A lone atelet or controller redeploy keeps the installed data plane: it
+// cannot switch half of it.
+func TestRequireInstalledDataPlane(t *testing.T) {
+	fakeWorkersync := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: NamespaceAteSystem, Name: fakeWorkersyncDeployment}}
+	for _, tc := range []struct {
+		name      string
+		fake      bool
+		installed bool
+		wantErr   bool
+	}{
+		{name: "real on real"},
+		{name: "fake on fake", fake: true, installed: true},
+		{name: "fake on real", fake: true, wantErr: true},
+		{name: "real on fake", installed: true, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var objects []runtime.Object
+			if tc.installed {
+				objects = append(objects, fakeWorkersync)
+			}
+			e := &Env{Cfg: &config.Config{Root: repoRoot(t), FakeDataPlane: tc.fake}, Kube: fakeKube(t, objects...)}
+			err := e.requireInstalledDataPlane(context.Background(), "deploy atelet")
+			if (err != nil) != tc.wantErr {
+				t.Errorf("requireInstalledDataPlane() = %v, want error %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// fakeDeleteKube is fakeKube with a dynamic client and discovery for the
+// built-in kinds in fake-workersync's manifest, so DeletePath runs. typed
+// seeds the typed client, which the Deployment checks read; dyn seeds the
+// dynamic client, which DeletePath deletes through.
+func fakeDeleteKube(t *testing.T, typed []runtime.Object, dyn []runtime.Object) (*kube.Client, *dynamicfake.FakeDynamicClient) {
+	t.Helper()
+	cs := fake.NewClientset(typed...)
+	cs.Fake.Resources = []*metav1.APIResourceList{
+		{GroupVersion: "v1", APIResources: []metav1.APIResource{{Name: "serviceaccounts", Kind: "ServiceAccount", Namespaced: true}}},
+		{GroupVersion: "apps/v1", APIResources: []metav1.APIResource{{Name: "deployments", Kind: "Deployment", Namespaced: true}}},
+		{GroupVersion: "networking.k8s.io/v1", APIResources: []metav1.APIResource{{Name: "networkpolicies", Kind: "NetworkPolicy", Namespaced: true}}},
+		{GroupVersion: "rbac.authorization.k8s.io/v1", APIResources: []metav1.APIResource{
+			{Name: "clusterroles", Kind: "ClusterRole"},
+			{Name: "clusterrolebindings", Kind: "ClusterRoleBinding"},
+			{Name: "roles", Kind: "Role", Namespaced: true},
+			{Name: "rolebindings", Kind: "RoleBinding", Namespaced: true},
+		}},
+	}
+	dc := dynamicfake.NewSimpleDynamicClient(clientgoscheme.Scheme, dyn...)
+	return kube.NewFromClients(nil, cs, dc, cs.Discovery()), dc
+}
+
+// A real install deletes fake-workersync's whole manifest, whatever an
+// earlier run left of it, after stopping it; a fake install leaves its own
+// fake-workersync alone.
+func TestRemoveFakeWorkersync(t *testing.T) {
+	clusterRoles := schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterroles"}
+	clusterRoleBindings := schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterrolebindings"}
+	deployment := func() *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: NamespaceAteSystem, Name: fakeWorkersyncDeployment}}
+	}
+	rbac := func() []runtime.Object {
+		return []runtime.Object{
+			&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: fakeWorkersyncDeployment}},
+			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: fakeWorkersyncDeployment}},
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		fake bool
+		// running seeds fake-workersync's Deployment; left seeds its RBAC.
+		running, left bool
+		wantGone      bool
+	}{
+		{name: "real install over a fake one", running: true, left: true, wantGone: true},
+		{name: "real install over RBAC a failed run left", left: true, wantGone: true},
+		{name: "real install with nothing left"},
+		{name: "fake install keeps its own", fake: true, running: true, left: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var typed, dyn []runtime.Object
+			if tc.running {
+				typed = append(typed, deployment())
+			}
+			if tc.left {
+				dyn = rbac()
+			}
+			k, dc := fakeDeleteKube(t, typed, dyn)
+			e := &Env{Cfg: &config.Config{Root: repoRoot(t), FakeDataPlane: tc.fake, RolloutTimeout: time.Second}, Kube: k}
+			if err := e.removeFakeWorkersync(context.Background()); err != nil {
+				t.Fatalf("removeFakeWorkersync() = %v", err)
+			}
+			running, err := k.DeploymentExists(context.Background(), NamespaceAteSystem, fakeWorkersyncDeployment)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if running != (tc.running && !tc.wantGone) {
+				t.Errorf("fake-workersync's Deployment exists = %v after removeFakeWorkersync", running)
+			}
+			for _, gvr := range []schema.GroupVersionResource{clusterRoles, clusterRoleBindings} {
+				_, err := dc.Resource(gvr).Get(context.Background(), fakeWorkersyncDeployment, metav1.GetOptions{})
+				gone := apierrors.IsNotFound(err)
+				if tc.left && gone != tc.wantGone {
+					t.Errorf("%s/%s gone = %v, want %v (err %v)", gvr.Resource, fakeWorkersyncDeployment, gone, tc.wantGone, err)
+				}
+			}
+		})
+	}
 }

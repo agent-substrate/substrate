@@ -100,6 +100,9 @@ usage() {
   echo "  --cordon-control-plane                 Keep the control plane off the worker nodes: assumes a small shared pool labeled and"
   echo "                                         tainted ate.dev/workloadType=ate-control-plane:NoSchedule, and a one-node pool"
   echo "                                         labeled and tainted ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone"
+  echo "  --fake-data-plane                      Install fake-atelet in place of atelet and fake-workersync in place of"
+  echo "                                         ate-controller, for control-plane benchmarks. Actors do not exist; never"
+  echo "                                         use it on a cluster that serves real actors"
   echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
   echo ""
@@ -303,6 +306,7 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       GLOBAL_FLAGS+=("--cluster-size=${prescan_args[$((i + 1))]}")
       ;;
     --cordon-control-plane|--cordon-control-plane=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
+    --fake-data-plane|--fake-data-plane=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
     --rollout-timeout=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
     --rollout-timeout)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -365,6 +369,7 @@ while [[ "$#" -gt 0 ]]; do
     --benchmark-worker-count|--benchmark-sandbox-class|--benchmark-actor-memory) shift ;;
     --atenet-dataplane=*|--podcert-workers-per-signer=*|--rollout-timeout=*|--otlp-endpoint=*) ;;
     --cluster-size=*|--cordon-control-plane|--cordon-control-plane=*) ;;
+    --fake-data-plane|--fake-data-plane=*) ;;
     --experimental-additional-egress-extproc-service=*) ;;
     --credential-provider=*) ;;
     --benchmark-worker-count=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;

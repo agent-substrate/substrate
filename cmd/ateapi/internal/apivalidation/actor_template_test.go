@@ -222,7 +222,7 @@ func TestValidateListActorTemplatesRequest(t *testing.T) {
 		want field.ErrorList
 	}{{
 		"valid",
-		&ateapipb.ListActorTemplatesRequest{PageSize: 10},
+		&ateapipb.ListActorTemplatesRequest{Options: &ateapipb.ListOptions{PageSize: 10}},
 		nil,
 	}, {
 		"zero page size",
@@ -238,8 +238,8 @@ func TestValidateListActorTemplatesRequest(t *testing.T) {
 		field.ErrorList{field.Invalid(field.NewPath("atespace"), "NS_1", "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"negative page size",
-		&ateapipb.ListActorTemplatesRequest{PageSize: -1},
-		field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "").WithOrigin("minimum")},
+		&ateapipb.ListActorTemplatesRequest{Options: &ateapipb.ListOptions{PageSize: -1}},
+		field.ErrorList{field.Invalid(field.NewPath("options", "page_size"), int32(-1), "").WithOrigin("minimum")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -600,7 +600,7 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "valid wakeup probe",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.WakeupProbe{
 				HttpGet:        &ateapipb.HttpGetAction{Path: "/healthz", Port: 8080},
 				TimeoutSeconds: 60,
 			}
@@ -608,25 +608,25 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "wakeup probe missing http_get",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{TimeoutSeconds: 60}
+			tmpl.Containers[0].WakeupProbe = &ateapipb.WakeupProbe{TimeoutSeconds: 60}
 		},
 		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get"), "")},
 	}, {
 		name: "missing wakeup probe timeout_seconds",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HttpGetAction{Path: "/healthz", Port: 8080}}
+			tmpl.Containers[0].WakeupProbe = &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Path: "/healthz", Port: 8080}}
 		},
 		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("wakeup_probe", "timeout_seconds"), "")},
 	}, {
 		name: "missing wakeup probe http_get.path",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 8080}, TimeoutSeconds: 60}
+			tmpl.Containers[0].WakeupProbe = &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 8080}, TimeoutSeconds: 60}
 		},
 		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "path"), "")},
 	}, {
 		name: "wakeup probe timeout_seconds out of range",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.WakeupProbe{
 				HttpGet:        &ateapipb.HttpGetAction{Path: "/healthz", Port: 8080},
 				TimeoutSeconds: 3601,
 			}
@@ -635,7 +635,7 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "negative wakeup probe timeout_seconds",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.WakeupProbe{
 				HttpGet:        &ateapipb.HttpGetAction{Path: "/healthz", Port: 8080},
 				TimeoutSeconds: -1,
 			}
@@ -644,7 +644,7 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "wakeup probe missing port",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.WakeupProbe{
 				HttpGet:        &ateapipb.HttpGetAction{Path: "/healthz"},
 				TimeoutSeconds: 60,
 			}
@@ -653,7 +653,7 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "negative wakeup probe port",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.WakeupProbe{
 				HttpGet:        &ateapipb.HttpGetAction{Path: "/healthz", Port: -1},
 				TimeoutSeconds: 60,
 			}
@@ -662,7 +662,7 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "wakeup probe port out of range",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.WakeupProbe{
 				HttpGet:        &ateapipb.HttpGetAction{Path: "/healthz", Port: 65536},
 				TimeoutSeconds: 60,
 			}
@@ -671,7 +671,7 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "wakeup probe path with query string",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.WakeupProbe{
 				HttpGet:        &ateapipb.HttpGetAction{Path: "/readyz?verbose=1", Port: 8080},
 				TimeoutSeconds: 60,
 			}
@@ -680,7 +680,7 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "wakeup probe path not starting with slash",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
+			tmpl.Containers[0].WakeupProbe = &ateapipb.WakeupProbe{
 				HttpGet:        &ateapipb.HttpGetAction{Path: "readyz", Port: 8080},
 				TimeoutSeconds: 60,
 			}

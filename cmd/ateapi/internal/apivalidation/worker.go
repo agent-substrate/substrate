@@ -81,6 +81,11 @@ func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateapipb.Reque
 	return Validate_RequestActorSuspendRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateReportActorSnapshotStateRequest(ctx context.Context, req *ateapipb.ReportActorSnapshotStateRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_ReportActorSnapshotStateRequest(ctx, op, nil, req, nil)
+}
+
 // validateWorkerUpdate validates a Worker against the previous stored value.
 // It is what enforces the immutable fields, which need an old value to compare
 // against.

@@ -155,6 +155,7 @@ type routerConfig struct {
 	ExtprocPort       int
 	ExtprocAddr       string
 	StatusPort        int
+	StatusAddr        string
 	HealthInterval    time.Duration
 	HttpsPort         int
 	// ConnectPlainTextPort and ConnectTLSPort are the plaintext and TLS

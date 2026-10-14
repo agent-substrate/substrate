@@ -17,6 +17,8 @@ package main
 import (
 	"crypto/tls"
 	"fmt"
+	"log"
+	"net"
 	"net/http"
 )
 
@@ -42,14 +44,40 @@ func configureTLSServer(server *http.Server, certFile, keyFile string) error {
 	return nil
 }
 
-func serveHTTP(server *http.Server, certFile, keyFile string) error {
-	if certFile == "" && keyFile == "" {
-		return server.ListenAndServe()
-	}
+// tlsListenAddress is where the http and websocket subcommands serve HTTPS
+// when given a certificate, beside their cleartext --listen. It is a fixed port.
+const tlsListenAddress = ":8443"
 
+// serveHTTP serves server in cleartext on server.Addr and, when certFile and
+// keyFile are set, over TLS on tlsListenAddress.
+func serveHTTP(server *http.Server, certFile, keyFile string) error {
 	if err := configureTLSServer(server, certFile, keyFile); err != nil {
 		return err
 	}
+	cleartext, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return err
+	}
+	var encrypted net.Listener
+	if server.TLSConfig != nil {
+		if encrypted, err = net.Listen("tcp", tlsListenAddress); err != nil {
+			_ = cleartext.Close()
+			return err
+		}
+		log.Printf("testserver: serving HTTPS on %s", tlsListenAddress)
+	}
+	return serveListeners(server, cleartext, encrypted)
+}
 
-	return server.ListenAndServeTLS("", "")
+// serveListeners serves server in cleartext on cleartext and, unless encrypted
+// is nil, over TLS on encrypted, returning when either stops. The caller binds
+// both before this starts serving either, so a readiness probe that reaches one
+// listener finds the other already listening.
+func serveListeners(server *http.Server, cleartext, encrypted net.Listener) error {
+	errs := make(chan error, 2)
+	go func() { errs <- server.Serve(cleartext) }()
+	if encrypted != nil {
+		go func() { errs <- server.ServeTLS(encrypted, "", "") }()
+	}
+	return <-errs
 }

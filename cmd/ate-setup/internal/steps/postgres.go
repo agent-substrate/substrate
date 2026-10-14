@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -31,10 +32,20 @@ import (
 	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
+// bundledPostgresHost is where ate-api-server reaches the bundled PostgreSQL.
+const bundledPostgresHost = "postgres.ate-system.svc:5432"
+
 // Each bundled connection presents a certificate for its own login user.
 func bundledPostgresDSN(user string) string {
 	bundle := "/run/postgres.podcert.ate.dev/" + user + ".pem"
-	return fmt.Sprintf("postgresql://%s@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=%s&sslkey=%s", user, bundle, bundle)
+	return fmt.Sprintf("postgresql://%s@%s/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=%s&sslkey=%s", user, bundledPostgresHost, bundle, bundle)
+}
+
+// usesBundledPostgres reports whether a connection string names the bundled
+// PostgreSQL.
+func usesBundledPostgres(dsn string) bool {
+	u, err := url.Parse(dsn)
+	return err == nil && u.Host == bundledPostgresHost
 }
 
 func (e *Env) postgresReadWriteConnectionStrings() (string, string, error) {
