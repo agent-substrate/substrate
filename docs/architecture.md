@@ -167,6 +167,9 @@ Both binaries reject invalid namespace names at startup and log the effective
 scope. The API waits up to one minute for its required Kubernetes caches and
 reports any that fail to sync. Its WorkerPool informer only seeds worker-count
 metrics; it syncs in the background and warns after one minute if still unsynced.
+The controller's worker syncer gets the same one-minute diagnostic: if its
+caches have not synced it logs the pending ones and keeps waiting, so fixing
+the cause recovers without a restart.
 The worker syncer's startup scan leaves registry entries from other namespaces
 alone, because a Pod absent from a scoped cache is not necessarily deleted.
 It logs a single warning with the skipped count and watched namespace when
