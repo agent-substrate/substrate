@@ -110,12 +110,12 @@ type ActorWorkflow struct {
 	instruments          *Instruments
 	egressGatewayAddress string
 	pluginRegistry       VolumePluginRegistry
-	snapshotPlugin       objectstorev1.ControlProviderClient
+	objectStorePlugin    objectstorev1.ControlProviderClient
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
 //
-// snapshotPlugin may be nil, which leaves external snapshots in place instead
+// objectStorePlugin may be nil, which leaves external snapshots in place instead
 // of copying and releasing them. Only tests that never reach those steps pass
 // nil; ate-api always builds one.
 func NewActorWorkflow(
@@ -127,7 +127,7 @@ func NewActorWorkflow(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	pluginRegistry VolumePluginRegistry,
-	snapshotPlugin objectstorev1.ControlProviderClient,
+	objectStorePlugin objectstorev1.ControlProviderClient,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:                store,
@@ -139,21 +139,21 @@ func NewActorWorkflow(
 		instruments:          instruments,
 		egressGatewayAddress: egressGatewayAddress,
 		pluginRegistry:       pluginRegistry,
-		snapshotPlugin:       snapshotPlugin,
+		objectStorePlugin:    objectStorePlugin,
 	}
 }
 
 // cleanupSnapshot deletes every object under prefix through the control
-// snapshot plugin.
+// object-store plugin.
 func (w *ActorWorkflow) cleanupSnapshot(ctx context.Context, prefix resources.StoragePrefix) error {
-	_, err := w.snapshotPlugin.CleanupSnapshot(ctx, &objectstorev1.CleanupSnapshotRequest{SnapshotUri: prefix.String()})
+	_, err := w.objectStorePlugin.CleanupSnapshot(ctx, &objectstorev1.CleanupSnapshotRequest{SnapshotUri: prefix.String()})
 	return pluginsocket.CallError(err)
 }
 
 // copySnapshot copies every object under src to dst through the control
-// snapshot plugin.
+// object-store plugin.
 func (w *ActorWorkflow) copySnapshot(ctx context.Context, src, dst resources.StoragePrefix) error {
-	_, err := w.snapshotPlugin.CopySnapshot(ctx, &objectstorev1.CopySnapshotRequest{SrcUri: src.String(), DstUri: dst.String()})
+	_, err := w.objectStorePlugin.CopySnapshot(ctx, &objectstorev1.CopySnapshotRequest{SrcUri: src.String(), DstUri: dst.String()})
 	return pluginsocket.CallError(err)
 }
 

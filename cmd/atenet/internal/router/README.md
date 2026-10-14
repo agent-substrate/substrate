@@ -193,9 +193,38 @@ ingress dataplane, `atenet-egress` the egress gateway.
 `--atenet-dataplane` selects the dataplane for both Deployments. Each gateway has
 its own static configuration because ingress and egress scale independently.
 
+## Ingress client authentication and authorization
+
+The ingress router is migrating to require clients to present a SPIFFE certificate.
+* With `--ingress-auth-mode=static-mtls`, the ingress router no longer offers any
+  plaintext listeners, and all clients *must* present a SPIFFE certificate.
+* With `--ingress-auth-mode=deprecated-insecure`, the ingress router offers both
+  plaintext and secure listeners.  If a client presents a SPIFFE certificate, it
+  must be valid.
+
+Configure the CA that is used to validate client certificates with the
+`--ingress-client-ca-file` flag, which points at a PEM file containing root
+certificates.
+
+Right now the only "authorization" policy is to check the client's SPIFFE ID
+against a static allowlist.  Any ID on the allowlist may use the ingress router
+to contact any actor.  Richer authorization policies may be added post-GA.  Use
+the `--ingress-allowed-spiffe-ids` flag to set the allowlist (comma-separated
+list).
+
 ## status page
 
-Serve a `/statusz` page on port 8080.
+The unauthenticated `/statusz` dashboard binds to `127.0.0.1:4040` by default
+(`--status-address` and `--status-port`). It is not published by the router
+Service. Access it through a pod port-forward:
+
+```sh
+kubectl -n ate-system port-forward deployment/atenet-router 4040:4040
+```
+
+Open `http://127.0.0.1:4040/statusz` (or add `?format=json`). Binding
+`--status-address` to a non-loopback address exposes the diagnostic data to
+other pods.
 
 Contents:
 
@@ -203,3 +232,10 @@ Contents:
 * Command line args
 * Last 100 queries served
 * Build tag
+
+Health checks use `/healthz` (liveness) and `/readyz` (readiness) on the health
+listener, configured by `--health-listen-addr` (default `:9091`). For a GKE
+Gateway, migrate any `HealthCheckPolicy` using port 4040 and `/statusz` to port
+9091 and `/readyz`, so draining pods also stop receiving traffic.
+[GKE probes Pod IPs directly](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/configure-gateway-resources#configure_health_checks),
+so port 9091 does not need to be published by the router Service.

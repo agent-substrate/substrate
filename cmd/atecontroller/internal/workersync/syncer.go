@@ -273,10 +273,6 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		slog.InfoContext(ctx, "Syncer: deregistering worker (pod replaced)", key.logAttrs()...)
 		return s.reconcileDeadWorker(ctx, key)
 	}
-	// Checked before eligibility: draining works off the registered record by name
-	// and never reads the pod IP, while a Terminating pod can legitimately report
-	// no IP once its sandbox is torn down. Gating on the IP first would drop the
-	// transition and leave the worker schedulable for as long as the pod lingers.
 	if pod.DeletionTimestamp != nil {
 		// The pod has entered Terminating: mark the worker DRAINING so the
 		// scheduler stops routing new actors to it. We deliberately do NOT touch
@@ -285,15 +281,15 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		// Deleted event.
 		return s.markWorkerDraining(ctx, key)
 	}
-	// Checked before eligibility for the same reason: a terminal pod is never
-	// Ready, so the eligibility gate would leave its Worker, and the Actors bound
-	// to it, registered for as long as the pod object lingers. The API server
-	// deletes a terminal pod without a grace period.
+	// A terminal pod is never Ready again, so left alone its Worker would stay
+	// UNAVAILABLE, and the Actors bound to it registered, for as long as the pod
+	// object lingers. The API server deletes a terminal pod without a grace
+	// period.
 	if isPodTerminal(pod) {
 		return s.deleteWorkerPod(ctx, key, pod, "phase "+string(pod.Status.Phase))
 	}
-	// Checked before eligibility too: a pod that is not Ready never reaches
-	// createOrUpdateWorker, but its pool can still be gone.
+	// A pod whose pool is gone is handled whether or not it is Ready, so the
+	// pool is resolved here rather than inside createOrUpdateWorker.
 	poolName := pod.Labels[workerPodLabel]
 	poolObject, exists, err := s.workerPoolInformer.GetIndexer().GetByKey(key.namespace + "/" + poolName)
 	if err != nil {
@@ -305,12 +301,6 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 	pool, ok := poolObject.(*atev1alpha1.WorkerPool)
 	if !ok {
 		return fmt.Errorf("getting WorkerPool %s/%s: unexpected object type %T", key.namespace, poolName, poolObject)
-	}
-	if !isWorkerEligible(pod) {
-		// The pod has no IP or is not Ready yet; a later update event re-enqueues
-		// it. A registered Worker still takes a raised epoch: an ateom that is
-		// restarting is not Ready, but its Actors are already lost.
-		return s.raiseEpoch(ctx, key, pod)
 	}
 	return s.createOrUpdateWorker(ctx, key, pod, pool)
 }
@@ -329,42 +319,28 @@ func podEpoch(pod *corev1.Pod) int64 {
 	return 0
 }
 
-// raiseEpoch writes the pod's epoch to its registered Worker if it is higher
-// than the one recorded there. A pod that is not registered is left to
-// createOrUpdateWorker.
-func (s *WorkerPoolSyncer) raiseEpoch(ctx context.Context, key workerKey, pod *corev1.Pod) error {
-	epoch := podEpoch(pod)
-	if epoch == 0 {
-		return nil
-	}
-	w, err := s.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: key.workerRef()})
-	if status.Code(err) == codes.NotFound {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("getting worker: %w", err)
-	}
-	if epoch <= w.GetEpoch() {
-		return nil
-	}
-	slog.InfoContext(ctx, "Syncer: updating worker (ateom restarted)",
-		append(key.logAttrs(), slog.Int64("epoch", epoch))...)
-	w.Epoch = epoch
-	_, err = s.client.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{Worker: w})
-	return err
-}
-
+// createOrUpdateWorker registers the pod's Worker, or brings the registered
+// one in line with the pod. A Worker is registered UNAVAILABLE and marked
+// available only while its pod is Ready, and only once its epoch matches the
+// ateom running, so nothing is placed on it under the epoch of an ateom that
+// has since restarted.
 func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod, pool *atev1alpha1.WorkerPool) error {
-	poolName := pool.Name
+	available := isWorkerAvailable(pod)
+
 	w, err := s.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: key.workerRef()})
 	if status.Code(err) == codes.NotFound {
+		// ips and node_name are required and immutable, so the pod is registered
+		// once it has an IP; the update that reports it re-enqueues the pod.
+		if len(pod.Status.PodIPs) == 0 {
+			return nil
+		}
 		slog.InfoContext(ctx, "Syncer: registering worker", key.logAttrs()...)
 		worker := &ateapipb.Worker{
 			// Workers are global-scoped, so the name carries no atespace. See
 			// workerKey.workerName for where the name comes from.
 			Metadata:        &ateapipb.ResourceMetadata{Name: key.workerName()},
 			WorkerNamespace: pod.Namespace,
-			WorkerPool:      poolName,
+			WorkerPool:      pool.Name,
 			WorkerPod:       pod.Name,
 			Ips:             podIPs(pod),
 			WorkerPodUid:    string(pod.UID),
@@ -377,16 +353,29 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			// that report lands, CreateWorker's reified ceiling holds the
 			// Worker to a single Actor.
 		}
-		// status is output-only: CreateWorker sets STATE_ACTIVE itself.
+		// status is output-only: CreateWorker registers the Worker UNAVAILABLE.
 		//
 		// ALREADY_EXISTS means we lost a create race; requeue and converge via
 		// the update path. INVALID_ARGUMENT is terminal — see
 		// processNextWorkItem.
-		_, err := s.client.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: worker})
-		return err
-	}
-	if err != nil {
+		w, err = s.client.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: worker})
+		if err != nil {
+			return err
+		}
+	} else if err != nil {
 		return fmt.Errorf("getting worker: %w", err)
+	}
+
+	// Each write below returns the Worker at its new version, which the next
+	// one carries as its precondition. ABORTED requeues the key; the retry
+	// re-fetches the worker.
+	if !available && w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+		slog.InfoContext(ctx, "Syncer: marking worker unavailable (pod not Ready)", key.logAttrs()...)
+		marked, err := s.client.MarkWorkerUnavailable(ctx, &ateapipb.MarkWorkerUnavailableRequest{Worker: key.workerRef()})
+		if err != nil {
+			return err
+		}
+		w = marked.GetWorker()
 	}
 
 	// UpdateWorker replaces the whole resource, so the mutable fields are
@@ -417,7 +406,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		slog.DebugContext(ctx, "Syncer: registered worker sandbox class predates its pool",
 			append(key.logAttrs(), slog.String("registered", w.GetSandboxClass()), slog.String("pool", string(pool.Spec.DefaultSandboxClass())))...)
 	}
-	if ips := podIPs(pod); !slices.Equal(w.GetIps(), ips) {
+	if ips := podIPs(pod); len(ips) > 0 && !slices.Equal(w.GetIps(), ips) {
 		// TODO: I don't think this is possible, but handling this case so we can
 		// log it just in case we can reproduce it. It is logged rather than
 		// repaired because ips is immutable on a registered Worker: writing the
@@ -425,18 +414,26 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		slog.WarnContext(ctx, "Syncer: registered worker IPs disagree with its pod",
 			append(key.logAttrs(), slog.Any("registered", w.GetIps()), slog.Any("pod_ips", ips))...)
 	}
-	if !changed {
-		return nil
+	if changed {
+		w, err = s.client.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{Worker: w})
+		if err != nil {
+			return err
+		}
 	}
 
-	// w carries the uid and version it was read at, which the API requires as the
-	// update's precondition. ABORTED requeues the key; the retry re-fetches the
-	// worker at its new version.
-	_, err = s.client.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{Worker: w})
-	return err
+	// Last, so the Worker takes Actors only at the epoch written above. A
+	// DRAINING Worker is left alone: its pod is on its way out.
+	if available && w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
+		slog.InfoContext(ctx, "Syncer: marking worker available (pod Ready)", key.logAttrs()...)
+		_, err = s.client.MarkWorkerAvailable(ctx, &ateapipb.MarkWorkerAvailableRequest{Worker: key.workerRef()})
+		return err
+	}
+	return nil
 }
 
-func isWorkerEligible(pod *corev1.Pod) bool {
+// isWorkerAvailable reports whether the pod is Ready with an IP, and so can
+// take Actors.
+func isWorkerAvailable(pod *corev1.Pod) bool {
 	if len(pod.Status.PodIPs) == 0 {
 		return false
 	}
@@ -660,7 +657,7 @@ func (s *WorkerPoolSyncer) listWorkersPageWithRetry(ctx context.Context, pageTok
 		Cap:   s.listCap,
 	}
 	for {
-		page, err := s.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{PageSize: 1000, PageToken: pageToken})
+		page, err := s.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken}})
 		if err == nil {
 			return page, nil
 		}

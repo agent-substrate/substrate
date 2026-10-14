@@ -66,11 +66,12 @@ func (s *recordingStorage) objects() []string {
 }
 
 func uniformDelays(d time.Duration) delays {
-	return delays{run: d, restore: d, checkpoint: d, uploadPausedCheckpoint: d, terminate: d}
+	return delays{run: d, restore: d, checkpoint: d, promoteSnapshot: d, terminate: d}
 }
 
 // herderCalls invokes every AteomHerder method the herder implements. The
-// checkpoint calls ask for an external snapshot, so each writes a placeholder.
+// Checkpoint and PromoteSnapshot calls upload a snapshot, so each writes a
+// placeholder.
 func herderCalls(h *herder) map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
 		"Run": func(ctx context.Context) error {
@@ -85,8 +86,12 @@ func herderCalls(h *herder) map[string]func(context.Context) error {
 			_, err := h.Checkpoint(ctx, externalCheckpoint(testSnapshotURI))
 			return err
 		},
-		"UploadPausedCheckpoint": func(ctx context.Context) error {
-			_, err := h.UploadPausedCheckpoint(ctx, &ateletpb.UploadPausedCheckpointRequest{DestinationSnapshotUri: testSnapshotURI})
+		"PromoteSnapshot": func(ctx context.Context) error {
+			_, err := h.PromoteSnapshot(ctx, &ateletpb.PromoteSnapshotRequest{
+				Snapshot: &ateletpb.Snapshot{
+					Object: &ateletpb.ObjectStorage{SnapshotUri: testSnapshotURI},
+				},
+			})
 			return err
 		},
 		"Terminate": func(ctx context.Context) error {
@@ -96,10 +101,17 @@ func herderCalls(h *herder) map[string]func(context.Context) error {
 	}
 }
 
+// externalCheckpoint is a Checkpoint that uploads to uri before it returns.
 func externalCheckpoint(uri string) *ateletpb.CheckpointRequest {
+	return checkpointWithMode(uri, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+}
+
+func checkpointWithMode(uri string, mode ateletpb.UploadMode) *ateletpb.CheckpointRequest {
 	return &ateletpb.CheckpointRequest{
-		Type:   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-		Config: &ateletpb.CheckpointRequest_ExternalConfig{ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{SnapshotUri: uri}},
+		Snapshot: &ateletpb.Snapshot{
+			Object: &ateletpb.ObjectStorage{SnapshotUri: uri},
+		},
+		UploadConfig: &ateletpb.UploadConfig{Mode: mode},
 	}
 }
 
@@ -151,11 +163,11 @@ func TestHerderUsesEachCallsOwnDelay(t *testing.T) {
 }
 
 // ate-api-server copies an actor's snapshot when it creates a tag and refuses
-// to copy an empty one, so both calls that would upload a snapshot must leave
-// an object under its URI.
+// to copy an empty one, so calls that upload a snapshot before they return
+// must leave an object under its URI.
 func TestHerderWritesPlaceholderUnderSnapshotURI(t *testing.T) {
 	const want = "bench-bucket/benchmark-workloads/sleep/atespaces/team-a/actors/0f9c1d2e-3b4a-4c5d-8e6f-7a8b9c0d1e2f/snapshots/snap-1/" + placeholderObject
-	for _, name := range []string{"Checkpoint", "UploadPausedCheckpoint"} {
+	for _, name := range []string{"Checkpoint", "PromoteSnapshot"} {
 		t.Run(name, func(t *testing.T) {
 			storage := &recordingStorage{}
 			if err := herderCalls(&herder{storage: storage})[name](context.Background()); err != nil {
@@ -168,14 +180,19 @@ func TestHerderWritesPlaceholderUnderSnapshotURI(t *testing.T) {
 	}
 }
 
+// A deferred upload happens after Checkpoint returns, which the fake does not
+// model, so only an immediate one writes a placeholder.
 func TestHerderWritesNothingForLocalCheckpoint(t *testing.T) {
 	storage := &recordingStorage{}
 	h := &herder{storage: storage}
-	if _, err := h.Checkpoint(context.Background(), &ateletpb.CheckpointRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL}); err != nil {
+	if _, err := h.Checkpoint(context.Background(), &ateletpb.CheckpointRequest{}); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
+	if _, err := h.Checkpoint(context.Background(), checkpointWithMode(testSnapshotURI, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)); err != nil {
+		t.Fatalf("Checkpoint with a deferred upload: %v", err)
+	}
 	for name, call := range herderCalls(h) {
-		if name == "Checkpoint" || name == "UploadPausedCheckpoint" {
+		if name == "Checkpoint" || name == "PromoteSnapshot" {
 			continue
 		}
 		if err := call(context.Background()); err != nil {
@@ -183,7 +200,7 @@ func TestHerderWritesNothingForLocalCheckpoint(t *testing.T) {
 		}
 	}
 	if got := storage.objects(); len(got) != 0 {
-		t.Errorf("wrote %v, want nothing outside external checkpoints", got)
+		t.Errorf("wrote %v, want nothing outside immediate uploads and promotions", got)
 	}
 }
 
@@ -194,6 +211,9 @@ func TestHerderFailsWhenPlaceholderCannotBeWritten(t *testing.T) {
 	}
 	if _, err := h.Checkpoint(context.Background(), externalCheckpoint("not a snapshot uri")); err == nil {
 		t.Error("Checkpoint succeeded with an unparseable snapshot URI")
+	}
+	if err := herderCalls(h)["PromoteSnapshot"](context.Background()); err == nil {
+		t.Error("PromoteSnapshot succeeded with no placeholder written; a later tag of this snapshot would fail")
 	}
 }
 

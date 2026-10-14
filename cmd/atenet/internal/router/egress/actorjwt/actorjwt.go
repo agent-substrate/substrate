@@ -46,9 +46,9 @@ func New(client ateapipb.ControlClient) *Minter {
 }
 
 // Token returns a JWT for the actor ref names, bound to src's audiences and
-// lifetime. MintActorJWT errors are returned wrapped.
-func (m *Minter) Token(ctx context.Context, ref resources.ActorRef, src *ateapipb.ActorJWTSource) (string, error) {
-	req := &ateapipb.MintActorJWTRequest{
+// lifetime. MintActorJwt errors are returned wrapped.
+func (m *Minter) Token(ctx context.Context, ref resources.ActorRef, src *ateapipb.ActorJwtSource) (string, error) {
+	req := &ateapipb.MintActorJwtRequest{
 		Actor:             ref.ToObjectRef(),
 		Audiences:         slices.Sorted(slices.Values(src.GetAudiences())),
 		ExpirationSeconds: src.GetExpirationSeconds(),
@@ -80,15 +80,15 @@ func (m *Minter) Token(ctx context.Context, ref resources.ActorRef, src *ateapip
 
 // mint sends req and caches the token under key, unless a flight that just
 // finished has already stored one.
-func (m *Minter) mint(ctx context.Context, key string, ref resources.ActorRef, req *ateapipb.MintActorJWTRequest) (string, error) {
+func (m *Minter) mint(ctx context.Context, key string, ref resources.ActorRef, req *ateapipb.MintActorJwtRequest) (string, error) {
 	if jwt, ok := m.cached(key); ok {
 		return jwt, nil
 	}
-	resp, err := m.client.MintActorJWT(ctx, req)
+	resp, err := m.client.MintActorJwt(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("minting an actor JWT for %s: %w", ref, err)
 	}
-	reuseFor := time.Until(resp.GetExpiresAt().AsTime()) - time.Duration(req.GetExpirationSeconds())*time.Second/3
+	reuseFor := time.Until(resp.GetExpireTime().AsTime()) - time.Duration(req.GetExpirationSeconds())*time.Second/3
 	m.tokens.Set(key, resp.GetActorJwt(), reuseFor)
 	return resp.GetActorJwt(), nil
 }
@@ -101,7 +101,7 @@ func (m *Minter) cached(key string) (string, bool) {
 
 // tokenKey identifies the token req mints by req's own encoding. Deterministic
 // encoding is stable within one binary, which is all an in-process cache needs.
-func tokenKey(req *ateapipb.MintActorJWTRequest) (string, error) {
+func tokenKey(req *ateapipb.MintActorJwtRequest) (string, error) {
 	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(req)
 	if err != nil {
 		return "", fmt.Errorf("encoding the token key: %w", err)

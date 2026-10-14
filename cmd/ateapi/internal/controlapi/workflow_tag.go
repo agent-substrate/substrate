@@ -23,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 )
 
 // TagActorSnapshot tags the external snapshot held by the suspended actor the
@@ -158,7 +159,7 @@ func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *atea
 	ctx, done := stepSpan(ctx, "ReleaseTagSnapshot")
 	defer func() { err = done(err) }()
 
-	if w.snapshotPlugin == nil {
+	if w.objectStorePlugin == nil {
 		markSkipped(ctx, "no object store configured")
 		return nil
 	}
@@ -217,6 +218,10 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	if snap == nil {
 		return nil, nil, apierror.FailedPrecondition("Actor %s holds no external snapshot to tag", actorRef)
+	}
+	// The actor's latest snapshot is local only. It must be uploaded before it can be tagged.
+	if latestSnapshotIsLocalOnly(actor.GetStatus()) {
+		return nil, nil, apierror.FailedPrecondition("Actor %s holds no external snapshot of its latest state to tag: suspend it first", actorRef)
 	}
 	// Every way an Actor comes to hold an external snapshot records the
 	// template its guest state was built under: a suspend through
@@ -299,6 +304,7 @@ func (w *ActorWorkflow) ensureTagSnapshotRecorded(ctx context.Context, tag *atea
 		dst.String(),
 		ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
 	)
+	pending.SandboxRuntime = proto.CloneOf(snapshot.GetSandboxRuntime())
 	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
 		toUpdate.Status.Snapshot = pending
 		return nil
@@ -322,7 +328,7 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 	ctx, done := stepSpan(ctx, "CopyTagSnapshot")
 	defer func() { err = done(err) }()
 
-	if w.snapshotPlugin == nil {
+	if w.objectStorePlugin == nil {
 		markSkipped(ctx, "no object store configured")
 		return nil
 	}
@@ -356,6 +362,7 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 		dst.String(),
 		ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
 	)
+	finalSnapshot.SandboxRuntime = proto.CloneOf(snapshot.GetSandboxRuntime())
 	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
 		toUpdate.Status.Snapshot = finalSnapshot
 		return nil

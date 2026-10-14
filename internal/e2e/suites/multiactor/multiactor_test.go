@@ -52,7 +52,7 @@ func TestTwoActorsShareOneWorker(t *testing.T) {
 	e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/probe/probe-multiactor.yaml.tmpl",
 		Template: "internal/e2e/fixtures/probe/probe-multiactor-template.yaml.tmpl",
-	}, env["BUCKET_NAME"], "multiactor", false)
+	}, env["BUCKET_NAME"], "multiactor", nil)
 
 	names := []string{"ma-first", "ma-second"}
 	pods := map[string]string{}
@@ -73,11 +73,14 @@ func TestTwoActorsShareOneWorker(t *testing.T) {
 	}
 	defer rc.Close()
 
-	for _, name := range names {
-		got := whoami(t, ctx, rc, name)
-		if got.Atespace != multiactorNamespace || got.File != name {
-			t.Errorf("request for %s was served by atespace=%q actor=%q; each actor must be reached in its own sandbox",
-				name, got.Atespace, got.File)
+	// Alternate actors to catch one actor's tunnel serving the other.
+	for range 3 {
+		for _, name := range names {
+			got := whoami(t, ctx, rc, name)
+			if got.Atespace != multiactorNamespace || got.File != name {
+				t.Errorf("request for %s was served by atespace=%q actor=%q; each actor must be reached in its own sandbox",
+					name, got.Atespace, got.File)
+			}
 		}
 	}
 

@@ -37,9 +37,11 @@ likely be split in the future for better scalability.)
   Envoy container's `preStop` hook waits for the router's drain-complete
   marker on a pod-shared emptyDir — so established connections and parked
   requests finish instead of resetting. The whole sequence must fit within
-  `terminationGracePeriodSeconds` (see the manifest comments). Upgrades are
-  whole-system swaps (#473) rather than per-Deployment rolling updates; the
-  drain is what makes the old system's termination lossless.
+  `terminationGracePeriodSeconds` (see the manifest comments). An upgrade
+  rolls the router as an ordinary Deployment update (see
+  [docs/upgrade.md](../../docs/upgrade.md)). The drain lets each old pod's
+  requests finish, except one still open about 15 seconds after the drain
+  starts, which is cut.
 
 RBAC permissions:
 * get, list, watch on ate-system EndpointSlices

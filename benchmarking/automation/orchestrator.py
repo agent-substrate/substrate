@@ -53,7 +53,14 @@ from typing import Any
 import yaml
 
 from testtypes import TYPES
-from util import parse_duration_seconds, run, run_no_check
+from util import (
+    isolate_block,
+    isolate_install_args,
+    isolate_workload_args,
+    parse_duration_seconds,
+    run,
+    run_no_check,
+)
 
 
 SUBSTRATE_DIR = "/workspace/substrate"
@@ -319,6 +326,15 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
                 f"(want one of {list(TEST_TYPES)})"
             )
         TYPES[ttype].validate(t)
+        isolate_block(t)
+
+
+def substrate_args(test: dict[str, Any]) -> list[str]:
+    """Return the hack/install-ate.sh --deploy-ate-system arguments for a
+    tests.yaml entry: its ateArgs, then the fake data plane flag its isolate
+    block asks for. The teardown needs no matching flag: --delete-ate-system
+    removes the fake data plane whether or not it was installed."""
+    return [*test.get("ateArgs", []), *isolate_install_args(test)]
 
 
 def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
@@ -349,6 +365,7 @@ def deploy_workloads(
     actor_memory: str = "",
     wait_timeout_secs: int | str = "",
     worker_memory: str = "",
+    fake_atelet_args: Iterable[str] = (),
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -370,6 +387,8 @@ def deploy_workloads(
     # (whole seconds).
     if wait_timeout_secs != "":
         cmd += ["--wait-timeout", str(wait_timeout_secs)]
+    # An isolate block's tuning of fake-atelet, on the fake data plane.
+    cmd += list(fake_atelet_args)
     # deploy.sh itself blocks until every template's golden snapshot exists.
     run(cmd)
 
@@ -534,7 +553,7 @@ def main() -> None:
             failure_msg = None
             start_time = time.time()
             try:
-                deploy_substrate(test.get("ateArgs", []))
+                deploy_substrate(substrate_args(test))
                 TYPES[ttype].pre_test(test)
                 # install-microvm-deps needs the CRDs from deploy_substrate;
                 # deploy_workloads needs the microvm SandboxConfig.
@@ -546,6 +565,7 @@ def main() -> None:
                     test.get("actorMemory", ""),
                     test.get("workerWaitTimeout", ""),
                     test.get("workerMemory", ""),
+                    isolate_workload_args(test),
                 )
                 try:
                     status = run_test(

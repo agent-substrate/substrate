@@ -64,6 +64,13 @@ func TestEgressSPIFFEID(t *testing.T) {
 	}
 }
 
+func TestControllerSPIFFEID(t *testing.T) {
+	const want = "spiffe://cluster.local/ns/ate-system/sa/ate-controller"
+	if got := ControllerSPIFFEID(SystemNamespace); got != want {
+		t.Errorf("ControllerSPIFFEID(%q) = %q, want %q", SystemNamespace, got, want)
+	}
+}
+
 func TestActorJWTIssuer(t *testing.T) {
 	tests := []struct {
 		name      string

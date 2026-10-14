@@ -26,10 +26,14 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/e2e"
+	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/testing/protocmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/portforward"
@@ -103,6 +107,21 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
 
+	goldenStamp := goldenSnapshotRuntime(t, ctx, clients, at)
+	wantClass := string(atev1alpha1.SandboxClassGvisor)
+	if e2e.IsMicroVM() {
+		wantClass = string(atev1alpha1.SandboxClassMicroVM)
+	}
+	if got := goldenStamp.GetSandboxClass(); got != wantClass {
+		t.Errorf("golden snapshot sandbox_class = %q, want %q", got, wantClass)
+	}
+	if got := goldenStamp.GetVersion().GetSchemaVersion(); got != hardware.SchemaVersionV1 {
+		t.Errorf("golden snapshot schema_version = %q, want %q", got, hardware.SchemaVersionV1)
+	}
+	if runtimeAttribute(goldenStamp, hardware.AttrArchitecture) == "" {
+		t.Errorf("golden snapshot stamp %v has no %q attribute", goldenStamp, hardware.AttrArchitecture)
+	}
+
 	sourceName := "snapshot-source-" + nsObj.Name
 	cloneName := "snapshot-clone-" + nsObj.Name
 	for _, name := range []string{sourceName, cloneName} {
@@ -114,16 +133,32 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		})
 	}
 
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+	sourceCreated, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: sourceName},
 		ActorTemplate: e2e.TemplateRef(at),
-	}}); err != nil {
+	}})
+	if err != nil {
 		t.Fatalf("failed to create source Actor: %v", err)
 	}
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName}}); err != nil {
+	if diff := cmp.Diff(goldenStamp, durableSnapshot(sourceCreated.GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("golden snapshot stamp mismatch (-golden +actor):\n%s", diff)
+	}
+	sourceResumed, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName}})
+	if err != nil {
 		t.Fatalf("failed to resume source Actor: %v", err)
 	}
 	waitForActorState(ctx, t, clients, sourceName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	assignment := sourceResumed.GetActor().GetStatus().GetWorkerAssignment()
+	worker, err := clients.SubstrateAPI.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: assignment.GetWorker()})
+	if err != nil {
+		t.Fatalf("failed to get assigned Worker %s: %v", assignment.GetWorker().GetName(), err)
+	}
+	if diff := cmp.Diff(worker.GetStatus().GetDefaultRuntime(), assignment.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("worker_assignment.sandbox_runtime mismatch (-worker default_runtime +assignment):\n%s", diff)
+	}
+	if !hardware.Matches(assignment.GetSandboxRuntime(), goldenStamp) {
+		t.Fatalf("assigned runtime %v cannot restore the golden stamp %v", assignment.GetSandboxRuntime(), goldenStamp)
+	}
 	response, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: sourceName})
 	if err != nil {
 		t.Fatalf("failed to call source Actor: %v", err)
@@ -144,6 +179,10 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if snapshotURI == "" {
 		t.Fatal("suspended Actor has no external snapshot")
 	}
+	snapshotStamp := durableSnapshot(suspended.GetActor().GetStatus()).GetSandboxRuntime()
+	if diff := cmp.Diff(assignment.GetSandboxRuntime(), snapshotStamp, protocmp.Transform()); diff != "" {
+		t.Fatalf("suspended snapshot stamp mismatch (-assignment +snapshot):\n%s", diff)
+	}
 	// The tag is given its own copy of the snapshot the suspend just wrote, so
 	// it survives the Actor being suspended again or deleted.
 	tagToUpdate, err := clients.SubstrateAPI.CreateTag(ctx, &ateapipb.CreateTagRequest{
@@ -161,6 +200,9 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 	if _, err := resources.ParseSnapshotURI(tagSnapshotURI(tagToUpdate)); err != nil {
 		t.Errorf("ParseSnapshotURI(%q): %v", tagSnapshotURI(tagToUpdate), err)
+	}
+	if diff := cmp.Diff(snapshotStamp, tagToUpdate.GetStatus().GetSnapshot().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("tag snapshot stamp mismatch (-actor snapshot +tag):\n%s", diff)
 	}
 	listed, err := clients.SubstrateAPI.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: demoAtespace})
 	if err != nil {
@@ -184,17 +226,25 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("failed to publish Tag: %v", err)
 	}
 
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
+	cloned, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
 			Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: cloneName},
 			ActorTemplate: e2e.TemplateRef(at),
 			SourceTag:     tagRef,
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to create Actor from Tag: %v", err)
 	}
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: cloneName}}); err != nil {
+	if diff := cmp.Diff(snapshotStamp, durableSnapshot(cloned.GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("cloned actor snapshot stamp mismatch (-tag +clone):\n%s", diff)
+	}
+	cloneResumed, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: cloneName}})
+	if err != nil {
 		t.Fatalf("failed to resume cloned Actor: %v", err)
+	}
+	if diff := cmp.Diff(snapshotStamp, cloneResumed.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Errorf("cloned actor assignment stamp mismatch (-tag +assignment):\n%s", diff)
 	}
 	waitForActorState(ctx, t, clients, cloneName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	response, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: cloneName})
@@ -256,8 +306,8 @@ func TestDurableDirLifecycle(t *testing.T) {
 			},
 		},
 		{
-			// Suspend from PAUSED uploads the MEMORY local snapshot.
-			name: "preferredFidelity:MEMORY, suspend from PAUSED",
+			// Suspend from paused uploads the MEMORY local snapshot.
+			name: "preferredFidelity:MEMORY, suspend from paused",
 			tc: actorLifecycleTestCase{
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				wantMemoryAfterPause:   2,
@@ -271,8 +321,8 @@ func TestDurableDirLifecycle(t *testing.T) {
 			},
 		},
 		{
-			// Suspend from PAUSED uploads the VOLUMES local snapshot.
-			name: "preferredFidelity:VOLUMES, suspend from PAUSED",
+			// Suspend from paused uploads the VOLUMES local snapshot.
+			name: "preferredFidelity:VOLUMES, suspend from paused",
 			tc: actorLifecycleTestCase{
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				wantMemoryAfterPause:   1,
@@ -286,8 +336,8 @@ func TestDurableDirLifecycle(t *testing.T) {
 			},
 		},
 		{
-			// Suspend from PAUSED uploads the ROOTFS local snapshot.
-			name: "preferredFidelity:ROOTFS, suspend from PAUSED",
+			// Suspend from paused uploads the ROOTFS local snapshot.
+			name: "preferredFidelity:ROOTFS, suspend from paused",
 			tc: actorLifecycleTestCase{
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 				wantMemoryAfterPause:   1,
@@ -587,7 +637,7 @@ type actorLifecycleTestCase struct {
 	microVMOnly bool
 
 	// suspendWhilePaused pauses the actor again before the suspend step, so
-	// the suspend runs from PAUSED: it must upload the node-local pause
+	// the suspend runs from paused: it must upload the node-local pause
 	// snapshot instead of checkpointing a running workload. The counter
 	// expectations are unchanged — both origins capture the state after the
 	// second call.
@@ -629,12 +679,17 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorID)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
+	resumed1, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
 	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	assignedRuntime := resumed1.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime()
+	if assignedRuntime == nil {
+		t.Fatalf("resumed Actor %q has nil WorkerAssignment.SandboxRuntime", actorID)
+	}
 
 	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
@@ -652,21 +707,30 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	// Pausing the actor
 	//
 	t.Logf("Pausing Actor %q...", actorID)
-	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
+	paused, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorPaused(ctx, t, clients, actorID)
+	if diff := cmp.Diff(assignedRuntime, localSnapshot(paused.GetActor().GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Errorf("local pause snapshot stamp mismatch (-assignment +local):\n%s", diff)
+	}
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q again...", actorID)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
+	resumed2, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
 	}
 	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	assignedRuntime2 := resumed2.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime()
+	if diff := cmp.Diff(assignedRuntime, assignedRuntime2, protocmp.Transform()); diff != "" {
+		t.Errorf("resume-from-paused assignment stamp mismatch (-first +second):\n%s", diff)
+	}
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
@@ -690,15 +754,19 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		}); err != nil {
 			t.Fatalf("failed to pause Actor before suspend: %v", err)
 		}
-		waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+		waitForActorPaused(ctx, t, clients, actorID)
 	}
 	t.Logf("Suspending Actor %q...", actorID)
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
 	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	if diff := cmp.Diff(assignedRuntime2, durableSnapshot(suspended.GetActor().GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Errorf("durable snapshot stamp after suspend mismatch (-assignment +snapshot):\n%s", diff)
+	}
 
 	if tc.suspendWhilePaused {
 		// The suspend must end the node pinning: a suspended actor's snapshot
@@ -780,13 +848,50 @@ func durableSnapshotURI(status *ateapipb.ActorStatus) string {
 	return durableSnapshotStorage(status).GetObject().GetSnapshotUri()
 }
 
-func hasLocalSnapshot(status *ateapipb.ActorStatus) bool {
+func localSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
+	var best *ateapipb.Snapshot
 	for _, snap := range status.GetSnapshots() {
 		if snap.GetLocality() != "" && snap.GetUuid() != "" {
-			return true
+			if best == nil || snap.GetGeneration() > best.GetGeneration() {
+				best = snap
+			}
 		}
 	}
-	return false
+	return best
+}
+
+func hasLocalSnapshot(status *ateapipb.ActorStatus) bool {
+	return localSnapshot(status) != nil
+}
+
+func goldenSnapshotRuntime(t *testing.T, ctx context.Context, clients *e2e.Clients, at *ateapipb.ActorTemplate) *ateapipb.SandboxRuntime {
+	t.Helper()
+	current, err := clients.SubstrateAPI.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: e2e.TemplateRef(at)})
+	if err != nil {
+		t.Fatalf("GetActorTemplate: %v", err)
+	}
+	goldenTag := current.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
+	if goldenTag.GetName() == "" {
+		t.Fatalf("ActorTemplate %s has no golden tag", e2e.TemplateRef(at))
+	}
+	tag, err := clients.SubstrateAPI.GetTag(ctx, &ateapipb.GetTagRequest{Tag: goldenTag})
+	if err != nil {
+		t.Fatalf("GetTag(golden %s/%s): %v", goldenTag.GetAtespace(), goldenTag.GetName(), err)
+	}
+	stamp := tag.GetStatus().GetSnapshot().GetSandboxRuntime()
+	if stamp == nil {
+		t.Fatalf("golden snapshot %v carries no sandbox_runtime", tag.GetStatus().GetSnapshot())
+	}
+	return stamp
+}
+
+func runtimeAttribute(rt *ateapipb.SandboxRuntime, key string) string {
+	for _, attr := range rt.GetVersion().GetAttributes() {
+		if attr.GetKey() == key {
+			return attr.GetValue()
+		}
+	}
+	return ""
 }
 
 func tagSnapshotURI(tag *ateapipb.Tag) string {
@@ -913,7 +1018,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorPaused(ctx, t, clients, actorName)
 
 	// Resuming the actor again
 	t.Logf("Resuming Actor %q again...", actorName)
@@ -1111,26 +1216,26 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	}
 	validateCounterResponse(t, resp, "after revert from RUNNING", 2, 2)
 
-	// Revert from PAUSED. Resume prefers a local snapshot over the external
+	// Revert from paused. Resume prefers a local snapshot over the external
 	// one, so clearing LocalSnapshot is what prevents this pause's count=2
 	// checkpoint from restoring on the next resume.
 	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorPaused(ctx, t, clients, actorName)
 
 	reverted, err = clients.SubstrateAPI.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef})
 	if err != nil {
-		t.Fatalf("RevertActor from PAUSED: %v", err)
+		t.Fatalf("RevertActor from paused: %v", err)
 	}
 	if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Fatalf("state after revert from PAUSED = %v, want SUSPENDED", got)
+		t.Fatalf("state after revert from paused = %v, want SUSPENDED", got)
 	}
 	if hasLocalSnapshot(reverted.GetActor().GetStatus()) {
-		t.Fatal("local snapshot pointer survived revert from PAUSED")
+		t.Fatal("local snapshot pointer survived revert from paused")
 	}
 	if got := durableSnapshotURI(reverted.GetActor().GetStatus()); got != snapshotURI {
-		t.Fatalf("snapshot URI after revert from PAUSED = %q, want %q", got, snapshotURI)
+		t.Fatalf("snapshot URI after revert from paused = %q, want %q", got, snapshotURI)
 	}
 
 	// SUSPENDED is rejected with FailedPrecondition rather than no-oping.
@@ -1141,15 +1246,15 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	// Final resume: if the pause checkpoint had been restored, the counter
 	// would advance from 2 to 3. Expecting 2 proves the external snapshot won.
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
-		t.Fatalf("failed to resume Actor after PAUSED revert: %v", err)
+		t.Fatalf("failed to resume Actor after paused revert: %v", err)
 	}
 	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
-		t.Fatalf("failed to call actor after PAUSED revert: %v", err)
+		t.Fatalf("failed to call actor after paused revert: %v", err)
 	}
-	validateCounterResponse(t, resp, "after revert from PAUSED", 2, 2)
+	validateCounterResponse(t, resp, "after revert from paused", 2, 2)
 
 	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef, AnyState: true}); err != nil {
 		t.Fatalf("failed to delete Actor: %v", err)
@@ -1276,7 +1381,7 @@ func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.C
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorPaused(ctx, t, clients, actorName)
 
 	// 4. Delete the paused actor with any-state
 	t.Logf("Deleting paused Actor %q with any-state...", actorName)
@@ -1413,6 +1518,26 @@ func hasStorageClass(ctx context.Context, clients *e2e.Clients, name string) boo
 
 func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedState ateapipb.ActorState) {
 	waitForActorStateWithTimeout(ctx, t, clients, actorName, expectedState, 60*time.Second)
+}
+
+// waitForActorPaused waits for the shape a pause leaves behind: SUSPENDED,
+// holding a node-local snapshot and pinned to its node. A plain suspend
+// leaves neither.
+func waitForActorPaused(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string) {
+	t.Helper()
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	})
+	if err != nil {
+		t.Fatalf("GetActor %q after pause: %v", actorName, err)
+	}
+	if !hasLocalSnapshot(resp.GetStatus()) {
+		t.Fatalf("Actor %q is SUSPENDED after pause but holds no local snapshot: %v", actorName, resp.GetStatus())
+	}
+	if resp.GetStatus().GetAssignedNode() == "" {
+		t.Fatalf("Actor %q is paused but not pinned to a node: %v", actorName, resp.GetStatus())
+	}
 }
 
 func waitForActorStateWithTimeout(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedState ateapipb.ActorState, timeout time.Duration) {

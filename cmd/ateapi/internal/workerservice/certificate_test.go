@@ -30,12 +30,22 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 )
 
 type fakeActorStore struct {
 	store.Interface
-	actors map[resources.ActorRef]*ateapipb.Actor
+	actors  map[resources.ActorRef]*ateapipb.Actor
+	workers map[string]*ateapipb.Worker
+}
+
+func (f *fakeActorStore) GetWorker(_ context.Context, name string) (*ateapipb.Worker, error) {
+	w, ok := f.workers[name]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return w, nil
 }
 
 func (f *fakeActorStore) GetActor(_ context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
@@ -58,12 +68,17 @@ func newFakeStoreWithActor(atespace, name, uid string) (*fakeActorStore, *ateapi
 			Name:     "template-1",
 		},
 		Status: &ateapipb.ActorStatus{
-			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{Worker: &ateapipb.ObjectRef{Name: "worker-1"}},
 		},
 	}
 	return &fakeActorStore{
 		actors: map[resources.ActorRef]*ateapipb.Actor{
 			{Atespace: atespace, Name: name}: actor,
+		},
+		// worker-1 runs on node-1, the node the tests' atelet certificate names.
+		workers: map[string]*ateapipb.Worker{
+			"worker-1": {Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}, NodeName: "node-1"},
 		},
 	}, actor
 }
@@ -96,7 +111,7 @@ func newTestCAPool(t *testing.T) *localca.ConcretePool {
 func TestMintAteomActorCertificate(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	caPool := newTestCAPool(t)
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool, "", nil)
 
 	csr, key := generateTestCSR(t)
 
@@ -135,15 +150,20 @@ func TestMintAteomActorCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ActorIdentityFromCertificate: %v", err)
 	}
-	if identity != nil {
-		t.Errorf("ActorIdentity = %+v, want nil (ateom certificates should not carry ActorIdentity)", identity)
+	wantIdentity := &substratex509.ActorIdentity{
+		Atespace:  "team-a",
+		ActorName: "my-actor",
+		ActorUid:  actor.GetMetadata().GetUid(),
+	}
+	if diff := cmp.Diff(wantIdentity, identity); diff != "" {
+		t.Errorf("ActorIdentity mismatch (-want +got):\n%s", diff)
 	}
 }
 
 func TestMintAteomActorCertificate_Errors(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	caPool := newTestCAPool(t)
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool, "", nil)
 
 	csr, _ := generateTestCSR(t)
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-1"))

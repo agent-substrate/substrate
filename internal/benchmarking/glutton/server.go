@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -51,7 +53,7 @@ func Handler(mode string, svc *Service) (http.Handler, error) {
 		reflection.Register(srv)
 		// The wakeup probe is an HTTP GET, so gRPC mode serves it next to
 		// the gRPC handler on the same listener.
-		handler = splitGRPC(srv, readyzMux())
+		handler = splitGRPC(srv, readyzMux(svc.readyzDir))
 	case ModeHTTP:
 		// otelhttp at the mux level + per-handler span follows
 		// docs/dev/best-practices/tracing.md: extract incoming context,
@@ -85,10 +87,24 @@ func splitGRPC(grpcSrv, rest http.Handler) http.Handler {
 	})
 }
 
-// readyzMux serves the wakeup probe both modes need.
-func readyzMux() *http.ServeMux {
+// readyzCanary is the file the wakeup probe writes to check that the data
+// directory is writable.
+const readyzCanary = ".readyz_canary"
+
+// readyzMux serves the wakeup probe both modes need. When writableDir is set,
+// the probe also writes a small file there and fails until the write
+// succeeds. Thus ResumeActor waits for an external volume to be mounted and
+// writable before the actor takes load.
+func readyzMux(writableDir string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc(ReadyzRoute, func(w http.ResponseWriter, r *http.Request) {
+		if writableDir != "" {
+			canary := filepath.Join(writableDir, readyzCanary)
+			if err := os.WriteFile(canary, []byte("ok"), 0o600); err != nil {
+				http.Error(w, fmt.Sprintf("data dir not writable: %v", err), http.StatusServiceUnavailable)
+				return
+			}
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 	return mux
@@ -96,7 +112,7 @@ func readyzMux() *http.ServeMux {
 
 // newMux builds the HTTP-mode route table on top of the wakeup probe.
 func newMux(svc *Service) *http.ServeMux {
-	mux := readyzMux()
+	mux := readyzMux(svc.readyzDir)
 	mux.HandleFunc(PingRoute, protoRoute("Ping", svc.Ping))
 	mux.HandleFunc(WriteDiskRoute, protoRoute("WriteDisk", svc.WriteDisk))
 	mux.HandleFunc(ReadDiskRoute, protoRoute("ReadDisk", svc.ReadDisk))
