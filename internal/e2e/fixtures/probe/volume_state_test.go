@@ -16,6 +16,7 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/agent-substrate/substrate/internal/e2e/probeapi"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -60,13 +62,13 @@ func volumePrime(t *testing.T, p *volumeStateProbe, root string) {
 	t.Cleanup(p.close)
 }
 
-func volumeObserve(t *testing.T, p *volumeStateProbe) volumeStateResponse {
+func volumeObserve(t *testing.T, p *volumeStateProbe) probeapi.VolumeStateResponse {
 	t.Helper()
 	w := volumeRequest(p, http.MethodGet, "/volume-state")
 	if w.Code != http.StatusOK {
 		t.Fatalf("observe: %d %s", w.Code, w.Body.String())
 	}
-	var out volumeStateResponse
+	var out probeapi.VolumeStateResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
@@ -183,5 +185,16 @@ func TestVolumeStateConcurrentReads(t *testing.T) {
 	wg.Wait()
 	if got := volumeObserve(t, p); got.Reads != 17 {
 		t.Fatalf("reads = %d", got.Reads)
+	}
+}
+
+func TestVolumeResultClassifiesWrappedIOError(t *testing.T) {
+	got := volumeResult(nil, &os.PathError{Op: "read", Path: "unlinked.txt", Err: syscall.EIO})
+	if got.ErrorCode != "EIO" || got.Error == "" || got.NotExist {
+		t.Fatalf("unexpected observation: %+v", got)
+	}
+	other := volumeResult(nil, os.ErrPermission)
+	if other.ErrorCode != "" {
+		t.Fatalf("unrelated error classified as EIO: %+v", other)
 	}
 }

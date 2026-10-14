@@ -103,6 +103,13 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			})
 	}()
 
+	// Reject impossible captures before disconnecting traffic, pausing the guest,
+	// or replacing any existing checkpoint files.
+	ra := s.runningVM(req.GetActorUid())
+	if ra != nil && ra.phase == guestBooted && scope != ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		return nil, apierror.FailedPrecondition("runtime golden requires MEMORY fidelity")
+	}
+
 	if err := s.tunnel.Deactivate(ctx, attribution); err != nil {
 		return nil, err
 	}
@@ -140,7 +147,6 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
 	// either way ateom owns it and tracks its api-socket.
-	ra := s.runningVM(actorUID)
 	chSocket := kata.CLHSocketPath(actorUID)
 	if ra != nil && ra.apiSocket != "" {
 		chSocket = ra.apiSocket
@@ -171,10 +177,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while creating checkpoint dir %q: %w", checkpointDir, err)
 	}
 
-	if ra != nil && ra.runtimeGolden {
-		if scope != ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
-			return nil, apierror.FailedPrecondition("runtime golden requires MEMORY fidelity")
-		}
+	if ra != nil && ra.phase == guestBooted {
 		if err := os.WriteFile(filepath.Join(checkpointDir, runtimeGoldenFile), []byte(runtimeGoldenFormat), 0o600); err != nil {
 			return nil, err
 		}

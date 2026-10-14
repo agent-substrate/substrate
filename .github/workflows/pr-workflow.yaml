@@ -269,6 +269,7 @@ jobs:
       # variant by the single E2E_SANDBOX_CLASS knob (see internal/e2e/sandbox.go).
       env:
         E2E_SANDBOX_CLASS: microvm
+        E2E_RUNTIME_LOG_DIR: ${{ github.workspace }}/_artifacts/runtime-golden
         E2E_PARALLELISM: 8
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-microvm.xml
       run: hack/run-e2e-kind.sh -v -args --no-color

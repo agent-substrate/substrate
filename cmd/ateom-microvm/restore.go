@@ -31,15 +31,12 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomphaselog"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
-	"github.com/agent-substrate/substrate/internal/wakeupprobe"
 )
 
 // restoreMemMode picks how cloud-hypervisor should load guest RAM, from what the VMM
@@ -453,8 +450,8 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
-		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
+	if err := s.waitActorReady(ctx, p); err != nil {
+		return err
 	}
 
 	// Where a resume goes. Like the boot phases, this used to be a single total,
@@ -503,31 +500,11 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 		guestAgent:  guestAC,
 	}
 
-	// Re-attach stdout/stderr forwarding for each container over the agent
-	// connection dialed after resume: the restored guest's containers are alive, so
-	// ReadStdout/ReadStderr pick up where they left off.
-	attribution := p.actorAttribution()
-	for _, c := range containers {
-		s.startActorLogForwarding(guestAC, attribution, c.GetName(), c.GetName())
-	}
-
 	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
 		return err
 	}
-	s.setRunningVM(actorUID, ra)
-
-	// After the last error return, so a failed restore stays retryable.
 	maybeDropStagedMemoryImage(ctx, restoreDir, memMode, preserveRestoreDir)
-
-	// Publish the guest to GetWorkloadStats, past the last error return above
-	// for the same reason as in coldBootActor. Same client the forwarding above
-	// reads over.
-	s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: guestAC, workloadIDs: ra.workloadIDs})
-	// Looked up while the caller holds the actor's lock, so it is this
-	// activation.
-	if hosted := s.lookupActor(actorUID); hosted != nil {
-		go s.recordInitial(context.WithoutCancel(ctx), hosted)
-	}
+	s.publishActorApplication(ctx, p, ra, ctrs)
 
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))

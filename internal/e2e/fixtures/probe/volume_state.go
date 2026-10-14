@@ -18,12 +18,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/agent-substrate/substrate/internal/e2e/probeapi"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
+	"syscall"
 )
 
 // volumeStateProbe retains guest process state across snapshots. A controller
@@ -39,34 +41,20 @@ type volumeStateProbe struct {
 	reads                     uint64
 }
 
-type volumeObservation struct {
-	Data     string `json:"data"`
-	Error    string `json:"error,omitempty"`
-	NotExist bool   `json:"not_exist,omitempty"`
-}
-
-type volumeStateResponse struct {
-	Challenge      string            `json:"challenge"`
-	Reads          uint64            `json:"reads"`
-	Cached         string            `json:"cached"`
-	ByPath         volumeObservation `json:"by_path"`
-	Held           volumeObservation `json:"held"`
-	Unlinked       volumeObservation `json:"unlinked"`
-	Negative       volumeObservation `json:"negative"`
-	Directory      []string          `json:"directory"`
-	DirectoryError string            `json:"directory_error,omitempty"`
-}
-
-func volumeResult(data []byte, err error) volumeObservation {
+func volumeResult(data []byte, err error) probeapi.VolumeObservation {
 	if err != nil {
-		return volumeObservation{Error: err.Error(), NotExist: errors.Is(err, os.ErrNotExist)}
+		out := probeapi.VolumeObservation{Error: err.Error(), NotExist: errors.Is(err, os.ErrNotExist)}
+		if errors.Is(err, syscall.EIO) {
+			out.ErrorCode = "EIO"
+		}
+		return out
 	}
-	return volumeObservation{Data: string(data)}
+	return probeapi.VolumeObservation{Data: string(data)}
 }
 
 // Fixtures are deliberately small; oversized data is an error, never a
 // truncated success that could hide the distinguishing part of a sentinel.
-func volumeRead(f *os.File) volumeObservation {
+func volumeRead(f *os.File) probeapi.VolumeObservation {
 	b := make([]byte, 4097)
 	n, err := f.ReadAt(b, 0)
 	if err == io.EOF {
@@ -78,7 +66,7 @@ func volumeRead(f *os.File) volumeObservation {
 	return volumeResult(b[:n], err)
 }
 
-func volumeReadPath(path string) volumeObservation {
+func volumeReadPath(path string) probeapi.VolumeObservation {
 	f, err := os.Open(path)
 	if err != nil {
 		return volumeResult(nil, err)
@@ -139,9 +127,9 @@ func (p *volumeStateProbe) prime(root, challenge string) (err error) {
 	return nil
 }
 
-func (p *volumeStateProbe) observe() volumeStateResponse {
+func (p *volumeStateProbe) observe() probeapi.VolumeStateResponse {
 	p.reads++
-	out := volumeStateResponse{
+	out := probeapi.VolumeStateResponse{
 		Challenge: p.challenge, Reads: p.reads, Cached: p.cached,
 		ByPath: volumeReadPath(filepath.Join(p.root, "cached.txt")),
 		Held:   volumeRead(p.held), Unlinked: volumeRead(p.unlinked),

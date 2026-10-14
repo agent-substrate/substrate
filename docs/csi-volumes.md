@@ -255,3 +255,22 @@ goldens do not change those semantics or claim to repair those cases.
 The runtime mode is rejected for gVisor. Its existing cold-start guard remains:
 runsc derives `disable_file_handle_sharing` from the source filesystem, and a
 local placeholder and NFS volume can produce incompatible restore options.
+
+### Runtime golden regression coverage
+
+The microVM CI lane requires the runtime golden correctness cases and NFS CSI;
+missing prerequisites fail that lane. Local cluster runs opt in with
+`E2E_RUNTIME_GOLDEN=true`, `E2E_SANDBOX_CLASS=microvm`, and
+`E2E_RUNTIME_LOG_DIR` pointing to an evidence directory. Run
+`TestRuntimeGoldenVolumes` in `internal/e2e/suites/combinedvolumes` through
+`hack/run-e2e-kind.sh`. This checks distinct volume bindings, guest/process
+identity, and retained state over two own-snapshot generations.
+
+The probe contract checks directory entries and negative lookups as well as
+cached and open-file contents. Only the known deleted-open-file `EIO` on the
+second generation is tolerated; other errors fail the test.
+
+Latency collection is separate: select `TestRuntimeGoldenLatency`, additionally
+set `E2E_RUNTIME_GOLDEN_BENCHMARK=true` and `E2E_LATENCY_OUTPUT` to a JSONL file.
+`E2E_LATENCY_SAMPLES` defaults to 100 positive measured samples per mode, with
+five warmups. It does not disable or replace the correctness test.

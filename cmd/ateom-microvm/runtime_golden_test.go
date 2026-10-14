@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"github.com/agent-substrate/substrate/internal/actorlock"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,5 +54,37 @@ func TestRuntimeGoldenRejectsOrdinaryActorBeforeActivation(t *testing.T) {
 	_, err := s.RunWorkload(context.Background(), &ateompb.RunWorkloadRequest{Atespace: "user", Spec: &ateompb.WorkloadSpec{RuntimeGolden: true}})
 	if err == nil || !strings.Contains(err.Error(), "requires a golden actor") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRuntimeGoldenCheckpointRejectsBeforeMutation(t *testing.T) {
+	for _, fidelity := range []ateompb.SnapshotFidelity{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS} {
+		t.Run(fidelity.String(), func(t *testing.T) {
+			root := t.TempDir()
+			checkpoint := filepath.Join(root, "checkpoint")
+			if err := os.Mkdir(checkpoint, 0700); err != nil {
+				t.Fatal(err)
+			}
+			sentinel := filepath.Join(checkpoint, "existing")
+			if err := os.WriteFile(sentinel, []byte("keep"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			ra := &runningActor{phase: guestBooted}
+			// No tunnel or CH client: crossing the mutation boundary would panic or
+			// fail to reach CH instead of returning the expected precondition error.
+			s := &AteomService{locks: actorlock.New(), inFlight: actorlock.NewInFlight(), actors: map[string]*hostedActor{"a": {vm: ra}}}
+			dirs := &ateompb.ActorDirs{RootDir: root, OciBundleDir: root, CheckpointDir: checkpoint, RestoreDir: root, DurableDirVolumeMountsDir: root, SystemInfoVolumeRootsDir: root, VolumesDir: root}
+			_, err := s.CheckpointWorkload(context.Background(), &ateompb.CheckpointWorkloadRequest{ActorUid: "a", ActorDirs: dirs, Fidelity: fidelity})
+			if err == nil || !strings.Contains(err.Error(), "requires MEMORY") {
+				t.Fatalf("got %v", err)
+			}
+			data, err := os.ReadFile(sentinel)
+			if err != nil || string(data) != "keep" {
+				t.Fatalf("checkpoint changed: %s %v", data, err)
+			}
+			if s.runningVM("a") != ra || ra.phase != guestBooted {
+				t.Fatal("guest state changed")
+			}
+		})
 	}
 }
