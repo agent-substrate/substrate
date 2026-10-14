@@ -858,7 +858,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				actor.SourceTag = &ateapipb.ObjectRef{Atespace: ref.Atespace, Name: "explicit"}
 			}
 			svc := &ServiceImpl{store: persistence}
-			created, err := svc.CreateActor(ctx, actor)
+			created, err := svc.CreateActor(ctx, actor, nil)
 			if apierror.Code(err) != wantCode {
 				t.Fatalf("CreateActor = %v, want %v", err, wantCode)
 			}

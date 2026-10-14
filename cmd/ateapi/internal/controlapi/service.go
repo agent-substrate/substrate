@@ -106,10 +106,9 @@ func NewRPCService(
 	return s
 }
 
-// serviceStore enumerates the exact storage methods needed by
-// the control API and nothing more.
+// serviceStore enumerates the service methods consumed by the RPC layer.
 type serviceStore interface {
-	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
+	CreateActor(ctx context.Context, actor *ateapipb.Actor, initial *ateapipb.EgressPolicyTemplate) (*ateapipb.Actor, error)
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 	ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error)

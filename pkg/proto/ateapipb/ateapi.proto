@@ -1168,9 +1168,9 @@ message ActorTemplate {
   // +k8s:optional
   ActorTemplateStatus status = 8;
 
-  // Egress policy for the golden Actor during initialization. Copied
-  // atomically when the golden Actor is created, as its "default" policy
-  // in the reserved ate-golden atespace. Actors created from this template
+  // Egress policy for the golden Actor during initialization. The template
+  // controller supplies this as CreateActorRequest.initial_egress_policy
+  // when creating the golden Actor. Other Actors created from this template
   // do not inherit this policy, including when using the golden snapshot.
   // If absent, no policy is created. When set, at least one rule is required.
   //
@@ -1748,6 +1748,16 @@ message CreateActorRequest {
   //
   // +k8s:required
   Actor actor = 1;
+
+  // Optional initial egress policy, created atomically with the Actor as its
+  // "default" policy. The server assigns the policy's metadata. When set,
+  // at least one rule is required, and the caller must have permission to
+  // create an egress policy on the Actor in addition to creating the Actor.
+  // If absent, no policy is created or inherited from the template or tag.
+  // The policy can subsequently be managed through the Actor egress policy RPCs.
+  //
+  // +k8s:optional
+  EgressPolicyTemplate initial_egress_policy = 2;
 }
 
 // Request to update mutable fields on an existing Actor.

@@ -232,7 +232,12 @@ var defaultRPCPermissions = map[string]rpcRule{
 		templateChecks, templateErrs := onActorTemplate(RelationCanUseTemplate, r.GetActor().GetActorTemplate(), field.NewPath("actor", "actor_template"))
 		checks, errs := both(actorChecks, actorErrs, templateChecks, templateErrs)
 		tagChecks, tagErrs := onSourceTag(r.GetActor().GetSourceTag(), field.NewPath("actor", "source_tag"))
-		return both(checks, errs, tagChecks, tagErrs)
+		checks, errs = both(checks, errs, tagChecks, tagErrs)
+		if r.GetInitialEgressPolicy() != nil {
+			policyChecks, policyErrs := onActor(RelationCanCreateEgressPolicy, r.GetActor().GetMetadata(), field.NewPath("actor", "metadata"))
+			return both(checks, errs, policyChecks, policyErrs)
+		}
+		return checks, errs
 	})),
 	ateapipb.Control_GetActor_FullMethodName: rule(checksOf(func(r *ateapipb.GetActorRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanGet, r.GetActor(), field.NewPath("actor"))

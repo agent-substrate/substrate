@@ -53,6 +53,32 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		validReq(validActor()),
 		nil,
 	}, {
+		"valid initial egress policy",
+		validReq(validActor(), func(r *ateapipb.CreateActorRequest) {
+			r.InitialEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{
+				Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}},
+			}}}
+		}),
+		nil,
+	}, {
+		"missing initial egress rules",
+		validReq(validActor(), func(r *ateapipb.CreateActorRequest) { r.InitialEgressPolicy = &ateapipb.EgressPolicyTemplate{} }),
+		field.ErrorList{field.Required(field.NewPath("initial_egress_policy", "rules"), "")},
+	}, {
+		"empty initial egress rules",
+		validReq(validActor(), func(r *ateapipb.CreateActorRequest) {
+			r.InitialEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{}}
+		}),
+		field.ErrorList{field.Required(field.NewPath("initial_egress_policy", "rules"), "")},
+	}, {
+		"invalid initial egress hostname",
+		validReq(validActor(), func(r *ateapipb.CreateActorRequest) {
+			r.InitialEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{
+				Https: &ateapipb.HttpsRule{Hostnames: []string{"bad/host"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}},
+			}}}
+		}),
+		field.ErrorList{field.Invalid(field.NewPath("initial_egress_policy", "rules").Index(0).Child("https", "hostnames").Index(0), nil, "")},
+	}, {
 		"valid with status",
 		validReq(validActor(withStatus())),
 		nil, // ignored on input

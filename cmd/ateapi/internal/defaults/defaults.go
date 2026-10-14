@@ -38,6 +38,8 @@ func Apply(m proto.Message) {
 		applyAtespaceDefaults(v)
 	case *ateapipb.EgressPolicy:
 		applyEgressPolicyDefaults(v)
+	case *ateapipb.EgressPolicyTemplate:
+		applyEgressRuleDefaults(v.GetRules())
 	case *ateapipb.Tag:
 		applyTagDefaults(v)
 	case *ateapipb.Worker:

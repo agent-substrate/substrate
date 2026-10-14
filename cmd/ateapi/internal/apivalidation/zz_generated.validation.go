@@ -2182,6 +2182,36 @@ func Validate_CreateActorRequest(
 		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.CreateActorRequest.InitialEgressPolicy
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.EgressPolicyTemplate,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_EgressPolicyTemplate(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.CreateActorRequest) *ateapipb.EgressPolicyTemplate {
+				return oldObj.InitialEgressPolicy
+			})
+		errs = append(errs, fn(fldPath.Child("initial_egress_policy"), obj.InitialEgressPolicy, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 

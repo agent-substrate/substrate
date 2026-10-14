@@ -447,6 +447,7 @@ func (r *ActorTemplateReconciler) ensureActorExists(ctx context.Context, tmpl *a
 			},
 			ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
 		},
+		InitialEgressPolicy: tmpl.GetGoldenEgressPolicy(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while creating golden actor: %w", err)

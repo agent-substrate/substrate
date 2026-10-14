@@ -66,6 +66,88 @@ func createEgressPolicy(t *testing.T, tc *testContext, actor *ateapipb.ObjectRef
 	return created
 }
 
+func TestCreateActor_InitialEgressPolicy(t *testing.T) {
+	ns := namespaceForTest("ns-initial-egress-policy")
+	tc := setupTest(t, ns)
+	t.Cleanup(tc.cleanup)
+	createTemplate(t, tc, ns)
+	ctx := t.Context()
+
+	for _, tt := range []struct {
+		name   string
+		policy *ateapipb.EgressPolicyTemplate
+		valid  bool
+	}{
+		{name: "omitted", valid: true},
+		{name: "configured", valid: true, policy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}},
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}},
+		}}},
+		{name: "empty", policy: &ateapipb.EgressPolicyTemplate{}},
+		{name: "invalid", policy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"bad/host"}}},
+		}}},
+		{name: "conflicting", policy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}},
+			{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
+		}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: tt.name}
+			req := &ateapipb.CreateActorRequest{
+				Actor: &ateapipb.Actor{
+					Metadata:      &ateapipb.ResourceMetadata{Atespace: ref.Atespace, Name: ref.Name},
+					ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+				},
+				InitialEgressPolicy: tt.policy,
+			}
+			actor, err := tc.client.CreateActor(ctx, req)
+			if !tt.valid {
+				assertGrpcErrorRegex(t, err, codes.InvalidArgument, "initial_egress_policy")
+				_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+				assertGrpcErrorRegex(t, err, codes.NotFound, "not found")
+				_, err = tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName})
+				assertGrpcErrorRegex(t, err, codes.NotFound, "not found")
+				return
+			}
+			if err != nil {
+				t.Fatalf("CreateActor: %v", err)
+			}
+			policy, err := tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName})
+			if tt.policy == nil {
+				assertGrpcErrorRegex(t, err, codes.NotFound, "not found")
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetActorEgressPolicy: %v", err)
+			}
+			want := &ateapipb.EgressPolicy{Metadata: policy.Metadata, Rules: []*ateapipb.EgressRule{
+				{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}},
+				{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
+			}}
+			if diff := cmp.Diff(want, policy, protocmp.Transform()); diff != "" {
+				t.Fatalf("initial policy (-want +got):\n%s", diff)
+			}
+			md := policy.GetMetadata()
+			if md.GetAtespace() != ref.Atespace || md.GetName() != resources.SingletonName || md.GetUid() == "" || md.GetUid() == actor.GetMetadata().GetUid() || md.GetVersion() != 1 || md.GetCreateTime() == nil || md.GetUpdateTime() == nil {
+				t.Fatalf("unexpected policy metadata: %v", md)
+			}
+
+			// Repeating CreateActor must not replace the policy on the existing actor.
+			req.InitialEgressPolicy.Rules = []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"other.example.com"}}}}
+			_, err = tc.client.CreateActor(ctx, req)
+			assertGrpcErrorRegex(t, err, codes.AlreadyExists, "already exists")
+			got, err := tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(policy, got, protocmp.Transform()); diff != "" {
+				t.Fatalf("duplicate CreateActor changed policy (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestCreateActorEgressPolicy_Success(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-create-egress-policy")
 	policy := functionalEgressPolicy()

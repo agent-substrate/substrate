@@ -44,6 +44,7 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 			svc := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
 			storetest.MustCreateAtespace(t, ctx, persistence, "templates")
 			storetest.MustCreateAtespace(t, ctx, persistence, "actors")
+			storetest.MustCreateAtespace(t, ctx, persistence, resources.GoldenActorAtespace)
 			tmpl, err := svc.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 				tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: "templates", Name: "tmpl"}
 				tmpl.GoldenEgressPolicy = tt.policy
@@ -52,21 +53,25 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 			tmplRef := resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()
-			for _, name := range []string{"alpha", tmpl.GetMetadata().GetUid()} {
+			for _, target := range []resources.ActorRef{
+				{Atespace: "actors", Name: "alpha"},
+				{Atespace: "actors", Name: tmpl.GetMetadata().GetUid()},
+				{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()},
+			} {
 				actor, err := svc.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-					Metadata: &ateapipb.ResourceMetadata{Atespace: "actors", Name: name}, ActorTemplate: tmplRef,
+					Metadata: &ateapipb.ResourceMetadata{Atespace: target.Atespace, Name: target.Name}, ActorTemplate: tmplRef,
 				}})
 				if err != nil {
 					t.Fatal(err)
 				}
 				ref := resources.ActorRefFromActor(actor).ToObjectRef()
 				if _, err := svc.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName}); apierror.Code(err) != codes.NotFound {
-					t.Fatalf("ordinary actor inherited golden policy: %v, want NotFound", err)
+					t.Fatalf("actor %v inherited golden policy: %v, want NotFound", target, err)
 				}
 				if _, err := svc.CreateActorEgressPolicy(ctx, &ateapipb.CreateActorEgressPolicyRequest{
 					Actor: ref,
 					EgressPolicy: &ateapipb.EgressPolicy{
-						Metadata: &ateapipb.ResourceMetadata{Atespace: "actors", Name: "default"},
+						Metadata: &ateapipb.ResourceMetadata{Atespace: target.Atespace, Name: resources.SingletonName},
 						Rules:    []*ateapipb.EgressRule{{Https: &ateapipb.HttpsRule{Hostnames: []string{"runtime.example.com"}}}},
 					},
 				}); err != nil {
