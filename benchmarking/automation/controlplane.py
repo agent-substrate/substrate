@@ -191,16 +191,25 @@ def _allocatable_millis(node: dict[str, Any]) -> int:
 
 
 def _pod_cpu_millis(pod: dict[str, Any]) -> int:
-    """The CPU a pod holds on its node: its containers' requests plus its
-    sidecars', the init containers that keep running."""
+    """The CPU the scheduler reserves for a pod, as Kubernetes computes it:
+    its containers' and sidecars' requests, or the largest init container's
+    with the sidecars started before it if that is more, plus the
+    RuntimeClass overhead."""
+    def cpu(c: dict[str, Any]) -> int:
+        return _cpu_millis(c.get("resources", {}).get("requests", {}).get("cpu", 0))
+
     spec = pod.get("spec", {})
-    containers = spec.get("containers", []) + [
-        c for c in spec.get("initContainers", []) if c.get("restartPolicy") == "Always"
-    ]
-    return sum(
-        _cpu_millis(c.get("resources", {}).get("requests", {}).get("cpu", 0))
-        for c in containers
-    )
+    running = sum(cpu(c) for c in spec.get("containers", []))
+    sidecars = init_max = 0
+    for c in spec.get("initContainers", []):
+        if c.get("restartPolicy") == "Always":
+            running += cpu(c)
+            sidecars += cpu(c)
+            init_max = max(init_max, sidecars)
+        else:
+            init_max = max(init_max, cpu(c) + sidecars)
+    overhead = _cpu_millis(spec.get("overhead", {}).get("cpu", 0))
+    return max(running, init_max) + overhead
 
 
 def requested_millis(pods: list[dict[str, Any]]) -> dict[str, int]:
