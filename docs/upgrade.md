@@ -1,652 +1,317 @@
-# Rolling upgrade runbook
+# Upgrade runbook
 
-This runbook upgrades a running Agent Substrate install to a new build
-version, one node at a time. No actor loses state. On a cluster with
-more than one node, at most one node's worth of capacity is out of
-service while the rest of the fleet keeps serving; a single-node cluster
-stops fully during step 5. It needs `kubectl`, `kubectl ate`, `go run
-./cmd/ate-setup`, `jq`, and `grpcurl`. The numbered steps are the same
-on every Kubernetes provider; the provider-specific parts sit in their
-own sections, [before](#on-gke) and [after](#after-the-roll-on-gke)
-the roll. All of the roll's state lives in cluster objects, so you can
-stop at any point and pick up again. [Check your
-progress](#check-your-progress) tells you where you left off.
+This runbook upgrades a running Agent Substrate install to a newer release.
 
-The order is `ate-controller` first, then the dataplane, then the rest
-of the control plane. The controller goes first because it manages
-the worker pools the roll creates. The dataplane goes before the rest
-of the control plane so that, by the time ate-api-server and atenet
-change, every atelet and worker already understands requests from
-either version of the control plane.
+| From → to | Supported |
+|---|---|
+| A later patch release of the same minor, for example 1.2.1 → 1.2.4 | Yes. Patch releases can be skipped |
+| The next minor release, for example 1.2.x → 1.3.y | Yes |
+| Skipping a minor release, for example 1.2.x → 1.4.y | No. Upgrade to 1.3 first |
+| A new major release, for example 1.x → 2.x | No. Reinstall |
+| A minor release before 1.0, for example 0.3.x → 0.4.y | No. Reinstall. Before 1.0, breakage still exists for minor versions |
 
-## Check your progress
+If an upgrade goes wrong, you can roll back to the release you upgraded from, and no further.
 
-Come back here after a break, and before you touch anything when
-something looks wrong. Three commands say where the roll stands:
+<!-- TODO: Link the compatibility policy, which these rules come from, and the version skew policy, which sets the step order below, once both are in the repository. -->
+
+| Step | What changes | What running actors see | How long |
+|---|---|---|---|
+| 1 | podcertificate-controller | Nothing | A minute |
+| 2 | atelet, one node at a time | Nothing | Seconds to about 6 minutes per node |
+| 3 | workers | `SIGTERM`, then a 30-minute window to be suspended before `SIGKILL` | Seconds to hours per pool |
+| 4 | ate-api-server, the CRDs and ate-controller, atenet, SandboxConfig, then the rest of the system bundle | API calls, long requests and outbound connections can be cut once; workers may get `SIGTERM` again. See step 4 | A few minutes, or as long as step 3 if workers roll again |
+
+Rollback is the same list in reverse, from the old release. An actor that crashes along the way goes back to its last snapshot with `kubectl ate revert actor <name> -a <atespace>`.
+
+The system upgrade does not change the database engine, the CSI drivers `--setup-csi` installs, the Kubernetes version or the node OS version.
+
+## Where am I?
+
+Come back here after a break or a handoff. Each time a Deployment moves to a new image it gets a new ReplicaSet, and the atelet DaemonSet a new ControllerRevision, so their `AGE` tells what has moved. A component has moved when the `AGE` of its ReplicaSet with pods (`DESIRED` above 0), or of atelet's ControllerRevision with the highest `REVISION`, is shorter than the time since the upgrade began. Two ReplicaSets with pods mean a roll is under way. `podcertificate-controller` moves in step 1, `atelet` in step 2, the rest in step 4:
 
 ```bash
-# One DaemonSet: only the old dataplane is installed, and its label
-# value is the $OLD_VERSION you are upgrading from. Two: step 3 is done,
-# and the other label value is the version you are upgrading to.
-kubectl get ds -n ate-system -l app=atelet -L ate.dev/substrate-version
-
-# Nodes per version. All on the old one: the per-node roll has not
-# started. A mix: it is under way. All on the new one: it is done.
-kubectl get nodes -L ate.dev/substrate-version --no-headers \
-  | awk '{print $NF}' | sort | uniq -c
-
-# Worker pools. A clone next to each serving pool: step 4 is done.
-kubectl get workerpools -A
+kubectl -n podcertificate-controller-system get rs
+kubectl -n ate-system get rs,controllerrevision
 ```
 
-The commands above do not show whether steps 1, 2 and 6 have run.
-Those steps are idempotent, so run them again if you are not sure.
+The worker pools move in step 3, and their ReplicaSets read the same way. A pool is done rolling when `UP-TO-DATE` and `READY` equal `WANTED`:
+
+```bash
+kubectl get rs -A -l ate.dev/worker-pool
+kubectl get deploy -A -l ate.dev/worker-pool -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,UP-TO-DATE:.status.updatedReplicas,READY:.status.readyReplicas,WANTED:.spec.replicas,PAUSED:.spec.paused'
+```
 
 ## Before you start
 
-### Confirm before you begin
+You need git, go and kubectl, and crane for prebuilt images. Agree on a time with actor owners: their running actors get `SIGTERM` in step 3.
 
-Every item has to hold. Nothing in the roll stops you if one does not.
+Every `ate-setup deploy` run records the settings it was given in `installs/` under the record directory: `ATE_RECORD_DIR` if set, by default `~/.cache/ate-setup` on Linux and `~/Library/Caches/ate-setup` on macOS. It prints the path as `recorded this configuration in <path>`.
 
-- [ ] Every node carries the `ate.dev/substrate-version` label, all
-  with the same value. That value is `$OLD_VERSION`.
+The record's `cluster.substrateVersion` is the installed release. If this machine has no record of the cluster, write one from the settings you installed with ([operator-install.md](operator-install.md) lists them), and set `OLD_RELEASE` to the installed release before you run the block below.
 
-  ```bash
-  kubectl get nodes -L ate.dev/substrate-version
-  ```
-
-- [ ] The atelet DaemonSet name carries a version suffix. If it does
-  not, the cluster was installed from an older build and needs a fresh
-  install instead; its DaemonSet selector cannot be changed in place.
-
-  ```bash
-  kubectl get ds -n ate-system -l app=atelet
-  ```
-
-- [ ] If you are upgrading across the release that added the ate-system
-  NetworkPolicies, every namespace whose pods call the Substrate API
-  directly (not through `kubectl ate`) is labeled
-  `ate.dev/api-access=true`. The new manifests deny the API to every
-  other namespace as soon as they are applied. Worker pods are never
-  admitted, labeled or not. See
-  [`ate-system-networkpolicies.yaml`](../manifests/ate-install/ate-system-networkpolicies.yaml).
-
-  ```bash
-  kubectl label namespace <ns> ate.dev/api-access=true
-  ```
-
-- [ ] Every serving pool is pinned to `$OLD_VERSION`. An unpinned pool
-  cannot take part in the roll.
-
-  ```bash
-  kubectl get workerpools -A \
-    -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,PIN:.spec.template.nodeSelector.ate\.dev/substrate-version'
-  ```
-
-  Pin a pool whose `PIN` column is `<none>` while no actor is assigned
-  to its workers, because the edit re-renders the pool's Deployment
-  (see [the warnings](#three-things-that-break-an-upgrade)):
-
-  ```bash
-  kubectl -n $NS patch workerpool $OLD_WORKERPOOL --type merge \
-    -p "spec: {template: {nodeSelector: {ate.dev/substrate-version: '$OLD_VERSION'}}}"
-  ```
-
-- [ ] Every serving pool is healthy: `READY` equals `DESIRED`.
-
-  ```bash
-  kubectl get workerpools -A
-  ```
-
-- [ ] Nothing drains worker nodes on its own: node auto-upgrade is off
-  on every pool that runs workers and none of them is spot or
-  preemptible, as the
-  [Create Cluster warning](../tools/setup-gcp/README.md#2-create-cluster)
-  requires.
-
-- [ ] If the install uses `--cordon-control-plane` with the bundled
-  PostgreSQL, at least one node carries
-  `ate.dev/workloadType=ate-postgres`. Releases before the dedicated
-  postgres pool ran postgres in the shared `ate-control-plane` pool; see
-  [Cordoned control plane: postgres pool](#cordoned-control-plane-postgres-pool).
-  `ate-setup` refuses to apply postgres without one.
-
-  ```bash
-  kubectl get nodes -l ate.dev/workloadType=ate-postgres
-  ```
-
-- [ ] The installed ate-api-server serves `DrainWorker`. Draining a
-  worker is one `DrainWorker` RPC, and step 5 calls it with
-  [grpcurl](https://github.com/fullstorydev/grpcurl). Open access to
-  the Control API now and keep the port-forward running; step 5 uses
-  the same `/tmp/ate-ca.pem` and `$TOKEN`.
-
-  ```bash
-  kubectl -n ate-system port-forward svc/api 8443:443 >/dev/null 2>&1 &
-
-  kubectl get clustertrustbundles -l podcert.ate.dev/canarying=live \
-    -o jsonpath='{range .items[?(@.spec.signerName=="servicedns.podcert.ate.dev/identity")]}{.spec.trustBundle}{end}' \
-    > /tmp/ate-ca.pem
-
-  TOKEN=$(kubectl -n ate-system create token ate-client \
-    --audience=api.ate-system.svc --duration=48h)
-
-  # Must print ateapi.Control.DrainWorker. If it does not, the cluster
-  # predates the versioned builds and needs a fresh install.
-  grpcurl -cacert /tmp/ate-ca.pem -authority api.ate-system.svc \
-    -H "authorization: Bearer ${TOKEN}" 127.0.0.1:8443 list ateapi.Control \
-    | grep DrainWorker
-  ```
-
-### Names used throughout
-
-| name | what it is | how to get it |
-|---|---|---|
-| `$OLD_VERSION` | the version label value you are upgrading from | the one atelet DaemonSet's label, see [Check your progress](#check-your-progress) |
-| `$NEW_VERSION` | the version label value you are upgrading to | the second DaemonSet's label once step 3 has run |
-| `$NS`, `$OLD_WORKERPOOL` | namespace and name of a serving WorkerPool | `kubectl get workerpools -A` |
-| `$NEW_WORKERPOOL` | the clone's name | you pick it in step 4, for example `counter-v2` |
-| `$NODE` | the node being rolled | picked per iteration in step 5 from `kubectl get nodes` |
-
-A cluster usually serves more than one WorkerPool, and every serving
-pool moves in the same upgrade. Step 4 clones each of them, the
-per-node roll in step 5 covers all pools on a node together, and the
-retire at the end deletes each old pool. Where the runbook says
-`$OLD_WORKERPOOL`, read "each serving pool".
-
-### Checkout and environment
-
-Every `go run ./cmd/ate-setup` command below runs from a checkout of
-the new release, with the environment and flags the install used:
-`PROJECT_ID`, `CLUSTER_NAME` and `CLUSTER_LOCATION` (or `--context`),
-and either `KO_DOCKER_REPO` for a build from source or
-`--image-repo`/`--image-tag` for prebuilt images. Keep a checkout of
-the old release too as rollback runs the same commands from it.
-
-`ate-setup` takes the version from `$VERSION` when it is set, else
-from `git describe` on the checkout for a build from source, or from
-`--image-tag` (`ATE_IMAGE_TAG`) for prebuilt images. That value must come out different
-from `$OLD_VERSION`, otherwise dataplane upgrade rolls the running atelet in place
-instead of adding a second DaemonSet. A tagged checkout differs by
-construction; if the install pinned `VERSION`, pin a new value now
-and keep it for every command of this upgrade.
-
-Install the new `kubectl ate` with `go install ./cmd/kubectl-ate`.
-
-### On GKE
-
-GKE needs `gcloud` and three more names:
-
-| name | what it is | how to get it |
-|---|---|---|
-| `$CLUSTER`, `$ZONE` | the cluster and its location | `gcloud container clusters list` |
-| `$NODEPOOL` | the node pool | `gcloud container node-pools list --cluster $CLUSTER --zone $ZONE` |
-
-Park the autoscaler. During the roll, the old pool's pods that lost
-their node sit Pending on purpose: they are the rollback reserve. The
-autoscaler reads Pending pods as demand and would add nodes for pods
-that must never schedule. Save its config first; you restore it
-[after the roll](#after-the-roll-on-gke).
+If `~/ate-upgrade` is left from an earlier upgrade, delete it first. Fill in the first three lines, then run the rest. `ate-setup` runs from the new checkout. The old checkout is kept for rollback.
 
 ```bash
-gcloud container node-pools describe $NODEPOOL --cluster $CLUSTER --zone $ZONE \
-  --format='json(autoscaling)'   # save for after the roll
-gcloud container clusters update $CLUSTER --zone $ZONE \
-  --node-pool $NODEPOOL --no-enable-autoscaling
+NEW_RELEASE=v0.4.2                                   # change me
+RECORD=~/.cache/ate-setup/installs/my-cluster.yaml   # change me: this cluster's record
+kubectl config use-context my-cluster                # change me: keep it until the upgrade is done
+# export ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING=...   # external database only
+
+OLD_RELEASE=${OLD_RELEASE:-$(sed -n 's/^ *substrateVersion: //p' $RECORD)}
+echo "Upgrading '$OLD_RELEASE' -> '$NEW_RELEASE'"    # stop if either is empty or not a release tag
+mkdir ~/ate-upgrade && cd ~/ate-upgrade
+cp $RECORD old.yaml && cp $RECORD new.yaml
+sed -i.bak "s/^  tag: .*/  tag: $NEW_RELEASE/" new.yaml   # prebuilt images: the new tag
+grep 'tag:' old.yaml new.yaml                        # prebuilt images: new.yaml has the new tag
+git clone --branch $OLD_RELEASE https://github.com/agent-substrate/substrate.git old
+git clone --branch $NEW_RELEASE https://github.com/agent-substrate/substrate.git new
+(cd old && go install ./cmd/kubectl-ate)
+cd new
 ```
 
-If a GKE maintenance window falls inside the roll, add a maintenance
-exclusion for it too: a node GKE recreates mid-roll comes back at the
-pool's label, which is still `$OLD_VERSION`.
+Run every step from this shell. A record holds no database connection strings: with an external database, uncomment the `export` line, and export `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` too if you set it.
 
-Check that the node pool itself carries
-`ate.dev/substrate-version=$OLD_VERSION`, or nodes GKE creates later
-arrive unlabeled and nothing schedules to them. If it is missing, stamp
-it now with the old value:
+Keep `old.yaml` as it is, for rollback. With prebuilt images, `new.yaml` now names the new tag. From source, the checkout you run from decides the release.
 
-```bash
-gcloud container node-pools describe $NODEPOOL --cluster $CLUSTER --zone $ZONE \
-  --format='get(config.labels)' # copy the value
-gcloud container node-pools update $NODEPOOL --cluster $CLUSTER --zone $ZONE \
-  --node-labels=<every existing user label>,ate.dev/substrate-version=$OLD_VERSION
-```
-
-Other providers have their own equivalents: stop whatever adds or
-recreates worker nodes during the roll, and make sure a node created
-later arrives with the old label.
-
-### Cordoned control plane: postgres pool
-
-Skip this section unless the install uses `--cordon-control-plane` with
-the bundled PostgreSQL. Under that flag, postgres runs alone in a
-one-node pool labeled and tainted
-`ate.dev/workloadType=ate-postgres:NoSchedule`, and every other control
-plane workload shares the `ate-control-plane` pool. An install from a
-release before that split has no postgres pool. The StatefulSet deletes
-its running pod before creating the replacement, so without the pool
-step 6 would take postgres down with nothing to schedule it on.
-
-Create the pool before step 6, in the zone of the postgres volume. The
-volume is a zonal disk, and a postgres pod on a node in another zone
-stays Pending with a volume node affinity conflict.
-
-```bash
-# The zone the postgres volume lives in.
-PG_ZONE=$(kubectl get pv \
-  "$(kubectl -n ate-system get pvc data-postgres-0 -o jsonpath='{.spec.volumeName}')" \
-  -o jsonpath='{.spec.nodeAffinity.required.nodeSelectorTerms[*].matchExpressions[*].values[0]}')
-echo "$PG_ZONE"
-
-# A machine type that fits the postgres pod's requests: the size10
-# profile asks for 80 CPUs and 140Gi.
-gcloud container node-pools create ate-postgres --cluster $CLUSTER --zone $ZONE \
-  --node-locations "$PG_ZONE" --num-nodes 1 --machine-type <machine type> \
-  --node-labels ate.dev/workloadType=ate-postgres \
-  --node-taints ate.dev/workloadType=ate-postgres:NoSchedule
-```
-
-On other providers, create the equivalent: one node in the volume's
-zone, carrying the label and the taint.
-
-Step 6 then restarts postgres once onto the new node, which is a short
-outage for ate-api-server. The other control plane Deployments roll in
-steps 2 and 6 as well. Their old pods still carry the required
-anti-affinity of the earlier release, so the new pods land on the
-`ate-control-plane` pool's spare node first and stay packed there. Once
-`kubectl get pods -n ate-system -o wide` shows no pod older than the
-roll, spread them again and shrink the pool, which no longer needs one
-node per pod:
-
-```bash
-kubectl -n ate-system rollout restart deployment \
-  ate-api-server ate-controller atenet-router atenet-egress podcertificate-controller
-gcloud container clusters resize $CLUSTER --zone $ZONE \
-  --node-pool <ate-control-plane pool> --num-nodes <smaller size>
-```
-
-## Three things that break an upgrade
-
-Each warning comes back at the step where the mistake becomes possible.
-
-> [!WARNING]
-> **Do not delete a node's old worker pods before flipping its
-> version label.** Otherwise the old pool reschedules replacements onto
-> the same node, and old workers end up next to the new atelet: exactly
-> the version skew the roll exists to prevent. (Step 5)
-
-> [!WARNING]
-> **Do not edit a serving worker pool, and do not scale it down.** The
-> controller would roll the pool's Deployment straight through live
-> actors. A deleted worker pod does go through the eviction path:
-> `SIGTERM` is forwarded into the actor's containers and the control
-> plane keeps accepting a suspend for 30 minutes, so an actor suspended
-> inside that window saves its state and stays resumable. Handling
-> `SIGTERM` by exiting cleanly is not enough on its own; the suspend has
-> to reach the control plane and finish. An actor still awake when the
-> window closes moves to `ACTOR_STATE_CRASHED`: `resume` and `suspend`
-> are both refused, and everything since its last snapshot is lost. Call
-> `RevertActor` (`kubectl ate revert`) to discard the crashed run and
-> return the actor to `ACTOR_STATE_SUSPENDED` at its last external snapshot
-> so it can be resumed. Scaling a serving pool down removes pods the same
-> way, without suspending the actors on them. (Step 4 clones the pool; it
-> never edits it.)
-
-> [!WARNING]
-> **On GKE, do not touch the node pool's label until every node is
-> rolled.** A pool label update applies in place to every node in the
-> pool, so the whole fleet flips at once, with no drain and no pacing.
-> (After the roll)
+> [!CAUTION]
+> Do not run `ate-setup setup csi` or `ate-setup delete` during the upgrade, or `ate-setup deploy ate-system` before step 4e. They change components out of upgrade order.
 
 ## Upgrade
 
-### 1. Apply the new CRDs
-
-From the new release's checkout, apply its CRDs. Nothing running
-changes; the new schema is in place for the controller that follows.
+### Step 1. Upgrade podcertificate-controller
 
 ```bash
-# in a checkout of the new release
-kubectl apply -f manifests/ate-install/generated
+go run ./cmd/ate-setup deploy podcertificate-controller --config ~/ate-upgrade/new.yaml
 ```
 
-### 2. Upgrade ate-controller
+This deploys the new podcertificate-controller and waits until it publishes its trust bundles. Rerunning is safe.
+
+- **Done:** the command exits 0.
+- **Stuck:** the command fails. [Roll back step 1](#roll-back-step-1).
+
+### Step 2. Upgrade atelet
 
 ```bash
-go run ./cmd/ate-setup deploy ate-controller
+go run ./cmd/ate-setup deploy atelet --config ~/ate-upgrade/new.yaml --rollout-timeout 1h
 ```
 
-This rolls `ate-controller` (and re-applies the CRDs, which is a
-no-op now).
-
-By convention, changes to how the controller renders worker
-pods sit behind WorkerPool fields, so the new controller keeps
-rendering the serving pools as they are. A release that breaks that
-convention says so in its notes. Expect the pools' Deployments to
-roll once here in that case. Every actor is suspended through the
-worker eviction path, loses no state, and resumes on demand. If they
-roll, wait for `READY` to equal `DESIRED` again on every serving pool
-(`kubectl get workerpools -A`) before step 4.
-
-The move of the node state root from `/var/lib/ateom-gvisor` to
-`/var/lib/ate` is such a release. A worker that lands on a node whose
-atelet still uses the old path reaches it only once step 5 moves that node.
-The old directory can be deleted afterwards.
-
-### 3. Prepare the new dataplane
-
-The dataplane roll starts with the new atelet DaemonSet, from the
-same checkout:
+`ate-setup` prints nothing until the roll is done. To watch it, open a second terminal and run:
 
 ```bash
-go run ./cmd/ate-setup deploy atelet
+kubectl -n ate-system rollout status ds/atelet
 ```
 
-It lands next to the old one with zero pods until step 5 flips a
-node.
+- **Progress:** `Waiting for daemon set "atelet" rollout to finish: 2 out of 5 new pods have been updated...`, then `... 4 of 5 updated pods are available...`.
+- **Done:** `daemon set "atelet" successfully rolled out`.
+- **Stuck:** the `N out of M` count does not move for more than about 6 minutes. A new atelet pod that cannot start stops the roll and leaves its node without atelet; if you cannot fix it quickly, [roll back step 2](#roll-back-step-2). A pod stuck in ContainerCreating usually means podcertificate-controller is not running. If `deploy atelet` times out, the roll still goes on; keep watching.
+- **Actors:** running actors keep running. A node's atelet is down for a few seconds while it restarts.
 
-Then read `$NEW_VERSION` off the cluster:
+### Step 3. Move each WorkerPool to the new worker image
+
+> [!IMPORTANT]
+> Do not start step 3 until step 2 is done: new workers need the new atelet.
+
+Change the WorkerPool, not its Deployment: `ate-controller` overwrites edits to the Deployment. If your WorkerPools live in Git or are applied by CI, change `workerImage` there as well, or the next sync puts the old image back and rolls every worker again.
+
+Before you patch any pool, list the pools and save the list for rollback. Each pool needs the new image for its sandbox CLASS:
 
 ```bash
-kubectl get ds -n ate-system -l app=atelet -L ate.dev/substrate-version
+kubectl get workerpools -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,CLASS:.spec.sandboxClasses[0].name,IMAGE:.spec.workerImage' | tee ~/ate-upgrade/before-workerpools.txt
 ```
 
-Exactly two DaemonSets print. The SUBSTRATE-VERSION that is not `$OLD_VERSION` is
-`$NEW_VERSION`, and the new DaemonSet shows 0 `DESIRED` because no node carries
-its label yet. `kubectl get nodes -L ate.dev/substrate-version` still
-shows every node at `$OLD_VERSION`. If only one DaemonSet prints, the
-version did not change (see Checkout and environment) and the command
-rolled the running atelet in place.
-
-Last, build and push the new worker images. The refs print together
-at the end. The one for your pool's `sandboxClasses[].name` goes into the clone
-in step 4:
+If you build from source, build and push both worker images once. This touches nothing in the cluster and ends by printing `ateom-gvisor: <ref>` and `ateom-microvm: <ref>`:
 
 ```bash
-go run ./cmd/ate-setup publish worker-images
+go run ./cmd/ate-setup publish worker-images --config ~/ate-upgrade/new.yaml | tee ~/ate-upgrade/worker-images.txt
 ```
 
-If you are using prebuilt images there is nothing to publish. The new worker image
-is the release's `ateom-<sandboxClasses[].name>` image under the same repo and
-tag as the control plane, pinned by digest:
+Then move the pools, starting with a small pool of each CLASS that you can afford to disrupt. For each pool:
+
+1. Set the pool:
+
+   ```bash
+   NS=my-namespace          # change me
+   WORKERPOOL=my-pool       # change me
+   CLASS=$(kubectl -n $NS get workerpool $WORKERPOOL -o jsonpath='{.spec.sandboxClasses[0].name}')
+   ```
+
+2. Set its new image. From source, take the ref after `ateom-$CLASS: ` in `~/ate-upgrade/worker-images.txt`:
+
+   ```bash
+   NEW_IMAGE=$(sed -n "s/^ateom-$CLASS: //p" ~/ate-upgrade/worker-images.txt)
+   ```
+
+   With prebuilt images, take `ateom-$CLASS` from your image repo at the new tag, pinned by digest:
+
+   ```bash
+   NEW_IMAGE=$(sed -n 's/^  repo: //p' ~/ate-upgrade/new.yaml)/ateom-$CLASS:$NEW_RELEASE
+   NEW_IMAGE=$NEW_IMAGE@$(crane digest $NEW_IMAGE)
+   ```
+
+3. Check that `echo "$NS/$WORKERPOOL $CLASS $NEW_IMAGE"` shows `ateom-` plus the pool's CLASS and a full `@sha256:` digest. A bad image still removes the pool's first old worker.
+4. Patch the worker pool and wait until ate-controller moves its Deployment to the new image:
+
+   ```bash
+   kubectl -n $NS patch workerpool $WORKERPOOL --type merge -p "{\"spec\":{\"workerImage\":\"$NEW_IMAGE\"}}"
+   kubectl -n $NS wait deployment/$WORKERPOOL --for=jsonpath='{.spec.template.spec.containers[0].image}'="$NEW_IMAGE" --timeout=2m
+   ```
+
+5. Once the first pool of a CLASS has one new worker running, patch the other pools of that CLASS without waiting for the roll to finish. A new worker is running when the newest ReplicaSet of the pool shows READY 1 or more:
+
+   ```bash
+   kubectl -n $NS get rs -l ate.dev/worker-pool=$WORKERPOOL
+   ```
+
+   Then repeat on the other CLASS.
+
+What to expect:
+
+- **Progress:** `kubectl -n $NS rollout status deployment/$WORKERPOOL` prints how many new workers are updated and available. Ctrl-C stops only the watch.
+- **Done:** Step 3 is done when every pool is done rolling with `kubectl get deploy -A -l ate.dev/worker-pool`. Go to Step 4 once done.
+- **Pace:** a WorkerPool replaces 10% of its workers per batch, rounded down, at least one. With spare capacity, every batch has its `SIGTERM` within minutes and the old workers drain in parallel. Without it, each batch waits up to 30 minutes for old workers to exit.
+- **Stuck:** rollout status fails with `exceeded its progress deadline` (the roll goes on), or a worker pod stays Terminating for more than 60 minutes, its grace period (a worker normally exits within about 30). Check `kubectl -n $NS get pods -l ate.dev/worker-pool=$WORKERPOOL`. A bad image stops the roll after the first batch: [roll back that pool](#roll-back-step-3).
+- **Actors:** each gets `SIGTERM` and 30 minutes to be suspended. Substrate does not suspend them. An actor that is not suspended by then becomes `CRASHED` and loses its work since its last snapshot. [Eviction](api-guide.md#eviction) in the API guide says what an actor needs to keep its state.
+
+### Step 4. Upgrade the Substrate control plane
+
+#### 4a. ate-api-server
+
+The first new API server pod migrates the database schema, and rolling back does not undo that. Back up the database first: with `pg_dump` for the bundled one, or an on-demand backup for Cloud SQL. With an external database, check that `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING` is set in this shell: without it, `deploy apiserver` points the API server at the bundled database.
 
 ```bash
-NEW_IMAGE=$IMAGE_REPO/ateom-gvisor:$IMAGE_TAG@$(crane digest $IMAGE_REPO/ateom-gvisor:$IMAGE_TAG)
+go run ./cmd/ate-setup deploy apiserver --config ~/ate-upgrade/new.yaml
+kubectl -n ate-system rollout status deploy/ate-api-server
+kubectl ate get actors -A
 ```
 
-### 4. Create the new pool
+- **Done:** rollout status prints `successfully rolled out` and `kubectl ate get actors -A` lists your actors.
+- **Stuck:** rollout status does not finish, or a new pod keeps restarting. [Roll back step 4](#roll-back-step-4).
+- **API clients:** an API call can fail once with a retriable error while an API server pod restarts. Retry it.
 
-**Repeat this step for every serving pool the checklist listed**.
+#### 4b. CRDs and ate-controller
+
+```bash
+go run ./cmd/ate-setup deploy ate-controller --config ~/ate-upgrade/new.yaml
+kubectl get deploy -A -l ate.dev/worker-pool
+```
+
+This applies the new CRDs and ate-controller's RBAC, then deploys the new `ate-controller`. Rerunning is safe. If this release changes the worker pod template, the new ate-controller rolls every pool again, with another round of `SIGTERM`: wait as in step 3.
+
+<!-- TODO: Depends on the version skew policy: whether a compatible release may change the worker pod template. If it may not, the pools never roll in this step, and this check and the second roll in the rollback go away. -->
+
+- **Done:** the command exits 0, `kubectl -n ate-system get pods -l app=ate-controller` shows one pod, Running, with RESTARTS 0, and every pool shows READY `n/n` with UP-TO-DATE and AVAILABLE `n`. Check the pools a minute after the new pod starts: a second roll begins only once it reconciles them.
+- **Stuck:** the new ate-controller pod keeps restarting. [Roll back step 4](#roll-back-step-4).
+
+#### 4c. atenet
+
+```bash
+go run ./cmd/ate-setup deploy atenet --config ~/ate-upgrade/new.yaml
+kubectl -n ate-system rollout status deploy/atenet-router
+kubectl -n ate-system rollout status deploy/atenet-egress
+```
+
+- **Done:** both print `successfully rolled out`.
+- **Stuck:** rollout status does not finish, or a new pod keeps restarting. [Roll back step 4](#roll-back-step-4).
+- **Actors:** a request to an actor, or an outbound connection, still open about 15 seconds after its `atenet` pod starts draining can be cut once.
+
+#### 4d. SandboxConfig
+
+```bash
+go run ./cmd/ate-setup deploy sandboxconfig --config ~/ate-upgrade/new.yaml
+```
+
+This applies the SandboxConfig admission policy and the default SandboxConfig. It does not roll workers.
+
+<!-- TODO: Today this step overwrites `gvisor-default` in place. Once each release ships its own SandboxConfig, it adds the new one, and WorkerPools without a `configRef` switch to it, so some suspended actors may cold boot. Link the sandbox upgrade guide. -->
+
+- **Done:** the command exits 0.
+- **Stuck:** the command fails. [Roll back step 4](#roll-back-step-4).
+
+#### 4e. The rest of the system bundle
+
+```bash
+go run ./cmd/ate-setup deploy ate-system --config ~/ate-upgrade/new.yaml --setup-csi=none
+```
+
+This applies what the steps above do not, such as the ate-system NetworkPolicies and the bundled PostgreSQL. The components above are already on the new release and do not roll again. `--setup-csi=none` leaves the CSI drivers as they are. Rerunning is safe.
+
+- **Done:** the command exits 0.
+- **Stuck:** the command fails. [Roll back step 4](#roll-back-step-4).
+- **API clients:** if the release changes the bundled PostgreSQL, it restarts once, and API calls fail until it is back.
+
+Then install the new `kubectl ate` with `go install ./cmd/kubectl-ate`. Actor owners can now use API fields and commands new in this release, and you can set WorkerPool, SandboxConfig and CSIDriverConfig fields new in this release.
+
+The upgrade is done when step 4 is done and [Where am I?](#where-am-i) shows every component and pool moved, every pool done rolling and none paused. Keep `~/ate-upgrade` while you might still roll back, then delete it.
+
+## Something's wrong, or I need to roll back
+
+Stopping between steps is safe, and so is stopping partway through step 3. A pool you have patched keeps rolling unless you pause it.
+
+### Pause a pool's roll
+
+If a pool's new workers look wrong but you are not ready to roll it back, or you want to stop interrupting actors for a while, pause its Deployment. ate-controller leaves this one Deployment change in place.
+
+```bash
+kubectl -n $NS rollout pause deployment/$WORKERPOOL
+kubectl -n $NS rollout resume deployment/$WORKERPOOL
+```
+
+Workers already removed still get their 30 minutes. Do not leave a pool paused, and do not start step 4 while one is: a paused pool ignores every later change to its workers.
+
+### Roll back
+
+To go back to the old release, roll back every step you began, finished or not, starting with the last. To fix one pool, roll back only that pool. Rollback runs from the old checkout, with `old.yaml`:
+
+```bash
+cd ~/ate-upgrade/old
+```
+
+#### Roll back step 4
+
+Tell actor owners to stop using API fields new in this release, because the old API server rejects them. Then:
+
+```bash
+go run ./cmd/ate-setup deploy sandboxconfig --config ~/ate-upgrade/old.yaml
+go run ./cmd/ate-setup deploy atenet --config ~/ate-upgrade/old.yaml
+go run ./cmd/ate-setup deploy ate-controller --config ~/ate-upgrade/old.yaml
+go run ./cmd/ate-setup deploy apiserver --config ~/ate-upgrade/old.yaml
+go install ./cmd/kubectl-ate
+```
+
+`deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. If the release changed the worker pod template, every pool rolls again: wait as in step 3. Fields the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
+
+The database schema stays new; the old API server drops fields it does not know when it rewrites a record. Step 4e is not undone either: the NetworkPolicies and the bundled PostgreSQL stay as the new release left them.
+
+#### Roll back step 3
+
+Set each patched pool back to its image in `~/ate-upgrade/before-workerpools.txt`:
+
+```bash
+NS=my-namespace          # change me
+WORKERPOOL=my-pool       # change me
+OLD_IMAGE=$(awk -v ns=$NS -v name=$WORKERPOOL '$1 == ns && $2 == name {print $4}' ~/ate-upgrade/before-workerpools.txt)
+kubectl -n $NS patch workerpool $WORKERPOOL --type merge -p "{\"spec\":{\"workerImage\":\"$OLD_IMAGE\"}}"
+```
+
+If you paused a WorkerPool, resume it now with `kubectl -n $NS rollout resume deployment/$WORKERPOOL`. Then watch:
+
+```bash
+kubectl -n $NS rollout status deployment/$WORKERPOOL
+```
+
+Only workers already on the new image are replaced, and their actors get `SIGTERM` again. Wait as in [step 3](#step-3-move-each-workerpool-to-the-new-worker-image).
+
+#### Roll back step 2
 
 > [!WARNING]
-> Clone the old pool. Do not edit it. An edit rolls its Deployment
-> straight through the live actors on it (second warning above).
-
-Copy the old pool under a new name (`$NEW_WORKERPOOL`, for example
-the old name plus `$NEW_VERSION`) and change only `workerImage` and
-the version pin. The command below does exactly that; everything
-else, including the `metadata.labels` the scheduler matches actors
-by, carries over as is.
+> Do not roll back step 2 before every pool is back on its old image and `kubectl get pods -A -l ate.dev/worker-pool` shows no Terminating pod. A new worker with an old atelet is not supported.
 
 ```bash
-NEW_IMAGE=<the ateom ref from step 3, for this pool's sandboxClasses[].name>
-# Only read when the old pool predates spec.sandboxClasses.
-SANDBOX_CLASS=<gvisor or microvm: the old pool's former spec.sandboxClass>
-
-kubectl -n $NS get workerpool $OLD_WORKERPOOL -o json \
-  | jq --arg name "$NEW_WORKERPOOL" --arg image "$NEW_IMAGE" --arg version "$NEW_VERSION" \
-       --arg class "$SANDBOX_CLASS" '
-      {apiVersion, kind,
-       metadata: {name: $name, namespace: .metadata.namespace,
-                  labels: .metadata.labels},
-       spec: (.spec + {workerImage: $image})}
-      | .spec.template.nodeSelector["ate.dev/substrate-version"] = $version
-      | .spec.sandboxClasses //= [{name: $class}]
-    ' \
-  | kubectl apply -f -
+go run ./cmd/ate-setup deploy atelet --config ~/ate-upgrade/old.yaml --rollout-timeout 1h
 ```
 
-Do not shrink `spec.template.resources.limits` while cloning. A
-worker only accepts an actor whose limits fit under them.
-
-Verify:
+#### Roll back step 1
 
 ```bash
-# $NEW_VERSION, then an image ref that contains @sha256:
-kubectl -n $NS get workerpool $NEW_WORKERPOOL \
-  -o jsonpath='{.spec.template.nodeSelector.ate\.dev/substrate-version}{"\n"}{.spec.workerImage}{"\n"}'
-
-# One Deployment per pool; new-pool pods all Pending (no node carries
-# the new label yet).
-kubectl -n $NS get deploy -l ate.dev/worker-pool
-kubectl -n $NS get pods -l ate.dev/worker-pool=$NEW_WORKERPOOL
+go run ./cmd/ate-setup deploy podcertificate-controller --config ~/ate-upgrade/old.yaml
 ```
-
-While both pools serve, placement between them is random, and that
-is fine: a snapshot written on either version restores on either
-version. The roll converges because step 5 takes old workers out of
-service node by node, not because the scheduler prefers the new pool.
-
-### 5. Roll each node
-
-Repeat for every node, one at a time. On a single-node cluster this
-step is a full stop: every actor is suspended at once.
-
-**a. Drain the node's workers.** Bound actors keep running. Draining
-only stops new placements.
-
-```bash
-# A worker's name is its pod's UID; that is what DrainWorker takes.
-for w in $(kubectl ate get workers -o json \
-             | jq -r --arg node "$NODE" '.workers[] | select(.nodeName == $node) | .metadata.name'); do
-  grpcurl -cacert /tmp/ate-ca.pem -authority api.ate-system.svc \
-    -H "authorization: Bearer ${TOKEN}" \
-    -d "{\"worker\": {\"name\": \"${w}\"}}" \
-    127.0.0.1:8443 ateapi.Control/DrainWorker
-done
-```
-
-**b. See what is still on the node.** Two lists: the node's workers
-with the actor each one hosts, and any paused actor whose local
-snapshot lives on this node. A paused actor sits on no worker, so it
-shows up only in the second list.
-
-```bash
-kubectl ate get workers -o json | jq -r --arg node "$NODE" '
-  ["WORKER", "POD", "ASSIGNED ACTOR"],
-  (.workers[] | select(.nodeName == $node)
-   | [.metadata.name, .workerPod,
-      (.status.assignment.actor | if . then .atespace + "/" + .name else "<none>" end)])
-  | @tsv' | column -t -s $'\t'
-
-kubectl ate get actors -A -o json | jq -r --arg node "$NODE" '
-  ["PAUSED_ACTOR", "STATE"],
-  (.actors[]
-   | select(.status.assignedNode == $node and (.status.workerAssignment == null))
-   | [.metadata.atespace + "/" + .metadata.name, .status.state])
-  | @tsv' | column -t -s $'\t'
-```
-
-**c. Suspend them at your own pace.** Every actor in either list has to be suspended
-before the node moves (`kubectl ate suspend actor <name> -a
-<atespace>`). Suspend releases the worker and uploads the durable
-snapshot, so the actor resumes on demand onto any free matching worker
-afterwards. Repeat step b until the `ASSIGNED ACTOR` column reads
-`<none>` throughout and the paused list is empty. Then rerun the drain
-in step a once more right before flipping.
-
-> [!WARNING]
-> Do not run e before d. Deleting the old-pool pods while the node
-> still carries `$OLD_VERSION` lets the old pool put replacements right
-> back on this node, next to the new atelet (first warning above).
-
-**d. Flip the label.** The old atelet pod leaves on its own and the
-new one starts.
-
-```bash
-kubectl label node $NODE ate.dev/substrate-version=$NEW_VERSION --overwrite
-```
-
-Wait for the new `atelet` pod on the node to be Ready before going on. Usually that is seconds; the new `atelet` pod stays Pending only while the old one is still exiting, since it holds the node's host ports until then.
-
-```bash
-# The pod is named after atelet-<new suffix>.
-kubectl get pods -n ate-system -l app=atelet --field-selector spec.nodeName=$NODE
-```
-
-**e. Delete the node's old-pool worker pods.** Step c emptied them,
-but they are still Ready and hold capacity the new pool needs on this
-node. Their Deployment cannot reschedule them here anymore. Repeat
-per pool if the node hosts several.
-
-```bash
-kubectl -n $NS delete pod -l ate.dev/worker-pool=$OLD_WORKERPOOL \
-  --field-selector spec.nodeName=$NODE
-```
-
-**f. Confirm the node has moved.** Two checks:
-
-```bash
-# New-pool workers came up here.
-kubectl -n $NS get pods -l ate.dev/worker-pool=$NEW_WORKERPOOL --field-selector spec.nodeName=$NODE
-
-# No old-pool pod is left here.
-kubectl -n $NS get pods -l ate.dev/worker-pool=$OLD_WORKERPOOL --field-selector spec.nodeName=$NODE
-```
-
-New-pool pods Pending on other nodes are expected until those nodes
-move.
-
-**g. Take the next node.** Start again at step a once `kubectl ate get
-workers` shows at least one FREE worker for the suspended actors to
-land on.
-
-You are done when `kubectl get nodes -L ate.dev/substrate-version`
-shows every node at `$NEW_VERSION` (a node that joined mid-roll still
-carries `$OLD_VERSION`; apply step 5 to roll it) and every assigned
-actor in `kubectl ate get actors -A` sits on a new-pool pod.
-
-### 6. Upgrade the rest of the control plane
-
-Every actor is now on the new dataplane, running or suspended, and
-ate-controller moved in step 2. From the same checkout, move
-`ate-api-server` first, then everything else:
-
-```bash
-go run ./cmd/ate-setup deploy apiserver
-go run ./cmd/ate-setup deploy ate-system --credential-provider='<as installed>'
-```
-
-`deploy ate-system` requires the credential provider selection; pass the one
-the install was made with, or carry it in `ATE_CREDENTIAL_PROVIDER`. An install
-made with `--experimental-egress-credential-injection` and the bundled provider
-is `{"name":"k8s.io"}`; one without injection is `{"enabled":false}`. The
-selection replaces `--credential-provider-name` and
-`--credential-provider-address`: a provider you deploy yourself is
-`{"name":"<provider>","address":"<host>:<port>"}`, with the name bare
-(`vault.example.com`, not `ate-secret://vault.example.com`).
-
-The second command rolls atenet and converges the rest of the
-install, postgres included: on a cordoned install it moves postgres to
-its own pool (see [Cordoned control plane: postgres
-pool](#cordoned-control-plane-postgres-pool)); it re-resolves and re-applies everything, so it could take a
-while. The checklist's port-forward dies when the API server rolls.
-Restart it and mint a fresh token if you still need to drain.
-
-**NOTE**: Until
-this step is done the old ate-api-server is still serving, so do not
-start using API fields new in this release before upgrade finishes.
-
-### After the roll, on GKE
-
-> [!WARNING]
-> Only after every node shows `$NEW_VERSION` in [Check your
-> progress](#check-your-progress). Relabeling the node pool applies to
-> every node in it at once, with no drain and no pacing.
-
-Relabel the node pool with `$NEW_VERSION` so nodes created later start
-at the new version, then restore the autoscaler from the config you
-saved [before the roll](#on-gke):
-
-```bash
-# --node-labels REPLACES the pool's full user label set: list the
-# current labels first and carry them all over.
-gcloud container node-pools describe $NODEPOOL --cluster $CLUSTER --zone $ZONE \
-  --format='get(config.labels)' # copy the output
-
-gcloud container node-pools update $NODEPOOL --cluster $CLUSTER --zone $ZONE \
-  --node-labels=<every existing user label>,ate.dev/substrate-version=$NEW_VERSION
-
-# restore the autoscaler config
-gcloud container clusters update $CLUSTER --zone $ZONE --node-pool $NODEPOOL \
-  --enable-autoscaling --min-nodes <min> --max-nodes <max>
-```
-
-## Something's wrong, or I need to undo
-
-First run [Check your progress](#check-your-progress). It tells you
-which step you reached, and everything below is keyed on that.
-
-If a command failed, rerun it: every step is idempotent. The one
-exception is drain. There is no undrain; if you drained the wrong
-node, check that its workers are empty (suspending as needed), delete
-their pods, and let the Deployment's replacements register as fresh
-workers.
-
-To roll back, undo what you did in reverse order: the control plane
-first, then the nodes, then ate-controller last. The roll never edits
-or deletes the old objects, so the old `WorkerPool` is intact, the pods
-that lost their nodes stay Pending, and the old atelet DaemonSet is
-still installed. Rolling nodes back is a matter of label flips. Run the
-commands from the old release's checkout with the same environment as
-the install, `VERSION` included if the install pinned it.
-
-- Relabeled the GKE node pool: park the autoscaler again as
-  [before the roll](#on-gke), then move the node pool label back to
-  `$OLD_VERSION` with the [after the roll](#after-the-roll-on-gke)
-  command.
-- Past step 6: `go run ./cmd/ate-setup deploy apiserver` now, and
-  `go run ./cmd/ate-setup deploy ate-system` once the nodes are back.
-- Past step 5: roll each flipped node back by running step 5 with the
-  sides swapped: drain, get every actor off the node as in b and c,
-  flip the label back to `$OLD_VERSION`, and delete the node's
-  new-pool pods.
-- Past step 4: once no actor is assigned to a new-pool worker, delete
-  each clone: `kubectl -n $NS delete workerpool $NEW_WORKERPOOL`.
-- Past step 3: once no node carries `$NEW_VERSION`, delete the new
-  DaemonSet: `kubectl delete daemonset -n ate-system -l app=atelet,ate.dev/substrate-version=$NEW_VERSION`.
-- Past step 2: `go run ./cmd/ate-setup deploy ate-controller`.
-
-`kubectl get ds -n ate-system -l app=atelet` must not show a third
-DaemonSet afterwards. A third means the old checkout produced a
-version other than `$OLD_VERSION`: delete it and check `VERSION`.
-
-Abandoning the upgrade entirely is the whole list, top to bottom.
-Retiring the old pool (below) is a separate, deliberate step. As long
-as the old objects exist, rollback is one label flip per node.
-
-## Retire the old pool
-
-After the new version has soaked, reclaim the reserve. Save the old
-pool's spec first: its `workerImage` ref is by digest and stays
-pullable, so the saved file is the last-resort way to recreate the
-pool. Then check the guards. Deleting the old objects is what ends
-the rollback option.
-
-```bash
-kubectl -n $NS get workerpool $OLD_WORKERPOOL -o yaml > old-pool-backup.yaml
-
-# Guards: no node still at $OLD_VERSION; no old-pool pod Running (Pending is
-# expected); no actor assigned to an old-pool worker.
-kubectl get nodes -l ate.dev/substrate-version=$OLD_VERSION
-kubectl -n $NS get pods -l ate.dev/worker-pool=$OLD_WORKERPOOL
-kubectl ate get workers
-
-# Retire the old pool (its Deployment and pods go with it) and the
-# old atelet DaemonSet.
-kubectl -n $NS delete workerpool $OLD_WORKERPOOL
-kubectl delete daemonset -n ate-system -l app=atelet,ate.dev/substrate-version=$OLD_VERSION
-```
-
-The new pool keeps its name. Names mean nothing to placement, so
-`counter-v2` can serve indefinitely, and the next upgrade clones it
-to `counter-v3`.

@@ -70,9 +70,12 @@ func Matches(worker, snap *ateapipb.SandboxRuntime) bool {
 }
 
 // MatchesCompat reports whether worker can restore a snapshot stamped with
-// snap: same non-empty schema version, and every attribute on snap present on
-// worker with an equal value. Keys only the worker has are ignored; a new
-// schema version is how older snapshots are excluded.
+// snap: the same non-empty schema version, and every attribute on snap
+// present on worker with an equal value. Keys only the worker has are
+// ignored, so a worker can start reporting a new key under the same schema
+// version without invalidating the snapshots taken before it; removing or
+// recomputing a key is a new schema version, under which older snapshots no
+// longer match.
 func MatchesCompat(worker, snap *ateapipb.VersionedSandboxCompat) bool {
 	if worker == nil || snap == nil {
 		return false
@@ -100,4 +103,44 @@ func MatchesCompat(worker, snap *ateapipb.VersionedSandboxCompat) bool {
 		}
 	}
 	return true
+}
+
+// MatchingRuntime returns the SandboxRuntime from status that can restore a
+// snapshot stamped with snap (checking DefaultRuntime first, then
+// RestorableRuntimes in order), or nil if none matches. When snap is nil,
+// DefaultRuntime is returned.
+func MatchingRuntime(status *ateapipb.WorkerStatus, snap *ateapipb.SandboxRuntime) *ateapipb.SandboxRuntime {
+	if snap == nil {
+		return status.GetDefaultRuntime()
+	}
+	if def := status.GetDefaultRuntime(); Matches(def, snap) {
+		return def
+	}
+	for _, rt := range status.GetRestorableRuntimes() {
+		if Matches(rt, snap) {
+			return rt
+		}
+	}
+	return nil
+}
+
+// WorkerMatches reports whether a worker with status can restore a snapshot
+// stamped with snap. A nil snapshot SandboxRuntime imposes no constraint.
+func WorkerMatches(status *ateapipb.WorkerStatus, snap *ateapipb.SandboxRuntime) bool {
+	if snap == nil {
+		return true
+	}
+	return MatchingRuntime(status, snap) != nil
+}
+
+// RuntimeFor returns the runtime a worker with status runs an actor under
+// whose snapshot is stamped with snap: the matching runtime when it can
+// restore the snapshot, else the DefaultRuntime the guest boots fresh under.
+// This is what an assignment records and what the actor's next checkpoint
+// is stamped with.
+func RuntimeFor(status *ateapipb.WorkerStatus, snap *ateapipb.SandboxRuntime) *ateapipb.SandboxRuntime {
+	if rt := MatchingRuntime(status, snap); rt != nil {
+		return rt
+	}
+	return status.GetDefaultRuntime()
 }

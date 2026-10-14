@@ -365,3 +365,108 @@ func TestMintActorCertificateRequiresCertificate(t *testing.T) {
 		t.Errorf("unauthenticated request still forwarded %v", workers.mintGot)
 	}
 }
+
+type fakeEgressPolicyControl struct {
+	ateapipb.ControlClient
+
+	got  []*ateapipb.GetActorEgressPolicyRequest
+	resp *ateapipb.EgressPolicy
+	err  error
+}
+
+func (c *fakeEgressPolicyControl) GetActorEgressPolicy(_ context.Context, in *ateapipb.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+	c.got = append(c.got, in)
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.resp, nil
+}
+
+func TestGetActorEgressPolicy(t *testing.T) {
+	policy := &ateapipb.EgressPolicy{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"},
+		Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{
+			Hostnames: []string{"api.example.com"},
+			Ports:     &ateapipb.Ports{Numbers: []int32{80}},
+		}}},
+	}
+	// The copy toAteletEgressPolicy makes; TestToAteletEgressPolicy covers it.
+	copied := &ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{Http: &ateletpb.EgressDestinations{
+		Hostnames: []string{"api.example.com"},
+		Ports:     &ateletpb.EgressPorts{Numbers: []int32{80}},
+	}}}}
+	req := &ateletpb.GetActorEgressPolicyRequest{ActorAtespace: "team-a", ActorName: "actor-1"}
+	forwarded := []*ateapipb.GetActorEgressPolicyRequest{{
+		Actor: &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		Name:  resources.SingletonName,
+	}}
+
+	tests := []struct {
+		name string
+		// unauthenticated drops the peer certificate from the context.
+		unauthenticated bool
+		req             *ateletpb.GetActorEgressPolicyRequest
+		// resp and serviceErr are what the control plane answers with.
+		resp          *ateapipb.EgressPolicy
+		serviceErr    error
+		wantCode      codes.Code
+		wantForwarded []*ateapipb.GetActorEgressPolicyRequest
+		// wantPolicy is the policy the worker gets back; nil means unset.
+		wantPolicy *ateletpb.EgressPolicy
+	}{{
+		name:          "returns the policy",
+		req:           req,
+		resp:          policy,
+		wantForwarded: forwarded,
+		wantPolicy:    copied,
+	}, {
+		name:          "leaves no policy unset",
+		req:           req,
+		serviceErr:    status.Error(codes.NotFound, "EgressPolicy for actor team-a/actor-1 not found"),
+		wantForwarded: forwarded,
+	}, {
+		name:            "requires a certificate",
+		unauthenticated: true,
+		req:             req,
+		wantCode:        codes.Unauthenticated,
+	}, {
+		name:     "rejects an invalid request without forwarding",
+		req:      &ateletpb.GetActorEgressPolicyRequest{ActorAtespace: "team-a"},
+		wantCode: codes.InvalidArgument,
+	}, {
+		// A failure is not "no policy": the worker must be able to tell them
+		// apart, and refuses DNS until a fetch succeeds.
+		name:          "surfaces the control plane's failure",
+		req:           req,
+		serviceErr:    status.Error(codes.Unavailable, "ateapi unavailable"),
+		wantCode:      codes.Unavailable,
+		wantForwarded: forwarded,
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			control := &fakeEgressPolicyControl{resp: tt.resp, err: tt.serviceErr}
+			svc := &ateomSupportServer{control: control}
+			ctx := workerContext(t, "pod-a")
+			if tt.unauthenticated {
+				ctx = context.Background()
+			}
+
+			resp, err := svc.GetActorEgressPolicy(ctx, tt.req)
+			if got := status.Code(err); got != tt.wantCode {
+				t.Fatalf("GetActorEgressPolicy() code = %v (%v), want %v", got, err, tt.wantCode)
+			}
+			if diff := cmp.Diff(tt.wantForwarded, control.got, protocmp.Transform()); diff != "" {
+				t.Errorf("forwarded requests mismatch (-want +got):\n%s", diff)
+			}
+			if err != nil {
+				return
+			}
+			if (resp.GetEgressPolicy() == nil) != (tt.wantPolicy == nil) {
+				t.Fatalf("EgressPolicy = %v, want %v", resp.GetEgressPolicy(), tt.wantPolicy)
+			}
+			if diff := cmp.Diff(tt.wantPolicy, resp.GetEgressPolicy(), protocmp.Transform()); diff != "" {
+				t.Errorf("returned policy mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
