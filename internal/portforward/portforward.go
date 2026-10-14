@@ -59,7 +59,7 @@ func ServicePodPortForward(ctx context.Context, config *rest.Config, clientset k
 	if err != nil {
 		return 0, nil, err
 	}
-	return podPortForward(ctx, config, clientset, namespace, pod.Name, containerPort)
+	return PodPortForward(ctx, config, clientset, namespace, pod.Name, containerPort)
 }
 
 func firstReadyPodForService(ctx context.Context, clientset kubernetes.Interface, namespace, service string) (*corev1.Pod, *corev1.Service, error) {
