@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -51,6 +52,8 @@ import (
 // cloud-hypervisor process directly (booted by RunWorkload or relaunched by
 // RestoreWorkload), so it tracks that process and its api-socket for teardown.
 type runningActor struct {
+	runtimeGolden bool
+
 	// baseID is the FROZEN base sandbox id propagated across this actor's restore
 	// lineage. For a cold-run actor this is the actor's own id; for a restored
 	// actor it is the id read from the snapshot's base-id file (the golden id,
@@ -232,6 +235,9 @@ func (s *AteomService) resolveRuntime(paths map[string]string) resolvedRuntime {
 //   - Each container's bundle holds the overlay spec its rootfs/ is composed
 //     from. ateom builds the OCI spec itself.
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
+	if req.GetSpec().GetRuntimeGolden() && req.GetAtespace() != resources.GoldenActorAtespace {
+		return nil, apierror.InvalidArgument("runtime golden capture requires a golden actor")
+	}
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
@@ -256,6 +262,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	p := actorBootParams{
+		runtimeGolden:    req.GetSpec().GetRuntimeGolden(),
 		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
 		actorUID:         req.GetActorUid(),
 		actorDirs:        req.GetActorDirs(),
@@ -298,6 +305,8 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 // request, or from a Restore request whose snapshot fidelity covers only the
 // durable-dir volumes (the workload itself cold-starts).
 type actorBootParams struct {
+	runtimeGolden bool
+
 	actorRef         resources.ActorRef
 	actorUID         string
 	actorDirs        *ateompb.ActorDirs
@@ -536,6 +545,9 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	consoleLog := kata.ConsoleLogPath(actorUID)
 	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, vcpus,
 		agentInit(ctx, client.Info()), s.guestDebug)
+	// A cold boot gets a new marker; memory restores retain the kernel's
+	// original command line. Unlike Linux boot_id this is not lazily created.
+	vmCfg.Payload.Cmdline += " ate.boot_id=" + rand.Text()
 	if err := client.CreateVM(ctx, vmCfg); err != nil {
 		return fmt.Errorf("while creating VM: %w", err)
 	}
@@ -591,15 +603,18 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		}
 	}()
 
-	// Post-boot kata-agent setup: sandbox, guest networking, start each container.
-	if err := s.startActorContainers(ctx, ac, actorUID, vsockPath, ctrs); err != nil {
-		return err
+	// Runtime goldens stop before CreateSandbox mounts virtio-fs. No guest
+	// inode, application cache or open handle can reference a placeholder.
+	if !p.runtimeGolden {
+		if err := s.startActorContainers(ctx, ac, actorUID, vsockPath, ctrs); err != nil {
+			return err
+		}
 	}
 	tContainers := time.Now()
-
-	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
-		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
+	if !p.runtimeGolden {
+		if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
+			return fmt.Errorf("while waiting for container wakeup probe: %w", err)
+		}
 	}
 
 	// Everything from BootVM onward, split. ateom used to log only the total, which
@@ -611,9 +626,14 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
+	ra := &runningActor{runtimeGolden: p.runtimeGolden, chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
 	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
 		return err
+	}
+	if p.runtimeGolden {
+		ra.workloadIDs = nil
+		s.setRunningVM(actorUID, ra)
+		return nil
 	}
 	s.setRunningVM(actorUID, ra)
 

@@ -179,6 +179,9 @@ message EgressGateway {
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 message WorkloadSpec {
   repeated Container containers = 1;
+  // Boot the runtime without creating a guest sandbox or application processes.
+  // Valid only for a microVM golden actor.
+  bool runtime_golden = 2;
 }
 
 message Container {

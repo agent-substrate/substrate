@@ -35,6 +35,18 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate()},
 		nil,
 	}, {
+		"runtime golden requires microvm",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(x *ateapipb.ActorTemplate) {
+			x.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "golden_snapshot_config", "mode"), "RUNTIME", "")},
+	}, {
+		"runtime golden microvm",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(x *ateapipb.ActorTemplate) {
+			x.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME}
+			x.SandboxConfig.SandboxClass = ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM
+		})}, nil,
+	}, {
 		"missing actor_template",
 		&ateapipb.CreateActorTemplateRequest{},
 		field.ErrorList{field.Required(field.NewPath("actor_template"), "")},
@@ -312,7 +324,7 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "golden snapshot mode unknown",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode(3)}
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode(4)}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "golden_snapshot_config", "mode"), nil, "").WithOrigin("maximum")},
 	}, {

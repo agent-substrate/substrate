@@ -1568,7 +1568,7 @@ func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*ateom
 		volumes[name] = vol
 	}
 
-	out := &ateompb.WorkloadSpec{}
+	out := &ateompb.WorkloadSpec{RuntimeGolden: spec.GetRuntimeGolden()}
 	for i, ctr := range spec.GetContainers() {
 		var ddMounts []*ateompb.DurableDirVolumeMount
 		var csiMounts []*ateompb.VolumeMount

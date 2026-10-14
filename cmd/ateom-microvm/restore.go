@@ -233,6 +233,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 // comes back from the memory snapshot; the durable-dir volumes were restored by the
 // caller from their tar.
 func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootParams, scope ateompb.SnapshotFidelity, restoreDir string, preserveRestoreDir bool, tStart time.Time) (retErr error) {
+	runtimeGolden, err := readRuntimeGolden(restoreDir)
+	if err != nil {
+		return err
+	}
 	actorUID := p.actorUID
 
 	rr := s.resolveRuntime(p.assetPaths)
@@ -438,6 +442,14 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 	// race. At that point this agent-driven reseed can be dropped.
 	if err := reseedGuestCRNG(ctx, guestAC); err != nil {
 		return fmt.Errorf("while reseeding guest CRNG: %w", err)
+	}
+
+	if runtimeGolden {
+		// The restored kernel has never mounted the share. The host has now
+		// staged this actor's real volumes; create its sandbox and processes.
+		if err := s.startActorContainers(ctx, guestAC, actorUID, kata.VsockSocketPath(actorUID), ctrs); err != nil {
+			return err
+		}
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.

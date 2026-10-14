@@ -171,6 +171,15 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while creating checkpoint dir %q: %w", checkpointDir, err)
 	}
 
+	if ra != nil && ra.runtimeGolden {
+		if scope != ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+			return nil, apierror.FailedPrecondition("runtime golden requires MEMORY fidelity")
+		}
+		if err := os.WriteFile(filepath.Join(checkpointDir, runtimeGoldenFile), []byte(runtimeGoldenFormat), 0o600); err != nil {
+			return nil, err
+		}
+	}
+
 	// Capture the snapshot's pieces CONCURRENTLY: the CH snapshot, the
 	// durable-dir tars, and the rootfs upper tars read independent data from a
 	// quiesced guest and write distinct files into checkpointDir, so the paused

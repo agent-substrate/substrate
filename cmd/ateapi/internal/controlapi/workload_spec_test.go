@@ -732,3 +732,22 @@ func TestWorkloadSpecBorrowedVolume(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntimeGoldenWorkloadBoundary(t *testing.T) {
+	for _, golden := range []bool{false, true} {
+		for _, mode := range []ateapipb.GoldenSnapshotMode{ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME} {
+			a := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "users"}}
+			if golden {
+				a.Metadata.Atespace = resources.GoldenActorAtespace
+			}
+			tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: mode}}}
+			spec, err := workloadSpecFromActorTemplate(tmpl, a, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if spec.GetRuntimeGolden() != (golden && mode == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME) {
+				t.Fatalf("incorrect boundary: golden=%v mode=%v spec=%v", golden, mode, spec)
+			}
+		}
+	}
+}

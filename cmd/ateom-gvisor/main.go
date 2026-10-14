@@ -563,6 +563,9 @@ func validateFidelity(fidelity ateompb.SnapshotFidelity) error {
 }
 
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
+	if req.GetSpec().GetRuntimeGolden() {
+		return nil, fmt.Errorf("runtime golden snapshots require the microVM runtime")
+	}
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}

@@ -539,6 +539,10 @@ const (
 	GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_UNSPECIFIED GoldenSnapshotMode = 0
 	GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED     GoldenSnapshotMode = 1
 	GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED    GoldenSnapshotMode = 2
+	// Capture the microVM before creating the guest sandbox or application
+	// processes. Restore attaches real volumes before starting applications.
+	// Does not preserve application warmup. Requires MICROVM.
+	GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME GoldenSnapshotMode = 3
 )
 
 // Enum value maps for GoldenSnapshotMode.
@@ -547,11 +551,13 @@ var (
 		0: "GOLDEN_SNAPSHOT_MODE_UNSPECIFIED",
 		1: "GOLDEN_SNAPSHOT_MODE_ENABLED",
 		2: "GOLDEN_SNAPSHOT_MODE_DISABLED",
+		3: "GOLDEN_SNAPSHOT_MODE_RUNTIME",
 	}
 	GoldenSnapshotMode_value = map[string]int32{
 		"GOLDEN_SNAPSHOT_MODE_UNSPECIFIED": 0,
 		"GOLDEN_SNAPSHOT_MODE_ENABLED":     1,
 		"GOLDEN_SNAPSHOT_MODE_DISABLED":    2,
+		"GOLDEN_SNAPSHOT_MODE_RUNTIME":     3,
 	}
 )
 
@@ -3600,7 +3606,7 @@ type GoldenSnapshotConfig struct {
 	//
 	// +k8s:required
 	// +k8s:minimum=1
-	// +k8s:maximum=2 # keep this in sync with the GoldenSnapshotMode enum
+	// +k8s:maximum=3 # keep this in sync with the GoldenSnapshotMode enum
 	Mode          GoldenSnapshotMode `protobuf:"varint,1,opt,name=mode,proto3,enum=ateapi.GoldenSnapshotMode" json:"mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4433,9 +4439,8 @@ func (x *ExternalVolumeTemplate) GetStorageClassName() string {
 // SharedVolumeRef mounts a SharedVolume in the actor's atespace. The
 // volume outlives the actor, so several actors can mount it in turn.
 //
-// Actors created from a template with a SharedVolumeRef do not start from
-// the template's golden snapshot: the first resume boots from the image, and
-// later resumes restore the actor's own snapshot.
+// SharedVolume actors cold-boot initially unless their microVM template opts
+// into GOLDEN_SNAPSHOT_MODE_RUNTIME. Later resumes use their own snapshots.
 type SharedVolumeRef struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name of the SharedVolume. Left empty, the actor names it at creation in
@@ -10106,11 +10111,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\fSandboxClass\x12\x1d\n" +
 	"\x19SANDBOX_CLASS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SANDBOX_CLASS_GVISOR\x10\x01\x12\x19\n" +
-	"\x15SANDBOX_CLASS_MICROVM\x10\x02*\x7f\n" +
+	"\x15SANDBOX_CLASS_MICROVM\x10\x02*\xa1\x01\n" +
 	"\x12GoldenSnapshotMode\x12$\n" +
 	" GOLDEN_SNAPSHOT_MODE_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cGOLDEN_SNAPSHOT_MODE_ENABLED\x10\x01\x12!\n" +
-	"\x1dGOLDEN_SNAPSHOT_MODE_DISABLED\x10\x02*\x9a\x01\n" +
+	"\x1dGOLDEN_SNAPSHOT_MODE_DISABLED\x10\x02\x12 \n" +
+	"\x1cGOLDEN_SNAPSHOT_MODE_RUNTIME\x10\x03*\x9a\x01\n" +
 	"\x12ActorMetadataField\x12$\n" +
 	" ACTOR_METADATA_FIELD_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19ACTOR_METADATA_FIELD_NAME\x10\x01\x12!\n" +

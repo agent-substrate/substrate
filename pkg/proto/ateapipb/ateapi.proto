@@ -1330,6 +1330,10 @@ enum GoldenSnapshotMode {
   GOLDEN_SNAPSHOT_MODE_UNSPECIFIED = 0;
   GOLDEN_SNAPSHOT_MODE_ENABLED = 1;
   GOLDEN_SNAPSHOT_MODE_DISABLED = 2;
+  // Capture the microVM before creating the guest sandbox or application
+  // processes. Restore attaches real volumes before starting applications.
+  // Does not preserve application warmup. Requires MICROVM.
+  GOLDEN_SNAPSHOT_MODE_RUNTIME = 3;
 }
 
 // GoldenSnapshotConfig controls automated golden snapshot creation for a template.
@@ -1339,7 +1343,7 @@ message GoldenSnapshotConfig {
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the GoldenSnapshotMode enum
+  // +k8s:maximum=3 # keep this in sync with the GoldenSnapshotMode enum
   GoldenSnapshotMode mode = 1;
 }
 
@@ -1592,9 +1596,8 @@ message ExternalVolumeTemplate {
 // SharedVolumeRef mounts a SharedVolume in the actor's atespace. The
 // volume outlives the actor, so several actors can mount it in turn.
 //
-// Actors created from a template with a SharedVolumeRef do not start from
-// the template's golden snapshot: the first resume boots from the image, and
-// later resumes restore the actor's own snapshot.
+// SharedVolume actors cold-boot initially unless their microVM template opts
+// into GOLDEN_SNAPSHOT_MODE_RUNTIME. Later resumes use their own snapshots.
 message SharedVolumeRef {
   // name of the SharedVolume. Left empty, the actor names it at creation in
   // Actor.shared_volume_bindings.

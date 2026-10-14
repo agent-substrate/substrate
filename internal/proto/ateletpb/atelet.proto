@@ -446,6 +446,10 @@ message WorkloadSpec {
   // +k8s:listType=map
   // +k8s:listMapKey=name
   repeated Volume volumes = 2;
+
+  // Capture only the pre-application microVM runtime; golden actors only.
+  // +k8s:optional
+  bool runtime_golden = 3;
 }
 
 message DurableDirVolume {

@@ -100,7 +100,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 				return nil, apierror.FailedPrecondition("Tag cloning does not support ActorTemplates that reference a SharedVolume")
 			}
 		}
-	case templateHasSharedVolumeRef(template):
+	case templateHasSharedVolumeRef(template) && template.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() != ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME:
 		// TODO(shared-volumes): restore from the golden once checkpoint and restore mount options agree for external volume refs; see docs/csi-volumes.md.
 	default:
 		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()

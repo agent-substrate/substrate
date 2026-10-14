@@ -1496,7 +1496,10 @@ type WorkloadSpec struct {
 	// +k8s:maxItems=32 # matches the template's volumes bound
 	// +k8s:listType=map
 	// +k8s:listMapKey=name
-	Volumes       []*Volume `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	Volumes []*Volume `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	// Capture only the pre-application microVM runtime; golden actors only.
+	// +k8s:optional
+	RuntimeGolden bool `protobuf:"varint,3,opt,name=runtime_golden,json=runtimeGolden,proto3" json:"runtime_golden,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1543,6 +1546,13 @@ func (x *WorkloadSpec) GetVolumes() []*Volume {
 		return x.Volumes
 	}
 	return nil
+}
+
+func (x *WorkloadSpec) GetRuntimeGolden() bool {
+	if x != nil {
+		return x.RuntimeGolden
+	}
+	return false
 }
 
 type DurableDirVolume struct {
@@ -3589,12 +3599,13 @@ const file_atelet_proto_rawDesc = "" +
 	"pauseImage\x1aM\n" +
 	"\vAssetsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12(\n" +
-	"\x05value\x18\x02 \x01(\v2\x12.atelet.ArchAssetsR\x05value:\x028\x01\"k\n" +
+	"\x05value\x18\x02 \x01(\v2\x12.atelet.ArchAssetsR\x05value:\x028\x01\"\x92\x01\n" +
 	"\fWorkloadSpec\x121\n" +
 	"\n" +
 	"containers\x18\x01 \x03(\v2\x11.atelet.ContainerR\n" +
 	"containers\x12(\n" +
-	"\avolumes\x18\x02 \x03(\v2\x0e.atelet.VolumeR\avolumes\"\x12\n" +
+	"\avolumes\x18\x02 \x03(\v2\x0e.atelet.VolumeR\avolumes\x12%\n" +
+	"\x0eruntime_golden\x18\x03 \x01(\bR\rruntimeGolden\"\x12\n" +
 	"\x10DurableDirVolume\"\x10\n" +
 	"\x0eEmptyDirVolume\"\x89\x03\n" +
 	"\x0eExternalVolume\x12*\n" +

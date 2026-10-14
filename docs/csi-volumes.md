@@ -233,14 +233,25 @@ kubectl ate create actor consumer-42 -a demo --template consumer --volume shared
 Bindings are validated and recorded when the actor is created and cannot change
 afterwards.
 
-The golden snapshot is not used for templates that reference a `SharedVolume`. The
-first resume of such an actor is a cold boot from the image, and later resumes
-restore the actor's own snapshot, which was taken over the real volume. An
-explicit `sourceTag` is refused at actor creation. The reason is in gVisor:
-the golden actor warms up against a local empty directory at the mount path,
-but runsc derives the `disable_file_handle_sharing` mount option from the bind
-source's filesystem (NFS and FUSE get it, local disks do not) and refuses a
-restore whose mount options differ from the checkpoint's. Supporting golden
-restores here is follow-up work; the candidate approaches are a golden actor
-that warms up on a scratch volume from the same driver, or an upstream runsc
-change that excludes host-derived mount options from restore validation.
+Templates referencing a `SharedVolume` cold-boot by default and restore their own
+snapshots on later resumes. Explicit `sourceTag` cloning remains refused.
+
+MicroVM templates can opt into `snapshotConfig.goldenSnapshotConfig.mode:
+GOLDEN_SNAPSHOT_MODE_RUNTIME`. This snapshots a booted kernel and agent **before
+CreateSandbox mounts virtio-fs and before any application process exists**.
+On restore, the host stages the actor-selected real volumes, resumes the kernel,
+reseeds its random generator, and only then creates the sandbox and application
+containers. Readiness is published after the application probes succeed. This
+warms VM startup, not application memory. Ordinary own snapshots continue to
+capture the running application; the runtime-only marker is not propagated to
+those snapshots.
+
+Application-warm goldens cannot transparently substitute arbitrary filesystem
+state: applications may retain bytes from the source volume in their heap.
+Ordinary own-snapshot handoffs also retain application memory; changed backing
+data and deleted-open handles need application-specific semantics. Runtime
+goldens do not change those semantics or claim to repair those cases.
+
+The runtime mode is rejected for gVisor. Its existing cold-start guard remains:
+runsc derives `disable_file_handle_sharing` from the source filesystem, and a
+local placeholder and NFS volume can produce incompatible restore options.

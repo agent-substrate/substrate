@@ -49,7 +49,9 @@ func toAteletResources(r *ateapipb.Resources) (*ateletpb.ResourceLimits, error) 
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;
 // container env is copied verbatim.
 func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor, volumePublishContexts map[string]map[string]string) (*ateletpb.WorkloadSpec, error) {
-	workloadSpec := &ateletpb.WorkloadSpec{}
+	workloadSpec := &ateletpb.WorkloadSpec{
+		RuntimeGolden: isGoldenActor(actor) && actorTemplate.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME,
+	}
 
 	// Convert volumes to atelet's representation.  ActorTemplate validation has
 	// already ensured that only one source is set.

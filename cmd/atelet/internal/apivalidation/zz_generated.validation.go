@@ -4748,5 +4748,33 @@ func Validate_WorkloadSpec(
 		errs = append(errs, fn(fldPath.Child("volumes"), obj.Volumes, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateletpb.WorkloadSpec.RuntimeGolden
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *bool,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.WorkloadSpec) *bool {
+				return &oldObj.RuntimeGolden
+			})
+		errs = append(errs, fn(fldPath.Child("runtime_golden"), &obj.RuntimeGolden, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
