@@ -50,6 +50,93 @@ const (
 // maxCrashMessageBytes matches the maxLength on ActorCrash.message.
 const maxCrashMessageBytes = 4096
 
+// transientCrashCauses are the parts of a crash message that name a cause a
+// rolling worker pool or atelet DaemonSet produces and a later resume
+// outlives: the worker assigned to the actor drained, went away or no longer
+// hosts it; atelet could not be dialed yet, its new pod without an IP or
+// beside the old one on the node; ateom on the worker was not listening yet
+// or restarted; the worker's call was cancelled under it, its wakeup probe
+// with it, while its pod went away (a cancellation of ate-api's own call
+// crashes nothing). The message is matched because atelet's failures reach
+// ate-api as text only.
+var transientCrashCauses = []string{
+	crashMessageWorkerDraining,
+	crashMessageWorkerGone,
+	crashMessageWorkerReassigned,
+	crashMessageWorkerPodGone,
+	crashMessageAteomRestarted,
+	"has no assigned IPs",
+	"atelet pods on node",
+	"ateom.sock: connect:",
+	"transport: Error while dialing",
+	"rpc error: code = Canceled",
+	"wakeup probe cancelled",
+}
+
+// transientCrashCause reports whether msg names one of transientCrashCauses.
+func transientCrashCause(msg string) bool {
+	for _, cause := range transientCrashCauses {
+		if strings.Contains(msg, cause) {
+			return true
+		}
+	}
+	return false
+}
+
+// resumeCrashPrefix starts the message of a crash recorded by a resume.
+var resumeCrashPrefix = ateattr.OperationResume + " failed: "
+
+// transientResumeCrash reports whether the actor is CRASHED by a resume that
+// a rolling worker pool interrupted. The actor never ran since the snapshot
+// it was resuming from, so returning it to that snapshot loses nothing.
+func transientResumeCrash(actor *ateapipb.Actor) bool {
+	msg := actor.GetStatus().GetCrash().GetMessage()
+	return actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED &&
+		strings.HasPrefix(msg, resumeCrashPrefix) && transientCrashCause(msg)
+}
+
+// checkpointCrashPrefixes start the messages of crashes recorded by the
+// operations that checkpoint a running workload.
+var checkpointCrashPrefixes = []string{
+	ateattr.OperationSuspend + " failed: ",
+	ateattr.OperationPause + " failed: ",
+}
+
+// pausedUploadCrashMessage starts the message of a crash a paused-origin
+// suspend records when atelet fails to upload the pause snapshot.
+const pausedUploadCrashMessage = "atelet UploadPausedCheckpoint: "
+
+// transientCheckpointCrash reports whether the actor is CRASHED by a suspend
+// or a pause that a rolling worker pool interrupted while it checkpointed the
+// running workload, and holds a completed durable snapshot. The workload went
+// with its worker, so that snapshot is the latest state of the actor that
+// survives: returning the actor to it loses nothing the crash has not lost
+// already. A paused-origin suspend checkpoints no workload: the pause snapshot
+// it uploads stays on its node, so its crash is not one.
+func transientCheckpointCrash(actor *ateapipb.Actor) bool {
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		return false
+	}
+	if _, durable := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); durable == nil {
+		return false
+	}
+	msg := actor.GetStatus().GetCrash().GetMessage()
+	for _, prefix := range checkpointCrashPrefixes {
+		if cause, ok := strings.CutPrefix(msg, prefix); ok {
+			return !strings.HasPrefix(cause, pausedUploadCrashMessage) && transientCrashCause(cause)
+		}
+	}
+	return false
+}
+
+// transientCrash reports whether the actor is CRASHED for a transient cause
+// that returns it to a snapshot: a resume (transientResumeCrash) or a
+// checkpoint (transientCheckpointCrash) that a rolling worker pool
+// interrupted.
+func transientCrash(actor *ateapipb.Actor) bool {
+	return transientResumeCrash(actor) || transientCheckpointCrash(actor)
+}
+
 // ateletCrashMessage describes a failed atelet call with the error text atelet
 // returned, since its gRPC code is Unknown for most failures.
 // TODO: consider sanizing the error message returned by atelet.
@@ -142,6 +229,11 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	if err != nil {
 		return fmt.Errorf("while releasing worker to crash actor: %w", err)
 	}
+	if !wasAlreadyCrashed && !transientCrashCause(message) {
+		if cause := workerLeavingCause(ctx, st, actor); cause != "" {
+			message += " (" + cause + ")"
+		}
+	}
 
 	// Snapshot crash attributes before pod and pool pointers are cleared below;
 	// the counter itself is emitted only after the transition commits.
@@ -172,6 +264,33 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	}
 
 	return nil
+}
+
+// workerLeavingCause names why the worker the actor was assigned when its
+// call failed is going away: it drained, its record is gone, or its pod was
+// replaced. A call cut by its worker's pod going away fails with whatever the
+// killed process reported, `runsc start` killed by a signal for one, so the
+// worker's own state is what tells it apart from a failure on a worker that
+// keeps serving, which yields "".
+func workerLeavingCause(ctx context.Context, st crashActorStore, actor *ateapipb.Actor) string {
+	assignment := actor.GetStatus().GetWorkerAssignment()
+	if assignment == nil {
+		return ""
+	}
+	worker, err := st.GetWorker(ctx, assignment.GetWorker().GetName())
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return crashMessageWorkerGone
+	case err != nil:
+		slog.WarnContext(ctx, "Could not read the crashed actor's worker; recording the crash as is",
+			slog.String("worker", assignment.GetWorker().GetName()), slog.Any("err", err))
+		return ""
+	case worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING:
+		return crashMessageWorkerDraining
+	case assignment.GetWorkerPodUid() != "" && worker.GetWorkerPodUid() != assignment.GetWorkerPodUid():
+		return crashMessageWorkerPodGone
+	}
+	return ""
 }
 
 // newActorCrash records a crash that happens now, prefixing message with the
