@@ -306,7 +306,7 @@ func TestValidateActorUpdate(t *testing.T) {
 		field.ErrorList{field.Required(field.NewPath("status", "state"), "")},
 	}, {
 		"change actor.status.state",
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.State = ateapipb.ActorState_ACTOR_STATE_PAUSED })),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.State = ateapipb.ActorState_ACTOR_STATE_RUNNING })),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.State = ateapipb.ActorState_ACTOR_STATE_CRASHED })),
 		nil,
 	}, {
