@@ -119,13 +119,24 @@ works and warns; rename it in your `.ate-dev-env.sh`.
 **Node sysctls for high sandbox density (>800 sandboxes/node):** each awake
 actor sandbox creates its own network namespace, veth/tap pair, and inotify
 watches on the host kernel (even in multi-actor worker pods). Default COS
-limits (`net.ipv4.neigh.default.gc_thresh3 = 1024`, `inotify`) overflow around
-~800–1,000 live sandboxes per node (`neighbour: arp_cache: neighbor table
-overflow!`). `create cluster` configures these sysctls automatically on the
-default `substrate-node-pool`.
+limits (`net.ipv4.neigh.default.gc_thresh3 = 1024`,
+`fs.inotify.max_user_instances = 128`, `fs.inotify.max_user_watches = 8192`)
+fail around ~800–1,000 live sandboxes per node: in single-node density
+benchmarks on `c3-standard-192-metal` (50–100 multi-actor worker pods),
+inotify watches exhausted at ~800 live sandboxes and the host ARP cache
+overflowed on the 1,000-sandbox wave after passing 850 (`dmesg`: `neighbour:
+arp_cache: neighbor table overflow!`), while raising these sysctls sustained
+1,500 concurrent sandboxes per node.
+`create cluster` sets these sysctls on `substrate-node-pool` **when creating a
+new cluster**; existing clusters keep their original node-pool sysctls
+(`create cluster` logs a warning if they are missing) and must be updated via
+one of the options below.
 
-* **When creating additional node pools** (e.g., bare-metal pools), pass
-  `--system-config-from-file=systemconfig.yaml`:
+* **When creating or updating node pools** (e.g., bare-metal pools), pass
+  `--system-config-from-file=systemconfig.yaml` to `gcloud container node-pools
+  create` or `update`. Note that `node-pools update --system-config-from-file`
+  **replaces the pool's entire system config** (so carry over any existing
+  sysctls/kubelet/cgroup settings) and **recreates the pool's nodes**:
 
   ```yaml
   # systemconfig.yaml
