@@ -205,6 +205,10 @@ func TestStartupScanRespectsNamespace(t *testing.T) {
 }
 
 func TestReconcileIgnoresWorkerOutsideNamespace(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(oldLogger) })
 	api := newFakeControl()
 	api.put(registeredWorker("other", "pool", "live", testPodUID, "10.0.0.1"))
 	s, _, _ := setupReconcileTest(t, api)
@@ -217,6 +221,13 @@ func TestReconcileIgnoresWorkerOutsideNamespace(t *testing.T) {
 	}
 	if got := api.names(); !slices.Equal(got, []string{testPodUID}) {
 		t.Fatalf("out-of-scope Worker was deregistered: %v", got)
+	}
+	// The skip is a should-never-happen path: it must be visible in the logs,
+	// not silent.
+	for _, fragment := range []string{`"level":"ERROR"`, "should not happen", `"pod":"other/live"`, `"watch-namespace":"agent-workloads"`} {
+		if !strings.Contains(logs.String(), fragment) {
+			t.Errorf("out-of-scope key diagnostic lacks %q: %s", fragment, logs.String())
+		}
 	}
 }
 

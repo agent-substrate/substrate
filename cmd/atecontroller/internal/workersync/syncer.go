@@ -252,7 +252,13 @@ func (s *WorkerPoolSyncer) processNextWorkItem(ctx context.Context) bool {
 // reconcile converges the registry record for key with the current pod state in
 // the informer cache. Returning an error requeues the key with backoff.
 func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
+	// The pod informer only delivers keys in the watched namespace and the
+	// startup scan filters its keys the same way, so a key outside it means
+	// one of those invariants broke. Error, and drop the key: silence would
+	// hide the regression, and requeueing would retry it forever.
 	if s.watchNamespace != "" && key.namespace != s.watchNamespace {
+		slog.ErrorContext(ctx, "Syncer: reconcile key outside watch namespace; this should not happen",
+			append(key.logAttrs(), slog.String("watch-namespace", s.watchNamespace))...)
 		return nil
 	}
 	obj, exists, err := s.workerInformer.GetIndexer().GetByKey(key.namespace + "/" + key.name)
