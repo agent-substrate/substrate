@@ -128,7 +128,7 @@ func generateDynamicChunks(totalSteps int, numCycles int) []chunk {
 
 // initSweperf creates a runtime tied to cfg and returns a boomer-compatible
 // task function plus a shutdown hook the caller should run before exit (it
-// suspend+deletes every actor this worker created).
+// deletes every actor this worker created).
 func initSweperf(cfg *userclass.Config) (taskFn func(), shutdown func(context.Context)) {
 	if cfg.Tracer == nil {
 		cfg.Tracer = otel.Tracer("substrate-boomer/sweperf")
@@ -162,6 +162,10 @@ type sweperfRuntime struct {
 	// inflight counts iterate calls in progress, each of which may create or
 	// delete an actor. shutdown waits for them before sweeping users.
 	inflight sync.WaitGroup
+	// atespaceReady is set once CreateAtespace succeeds, so later actors skip
+	// it. Cleared when CreateActor reports the atespace missing, so the next
+	// start recreates it.
+	atespaceReady atomic.Bool
 }
 
 // enter registers an iterate call with inflight, or reports false once
@@ -177,13 +181,22 @@ func (r *sweperfRuntime) enter() bool {
 }
 
 // teardownTimeout bounds deleting an actor once the run context may already
-// be canceled.
-const teardownTimeout = 30 * time.Second
+// be canceled. A var so tests can shorten it.
+var teardownTimeout = 30 * time.Second
 
 // teardownCtx returns a context for deleting an actor that outlives the run
 // context, so cancellation by shutdown does not strand the actor.
 func (r *sweperfRuntime) teardownCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(r.runCtx), teardownTimeout)
+}
+
+// canceled reports whether ctx was canceled, which only happens when shutdown
+// cuts a call short, so the call says nothing about the system under test.
+// It checks the context, not the error: gRPC returns a codes.Canceled status
+// that errors.Is does not match. Timeouts are DeadlineExceeded, so teardown
+// calls that run out of time are still recorded.
+func canceled(ctx context.Context) bool {
+	return errors.Is(ctx.Err(), context.Canceled)
 }
 
 // resolveConfig returns the template, total step count and cycle count for a
@@ -265,7 +278,9 @@ func (r *sweperfRuntime) runCycle() {
 	user.step(r.runCtx)
 
 	if user.isDone() {
-		user.recordTaskMetrics()
+		if r.runCtx.Err() == nil { // a task finished as shutdown began records nothing
+			user.recordTaskMetrics()
+		}
 		r.retireUser(gid, user)
 	}
 }
@@ -316,9 +331,12 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (_ *sweperfUser, err err
 
 	bmetrics.UpdateUsers(u.userClass, 1)
 
-	if err := u.ensureAtespace(ctx); err != nil {
-		bmetrics.UpdateUsers(u.userClass, -1)
-		return nil, fmt.Errorf("ensureAtespace: %w", err)
+	if !r.atespaceReady.Load() {
+		if err := u.ensureAtespace(ctx); err != nil {
+			bmetrics.UpdateUsers(u.userClass, -1)
+			return nil, fmt.Errorf("ensureAtespace: %w", err)
+		}
+		r.atespaceReady.Store(true)
 	}
 	// CreateActor runs detached from ctx: canceled mid-call, the actor might
 	// exist without this session knowing to delete it.
@@ -326,6 +344,10 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (_ *sweperfUser, err err
 	err = u.create(createCtx)
 	cancelCreate()
 	if err != nil {
+		// ate-api answers FailedPrecondition when the atespace is missing.
+		if status.Code(err) == codes.FailedPrecondition {
+			r.atespaceReady.Store(false)
+		}
 		bmetrics.UpdateUsers(u.userClass, -1)
 		return nil, fmt.Errorf("createActor: %w", err)
 	}
@@ -335,8 +357,8 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (_ *sweperfUser, err err
 		// ctx may be canceled by shutdown; tear down regardless.
 		tctx, cancel := r.teardownCtx()
 		defer cancel()
-		// suspendAndDelete also decrements the user gauge.
-		u.suspendAndDelete(tctx)
+		// teardown also decrements the user gauge.
+		u.teardown(tctx)
 		return nil, fmt.Errorf("pollLiveness: %w", err)
 	}
 
@@ -352,17 +374,21 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (_ *sweperfUser, err err
 // final cycle leaves the actor running, and DeleteActor with AnyState removes
 // it from any state, so no suspend is sent first. The delete runs detached
 // from the run context so shutdown cannot cut it short. A failed delete is
-// retried once; if that also fails the actor is left behind and logged.
+// retried once, with a fresh timeout; if that also fails the actor is left
+// behind and logged.
 func (r *sweperfRuntime) retireUser(gid int64, u *sweperfUser) {
 	r.users.CompareAndDelete(gid, u)
 	if !u.cleanedUp.CompareAndSwap(false, true) {
 		return // shutdown already owns this actor's teardown
 	}
 	bmetrics.UpdateUsers(u.userClass, -1)
-	ctx, cancel := r.teardownCtx()
-	defer cancel()
-	if err := u.delete(ctx); err != nil {
-		if err := u.delete(ctx); err != nil {
+	deleteActor := func() error {
+		ctx, cancel := r.teardownCtx()
+		defer cancel()
+		return u.delete(ctx)
+	}
+	if err := deleteActor(); err != nil {
+		if err := deleteActor(); err != nil {
 			slog.Error("DeleteActor failed twice for finished actor; it is leaked",
 				slog.String("actor", u.actorName),
 				slog.String("err", err.Error()),
@@ -381,19 +407,20 @@ func (r *sweperfRuntime) retireUser(gid int64, u *sweperfUser) {
 // shutdown budget for the sweep. A var so tests can shorten it.
 var inflightWaitTimeout = 10 * time.Second
 
-// shutdownConcurrency bounds how many actors shutdown suspends and deletes at
-// once. In-cluster the pod's 30s termination grace period, not boomer-worker's
+// shutdownConcurrency bounds how many actors shutdown deletes at once.
+// In-cluster the pod's 30s termination grace period, not boomer-worker's
 // 60s shutdown context, is the real budget, and a serial sweep over thousands
 // of sessions would overrun it.
 const shutdownConcurrency = 64
 
 // shutdown stops new iterations, cancels in-flight startups and cycles, waits
-// up to inflightWaitTimeout for them to finish, then suspends and deletes every
-// actor still bound to a goroutine, shutdownConcurrency at a time, until done
-// or ctx expires. Boomer has no per-VU stop hook, so a mid-run decrease in user
+// up to inflightWaitTimeout for them to finish, then deletes every actor still
+// bound to a goroutine, shutdownConcurrency at a time, until done or ctx
+// expires. Boomer has no per-VU stop hook, so a mid-run decrease in user
 // count leaks actors until this runs — acceptable for a run that ramps up,
 // holds, then tears down.
 func (r *sweperfRuntime) shutdown(ctx context.Context) {
+	slog.Info("sweperf shutdown started")
 	r.mu.Lock()
 	r.stopping = true
 	r.mu.Unlock()
@@ -424,7 +451,7 @@ func (r *sweperfRuntime) shutdown(ctx context.Context) {
 		go func(u *sweperfUser) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			u.suspendAndDelete(ctx)
+			u.teardown(ctx)
 		}(val.(*sweperfUser))
 		return true
 	})
@@ -547,17 +574,14 @@ func (u *sweperfUser) delete(ctx context.Context) error {
 	})
 }
 
-// suspendAndDelete releases the actor and the worker it holds, and decrements
-// the user gauge. It suspends first so the delete has no sandbox to terminate
-// and no node to reach. Safe to call more than once and from several
-// goroutines: only the first call does anything.
-func (u *sweperfUser) suspendAndDelete(ctx context.Context) {
+// teardown releases the actor and the worker it holds, and decrements the
+// user gauge. Like retireUser, it deletes with AnyState and sends no suspend
+// first. Safe to call more than once and from several goroutines: only the
+// first call does anything.
+func (u *sweperfUser) teardown(ctx context.Context) {
 	if !u.cleanedUp.CompareAndSwap(false, true) {
 		return
 	}
-	_, _ = u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: u.ref(),
-	})
 	_ = u.delete(ctx)
 	bmetrics.UpdateUsers(u.userClass, -1)
 }
@@ -581,6 +605,9 @@ func (u *sweperfUser) tracedCallRecord(ctx context.Context, name string, recordS
 	var tr metadata.MD
 	err := do(ctx, &tr)
 	clientLatency := time.Since(start)
+	if err != nil && canceled(ctx) {
+		return err
+	}
 
 	latency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
 	if source == boomerutil.SourceServer {
@@ -689,7 +716,11 @@ func (u *sweperfUser) step(ctx context.Context) {
 	resumeStart := time.Now()
 	// Summed per cycle so the between-cycle think time stays out of the total.
 	defer func() { u.loopWall += time.Since(resumeStart) }()
+	// A cycle cut short by shutdown returns without recording or advancing.
 	if !u.resume(ctx) {
+		if canceled(ctx) {
+			return
+		}
 		u.loopFailed = true
 		bmetrics.RecordFailure(derivedMetricMethod, resumeToFirstExecMetric, u.userClass,
 			time.Since(resumeStart), "ResumeActor failed")
@@ -700,6 +731,9 @@ func (u *sweperfUser) step(ctx context.Context) {
 
 	// 2. Execute step range chunk inside sandbox
 	ackAt, execDur, err := u.execute(ctx, cycleNum, chunk.start, chunk.end)
+	if err != nil && canceled(ctx) {
+		return
+	}
 	if err != nil {
 		u.loopFailed = true
 		slog.Error("execute steps failed",
@@ -718,6 +752,9 @@ func (u *sweperfUser) step(ctx context.Context) {
 
 	// 3. Suspend actor, unless this was the last cycle
 	if cycleNum < len(u.chunks) && !u.suspend(ctx) {
+		if canceled(ctx) {
+			return
+		}
 		u.loopFailed = true
 	}
 
@@ -903,14 +940,19 @@ func (u *sweperfUser) execute(ctx context.Context, cycleNum int, startIdx int, e
 
 // httpJSONCall posts body to route on the actor's in-sandbox server and
 // records the result under metricName. validate inspects the response body and
-// decides the outcome.
+// decides the outcome. A call canceled by shutdown records no failure.
 func (u *sweperfUser) httpJSONCall(ctx context.Context, metricName, route string, body []byte, validate func([]byte) error) ([]byte, error) {
 	ctx, span := u.cfg.Tracer.Start(ctx, metricName)
 	defer span.End()
+	recordFailure := func(latency time.Duration, msg string) {
+		if !canceled(ctx) {
+			bmetrics.RecordFailure("http", metricName, u.userClass, latency, msg)
+		}
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.cfg.RouterURL+route, bytes.NewReader(body))
 	if err != nil {
-		bmetrics.RecordFailure("http", metricName, u.userClass, 0, err.Error())
+		recordFailure(0, err.Error())
 		return nil, err
 	}
 	u.setActorRouting(httpReq)
@@ -921,14 +963,14 @@ func (u *sweperfUser) httpJSONCall(ctx context.Context, metricName, route string
 	resp, err := u.cfg.HTTPClient.Do(httpReq)
 	clientLatency := time.Since(start)
 	if err != nil {
-		bmetrics.RecordFailure("http", metricName, u.userClass, clientLatency, err.Error())
+		recordFailure(clientLatency, err.Error())
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	respBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		bmetrics.RecordFailure("http", metricName, u.userClass, clientLatency, readErr.Error())
+		recordFailure(clientLatency, readErr.Error())
 		return nil, readErr
 	}
 
@@ -940,7 +982,7 @@ func (u *sweperfUser) httpJSONCall(ctx context.Context, metricName, route string
 	if resp.StatusCode >= 400 {
 		httpErr := fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		boomerutil.LogSampledTrace(span, metricName, clientLatency, boomerutil.SourceClient, httpErr)
-		bmetrics.RecordFailure("http", metricName, u.userClass, clientLatency, httpErr.Error())
+		recordFailure(clientLatency, httpErr.Error())
 		return nil, httpErr
 	}
 
@@ -948,7 +990,7 @@ func (u *sweperfUser) httpJSONCall(ctx context.Context, metricName, route string
 		if err := validate(respBody); err != nil {
 			elapsed := time.Since(start)
 			boomerutil.LogSampledTrace(span, metricName, elapsed, boomerutil.SourceClient, err)
-			bmetrics.RecordFailure("http", metricName, u.userClass, elapsed, err.Error())
+			recordFailure(elapsed, err.Error())
 			return nil, err
 		}
 	}

@@ -187,6 +187,13 @@ The last cycle of a task is not suspended: the actor is deleted straight from ru
 task of `n` cycles therefore records `n - 1` `SuspendActor` samples, and `TaskWallClock`
 does not include a final suspend.
 
+`CreateAtespace` is sent once per worker, not per task, and again only if `CreateActor`
+reports the atespace missing.
+
+When the run ends, shutdown cancels cycles still in flight. Calls cut short this way record
+nothing, and the interrupted task records no `TaskCEL` or `TaskWallClock` row, so the end of
+a run does not show up as a burst of failures.
+
 ### Agent-Session Benchmark
 
 The agent-session benchmark (`--user-class agentsession`) emulates a fleet of
