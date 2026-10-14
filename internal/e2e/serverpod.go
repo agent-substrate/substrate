@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
 	"path"
 	"slices"
 	"strconv"
@@ -29,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/yaml"
 )
 
@@ -64,6 +64,20 @@ type ServerPod struct {
 	// publish a port the container -- uid 65532, every capability dropped --
 	// cannot bind, such as 80; the Service maps Port down to it.
 	TargetPort int
+	// UDPPorts are Service ports published over UDP alongside the TCP port
+	// above, every one of them mapped to the same UDPTargetPort. Several
+	// published ports onto one listener is the point: a caller that expects a
+	// datagram to arrive on one port and not another can then attribute the
+	// difference to the port, not to two servers behaving differently.
+	//
+	// A port here can be one the container could never bind, 53 included: the
+	// Service maps it down to UDPTargetPort, and kube-proxy does that in the
+	// host netns, after whatever the sender's own netns did with the datagram.
+	UDPPorts []int
+	// UDPTargetPort is the UDP port the binary listens on, defaulting to the
+	// TCP target port -- which is where a server that takes one --listen flag
+	// for both protocols ends up.
+	UDPTargetPort int
 	// TLSPort, when set, publishes the HTTPS listener testserver's http and
 	// websocket subcommands open on container port 8443 when given a
 	// certificate, beside the cleartext one on Port. The readiness probe then
@@ -78,6 +92,10 @@ type ServerPod struct {
 	// an HTTP GET. A gRPC server answers an HTTP request with a protocol error,
 	// so a server speaking grpc must set this and register the health service.
 	GRPCProbe bool
+	// TCPProbe asks kubelet to probe by opening a TCP connection and closing
+	// it, which is all readiness can mean for a server that speaks neither HTTP
+	// nor gRPC. Ignored when GRPCProbe is set.
+	TCPProbe bool
 	// HealthPath is the HTTP readiness path, defaulting to /healthz. Ignored
 	// when GRPCProbe is set.
 	HealthPath string
@@ -146,7 +164,15 @@ type Server struct {
 
 // Address is the host:port to dial the server at.
 func (s Server) Address() string {
-	return net.JoinHostPort(s.ClusterIP, strconv.Itoa(s.Port))
+	return s.AddressOnPort(s.Port)
+}
+
+// AddressOnPort is the host:port to dial one of the server's other published
+// ports at -- a ServerPod.UDPPorts entry, say. The port is not checked against
+// what was published: an address for a port the Service does not carry is
+// exactly what a test asserting unreachability wants.
+func (s Server) AddressOnPort(port int) string {
+	return net.JoinHostPort(s.ClusterIP, strconv.Itoa(port))
 }
 
 // TLSAddress is the host:port to dial the server's HTTPS listener at.
@@ -163,38 +189,100 @@ func (s Server) SvcName() string {
 
 // DeployServerPod builds spec's image, applies the shared server manifest, waits
 // for readiness and returns the address to dial.
+func DeployServerPod(t *testing.T, ctx context.Context, spec ServerPod) Server {
+	t.Helper()
+	return DeployServerPods(t, ctx, spec)[0]
+}
+
+// DeployServerPods deploys several servers at once, into one namespace and
+// through one ko invocation, and returns their addresses in the order given.
+//
+// Worth having rather than a loop over DeployServerPod, because a serial loop
+// pays for each server end to end: ko starts, builds and pushes, then the pod
+// schedules, pulls and goes ready, and only then does the next one begin. One
+// apply overlaps all of that. ko caches builds and pushes by image reference
+// within an invocation, so servers sharing an ImportPath -- which is the common
+// case, since one testserver binary backs them all -- build once; and every pod
+// is admitted at the same instant, so the second readiness wait has usually
+// already been satisfied by the time the first returns.
 //
 // It registers no cleanup: everything the manifest creates is namespaced, so it
 // goes with the namespace CreateNamespace made — and, on failure, is retained
 // with it for `kubectl logs`.
-func DeployServerPod(t *testing.T, ctx context.Context, spec ServerPod) Server {
+func DeployServerPods(t *testing.T, ctx context.Context, specs ...ServerPod) []Server {
 	t.Helper()
+	if len(specs) == 0 {
+		t.Fatalf("DeployServerPods was given no servers to deploy")
+	}
 	if _, err := CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
-	namespace := spec.Namespace
+	namespace := serverPodNamespace(t, specs)
+
+	koApply(t, writeManifest(t, "serverpods.yaml", renderServerPods(t, specs, namespace)))
+
+	servers := make([]Server, 0, len(specs))
+	for _, spec := range specs {
+		WaitForPodReady(t, ctx, namespace, spec.Name, serverPodReadyTimeout)
+
+		service, err := GetClients().K8s.CoreV1().Services(namespace).Get(ctx, spec.Name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("getting service %s/%s: %v", namespace, spec.Name, err)
+		}
+		if service.Spec.ClusterIP == "" || service.Spec.ClusterIP == corev1.ClusterIPNone {
+			t.Fatalf("service %s/%s has no ClusterIP to dial: %q", namespace, spec.Name, service.Spec.ClusterIP)
+		}
+
+		server := Server{Name: spec.Name, Namespace: namespace, ClusterIP: service.Spec.ClusterIP, Port: spec.Port, TLSPort: spec.TLSPort}
+		if server.TLSPort != 0 {
+			t.Logf("server %s is serving at %s and HTTPS at %s (namespace %s)", spec.Name, server.Address(), server.TLSAddress(), namespace)
+		} else {
+			t.Logf("server %s is serving at %s (namespace %s)", spec.Name, server.Address(), namespace)
+		}
+		servers = append(servers, server)
+	}
+	return servers
+}
+
+// serverPodNamespace picks the one namespace specs are deployed into: the one
+// they name, or a fresh one when none does. Sharing it is what lets a single
+// apply cover them all, so specs that disagree are a mistake in the caller
+// rather than something to paper over by applying twice.
+func serverPodNamespace(t *testing.T, specs []ServerPod) string {
+	t.Helper()
+	names := map[string]bool{}
+	namespace := ""
+	for _, spec := range specs {
+		// Distinct names, because the Pod, the Service and the app label are all
+		// spec.Name: two servers sharing one would apply over each other and
+		// leave the suite dialing a Service that selects both.
+		if names[spec.Name] {
+			t.Fatalf("two servers are both named %q", spec.Name)
+		}
+		names[spec.Name] = true
+
+		if spec.Namespace == "" {
+			continue
+		}
+		if namespace != "" && namespace != spec.Namespace {
+			t.Fatalf("servers deployed together must share a namespace, got %q and %q", namespace, spec.Namespace)
+		}
+		namespace = spec.Namespace
+	}
 	if namespace == "" {
 		namespace = CreateNamespace(t).Name
 	}
+	return namespace
+}
 
-	koApply(t, renderServerPod(t, spec, namespace))
-	WaitForPodReady(t, ctx, namespace, spec.Name, serverPodReadyTimeout)
-
-	service, err := GetClients().K8s.CoreV1().Services(namespace).Get(ctx, spec.Name, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("getting service %s/%s: %v", namespace, spec.Name, err)
+// renderServerPods renders specs into one multi-document manifest.
+func renderServerPods(t *testing.T, specs []ServerPod, namespace string) string {
+	t.Helper()
+	docs := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		docs = append(docs, renderServerPod(t, spec, namespace))
 	}
-	if service.Spec.ClusterIP == "" || service.Spec.ClusterIP == corev1.ClusterIPNone {
-		t.Fatalf("service %s/%s has no ClusterIP to dial: %q", namespace, spec.Name, service.Spec.ClusterIP)
-	}
-
-	server := Server{Name: spec.Name, Namespace: namespace, ClusterIP: service.Spec.ClusterIP, Port: spec.Port, TLSPort: spec.TLSPort}
-	if server.TLSPort != 0 {
-		t.Logf("server %s is serving at %s and HTTPS at %s (namespace %s)", spec.Name, server.Address(), server.TLSAddress(), namespace)
-	} else {
-		t.Logf("server %s is serving at %s (namespace %s)", spec.Name, server.Address(), namespace)
-	}
-	return server
+	return strings.Join(docs, "\n---\n")
 }
 
 // renderServerPod writes spec's manifest into the test's temp dir and returns
@@ -217,6 +305,7 @@ func renderServerPod(t *testing.T, spec ServerPod, namespace string) string {
 		"${PORT}":        strconv.Itoa(spec.Port),
 		"${TARGET_PORT}": targetPortStr,
 	}
+	servicePorts, containerPorts := serverUDPPorts(t, spec, targetPort)
 	blocks := map[string]string{
 		"${ARGS}":            serverArgs(spec, targetPortStr),
 		"${READINESS_PROBE}": serverReadinessProbe(spec, targetPortStr),
@@ -227,8 +316,12 @@ func renderServerPod(t *testing.T, spec ServerPod, namespace string) string {
 		// a pod one. An empty list takes its whole line, key included.
 		"${VOLUME_MOUNTS}": yamlListBlock(t, "volumeMounts", spec.VolumeMounts, 4),
 		"${VOLUMES}":       yamlListBlock(t, "volumes", spec.Volumes, 2),
+		// Extensions of the two `ports:` lists the template already opens, so
+		// these carry no key of their own.
+		"${UDP_SERVICE_PORTS}":   servicePorts,
+		"${UDP_CONTAINER_PORTS}": containerPorts,
 	}
-	return renderManifest(t, serverPodTemplate, inline, blocks)
+	return renderManifestText(t, serverPodTemplate, inline, blocks)
 }
 
 // serverArgs renders the container's `args:` list -- spec.Args followed by the
@@ -244,14 +337,49 @@ func serverArgs(spec ServerPod, targetPort string) string {
 	return strings.Join(out, "\n")
 }
 
+// serverUDPPorts renders spec's UDP ports as fragments extending the Service's
+// and the container's `ports:` lists. Every published port maps to the one
+// listener, so the container side is a single entry however many the Service
+// publishes.
+func serverUDPPorts(t *testing.T, spec ServerPod, tcpTargetPort int) (service, container string) {
+	t.Helper()
+	if len(spec.UDPPorts) == 0 {
+		return "", ""
+	}
+	target := spec.UDPTargetPort
+	if target == 0 {
+		target = tcpTargetPort
+	}
+
+	servicePorts := make([]corev1.ServicePort, 0, len(spec.UDPPorts))
+	for _, port := range spec.UDPPorts {
+		servicePorts = append(servicePorts, corev1.ServicePort{
+			// Named because a Service with more than one port requires it.
+			Name:       fmt.Sprintf("udp-%d", port),
+			Protocol:   corev1.ProtocolUDP,
+			Port:       int32(port),
+			TargetPort: intstr.FromInt32(int32(target)),
+		})
+	}
+	containerPorts := []corev1.ContainerPort{{
+		Name:          "serve-udp",
+		ContainerPort: int32(target),
+		Protocol:      corev1.ProtocolUDP,
+	}}
+	return yamlItemsBlock(t, servicePorts, 2), yamlItemsBlock(t, containerPorts, 4)
+}
+
 // serverReadinessProbe renders the probe fragment for spec, indented to sit
 // under the template's `readinessProbe:` key. kubelet dials the container
 // directly, so the probe names the listen port rather than the published one.
 // A server with TLSPort is probed over HTTPS, on the listener that depends on
 // its certificate.
 func serverReadinessProbe(spec ServerPod, targetPort string) string {
-	if spec.GRPCProbe {
+	switch {
+	case spec.GRPCProbe:
 		return "      grpc:\n        port: " + targetPort
+	case spec.TCPProbe:
+		return "      tcpSocket:\n        port: " + targetPort
 	}
 	healthPath := spec.HealthPath
 	if healthPath == "" {
@@ -311,11 +439,8 @@ func CreateServerService(t *testing.T, ctx context.Context, spec ServerPod) Serv
 	if spec.Namespace == "" {
 		t.Fatal("CreateServerService requires a test namespace")
 	}
-	raw, err := os.ReadFile(renderServerPod(t, spec, spec.Namespace))
-	if err != nil {
-		t.Fatalf("reading origin manifest: %v", err)
-	}
-	for doc := range strings.SplitSeq(string(raw), "\n---\n") {
+	raw := renderServerPod(t, spec, spec.Namespace)
+	for doc := range strings.SplitSeq(raw, "\n---\n") {
 		var kind metav1.TypeMeta
 		if err := yaml.Unmarshal([]byte(doc), &kind); err != nil {
 			t.Fatalf("decoding origin kind: %v", err)

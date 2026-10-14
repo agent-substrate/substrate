@@ -1008,3 +1008,208 @@ func protocolGatewayAccessLogMatches(entry gatewayAccessLogLine, actorRef resour
 	}
 	return false
 }
+
+// TestActorEgressRawTCPBlocked covers TCP that is neither HTTP nor TLS, from
+// both sides of the who-speaks-first divide. The gateway refuses it either way;
+// what the actor sees depends on whether it sends first:
+//
+//   - If the actor waits for the server, the gateway has nothing to classify,
+//     gives up on its listener timeout and closes the connection with no bytes
+//     returned.
+//   - If the actor sends first, the gateway treats bytes that are not TLS as
+//     cleartext HTTP, its HTTP handler cannot parse them, and it answers with
+//     its own "400 Bad Request" and closes.
+//
+// The origins answer whenever anything reaches them -- one greets on connect,
+// the other echoes what it reads -- so a greeting or an echo back means the
+// gateway relayed the connection. The CONNECT record shows the attempt did
+// reach the gateway, so the refusal is the gateway's and not a connection
+// that never left the sandbox.
+func TestActorEgressRawTCPBlocked(t *testing.T) {
+	ctx := context.Background()
+
+	// Stand the targets up first in one call so they share a ko build and start together,
+	// rather than the second waiting out the first's build, push and readiness.
+	targets := e2e.DeployServerPods(t, ctx, tcpBannerTarget, tcpQuietTarget)
+	bannerTarget, quietTarget := targets[0], targets[1]
+
+	tests := []struct {
+		name   string
+		target e2e.Server
+		// skipBanner makes the actor write before reading, so the gateway sees
+		// the client's bytes at once instead of waiting for them.
+		skipBanner bool
+		// payload is what the actor sends, given a token unique to the run.
+		payload func(token string) string
+		// wantBadRequest is whether the gateway answers with its own 400
+		// rather than closing with no bytes.
+		wantBadRequest bool
+	}{
+		{name: "server speaks first", target: bannerTarget, payload: func(token string) string { return token + "\r\n" }},
+		// A line-based protocol: complete lines that are not HTTP.
+		{name: "client speaks first, text line", target: quietTarget, skipBanner: true, wantBadRequest: true, payload: func(token string) string { return token + "\r\n" }},
+		// A binary protocol: bytes no HTTP parser accepts as a request line.
+		{name: "client speaks first, binary", target: quietTarget, skipBanner: true, wantBadRequest: true, payload: func(token string) string { return "\x00\x01\x02\x03" + token }},
+	}
+
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-tcp", egressFixture(), e2e.EgressAllowAll()...)
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForActorRoute(t, ctx, router, actorRef)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Bound the access-log scan to lines this subtest could have produced.
+			since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
+			address := test.target.Address()
+
+			// Distinct per run, so an echo cannot be satisfied by anything stale.
+			token := fmt.Sprintf("ping-%d", time.Now().UnixNano())
+			probe := probeRawTCP(t, ctx, router, actorRef, map[string]any{
+				"address": address, "send": test.payload(token), "skipBanner": test.skipBanner, "timeout": "5s",
+			})
+			if probe.Banner != "" {
+				t.Fatalf("raw TCP to %s got the origin's greeting %q: the gateway relayed the connection", address, probe.Banner)
+			}
+			if strings.Contains(probe.Received, token) {
+				t.Fatalf("raw TCP to %s got its payload echoed back: the gateway relayed the connection (received %q)", address, probe.Received)
+			}
+			port := strconv.Itoa(test.target.Port)
+			if test.wantBadRequest {
+				if !strings.HasPrefix(probe.Received, "HTTP/1.1 400 Bad Request\r\n") {
+					t.Fatalf("raw TCP to %s received %q, want the gateway's HTTP/1.1 400 Bad Request", address, probe.Received)
+				}
+				t.Logf("raw TCP to %s was answered by the gateway with 400 Bad Request", address)
+				assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, port)
+				return
+			}
+			if probe.Received != "" {
+				t.Fatalf("raw TCP to %s received %q, want the connection closed with no bytes", address, probe.Received)
+			}
+			// No bytes alone is also what a connection the gateway holds open
+			// until the actor gives up looks like.
+			if !probe.Closed {
+				t.Fatalf("raw TCP to %s got no bytes but was never closed: the gateway held it open until the actor's 5s read timeout", address)
+			}
+			t.Logf("raw TCP to %s was closed with no bytes returned", address)
+			assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, port)
+			assertEgressGatewayReturnedNoBytes(t, ctx, since, actorAtespace, actorName, port)
+		})
+	}
+}
+
+// rawTCPProbe is the egress demo's /tcp answer.
+type rawTCPProbe struct {
+	Banner   string `json:"banner"`
+	Received string `json:"received"`
+	Closed   bool   `json:"closed"`
+	Error    string `json:"error"`
+}
+
+// probeRawTCP asks the egress demo actor for one raw TCP exchange. The demo
+// reports a closed connection as a 200 with Closed set, so anything but a 200
+// means the probe itself failed. Only a 503 from the router, while the actor's
+// route propagates, is retried.
+func probeRawTCP(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, request map[string]any) rawTCPProbe {
+	t.Helper()
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshaling the TCP probe request: %v", err)
+	}
+	status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/tcp", payload, notTransient)
+	if status != http.StatusOK {
+		t.Fatalf("TCP probe returned HTTP %d, want 200; body: %s", status, body)
+	}
+	var probe rawTCPProbe
+	if err := json.Unmarshal(body, &probe); err != nil {
+		t.Fatalf("decoding the TCP probe response %s: %v", body, err)
+	}
+	return probe
+}
+
+// accessLogCount parses the field named key as a count. A missing field and an
+// unparseable one are both reported as absent, since either means the caller's
+// expectation of the log format no longer holds.
+func accessLogCount(line, key string) (int, bool) {
+	raw, ok := accessLogField(line, key)
+	if !ok {
+		return 0, false
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+// assertEgressGatewayReturnedNoBytes checks, on Envoy, that the actor's tunnels
+// to port carried nothing back. Envoy logs each CONNECT twice: once when the
+// tunnel is established, with zero counters, and once when it closes, with the
+// final ones. Waiting for both records is what makes a zero down_bytes mean the
+// gateway sent nothing, rather than that the close had not been logged yet.
+// AgentGateway's tunnel log carries no byte counters, so there the probe's own
+// result is the only evidence.
+func assertEgressGatewayReturnedNoBytes(t *testing.T, ctx context.Context, since metav1.Time, atespace, actorName, port string) {
+	t.Helper()
+	spiffeSlug := "/ateom-for-actor/" + atespace + "/" + actorName
+	want := fmt.Sprintf("the establish and close records of a tunnel to port %s by actor %s/%s", port, atespace, actorName)
+	var records []string
+	agentGateway := false
+	waitForAccessLog(t, ctx, since, want, func(lines []gatewayAccessLogLine) bool {
+		records = records[:0]
+		for _, line := range lines {
+			switch line.container {
+			case "agentgateway":
+				agentGateway = true
+			case "envoy":
+				if !strings.Contains(line.text, spiffeSlug) {
+					continue
+				}
+				if authority, ok := accessLogField(line.text, "authority"); ok && strings.HasSuffix(authority, ":"+port) {
+					records = append(records, line.text)
+				}
+			}
+		}
+		return agentGateway || len(records) >= 2
+	})
+	if agentGateway {
+		return
+	}
+	for _, record := range records {
+		down, ok := accessLogCount(record, "down_bytes")
+		if !ok {
+			t.Fatalf("access-log line has no down_bytes counter, so the log format changed: %s", record)
+		}
+		if down != 0 {
+			t.Fatalf("egress gateway sent %d bytes back through a tunnel that should have been closed with none: %s", down, record)
+		}
+	}
+	t.Logf("egress gateway returned no bytes on %d tunnel records to port %s", len(records), port)
+}
+
+// tcpEchoBanner is the greeting tcpBannerTarget is started with; the actor must
+// never receive it.
+const tcpEchoBanner = "TESTBANNER/1.0\r\n"
+
+// tcpBannerTarget and tcpQuietTarget are the origins TestActorEgressRawTCPBlocked
+// dials. They differ only in whether they greet.
+//
+// Distinct ports as well as distinct pods, so that the access-log assertions
+// stay unambiguous while both subtests share one Actor.
+var (
+	tcpBannerTarget = e2e.ServerPod{
+		Name:       "tcpbanner",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"tcpecho", "--banner=" + tcpEchoBanner},
+		Port:       2222,
+		TCPProbe:   true,
+	}
+	tcpQuietTarget = e2e.ServerPod{
+		Name:       "tcpquiet",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"tcpecho"},
+		Port:       2223,
+		TCPProbe:   true,
+	}
+)

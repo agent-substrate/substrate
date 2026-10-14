@@ -363,3 +363,29 @@ func TestCapabilityNamesTable(t *testing.T) {
 		}
 	}
 }
+
+// TestListenAddress covers the two ways the probe is started: bare, inside an
+// actor, and with the --listen e2e.ServerPod appends when it runs as a pod.
+func TestListenAddress(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		want    string
+		wantErr bool
+	}{
+		{name: "actor default", args: nil, want: ":80"},
+		{name: "server pod", args: []string{"--listen=:8080"}, want: ":8080"},
+		{name: "unknown flag", args: []string{"--port=8080"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := listenAddress(tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("listenAddress(%q) error = %v, wantErr %v", tt.args, err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("listenAddress(%q) = %q, want %q", tt.args, got, tt.want)
+			}
+		})
+	}
+}
