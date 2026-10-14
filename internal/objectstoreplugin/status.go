@@ -17,6 +17,8 @@ package objectstoreplugin
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
@@ -37,5 +39,29 @@ func toStatus(err error) error {
 	case errors.Is(err, context.DeadlineExceeded):
 		return status.Error(codes.DeadlineExceeded, err.Error())
 	}
+	// The caller sees only Internal, and atelet deliberately drops a plugin's
+	// status text, so this log line is the one record of why the plugin failed.
+	slog.Warn("Object-store plugin failed with an unrecognized error; returning Internal", internalErrorAttrs(err)...)
 	return status.Error(codes.Internal, err.Error())
+}
+
+// internalErrorAttrs describes err for the log without its text, which may
+// quote a URI, header or credential: only what the storage backend describes
+// of the service's response (see objectstorage.DescribeServiceError), and the
+// Go type of err's innermost error.
+func internalErrorAttrs(err error) []any {
+	var attrs []any
+	if desc, ok := objectstorage.DescribeServiceError(err); ok {
+		attrs = append(attrs, slog.Int("http_status", desc.HTTPStatus))
+		if desc.Code != "" {
+			attrs = append(attrs, slog.String("service_code", desc.Code))
+		}
+		if desc.Message != "" {
+			attrs = append(attrs, slog.String("message", desc.Message))
+		}
+	}
+	for next := errors.Unwrap(err); next != nil; next = errors.Unwrap(err) {
+		err = next
+	}
+	return append(attrs, slog.String("error_type", fmt.Sprintf("%T", err)))
 }

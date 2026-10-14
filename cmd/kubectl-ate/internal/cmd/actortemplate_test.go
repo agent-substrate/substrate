@@ -60,7 +60,7 @@ snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://ate-snapshots/ate-demo-counter/
 sandboxConfig:
-  sandboxClass: SANDBOX_CLASS_GVISOR
+  sandboxClass: gvisor
   configName: gvisor-default
 volumes:
 - name: data
@@ -94,7 +94,7 @@ func TestActorTemplateFromManifest(t *testing.T) {
 			StorageLocation:   "gs://ate-snapshots/ate-demo-counter/",
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			SandboxClass: "gvisor",
 			ConfigName:   "gvisor-default",
 		},
 		Volumes: []*ateapipb.Volume{{
@@ -115,7 +115,7 @@ func TestActorTemplateFromManifest_SnakeCase(t *testing.T) {
 snapshot_config:
   storage_location: gs://ate-snapshots/ate-demo-counter/
 sandbox_config:
-  sandbox_class: SANDBOX_CLASS_MICROVM
+  sandbox_class: microvm
   config_name: microvm
 `
 	got, err := actorTemplateFromManifest([]byte(manifest))
@@ -125,7 +125,7 @@ sandbox_config:
 	if got.GetSnapshotConfig().GetStorageLocation() != "gs://ate-snapshots/ate-demo-counter/" {
 		t.Errorf("storage_location = %q", got.GetSnapshotConfig().GetStorageLocation())
 	}
-	if got.GetSandboxConfig().GetSandboxClass() != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
+	if got.GetSandboxConfig().GetSandboxClass() != "microvm" {
 		t.Errorf("sandbox_class = %v", got.GetSandboxConfig().GetSandboxClass())
 	}
 }
@@ -137,7 +137,7 @@ func TestActorTemplateFromManifest_Errors(t *testing.T) {
 	}{
 		{name: "empty", manifest: ""},
 		{name: "unknown field", manifest: "metadata: {atespace: a, name: n}\nsandboxClass: gvisor\n"},
-		{name: "bad enum", manifest: "sandboxConfig: {sandboxClass: gvisor}\n"},
+		{name: "bad enum", manifest: "snapshotConfig: {preferredFidelity: memory}\n"},
 		{name: "crd shape", manifest: "apiVersion: ate.dev/v1alpha1\nkind: ActorTemplate\nmetadata: {name: counter}\n"},
 		{name: "not yaml", manifest: "\t{"},
 	}
@@ -157,19 +157,19 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 		manifest string
 		atespace string
 		name     string
-		class    ateapipb.SandboxClass
+		class    string
 	}{
 		{
 			manifest: "counter-template.yaml.tmpl",
 			atespace: "ate-demo-counter",
 			name:     "counter",
-			class:    ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			class:    "gvisor",
 		},
 		{
 			manifest: "counter-microvm-template.yaml.tmpl",
 			atespace: "ate-demo-counter-microvm",
 			name:     "counter-microvm",
-			class:    ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM,
+			class:    "microvm",
 		},
 	}
 	for _, test := range tests {

@@ -26,9 +26,9 @@
 registry_version: 1
 
 # The version of the upstream semantic conventions that Substrate borrows from.
-# Substrate takes error.type, file.name, the rpc.* attributes, server.address
-# and server.port from it. This is the only version that the code imports under
-# cmd/, internal/ and pkg/.
+# Substrate takes error.type, file.name, the rpc.* attributes and server.port
+# from it. This is the only version that the code imports under cmd/, internal/
+# and pkg/.
 # It is not the version of this registry: manifest.yaml holds that.
 upstream_semconv_version: 1.40.0
 

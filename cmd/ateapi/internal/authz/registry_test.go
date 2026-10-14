@@ -233,6 +233,18 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			want:       []check{{RelationCanDrain, "worker:w-1"}},
 		},
 		{
+			name:       "MarkWorkerAvailable",
+			fullMethod: ateapipb.Control_MarkWorkerAvailable_FullMethodName,
+			req:        &ateapipb.MarkWorkerAvailableRequest{Worker: workerRef},
+			want:       []check{{RelationCanUpdate, "worker:w-1"}},
+		},
+		{
+			name:       "MarkWorkerUnavailable",
+			fullMethod: ateapipb.Control_MarkWorkerUnavailable_FullMethodName,
+			req:        &ateapipb.MarkWorkerUnavailableRequest{Worker: workerRef},
+			want:       []check{{RelationCanUpdate, "worker:w-1"}},
+		},
+		{
 			name:       "ListWorkerActorAssignments",
 			fullMethod: ateapipb.Control_ListWorkerActorAssignments_FullMethodName,
 			req:        &ateapipb.ListWorkerActorAssignmentsRequest{Worker: workerRef},
@@ -465,6 +477,18 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 			name:       "DrainWorker with an over-long name",
 			fullMethod: ateapipb.Control_DrainWorker_FullMethodName,
 			req:        &ateapipb.DrainWorkerRequest{Worker: &ateapipb.ObjectRef{Name: strings.Repeat("w", 64)}},
+			wantField:  "worker.name",
+		},
+		{
+			name:       "MarkWorkerAvailable without a name",
+			fullMethod: ateapipb.Control_MarkWorkerAvailable_FullMethodName,
+			req:        &ateapipb.MarkWorkerAvailableRequest{Worker: &ateapipb.ObjectRef{}},
+			wantField:  "worker.name",
+		},
+		{
+			name:       "MarkWorkerUnavailable with an invalid name",
+			fullMethod: ateapipb.Control_MarkWorkerUnavailable_FullMethodName,
+			req:        &ateapipb.MarkWorkerUnavailableRequest{Worker: &ateapipb.ObjectRef{Name: "w/1"}},
 			wantField:  "worker.name",
 		},
 		{
