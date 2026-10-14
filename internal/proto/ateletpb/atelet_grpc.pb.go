@@ -319,11 +319,10 @@ type AteletClient interface {
 	Run(ctx context.Context, in *RunRequest, opts ...grpc.CallOption) (*RunResponse, error)
 	// Checkpoint saves the workload's state as a new snapshot of the actor and
 	// returns the worker to a blank state. upload_config says when the snapshot
-	// becomes durable. Once the worker has captured the workload, and before the new
-	// snapshot is uploaded or stored locally, atelet deletes the actor's older
-	// local snapshots, except one still being uploaded, which it deletes when
-	// that upload ends. A Checkpoint that then fails to upload or store the new
-	// snapshot leaves the actor with no local snapshot.
+	// becomes durable. Once the new snapshot is uploaded or stored locally,
+	// atelet deletes the actor's older local snapshots, except one still being
+	// uploaded, which it deletes after that upload ends. A Checkpoint that fails
+	// before then leaves the actor's previous local snapshot in place.
 	Checkpoint(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error)
 	// Restore restores a workload from a snapshot onto a worker.
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
@@ -437,11 +436,10 @@ type AteletServer interface {
 	Run(context.Context, *RunRequest) (*RunResponse, error)
 	// Checkpoint saves the workload's state as a new snapshot of the actor and
 	// returns the worker to a blank state. upload_config says when the snapshot
-	// becomes durable. Once the worker has captured the workload, and before the new
-	// snapshot is uploaded or stored locally, atelet deletes the actor's older
-	// local snapshots, except one still being uploaded, which it deletes when
-	// that upload ends. A Checkpoint that then fails to upload or store the new
-	// snapshot leaves the actor with no local snapshot.
+	// becomes durable. Once the new snapshot is uploaded or stored locally,
+	// atelet deletes the actor's older local snapshots, except one still being
+	// uploaded, which it deletes after that upload ends. A Checkpoint that fails
+	// before then leaves the actor's previous local snapshot in place.
 	Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error)
 	// Restore restores a workload from a snapshot onto a worker.
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)

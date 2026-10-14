@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package snapshottracker tracks each actor's snapshots on an atelet node, and
-// detaches them in the background.
+// uploads and detaches them in the background.
 package snapshottracker
 
 import (
@@ -23,6 +23,7 @@ import (
 
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/clock"
 )
@@ -38,37 +39,48 @@ type Store interface {
 
 // Tracker tracks each actor's snapshots on this node: the latest one stored
 // locally, and the latest one confirmed in object storage. State reports them.
-// It detaches suspended actors from this node in the background.
+// It uploads and detaches them in the background.
 //
 // Background work runs off a delaying workqueue of actor UIDs drained by a
 // fixed pool of workers. Each change to an actor's state queues the actor for
-// when its next detach is due:
+// when its next upload or detach is due:
 //  1. A checkpoint records the new snapshot as LatestLocal with CommitLocal,
 //     and schedules the actor's detach detachDelay after the checkpoint. An
 //     immediate checkpoint records its upload with CommitDurable first. A
 //     promote of LatestLocal (CommitPromoted) leaves the schedule as it is.
-//  2. A worker that takes the actor from the queue detaches it if the detach
-//     is due then. When it is not due yet, the worker queues the actor again
-//     for when it is: the queue holds an actor until the earliest time it was
-//     queued for, so a due time that moves later only costs a worker that
-//     check.
-//  3. The queue hands an actor to one worker at a time, and the number of
-//     workers bounds how many background detaches run at once.
-//  4. A detach, in the background or via the Detach RPC, makes LatestLocal
-//     durable and then deletes all the actor's local snapshots.
-//  5. A Run or Restore unschedules the actor's detach as it begins
+//     If LatestLocal needs an upload (see uploadDue), its upload is due
+//     uploadDelay after UndurableSince.
+//  2. A worker that takes the actor from the queue runs whatever is due for
+//     it then, preferring a detach, which also makes LatestLocal durable.
+//     When nothing is due yet, it queues the actor again for when something
+//     is: the queue holds an actor until the earliest time it was queued
+//     for, so a due time that moves later only costs a worker that check.
+//  3. The worker uploads the LatestLocal of when it runs, so snapshots
+//     superseded while the actor waits for its upload are never uploaded.
+//     An upload that has begun (Uploading) goes on across newer checkpoints
+//     and atelet restarts, though, until it succeeds, a newer snapshot is
+//     durable, or it fails while a newer local snapshot can replace it.
+//  4. The queue hands an actor to one worker at a time, and the number of
+//     workers bounds how many background uploads and detaches run at once.
+//  5. An upload leaves LatestLocal on disk so a same-node Restore still
+//     reads it. A detach, in the background or via the Detach RPC, makes
+//     LatestLocal durable and then deletes all the actor's local snapshots.
+//  6. A Run or Restore unschedules the actor's detach as it begins
 //     (BeginStart), and saves that before the workload can start, so atelet
 //     does not detach an actor whose start has begun, even after a restart or
 //     a failed start; only the actor's next checkpoint schedules a detach
-//     again. A background detach that comes due while a Run, Restore, or
-//     Checkpoint is in progress (BeginStart or BeginCheckpoint) waits for it
-//     to end, which queues the actor again.
+//     again. A background detach that comes due while a Run, Restore,
+//     Checkpoint, or PromoteSnapshot is in progress (BeginStart,
+//     BeginCheckpoint, or BeginPromote) waits for it to end, which queues the
+//     actor again.
 //
 // The Detach RPC runs in the calling goroutine rather than on a worker, so an
 // explicit control-plane call does not wait behind other actors' background
-// work. It does wait for the actor's own detach in progress, as do Run,
-// Restore, and Checkpoint. A worker leaves an actor with a detach in progress
-// to that detach's end, which queues the actor again.
+// work. It does wait for the actor's own operation in progress, even an
+// upload of an older snapshot; Run, Restore, and Checkpoint wait for a detach
+// in progress; and PromoteSnapshot waits for a detach or a background upload
+// of the same snapshot. A worker leaves an actor with an operation in
+// progress to that operation's end, which queues the actor again.
 //
 // TODO: Commits record the snapshot they are given without comparing
 // Snapshot.generation. Checkpoint and PromoteSnapshot should reject a stale
@@ -77,15 +89,22 @@ type Store interface {
 type Tracker struct {
 	// ctx bounds background work, and shuts the queue down when it ends.
 	ctx context.Context
-	// store uploads the snapshots of actors being detached. A tracker
-	// without one schedules no background work.
+	// store uploads actors' snapshots. A tracker without one schedules no
+	// background work.
 	store Store
 	// clock is what due times are measured on, and the queue waits on.
 	clock clock.WithTicker
+	// uploadDelay is how long after UndurableSince the actor's latest local
+	// snapshot becomes due for background upload: DefaultUploadDelay unless
+	// WithUploadDelay sets it.
+	uploadDelay time.Duration
 	// detachDelay is how long a suspended actor keeps its local snapshot on
 	// this node before atelet detaches it: DefaultDetachDelay unless
 	// WithDetachDelay sets it.
 	detachDelay time.Duration
+	// instruments records background upload duration and outcome. Nil without
+	// WithInstruments.
+	instruments *Instruments
 	// retries says how long an actor's background work is held back after a
 	// failure: longer with each consecutive failure for the actor.
 	retries workqueue.TypedRateLimiter[string]
@@ -103,17 +122,23 @@ type Tracker struct {
 
 	// mu guards the actors map, and is never held during file I/O.
 	mu sync.Mutex
-	// actors maps actorUID to the entry of an actor with an operation, a Run,
-	// Restore, or Checkpoint, or a retry hold in progress, or whose state its
-	// snapshot state file lacks because the save failed. requeueLocked drops
-	// any other entry, and findLocked then reads the state from the file.
-	// Read and change it through findLocked, findOrAddLocked, addLocked,
-	// dropLocked, and tracksLocked.
+	// actors maps actorUID to the entries requeueLocked keeps in memory (see
+	// requeueLocked). requeueLocked drops any other entry, and findLocked then
+	// reads the state from the file. Read and change it through findLocked,
+	// findOrAddLocked, addLocked, dropLocked, tracksLocked, and heldLocked.
 	actors map[string]*actorSnapshots
 }
 
 // Option configures a Tracker.
 type Option func(*Tracker)
+
+// WithUploadDelay sets how long after the oldest snapshot of an actor not yet
+// durable was taken atelet uploads the actor's latest local snapshot.
+func WithUploadDelay(d time.Duration) Option {
+	return func(t *Tracker) {
+		t.uploadDelay = d
+	}
+}
 
 // WithDetachDelay sets how long an actor stays suspended on this node, its
 // latest snapshot kept locally, before atelet detaches it.
@@ -123,14 +148,23 @@ func WithDetachDelay(d time.Duration) Option {
 	}
 }
 
+// WithInstruments attaches the instruments the tracker records background
+// uploads on. A nil *Instruments is a no-op.
+func WithInstruments(inst *Instruments) Option {
+	return func(t *Tracker) {
+		t.instruments = inst
+	}
+}
+
 // New returns a tracker over store that tracks no actor yet and measures time
 // on clk. Its workers run once Start is called, until ctx ends. A nil store
-// schedules no detaches.
+// schedules no uploads or detaches.
 func New(ctx context.Context, store Store, clk clock.WithTicker, opts ...Option) *Tracker {
 	t := &Tracker{
 		ctx:         ctx,
 		store:       store,
 		clock:       clk,
+		uploadDelay: DefaultUploadDelay,
 		detachDelay: DefaultDetachDelay,
 		retries:     workqueue.NewTypedItemExponentialFailureRateLimiter[string](snapshotRetryDelay, maxSnapshotRetryDelay),
 		workers:     snapshotWorkers,
@@ -201,6 +235,25 @@ func (t *Tracker) tracksLocked(a *actorSnapshots) bool {
 	return t.actors[a.actorUID] == a
 }
 
+// heldLocked reports whether a Run, Restore, Checkpoint, or PromoteSnapshot of
+// the actor is in progress. An entry with one stays in memory, so this never
+// reads the snapshot state file.
+func (t *Tracker) heldLocked(actorUID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	a := t.actors[actorUID]
+	return a != nil && a.holds > 0
+}
+
+// uploadDueLocked returns when the actor's background upload is due, as
+// actorSnapshots.uploadDue does. A tracker without a store uploads nothing.
+func (t *Tracker) uploadDueLocked(a *actorSnapshots) (time.Time, bool) {
+	if t.store == nil {
+		return time.Time{}, false
+	}
+	return a.uploadDue(t.uploadDelay)
+}
+
 // detachDueLocked returns when atelet next checks whether to detach the actor,
 // as actorSnapshots.detachDue does. A tracker without a store detaches
 // nothing.
@@ -213,10 +266,19 @@ func (t *Tracker) detachDueLocked(a *actorSnapshots) (time.Time, bool) {
 
 // stateLocked returns what atelet holds for the actor.
 func (t *Tracker) stateLocked(a *actorSnapshots) *ateletpb.ActorSnapshotState {
-	return &ateletpb.ActorSnapshotState{
+	var uploading *ateletpb.SnapshotReport
+	if a.keepUploading() {
+		uploading = a.Uploading.report()
+	}
+	st := &ateletpb.ActorSnapshotState{
 		LatestLocal:   a.LatestLocal.report(),
+		Uploading:     uploading,
 		LatestDurable: a.LatestDurable.report(),
 	}
+	if due, ok := t.uploadDueLocked(a); ok {
+		st.UploadDueTime = timestamppb.New(due)
+	}
+	return st
 }
 
 // State returns what atelet holds for the actor.

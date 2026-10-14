@@ -44,6 +44,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/utils/clock"
+	clocktesting "k8s.io/utils/clock/testing"
 )
 
 // useTempNodeDirs roots atelet's on-node state in temp directories so a test
@@ -1273,25 +1274,56 @@ func TestImmediateCheckpointWithoutLocalCopy(t *testing.T) {
 	}
 }
 
-// TestFailedCheckpointForgetsLocalSnapshot suspends a resumed actor whose
-// upload fails after the checkpoint has deleted the pause snapshot: the
-// tracker no longer reports the deleted snapshot.
-func TestFailedCheckpointForgetsLocalSnapshot(t *testing.T) {
-	a := runPluginActor(t)
-	if _, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
-		t.Fatalf("Checkpoint (pause): %v", err)
-	}
-	a.restoreLocal(t, "pause-snap-1", 1)
+// TestFailedCheckpointKeepsLocalSnapshot checkpoints a resumed actor again, and
+// fails before the new snapshot commits: the pause snapshot stays on disk and
+// recorded as the actor's latest local snapshot, so the actor can still be
+// restored from it.
+func TestFailedCheckpointKeepsLocalSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		snap string
+		mode ateletpb.UploadMode
+		fail func(t *testing.T, a *pluginActor)
+	}{
+		{
+			name: "suspend upload fails",
+			snap: "suspend-snap-2",
+			mode: ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE,
+			fail: func(t *testing.T, a *pluginActor) {
+				a.store.putErr = errors.New("object store unavailable")
+			},
+		},
+		{
+			name: "pause move fails",
+			snap: "pause-snap-2",
+			mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED,
+			fail: func(t *testing.T, a *pluginActor) {
+				// A file where the new snapshot's directory belongs fails the move.
+				if err := os.WriteFile(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-2"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := runPluginActor(t)
+			if _, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+				t.Fatalf("Checkpoint (pause): %v", err)
+			}
+			a.restoreLocal(t, "pause-snap-1", 1)
 
-	a.store.putErr = errors.New("object store unavailable")
-	if _, err := a.checkpoint(t, a.snapshot("suspend-snap-2", 2), ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE); err == nil {
-		t.Fatal("Checkpoint (suspend) succeeded, want the upload to fail")
-	}
-	if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-1")); !os.IsNotExist(err) {
-		t.Fatalf("pause snapshot after the failed suspend: stat = %v, want it deleted", err)
-	}
-	if st := a.s.snapshots.State(pluginActorUID); st.GetLatestLocal() != nil || st.GetLatestDurable() != nil {
-		t.Errorf("state = %v, want neither a local nor a durable snapshot", st)
+			tc.fail(t, a)
+			if _, err := a.checkpoint(t, a.snapshot(tc.snap, 2), tc.mode); err == nil {
+				t.Fatal("Checkpoint succeeded, want it to fail")
+			}
+			if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-1")); err != nil {
+				t.Errorf("pause snapshot after the failed checkpoint: stat = %v, want it kept", err)
+			}
+			if got := a.s.snapshots.State(pluginActorUID).GetLatestLocal().GetSnapshot().GetSnapshotUuid(); got != "pause-snap-1" {
+				t.Errorf("latest_local = %q, want pause-snap-1", got)
+			}
+			a.restoreLocal(t, "pause-snap-1", 1)
+		})
 	}
 }
 
@@ -1695,7 +1727,6 @@ func TestPromoteSnapshotFoundAlreadyUploaded(t *testing.T) {
 	if _, err := (&trackerStore{s: a.s}).UploadLocalSnapshot(t.Context(), pluginActorUID, snapshottracker.SnapshotRef{Snapshot: snap}); err != nil {
 		t.Fatalf("UploadLocalSnapshot: %v", err)
 	}
-	a.s.snapshots.ForgetLocal(pluginActorUID)
 	if err := snapshottracker.PruneLocalCheckpoints(t.Context(), pluginActorUID); err != nil {
 		t.Fatalf("PruneLocalCheckpoints: %v", err)
 	}
@@ -1777,4 +1808,159 @@ func mustRecord(t *testing.T, sa *ateletpb.SandboxAssets) *sandboxAssetsRecord {
 		t.Fatal(err)
 	}
 	return rec
+}
+
+type gatingTrackerStore struct {
+	inner   snapshottracker.Store
+	objects *recordingObjectStorage
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *gatingTrackerStore) UploadLocalSnapshot(ctx context.Context, actorUID string, ref snapshottracker.SnapshotRef) (bool, error) {
+	s.started <- struct{}{}
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+	uploaded, err := s.inner.UploadLocalSnapshot(ctx, actorUID, ref)
+	// Fail any second upload attempt so PromoteSnapshot proves it skips
+	// re-uploading once the background upload made the snapshot durable.
+	s.objects.mu.Lock()
+	delete(s.objects.objects, manifestKey(ref.Snapshot.GetSnapshotUuid()))
+	s.objects.putErr = errors.New("promote re-uploaded a snapshot already uploaded in the background")
+	s.objects.mu.Unlock()
+	return uploaded, err
+}
+
+// stepToUpload advances clk to due and waits for the background upload to
+// start. The tracker's queue arms its timer from a clock reading taken just
+// before, so a step that lands in between leaves the timer late; further
+// one-second steps get past it.
+func stepToUpload(t *testing.T, clk *clocktesting.FakeClock, due time.Time, started <-chan struct{}) {
+	t.Helper()
+	clk.Step(due.Sub(clk.Now()))
+	waitFor(t, "the background upload to start", func() bool {
+		select {
+		case <-started:
+			return true
+		case <-time.After(10 * time.Millisecond):
+			clk.Step(time.Second)
+			return false
+		}
+	})
+}
+
+// TestPromoteSnapshotWaitsForBackgroundUpload promotes a snapshot while its
+// background upload is in flight: PromoteSnapshot waits for the background
+// upload to finish and does not upload the snapshot a second time.
+func TestPromoteSnapshotWaitsForBackgroundUpload(t *testing.T) {
+	a := runPluginActor(t)
+	snap := a.snapshot("pause-snap-1", 1)
+	clk := clocktesting.NewFakeClock(time.Now())
+	store := &gatingTrackerStore{
+		inner:   &trackerStore{s: a.s},
+		objects: a.store,
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	a.s.snapshots = snapshottracker.New(t.Context(), store, clk,
+		snapshottracker.WithUploadDelay(time.Second),
+		snapshottracker.WithDetachDelay(time.Hour))
+	a.s.snapshots.Start()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := a.s.snapshots.Wait(ctx); err != nil {
+			t.Errorf("Wait: %v", err)
+		}
+	})
+
+	cpResp, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+	if err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	stepToUpload(t, clk, cpResp.GetState().GetUploadDueTime().AsTime(), store.started)
+
+	type promoteResult struct {
+		state *ateletpb.ActorSnapshotState
+		err   error
+	}
+	resCh := make(chan promoteResult, 1)
+	go func() {
+		resp, err := a.s.PromoteSnapshot(t.Context(), &ateletpb.PromoteSnapshotRequest{
+			Atespace:              "ate-demo",
+			ActorName:             "counter",
+			ActorUid:              pluginActorUID,
+			ActorTemplateAtespace: "default",
+			ActorTemplateName:     "counter",
+			Snapshot:              snap,
+		})
+		resCh <- promoteResult{resp.GetState(), err}
+	}()
+	select {
+	case res := <-resCh:
+		t.Fatalf("PromoteSnapshot returned (%v, %v) while background upload was in progress", res.state, res.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(store.release)
+	res := <-resCh
+	if res.err != nil {
+		t.Fatalf("PromoteSnapshot: %v", res.err)
+	}
+	if got := res.state.GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || got.GetDurableCompleteTime() == nil {
+		t.Errorf("latest_durable = %v, want %v with the background upload's time", got, snap)
+	}
+}
+
+// TestCheckpointKeepsSnapshotBeingUploaded pauses a resumed actor while the
+// background upload of its previous pause snapshot still runs: the
+// checkpoint's prune keeps that snapshot for the upload, which deletes it once
+// it ends.
+func TestCheckpointKeepsSnapshotBeingUploaded(t *testing.T) {
+	a := runPluginActor(t)
+	clk := clocktesting.NewFakeClock(time.Now())
+	store := &gatingTrackerStore{
+		inner:   &trackerStore{s: a.s},
+		objects: a.store,
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	a.s.snapshots = snapshottracker.New(t.Context(), store, clk,
+		snapshottracker.WithUploadDelay(time.Second),
+		snapshottracker.WithDetachDelay(time.Hour))
+	a.s.snapshots.Start()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := a.s.snapshots.Wait(ctx); err != nil {
+			t.Errorf("Wait: %v", err)
+		}
+	})
+
+	cpResp, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+	if err != nil {
+		t.Fatalf("Checkpoint (pause-snap-1): %v", err)
+	}
+	stepToUpload(t, clk, cpResp.GetState().GetUploadDueTime().AsTime(), store.started)
+
+	a.restoreLocal(t, "pause-snap-1", 1)
+	if _, err := a.checkpoint(t, a.snapshot("pause-snap-2", 2), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+		t.Fatalf("Checkpoint (pause-snap-2): %v", err)
+	}
+	snap1Dir := ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-1")
+	if _, err := os.Stat(snap1Dir); err != nil {
+		t.Fatalf("pause-snap-1 during its upload: stat = %v, want it kept", err)
+	}
+
+	close(store.release)
+	waitFor(t, "pause-snap-1 to be deleted once its upload ends", func() bool {
+		_, err := os.Stat(snap1Dir)
+		return os.IsNotExist(err)
+	})
+	if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-2")); err != nil {
+		t.Errorf("pause-snap-2 after the upload of pause-snap-1: stat = %v, want it kept", err)
+	}
 }

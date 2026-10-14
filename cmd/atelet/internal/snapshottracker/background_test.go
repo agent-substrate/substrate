@@ -17,9 +17,12 @@ package snapshottracker
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,7 +64,7 @@ func beginOp(t *testing.T, tr *Tracker, target SnapshotRef) (context.Context, *a
 	t.Helper()
 	tr.lock(trackedActorUID)
 	defer tr.unlock(trackedActorUID)
-	ctx, op := tr.beginOpLocked(tr.ctx, tr.findOrAddLocked(trackedActorUID), target)
+	ctx, op := tr.beginOpLocked(tr.ctx, tr.findOrAddLocked(trackedActorUID), opUpload, target)
 	if op == nil {
 		t.Fatal("beginOpLocked: the actor already has an operation in progress")
 	}
@@ -213,16 +216,17 @@ func TestForgetAbandonsInFlightOp(t *testing.T) {
 	if endOp(tr, op) {
 		t.Error("endOpLocked = true after Forget, want the operation abandoned")
 	}
-	if got := tr.State(trackedActorUID); !proto.Equal(got, &ateletpb.ActorSnapshotState{}) {
-		t.Errorf("state after forget = %v, want empty", got)
+	if got, want := tr.State(trackedActorUID), (&ateletpb.ActorSnapshotState{Uploading: s1.report()}); !proto.Equal(got, want) {
+		t.Errorf("state after forget = %v, want %v: only the operation begun after Forget", got, want)
 	}
 	if !endOp(tr, next) {
 		t.Error("endOpLocked = false for the operation begun after Forget, want the abandoned one's end to leave it alone")
 	}
 }
 
-// A Checkpoint's commits, PromoteSnapshot's, and State neither wait for the
-// actor's background operation in progress nor cancel it.
+// A Checkpoint's commits and LocalSnapshotsToKeep, PromoteSnapshot's commit,
+// and State neither wait for the actor's background operation in progress nor
+// cancel it.
 func TestCommitsDoNotWaitForInFlightOp(t *testing.T) {
 	useActorDir(t)
 	tr := newTracker(t)
@@ -236,7 +240,7 @@ func TestCommitsDoNotWaitForInFlightOp(t *testing.T) {
 		call func()
 	}{
 		{"CommitLocal", func() { tr.CommitLocal(trackedActorUID, testRef("s2", 2, t0)) }},
-		{"ForgetLocal", func() { tr.ForgetLocal(trackedActorUID) }},
+		{"LocalSnapshotsToKeep", func() { tr.LocalSnapshotsToKeep(trackedActorUID) }},
 		{"CommitDurable", func() { tr.CommitDurable(trackedActorUID, testRef("s3", 3, t0)) }},
 		{"CommitPromoted", func() { tr.CommitPromoted(trackedActorUID, testRef("s4", 4, t0)) }},
 		{"State", func() { tr.State(trackedActorUID) }},
@@ -260,7 +264,7 @@ func TestBeginOpLockedAllowsOneOpPerActor(t *testing.T) {
 	_, op := beginOp(t, tr, s1)
 
 	tr.lock(trackedActorUID)
-	_, second := tr.beginOpLocked(tr.ctx, tr.findOrAddLocked(trackedActorUID), s1)
+	_, second := tr.beginOpLocked(tr.ctx, tr.findOrAddLocked(trackedActorUID), opUpload, s1)
 	tr.unlock(trackedActorUID)
 	if second != nil {
 		t.Error("beginOpLocked began a second operation for the actor, want none")
@@ -268,7 +272,7 @@ func TestBeginOpLockedAllowsOneOpPerActor(t *testing.T) {
 
 	const otherActorUID = "other-actor-uid"
 	tr.lock(otherActorUID)
-	_, other := tr.beginOpLocked(tr.ctx, tr.findOrAddLocked(otherActorUID), s1)
+	_, other := tr.beginOpLocked(tr.ctx, tr.findOrAddLocked(otherActorUID), opUpload, s1)
 	tr.unlock(otherActorUID)
 	if other == nil {
 		t.Error("beginOpLocked for another actor = nil, want an operation")
@@ -285,9 +289,9 @@ func TestBeginOpLockedAllowsOneOpPerActor(t *testing.T) {
 }
 
 // A failure holds the actor's background work back for snapshotRetryDelay,
-// doubling with each consecutive failure up to maxSnapshotRetryDelay. Making
-// the actor's latest snapshot durable, or forgetting the actor, starts the
-// doubling over.
+// doubling with each consecutive failure up to maxSnapshotRetryDelay. A
+// deferred checkpoint, making the actor's latest snapshot durable, or
+// forgetting the actor starts the doubling over.
 func TestTrackerBackoff(t *testing.T) {
 	useActorDir(t)
 	clk := clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0))
@@ -307,6 +311,7 @@ func TestTrackerBackoff(t *testing.T) {
 		name string
 		call func()
 	}{
+		{"CommitLocal", func() { tr.CommitLocal(trackedActorUID, testRef("s0", 1, clk.Now())) }},
 		{"CommitDurable", func() { tr.CommitDurable(trackedActorUID, testRef("s1", 1, clk.Now())) }},
 		{"CommitPromoted", func() { tr.CommitPromoted(trackedActorUID, testRef("s2", 2, clk.Now())) }},
 		{"Forget", func() {
@@ -321,5 +326,94 @@ func TestTrackerBackoff(t *testing.T) {
 		if got := fail(); got != snapshotRetryDelay {
 			t.Errorf("the first failure after %s held the actor back %v, want %v", lift.name, got, snapshotRetryDelay)
 		}
+	}
+}
+
+// recordingHandler is a slog.Handler that keeps the records it handles.
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *recordingHandler) WithGroup(string) slog.Handler { return h }
+
+// logOp logs a finished operation at info level, a failed background one as a
+// warning, and a background one canceled by its context at info level. A
+// failed foreground operation goes back to its caller unlogged.
+func TestLogOp(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, tc := range []struct {
+		name       string
+		ctx        context.Context
+		background bool
+		err        error
+		wantLevel  slog.Level
+		wantMsg    string
+	}{
+		{name: "finished", ctx: context.Background(), background: true, wantLevel: slog.LevelInfo, wantMsg: "Snapshot operation finished"},
+		{name: "background failure", ctx: context.Background(), background: true, err: errors.New("boom"), wantLevel: slog.LevelWarn, wantMsg: "Snapshot operation failed"},
+		{name: "background canceled", ctx: canceled, background: true, err: context.Canceled, wantLevel: slog.LevelInfo, wantMsg: "Snapshot operation canceled"},
+		{name: "foreground failure", ctx: context.Background(), err: errors.New("boom")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &recordingHandler{}
+			defaultLogger := slog.Default()
+			slog.SetDefault(slog.New(h))
+			t.Cleanup(func() { slog.SetDefault(defaultLogger) })
+
+			logOp(tc.ctx, trackedActorUID, opUpload, testRef("s1", 1, time.Time{}), false, tc.background, time.Second, tc.err)
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if tc.wantMsg == "" {
+				if len(h.records) != 0 {
+					t.Errorf("logged %q, want nothing", h.records[0].Message)
+				}
+				return
+			}
+			if len(h.records) != 1 || h.records[0].Message != tc.wantMsg || h.records[0].Level != tc.wantLevel {
+				t.Errorf("logged %v, want one %v record %q", h.records, tc.wantLevel, tc.wantMsg)
+			}
+		})
+	}
+}
+
+// A failed background detach logs a warning rather than a cancellation:
+// finishDetach logs before endOp ends the detach's context.
+func TestBackgroundDetachFailureLogsWarning(t *testing.T) {
+	store := newFakeSnapshotStore()
+	store.setErr(errors.New("boom"))
+	tr := newIdleTestTracker(t, store)
+	t0 := tr.clock.Now()
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
+
+	h := &recordingHandler{}
+	defaultLogger := slog.Default()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() { slog.SetDefault(defaultLogger) })
+
+	stepTo(tr, t0.Add(testDetachDelay))
+	processNext(t, tr)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var got []string
+	for _, r := range h.records {
+		if strings.HasPrefix(r.Message, "Snapshot operation") {
+			got = append(got, r.Level.String()+" "+r.Message)
+		}
+	}
+	if want := []string{"WARN Snapshot operation failed"}; !slices.Equal(got, want) {
+		t.Errorf("logged %v, want %v", got, want)
 	}
 }
