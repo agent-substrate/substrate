@@ -446,7 +446,7 @@ func TestActorEgressHTTPSByHostnamePassthrough(t *testing.T) {
 }
 
 // TestActorEgressHTTPByHostnameCleartext: the gateway decides each cleartext
-// HTTP request by name: example.org 200, example.net 403.
+// HTTP request by name: example.org 200, example.com 403.
 func TestActorEgressHTTPByHostnameCleartext(t *testing.T) {
 	ctx := context.Background()
 	dataplane := e2e.CurrentAtenetDataplane()
@@ -462,7 +462,7 @@ func TestActorEgressHTTPByHostnameCleartext(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("fetch of the allowed host returned HTTP %d, want 200; body: %s", status, body)
 	}
-	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "http://example.net/", notTransient)
+	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "http://example.com/", notTransient)
 	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
 		t.Fatalf("fetch of a host outside the policy returned HTTP %d, want an egress-policy denial; body: %s", status, body)
 	}

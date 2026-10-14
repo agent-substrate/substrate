@@ -423,14 +423,14 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 		{
 			name: "http and https rules with effects set has_effects",
 			policy: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{
-				{Http: &ateapipb.HTTPRule{
+				{Http: &ateapipb.HttpRule{
 					Hostnames: []string{"http-effects.example.com"},
 					Ports:     ports(443),
 					Effects: &ateapipb.HttpRuleEffects{
 						ReplaceHeaders: []*ateapipb.CredentialHeader{{Header: "authorization", CredentialUri: "ate-secret://k8s/default/token"}},
 					},
 				}},
-				{Https: &ateapipb.HTTPSRule{
+				{Https: &ateapipb.HttpsRule{
 					Hostnames: []string{"https-effects.example.com"},
 					Effects: &ateapipb.HttpRuleEffects{
 						ReplaceHeaders: []*ateapipb.CredentialHeader{{Header: "authorization", CredentialUri: "ate-secret://k8s/default/token"}},

@@ -532,14 +532,14 @@ func TestEgressRules(t *testing.T) {
 		{
 			name: "http and https rules with effects set HasEffects",
 			policy: policy(
-				&ateapipb.EgressRule{Http: &ateapipb.HTTPRule{
+				&ateapipb.EgressRule{Http: &ateapipb.HttpRule{
 					Hostnames: []string{"http-effects.example.com"},
 					Ports:     ports(443),
 					Effects: &ateapipb.HttpRuleEffects{
 						ReplaceHeaders: []*ateapipb.CredentialHeader{{Header: "authorization", CredentialUri: "ate-secret://k8s/default/token"}},
 					},
 				}},
-				&ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{
+				&ateapipb.EgressRule{Https: &ateapipb.HttpsRule{
 					Hostnames: []string{"https-effects.example.com"},
 					Effects: &ateapipb.HttpRuleEffects{
 						ReplaceHeaders: []*ateapipb.CredentialHeader{{Header: "authorization", CredentialUri: "ate-secret://k8s/default/token"}},
