@@ -39,8 +39,8 @@ type message[M any] interface {
 
 // Parse parses each record of a manifest into an M, in order. Each non-empty
 // YAML document is a record, and a JSON file is a single record. Empty
-// documents are skipped, as kubectl does. Parsing is strict: unknown fields are an error, so
-// typos don't silently drop configuration.
+// documents are skipped, as kubectl does. Parsing is strict: unknown fields are
+// an error, so typos don't silently drop configuration.
 func Parse[M any, PM message[M]](data []byte) ([]PM, error) {
 	docs, err := splitDocuments(data)
 	if err != nil {
