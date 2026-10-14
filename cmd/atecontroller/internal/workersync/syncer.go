@@ -317,8 +317,8 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 
 	w, err := s.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: key.workerRef()})
 	if status.Code(err) == codes.NotFound {
-		// ips and node_name are required and immutable, so the pod is registered
-		// once it has an IP; the update that reports it re-enqueues the pod.
+		// ips is required, so the pod is registered once it has an IP; the
+		// update that reports it re-enqueues the pod.
 		if len(pod.Status.PodIPs) == 0 {
 			return nil
 		}
@@ -379,6 +379,14 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		w.Epoch = epoch
 		changed = true
 	}
+	// Between sandboxes the pod reports no IPs; the registered ones are kept
+	// until it has new ones.
+	if ips := podIPs(pod); len(ips) > 0 && !slices.Equal(w.GetIps(), ips) {
+		slog.InfoContext(ctx, "Syncer: updating worker (pod IPs changed)",
+			append(key.logAttrs(), slog.Any("registered", w.GetIps()), slog.Any("pod_ips", ips))...)
+		w.Ips = ips
+		changed = true
+	}
 	if !maps.Equal(w.GetLabels(), pool.GetLabels()) {
 		slog.InfoContext(ctx, "Syncer: updating worker (labels changed)", key.logAttrs()...)
 		w.Labels = pool.GetLabels()
@@ -393,14 +401,6 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		// scheduler if it were not.
 		slog.DebugContext(ctx, "Syncer: registered worker sandbox class predates its pool",
 			append(key.logAttrs(), slog.String("registered", w.GetSandboxClass()), slog.String("pool", string(pool.Spec.DefaultSandboxClass())))...)
-	}
-	if ips := podIPs(pod); len(ips) > 0 && !slices.Equal(w.GetIps(), ips) {
-		// TODO: I don't think this is possible, but handling this case so we can
-		// log it just in case we can reproduce it. It is logged rather than
-		// repaired because ips is immutable on a registered Worker: writing the
-		// pod's value back would be rejected rather than applied.
-		slog.WarnContext(ctx, "Syncer: registered worker IPs disagree with its pod",
-			append(key.logAttrs(), slog.Any("registered", w.GetIps()), slog.Any("pod_ips", ips))...)
 	}
 	if changed {
 		w, err = s.client.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{Worker: w})

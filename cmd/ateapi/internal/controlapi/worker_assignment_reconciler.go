@@ -39,9 +39,11 @@ type workerWatcher interface {
 	AddHandler(handler func(*ateapipb.Worker))
 }
 
-// WorkerAssignmentReconciler keeps the Actors assigned to a Worker in line with
-// its epoch. It watches for Workers whose epoch has risen past
-// status.observed_epoch, and crashes the Actors a restarted ateom took with it.
+// WorkerAssignmentReconciler keeps the Actors assigned to a Worker in line with its
+// epoch and ips. It watches for Workers whose epoch has risen past
+// status.observed_epoch, and crashes the Actors a restarted ateom took with it,
+// or whose status.ips_generation has risen past status.observed_ips_generation,
+// and points their Actors at the new ips.
 //
 // TODO: Every ateapi replica runs this reconciler and queues every Worker, with
 // only a per-Worker lease keeping them from releasing the same one at once.
@@ -75,7 +77,7 @@ func (r *WorkerAssignmentReconciler) Start(ctx context.Context) {
 	r.workers.AddHandler(r.enqueue)
 }
 
-// enqueue queues worker if its epoch has not been observed.
+// enqueue queues worker if its epoch or ips have not been observed.
 func (r *WorkerAssignmentReconciler) enqueue(worker *ateapipb.Worker) {
 	if needsAssignmentReconcile(worker) {
 		r.queue.Add(worker.GetMetadata().GetName())
@@ -119,7 +121,7 @@ func (r *WorkerAssignmentReconciler) reconcileOne(ctx context.Context, name stri
 	if err != nil {
 		if errors.Is(err, store.ErrLeaseConflict) {
 			// Retried in case that replica does not finish; once it has, the
-			// retry finds the epoch observed.
+			// retry finds the epoch and ips observed.
 			return errWorkerLeased
 		}
 		return fmt.Errorf("while acquiring lease: %w", err)

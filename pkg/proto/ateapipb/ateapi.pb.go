@@ -2184,8 +2184,10 @@ func (x *ActorCrash) GetCrashTime() *timestamppb.Timestamp {
 //
 // This is a denormalized snapshot, not merely a reference: atenet reads
 // worker_pod_ips on the request-routing path and must not need a second lookup,
-// and kubectl-ate displays the pod name. The copies stay valid for the life of
-// the assignment because a Worker's identity fields are immutable.
+// and kubectl-ate displays the pod name. The identity fields are immutable on a
+// Worker, so their copies stay valid for the life of the assignment.
+// worker_pod_ips is the exception: the control plane rewrites it when the
+// Worker's ips change.
 //
 // Pass `worker` to GetWorker; none of the denormalized fields identify the
 // Worker to the API.
@@ -2220,7 +2222,9 @@ type WorkerAssignment struct {
 	// +k8s:required
 	// +k8s:format=k8s-uuid
 	WorkerPodUid string `protobuf:"bytes,4,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
-	// worker_pod_ips are the IPs of worker_pod, copied from Worker.ips.
+	// worker_pod_ips are the IPs of worker_pod, copied from Worker.ips. Until
+	// status.observed_ips_generation on the Worker catches up with its
+	// status.ips_generation, they may still be the pod's previous IPs.
 	//
 	// +k8s:required
 	// +k8s:maxItems=2
@@ -2243,8 +2247,14 @@ type WorkerAssignment struct {
 	//
 	// +k8s:optional
 	SandboxRuntime *SandboxRuntime `protobuf:"bytes,9,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// worker_ips_generation is the Worker's status.ips_generation whose ips
+	// worker_pod_ips holds.
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	WorkerIpsGeneration int64 `protobuf:"varint,10,opt,name=worker_ips_generation,json=workerIpsGeneration,proto3" json:"worker_ips_generation,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *WorkerAssignment) Reset() {
@@ -2338,6 +2348,13 @@ func (x *WorkerAssignment) GetSandboxRuntime() *SandboxRuntime {
 		return x.SandboxRuntime
 	}
 	return nil
+}
+
+func (x *WorkerAssignment) GetWorkerIpsGeneration() int64 {
+	if x != nil {
+		return x.WorkerIpsGeneration
+	}
+	return 0
 }
 
 // TagStatus is the server-owned state of a Tag.
@@ -7208,7 +7225,7 @@ func (x *ListActorsResponse) GetNextPageToken() string {
 // by the control plane and is opaque to clients — never parse it or derive it
 // from anything else; read pod identity from the named fields below.
 //
-// labels and epoch are the only mutable fields; every other field is
+// labels, epoch and ips are the only mutable fields; every other field is
 // either immutable after creation or output-only. UpdateWorker replaces the whole resource, so
 // an immutable field that a request changes — including by omitting it, which
 // would clear it — is rejected with INVALID_ARGUMENT.
@@ -7249,7 +7266,6 @@ type Worker struct {
 	// +k8s:maxItems=2
 	// +k8s:listType=atomic
 	// +k8s:customValidation # until `format=k8s-ip` is supported
-	// +k8s:immutable
 	Ips []string `protobuf:"bytes,7,rep,name=ips,proto3" json:"ips,omitempty"`
 	// sandbox_class mirrors the WorkerPool's default sandbox class
 	//
@@ -7441,8 +7457,22 @@ type WorkerStatus struct {
 	// +k8s:maxItems=32
 	// +k8s:listType=atomic
 	RestorableRuntimes []*SandboxRuntime `protobuf:"bytes,6,rep,name=restorable_runtimes,json=restorableRuntimes,proto3" json:"restorable_runtimes,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// ips_generation counts the changes to ips. It never decreases, so ips that
+	// change and change back still raise it.
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	IpsGeneration int64 `protobuf:"varint,7,opt,name=ips_generation,json=ipsGeneration,proto3" json:"ips_generation,omitempty"`
+	// observed_ips_generation is the latest ips_generation whose ips the control
+	// plane has written to every Actor assigned to the Worker. While it is below
+	// ips_generation, some of those Actors may still route to IPs the pod no
+	// longer has.
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	ObservedIpsGeneration int64 `protobuf:"varint,8,opt,name=observed_ips_generation,json=observedIpsGeneration,proto3" json:"observed_ips_generation,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *WorkerStatus) Reset() {
@@ -7515,6 +7545,20 @@ func (x *WorkerStatus) GetRestorableRuntimes() []*SandboxRuntime {
 		return x.RestorableRuntimes
 	}
 	return nil
+}
+
+func (x *WorkerStatus) GetIpsGeneration() int64 {
+	if x != nil {
+		return x.IpsGeneration
+	}
+	return 0
+}
+
+func (x *WorkerStatus) GetObservedIpsGeneration() int64 {
+	if x != nil {
+		return x.ObservedIpsGeneration
+	}
+	return 0
 }
 
 // SandboxRuntime describes a sandbox runtime and its compatibility identity as
@@ -7810,9 +7854,23 @@ type ActorAssignment struct {
 	//
 	// +k8s:optional
 	// +k8s:minimum=0
-	WorkerEpoch   int64 `protobuf:"varint,7,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	WorkerEpoch int64 `protobuf:"varint,7,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
+	// worker_pod_ips are the IPs of the Worker's pod. Until
+	// status.observed_ips_generation on the Worker catches up with its
+	// status.ips_generation, they may still be the pod's previous IPs.
+	//
+	// +k8s:optional
+	// +k8s:maxItems=2
+	// +k8s:listType=atomic
+	WorkerPodIps []string `protobuf:"bytes,8,rep,name=worker_pod_ips,json=workerPodIps,proto3" json:"worker_pod_ips,omitempty"`
+	// worker_ips_generation is the Worker's status.ips_generation whose ips
+	// worker_pod_ips holds.
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	WorkerIpsGeneration int64 `protobuf:"varint,9,opt,name=worker_ips_generation,json=workerIpsGeneration,proto3" json:"worker_ips_generation,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ActorAssignment) Reset() {
@@ -7876,6 +7934,20 @@ func (x *ActorAssignment) GetResources() *Resources {
 func (x *ActorAssignment) GetWorkerEpoch() int64 {
 	if x != nil {
 		return x.WorkerEpoch
+	}
+	return 0
+}
+
+func (x *ActorAssignment) GetWorkerPodIps() []string {
+	if x != nil {
+		return x.WorkerPodIps
+	}
+	return nil
+}
+
+func (x *ActorAssignment) GetWorkerIpsGeneration() int64 {
+	if x != nil {
+		return x.WorkerIpsGeneration
 	}
 	return 0
 }
@@ -9511,7 +9583,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"ActorCrash\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x129\n" +
 	"\n" +
-	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\xf5\x02\n" +
+	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\xa9\x03\n" +
 	"\x10WorkerAssignment\x12)\n" +
 	"\x06worker\x18\x06 \x01(\v2\x11.ateapi.ObjectRefR\x06worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
@@ -9523,7 +9595,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0eworker_pod_ips\x18\x05 \x03(\tR\fworkerPodIps\x12\x1b\n" +
 	"\tnode_name\x18\a \x01(\tR\bnodeName\x12!\n" +
 	"\fworker_epoch\x18\b \x01(\x03R\vworkerEpoch\x12?\n" +
-	"\x0fsandbox_runtime\x18\t \x01(\v2\x16.ateapi.SandboxRuntimeR\x0esandboxRuntime\"g\n" +
+	"\x0fsandbox_runtime\x18\t \x01(\v2\x16.ateapi.SandboxRuntimeR\x0esandboxRuntime\x122\n" +
+	"\x15worker_ips_generation\x18\n" +
+	" \x01(\x03R\x13workerIpsGeneration\"g\n" +
 	"\tTagStatus\x12,\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x10.ateapi.SnapshotR\bsnapshot\x12,\n" +
 	"\x12actor_template_uid\x18\x02 \x01(\tR\x10actorTemplateUid\"\xd2\x01\n" +
@@ -9780,14 +9854,16 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x06status\x18\v \x01(\v2\x14.ateapi.WorkerStatusR\x06status\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:\x0f\x82\xb5\x18\v\x18\x02\"\aWorkers\"\xd6\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:\x0f\x82\xb5\x18\v\x18\x02\"\aWorkers\"\xb5\x03\n" +
 	"\fWorkerStatus\x12)\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x13.ateapi.WorkerStateR\x05state\x123\n" +
 	"\bcapacity\x18\x02 \x01(\v2\x17.ateapi.WorkerResourcesR\bcapacity\x125\n" +
 	"\tallocated\x18\x03 \x01(\v2\x17.ateapi.WorkerResourcesR\tallocated\x12%\n" +
 	"\x0eobserved_epoch\x18\x04 \x01(\x03R\robservedEpoch\x12?\n" +
 	"\x0fdefault_runtime\x18\x05 \x01(\v2\x16.ateapi.SandboxRuntimeR\x0edefaultRuntime\x12G\n" +
-	"\x13restorable_runtimes\x18\x06 \x03(\v2\x16.ateapi.SandboxRuntimeR\x12restorableRuntimes\"o\n" +
+	"\x13restorable_runtimes\x18\x06 \x03(\v2\x16.ateapi.SandboxRuntimeR\x12restorableRuntimes\x12%\n" +
+	"\x0eips_generation\x18\a \x01(\x03R\ripsGeneration\x126\n" +
+	"\x17observed_ips_generation\x18\b \x01(\x03R\x15observedIpsGeneration\"o\n" +
 	"\x0eSandboxRuntime\x12#\n" +
 	"\rsandbox_class\x18\x01 \x01(\tR\fsandboxClass\x128\n" +
 	"\aversion\x18\x02 \x01(\v2\x1e.ateapi.VersionedSandboxCompatR\aversion\"w\n" +
@@ -9801,13 +9877,15 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value\"Z\n" +
 	"\x0fWorkerResources\x12/\n" +
 	"\tresources\x18\x01 \x01(\v2\x11.ateapi.ResourcesR\tresources\x12\x16\n" +
-	"\x06actors\x18\x02 \x01(\x05R\x06actors\"\x81\x02\n" +
+	"\x06actors\x18\x02 \x01(\x05R\x06actors\"\xdb\x02\n" +
 	"\x0fActorAssignment\x124\n" +
 	"\bmetadata\x18\x06 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12'\n" +
 	"\x05actor\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12/\n" +
 	"\tresources\x18\x05 \x01(\v2\x11.ateapi.ResourcesR\tresources\x12!\n" +
-	"\fworker_epoch\x18\a \x01(\x03R\vworkerEpoch:\x1e\x82\xb5\x18\x1a\n" +
+	"\fworker_epoch\x18\a \x01(\x03R\vworkerEpoch\x12$\n" +
+	"\x0eworker_pod_ips\x18\b \x03(\tR\fworkerPodIps\x122\n" +
+	"\x15worker_ips_generation\x18\t \x01(\x03R\x13workerIpsGeneration:\x1e\x82\xb5\x18\x1a\n" +
 	"\x06Worker\"\x10ActorAssignments\"\x81\x02\n" +
 	"\x15RegisterWorkerRequest\x12)\n" +
 	"\x06worker\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x06worker\x123\n" +
