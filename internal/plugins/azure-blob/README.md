@@ -279,7 +279,9 @@ snapshotConfig:
 `FetchAsset` differs where its codes carry a narrower meaning:
 `PermissionDenied` means a refused snapshot location, so an Azure 401 or 403
 is `Internal`; an absent asset container is `NotFound`; and a size or sha256
-mismatch is `FailedPrecondition`.
+mismatch is `FailedPrecondition`. A 401 or 403 refuses the plugin's own
+identity, not the URL; atelet reads an asset anonymously after `Internal` only
+for `gs://` URLs, which this plugin never reads.
 
 ## Limitations and open edges
 
