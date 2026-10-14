@@ -763,11 +763,24 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Checkpoint pause container (root of the sandbox), splitting durable-dir
 		// volumes into <checkpointPath>/fs when present.
+		sandbox, sbErr := openSandboxProcess(req.GetActorDirs())
+		if sbErr != nil {
+			slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", sbErr))
+		} else {
+			defer sandbox.Close()
+		}
 		err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
-		timing.checkpoint = lap(&tLast)
 		if err != nil {
+			timing.checkpoint = lap(&tLast)
 			return nil, fmt.Errorf("while checkpointing pause: %w", err)
 		}
+		// the checkpoint stops the sandbox, runsc delete fails until it is reaped
+		if sandbox != nil {
+			if err := sandbox.waitGone(sandboxExitTimeout); err != nil {
+				slog.WarnContext(ctx, "Sandbox did not go away after checkpoint", slog.Any("err", err))
+			}
+		}
+		timing.checkpoint = lap(&tLast)
 	default:
 		return nil, fmt.Errorf("unsupported snapshot fidelity: %v", fidelity)
 	}
