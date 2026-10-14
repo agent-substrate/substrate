@@ -149,6 +149,11 @@ var Registry = []Setting{
 		Key: "storage.bucketName", Env: "BUCKET_NAME", Flag: "storage-bucket-name", Kind: KindString,
 		Usage: "Snapshot bucket the demos are templated with",
 	},
+	{
+		Key: gvisorAssetBaseURLKey, Env: "ATE_GVISOR_ASSET_BASE_URL", Flag: "gvisor-asset-base-url", Kind: KindString,
+		Usage: "Replace the gs://gvisor/releases/ prefix in the bundled gvisor-default SandboxConfig " +
+			"with this gs:// or s3:// base URL",
+	},
 
 	{
 		Key: "atenet.dataplane", Env: "ATE_ATENET_DATAPLANE", Flag: "atenet-dataplane", Kind: KindString,
@@ -303,6 +308,10 @@ var Registry = []Setting{
 // kindEnabledKey is resolved before the rest, because whether to source the
 // developer environment depends on it.
 const kindEnabledKey = "kindCluster.enabled"
+
+// gvisorAssetBaseURLKey names the optional mirror for the bundled gVisor
+// release assets.
+const gvisorAssetBaseURLKey = "sandbox.gvisorAssetBaseURL"
 
 // scoped holds the settings commands registered for themselves, in
 // registration order.

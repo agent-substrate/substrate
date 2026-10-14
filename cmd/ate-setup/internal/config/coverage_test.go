@@ -100,6 +100,8 @@ func valueFor(key string) string {
 		return "ES256"
 	case "actorJWT.issuer":
 		return "https://idp.example.com"
+	case gvisorAssetBaseURLKey:
+		return "s3://substrate-assets/gvisor/releases/"
 	case "csi.setup":
 		return "none"
 	}

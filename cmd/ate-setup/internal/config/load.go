@@ -15,6 +15,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,10 +23,12 @@ import (
 	"strings"
 
 	"github.com/spf13/pflag"
+	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
+	"github.com/agent-substrate/substrate/pkg/assetfetch"
 )
 
 // ConfigPathEnv names the configuration document when --config is not given.
@@ -208,6 +211,11 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 	if actorJWTIssuer == "" {
 		actorJWTIssuer = installdefaults.ActorJWTIssuer(r.String("namespace"))
 	}
+	gvisorAssetBaseURL, err := normalizeGvisorAssetBaseURL(r.String(gvisorAssetBaseURLKey))
+	if err != nil {
+		value, _ := r.Value(gvisorAssetBaseURLKey)
+		return nil, fmt.Errorf("%s: %w (from %s)", value.Setting.Key, err, value.From.Describe(value.Setting))
+	}
 
 	cfg := &Config{
 		Root:               root,
@@ -220,6 +228,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		ClusterLocation:    r.String("gcp.clusterLocation"),
 		ExpectedJWTIssuer:  r.String("ateapi.expectedJWTIssuer"),
 		BucketName:         r.String("storage.bucketName"),
+		GvisorAssetBaseURL: gvisorAssetBaseURL,
 		KODockerRepo:       r.String("ko.dockerRepo"),
 		KODefaultPlatforms: r.String("ko.defaultPlatforms"),
 		ActorJWTAlgorithm:  r.String("actorJWT.algorithm"),
@@ -274,6 +283,28 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// normalizeGvisorAssetBaseURL validates the object-store URL prefix used for
+// mirrored gVisor releases and gives it exactly one trailing slash. A sentinel
+// object runs the prefix through the same URI and object-name checks as the
+// in-tree object-store plugin; each real rewritten URL is checked again before
+// the SandboxConfig is applied.
+func normalizeGvisorAssetBaseURL(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	if strings.TrimSpace(raw) != raw {
+		return "", fmt.Errorf("must not have leading or trailing whitespace")
+	}
+	normalized := strings.TrimSuffix(raw, "/") + "/"
+	probe := normalized + "asset"
+	_, _, err := assetfetch.ParseObjectURI(probe, assetfetch.GCSURIScheme, assetfetch.S3URIScheme)
+	if err != nil {
+		message := strings.ReplaceAll(status.Convert(err).Message(), probe, raw)
+		return "", errors.New(message)
+	}
+	return normalized, nil
 }
 
 // splitKubeconfig divides the setting into the path handed to client-go and the

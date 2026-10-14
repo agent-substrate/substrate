@@ -226,6 +226,9 @@ func TestFetchAsset(t *testing.T) {
 			if status.Code(err) != codes.InvalidArgument {
 				t.Errorf("%s plugin: FetchAsset of a %s:// asset = %v, want %s", tc.plugin, tc.asset, err, codes.InvalidArgument)
 			}
+			if want := "storage backend serves " + tc.plugin + "://"; !strings.Contains(status.Convert(err).Message(), want) {
+				t.Errorf("%s plugin error = %q, want it to contain %q", tc.plugin, err, want)
+			}
 			assertContent(t, dst, untouched)
 			if n := f.backend.gets.Load(); n != 0 {
 				t.Errorf("%s plugin read %d objects for a %s:// asset, want 0", tc.plugin, n, tc.asset)
@@ -324,6 +327,7 @@ func TestFetchAsset(t *testing.T) {
 			{"https scheme", "https://storage.example.com/" + testBucket + "/kata-assets/vmlinux", sum, 1 << 20},
 			{"no object", "gs://" + testBucket, sum, 1 << 20},
 			{"no bucket", "gs:///kata-assets/vmlinux", sum, 1 << 20},
+			{"bucket port", "gs://" + testBucket + ":9000/kata-assets/vmlinux", sum, 1 << 20},
 			{"query", "gs://" + testBucket + "/kata-assets/vmlinux?sig=secret", sum, 1 << 20},
 			{"user info", "gs://usr0:secret@" + testBucket + "/kata-assets/vmlinux", sum, 1 << 20},
 			{"fragment", "gs://" + testBucket + "/kata-assets/vmlinux#x", sum, 1 << 20},

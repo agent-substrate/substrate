@@ -18,13 +18,10 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/agent-substrate/substrate/pkg/assetfetch"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // AssetPlugin serves AssetProvider on an object storage client. It reads
@@ -50,7 +47,7 @@ type AssetPlugin struct {
 // stages downloads in stagingDir, which must not be below root, holding at
 // most stagingCapacity bytes there at once.
 func NewAssetPlugin(client objectstorage.ObjectStorage, scheme, root, stagingDir string, stagingCapacity int64) (*AssetPlugin, error) {
-	if scheme != "gs" && scheme != "s3" {
+	if scheme != assetfetch.GCSURIScheme && scheme != assetfetch.S3URIScheme {
 		return nil, fmt.Errorf("asset URI scheme %q is not gs or s3", scheme)
 	}
 	stager, err := assetfetch.NewStager(root, stagingDir, stagingCapacity)
@@ -64,7 +61,7 @@ func NewAssetPlugin(client objectstorage.ObjectStorage, scheme, root, stagingDir
 // if it is at most max_bytes long and hashes to sha256, copies it into the
 // existing file at write_path (see assetfetch.Stager.Fetch).
 func (p *AssetPlugin) FetchAsset(ctx context.Context, req *objectstorev1.FetchAssetRequest) (*objectstorev1.FetchAssetResponse, error) {
-	bucket, object, err := parseAssetURI(req.GetAssetUri(), p.scheme)
+	bucket, object, err := assetfetch.ParseObjectURI(req.GetAssetUri(), p.scheme)
 	if err != nil {
 		return nil, err
 	}
@@ -83,25 +80,4 @@ func (p *AssetPlugin) FetchAsset(ctx context.Context, req *objectstorev1.FetchAs
 		return nil, err
 	}
 	return &objectstorev1.FetchAssetResponse{}, nil
-}
-
-// parseAssetURI accepts <scheme>://<bucket>/<object> whose object name is in
-// canonical form and is not stored under a snapshot location, and returns the
-// bucket and object name.
-func parseAssetURI(uri, scheme string) (bucket, object string, err error) {
-	u, err := assetfetch.ParseURI(uri)
-	if err != nil {
-		return "", "", err
-	}
-	if u.Scheme != scheme {
-		return "", "", status.Errorf(codes.InvalidArgument, "asset URI %s: scheme %q is not served by this plugin, whose storage backend serves %s://", uri, u.Scheme, scheme)
-	}
-	object = strings.TrimPrefix(u.Path, "/")
-	if u.Host == "" || object == "" {
-		return "", "", status.Errorf(codes.InvalidArgument, "asset URI %s must name a bucket and an object", uri)
-	}
-	if err := assetfetch.CheckObjectName(uri, u.Scheme+"://"+u.Host, object); err != nil {
-		return "", "", err
-	}
-	return u.Host, object, nil
 }

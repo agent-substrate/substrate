@@ -22,13 +22,17 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	apiv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/assetfetch"
 )
 
 // crdGVK is the kind of a CustomResourceDefinition.
@@ -74,6 +78,10 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.CheckCSIDriver(opts.SetupCSI); err != nil {
 		return err
 	}
+	gvisorConfigs, err := e.gvisorSandboxConfigObjects()
+	if err != nil {
+		return err
+	}
 	if err := e.requireNoWorkerPods(ctx); err != nil {
 		return err
 	}
@@ -103,7 +111,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
-	if err := e.DeploySandboxConfig(ctx); err != nil {
+	if err := e.deploySandboxConfig(ctx, gvisorConfigs); err != nil {
 		return err
 	}
 
@@ -539,6 +547,14 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 // DeploySandboxConfig applies the SandboxConfig admission policy, then the
 // default gVisor SandboxConfig.
 func (e *Env) DeploySandboxConfig(ctx context.Context) error {
+	configs, err := e.gvisorSandboxConfigObjects()
+	if err != nil {
+		return err
+	}
+	return e.deploySandboxConfig(ctx, configs)
+}
+
+func (e *Env) deploySandboxConfig(ctx context.Context, configs []*unstructured.Unstructured) error {
 	log.Step("deploy_sandboxconfig")
 
 	if err := e.EnsureCRDs(ctx); err != nil {
@@ -555,7 +571,95 @@ func (e *Env) DeploySandboxConfig(ctx context.Context) error {
 	// cluster-scoped SandboxConfigs each ActorTemplate names via
 	// sandboxConfig.configName; gVisor templates name this one unless they
 	// create their own SandboxConfig.
-	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml"))
+	return e.Kube.Apply(ctx, configs)
+}
+
+const (
+	sandboxConfigKind              = "SandboxConfig"
+	defaultGvisorSandboxConfigName = "gvisor-default"
+	bundledGvisorBucketBaseURL     = assetfetch.GCSURIScheme + "://gvisor/"
+	bundledGvisorReleaseBaseURL    = bundledGvisorBucketBaseURL + "releases/"
+)
+
+// gvisorSandboxConfigObjects loads the bundled gVisor SandboxConfig and, when
+// configured, relocates every release asset under the operator's object-store
+// prefix before anything reaches the cluster.
+func (e *Env) gvisorSandboxConfigObjects() ([]*unstructured.Unstructured, error) {
+	path := e.Cfg.Manifest("sandboxconfig-gvisor.yaml")
+	objs, err := kube.LoadPath(path)
+	if err != nil {
+		return nil, err
+	}
+	if e.Cfg.GvisorAssetBaseURL == "" {
+		return objs, nil
+	}
+	if err := rewriteBundledGvisorAssetURLs(objs, e.Cfg.GvisorAssetBaseURL); err != nil {
+		return nil, fmt.Errorf("while applying the gVisor asset base URL to %s: %w", path, err)
+	}
+	return objs, nil
+}
+
+// rewriteBundledGvisorAssetURLs replaces the public release prefix, validates
+// every resulting asset URL against the in-tree object-store plugin's rules,
+// and rejects any URL left on the public gVisor bucket. No match is an error so
+// a future manifest change cannot silently restore public downloads.
+func rewriteBundledGvisorAssetURLs(objs []*unstructured.Unstructured, baseURL string) error {
+	var obj *unstructured.Unstructured
+	for _, candidate := range objs {
+		if candidate.GetKind() == sandboxConfigKind && candidate.GetName() == defaultGvisorSandboxConfigName {
+			if obj != nil {
+				return fmt.Errorf("manifest has more than one %s", kube.Describe(candidate))
+			}
+			obj = candidate
+		}
+	}
+	if obj == nil {
+		return fmt.Errorf("manifest has no sandboxconfig/%s", defaultGvisorSandboxConfigName)
+	}
+
+	description := kube.Describe(obj)
+	config := &apiv1alpha1.SandboxConfig{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, config); err != nil {
+		return fmt.Errorf("while decoding %s: %w", description, err)
+	}
+	if config.Spec.SandboxClass != apiv1alpha1.SandboxClassGvisor {
+		return fmt.Errorf("%s has sandboxClass %q, want %q",
+			description, config.Spec.SandboxClass, apiv1alpha1.SandboxClassGvisor)
+	}
+
+	rewritten := 0
+	for versionIndex := range config.Spec.Versions {
+		version := &config.Spec.Versions[versionIndex]
+		for arch, assets := range version.Assets {
+			for name, asset := range assets {
+				if strings.HasPrefix(asset.URL, bundledGvisorReleaseBaseURL) {
+					asset.URL = baseURL + strings.TrimPrefix(asset.URL, bundledGvisorReleaseBaseURL)
+					rewritten++
+				}
+				if _, _, err := assetfetch.ParseObjectURI(asset.URL, assetfetch.GCSURIScheme, assetfetch.S3URIScheme); err != nil {
+					return fmt.Errorf("%s version %q asset %s/%s URL: %s",
+						description, version.Name, arch, name, status.Convert(err).Message())
+				}
+				if strings.HasPrefix(asset.URL, bundledGvisorBucketBaseURL) {
+					return fmt.Errorf("%s version %q asset %s/%s still uses the public gVisor bucket: %s",
+						description, version.Name, arch, name, asset.URL)
+				}
+				assets[name] = asset
+			}
+		}
+	}
+	if rewritten == 0 {
+		return fmt.Errorf("%s has no asset URL beginning with %s", description, bundledGvisorReleaseBaseURL)
+	}
+	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(config)
+	if err != nil {
+		return fmt.Errorf("while encoding %s: %w", description, err)
+	}
+	if timestamp, found, _ := unstructured.NestedFieldNoCopy(raw, "metadata", "creationTimestamp"); found && timestamp == nil {
+		unstructured.RemoveNestedField(raw, "metadata", "creationTimestamp")
+	}
+	obj.Object = raw
+	return nil
 }
 
 // EnsureCRDs creates the generated CRDs that are missing. Existing CRDs and

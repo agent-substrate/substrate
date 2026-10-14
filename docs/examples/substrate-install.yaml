@@ -51,6 +51,12 @@ images:
 storage:
   bucketName: ate-snapshots
 
+# Optional: keep the bundled gVisor release paths and SHA-256 values, but fetch
+# the archives from the node object-store plugin's backend. Mirror the pinned
+# files there before deploying.
+# sandbox:
+#   gvisorAssetBaseURL: s3://substrate-assets/gvisor/releases/
+
 ateapi:
   postgres:
     schema: public

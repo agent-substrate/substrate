@@ -127,6 +127,9 @@ type Config struct {
 
 	// BucketName is the snapshot bucket demos are templated with.
 	BucketName string
+	// GvisorAssetBaseURL replaces gs://gvisor/releases/ on every matching asset
+	// in the bundled gvisor-default SandboxConfig. Empty keeps the public URLs.
+	GvisorAssetBaseURL string
 
 	// KODockerRepo is where ko pushes images (KO_DOCKER_REPO).
 	KODockerRepo string

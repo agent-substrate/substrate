@@ -16,12 +16,18 @@ package steps
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
+	apiv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/assetfetch"
 )
 
 // podcertObjects loads the podcertificate-controller manifest as
@@ -109,6 +115,206 @@ func TestSetPodcertWorkersPerSignerRejectsMissingDeployment(t *testing.T) {
 	}
 	if err := setPodcertWorkersPerSigner(withoutDeployment, 2); err == nil {
 		t.Error("setPodcertWorkersPerSigner succeeded without a Deployment, want an error")
+	}
+}
+
+func setGvisorAssetURL(t *testing.T, obj *unstructured.Unstructured, versionName, arch, assetName, assetURL string) {
+	t.Helper()
+	versions, found, err := unstructured.NestedSlice(obj.Object, "spec", "versions")
+	if err != nil || !found {
+		t.Fatalf("reading spec.versions: found=%v err=%v", found, err)
+	}
+	for versionIndex, rawVersion := range versions {
+		version := rawVersion.(map[string]any)
+		if version["name"] != versionName {
+			continue
+		}
+		assets := version["assets"].(map[string]any)
+		files := assets[arch].(map[string]any)
+		asset := files[assetName].(map[string]any)
+		asset["url"] = assetURL
+		files[assetName] = asset
+		assets[arch] = files
+		version["assets"] = assets
+		versions[versionIndex] = version
+		if err := unstructured.SetNestedSlice(obj.Object, versions, "spec", "versions"); err != nil {
+			t.Fatalf("updating spec.versions: %v", err)
+		}
+		return
+	}
+	t.Fatalf("asset %s/%s/%s not found", versionName, arch, assetName)
+}
+
+const testGvisorAssetSHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func TestGvisorSandboxConfigObjectsRewritesAssetBaseURL(t *testing.T) {
+	const mirror = "s3://substrate-assets/gvisor/releases/"
+	root := repoRoot(t)
+	baseObjects, err := (&Env{Cfg: &config.Config{Root: root}}).gvisorSandboxConfigObjects()
+	if err != nil {
+		t.Fatalf("loading the default SandboxConfig: %v", err)
+	}
+	wantObjects := make([]*unstructured.Unstructured, len(baseObjects))
+	for i, obj := range baseObjects {
+		wantObjects[i] = obj.DeepCopy()
+	}
+	wantConfig := findObject(wantObjects, sandboxConfigKind, defaultGvisorSandboxConfigName)
+	if wantConfig == nil {
+		t.Fatalf("objects have no sandboxconfig/%s", defaultGvisorSandboxConfigName)
+	}
+	sandboxConfig := &apiv1alpha1.SandboxConfig{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(wantConfig.Object, sandboxConfig); err != nil {
+		t.Fatalf("decoding the default SandboxConfig: %v", err)
+	}
+	rewritten := 0
+	for _, version := range sandboxConfig.Spec.Versions {
+		for arch, assets := range version.Assets {
+			for name, asset := range assets {
+				if strings.HasPrefix(asset.URL, bundledGvisorReleaseBaseURL) {
+					setGvisorAssetURL(t, wantConfig, version.Name, arch, name,
+						mirror+strings.TrimPrefix(asset.URL, bundledGvisorReleaseBaseURL))
+					rewritten++
+				}
+			}
+		}
+	}
+	if rewritten == 0 {
+		t.Fatal("the real bundled SandboxConfig has no public release URLs")
+	}
+
+	mirroredObjects, err := (&Env{Cfg: &config.Config{
+		Root: root, GvisorAssetBaseURL: mirror,
+	}}).gvisorSandboxConfigObjects()
+	if err != nil {
+		t.Fatalf("loading the mirrored SandboxConfig: %v", err)
+	}
+	if diff := cmp.Diff(wantObjects, mirroredObjects); diff != "" {
+		t.Errorf("mirrored objects differ from the base outside the expected URLs (-want +got):\n%s", diff)
+	}
+
+	mirroredConfig := findObject(mirroredObjects, sandboxConfigKind, defaultGvisorSandboxConfigName)
+	if mirroredConfig == nil {
+		t.Fatalf("mirrored objects have no sandboxconfig/%s", defaultGvisorSandboxConfigName)
+	}
+	if got := mirroredConfig.GetAnnotations()[apiv1alpha1.SandboxConfigClassDefaultAnnotation]; got != "true" {
+		t.Errorf("is-class-default annotation = %q, want true", got)
+	}
+}
+
+func gvisorSandboxConfigObject(t *testing.T, versions ...apiv1alpha1.SandboxVersionConfig) *unstructured.Unstructured {
+	t.Helper()
+	config := &apiv1alpha1.SandboxConfig{
+		TypeMeta:   metav1.TypeMeta{APIVersion: apiv1alpha1.GroupVersion.String(), Kind: sandboxConfigKind},
+		ObjectMeta: metav1.ObjectMeta{Name: defaultGvisorSandboxConfigName},
+		Spec: apiv1alpha1.SandboxConfigSpec{
+			SandboxClass: apiv1alpha1.SandboxClassGvisor,
+			Versions:     versions,
+		},
+	}
+	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(config)
+	if err != nil {
+		t.Fatalf("encoding test SandboxConfig: %v", err)
+	}
+	unstructured.RemoveNestedField(raw, "metadata", "creationTimestamp")
+	return &unstructured.Unstructured{Object: raw}
+}
+
+func TestRewriteBundledGvisorAssetURLsCoversEveryVersion(t *testing.T) {
+	const mirror = "s3://substrate-assets/gvisor/releases/"
+	obj := gvisorSandboxConfigObject(t,
+		apiv1alpha1.SandboxVersionConfig{
+			Name: "v1",
+			Assets: map[string]map[string]apiv1alpha1.AssetFile{
+				"amd64": {
+					"gvisor": {URL: bundledGvisorReleaseBaseURL + "nightly/v1/gvisor.tar.zstd", SHA256: testGvisorAssetSHA256},
+					"other":  {URL: "s3://already-internal/other", SHA256: testGvisorAssetSHA256},
+				},
+			},
+		},
+		apiv1alpha1.SandboxVersionConfig{
+			Name: "v2",
+			Assets: map[string]map[string]apiv1alpha1.AssetFile{
+				"arm64": {"gvisor": {URL: bundledGvisorReleaseBaseURL + "nightly/v2/gvisor.tar.zstd", SHA256: testGvisorAssetSHA256}},
+			},
+		},
+	)
+	want := obj.DeepCopy()
+	setGvisorAssetURL(t, want, "v1", "amd64", "gvisor", mirror+"nightly/v1/gvisor.tar.zstd")
+	setGvisorAssetURL(t, want, "v2", "arm64", "gvisor", mirror+"nightly/v2/gvisor.tar.zstd")
+	if err := rewriteBundledGvisorAssetURLs([]*unstructured.Unstructured{obj}, mirror); err != nil {
+		t.Fatalf("rewriteBundledGvisorAssetURLs: %v", err)
+	}
+	if diff := cmp.Diff(want.Object, obj.Object); diff != "" {
+		t.Errorf("rewritten object lost or changed fields outside the expected URLs (-want +got):\n%s", diff)
+	}
+}
+
+func TestRewriteBundledGvisorAssetURLsRejectsRemainingPublicURL(t *testing.T) {
+	obj := gvisorSandboxConfigObject(t, apiv1alpha1.SandboxVersionConfig{
+		Name: "v1",
+		Assets: map[string]map[string]apiv1alpha1.AssetFile{
+			"amd64": {
+				"gvisor": {URL: bundledGvisorReleaseBaseURL + "nightly/v1/gvisor.tar.zstd", SHA256: testGvisorAssetSHA256},
+				"helper": {URL: bundledGvisorBucketBaseURL + "builds/helper", SHA256: testGvisorAssetSHA256},
+			},
+		},
+	})
+	err := rewriteBundledGvisorAssetURLs([]*unstructured.Unstructured{obj}, "s3://mirror/releases/")
+	if err == nil || !strings.Contains(err.Error(), "still uses the public gVisor bucket") {
+		t.Fatalf("rewriteBundledGvisorAssetURLs error = %v, want remaining public bucket error", err)
+	}
+}
+
+func TestRewriteBundledGvisorAssetURLsFailsClosed(t *testing.T) {
+	obj := gvisorSandboxConfigObject(t, apiv1alpha1.SandboxVersionConfig{
+		Name: "v1",
+		Assets: map[string]map[string]apiv1alpha1.AssetFile{
+			"amd64": {"gvisor": {URL: "s3://already-internal/gvisor.tar.zstd", SHA256: testGvisorAssetSHA256}},
+		},
+	})
+	err := rewriteBundledGvisorAssetURLs([]*unstructured.Unstructured{obj}, "s3://mirror/releases/")
+	if err == nil || !strings.Contains(err.Error(), "has no asset URL beginning") {
+		t.Fatalf("rewriteBundledGvisorAssetURLs error = %v, want no matching release URL error", err)
+	}
+}
+
+func TestRewriteBundledGvisorAssetURLsRejectsLongResult(t *testing.T) {
+	obj := gvisorSandboxConfigObject(t, apiv1alpha1.SandboxVersionConfig{
+		Name: "v1",
+		Assets: map[string]map[string]apiv1alpha1.AssetFile{
+			"amd64": {"gvisor": {URL: bundledGvisorReleaseBaseURL + "gvisor.tar.zstd", SHA256: testGvisorAssetSHA256}},
+		},
+	})
+	base := "s3://bucket/" + strings.Repeat("x", assetfetch.MaxURIBytes) + "/"
+	err := rewriteBundledGvisorAssetURLs([]*unstructured.Unstructured{obj}, base)
+	if err == nil || !strings.Contains(err.Error(), "more than the limit") {
+		t.Fatalf("rewriteBundledGvisorAssetURLs error = %v, want URI length error", err)
+	}
+	if strings.Contains(err.Error(), "rpc error:") {
+		t.Errorf("rewriteBundledGvisorAssetURLs error contains gRPC status wrapping: %q", err)
+	}
+}
+
+func TestRewriteBundledGvisorAssetURLsRejectsPluginInvalidResult(t *testing.T) {
+	for _, tc := range []struct {
+		baseURL, wantReason string
+	}{
+		{"s3://bucket/x%2F/", "empty, '.'-terminated or space-padded path segment"},
+		{"s3://bucket/atespaces/team/tags/", "stored under snapshot"},
+		{"s3://bucket:9000/x/", "must name a bucket without a port"},
+	} {
+		t.Run(tc.baseURL, func(t *testing.T) {
+			obj := gvisorSandboxConfigObject(t, apiv1alpha1.SandboxVersionConfig{
+				Name: "v1",
+				Assets: map[string]map[string]apiv1alpha1.AssetFile{
+					"amd64": {"gvisor": {URL: bundledGvisorReleaseBaseURL + "nightly/v1/gvisor.tar.zstd", SHA256: testGvisorAssetSHA256}},
+				},
+			})
+			err := rewriteBundledGvisorAssetURLs([]*unstructured.Unstructured{obj}, tc.baseURL)
+			if err == nil || !strings.Contains(err.Error(), tc.wantReason) {
+				t.Fatalf("rewriteBundledGvisorAssetURLs error = %v, want %q", err, tc.wantReason)
+			}
+		})
 	}
 }
 

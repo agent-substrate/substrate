@@ -18,7 +18,9 @@
 # (gvisor.tar.zstd: runsc plus the gvisor-bin/ helpers runsc requires next to
 # it) matching the worker node's architecture and extracts it locally. To pin a
 # different release, add a version below and point defaultVersion at it, or
-# create another SandboxConfig and name it from the ActorTemplate.
+# create another SandboxConfig and name it from the ActorTemplate. To mirror the
+# pinned files without changing this config's name or digests, install with
+# sandbox.gvisorAssetBaseURL / --gvisor-asset-base-url.
 apiVersion: ate.dev/v1alpha1
 kind: SandboxConfig
 metadata:
