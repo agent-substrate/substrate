@@ -22,6 +22,39 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
+func TestParseQuantity(t *testing.T) {
+	for _, s := range []string{
+		// Whole numbers, up to the largest uint64.
+		"0", "10", "18446744073709551615",
+		// Up to 3 decimal places, with "0.x" and "x.0" the only zero padding.
+		"0.5", "0.005", "1.0",
+		// Every suffix, also after a decimal.
+		"1m", "1k", "1M", "1G", "1T", "1P", "1E",
+		"1Ki", "1Mi", "1Gi", "1Ti", "1Pi", "1Ei", "1.5Gi",
+	} {
+		if _, err := ParseQuantity(s); err != nil {
+			t.Errorf("ParseQuantity(%q) = %v, want no error", s, err)
+		}
+	}
+	// resource.ParseQuantity accepts all of these.
+	for _, s := range []string{
+		// A sign, or a micro or nano suffix.
+		"-1", "+1", "1u", "1n",
+		// Leading or trailing zeros.
+		"01", "00.5", "1.50", "1.00",
+		// A bare decimal point, or more than 3 decimal places.
+		".5", "1.", "1.2345",
+		// An exponent, including one resource.ParseQuantity spends hours on.
+		"1E3", "1e-2147483646",
+		// A whole-number part past uint64.
+		"18446744073709551616",
+	} {
+		if _, err := ParseQuantity(s); err == nil {
+			t.Errorf("ParseQuantity(%q) = nil error, want one", s)
+		}
+	}
+}
+
 func limits(pairs ...string) *ateapipb.Resources {
 	out := &ateapipb.Resources{}
 	for i := 0; i < len(pairs); i += 2 {

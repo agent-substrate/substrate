@@ -15,12 +15,55 @@
 package resources
 
 import (
+	"errors"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
+
+var errQuantityForm = errors.New("must be a number such as 500m, 1.5 or 2Gi: up to 3 decimal places, an optional suffix (m, k, M, G, T, P, E, Ki, Mi, Gi, Ti, Pi, Ei), and no sign, exponent, or leading or trailing zeros")
+
+// ParseQuantity is resource.ParseQuantity for API input, without the exponents
+// and long digit strings that can make resource.ParseQuantity hang. It takes
+//
+//	qty    := whole [ "." frac ] [ suffix ]
+//	whole  := "0" | digits without a leading 0, at most UINT64_MAX
+//	frac   := "0" | 1 to 3 digits without a trailing 0
+//	suffix := m | k | M | G | T | P | E | Ki | Mi | Gi | Ti | Pi | Ei
+func ParseQuantity(s string) (resource.Quantity, error) {
+	whole, rest := leadingDigits(s)
+	if whole == "" || (len(whole) > 1 && whole[0] == '0') {
+		return resource.Quantity{}, errQuantityForm
+	}
+	if _, err := strconv.ParseUint(whole, 10, 64); err != nil {
+		return resource.Quantity{}, errors.New("whole-number part must fit in a uint64")
+	}
+	if strings.HasPrefix(rest, ".") {
+		var frac string
+		frac, rest = leadingDigits(rest[1:])
+		if frac == "" || len(frac) > 3 || (frac != "0" && strings.HasSuffix(frac, "0")) {
+			return resource.Quantity{}, errQuantityForm
+		}
+	}
+	switch rest {
+	case "", "m", "k", "M", "G", "T", "P", "E", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei":
+		return resource.ParseQuantity(s)
+	}
+	return resource.Quantity{}, errQuantityForm
+}
+
+// leadingDigits splits s after its leading digits.
+func leadingDigits(s string) (digits, rest string) {
+	i := 0
+	for i < len(s) && '0' <= s[i] && s[i] <= '9' {
+		i++
+	}
+	return s[:i], s[i:]
+}
 
 // Quantities is the parsed form of an ateapipb.Resources: what an Actor asks
 // for, what a Worker supplies, or the sum of what a Worker's Actors hold. The
