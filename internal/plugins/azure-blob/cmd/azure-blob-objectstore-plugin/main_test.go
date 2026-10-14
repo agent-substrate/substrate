@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"maps"
 	"net"
 	"os"
@@ -413,6 +414,61 @@ func TestLogRPCReturnsHandlerResult(t *testing.T) {
 		t.Errorf("logRPC() response = %v, want %v", gotResp, wantResp)
 	}
 }
+
+// TestLogRPCLevel checks that a FetchAsset failing with Internal or
+// Unavailable is logged at WARN, and that every other result, including the
+// same codes from other RPCs, stays at INFO.
+func TestLogRPCLevel(t *testing.T) {
+	const otherMethod = objectstorev1.NodeProvider_FetchSnapshot_FullMethodName
+	for _, tc := range []struct {
+		name   string
+		method string
+		err    error
+		want   slog.Level
+	}{
+		{"FetchAsset Internal", objectstorev1.AssetProvider_FetchAsset_FullMethodName, status.Error(codes.Internal, "boom"), slog.LevelWarn},
+		{"FetchAsset Unavailable", objectstorev1.AssetProvider_FetchAsset_FullMethodName, status.Error(codes.Unavailable, "boom"), slog.LevelWarn},
+		{"FetchAsset NotFound", objectstorev1.AssetProvider_FetchAsset_FullMethodName, status.Error(codes.NotFound, "boom"), slog.LevelInfo},
+		{"FetchAsset InvalidArgument", objectstorev1.AssetProvider_FetchAsset_FullMethodName, status.Error(codes.InvalidArgument, "boom"), slog.LevelInfo},
+		{"FetchAsset OK", objectstorev1.AssetProvider_FetchAsset_FullMethodName, nil, slog.LevelInfo},
+		{"other RPC Internal", otherMethod, status.Error(codes.Internal, "boom"), slog.LevelInfo},
+		{"other RPC Unavailable", otherMethod, status.Error(codes.Unavailable, "boom"), slog.LevelInfo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var records []slog.Record
+			orig := slog.Default()
+			t.Cleanup(func() { slog.SetDefault(orig) })
+			slog.SetDefault(slog.New(recordHandler{&records}))
+
+			_, err := logRPC(t.Context(), nil, &grpc.UnaryServerInfo{FullMethod: tc.method}, func(context.Context, any) (any, error) {
+				return nil, tc.err
+			})
+			if status.Code(err) != status.Code(tc.err) {
+				t.Fatalf("logRPC() error = %v, want %v", err, tc.err)
+			}
+			var got []slog.Level
+			for _, r := range records {
+				if r.Message == "handled RPC" {
+					got = append(got, r.Level)
+				}
+			}
+			if want := []slog.Level{tc.want}; !slices.Equal(got, want) {
+				t.Errorf("handled RPC levels = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// recordHandler collects every record logged through it.
+type recordHandler struct{ records *[]slog.Record }
+
+func (recordHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h recordHandler) Handle(_ context.Context, r slog.Record) error {
+	*h.records = append(*h.records, r)
+	return nil
+}
+func (h recordHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h recordHandler) WithGroup(string) slog.Handler      { return h }
 
 func TestRunReturnsListenError(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "file")
