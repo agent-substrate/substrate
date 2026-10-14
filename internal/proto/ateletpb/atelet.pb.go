@@ -1875,9 +1875,13 @@ type WorkloadSpec struct {
 	// +k8s:maxItems=32 # matches the template's volumes bound
 	// +k8s:listType=map
 	// +k8s:listMapKey=name
-	Volumes       []*Volume `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Volumes []*Volume `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	// +k8s:optional
+	// +k8s:minimum=1024
+	// +k8s:maximum=1000000000
+	EgressBytesPerSecond int64 `protobuf:"varint,3,opt,name=egress_bytes_per_second,json=egressBytesPerSecond,proto3" json:"egress_bytes_per_second,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *WorkloadSpec) Reset() {
@@ -1922,6 +1926,13 @@ func (x *WorkloadSpec) GetVolumes() []*Volume {
 		return x.Volumes
 	}
 	return nil
+}
+
+func (x *WorkloadSpec) GetEgressBytesPerSecond() int64 {
+	if x != nil {
+		return x.EgressBytesPerSecond
+	}
+	return 0
 }
 
 type DurableDirVolume struct {
@@ -4088,12 +4099,13 @@ const file_atelet_proto_rawDesc = "" +
 	"pauseImage\x1aM\n" +
 	"\vAssetsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12(\n" +
-	"\x05value\x18\x02 \x01(\v2\x12.atelet.ArchAssetsR\x05value:\x028\x01\"k\n" +
+	"\x05value\x18\x02 \x01(\v2\x12.atelet.ArchAssetsR\x05value:\x028\x01\"\xa2\x01\n" +
 	"\fWorkloadSpec\x121\n" +
 	"\n" +
 	"containers\x18\x01 \x03(\v2\x11.atelet.ContainerR\n" +
 	"containers\x12(\n" +
-	"\avolumes\x18\x02 \x03(\v2\x0e.atelet.VolumeR\avolumes\"\x12\n" +
+	"\avolumes\x18\x02 \x03(\v2\x0e.atelet.VolumeR\avolumes\x125\n" +
+	"\x17egress_bytes_per_second\x18\x03 \x01(\x03R\x14egressBytesPerSecond\"\x12\n" +
 	"\x10DurableDirVolume\"\x9b\x03\n" +
 	"\x14ExternalVolumeSource\x12*\n" +
 	"\x11storage_volume_id\x18\x01 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +

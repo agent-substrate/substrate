@@ -207,6 +207,29 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 			field.Required(field.NewPath("actor_template", "resources", "limits"), "must set a memory limit"),
 		},
 	}}
+	for _, tc := range []struct {
+		name   string
+		rate   int64
+		origin string
+	}{
+		{"unlimited", 0, ""}, {"minimum", 1024, ""}, {"maximum", 1000000000, ""},
+		{"negative", -1, "minimum"}, {"too small", 1023, ""}, {"too large", 1000000001, "maximum"},
+	} {
+		req := &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(value *ateapipb.ActorTemplate) {
+			value.NetworkBandwidth = &ateapipb.NetworkBandwidth{EgressBytesPerSecond: &tc.rate}
+		})}
+		var want field.ErrorList
+		if tc.rate < 0 || tc.rate > 1000000000 || (tc.rate > 0 && tc.rate < 1024) {
+			path := field.NewPath("actor_template", "network_bandwidth", "egress_bytes_per_second")
+			want = field.ErrorList{field.Invalid(path, nil, "").WithOrigin(tc.origin)}
+		}
+		tests = append(tests, struct {
+			name string
+			req  *ateapipb.CreateActorTemplateRequest
+			want field.ErrorList
+		}{"bandwidth " + tc.name, req, want})
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, ValidateCreateActorTemplateRequest(context.Background(), tt.req), tt.want)

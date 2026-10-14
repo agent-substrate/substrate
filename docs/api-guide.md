@@ -103,11 +103,45 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
 | `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures (`SNAPSHOT_FIDELITY_ROOTFS` requires `sandboxClass: microvm`), and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
+| `networkBandwidth` | `NetworkBandwidth` | Optional. Default egress limit for each Actor; see [Egress bandwidth](#egress-bandwidth). |
 | `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpu` and `memory` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
 The sandbox itself — the binaries (e.g. the gVisor `runsc` binary) and the `pauseImage` holding the sandbox's namespaces — comes from the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object the template names via `sandboxConfig.configName`. An actor always resolves the config from its current template — repointing the actor at another template requires the same config.
 
 Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is a **hard scheduling gate**: an actor is only ever placed on a `WorkerPool` whose `sandboxClasses` entry matches. It is AND'd with `workerSelector` (and the actor's `worker_selector`), which can only narrow the eligible pools further. It has no default — `sandboxConfig` is required and its `sandboxClass` must be set — and, like the rest of the template, is immutable, so each template's class is fixed at creation.
+
+### Egress bandwidth
+
+`ActorTemplate.network_bandwidth.egress_bytes_per_second` supplies a default
+limit shared by all containers and connections in each Actor. An Actor may
+set `network_bandwidth.egress_bytes_per_second` to override it. Omitted values
+inherit the template default; explicit `0` means unlimited. Nonzero values
+must be between 1024 and 1,000,000,000 bytes/s.
+
+For example, a template default of 1 MiB/s is:
+
+```yaml
+network_bandwidth:
+  egress_bytes_per_second: 1048576
+```
+
+Templates remain immutable. An Actor's override may be updated, but changes
+apply on its next activation, including pause/resume or worker reassignment.
+Limits are installed before the workload starts. An installation failure
+fails the activation rather than starting an unlimited workload.
+
+The initial implementation uses Linux `tc` ingress policing on the Actor's
+kernel-owned veth peer (gVisor) or tap (microVM). This is outbound traffic from
+the Actor, before any gateway redirection, so gateway and direct traffic,
+DNS, and replies to inbound requests share one budget. Traffic within the
+sandbox's loopback interface is excluded. Each token bucket allows a burst
+of 100 ms of traffic, with a minimum of 64 KiB. Excess packets are dropped;
+TCP retransmits and reduces its sending rate. Ingress limits and live
+reconfiguration are outside this initial scope.
+
+Effective limits, attempted egress bytes, and packets dropped by policing
+are reported in [Actor usage samples](observability.md#the-same-records-over-otlp).
+No changes inside the Actor are required.
 
 ### Sandbox Right-Sizing (`resources`)
 

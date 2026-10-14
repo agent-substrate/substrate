@@ -325,6 +325,36 @@ func Validate_Actor(
 		errs = append(errs, fn(fldPath.Child("status"), obj.Status, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.Actor.NetworkBandwidth
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.NetworkBandwidth,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_NetworkBandwidth(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.Actor) *ateapipb.NetworkBandwidth {
+				return oldObj.NetworkBandwidth
+			})
+		errs = append(errs, fn(fldPath.Child("network_bandwidth"), obj.NetworkBandwidth, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -1332,6 +1362,36 @@ func Validate_ActorTemplate(
 				return oldObj.Status
 			})
 		errs = append(errs, fn(fldPath.Child("status"), obj.Status, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.ActorTemplate.NetworkBandwidth
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.NetworkBandwidth,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_NetworkBandwidth(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorTemplate) *ateapipb.NetworkBandwidth {
+				return oldObj.NetworkBandwidth
+			})
+		errs = append(errs, fn(fldPath.Child("network_bandwidth"), obj.NetworkBandwidth, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -6180,6 +6240,54 @@ func Validate_MintAteomActorJwtRequest(
 				return oldObj.Audiences
 			})
 		errs = append(errs, fn(fldPath.Child("audiences"), obj.Audiences, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_NetworkBandwidth validates an instance of NetworkBandwidth according
+// to declarative validation rules in the API schema.
+func Validate_NetworkBandwidth(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.NetworkBandwidth) (errs field.ErrorList) {
+
+	// custom validation
+	if e := ValidateCustom_NetworkBandwidth(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
+	{ // field ateapipb.NetworkBandwidth.EgressBytesPerSecond
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int64,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 1000000000); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 0); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.NetworkBandwidth) *int64 {
+				return oldObj.EgressBytesPerSecond
+			})
+		errs = append(errs, fn(fldPath.Child("egress_bytes_per_second"), obj.EgressBytesPerSecond, oldVal, oldObj != nil)...)
 	}
 
 	return errs

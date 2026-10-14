@@ -586,10 +586,14 @@ func (x *EgressGateway) GetAddress() string {
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 type WorkloadSpec struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Containers    []*Container           `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Containers []*Container           `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
+	// +k8s:optional
+	// +k8s:minimum=1024
+	// +k8s:maximum=1000000000
+	EgressBytesPerSecond int64 `protobuf:"varint,2,opt,name=egress_bytes_per_second,json=egressBytesPerSecond,proto3" json:"egress_bytes_per_second,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *WorkloadSpec) Reset() {
@@ -627,6 +631,13 @@ func (x *WorkloadSpec) GetContainers() []*Container {
 		return x.Containers
 	}
 	return nil
+}
+
+func (x *WorkloadSpec) GetEgressBytesPerSecond() int64 {
+	if x != nil {
+		return x.EgressBytesPerSecond
+	}
+	return 0
 }
 
 type Container struct {
@@ -1725,6 +1736,9 @@ type WorkloadStatsSample struct {
 	// The activation this sample belongs to, as the unix-nano time it began. A
 	// Run or Restore starts one.
 	EpochUnixNano int64 `protobuf:"varint,13,opt,name=epoch_unix_nano,json=epochUnixNano,proto3" json:"epoch_unix_nano,omitempty"`
+	// Present only when kernel network counters were successfully read. Counters
+	// start at zero on each activation and count attempted egress bytes.
+	Network       *NetworkStats `protobuf:"bytes,14,opt,name=network,proto3" json:"network,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1848,6 +1862,13 @@ func (x *WorkloadStatsSample) GetEpochUnixNano() int64 {
 		return x.EpochUnixNano
 	}
 	return 0
+}
+
+func (x *WorkloadStatsSample) GetNetwork() *NetworkStats {
+	if x != nil {
+		return x.Network
+	}
+	return nil
 }
 
 type GetWorkloadStatsResponse struct {
@@ -1982,6 +2003,69 @@ func (x *GetActiveWorkloadStatsResponse) GetSamples() []*WorkloadStatsSample {
 	return nil
 }
 
+// NetworkStats reports this activation's egress configuration and traffic.
+type NetworkStats struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	EgressBytesPerSecond int64                  `protobuf:"varint,1,opt,name=egress_bytes_per_second,json=egressBytesPerSecond,proto3" json:"egress_bytes_per_second,omitempty"`
+	// Bytes received by the kernel-owned peer before policing, including
+	// packets subsequently dropped. Resets when the network is recreated.
+	EgressBytes          uint64 `protobuf:"varint,2,opt,name=egress_bytes,json=egressBytes,proto3" json:"egress_bytes,omitempty"`
+	EgressDroppedPackets uint32 `protobuf:"varint,3,opt,name=egress_dropped_packets,json=egressDroppedPackets,proto3" json:"egress_dropped_packets,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *NetworkStats) Reset() {
+	*x = NetworkStats{}
+	mi := &file_ateom_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NetworkStats) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NetworkStats) ProtoMessage() {}
+
+func (x *NetworkStats) ProtoReflect() protoreflect.Message {
+	mi := &file_ateom_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NetworkStats.ProtoReflect.Descriptor instead.
+func (*NetworkStats) Descriptor() ([]byte, []int) {
+	return file_ateom_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *NetworkStats) GetEgressBytesPerSecond() int64 {
+	if x != nil {
+		return x.EgressBytesPerSecond
+	}
+	return 0
+}
+
+func (x *NetworkStats) GetEgressBytes() uint64 {
+	if x != nil {
+		return x.EgressBytes
+	}
+	return 0
+}
+
+func (x *NetworkStats) GetEgressDroppedPackets() uint32 {
+	if x != nil {
+		return x.EgressDroppedPackets
+	}
+	return 0
+}
+
 var File_ateom_proto protoreflect.FileDescriptor
 
 const file_ateom_proto_rawDesc = "" +
@@ -2032,11 +2116,12 @@ const file_ateom_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +
 	"\x0f_egress_gateway\")\n" +
 	"\rEgressGateway\x12\x18\n" +
-	"\aaddress\x18\x01 \x01(\tR\aaddress\"@\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\"w\n" +
 	"\fWorkloadSpec\x120\n" +
 	"\n" +
 	"containers\x18\x01 \x03(\v2\x10.ateom.ContainerR\n" +
-	"containers\"\xce\x03\n" +
+	"containers\x125\n" +
+	"\x17egress_bytes_per_second\x18\x02 \x01(\x03R\x14egressBytesPerSecond\"\xce\x03\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x125\n" +
 	"\fwakeup_probe\x18\x02 \x01(\v2\x12.ateom.WakeupProbeR\vwakeupProbe\x12W\n" +
@@ -2129,7 +2214,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\x0f_egress_gateway\"\x19\n" +
 	"\x17RestoreWorkloadResponse\"6\n" +
 	"\x17GetWorkloadStatsRequest\x12\x1b\n" +
-	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\xbe\x04\n" +
+	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\xed\x04\n" +
 	"\x13WorkloadStatsSample\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2145,12 +2230,17 @@ const file_ateom_proto_rawDesc = "" +
 	" \x01(\x04R\x15memoryWorkingSetBytes\x12$\n" +
 	"\x0ecpu_usage_usec\x18\v \x01(\x04R\fcpuUsageUsec\x121\n" +
 	"\x15observed_at_unix_nano\x18\f \x01(\x03R\x12observedAtUnixNano\x12&\n" +
-	"\x0fepoch_unix_nano\x18\r \x01(\x03R\repochUnixNano\"N\n" +
+	"\x0fepoch_unix_nano\x18\r \x01(\x03R\repochUnixNano\x12-\n" +
+	"\anetwork\x18\x0e \x01(\v2\x13.ateom.NetworkStatsR\anetwork\"N\n" +
 	"\x18GetWorkloadStatsResponse\x122\n" +
 	"\x06sample\x18\x01 \x01(\v2\x1a.ateom.WorkloadStatsSampleR\x06sample\"\x1f\n" +
 	"\x1dGetActiveWorkloadStatsRequest\"V\n" +
 	"\x1eGetActiveWorkloadStatsResponse\x124\n" +
-	"\asamples\x18\x01 \x03(\v2\x1a.ateom.WorkloadStatsSampleR\asamples*\x90\x01\n" +
+	"\asamples\x18\x01 \x03(\v2\x1a.ateom.WorkloadStatsSampleR\asamples\"\x9e\x01\n" +
+	"\fNetworkStats\x125\n" +
+	"\x17egress_bytes_per_second\x18\x01 \x01(\x03R\x14egressBytesPerSecond\x12!\n" +
+	"\fegress_bytes\x18\x02 \x01(\x04R\vegressBytes\x124\n" +
+	"\x16egress_dropped_packets\x18\x03 \x01(\rR\x14egressDroppedPackets*\x90\x01\n" +
 	"\x10SnapshotFidelity\x12!\n" +
 	"\x1dSNAPSHOT_FIDELITY_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19SNAPSHOT_FIDELITY_VOLUMES\x10\x01\x12\x1c\n" +
@@ -2181,7 +2271,7 @@ func file_ateom_proto_rawDescGZIP() []byte {
 }
 
 var file_ateom_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_ateom_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_ateom_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_ateom_proto_goTypes = []any{
 	(SnapshotFidelity)(0),                  // 0: ateom.SnapshotFidelity
 	(StatsSource)(0),                       // 1: ateom.StatsSource
@@ -2210,15 +2300,16 @@ var file_ateom_proto_goTypes = []any{
 	(*GetWorkloadStatsResponse)(nil),       // 24: ateom.GetWorkloadStatsResponse
 	(*GetActiveWorkloadStatsRequest)(nil),  // 25: ateom.GetActiveWorkloadStatsRequest
 	(*GetActiveWorkloadStatsResponse)(nil), // 26: ateom.GetActiveWorkloadStatsResponse
-	nil,                                    // 27: ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                    // 28: ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                    // 29: ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	(*NetworkStats)(nil),                   // 27: ateom.NetworkStats
+	nil,                                    // 28: ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                    // 29: ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                    // 30: ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
 }
 var file_ateom_proto_depIdxs = []int32{
 	7,  // 0: ateom.TerminateWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
 	2,  // 1: ateom.TerminateWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
 	7,  // 2: ateom.RunWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	27, // 3: ateom.RunWorkloadRequest.runtime_asset_paths:type_name -> ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
+	28, // 3: ateom.RunWorkloadRequest.runtime_asset_paths:type_name -> ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
 	6,  // 4: ateom.RunWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
 	2,  // 5: ateom.RunWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
 	8,  // 6: ateom.WorkloadSpec.containers:type_name -> ateom.Container
@@ -2231,34 +2322,35 @@ var file_ateom_proto_depIdxs = []int32{
 	10, // 13: ateom.ContainerSpec.resources:type_name -> ateom.ResourceLimits
 	16, // 14: ateom.WakeupProbe.http_get:type_name -> ateom.HttpGetAction
 	7,  // 15: ateom.CheckpointWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	28, // 16: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	29, // 16: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
 	0,  // 17: ateom.CheckpointWorkloadRequest.fidelity:type_name -> ateom.SnapshotFidelity
 	2,  // 18: ateom.CheckpointWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
 	7,  // 19: ateom.RestoreWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	29, // 20: ateom.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	30, // 20: ateom.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
 	0,  // 21: ateom.RestoreWorkloadRequest.fidelity:type_name -> ateom.SnapshotFidelity
 	6,  // 22: ateom.RestoreWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
 	2,  // 23: ateom.RestoreWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
 	1,  // 24: ateom.WorkloadStatsSample.source:type_name -> ateom.StatsSource
-	23, // 25: ateom.GetWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
-	23, // 26: ateom.GetActiveWorkloadStatsResponse.samples:type_name -> ateom.WorkloadStatsSample
-	5,  // 27: ateom.Ateom.RunWorkload:input_type -> ateom.RunWorkloadRequest
-	18, // 28: ateom.Ateom.CheckpointWorkload:input_type -> ateom.CheckpointWorkloadRequest
-	20, // 29: ateom.Ateom.RestoreWorkload:input_type -> ateom.RestoreWorkloadRequest
-	22, // 30: ateom.Ateom.GetWorkloadStats:input_type -> ateom.GetWorkloadStatsRequest
-	25, // 31: ateom.Ateom.GetActiveWorkloadStats:input_type -> ateom.GetActiveWorkloadStatsRequest
-	3,  // 32: ateom.Ateom.TerminateWorkload:input_type -> ateom.TerminateWorkloadRequest
-	17, // 33: ateom.Ateom.RunWorkload:output_type -> ateom.RunWorkloadResponse
-	19, // 34: ateom.Ateom.CheckpointWorkload:output_type -> ateom.CheckpointWorkloadResponse
-	21, // 35: ateom.Ateom.RestoreWorkload:output_type -> ateom.RestoreWorkloadResponse
-	24, // 36: ateom.Ateom.GetWorkloadStats:output_type -> ateom.GetWorkloadStatsResponse
-	26, // 37: ateom.Ateom.GetActiveWorkloadStats:output_type -> ateom.GetActiveWorkloadStatsResponse
-	4,  // 38: ateom.Ateom.TerminateWorkload:output_type -> ateom.TerminateWorkloadResponse
-	33, // [33:39] is the sub-list for method output_type
-	27, // [27:33] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	27, // 25: ateom.WorkloadStatsSample.network:type_name -> ateom.NetworkStats
+	23, // 26: ateom.GetWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
+	23, // 27: ateom.GetActiveWorkloadStatsResponse.samples:type_name -> ateom.WorkloadStatsSample
+	5,  // 28: ateom.Ateom.RunWorkload:input_type -> ateom.RunWorkloadRequest
+	18, // 29: ateom.Ateom.CheckpointWorkload:input_type -> ateom.CheckpointWorkloadRequest
+	20, // 30: ateom.Ateom.RestoreWorkload:input_type -> ateom.RestoreWorkloadRequest
+	22, // 31: ateom.Ateom.GetWorkloadStats:input_type -> ateom.GetWorkloadStatsRequest
+	25, // 32: ateom.Ateom.GetActiveWorkloadStats:input_type -> ateom.GetActiveWorkloadStatsRequest
+	3,  // 33: ateom.Ateom.TerminateWorkload:input_type -> ateom.TerminateWorkloadRequest
+	17, // 34: ateom.Ateom.RunWorkload:output_type -> ateom.RunWorkloadResponse
+	19, // 35: ateom.Ateom.CheckpointWorkload:output_type -> ateom.CheckpointWorkloadResponse
+	21, // 36: ateom.Ateom.RestoreWorkload:output_type -> ateom.RestoreWorkloadResponse
+	24, // 37: ateom.Ateom.GetWorkloadStats:output_type -> ateom.GetWorkloadStatsResponse
+	26, // 38: ateom.Ateom.GetActiveWorkloadStats:output_type -> ateom.GetActiveWorkloadStatsResponse
+	4,  // 39: ateom.Ateom.TerminateWorkload:output_type -> ateom.TerminateWorkloadResponse
+	34, // [34:40] is the sub-list for method output_type
+	28, // [28:34] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_ateom_proto_init() }
@@ -2274,7 +2366,7 @@ func file_ateom_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ateom_proto_rawDesc), len(file_ateom_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   28,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -153,6 +153,29 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		validReq(validActor(withSourceTag("as", "invalid value"))),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "source_tag", "name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}}
+	for _, tc := range []struct {
+		name   string
+		rate   int64
+		origin string
+	}{
+		{"unlimited", 0, ""}, {"minimum", 1024, ""}, {"maximum", 1000000000, ""},
+		{"negative", -1, "minimum"}, {"too small", 1023, ""}, {"too large", 1000000001, "maximum"},
+	} {
+		req := &ateapipb.CreateActorRequest{Actor: validActor(func(value *ateapipb.Actor) {
+			value.NetworkBandwidth = &ateapipb.NetworkBandwidth{EgressBytesPerSecond: &tc.rate}
+		})}
+		var want field.ErrorList
+		if tc.rate < 0 || tc.rate > 1000000000 || (tc.rate > 0 && tc.rate < 1024) {
+			path := field.NewPath("actor", "network_bandwidth", "egress_bytes_per_second")
+			want = field.ErrorList{field.Invalid(path, nil, "").WithOrigin(tc.origin)}
+		}
+		tests = append(tests, struct {
+			name string
+			req  *ateapipb.CreateActorRequest
+			want field.ErrorList
+		}{"bandwidth " + tc.name, req, want})
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, ValidateCreateActorRequest(context.Background(), tt.req), tt.want)
@@ -651,6 +674,31 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		nil,
 	}}
+	for _, tc := range []struct {
+		name    string
+		rate    *int64
+		invalid bool
+	}{
+		{"set", new(int64(1048576)), false}, {"change", new(int64(2097152)), false},
+		{"unlimited", new(int64(0)), false}, {"inherit", nil, false}, {"invalid", new(int64(1023)), true},
+	} {
+		old := validOutput(func(a *ateapipb.Actor) {
+			a.NetworkBandwidth = &ateapipb.NetworkBandwidth{EgressBytesPerSecond: new(int64(1048576))}
+		})
+		next := validOutput(func(a *ateapipb.Actor) {
+			a.NetworkBandwidth = &ateapipb.NetworkBandwidth{EgressBytesPerSecond: tc.rate}
+		})
+		var want field.ErrorList
+		if tc.invalid {
+			want = field.ErrorList{field.Invalid(field.NewPath("network_bandwidth", "egress_bytes_per_second"), nil, "")}
+		}
+		tests = append(tests, struct {
+			name           string
+			oldVal, newVal *ateapipb.Actor
+			want           field.ErrorList
+		}{"bandwidth " + tc.name, old, next, want})
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, ValidateActorUpdate(context.Background(), nil, tt.newVal, tt.oldVal, true), tt.want)

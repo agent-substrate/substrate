@@ -569,6 +569,12 @@ message Actor {
   //
   // +k8s:optional
   ActorStatus status = 7;
+
+  // Per-Actor egress bandwidth override. Unset inherits the template limit;
+  // explicit zero means unlimited. Changes apply on the next activation.
+  //
+  // +k8s:optional
+  NetworkBandwidth network_bandwidth = 8;
 }
 
 // EgressPolicy is an egress policy resource nested under an Actor. An Actor has
@@ -1151,6 +1157,12 @@ message ActorTemplate {
 
   // +k8s:optional
   ActorTemplateStatus status = 8;
+
+  // Default egress bandwidth limit for Actors using this template. An Actor
+  // may override it. Resolved on each activation.
+  //
+  // +k8s:optional
+  NetworkBandwidth network_bandwidth = 9;
 }
 
 message Resources {
@@ -3000,4 +3012,21 @@ extend google.protobuf.MessageOptions {
 
 extend google.protobuf.MethodOptions {
   MethodAnnotation method = 50000;
+}
+
+// NetworkBandwidth limits aggregate traffic sent by all containers in an Actor.
+// Traffic exceeding the rate is dropped at the Actor's network boundary.
+// Loopback within the sandbox is excluded.
+//
+// +k8s:customValidation # nonzero rates must be at least 1024 bytes/s
+message NetworkBandwidth {
+  // Maximum outgoing bytes per second, including packet headers and
+  // retransmissions. Unset on an Actor inherits the template value.
+  // Unset on a template, or explicit zero, means unlimited.
+  // Nonzero values must be between 1024 and 1000000000 bytes/s.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=1000000000
+  optional int64 egress_bytes_per_second = 1;
 }

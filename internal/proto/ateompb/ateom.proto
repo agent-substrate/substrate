@@ -179,6 +179,10 @@ message EgressGateway {
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 message WorkloadSpec {
   repeated Container containers = 1;
+  // +k8s:optional
+  // +k8s:minimum=1024
+  // +k8s:maximum=1000000000
+  int64 egress_bytes_per_second = 2;
 }
 
 message Container {
@@ -464,6 +468,9 @@ message WorkloadStatsSample {
   // The activation this sample belongs to, as the unix-nano time it began. A
   // Run or Restore starts one.
   int64 epoch_unix_nano = 13;
+  // Present only when kernel network counters were successfully read. Counters
+  // start at zero on each activation and count attempted egress bytes.
+  NetworkStats network = 14;
 }
 
 message GetWorkloadStatsResponse {
@@ -483,4 +490,13 @@ message GetActiveWorkloadStatsResponse {
   // at most one entry until multi-actor workers land; consumers must not
   // assume that.
   repeated WorkloadStatsSample samples = 1;
+}
+
+// NetworkStats reports this activation's egress configuration and traffic.
+message NetworkStats {
+  int64 egress_bytes_per_second = 1;
+  // Bytes received by the kernel-owned peer before policing, including
+  // packets subsequently dropped. Resets when the network is recreated.
+  uint64 egress_bytes = 2;
+  uint32 egress_dropped_packets = 3;
 }
