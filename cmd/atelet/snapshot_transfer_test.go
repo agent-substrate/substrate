@@ -54,7 +54,7 @@ func newPluginHerder(t *testing.T, store objectstorage.ObjectStorage) *AteomHerd
 		t.Fatal(err)
 	}
 	return &AteomHerder{
-		snapshotPlugin:     objectstoreplugintest.NodeClient(plugin),
+		objectStorePlugin:  objectstoreplugintest.NodeClient(plugin),
 		snapshotScratchDir: t.TempDir(),
 	}
 }
@@ -163,12 +163,12 @@ func (p failingNodePlugin) UploadSnapshot(context.Context, *objectstorev1.Upload
 	return nil, p.err
 }
 
-// A snapshot plugin that cannot be reached reaches ate-api-server as
+// An object-store plugin that cannot be reached reaches ate-api-server as
 // Unavailable, which it retries, rather than Internal, which crashes the
 // actor. The upload after CheckpointWorkload is the exception: a retried
 // Checkpoint cannot redo it, so it stays Internal. Other plugin errors reach
 // ate-api-server as Internal.
-func TestSnapshotPluginErrorCodeThroughAtelet(t *testing.T) {
+func TestObjectStorePluginErrorCodeThroughAtelet(t *testing.T) {
 	uri, err := resources.ParseSnapshotURI(pausedSnapshotURI)
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +190,7 @@ func TestSnapshotPluginErrorCodeThroughAtelet(t *testing.T) {
 		{"paused upload", true, func(ctx context.Context, s *AteomHerder) error {
 			dir := t.TempDir()
 			writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
-			_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri)
+			_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
 			return err
 		}},
 		{"checkpoint upload", false, func(ctx context.Context, s *AteomHerder) error {
@@ -209,7 +209,7 @@ func TestSnapshotPluginErrorCodeThroughAtelet(t *testing.T) {
 					want = codes.Unavailable
 				}
 				s := &AteomHerder{
-					snapshotPlugin:     failingNodePlugin{err: status.Error(pluginCode, "plugin failed")},
+					objectStorePlugin:  failingNodePlugin{err: status.Error(pluginCode, "plugin failed")},
 					snapshotScratchDir: t.TempDir(),
 				}
 				// atelet's server interceptor decides the code ate-api-server sees.
@@ -223,11 +223,11 @@ func TestSnapshotPluginErrorCodeThroughAtelet(t *testing.T) {
 	}
 }
 
-// A snapshot plugin's status text can quote a signed URL or other credential.
+// An object-store plugin's status text can quote a signed URL or other credential.
 // Neither it nor the snapshot URI's query reaches atelet's RPC log or the
 // error ate-api-server receives: only the plugin's code and the snapshot URI
 // as scheme://host/path do, and callers still read the code.
-func TestSnapshotPluginErrorKeepsCredentialsOut(t *testing.T) {
+func TestObjectStorePluginErrorKeepsCredentialsOut(t *testing.T) {
 	const (
 		secret    = "SECRET-SIG"
 		signedURI = "s3://bucket/snapshots/a?sig=" + secret
@@ -256,7 +256,7 @@ func TestSnapshotPluginErrorKeepsCredentialsOut(t *testing.T) {
 		{"paused upload", "", func(ctx context.Context, s *AteomHerder) error {
 			dir := t.TempDir()
 			writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
-			_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri)
+			_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
 			return err
 		}},
 	}
@@ -265,7 +265,7 @@ func TestSnapshotPluginErrorKeepsCredentialsOut(t *testing.T) {
 			t.Run(pluginCode.String()+"/"+tr.name, func(t *testing.T) {
 				logs := captureLogs(t)
 				s := &AteomHerder{
-					snapshotPlugin:     failingNodePlugin{err: status.Error(pluginCode, "get "+signedURI+": AccountKey="+secret)},
+					objectStorePlugin:  failingNodePlugin{err: status.Error(pluginCode, "get "+signedURI+": AccountKey="+secret)},
 					snapshotScratchDir: t.TempDir(),
 				}
 				_, err := ateinterceptors.InternalServerUnaryInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/test"},
@@ -379,7 +379,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 		t.Fatalf("WaitReady = %v", err)
 	}
 	s := &AteomHerder{
-		snapshotPlugin:     objectstorev1.NewNodeProviderClient(conn),
+		objectStorePlugin:  objectstorev1.NewNodeProviderClient(conn),
 		snapshotScratchDir: t.TempDir(),
 	}
 	rec := sandboxAssetsRecord{
@@ -408,7 +408,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 		}
 	}
 
-	if _, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), pausedDir, uri); apierror.Code(err) != codes.Unavailable {
+	if _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), pausedDir, uri); apierror.Code(err) != codes.Unavailable {
 		t.Fatalf("paused upload during the outage = %v, want %s", err, codes.Unavailable)
 	}
 
@@ -440,7 +440,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 // snapshot upload uses to tell a missing snapshot from a failed probe.
 func TestFetchManifestKeepsNotFound(t *testing.T) {
 	s := &AteomHerder{
-		snapshotPlugin:     failingNodePlugin{err: status.Error(codes.NotFound, "no manifest")},
+		objectStorePlugin:  failingNodePlugin{err: status.Error(codes.NotFound, "no manifest")},
 		snapshotScratchDir: t.TempDir(),
 	}
 	_, err := s.fetchManifest(context.Background(), pausedSnapshotURI)

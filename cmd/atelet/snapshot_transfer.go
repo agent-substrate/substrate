@@ -28,10 +28,10 @@ import (
 )
 
 // External snapshots move between the node and storage only through the
-// snapshot plugin. These helpers adapt the plugin's file-oriented API to the
+// object-store plugin. These helpers adapt the plugin's file-oriented API to the
 // manifest bytes atelet works with.
 
-// pluginCallError replaces a snapshot plugin's error with one that keeps its
+// pluginCallError replaces an object-store plugin's error with one that keeps its
 // gRPC code and drops its message. The message may quote a signed URL or other
 // credential, and atelet's errors reach ate-api-server, its RPC log and the
 // actor's crash message, so only the code and the redacted snapshot URI are
@@ -45,7 +45,7 @@ func pluginCallError(op, snapshotURI string, err error) error {
 	if code == codes.Unknown {
 		code = status.FromContextError(err).Code() // a context error that is not a status
 	}
-	return status.Errorf(code, "snapshot plugin %s of %s failed (%s)", op, redactURLString(snapshotURI), code)
+	return status.Errorf(code, "object-store plugin %s of %s failed (%s)", op, redactURLString(snapshotURI), code)
 }
 
 // fetchSnapshotFiles downloads the named snapshot files into dstDir.
@@ -53,7 +53,7 @@ func (s *AteomHerder) fetchSnapshotFiles(ctx context.Context, snapshotURI, dstDi
 	if len(files) == 0 {
 		return nil
 	}
-	_, err := s.snapshotPlugin.FetchSnapshot(ctx, &objectstorev1.FetchSnapshotRequest{
+	_, err := s.objectStorePlugin.FetchSnapshot(ctx, &objectstorev1.FetchSnapshotRequest{
 		SnapshotUri: snapshotURI,
 		WritePath:   dstDir,
 		Files:       files,
@@ -70,7 +70,7 @@ func (s *AteomHerder) uploadSnapshotFiles(ctx context.Context, snapshotURI, srcD
 	if len(files) == 0 {
 		return nil
 	}
-	_, err := s.snapshotPlugin.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{
+	_, err := s.objectStorePlugin.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{
 		SnapshotUri: snapshotURI,
 		LocalPath:   srcDir,
 		Files:       files,

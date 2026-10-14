@@ -31,7 +31,7 @@ func validEgressPolicy() *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
 		Rules: []*ateapipb.EgressRule{{
-			Http: &ateapipb.HTTPRule{
+			Http: &ateapipb.HttpRule{
 				Hostnames: []string{"api.example.com"},
 				Effects: &ateapipb.HttpRuleEffects{
 					ReplaceHeaders: []*ateapipb.CredentialHeader{{
@@ -51,7 +51,7 @@ func actorJWTHeader(audiences ...string) *ateapipb.CredentialHeader {
 	return &ateapipb.CredentialHeader{
 		Header:   "Authorization",
 		Prefix:   "Bearer ",
-		ActorJwt: &ateapipb.ActorJWTSource{Audiences: audiences, ExpirationSeconds: 900},
+		ActorJwt: &ateapipb.ActorJwtSource{Audiences: audiences, ExpirationSeconds: 900},
 	}
 }
 
@@ -444,13 +444,13 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}
 	withoutEffects := func(p *ateapipb.EgressPolicy) { p.Rules[0].Http.Effects = nil }
 	trivialHTTPRule := func(hostname string) *ateapipb.EgressRule {
-		return &ateapipb.EgressRule{Http: &ateapipb.HTTPRule{Hostnames: []string{hostname}}}
+		return &ateapipb.EgressRule{Http: &ateapipb.HttpRule{Hostnames: []string{hostname}}}
 	}
 	httpsRule := func(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressRule {
-		return &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{Hostnames: patterns, Ports: ports}}
+		return &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{Hostnames: patterns, Ports: ports}}
 	}
 	passthroughRule := func(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressRule {
-		return &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: patterns, Ports: ports}}
+		return &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: patterns, Ports: ports}}
 	}
 	portNumbers := func(numbers ...int32) *ateapipb.Ports { return &ateapipb.Ports{Numbers: numbers} }
 	allPorts := func() *ateapipb.Ports { return &ateapipb.Ports{All: &ateapipb.AllPorts{}} }
@@ -504,7 +504,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "two protocols",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Https = &ateapipb.HTTPSRule{Hostnames: []string{"api.example.com"}}
+			p.Rules[0].Https = &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}
 		},
 		want: field.ErrorList{
 			field.Invalid(rule, nil, "one of").WithOrigin("union"),
@@ -737,7 +737,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "same pattern on different ports",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules = append(p.Rules, &ateapipb.EgressRule{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: portNumbers(8080)}})
+			p.Rules = append(p.Rules, &ateapipb.EgressRule{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}, Ports: portNumbers(8080)}})
 		},
 	}, {
 		name: "same pattern on the default port ties",
@@ -765,7 +765,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		name: "http and tls passthrough on every port tie",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules = []*ateapipb.EgressRule{
-				{Http: &ateapipb.HTTPRule{Hostnames: []string{"*"}, Ports: allPorts()}},
+				{Http: &ateapipb.HttpRule{Hostnames: []string{"*"}, Ports: allPorts()}},
 				passthroughRule(allPorts(), "*"),
 			}
 		},
@@ -878,7 +878,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "actor JWT on an https rule",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{
+			p.Rules[0] = &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{
 				Hostnames: []string{"api.example.com"},
 				Effects:   &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{actorJWTHeader("https://api.example.com")}},
 			}}
@@ -893,7 +893,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "credential URI and actor JWT in one header",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Http.Effects.ReplaceHeaders[0].ActorJwt = &ateapipb.ActorJWTSource{Audiences: []string{"https://api.example.com"}, ExpirationSeconds: 900}
+			p.Rules[0].Http.Effects.ReplaceHeaders[0].ActorJwt = &ateapipb.ActorJwtSource{Audiences: []string{"https://api.example.com"}, ExpirationSeconds: 900}
 		},
 		want: field.ErrorList{
 			field.Invalid(staticHeader, nil, "one of").WithOrigin("union"),
@@ -988,7 +988,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "effects on an https rule",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{Hostnames: []string{"api.example.com"}, Effects: &ateapipb.HttpRuleEffects{}}}
+			p.Rules[0] = &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}, Effects: &ateapipb.HttpRuleEffects{}}}
 		},
 		want: field.ErrorList{
 			field.Required(rule.Child("https", "effects"), "at least one effect must be specified"),

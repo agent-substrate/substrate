@@ -26,9 +26,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -320,6 +322,54 @@ func TestEnsureAteletSuspended_DialFailureLeavesActorRetryable(t *testing.T) {
 	}
 }
 
+// TestEnsureAteletSuspended_WireRequest verifies a running-origin suspend
+// checkpoints to the actor's in-progress durable snapshot with an immediate
+// upload, since FinalizeSuspended then marks that snapshot COMPLETED.
+func TestEnsureAteletSuspended_WireRequest(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	w, atelet := newWireCaptureWorkflow(t, persistence)
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	snapshotName := "2026-01-01t00-00-00z-abc"
+	snapshotURI := someActorSnapshotURI(t, testStorageLocation, "team-a", snapshotName)
+	created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns", Name: "tmpl1"},
+		Status: &ateapipb.ActorStatus{
+			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			AssignedNode:           "node-1",
+			WorkerAssignment:       wireTestAssignment(),
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "tmpl-uid-1", snapshotName, snapshotURI, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			},
+		},
+	})
+	tmpl := &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+	}
+
+	if _, err := w.ensureAteletSuspended(ctx, actorRef, created, tmpl); err != nil {
+		t.Fatalf("ensureAteletSuspended: %v", err)
+	}
+	req := atelet.checkpointRequest()
+	if req == nil {
+		t.Fatal("expected Checkpoint RPC to be called")
+	}
+	if got := req.GetSnapshot().GetSnapshotUuid(); got != snapshotName {
+		t.Errorf("CheckpointRequest.Snapshot.SnapshotUuid = %q, want %q", got, snapshotName)
+	}
+	if got := req.GetSnapshot().GetObject().GetSnapshotUri(); got != snapshotURI {
+		t.Errorf("CheckpointRequest.Snapshot.Object.SnapshotUri = %q, want %q", got, snapshotURI)
+	}
+	wantConfig := &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE}
+	if got := req.GetUploadConfig(); !proto.Equal(got, wantConfig) {
+		t.Errorf("CheckpointRequest.UploadConfig = %v, want %v", got, wantConfig)
+	}
+}
+
 // TestEnsureSuspendedFinalized_NoAssignment verifies finalization runs even when
 // the actor has no worker assignment: the external snapshot must be recorded on
 // the actor and the actor moved to SUSPENDED rather than silently left
@@ -457,7 +507,7 @@ func TestEnsureSuspendedFinalized_ReleasesReplacedSnapshot(t *testing.T) {
 var errObjectStore = errors.New("object storage is unavailable")
 
 // isObjectStoreErr reports whether err came from errObjectStore. The object
-// store sits behind the snapshot plugin's gRPC boundary, which carries the
+// store sits behind the object-store plugin's gRPC boundary, which carries the
 // message but not the error value, so errors.Is cannot match it.
 func isObjectStoreErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), errObjectStore.Error())
@@ -547,7 +597,7 @@ func TestEnsureSuspendedFinalized_KeepsReplacedSnapshotOnConflict(t *testing.T) 
 		}
 	})
 
-	w := &ActorWorkflow{store: &conflictingUpdateStore{Interface: persistence}, snapshotPlugin: objectstoreplugintest.ControlClient(objects)}
+	w := &ActorWorkflow{store: &conflictingUpdateStore{Interface: persistence}, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}
 	if _, err := w.ensureSuspendedFinalized(ctx, actorRef); apierror.Code(err) != codes.Aborted {
 		t.Fatalf("ensureSuspendedFinalized = %v, want code Aborted", err)
 	}

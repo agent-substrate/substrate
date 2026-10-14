@@ -29,7 +29,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -85,7 +84,7 @@ var getActorsCmd = &cobra.Command{
 		}
 
 		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		apiClient, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -141,7 +140,7 @@ var createActorCmd = &cobra.Command{
 		}
 
 		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		apiClient, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -162,7 +161,7 @@ var deleteActorCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		c, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		c, err := newAPIClient(cmd)
 		if err != nil {
 			return err
 		}
@@ -188,7 +187,7 @@ var pauseActorCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		apiClient, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -212,7 +211,7 @@ var resumeActorCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		apiClient, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -236,7 +235,7 @@ var suspendActorCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		apiClient, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -367,7 +366,7 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
 	scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 	for scanner.Scan() {
 		line := scanner.Text()
-		filterAndDisplayLogLine(line, r.filter, r.stdout)
+		filterAndDisplayLogLine(line, r.filter, r.stdout, r.stderr)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading log stream: %w", err)
@@ -380,6 +379,8 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 	// lastSeenTime is the kubelet's timestamp on the last line read from
 	// lastWorkerPod, the resume cursor for a reconnect to it.
 	var lastSeenTime time.Time
+	var waitingLogged bool
+	var lastWaitingState ateapipb.ActorState
 
 	for {
 		select {
@@ -393,6 +394,7 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 			if status.Code(err) == codes.NotFound {
 				return fmt.Errorf("actor %s not found: %w", r.actorRef, err)
 			}
+			vlogf(r.stderr, vBasic, "Failed to get actor %s: %v; retrying in %s", r.actorRef, err, r.pollInterval)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -403,8 +405,14 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 
 		podName := actor.GetStatus().GetWorkerAssignment().GetWorkerPod()
 		namespace := actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()
+		state := actor.GetStatus().GetState()
 
-		if podName == "" || namespace == "" || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		if podName == "" || namespace == "" || state != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+			if !waitingLogged || state != lastWaitingState {
+				vlogf(r.stderr, vBasic, "Actor %s is not running (state=%s); waiting for worker assignment...", r.actorRef, state)
+				waitingLogged = true
+				lastWaitingState = state
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -412,6 +420,7 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 				continue
 			}
 		}
+		waitingLogged = false
 
 		// The actor resumed on another worker.
 		switchedPod := podName != lastWorkerPod
@@ -437,6 +446,7 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		stream, err := r.streamer.StreamLogs(streamCtx, namespace, podName, opts)
 		if err != nil {
 			streamCancel()
+			vlogf(r.stderr, vBasic, "Failed to stream logs from pod %s/%s: %v; retrying in %s", namespace, podName, err, r.pollInterval)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -462,8 +472,10 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 					continue
 				}
 				lastSeenTime = stamp
+			} else {
+				vlogf(r.stderr, vTrace, "Log line had no kubelet timestamp prefix")
 			}
-			filterAndDisplayLogLine(line, r.filter, r.stdout)
+			filterAndDisplayLogLine(line, r.filter, r.stdout, r.stderr)
 		}
 		scanErr := scanner.Err()
 		stream.Close()
@@ -509,13 +521,19 @@ func (r *LogsActorRunner) startMigrationMonitor(
 				return
 			case <-ticker.C:
 				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: r.actorRef.ToObjectRef()})
-				if err == nil {
-					act := resp
-					if act.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING || act.GetStatus().GetWorkerAssignment().GetWorkerPod() != currentPod {
-						// Actor suspended or migrated! Cancel stream context to reconnect.
-						cancel()
-						return
+				if err != nil {
+					if ctx.Err() == nil {
+						vlogf(r.stderr, vBasic, "Migration monitor failed to get actor %s: %v", r.actorRef, err)
 					}
+					continue
+				}
+				act := resp
+				if act.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING || act.GetStatus().GetWorkerAssignment().GetWorkerPod() != currentPod {
+					// Actor suspended or migrated! Cancel stream context to reconnect.
+					vlogf(r.stderr, vBasic, "Actor %s left pod %s (state=%s, pod=%s); closing current log stream",
+						r.actorRef, currentPod, act.GetStatus().GetState(), act.GetStatus().GetWorkerAssignment().GetWorkerPod())
+					cancel()
+					return
 				}
 			}
 		}
@@ -549,12 +567,12 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+	apiClient, err := newAPIClient(cmd)
 	if err != nil {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 	}
 
-	config, err := ateclient.LoadKubeConfig(kubeconfig, k8sContext)
+	config, err := loadKubeConfig(cmd.ErrOrStderr(), kubeconfig, k8sContext)
 	if err != nil {
 		apiClient.Close()
 		return fmt.Errorf("while loading kubeconfig: %w", err)
@@ -649,7 +667,7 @@ var containerNameKeyQuoted = `"` + string(ateattr.ActorContainerNameKey) + `"`
 
 // filterAndDisplayLogLine writes line to w if filter selects it, and
 // reports whether it did.
-func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) bool {
+func filterAndDisplayLogLine(line string, filter logLineFilter, w, stderr io.Writer) bool {
 	// Under lifecycle, nearly every line is a container's; a busy actor
 	// writes many, so skip them before decoding.
 	if filter.source == logSourceLifecycle && strings.Contains(line, containerNameKeyQuoted) {
@@ -660,6 +678,7 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) boo
 	dec := json.NewDecoder(strings.NewReader(line))
 	dec.UseNumber()
 	if err := dec.Decode(&m); err != nil {
+		vlogf(stderr, vTrace, "Skipping non-JSON log line: %v", err)
 		return false
 	}
 

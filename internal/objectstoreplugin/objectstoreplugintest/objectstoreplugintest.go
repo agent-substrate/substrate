@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package objectstoreplugintest provides snapshot plugin clients that call the
+// Package objectstoreplugintest provides object-store plugin clients that call the
 // object-store plugins directly, without a socket, for tests that drive atelet
 // or ate-api-server through the real plugin.
 package objectstoreplugintest

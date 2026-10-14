@@ -661,11 +661,12 @@ func TestDeadSandboxCheckDuringDrain(t *testing.T) {
 }
 
 // TestDrainNeverKillsPauseContainer: gracefulShutdown kills the names
-// containerNames takes from the spec. atelet rejects a spec that names the
-// pause container, so the drain cannot stop the sandbox itself.
+// containerNames takes from the spec. atelet requires container names to be
+// DNS-1123 labels (k8s-short-name) and the pause container's name is not one,
+// so no spec can name it and the drain cannot stop the sandbox itself.
 func TestDrainNeverKillsPauseContainer(t *testing.T) {
-	if err := resources.ValidateContainerNames([]string{ocispec.PauseContainer}); err == nil {
-		t.Fatalf("ValidateContainerNames accepted %q; a spec could then put it on the drain's kill list", ocispec.PauseContainer)
+	if resources.IsValidResourceName(ocispec.PauseContainer) {
+		t.Fatalf("%q is a valid container name; a spec could then put it on the drain's kill list", ocispec.PauseContainer)
 	}
 	spec := []*ateompb.Container{{Name: "app"}, {Name: "sidecar"}}
 	for _, name := range containerNames(spec) {

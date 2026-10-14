@@ -1,0 +1,62 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the glutton-storage
+# benchmark workload, created through the ate API by workloads/deploy.sh.
+# Attaches an external volume backed by ${STORAGE_CLASS_NAME}. The DurDir load
+# runs it with --durdir-template glutton-storage.
+metadata:
+  atespace: benchmark-workloads
+  name: glutton-storage
+workerSelector:
+  matchLabels:
+    workload: benchmark-ateom
+volumes:
+- name: external-storage
+  externalVolumeTemplate:
+    capacity: 1Gi
+    storageClassName: ${STORAGE_CLASS_NAME}
+containers:
+- name: glutton-storage
+  image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
+  command:
+  - "/ko-app/glutton"
+  - "--grpc-listen-addr=:80"
+  - "--metrics-listen-addr=:9090"
+  - "--data-dir=/mnt/storage"
+  - "--sync-writes"
+  - "--readyz-require-writable-data-dir"
+  - "--mode=http"
+  volumeMounts:
+  - name: external-storage
+    mountPath: /mnt/storage
+  env:
+  - name: OTEL_EXPORTER_OTLP_ENDPOINT
+    value: "${OTLP_ENDPOINT}"
+  - name: OTEL_RESOURCE_ATTRIBUTES
+    value: "service.name=glutton-storage-actor"
+  wakeupProbe:
+    httpGet:
+      path: /readyz
+      port: 80
+resources:
+  limits:
+  - name: memory
+    quantity: ${ACTOR_MEMORY}
+snapshotConfig:
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton-storage/
+sandboxConfig:
+  sandboxClass: ${SANDBOX_CLASS_ENUM}
+  configName: ${SANDBOX_CONFIG_NAME}

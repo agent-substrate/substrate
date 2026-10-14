@@ -1142,7 +1142,7 @@ func (x *ImageVolumeMount) GetMountPath() string {
 // Only HTTP is supported today.
 type WakeupProbe struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
-	HttpGet *HTTPGetAction         `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
+	HttpGet *HttpGetAction         `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
 	// How long to keep polling before giving up and failing the actor start.
 	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	unknownFields  protoimpl.UnknownFields
@@ -1179,7 +1179,7 @@ func (*WakeupProbe) Descriptor() ([]byte, []int) {
 	return file_ateom_proto_rawDescGZIP(), []int{13}
 }
 
-func (x *WakeupProbe) GetHttpGet() *HTTPGetAction {
+func (x *WakeupProbe) GetHttpGet() *HttpGetAction {
 	if x != nil {
 		return x.HttpGet
 	}
@@ -1193,8 +1193,8 @@ func (x *WakeupProbe) GetTimeoutSeconds() int32 {
 	return 0
 }
 
-// HTTPGetAction performs an HTTP GET against the container.
-type HTTPGetAction struct {
+// HttpGetAction performs an HTTP GET against the container.
+type HttpGetAction struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Path to access on the HTTP server.
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
@@ -1204,20 +1204,20 @@ type HTTPGetAction struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *HTTPGetAction) Reset() {
-	*x = HTTPGetAction{}
+func (x *HttpGetAction) Reset() {
+	*x = HttpGetAction{}
 	mi := &file_ateom_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *HTTPGetAction) String() string {
+func (x *HttpGetAction) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*HTTPGetAction) ProtoMessage() {}
+func (*HttpGetAction) ProtoMessage() {}
 
-func (x *HTTPGetAction) ProtoReflect() protoreflect.Message {
+func (x *HttpGetAction) ProtoReflect() protoreflect.Message {
 	mi := &file_ateom_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1229,19 +1229,19 @@ func (x *HTTPGetAction) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use HTTPGetAction.ProtoReflect.Descriptor instead.
-func (*HTTPGetAction) Descriptor() ([]byte, []int) {
+// Deprecated: Use HttpGetAction.ProtoReflect.Descriptor instead.
+func (*HttpGetAction) Descriptor() ([]byte, []int) {
 	return file_ateom_proto_rawDescGZIP(), []int{14}
 }
 
-func (x *HTTPGetAction) GetPath() string {
+func (x *HttpGetAction) GetPath() string {
 	if x != nil {
 		return x.Path
 	}
 	return ""
 }
 
-func (x *HTTPGetAction) GetPort() int32 {
+func (x *HttpGetAction) GetPort() int32 {
 	if x != nil {
 		return x.Port
 	}
@@ -2127,9 +2127,9 @@ const file_ateom_proto_rawDesc = "" +
 	"\n" +
 	"mount_path\x18\x02 \x01(\tR\tmountPath\"g\n" +
 	"\vWakeupProbe\x12/\n" +
-	"\bhttp_get\x18\x01 \x01(\v2\x14.ateom.HTTPGetActionR\ahttpGet\x12'\n" +
+	"\bhttp_get\x18\x01 \x01(\v2\x14.ateom.HttpGetActionR\ahttpGet\x12'\n" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
-	"\rHTTPGetAction\x12\x12\n" +
+	"\rHttpGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\x15\n" +
 	"\x13RunWorkloadResponse\"\xdb\x04\n" +
@@ -2256,7 +2256,7 @@ var file_ateom_proto_goTypes = []any{
 	(*SystemInfoVolumeMount)(nil),          // 14: ateom.SystemInfoVolumeMount
 	(*ImageVolumeMount)(nil),               // 15: ateom.ImageVolumeMount
 	(*WakeupProbe)(nil),                    // 16: ateom.WakeupProbe
-	(*HTTPGetAction)(nil),                  // 17: ateom.HTTPGetAction
+	(*HttpGetAction)(nil),                  // 17: ateom.HttpGetAction
 	(*RunWorkloadResponse)(nil),            // 18: ateom.RunWorkloadResponse
 	(*CheckpointWorkloadRequest)(nil),      // 19: ateom.CheckpointWorkloadRequest
 	(*CheckpointWorkloadResponse)(nil),     // 20: ateom.CheckpointWorkloadResponse
@@ -2286,7 +2286,7 @@ var file_ateom_proto_depIdxs = []int32{
 	15, // 11: ateom.Container.image_volume_mounts:type_name -> ateom.ImageVolumeMount
 	10, // 12: ateom.Container.container_spec:type_name -> ateom.ContainerSpec
 	11, // 13: ateom.ContainerSpec.resources:type_name -> ateom.ResourceLimits
-	17, // 14: ateom.WakeupProbe.http_get:type_name -> ateom.HTTPGetAction
+	17, // 14: ateom.WakeupProbe.http_get:type_name -> ateom.HttpGetAction
 	8,  // 15: ateom.CheckpointWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
 	29, // 16: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
 	0,  // 17: ateom.CheckpointWorkloadRequest.fidelity:type_name -> ateom.SnapshotFidelity

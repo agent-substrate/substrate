@@ -232,7 +232,7 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		policy := &ateapipb.EgressPolicy{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
 			Rules: []*ateapipb.EgressRule{{
-				Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
+				Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
 			}},
 		}
 
@@ -262,7 +262,7 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		updated, err := s.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(created), func(policy *ateapipb.EgressPolicy) error {
 			policy.Metadata.Atespace = "other"
 			policy.Metadata.Name = "other"
-			policy.Rules = []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}
+			policy.Rules = []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}
 			return nil
 		})
 		if err != nil || updated.GetMetadata().GetAtespace() != testAtespace || updated.GetMetadata().GetName() != "default" || updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
@@ -3225,7 +3225,7 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		created, err := s.CreateEgressPolicy(ctx, ref, withUnknownField(&ateapipb.EgressPolicy{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
 			Rules: []*ateapipb.EgressRule{withUnknownField(&ateapipb.EgressRule{
-				Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
+				Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
 			})},
 		}))
 		if err != nil {

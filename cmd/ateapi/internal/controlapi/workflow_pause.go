@@ -194,16 +194,16 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 		ActorTemplateName:     actor.GetActorTemplate().GetName(),
 		Spec:                  workloadSpec,
-		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		Config: &ateletpb.CheckpointRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{
-				SnapshotName: inProgressSnap.GetUuid(),
-			},
+		Snapshot: &ateletpb.Snapshot{
+			SnapshotUuid: inProgressSnap.GetUuid(),
+			Fidelity:     fidelityToAtelet(actorTemplate.GetSnapshotConfig().GetPreferredFidelity()),
 		},
-		Fidelity: fidelityToAtelet(actorTemplate.GetSnapshotConfig().GetPreferredFidelity()),
+		UploadConfig: &ateletpb.UploadConfig{
+			Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED,
+		},
 		ActorUid: actor.GetMetadata().Uid,
 	}
-	wireFidelity = ateattr.SnapshotFidelityValue(req.Fidelity)
+	wireFidelity = ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity())
 
 	if _, err = client.Checkpoint(ctx, req); err != nil {
 		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationPause, "Checkpoint", false, err)

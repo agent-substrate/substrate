@@ -49,7 +49,7 @@ import (
 
 const (
 	testAssetBucket = "cluster-bucket"
-	testPluginSock  = "/run/snapshot-plugin/node.sock"
+	testPluginSock  = "/run/objectstore-plugin/node.sock"
 )
 
 // bucketStorage is an in-memory object store keyed by "bucket/object" that
@@ -659,7 +659,7 @@ func TestRejectAteletStorageEnv(t *testing.T) {
 	}
 	for _, v := range []string{"s3", "gcs", ""} {
 		os.Setenv("ATE_STORAGE_BACKEND", v)
-		if err := rejectStorageEnv(); err == nil || !strings.Contains(err.Error(), "snapshot-plugin sidecar") {
+		if err := rejectStorageEnv(); err == nil || !strings.Contains(err.Error(), "objectstore-plugin sidecar") {
 			t.Errorf("rejectStorageEnv() with %q = %v, want an error naming the sidecar", v, err)
 		}
 	}

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package objectstoreplugin implements the snapshot plugin API on GCS or S3
+// Package objectstoreplugin implements the object-store plugin API on GCS or S3
 // object storage, using the plugin's own credentials.
 //
 // Snapshot files are stored as zstd-compressed objects named <file>.zstd

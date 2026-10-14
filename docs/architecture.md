@@ -327,7 +327,7 @@ The node-level subsystem manages the physical execution of sandboxes and the mov
 
   * **Lifecycle Management**: The `ateom` process invokes the sandbox runtime to checkpoint or restore processes within the physical pod boundaries — `runsc` for gVisor, or the Kata + Cloud Hypervisor stack for micro-VMs. (Note: the gVisor backend currently requires a `runsc` version with the `--allow-connected-on-save` flag to work around a bug in networking resumption during checkpointing.)
 
-  * **Storage Mover**: External snapshots move through a *snapshot plugin*, a sidecar that serves the `objectstore.v1` gRPC API over a Unix socket in its pod. `atelet`'s sidecar (`NodeProvider`) uploads and fetches a snapshot's files; `ate-api-server`'s sidecar (`ControlProvider`) copies and deletes whole snapshots. Neither main process talks to object storage for snapshots. The in-tree plugin, `cmd/snapshot-plugin`, backs the API with GCS or S3; `ATE_STORAGE_BACKEND` on the sidecar (unset or `gcs`, or `s3` with the `AWS_*` variables) selects which, see `manifests/ate-install/atelet.yaml`, `ate-api-server.yaml`, and the kind overlay for an S3 example. The same `atelet` sidecar serves `AssetProvider`, which fetches every sandbox asset; `atelet` reads a `gs://` asset anonymously only when the plugin cannot serve it, which covers public buckets such as `gs://gvisor`. The plugin stages each download where `atelet` cannot read it, and copies it into `atelet`'s cache only if its sha256 matches; it refuses any URL under a snapshot location. `atelet` verifies the sha256 again and has no object storage credentials or settings of its own.
+  * **Storage Mover**: External snapshots move through an *object-store plugin*, a sidecar that serves the `objectstore.v1` gRPC API over a Unix socket in its pod. `atelet`'s sidecar (`NodeProvider`) uploads and fetches a snapshot's files; `ate-api-server`'s sidecar (`ControlProvider`) copies and deletes whole snapshots. Neither main process talks to object storage for snapshots. The in-tree plugin, `cmd/objectstore-plugin`, backs the API with GCS or S3; `ATE_STORAGE_BACKEND` on the sidecar (unset or `gcs`, or `s3` with the `AWS_*` variables) selects which, see `manifests/ate-install/atelet.yaml`, `ate-api-server.yaml`, and the kind overlay for an S3 example. The same `atelet` sidecar serves `AssetProvider`, which fetches every sandbox asset; `atelet` reads a `gs://` asset anonymously only when the plugin cannot serve it, which covers public buckets such as `gs://gvisor`. The plugin stages each download where `atelet` cannot read it, and copies it into `atelet`'s cache only if its sha256 matches; it refuses any URL under a snapshot location. `atelet` verifies the sha256 again and has no object storage credentials or settings of its own.
 
 ### Sandbox Classes
 
@@ -352,7 +352,8 @@ Handles actor-aware routing and automatic re-animation.
     authenticated TLS tunnel to the worker's `atunnel` listener on port 443.
     `atunnel`, hosted by `ateom`, forwards the request to the active Actor over
     its private veth interface. Worker pod port 80 is not a direct Actor ingress
-    path.
+    path. With `--upstream-connect`, the router instead reaches `atunnel`
+    through mTLS `CONNECT` tunnels on port 8443.
 
   * **Arbitrary-Port Ingress**: A client reaches a port on the Actor other than
     its default (80) with an HTTP `CONNECT` request naming the port in the

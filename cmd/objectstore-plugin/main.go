@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command snapshot-plugin serves the object-store plugin API on GCS or S3 over
+// Command objectstore-plugin serves the object-store plugin API on GCS or S3 over
 // a Unix socket. It runs as a sidecar: "node" next to atelet, serving snapshot
 // transfers and sandbox assets, and "control" next to ate-api-server. The
 // backend is chosen by ATE_STORAGE_BACKEND ("s3", or GCS by default) with the
@@ -46,7 +46,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-const usage = `usage: snapshot-plugin <node|control|healthcheck> [flags]`
+const usage = `usage: objectstore-plugin <node|control|healthcheck> [flags]`
 
 func main() {
 	if len(os.Args) < 2 {
@@ -57,7 +57,7 @@ func main() {
 	flags := pflag.NewFlagSet(mode, pflag.ExitOnError)
 	socket := flags.String("socket", "", "Unix socket to serve on, or to check in healthcheck mode")
 	root := flags.String("root", nodepath.BasePath, "node mode: the only directory tree local snapshot and asset files may be read from or written to")
-	assetStagingDir := flags.String("asset-staging-dir", "/var/lib/snapshot-plugin/asset-staging", "node mode: directory sandbox assets are downloaded into and verified before they are copied below --root; must not be below --root or readable by the caller")
+	assetStagingDir := flags.String("asset-staging-dir", "/var/lib/objectstore-plugin/asset-staging", "node mode: directory sandbox assets are downloaded into and verified before they are copied below --root; must not be below --root or readable by the caller")
 	assetStagingCapacity := flags.String("asset-staging-capacity", "8Gi", "node mode: the most sandbox asset downloads in --asset-staging-dir may hold at once, as a Kubernetes quantity; downloads wait for space, and an asset larger than this is refused")
 	timeout := flags.Duration("timeout", 5*time.Second, "healthcheck mode: how long to wait for the plugin to report that it is serving")
 	_ = flags.Parse(os.Args[2:])
@@ -72,13 +72,13 @@ func main() {
 	// shell or grpc_health_probe, so the binary checks itself.
 	if mode == "healthcheck" {
 		if err := healthcheck(ctx, *socket, *timeout); err != nil {
-			serverboot.Fatal(ctx, "Snapshot plugin is not serving", err)
+			serverboot.Fatal(ctx, "Object-store plugin is not serving", err)
 		}
 		return
 	}
 
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
-		ServiceName: "snapshot-plugin-" + mode,
+		ServiceName: "objectstore-plugin-" + mode,
 		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 	})
 	if err != nil {
@@ -133,11 +133,11 @@ func main() {
 	defer stop()
 	go func() {
 		<-sigCtx.Done()
-		slog.InfoContext(ctx, "Draining snapshot plugin")
+		slog.InfoContext(ctx, "Draining object-store plugin")
 		srv.GracefulStop()
 	}()
 
-	slog.InfoContext(ctx, "Serving snapshot plugin", slog.String("mode", mode), slog.String("socket", *socket))
+	slog.InfoContext(ctx, "Serving object-store plugin", slog.String("mode", mode), slog.String("socket", *socket))
 	if err := srv.Serve(lis); err != nil {
 		serverboot.Fatal(ctx, "Serve failed", err)
 	}

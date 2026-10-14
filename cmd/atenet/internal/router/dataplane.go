@@ -100,6 +100,7 @@ func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Grou
 		slog.WarnContext(ctx, "Ingress client authentication is optional: any client that presents no certificate, or uses a plaintext listener, can reach any actor. Set --ingress-auth-mode=static-mtls to require mTLS")
 	}
 	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath, s.cfg.UpstreamSpiffePrefix)
+	xdsSrv.SetUpstreamConnect(s.cfg.UpstreamConnect)
 
 	// The snapshot is a pure function of the configuration applied above, so it
 	// is built exactly once; an Envoy that connects later is served from the

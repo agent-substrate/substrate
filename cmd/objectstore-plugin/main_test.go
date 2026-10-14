@@ -58,7 +58,7 @@ func TestInstallStagingCapacityFitsVolume(t *testing.T) {
 		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
 			t.Fatal(err)
 		}
-		if obj.Kind == "DaemonSet" && strings.HasPrefix(obj.Name, "atelet-") {
+		if obj.Kind == "DaemonSet" && obj.Name == "atelet" {
 			ds = &obj
 		}
 	}
@@ -67,7 +67,7 @@ func TestInstallStagingCapacityFitsVolume(t *testing.T) {
 	}
 	var capacityArg string
 	for _, c := range ds.Spec.Template.Spec.InitContainers {
-		if c.Name != "snapshot-plugin" {
+		if c.Name != "objectstore-plugin" {
 			continue
 		}
 		for _, a := range c.Args {
@@ -77,7 +77,7 @@ func TestInstallStagingCapacityFitsVolume(t *testing.T) {
 		}
 	}
 	if capacityArg == "" {
-		t.Fatal("the snapshot-plugin sidecar does not set --asset-staging-capacity")
+		t.Fatal("the objectstore-plugin sidecar does not set --asset-staging-capacity")
 	}
 	capacity, err := parseCapacity(capacityArg)
 	if err != nil {

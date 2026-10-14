@@ -23,7 +23,7 @@ patches:
       apiVersion: apps/v1
       kind: DaemonSet
       metadata:
-        name: atelet-${SUBSTRATE_VERSION_SUFFIX}
+        name: atelet
         namespace: ate-system
       spec:
         template:
@@ -56,11 +56,11 @@ patches:
               $patch: delete
             - name: image-credential-provider-config
               $patch: delete
-            # The snapshot plugin transfers atelet's external snapshots and
+            # The object-store plugin transfers atelet's external snapshots and
             # fetches its private sandbox assets (the micro-VM assets
             # stage-to-rustfs.sh uploads), so it points at rustfs.
             initContainers:
-            - name: snapshot-plugin
+            - name: objectstore-plugin
               env:
               - name: ATE_STORAGE_BACKEND
                 value: s3
