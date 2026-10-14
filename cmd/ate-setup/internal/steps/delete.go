@@ -33,13 +33,14 @@ import (
 
 // DeleteAteSystem removes the control plane.
 //
-// PostgreSQL, the agentgateway ConfigMap, the bundled credential provider, and
-// the CRDs are deleted explicitly because they are not part of every rendered
-// bundle: which of them the install created depends on the router and
-// credential provider that were selected, and teardown must not depend on
-// remembering that. The provider goes first so that a later failure cannot
-// leave its ClusterRole and binding behind. The cluster-scoped trust bundles
-// go last, once the controllers that publish them are gone.
+// PostgreSQL, the agentgateway ConfigMap, the bundled credential provider,
+// fake-workersync, and the CRDs are deleted explicitly because they are not
+// part of every rendered bundle: which of them the install created depends on
+// the router, credential provider, and data plane that were selected, and
+// teardown must not depend on remembering that. The provider goes first so
+// that a later failure cannot leave its ClusterRole and binding behind. The
+// cluster-scoped trust bundles go last, once the controllers that publish
+// them are gone.
 func (e *Env) DeleteAteSystem(ctx context.Context) error {
 	log.Step("delete_ate_system")
 
@@ -66,6 +67,7 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 
 	for _, path := range [][]string{
 		{"components", "agentgateway", "configmap.yaml"},
+		{"components", "fake-data-plane", "fake-workersync.yaml"},
 		{"postgres", "postgres.yaml"},
 		{"generated"},
 	} {

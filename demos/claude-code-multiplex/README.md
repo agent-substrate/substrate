@@ -105,6 +105,18 @@ Click "Give a task". The UI picks a random idle agent and creates a task for it.
 
 With three agents and two pods, the third agent stays suspended (state snapshotted) until a pod opens up.
 
+## Settings
+
+The installer reads this setting in addition to those in
+[docs/operator-install.md](../../docs/operator-install.md#settings), through the same
+environment variable and configuration document channels.
+
+| Key                    | Environment variable | Flag        | Default    | Applies to |
+|------------------------|----------------------|-------------|------------|------------|
+| `demo.anthropicAPIKey` | `ANTHROPIC_API_KEY`  | — (no flag) | — (secret) | (global)   |
+
+It is a secret, so it has no flag and the run report prints `<set>` for it.
+
 ## Upstream blockers worked around for this demo
 
 This demo currently applies workarounds at runtime for two Substrate issues. See the linked issue threads for details and workarounds.

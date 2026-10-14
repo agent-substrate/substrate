@@ -48,7 +48,7 @@ func ServicePortForward(ctx context.Context, config *rest.Config, clientset kube
 	if err != nil {
 		return 0, nil, err
 	}
-	return podPortForward(ctx, config, clientset, namespace, pod.Name, targetPort)
+	return PodPortForward(ctx, config, clientset, namespace, pod.Name, targetPort)
 }
 
 // ServicePodPortForward forwards a random local port straight to
@@ -59,7 +59,7 @@ func ServicePodPortForward(ctx context.Context, config *rest.Config, clientset k
 	if err != nil {
 		return 0, nil, err
 	}
-	return podPortForward(ctx, config, clientset, namespace, pod.Name, containerPort)
+	return PodPortForward(ctx, config, clientset, namespace, pod.Name, containerPort)
 }
 
 func firstReadyPodForService(ctx context.Context, clientset kubernetes.Interface, namespace, service string) (*corev1.Pod, *corev1.Service, error) {
@@ -113,7 +113,7 @@ func resolveTargetPort(svc *corev1.Service, pod *corev1.Pod, servicePort int32) 
 	return 0, fmt.Errorf("service %s has no port %d", svc.Name, servicePort)
 }
 
-func podPortForward(ctx context.Context, config *rest.Config, clientset kubernetes.Interface, namespace, podName string, targetPort int32) (int, func(), error) {
+func PodPortForward(ctx context.Context, config *rest.Config, clientset kubernetes.Interface, namespace, podName string, targetPort int32) (int, func(), error) {
 	req := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Namespace(namespace).

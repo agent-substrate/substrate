@@ -82,9 +82,8 @@ func workersHostingAtespace(ctx context.Context, lister ActorLister, atespace st
 	pageToken := ""
 	for {
 		resp, err := lister.ListActors(ctx, &ateapipb.ListActorsRequest{
-			PageSize:  1000,
-			PageToken: pageToken,
-			Atespace:  atespace,
+			Options:  &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
+			Atespace: atespace,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to list actors in atespace %q: %w", atespace, err)
@@ -107,8 +106,7 @@ func listAllWorkers(ctx context.Context, lister WorkerLister) ([]*ateapipb.Worke
 	pageToken := ""
 	for {
 		resp, err := lister.ListWorkers(ctx, &ateapipb.ListWorkersRequest{
-			PageSize:  1000,
-			PageToken: pageToken,
+			Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to list workers: %w", err)

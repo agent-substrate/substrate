@@ -87,9 +87,8 @@ var getActorTemplatesCmd = &cobra.Command{
 		pageToken := ""
 		for {
 			resp, err := apiClient.ListActorTemplates(ctx, &ateapipb.ListActorTemplatesRequest{
-				PageSize:  100,
-				PageToken: pageToken,
-				Atespace:  getActorTemplateAtespaceFlag,
+				Options:  &ateapipb.ListOptions{PageSize: 100, PageToken: pageToken},
+				Atespace: getActorTemplateAtespaceFlag,
 			})
 			if err != nil {
 				return fmt.Errorf("failed to list actor templates: %w", err)

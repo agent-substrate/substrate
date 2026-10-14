@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -130,6 +131,25 @@ func (c *Client) GetDeployment(ctx context.Context, namespace, name string) (*ap
 		return nil, fmt.Errorf("while getting deployment %s/%s: %w", namespace, name, err)
 	}
 	return dep, nil
+}
+
+// DeleteDeploymentAndWait deletes a Deployment in the foreground and waits
+// until it is gone, which is once its pods are. A missing Deployment is not an
+// error.
+func (c *Client) DeleteDeploymentAndWait(ctx context.Context, namespace, name string, timeout time.Duration) error {
+	foreground := metav1.DeletePropagationForeground
+	err := c.Typed.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &foreground})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("while deleting deployment %s/%s: %w", namespace, name, err)
+	}
+	err = poll(ctx, timeout, func(ctx context.Context) (bool, error) {
+		dep, err := c.GetDeployment(ctx, namespace, name)
+		return dep == nil, err
+	})
+	if err != nil {
+		return fmt.Errorf("waiting for deployment %s/%s to be deleted: %w", namespace, name, err)
+	}
+	return nil
 }
 
 // DeploymentExists reports whether a Deployment is present. delete_demo_actors

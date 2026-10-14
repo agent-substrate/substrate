@@ -26,9 +26,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -146,15 +148,15 @@ func TestSuspendActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 
 // TestEnsureMarkedSuspending_StateMatrix verifies the suspend edge's state
 // gating against every actor state: RUNNING takes the edge (checkpoint the
-// workload), PAUSED takes it too (upload the node-local pause snapshot),
-// SUSPENDING skips (a previous attempt already marked the actor), everything
-// else is rejected with FailedPrecondition. SUSPENDED is rejected here
-// because the orchestrator early-returns before this step for a fully
-// suspended actor.
+// workload), SUSPENDING skips (a previous attempt already marked the actor),
+// everything else is rejected with FailedPrecondition. SUSPENDED without a
+// node-local snapshot is rejected here because the orchestrator
+// early-returns before this step for a fully suspended actor; SUSPENDED with
+// one is the paused shape, covered by
+// TestEnsureMarkedSuspending_PausedPromotesLocalSnapshot.
 func TestEnsureMarkedSuspending_StateMatrix(t *testing.T) {
 	allowed := map[ateapipb.ActorState]bool{
 		ateapipb.ActorState_ACTOR_STATE_RUNNING:    true,
-		ateapipb.ActorState_ACTOR_STATE_PAUSED:     true,
 		ateapipb.ActorState_ACTOR_STATE_SUSPENDING: true, // skipped, not re-marked
 	}
 
@@ -164,16 +166,9 @@ func TestEnsureMarkedSuspending_StateMatrix(t *testing.T) {
 		w := &ActorWorkflow{store: persistence}
 
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-		actorStatus := &ateapipb.ActorStatus{State: seedState}
-		if seedState == ateapipb.ActorState_ACTOR_STATE_PAUSED {
-			actorStatus.LastAssignedGeneration = 1
-			actorStatus.Snapshots = []*ateapipb.Snapshot{
-				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", "node-1"),
-			}
-		}
 		actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-			Status:   actorStatus,
+			Status:   &ateapipb.ActorStatus{State: seedState},
 		})
 
 		tmpl := &ateapipb.ActorTemplate{
@@ -184,25 +179,92 @@ func TestEnsureMarkedSuspending_StateMatrix(t *testing.T) {
 		if err == nil && marked.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
 			t.Errorf("state %v: ensureMarkedSuspending returned actor in %v, want SUSPENDING", seedState, marked.GetStatus().GetState())
 		}
-		if seedState == ateapipb.ActorState_ACTOR_STATE_PAUSED && err == nil {
-			wantURI, err := resources.NewActorSnapshotURI("gs://snapshots", actorRef.Atespace, actor.GetMetadata().GetUid(), "snap-1")
-			if err != nil {
-				t.Fatalf("NewActorSnapshotURI: %v", err)
-			}
-			pending := findLatestDurableSnapshot(marked.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
-			gotURI := pending.GetDurableSnapshot().GetObject().GetSnapshotUri()
-			if gotURI != wantURI.String() {
-				t.Errorf("paused-origin in-progress SnapshotUri = %q, want %q (derived from local snapshot uuid)", gotURI, wantURI.String())
-			}
-			// The upload promotes the pause snapshot in place rather than
-			// minting a new generation.
-			if pending.GetGeneration() != 1 || pending.GetUuid() != "snap-1" {
-				t.Errorf("paused-origin pending snapshot = generation %d, uuid %q; want the pause snapshot (generation 1, uuid %q)", pending.GetGeneration(), pending.GetUuid(), "snap-1")
-			}
-			if got := marked.GetStatus().GetLastAssignedGeneration(); got != 1 {
-				t.Errorf("paused-origin LastAssignedGeneration = %d, want 1", got)
-			}
-		}
+	}
+}
+
+// TestEnsureMarkedSuspending_RejectsPauseInProgress verifies a suspend does
+// not adopt a SUSPENDING actor whose latest generation is a pending
+// node-local snapshot: that actor is mid-pause, and the pause owns it until
+// it is paused.
+func TestEnsureMarkedSuspending_RejectsPauseInProgress(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	w := &ActorWorkflow{store: persistence}
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+
+	pausing := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
+	}
+	withPauseInProgress()(pausing)
+	created := storetest.MustCreateActor(t, ctx, persistence, pausing)
+
+	tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"}}
+	_, err := w.ensureMarkedSuspending(ctx, actorRef, created, tmpl)
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
+		t.Errorf("ensureMarkedSuspending on a pause in progress: code = %v, want FailedPrecondition (err: %v)", got, err)
+	}
+	stored, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got := stored.GetStatus().GetLastAssignedGeneration(); got != 1 {
+		t.Errorf("last_assigned_generation = %d, want 1 (the pause's snapshot untouched)", got)
+	}
+}
+
+// TestEnsureMarkedSuspending_PausedPromotesLocalSnapshot verifies the suspend
+// edge from a paused actor (SUSPENDED whose latest snapshot is node-local):
+// it takes the edge and promotes that snapshot in place to a pending durable
+// one, keeping its generation and uuid, with the upload destination derived
+// from the uuid.
+func TestEnsureMarkedSuspending_PausedPromotesLocalSnapshot(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	w := &ActorWorkflow{store: persistence}
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status: &ateapipb.ActorStatus{
+			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			AssignedNode:           "node-1",
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", "node-1"),
+			},
+		},
+	})
+
+	tmpl := &ateapipb.ActorTemplate{
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"},
+	}
+	marked, err := w.ensureMarkedSuspending(ctx, actorRef, actor, tmpl)
+	if err != nil {
+		t.Fatalf("ensureMarkedSuspending: %v", err)
+	}
+	if got := marked.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+		t.Errorf("state = %v, want SUSPENDING", got)
+	}
+	wantURI, err := resources.NewActorSnapshotURI("gs://snapshots", actorRef.Atespace, actor.GetMetadata().GetUid(), "snap-1")
+	if err != nil {
+		t.Fatalf("NewActorSnapshotURI: %v", err)
+	}
+	pending := findLatestDurableSnapshot(marked.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+	gotURI := pending.GetDurableSnapshot().GetObject().GetSnapshotUri()
+	if gotURI != wantURI.String() {
+		t.Errorf("paused-origin in-progress SnapshotUri = %q, want %q (derived from local snapshot uuid)", gotURI, wantURI.String())
+	}
+	// The upload promotes the pause snapshot in place rather than minting a
+	// new generation.
+	if pending.GetGeneration() != 1 || pending.GetUuid() != "snap-1" {
+		t.Errorf("paused-origin pending snapshot = generation %d, uuid %q; want the pause snapshot (generation 1, uuid %q)", pending.GetGeneration(), pending.GetUuid(), "snap-1")
+	}
+	if pending.GetLocality() != "node-1" {
+		t.Errorf("pending snapshot locality = %q, want node-1 kept until the upload finishes", pending.GetLocality())
+	}
+	if got := marked.GetStatus().GetLastAssignedGeneration(); got != 1 {
+		t.Errorf("paused-origin LastAssignedGeneration = %d, want 1", got)
 	}
 }
 
@@ -320,11 +382,59 @@ func TestEnsureAteletSuspended_DialFailureLeavesActorRetryable(t *testing.T) {
 	}
 }
 
+// TestEnsureAteletSuspended_WireRequest verifies a running-origin suspend
+// checkpoints to the actor's in-progress durable snapshot with an immediate
+// upload, since FinalizeSuspended then marks that snapshot COMPLETED.
+func TestEnsureAteletSuspended_WireRequest(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	w, atelet := newWireCaptureWorkflow(t, persistence)
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	snapshotName := "2026-01-01t00-00-00z-abc"
+	snapshotURI := someActorSnapshotURI(t, testStorageLocation, "team-a", snapshotName)
+	created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns", Name: "tmpl1"},
+		Status: &ateapipb.ActorStatus{
+			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			AssignedNode:           "node-1",
+			WorkerAssignment:       wireTestAssignment(),
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "tmpl-uid-1", snapshotName, snapshotURI, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			},
+		},
+	})
+	tmpl := &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+	}
+
+	if _, err := w.ensureAteletSuspended(ctx, actorRef, created, tmpl); err != nil {
+		t.Fatalf("ensureAteletSuspended: %v", err)
+	}
+	req := atelet.checkpointRequest()
+	if req == nil {
+		t.Fatal("expected Checkpoint RPC to be called")
+	}
+	if got := req.GetSnapshot().GetSnapshotUuid(); got != snapshotName {
+		t.Errorf("CheckpointRequest.Snapshot.SnapshotUuid = %q, want %q", got, snapshotName)
+	}
+	if got := req.GetSnapshot().GetObject().GetSnapshotUri(); got != snapshotURI {
+		t.Errorf("CheckpointRequest.Snapshot.Object.SnapshotUri = %q, want %q", got, snapshotURI)
+	}
+	wantConfig := &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE}
+	if got := req.GetUploadConfig(); !proto.Equal(got, wantConfig) {
+		t.Errorf("CheckpointRequest.UploadConfig = %v, want %v", got, wantConfig)
+	}
+}
+
 // TestEnsureSuspendedFinalized_NoAssignment verifies finalization runs even when
 // the actor has no worker assignment: the external snapshot must be recorded on
 // the actor and the actor moved to SUSPENDED rather than silently left
 // SUSPENDING. This is the shape a paused-origin suspend (#791) produces — a
-// PAUSED actor has no worker — and the regression test for finalization
+// paused actor has no worker — and the regression test for finalization
 // previously living inside the worker-freeing branch.
 func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	ctx := context.Background()
@@ -730,8 +840,9 @@ func TestPreferredFidelity(t *testing.T) {
 
 // TestIsPausedOriginSuspend pins the paused-origin discriminator: a local
 // snapshot alone must not select the paused path, because a RUNNING actor
-// resumed from pause still carries one; only PAUSED state, or SUSPENDING with
-// no worker assignment, means the suspend uploads a local snapshot.
+// resumed from pause still carries one; only the paused shape (SUSPENDED with
+// a node-local latest snapshot), or SUSPENDING with no worker assignment,
+// means the suspend uploads a local snapshot.
 func TestIsPausedOriginSuspend(t *testing.T) {
 	assignment := &ateapipb.WorkerAssignment{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod-1"}
 	localSnaps := []*ateapipb.Snapshot{
@@ -742,7 +853,8 @@ func TestIsPausedOriginSuspend(t *testing.T) {
 		actor *ateapipb.Actor
 		want  bool
 	}{
-		{"paused actor", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_PAUSED, AssignedNode: "node1", Snapshots: localSnaps}}, true},
+		{"paused actor", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, AssignedNode: "node1", LastAssignedGeneration: 1, Snapshots: localSnaps}}, true},
+		{"suspended actor without a local snapshot", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}, false},
 		{"suspending retry of a paused-origin suspend", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, AssignedNode: "node1", Snapshots: localSnaps}}, true},
 		{"running actor resumed from pause", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, Snapshots: localSnaps, WorkerAssignment: assignment}}, false},
 		{"suspending retry of a running-origin suspend after a resume from pause", &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, Snapshots: localSnaps, WorkerAssignment: assignment}}, false},
@@ -822,39 +934,6 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 			t.Errorf("state = %v, want SUSPENDING (retryable, not crashed)", stored.GetStatus().GetState())
 		}
 	})
-}
-
-// TestSuspendActor_PausedWithoutLocalSnapshotCrashes verifies a PAUSED actor
-// whose LocalSnapshot is missing (corrupted store state: nothing records
-// where the pause snapshot lives) is crashed by the suspend workflow rather
-// than left flapping between PAUSED and SUSPENDING.
-func TestSuspendActor_PausedWithoutLocalSnapshotCrashes(t *testing.T) {
-	ctx := context.Background()
-	st, cleanup := storetest.SetupTestStore(t)
-	defer cleanup()
-
-	// The template needs a snapshot location: MarkSuspending validates the
-	// destination URI before the workflow reaches the crash under test.
-	// newTestActorWorkflow's stored template carries one.
-	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
-
-	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_PAUSED)
-
-	_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
-	if got := apierror.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("apierror.Code(err) = %v, want %v for PAUSED actor with no local snapshot record (err: %v)", got, codes.FailedPrecondition, err)
-	}
-
-	got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
-	if err != nil {
-		t.Fatalf("GetActor failed: %v", err)
-	}
-	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
-	}
-	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageLocalSnapshotMissing; msg != want {
-		t.Errorf("crash message = %q, want %q", msg, want)
-	}
 }
 
 // TestEnsureSuspendedFinalized_MissingDurableSnapshotClearsAssignment verifies
