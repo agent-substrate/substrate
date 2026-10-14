@@ -112,6 +112,25 @@
 # seconds, or the step falls short of its rate. A resumepaused iteration is a
 # resume plus a pause, so size it by the p99 of both together.
 #
+# An optional `ateapi:` block shapes the control plane for a capacity run of
+# ate-api-server and Postgres; pre_test applies it after the deploy:
+#   cpu            Required. CPU of each ate-api-server replica, set as both
+#                  request and limit (e.g. 2 or "1500m").
+#   memory         Optional (default "4Gi"). Memory request and limit.
+#   replicas       Optional (default 1).
+#   poolMaxConns   Optional. pgxpool max connections per replica, set
+#                  through ateapi's env ConfigMap. Unset keeps the installed
+#                  value.
+#   pgStats        Optional (default true). Load pg_stat_statements and add
+#                  a postgres_exporter sidecar, scraped by monitoring.yaml.
+#   pinNodes       Optional (default true). Label one node for ateapi and
+#                  another for the runner, away from the Postgres node, and
+#                  pin each there. Every ateapi replica shares its node,
+#                  which must have the CPU for all of them; fake-atelet may
+#                  run there too. The runner takes a node of the pool
+#                  reserved for load generators when there is one. Not with
+#                  --cordon-control-plane in ateArgs.
+#
 # ---- type: nighthawk-ingress --------------------------------------------------------
 #
 # Runs the Nighthawk adaptive router-capacity benchmark. `duration` is the
