@@ -7,7 +7,7 @@
 
 # Agent Substrate
 
-**Zero-trust sandboxing for millions of agents on Kubernetes, at container density and speed.**
+**Zero-trust sandboxing for millions of agents on Kubernetes.**
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
@@ -17,24 +17,26 @@
 
 ## What is Agent Substrate?
 
-Agent Substrate is an agent execution runtime built around two equal premises:
+Agent Substrate is a security-hardened, zero-trust runtime for agents and sandboxes, built to safely run millions of agents and tools at 10x the density of standard containers. Purpose-built for the era of autonomous agents, Substrate delivers fast resume operations in less than 400ms, with more than 1500 activations per second. Agents get isolated compute, identity, networking, and storage, while sensitive credentials are kept out of reach from untrusted code. It supports multiple sandbox technologies, including microVMs and gVisor, enabling consistent lifecycle operations across all sandbox types.
 
-* **Zero trust for agents.** Every agent has an identity, but no credentials, no open network, and no way out of the sandbox.
-* **Fleet scale at container cost.** Millions of stateful sandboxes on Kubernetes, with 10x the density of standard container runtimes and sub-500ms suspend/resume at over 500 activations per second.
+Substrate is built around two equal premises:
 
-At its core, Agent Substrate maps a larger set of “actors” (stateful workloads such as agents) onto a smaller pool of ready “workers”. Because agents spend most of their lives waiting on models, tools, or humans, Substrate snapshots idle actors out of memory and restores them on demand to any available worker when a request arrives.
+* **Zero trust by default.** Everything inside the sandbox is suspect, and the default posture is to trust nothing.
+* **Fleet scale at container cost.** Agents are high volume and frequently idle, so the resources needed to run them cannot be proportional to the total number of agents under management.
 
-Agent Substrate is a low-opinion runtime, not an agent SDK. The workloads it runs do not have to be AI agents, though autonomous, untrusted, mostly-idle agents are what its isolation and scheduling model are built for. It runs on standard Kubernetes (Pods, autoscaling, NetworkPolicies), adding agent-specific scheduling, snapshotting, identity, and network mediation so agentic, inference, training, and reinforcement learning workloads share one infrastructure plane.
+At its core, Agent Substrate maps a larger set of “actors” (stateful workloads such as agents) onto a smaller pool of ready “workers”. Because agents spend most of their lives waiting on models, tools, or humans, Substrate snapshots idle actors out of memory and restores them on demand to any available worker.
+
+Substrate is a low-opinion runtime, not an agent SDK. The workloads it runs do not have to be AI agents, though autonomous, untrusted, mostly-idle agents are what its isolation and scheduling model are built for. It runs on standard Kubernetes (Pods, autoscaling, NetworkPolicies), adding agent-specific scheduling, snapshotting, identity, and network mediation. This allows agentic, inference, training, and reinforcement learning workloads to share one infrastructure plane.
 
 ## Security Model
 
 Substrate treats every actor as untrusted and mutually hostile, so tenants can share physical nodes without sharing a security boundary. Every control operates within the sub-500ms cold-start and resume budget. See the [Security Guide](docs/security.md) for the full list of security principles and threat model.
 
 * **Always sandboxed, VM-grade boundaries:** Every actor runs inside a dedicated [gVisor](https://gvisor.dev/) (`runsc`) or [Cloud Hypervisor](https://www.cloudhypervisor.org/) microVM sandbox with segregated compute, network, and storage. Plain Linux containers are not supported.
-* **Per-agent cryptographic identity:** Every active actor receives a short-lived [SPIFFE](https://spiffe.io/) X.509 certificate by default, and the egress gateway can mint per-actor JWTs on demand when an egress policy calls for one. Both carry the actor's identity and "atespace": the substrate namespace grouping, and are designed to federate with external identity systems.
+* **Per-agent cryptographic identity:** Every active actor receives a short-lived [SPIFFE](https://spiffe.io/) X.509 certificate by default, and the egress gateway can mint per-actor JWTs on demand when an egress policy calls for one. Both carry the actor identity and atespace (the Substrate namespace grouping), and are designed to federate with external identity systems.
 * **Zero credentials in the sandbox:** Actors never hold actor identity JWTs/certs, API keys, or cloud tokens. The built-in egress gateway ([`atenet-egress`](docs/egress-credential-injection.md)) injects credentials into approved outbound requests outside the sandbox, so a prompt-injected or compromised agent has nothing to exfiltrate.
 * **Default-deny networking:** Actors start with a private network stack, no inbound path except through the ingress router (`atenet-router`), no lateral actor-to-actor or control-plane access, and outbound traffic [restricted by the egress gateway](docs/egress-traffic.md).
-* **Pluggable policy at the edge:** Both ingress and egress gateways expose Envoy `ext_proc` callouts, and the egress gateway is replaceable outright. This means you can attach your own authorization, DLP, prompt-injection scanning, or cloud IAM policy engine without putting policy code inside the untrusted sandbox.
+* **Pluggable policy at the edge:** The egress gateway acts as an external Policy Enforcement Point (PEP) that is fully replaceable, allowing you to attach your own authorization, DLP, prompt-injection scanning, or cloud IAM policy engine without placing policy code inside the untrusted sandbox.
 
 ## Performance & Multiplexing
 
@@ -44,7 +46,7 @@ Substrate treats every actor as untrusted and mutually hostile, so tenants can s
 
 This demo highlights the core developer experience and "Agentic Infrastructure" capabilities of Substrate:
 
-1. **Actor Teleport:** Suspend and resume actors onto any available worker in the pool with sub-500ms activation, at over 500 activations per second.
+1. **Actor Teleport:** Suspend and resume actors onto any available worker in the pool, when needed.
 2. **Full-State Persistence:** Working memory (RAM) and filesystem state are captured in snapshots and restored intact across hibernation cycles, without losing in-flight sessions or tool state.
 3. **10x–30x Oversubscription:** Multiplex a large registry of stateful actors onto a small pool of warm worker pods, paying for compute only while an agent is actively thinking or executing a tool.
 
