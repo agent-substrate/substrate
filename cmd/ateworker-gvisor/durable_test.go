@@ -148,3 +148,36 @@ func TestFSRestoreArgs(t *testing.T) {
 		}
 	})
 }
+
+func TestFSRestoreContainers(t *testing.T) {
+	containers := []*ateworkerpb.Container{
+		{
+			Name: "init",
+		},
+		{
+			Name: "app",
+			DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
+				{VolumeName: "data", MountPath: "/var/data"},
+			},
+		},
+		{
+			Name: "sidecar-shared-only",
+			DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
+				{VolumeName: "data", MountPath: "/mnt/data"},
+			},
+		},
+		{
+			Name: "sidecar-with-own-vol",
+			DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
+				{VolumeName: "data", MountPath: "/mnt/data"},
+				{VolumeName: "logs", MountPath: "/var/log"},
+			},
+		},
+	}
+
+	got := fsRestoreContainers(containers)
+	want := []string{"app", "sidecar-with-own-vol"}
+	if !slices.Equal(got, want) {
+		t.Errorf("fsRestoreContainers() = %v, want %v", got, want)
+	}
+}

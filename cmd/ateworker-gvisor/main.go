@@ -202,8 +202,12 @@ func do(ctx context.Context) error {
 
 	// Prepare the pod cgroup so runsc can create per-actor-container leaves under
 	// it with real accounting.
-	if _, err := cgroup.Delegate(ctx); err != nil {
+	cgroupDelegated, err := cgroup.Delegate(ctx)
+	if err != nil {
 		return fmt.Errorf("while setting up cgroup delegation: %w", err)
+	}
+	if cgroupDelegated {
+		removeStaleCheckpointCgroups(ctx, defaultCgroupRoot)
 	}
 
 	// Clean up any old socket.
@@ -233,6 +237,7 @@ func do(ctx context.Context) error {
 		return err
 	}
 	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags)
+	ateworkerService.cgroupDelegated = cgroupDelegated
 	// The controller sets both from the downward API.
 	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
@@ -339,6 +344,10 @@ type AteWorkerService struct {
 	// own cgroup scope, which cgroup.Delegate prepares. A field rather
 	// than a constant so tests can point GetWorkloadStats at a fixture tree.
 	cgroupRoot string
+
+	// cgroupDelegated is set when the worker's cgroup is delegated (false on
+	// privileged workers that inherit the host cgroup namespace).
+	cgroupDelegated bool
 
 	// readSandboxCgroup overrides cgroupstats.Read when set. Only tests set it:
 	// it is the seam that lets them interleave a lifecycle transition with the
@@ -781,52 +790,69 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	containers := req.GetSpec().GetContainers()
 	durablePaths := durableFSCheckpointPaths(containers)
+
+	// Cleanup the containers after checkpointing. This also unhosts the actor,
+	// before the snapshot listing below can fail.
+	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
+	terminate := func() error {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		err := s.terminateWorkload(cleanupCtx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), containers)
+		if err != nil {
+			slog.WarnContext(cleanupCtx, "failed to terminate workload after checkpoint",
+				slog.String("actor", attribution.Ref.String()),
+				slog.String("actorUID", attribution.UID),
+				slog.Any("err", err))
+		}
+		timing.teardown = lap(&tLast)
+		s.recordFinalIfEnded(cleanupCtx, hosted)
+		return err
+	}
+
+	var checkpointFn func(context.Context) error
 	switch fidelity {
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		if len(durablePaths) == 0 {
 			return nil, fmt.Errorf("no durable-dir volumes found for VOLUMES snapshot")
 		}
-		err := rcmd.cmdFsCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
-		timing.durableDir = lap(&tLast)
-		if err != nil {
-			return nil, fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
+		checkpointFn = func(ctx context.Context) error {
+			err := rcmd.cmdFsCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
+			timing.durableDir = lap(&tLast)
+			if err != nil {
+				return fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
+			}
+			return nil
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Checkpoint pause container (root of the sandbox), splitting durable-dir
 		// volumes into <checkpointPath>/fs when present.
-		sandbox, sbErr := openSandboxProcess(req.GetActorDirs())
-		if sbErr != nil {
-			slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", sbErr))
-		} else {
-			defer sandbox.Close()
-		}
-		err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
-		if err != nil {
-			timing.checkpoint = lap(&tLast)
-			return nil, fmt.Errorf("while checkpointing pause: %w", err)
-		}
-		// the checkpoint stops the sandbox, runsc delete fails until it is reaped
-		if sandbox != nil {
-			if err := sandbox.waitGone(sandboxExitTimeout); err != nil {
-				slog.WarnContext(ctx, "Sandbox did not go away after checkpoint", slog.Any("err", err))
+		checkpointFn = func(ctx context.Context) error {
+			sandbox, sbErr := openSandboxProcess(req.GetActorDirs())
+			if sbErr != nil {
+				slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", sbErr))
+			} else {
+				defer sandbox.Close()
 			}
+			err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
+			if err != nil {
+				timing.checkpoint = lap(&tLast)
+				return fmt.Errorf("while checkpointing pause: %w", err)
+			}
+			// the checkpoint stops the sandbox, runsc delete fails until it is reaped
+			if sandbox != nil {
+				if err := sandbox.waitGone(sandboxExitTimeout); err != nil {
+					slog.WarnContext(ctx, "Sandbox did not go away after checkpoint", slog.Any("err", err))
+				}
+			}
+			timing.checkpoint = lap(&tLast)
+			return nil
 		}
-		timing.checkpoint = lap(&tLast)
 	default:
 		return nil, fmt.Errorf("unsupported snapshot fidelity: %v", fidelity)
 	}
-
-	// Cleanup the containers after checkpointing. This also unhosts the actor,
-	// before the snapshot listing below can fail.
-	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
-	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
-		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
-			slog.String("actor", attribution.Ref.String()),
-			slog.String("actorUID", attribution.UID),
-			slog.Any("err", err))
+	if err := checkpointIsolated(ctx, s.cgroupDelegated, s.cgroupRoot, req.GetActorUid(), req.GetActorDirs(), checkpointFn, terminate); err != nil {
+		return nil, err
 	}
-	timing.teardown = lap(&tLast)
-	s.recordFinalIfEnded(ctx, hosted)
 
 	// Report exactly the files runsc wrote so atelet ships precisely this set
 	// (checkpoint.img plus any pages images and fs/ durable-dir files), rather
@@ -1119,6 +1145,21 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err != nil {
 		return nil, err
 	}
+	dropActorCheckpointCacheAsync(req.GetActorUid(), checkpointDir, req.GetPreserveRestoreDir(), func(waitCtx context.Context) error {
+		if fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+			if err := rcmd.cmdWaitRestore(waitCtx, ocispec.PauseContainer); err != nil {
+				return err
+			}
+		}
+		if len(restoreArgs) > 0 {
+			for _, ctr := range fsRestoreContainers(containers) {
+				if err := rcmd.cmdWaitFSRestore(waitCtx, ctr); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
 	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(containers)})
