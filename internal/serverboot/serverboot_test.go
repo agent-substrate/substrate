@@ -661,6 +661,23 @@ func TestSkipFamiliesDropsBatchOnGatherError(t *testing.T) {
 	}
 }
 
+// A family that reaches the skip registry while inner produces is still
+// dropped, so the bridge never pushes it under its Prometheus name.
+func TestSkipFamiliesCoversFamiliesRegisteredDuringProduce(t *testing.T) {
+	skip := prometheus.NewRegistry()
+	inner := producerFunc(func(context.Context) ([]metricdata.ScopeMetrics, error) {
+		skip.MustRegister(prometheus.NewCounter(prometheus.CounterOpts{Name: "late_total", Help: "late"}))
+		return []metricdata.ScopeMetrics{{Metrics: []metricdata.Metrics{{Name: "late_total"}, {Name: "kept"}}}}, nil
+	})
+	scopes, err := skipFamilies{inner: inner, skip: skip}.Produce(t.Context())
+	if err != nil {
+		t.Fatalf("Produce: %v", err)
+	}
+	if len(scopes) != 1 || len(scopes[0].Metrics) != 1 || scopes[0].Metrics[0].Name != "kept" {
+		t.Errorf("Produce = %v, want only kept", scopes)
+	}
+}
+
 // failingCollector is an unchecked collector whose every Gather fails.
 type failingCollector struct{}
 
