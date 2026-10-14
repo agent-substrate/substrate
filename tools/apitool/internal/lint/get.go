@@ -65,7 +65,7 @@ func checkGetRequestSingleObjectRef(api *model.API) ([]Finding, error) {
 				})
 				continue
 			}
-			if want := fieldNameForResource(rg.Message.Name); f.Name != want {
+			if want := fieldNameForResource(locatorResourceName(rg.Message.Name)); f.Name != want {
 				findings = append(findings, Finding{
 					Subject: subject,
 					Message: fmt.Sprintf("resource field is named %q, want %q", f.Name, want),
