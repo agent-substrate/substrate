@@ -295,7 +295,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 	deleting := workerPod("pod-a", "pool")
 	deleting.DeletionTimestamp = &metav1.Time{Time: time.Now()}
 	stale := wantVersions()
-	stale.SandboxConfig = "gvisor-old"
+	stale.DefaultRuntime = wantRuntime("v0")
 
 	tests := []struct {
 		name string
@@ -362,15 +362,11 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		wantRetries: 1,
 	}, {
 		// The worker can start actors under the others meanwhile.
-		name:     "failed non-default version writes the others and retries",
-		objs:     []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
-		existing: stale,
-		failSHA:  "sha-v1",
-		want: &sandboxversions.File{
-			SandboxClass:  "gvisor",
-			SandboxConfig: "gvisor-release",
-			Versions:      []sandboxversions.Version{wantVersion("v2", true)},
-		},
+		name:        "failed non-default version writes the others and retries",
+		objs:        []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		existing:    stale,
+		failSHA:     "sha-v1",
+		want:        &sandboxversions.File{DefaultRuntime: wantRuntime("v2")},
 		wantDir:     true,
 		wantRetries: 1,
 	}, {

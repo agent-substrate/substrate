@@ -18,7 +18,8 @@ package main
 // in the steps syncPod runs:
 //   - resolve: find the SandboxConfig of the pod's WorkerPool
 //   - plan: pick the config's versions this node can run, with no IO
-//   - fetch: download each version's assets and pull its pause image
+//   - fetch: download each version's assets, pull its pause image, and hash
+//     the result into the version's sandbox_runtime_hash
 //   - write: replace the file in the worker directory if its content changed
 //
 // worker_sandbox_syncer.go decides when each pod is synced, and creates and
@@ -26,17 +27,22 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/sandboxversions"
@@ -74,7 +80,6 @@ var errPermanent = errors.New("permanent failure")
 // sandboxPlan is what one worker's sandbox versions file is built from, before
 // anything is fetched.
 type sandboxPlan struct {
-	class    v1alpha1.SandboxClass
 	config   string
 	versions []versionPlan // the default first
 }
@@ -139,7 +144,7 @@ func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (v1alpha1.SandboxClass,
 
 // plan resolves pod's SandboxConfig and the versions of it this node can run.
 func (r *workerSandboxResolver) plan(pod *corev1.Pod) (*sandboxPlan, error) {
-	class, cfg, err := r.resolve(pod)
+	_, cfg, err := r.resolve(pod)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +152,7 @@ func (r *workerSandboxResolver) plan(pod *corev1.Pod) (*sandboxPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &sandboxPlan{class: class, config: cfg.Name, versions: vers}, nil
+	return &sandboxPlan{config: cfg.Name, versions: vers}, nil
 }
 
 // planVersions returns the versions of cfg a worker on this node may use: the
@@ -197,26 +202,29 @@ func recordForArch(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConf
 }
 
 // fetch fetches every version in plan to the node, in parallel, and returns
-// the file content naming their local paths.
+// the file content naming their runtimes.
 //   - the default version fails: it returns no file, since no worker of the
 //     pool could start actors on this node
 //   - another version fails: it returns the file without that version, and
 //     the error, so the syncer writes the file and retries the rest
+//
+// A version whose runtime hash equals an earlier one's is left out, so the
+// file lists each runtime once.
 func (s *workerSandboxSyncer) fetch(ctx context.Context, plan *sandboxPlan) (*sandboxversions.File, error) {
 	ctx, cancel := context.WithTimeout(ctx, syncTimeout)
 	defer cancel()
 
-	paths := make([]map[string]string, len(plan.versions))
+	hashes := make([]string, len(plan.versions))
 	errs := make([]error, len(plan.versions))
 	var wg sync.WaitGroup
 	for i, v := range plan.versions {
 		wg.Go(func() {
-			p, err := s.fetchVersion(ctx, v.rec)
+			h, err := s.fetchVersion(ctx, v.rec)
 			if err != nil {
 				errs[i] = fmt.Errorf("SandboxConfig %q, version %q: %w", plan.config, v.name, err)
 				return
 			}
-			paths[i] = p
+			hashes[i] = h
 		})
 	}
 	wg.Wait()
@@ -225,44 +233,62 @@ func (s *workerSandboxSyncer) fetch(ctx context.Context, plan *sandboxPlan) (*sa
 		return nil, errs[0]
 	}
 
-	out := &sandboxversions.File{SandboxClass: string(plan.class), SandboxConfig: plan.config}
+	out := &sandboxversions.File{}
+	seen := make(map[string]bool, len(plan.versions))
 	for i, v := range plan.versions {
-		if errs[i] != nil {
+		if errs[i] != nil || seen[hashes[i]] {
 			continue
 		}
-		digests := make(map[string]string, len(v.rec.Assets))
-		for name, a := range v.rec.Assets {
-			digests[name] = a.SHA256
+		seen[hashes[i]] = true
+		attrs := sandboxversions.Attributes{hardware.AttrSandboxRuntimeHash: hashes[i]}
+		if v.isDefault {
+			out.DefaultRuntime = attrs
+		} else {
+			out.RestorableRuntimes = append(out.RestorableRuntimes, attrs)
 		}
-		out.Versions = append(out.Versions, sandboxversions.Version{
-			Name:         v.name,
-			IsDefault:    v.isDefault,
-			PauseImage:   v.rec.PauseImage,
-			AssetPaths:   paths[i],
-			AssetDigests: digests,
-		})
 	}
 	return out, errors.Join(errs...)
 }
 
 // fetchVersion downloads one version's assets and pulls its pause image into
-// the image cache, so the first Run/Restore under it finds both on the node.
-func (s *workerSandboxSyncer) fetchVersion(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
-	paths, err := s.assets.ensureSandboxAssets(ctx, rec)
-	if err != nil {
-		return nil, err
+// the image cache, so the first Run/Restore under it finds both on the node,
+// and returns the version's runtime hash.
+func (s *workerSandboxSyncer) fetchVersion(ctx context.Context, rec *sandboxAssetsRecord) (string, error) {
+	if _, err := s.assets.ensureSandboxAssets(ctx, rec); err != nil {
+		return "", err
 	}
+	var pauseDigest string
 	if rec.PauseImage != "" {
-		if _, err := s.images.EnsureImage(ctx, rec.PauseImage); err != nil {
-			return nil, fmt.Errorf("while pulling pause image %q: %w", rec.PauseImage, err)
+		img, err := s.images.EnsureImage(ctx, rec.PauseImage)
+		if err != nil {
+			return "", fmt.Errorf("while pulling pause image %q: %w", rec.PauseImage, err)
 		}
+		pauseDigest = img.Digest.String()
 	}
-	return paths, nil
+	return runtimeHash(rec, pauseDigest), nil
+}
+
+// runtimeHash is the sandbox_runtime_hash of a version fetched to the node: a
+// sha256 over one sorted "key=value" line per asset digest and pause image
+// digest. Version names and URLs are left out, so the same binaries under
+// another name or in another bucket are the same runtime.
+func runtimeHash(rec *sandboxAssetsRecord, pauseDigest string) string {
+	lines := make([]string, 0, len(rec.Assets)+1)
+	for name, a := range rec.Assets {
+		lines = append(lines, "asset/"+name+"="+a.SHA256)
+	}
+	if pauseDigest != "" {
+		lines = append(lines, "pause_image="+pauseDigest)
+	}
+	slices.Sort(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // syncPod writes pod's sandbox versions file:
 //   - plan: resolve the pool's config and its versions for this node, no IO
-//   - fetch: download every version's assets and pull its pause image
+//   - fetch: download every version's assets, pull its pause image, and
+//     hash them
 //   - write: replace the file if its content changed
 //
 // A failed non-default version is left out of the file and returned as the
@@ -276,13 +302,13 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 	if want == nil {
 		return fetchErr
 	}
-	if err := s.write(ctx, string(pod.UID), want); err != nil {
+	if err := s.write(ctx, string(pod.UID), plan.config, want); err != nil {
 		return err
 	}
 	return fetchErr
 }
 
-func (s *workerSandboxSyncer) write(ctx context.Context, uid string, want *sandboxversions.File) error {
+func (s *workerSandboxSyncer) write(ctx context.Context, uid, config string, want *sandboxversions.File) error {
 	if err := os.MkdirAll(s.podDir(uid), 0o700); err != nil {
 		return fmt.Errorf("while creating worker directory: %w", err)
 	}
@@ -293,8 +319,9 @@ func (s *workerSandboxSyncer) write(ctx context.Context, uid string, want *sandb
 	if wrote {
 		slog.InfoContext(ctx, "Wrote worker sandbox versions",
 			slog.String("pod_uid", uid),
-			slog.String("sandbox_config", want.SandboxConfig),
-			slog.Int("versions", len(want.Versions)))
+			slog.String("sandbox_config", config),
+			slog.String("default_runtime_hash", want.DefaultRuntime[hardware.AttrSandboxRuntimeHash]),
+			slog.Int("restorable_runtimes", len(want.RestorableRuntimes)))
 	}
 	return nil
 }

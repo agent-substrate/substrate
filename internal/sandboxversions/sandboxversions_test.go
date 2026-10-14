@@ -25,17 +25,10 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func testVersions(config string) *File {
+func testVersions(defaultHash string) *File {
 	return &File{
-		SandboxClass:  "gvisor",
-		SandboxConfig: config,
-		Versions: []Version{{
-			Name:         "v1",
-			IsDefault:    true,
-			PauseImage:   "registry.k8s.io/pause@sha256:abc",
-			AssetPaths:   map[string]string{"gvisor": "/var/lib/ate/static-files/gvisor-abc"},
-			AssetDigests: map[string]string{"gvisor": "abc"},
-		}},
+		DefaultRuntime:     Attributes{"sandbox_runtime_hash": defaultHash},
+		RestorableRuntimes: []Attributes{{"sandbox_runtime_hash": "sha256:41ab"}},
 	}
 }
 
@@ -50,22 +43,22 @@ func TestWrite(t *testing.T) {
 		wantErr   bool
 	}{{
 		name:      "new file",
-		v:         testVersions("gvisor-release"),
+		v:         testVersions("sha256:7c2e"),
 		wantWrote: true,
 	}, {
 		name:      "equal content is not rewritten",
-		existing:  testVersions("gvisor-release"),
-		v:         testVersions("gvisor-release"),
+		existing:  testVersions("sha256:7c2e"),
+		v:         testVersions("sha256:7c2e"),
 		wantWrote: false,
 	}, {
 		name:      "different content replaces the file",
-		existing:  testVersions("gvisor-release"),
-		v:         testVersions("gvisor-next"),
+		existing:  testVersions("sha256:7c2e"),
+		v:         testVersions("sha256:9d01"),
 		wantWrote: true,
 	}, {
 		name:    "missing directory",
 		noDir:   true,
-		v:       testVersions("gvisor-release"),
+		v:       testVersions("sha256:7c2e"),
 		wantErr: true,
 	}}
 	for _, tt := range tests {
@@ -150,15 +143,14 @@ func TestRead(t *testing.T) {
 		wantErr:  true,
 	}, {
 		name:     "unknown field",
-		contents: `{"sandboxClass": "gvisor", "nope": 1}`,
+		contents: `{"defaultRuntime": {"sandbox_runtime_hash": "sha256:7c2e"}, "nope": 1}`,
 		wantErr:  true,
 	}, {
 		name:     "valid file",
-		contents: `{"sandboxClass": "gvisor", "sandboxConfig": "gvisor-release", "versions": [{"name": "v1", "isDefault": true}]}`,
+		contents: `{"defaultRuntime": {"sandbox_runtime_hash": "sha256:7c2e"}, "restorableRuntimes": [{"sandbox_runtime_hash": "sha256:41ab"}]}`,
 		want: &File{
-			SandboxClass:  "gvisor",
-			SandboxConfig: "gvisor-release",
-			Versions:      []Version{{Name: "v1", IsDefault: true}},
+			DefaultRuntime:     Attributes{"sandbox_runtime_hash": "sha256:7c2e"},
+			RestorableRuntimes: []Attributes{{"sandbox_runtime_hash": "sha256:41ab"}},
 		},
 	}}
 	for _, tt := range tests {

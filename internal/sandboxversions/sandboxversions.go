@@ -26,36 +26,24 @@ import (
 	"strings"
 )
 
-// File is the content of a worker's sandbox versions file: the enabled
-// versions of the SandboxConfig the worker's pool uses, each with its assets
-// already fetched to the node.
+// File is the content of a worker's sandbox versions file: the sandbox
+// runtimes the worker can run, as the compatibility attributes atelet computed
+// for them. The ateom adds each runtime's attributes to the ones it probes
+// itself and registers the result as RegisterWorkerRequest's default_runtime
+// and restorable_runtimes.
 type File struct {
-	// SandboxClass is the sandbox class of the worker's pool.
-	SandboxClass string `json:"sandboxClass,omitempty"`
-	// SandboxConfig names the SandboxConfig the versions come from.
-	SandboxConfig string `json:"sandboxConfig,omitempty"`
-	// Versions lists the config's default version first, then its other
-	// Enabled versions in spec order. Versions with no assets for this node's
-	// architecture are left out.
-	Versions []Version `json:"versions,omitempty"`
+	// DefaultRuntime is the runtime new and cold-booted actors start under,
+	// from the default version of the pool's SandboxConfig.
+	DefaultRuntime Attributes `json:"defaultRuntime"`
+	// RestorableRuntimes are the other runtimes the worker can restore
+	// snapshots from, from the config's other Enabled versions in spec order.
+	// None repeats another runtime or the default.
+	RestorableRuntimes []Attributes `json:"restorableRuntimes,omitempty"`
 }
 
-// Version is one version of a SandboxConfig, projected onto the node's
-// architecture and fetched to the node.
-type Version struct {
-	// Name is the SandboxConfig version name, e.g. "gvisor-4".
-	Name string `json:"name,omitempty"`
-	// IsDefault is whether this is the config's defaultVersion, which new and
-	// cold-booted actors start under.
-	IsDefault bool `json:"isDefault,omitempty"`
-	// PauseImage is the root sandbox container image. Only gVisor has one.
-	PauseImage string `json:"pauseImage,omitempty"`
-	// AssetPaths maps asset name to local path on the node, as
-	// RunWorkloadRequest's runsc_path and runtime_asset_paths.
-	AssetPaths map[string]string `json:"assetPaths,omitempty"`
-	// AssetDigests maps asset name to the asset's sha256.
-	AssetDigests map[string]string `json:"assetDigests,omitempty"`
-}
+// Attributes maps a compatibility attribute key, e.g. "sandbox_runtime_hash",
+// to its value.
+type Attributes map[string]string
 
 // tempPrefix starts the name of every temporary file Write renames into
 // place. It is dot-prefixed so a directory listing does not show one.

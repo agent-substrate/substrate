@@ -40,6 +40,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
+	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/sandboxversions"
@@ -132,7 +133,12 @@ func (p *recordingPuller) EnsureImage(_ context.Context, ref string) (*imagecach
 	if ref == p.failRef {
 		return nil, errors.New("registry unavailable")
 	}
-	return &imagecache.Image{}, nil
+	return &imagecache.Image{Digest: pauseDigest(ref)}, nil
+}
+
+// pauseDigest is the digest recordingPuller resolves ref to.
+func pauseDigest(ref string) v1.Hash {
+	return v1.Hash{Algorithm: "sha256", Hex: fmt.Sprintf("%x", sha256.Sum256([]byte(ref)))}
 }
 
 // multiVersionConfig is a gVisor config whose default version "v2" is listed
@@ -205,6 +211,54 @@ func TestRecordForArch(t *testing.T) {
 			}
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("recordForArch() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestRuntimeHash(t *testing.T) {
+	gvisor := map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"}}
+	pause := "sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+
+	// Snapshots record the hash, so a change to any of these values strands
+	// every snapshot taken before it.
+	tests := []struct {
+		name        string
+		rec         *sandboxAssetsRecord
+		pauseDigest string
+		want        string
+	}{{
+		name:        "gvisor asset and pause image",
+		rec:         &sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: "registry.k8s.io/pause:3.10.2@" + pause, Assets: gvisor},
+		pauseDigest: pause,
+		want:        "sha256:7197896bb429f0b824accbc635a38c9ed5666c160070b833bbdc6e036ccd4f76",
+	}, {
+		// Only the digests count, not the version's other fields.
+		name:        "another URL and pause image ref",
+		rec:         &sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: "mirror.example.com/pause@" + pause, Assets: map[string]assetEntry{gvisorAssetName: {URL: "gs://other/gvisor", SHA256: gvisor[gvisorAssetName].SHA256}}},
+		pauseDigest: pause,
+		want:        "sha256:7197896bb429f0b824accbc635a38c9ed5666c160070b833bbdc6e036ccd4f76",
+	}, {
+		name: "no pause image",
+		rec:  &sandboxAssetsRecord{SandboxClass: "microvm", Assets: gvisor},
+		want: "sha256:f86e6f2bd8e25ac31a22e51e6e57e0eb6741eb0b0df77082989cc1e40f906fe1",
+	}, {
+		name:        "the asset under another name",
+		rec:         &sandboxAssetsRecord{SandboxClass: "gvisor", Assets: map[string]assetEntry{runscAssetName: gvisor[gvisorAssetName]}},
+		pauseDigest: pause,
+		want:        "sha256:91e241c70c94d67b16127f1ba9c239e76ed1e91cb99fd9587b071cb8ccf7d3d8",
+	}, {
+		name: "several assets",
+		rec: &sandboxAssetsRecord{SandboxClass: "microvm", Assets: map[string]assetEntry{
+			"kernel": {SHA256: "aaaa"},
+			"rootfs": {SHA256: "bbbb"},
+		}},
+		want: "sha256:fc253c8ca0d24c485ef86a377c0cd2cf97fbf922e9cabf290971c55f051158ba",
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := runtimeHash(tt.rec, tt.pauseDigest); got != tt.want {
+				t.Errorf("runtimeHash() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -335,24 +389,18 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 	}
 }
 
-// wantVersion is the Version planAndFetch builds from multiVersionConfig's
-// version name under recordingFetcher.
-func wantVersion(name string, isDefault bool) sandboxversions.Version {
-	return sandboxversions.Version{
-		Name:         name,
-		IsDefault:    isDefault,
-		PauseImage:   "pause-" + name,
-		AssetPaths:   map[string]string{gvisorAssetName: "/static/sha-" + name},
-		AssetDigests: map[string]string{gvisorAssetName: "sha-" + name},
-	}
+// wantRuntime is the runtime planAndFetch builds from multiVersionConfig's
+// version name under recordingPuller.
+func wantRuntime(name string) sandboxversions.Attributes {
+	rec := &sandboxAssetsRecord{Assets: map[string]assetEntry{gvisorAssetName: {SHA256: "sha-" + name}}}
+	return sandboxversions.Attributes{hardware.AttrSandboxRuntimeHash: runtimeHash(rec, pauseDigest("pause-"+name).String())}
 }
 
 // wantVersions is the file content for multiVersionConfig.
 func wantVersions() *sandboxversions.File {
 	return &sandboxversions.File{
-		SandboxClass:  "gvisor",
-		SandboxConfig: "gvisor-release",
-		Versions:      []sandboxversions.Version{wantVersion("v2", true), wantVersion("v1", false)},
+		DefaultRuntime:     wantRuntime("v2"),
+		RestorableRuntimes: []sandboxversions.Attributes{wantRuntime("v1")},
 	}
 }
 
@@ -369,11 +417,18 @@ func TestPlanAndFetch(t *testing.T) {
 	defaultNoArch := multiVersionConfig()
 	defaultNoArch.Spec.Versions[3].Assets = map[string]map[string]v1alpha1.AssetFile{"other-arch": defaultNoArch.Spec.Versions[3].Assets[runtime.GOARCH]}
 
-	onlyDefault := &sandboxversions.File{
-		SandboxClass:  "gvisor",
-		SandboxConfig: "gvisor-release",
-		Versions:      []sandboxversions.Version{wantVersion("v2", true)},
-	}
+	onlyDefault := &sandboxversions.File{DefaultRuntime: wantRuntime("v2")}
+
+	// sameAsDefault has v1 run the default version's binaries.
+	sameAsDefault := multiVersionConfig()
+	sameAsDefault.Spec.Versions[1].PauseImage = sameAsDefault.Spec.Versions[3].PauseImage
+	sameAsDefault.Spec.Versions[1].Assets = sameAsDefault.Spec.Versions[3].Assets
+
+	// v1Twice adds an Enabled "v3" running v1's binaries.
+	v1Twice := multiVersionConfig()
+	v3 := *v1Twice.Spec.Versions[1].DeepCopy()
+	v3.Name = "v3"
+	v1Twice.Spec.Versions = append(v1Twice.Spec.Versions, v3)
 
 	tests := []struct {
 		name     string
@@ -396,6 +451,19 @@ func TestPlanAndFetch(t *testing.T) {
 		want:        wantVersions(),
 		wantFetched: 2,
 		wantPulled:  []string{"pause-v1", "pause-v2"},
+	}, {
+		// The proto keeps default_runtime out of restorable_runtimes.
+		name:        "a version with the default's binaries is left out",
+		cfg:         sameAsDefault,
+		want:        onlyDefault,
+		wantFetched: 2,
+		wantPulled:  []string{"pause-v2", "pause-v2"},
+	}, {
+		name:        "versions with equal binaries are listed once",
+		cfg:         v1Twice,
+		want:        wantVersions(),
+		wantFetched: 3,
+		wantPulled:  []string{"pause-v1", "pause-v1", "pause-v2"},
 	}, {
 		name:          "default version has no assets for this architecture",
 		cfg:           defaultNoArch,
@@ -526,8 +594,17 @@ func TestFetchPausePull(t *testing.T) {
 			}
 			s.images = store
 
-			if _, err := planAndFetch(s, workerPod("pod-a", "pool")); (err != nil) != tt.wantErr {
+			got, err := planAndFetch(s, workerPod("pod-a", "pool"))
+			if (err != nil) != tt.wantErr {
 				t.Fatalf("planAndFetch() error = %v, want error %v", err, tt.wantErr)
+			}
+			if !tt.wantErr {
+				// The hash covers the digest the tag resolved to.
+				rec, _ := recordForArch(cfg, &cfg.Spec.Versions[0])
+				want := &sandboxversions.File{DefaultRuntime: sandboxversions.Attributes{hardware.AttrSandboxRuntimeHash: runtimeHash(rec, pauseDigest.String())}}
+				if diff := cmp.Diff(want, got); diff != "" {
+					t.Errorf("planAndFetch() mismatch (-want +got):\n%s", diff)
+				}
 			}
 			// With the registry gone, only a cache hit can satisfy a digest
 			// ref.
