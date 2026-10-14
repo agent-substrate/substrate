@@ -384,6 +384,15 @@ func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 			want:   codes.NotFound,
 		},
 		{
+			// An empty worker name must not match a paused actor's empty
+			// assignment.
+			name:   "paused actor, empty worker name",
+			ctx:    authed,
+			status: pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"),
+			mutate: func(r *ateapipb.MintWorkerActorCertificateRequest) { r.Worker.Name = "" },
+			want:   codes.InvalidArgument,
+		},
+		{
 			// A crash clears the worker but leaves assigned_node on the last
 			// node. Nothing is hosted there, so nothing may be minted.
 			name:   "crashed actor on its last node",

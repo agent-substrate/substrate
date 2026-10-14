@@ -68,8 +68,10 @@ type ReleaseWindowWorkflow struct {
 }
 
 // ReleaseWindowWorkflows returns pause, suspend, crash, and a resume onto an
-// ineligible worker: every workflow that releases a worker before it rewrites
-// the actor's status.
+// ineligible worker: the workflows that release a worker before rewriting the
+// actor's status while the actor is in a state HostingNode resolves through
+// the worker assignment. Revert and delete release theirs in REVERTING and
+// DELETING, which HostingNode never resolves to a node.
 func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
 	gvisorTemplate := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
 	return []ReleaseWindowWorkflow{

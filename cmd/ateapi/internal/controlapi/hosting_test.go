@@ -30,12 +30,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// TestHostingNodeAfterWorkerRelease drives each workflow that releases an
-// actor's worker before it rewrites the actor's status into the window
-// between the two, by failing the second write. The status still names the
-// worker there, and keeps doing so until the workflow is retried. The worker's
-// node must not count as hosting the actor in that window, nor once the worker
-// hosts another actor.
+// TestHostingNodeAfterWorkerRelease drives each of ReleaseWindowWorkflows into
+// the window between releasing the actor's worker and rewriting its status, by
+// failing the second write. The status still names the worker there, and keeps
+// doing so until the workflow is retried. The worker's node must not count as
+// hosting the actor in that window, nor once the worker hosts another actor.
 func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 	// The worker is the one wireTestAssignment names, so a pause or suspend
 	// reaches newWireCaptureWorkflow's fake atelet on its node.

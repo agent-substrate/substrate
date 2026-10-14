@@ -37,9 +37,9 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
-// TestMintWorkerActorCertificateAfterWorkerRelease drives each workflow that
-// releases an actor's worker before it rewrites the actor's status into the
-// window between the two, by failing the second write. The status still
+// TestMintWorkerActorCertificateAfterWorkerRelease drives each of
+// ReleaseWindowWorkflows into the window between releasing the actor's worker
+// and rewriting its status, by failing the second write. The status still
 // names the worker there, and keeps doing so until the workflow is retried.
 // The worker must not get a worker-for-actor certificate for the actor in that
 // window, nor once it hosts another actor or the status is finalized, and
