@@ -394,6 +394,35 @@ func TestNewWorkloadIdentityCredential(t *testing.T) {
 
 // TestRunFailsClosedWithoutWorkloadIdentity runs the production store factory:
 // startup must stop before serving when workload identity is not configured.
+// TestRunDoesNotReportAccountURLCredentials starts the plugin, with workload
+// identity configured, from a "Blob service SAS URL" an operator copied from
+// the portal. main logs the error run returns, so it must not hold the SAS.
+func TestRunDoesNotReportAccountURLCredentials(t *testing.T) {
+	const sig = "c2VjcmV0LXNpZ25hdHVyZQ"
+	t.Setenv("AZURE_CLIENT_ID", "client-id")
+	t.Setenv("AZURE_TENANT_ID", "tenant-id")
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AZURE_FEDERATED_TOKEN_FILE", tokenFile)
+	for _, accountURL := range []string{
+		"https://acct.blob.core.windows.net/?sv=2022-11-02&ss=b&sig=" + sig,
+		"https://user:" + sig + "@acct.blob.core.windows.net",
+	} {
+		err := run(t.Context(), []string{
+			"node",
+			"--socket=" + testSocket(t, "plugin.sock"),
+			"--account-url=" + accountURL,
+			"--containers=snapshots",
+			"--root=" + t.TempDir(),
+		}, newAzureStores)
+		if err == nil || !strings.Contains(err.Error(), "account URL") || strings.Contains(err.Error(), sig) {
+			t.Fatalf("run() = %v, want an account URL error without the credential", err)
+		}
+	}
+}
+
 func TestRunFailsClosedWithoutWorkloadIdentity(t *testing.T) {
 	setCredentialEnv(t, map[string]string{"AZURE_CLIENT_ID": "client-id", "AZURE_CLIENT_SECRET": "secret", "IDENTITY_ENDPOINT": "http://169.254.169.254"})
 	socket := testSocket(t, "plugin.sock")

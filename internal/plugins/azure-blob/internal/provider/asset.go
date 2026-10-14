@@ -58,7 +58,7 @@ type AssetServer struct {
 func NewAssetServer(accountURL string, stores map[string]blobstore.Store, root, stagingDir string, stagingCapacity int64) (*AssetServer, error) {
 	account, err := url.Parse(accountURL)
 	if err != nil || account.Host == "" || account.User != nil || account.RawQuery != "" || account.Fragment != "" {
-		return nil, fmt.Errorf("account URL %q is invalid", accountURL)
+		return nil, fmt.Errorf("account URL %q is invalid", blobstore.RedactURL(accountURL))
 	}
 	if len(stores) == 0 {
 		return nil, errors.New("at least one asset container is required")

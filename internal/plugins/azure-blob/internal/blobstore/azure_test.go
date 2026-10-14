@@ -215,6 +215,46 @@ func TestConstructorsRejectInvalidConfiguration(t *testing.T) {
 	}
 }
 
+// TestInvalidAccountURLErrorsOmitCredentials checks that rejecting an account
+// URL that carries a credential, such as a portal "Blob service SAS URL",
+// does not repeat the credential in the error, which the plugin logs.
+func TestInvalidAccountURLErrorsOmitCredentials(t *testing.T) {
+	const secret = "s3cr3t"
+	for _, tc := range []struct {
+		name, url, want string
+	}{
+		{name: "SAS query", url: "https://acct.blob.core.windows.net/?sv=2022-11-02&sig=" + secret, want: `"https://acct.blob.core.windows.net/"`},
+		{name: "userinfo", url: "https://user:" + secret + "@acct.blob.core.windows.net", want: `"https://acct.blob.core.windows.net"`},
+		{name: "fragment", url: "https://acct.blob.core.windows.net/#" + secret, want: `"https://acct.blob.core.windows.net/"`},
+		{name: "plain http with SAS", url: "http://acct.blob.core.windows.net/?sig=" + secret, want: `"http://acct.blob.core.windows.net/"`},
+		{name: "unparseable", url: "https://acct.blob.core.windows.net/%zz?sig=" + secret, want: "does not parse"},
+		{name: "control character", url: "https://user:" + secret + "@acct\x7f/", want: "does not parse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewAzure(tc.url, []string{"snapshots"}, staticCredential{})
+			if err == nil {
+				t.Fatalf("NewAzure(%s) succeeded", tc.name)
+			}
+			if strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("NewAzure error = %q, want it to contain %q and not %q", err, tc.want, secret)
+			}
+		})
+	}
+}
+
+func TestRedactURL(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://acct.blob.core.windows.net/c/b?sig=x#f": "https://acct.blob.core.windows.net/c/b",
+		"https://u:p@acct.blob.core.windows.net":         "https://acct.blob.core.windows.net",
+		"https://acct.blob.core.windows.net":             "https://acct.blob.core.windows.net",
+		"://bad?sig=x":                                   "<unparseable URL>",
+	} {
+		if got := RedactURL(raw); got != want {
+			t.Errorf("RedactURL(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
 func TestMapError(t *testing.T) {
 	sentinel := errors.New("plain")
 	if got := mapError(nil); got != nil {
