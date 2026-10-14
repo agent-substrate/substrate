@@ -4200,7 +4200,7 @@ func Validate_VersionedSandboxCompat(
 	return errs
 }
 
-var unionMembershipFor_github_com_agent_substrate_substrate_internal_proto_ateletpb_Volume_ = validate.NewUnionMembership(validate.NewUnionMember("durable_dir"), validate.NewUnionMember("external"), validate.NewUnionMember("system_info"), validate.NewUnionMember("image"))
+var unionMembershipFor_github_com_agent_substrate_substrate_internal_proto_ateletpb_Volume_ = validate.NewUnionMembership(validate.NewUnionMember("durable_dir"), validate.NewUnionMember("external"), validate.NewUnionMember("system_info"), validate.NewUnionMember("image"), validate.NewUnionMember("empty_dir"))
 
 // Validate_Volume validates an instance of Volume according
 // to declarative validation rules in the API schema.
@@ -4232,6 +4232,12 @@ func Validate_Volume(
 				return false
 			}
 			return obj.Image != nil
+		},
+		func(obj *ateletpb.Volume) bool {
+			if obj == nil {
+				return false
+			}
+			return obj.EmptyDir != nil
 		}); len(e) != 0 {
 		errs = append(errs, e...)
 	}
@@ -4384,6 +4390,34 @@ func Validate_Volume(
 				return oldObj.Image
 			})
 		errs = append(errs, fn(fldPath.Child("image"), obj.Image, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.Volume.EmptyDir
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.EmptyDirVolume,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.Volume) *ateletpb.EmptyDirVolume {
+				return oldObj.EmptyDir
+			})
+		errs = append(errs, fn(fldPath.Child("empty_dir"), obj.EmptyDir, oldVal, oldObj != nil)...)
 	}
 
 	return errs

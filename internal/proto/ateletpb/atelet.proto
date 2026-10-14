@@ -451,6 +451,10 @@ message WorkloadSpec {
 message DurableDirVolume {
 }
 
+// EmptyDirVolume is an empty host directory at the external volume path.
+message EmptyDirVolume {
+}
+
 message ExternalVolume {
   // Required, unlike the actor status counterpart: the control plane only
   // sends volumes that finished provisioning.
@@ -582,7 +586,7 @@ message Volume {
   // +k8s:format=k8s-short-name
   string name = 1;
 
-  // Exactly one of durable_dir / external / system_info / image must be set.
+  // Exactly one of durable_dir / external / system_info / image / empty_dir must be set.
   //
   // +k8s:optional
   // +k8s:unionMember
@@ -599,6 +603,10 @@ message Volume {
   // +k8s:optional
   // +k8s:unionMember
   ImageVolumeSource image = 5;
+
+  // +k8s:optional
+  // +k8s:unionMember
+  EmptyDirVolume empty_dir = 6;
 }
 
 message VolumeMount {

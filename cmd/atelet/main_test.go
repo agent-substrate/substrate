@@ -816,6 +816,7 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 			{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
 			{Name: "cache", DurableDir: &ateletpb.DurableDirVolume{}},
 			{Name: "scratch", External: &ateletpb.ExternalVolume{}},
+			{Name: "empty", EmptyDir: &ateletpb.EmptyDirVolume{}},
 			{Name: "system-info", SystemInfo: &ateletpb.SystemInfoVolume{}},
 		},
 		Containers: []*ateletpb.Container{
@@ -825,6 +826,7 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 					{Name: "data", MountPath: "/home/counter"},
 					{Name: "cache", MountPath: "/var/cache"},
 					{Name: "scratch", MountPath: "/scratch"},
+					{Name: "empty", MountPath: "/empty"},
 					{Name: "system-info", MountPath: "/run/ate"},
 				},
 			},
@@ -849,6 +851,7 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 				},
 				CsiVolumeMounts: []*ateompb.VolumeMount{
 					{VolumeName: "scratch", MountPath: "/scratch"},
+					{VolumeName: "empty", MountPath: "/empty"},
 				},
 				SystemInfoVolumeMounts: []*ateompb.SystemInfoVolumeMount{
 					{VolumeName: "system-info", MountPath: "/run/ate"},

@@ -31,11 +31,17 @@ import (
 
 func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
 	for _, vol := range volumes {
+		hostPath := ateletpath.VolumeHostPath(actorUID, vol.GetName())
+		if vol.GetEmptyDir() != nil {
+			if err := resetEmptyDir(hostPath); err != nil {
+				return err
+			}
+			continue
+		}
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue
 		}
-		hostPath := ateletpath.VolumeHostPath(actorUID, vol.GetName())
 		if err := os.MkdirAll(hostPath, 0o750); err != nil {
 			return fmt.Errorf("failed to create mount point %q: %w", hostPath, err)
 		}
@@ -52,6 +58,16 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 		}); err != nil {
 			return fmt.Errorf("failed to mount volume %q to %q: %w", ext.GetStorageVolumeId(), hostPath, err)
 		}
+	}
+	return nil
+}
+
+func resetEmptyDir(hostPath string) error {
+	if err := os.RemoveAll(hostPath); err != nil {
+		return fmt.Errorf("failed to clear empty dir %q: %w", hostPath, err)
+	}
+	if err := os.MkdirAll(hostPath, 0o750); err != nil {
+		return fmt.Errorf("failed to create empty dir %q: %w", hostPath, err)
 	}
 	return nil
 }

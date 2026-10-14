@@ -1587,7 +1587,7 @@ func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*ateom
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
 				})
-			case vol.GetExternal() != nil:
+			case vol.GetExternal() != nil, vol.GetEmptyDir() != nil:
 				csiMounts = append(csiMounts, &ateompb.VolumeMount{
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
