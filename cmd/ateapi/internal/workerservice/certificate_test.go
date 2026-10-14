@@ -38,6 +38,20 @@ type fakeActorStore struct {
 	store.Interface
 	actors  map[resources.ActorRef]*ateapipb.Actor
 	workers map[string]*ateapipb.Worker
+	// assignments maps an actor UID to the worker holding its assignment.
+	assignments map[string]string
+	// assignmentErr, when set, fails every GetWorkerAssignment.
+	assignmentErr error
+}
+
+func (f *fakeActorStore) GetWorkerAssignment(_ context.Context, workerName, actorUID string) (*ateapipb.ActorAssignment, error) {
+	if f.assignmentErr != nil {
+		return nil, f.assignmentErr
+	}
+	if holder, ok := f.assignments[actorUID]; !ok || holder != workerName {
+		return nil, store.ErrNotFound
+	}
+	return &ateapipb.ActorAssignment{ActorUid: actorUID}, nil
 }
 
 func (f *fakeActorStore) GetWorker(_ context.Context, name string) (*ateapipb.Worker, error) {
@@ -80,6 +94,7 @@ func newFakeStoreWithActor(atespace, name, uid string) (*fakeActorStore, *ateapi
 		workers: map[string]*ateapipb.Worker{
 			"worker-1": {Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}, NodeName: "node-1"},
 		},
+		assignments: map[string]string{uid: "worker-1"},
 	}, actor
 }
 
