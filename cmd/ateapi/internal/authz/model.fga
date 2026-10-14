@@ -134,6 +134,9 @@ type actor
     # Node Restriction: Only the node hosting the scheduled worker can mint ateom actor credentials
     define can_mint_ateom_actor_credential: host_node
 
+    # atenet-egress mints the actor JWTs that egress policies inject.
+    define can_mint_actor_jwt: egress_gateway from parent_atespace
+
     # Data Plane Ingress: Routers (or editors) can resume
     define can_resume: [user] or editor from parent_atespace or ingress_router from parent_atespace
 
