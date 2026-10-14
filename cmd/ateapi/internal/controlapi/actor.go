@@ -131,6 +131,13 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		}
 		return nil, resources.ToAPIError(errs)
 	}
+	if !isGoldenActor(inActor) {
+		refVols, err := resolveSharedVolumeRefs(ctx, s.store, inActor, template)
+		if err != nil {
+			return nil, err
+		}
+		initVols = append(initVols, refVols...)
+	}
 
 	// Verify that the result is properly valid before storing it.
 	outActor := proto.CloneOf(inActor)
@@ -169,11 +176,20 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
 
+	// Resume re-takes any reference missed here, so this does not fail the create.
+	if err := bindSharedVolumes(ctx, s.store, stored); err != nil {
+		slog.WarnContext(ctx, "Failed to bind external volumes to new actor", slog.Any("actor", resources.ActorRefFromActor(stored)), slog.Any("err", err))
+	}
+
 	// Without this an actor that is created and never resumed has no record at
 	// all, at any retention.
 	logActorStateChanged(ctx, stored, ateattr.OperationCreate)
 
 	return stored, nil
+}
+
+func isGoldenActor(actor *ateapipb.Actor) bool {
+	return actor.GetMetadata().GetAtespace() == resources.GoldenActorAtespace
 }
 
 // resolveTagSource resolves a CreateActor request's source tag

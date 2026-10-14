@@ -206,3 +206,44 @@ volumes:
       capacity: 5Gi
       storageClassName: csi-nfs-sc
 ```
+
+## 5. Shared Volumes
+
+A `SharedVolume` is an atespace-scoped CSI volume whose lifetime is
+independent of any actor, so several actors can mount the same storage in turn.
+Create one from a StorageClass, or register a volume that already exists:
+
+```bash
+kubectl ate create sharedvolume ctx-42 -a demo --storage-class csi-nfs-sc --capacity 10Gi
+kubectl ate create sharedvolume imported -a demo --volume-id <csi-volume-id> --volume-type nfs.csi.k8s.io
+```
+
+Each volume records:
+
+- `accessMode`: fixed at create. Only `READ_WRITE_ONCE` is accepted today, so
+  at most one resumed actor holds the volume; a resume that would take a held
+  volume fails and names the holder.
+- `deleteTrigger`: `MANUAL` removes the volume only on an explicit delete;
+  `LAST_ACTOR` removes it when the last actor referencing it is deleted.
+  Provisioned volumes default to `LAST_ACTOR`, registered ones to `MANUAL`.
+  Deleting the volume also deletes the storage.
+- `status.refs`: every actor referencing the volume, with `active` set while
+  the actor is resumed. A referenced volume cannot be deleted.
+
+A template mounts a `SharedVolume` with `external.sharedVolume`. Name the volume
+in the template, or leave the name empty and bind it per actor at creation:
+
+```yaml
+volumes:
+- name: shared
+  external: {sharedVolume: {}}
+```
+
+```bash
+kubectl ate create actor producer-42 -a demo --template producer --volume shared=ctx-42
+kubectl ate create actor consumer-42 -a demo --template consumer --volume shared=ctx-42
+```
+
+Bindings are validated and recorded when the actor is created and cannot change
+afterwards. Golden actors never reference a shared volume; they warm up against
+an empty directory at the same mount path.

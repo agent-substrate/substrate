@@ -552,6 +552,15 @@ message ExternalVolume {
   // +k8s:optional
   // +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
   map<string, string> volume_context = 5;
+
+  // shared_volume_name names the SharedVolume this mount references, in the
+  // actor's atespace. Empty when the actor owns the volume itself.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  string shared_volume_name = 6;
 }
 
 message Actor {
@@ -594,6 +603,17 @@ message Actor {
   //
   // +k8s:optional
   ActorStatus status = 7;
+
+  // shared_volume_bindings maps each unnamed external.shared_volume in the
+  // template, by volume name, to the SharedVolume this actor mounts. Every
+  // unnamed ref must be bound; a named ref cannot be rebound. Set at creation.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:format=k8s-short-name
+  // +k8s:eachVal=+k8s:format=k8s-short-name
+  // +k8s:immutable
+  map<string, string> shared_volume_bindings = 8;
 }
 
 // EgressPolicy is an egress policy resource nested under an Actor. An Actor has
@@ -1647,6 +1667,7 @@ message Volume {
   // +k8s:unionMember
   ExternalVolumeSource external = 7;
 
+
   // +k8s:optional
   // +k8s:unionMember
   SystemInfoVolumeSource system_info = 5;
@@ -1666,6 +1687,12 @@ message ExternalVolumeSource {
   // +k8s:optional
   // +k8s:unionMember
   ExternalVolumeTemplate template = 1;
+
+  // shared_volume mounts a SharedVolume that already exists.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  SharedVolumeRef shared_volume = 2;
 }
 
 // ImageVolumeSource mounts the contents of an OCI image, read-only. The
@@ -1702,6 +1729,17 @@ message ExternalVolumeTemplate {
   // +k8s:required
   // +k8s:format=k8s-long-name
   string storage_class_name = 2;
+}
+
+// SharedVolumeRef mounts a SharedVolume in the actor's atespace. The
+// volume outlives the actor, so several actors can mount it in turn.
+message SharedVolumeRef {
+  // name of the SharedVolume. Left empty, the actor names it at creation in
+  // Actor.shared_volume_bindings.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
+  string name = 1;
 }
 
 // SystemInfoVolumeSource is a read-only volume of substrate-generated
