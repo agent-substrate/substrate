@@ -51,14 +51,21 @@ type ServiceError struct {
 	Message string
 }
 
+// serviceErrorDescribers are the backends' describers for DescribeServiceError.
+// Each backend appends its own from an init function in its file, so this file
+// names no backend.
+var serviceErrorDescribers []func(error) (ServiceError, bool)
+
 // DescribeServiceError describes the storage service response that err
 // carries, if any. Each backend decides what of its errors is safe to
 // describe; an error in err's chain from any other source with an
 // HTTPStatusCode() int method, as the S3 SDK's response errors have, is
 // described by its status alone.
 func DescribeServiceError(err error) (ServiceError, bool) {
-	if desc, ok := describeGCSError(err); ok {
-		return desc, true
+	for _, describe := range serviceErrorDescribers {
+		if desc, ok := describe(err); ok {
+			return desc, true
+		}
 	}
 	var withStatus interface{ HTTPStatusCode() int }
 	if errors.As(err, &withStatus) {

@@ -30,6 +30,8 @@ import (
 	"google.golang.org/api/option"
 )
 
+func init() { serviceErrorDescribers = append(serviceErrorDescribers, describeGCSError) }
+
 // describeGCSError describes a GCS API error in err's chain for
 // DescribeServiceError. Reads use the XML API, whose error body carries a
 // generic Code and Message and puts the caller and resource in Details, which
