@@ -211,7 +211,7 @@ kubectl ate revert actor my-actor -a <atespace>
 # Delete an actor (by default, requires the actor to be SUSPENDED or CRASHED).
 kubectl ate delete actor my-actor -a <atespace>
 
-# Delete an actor from any state (e.g. RUNNING, PAUSED), terminating workloads and detaching volumes.
+# Delete an actor from any state (e.g. RUNNING), terminating workloads and detaching volumes.
 kubectl ate delete actor my-actor -a <atespace> --any-state
 ```
 

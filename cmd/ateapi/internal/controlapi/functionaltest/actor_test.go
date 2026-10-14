@@ -1319,6 +1319,56 @@ func TestDeleteActor_StateDeleting(t *testing.T) {
 	}
 }
 
+// TestDeleteActor_Paused deletes a paused actor without any_state: a paused
+// actor is SUSPENDED (holding a node-local snapshot), so it is deletable by
+// default, and the delete terminates it on its assigned node so the local
+// snapshot is removed.
+func TestDeleteActor_Paused(t *testing.T) {
+	ns := namespaceForTest("ns-delete-paused")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	if _, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("PauseActor failed: %v", err)
+	}
+	paused, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := paused.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Fatalf("actor state after pause = %v, want ACTOR_STATE_SUSPENDED", got)
+	}
+	if localSnapshot(paused.GetStatus()) == nil {
+		t.Fatal("paused actor has no local snapshot")
+	}
+	tc.fakeAtelet.Reset()
+
+	if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("DeleteActor of a paused actor without any_state failed: %v", err)
+	}
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Error("expected atelet Terminate on the paused actor's node to remove its local snapshot")
+	} else if got, want := tc.fakeAtelet.TerminateRequest.GetActorUid(), paused.GetMetadata().GetUid(); got != want {
+		t.Errorf("Terminate actor_uid = %q, want %q", got, want)
+	}
+	if _, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: actorRef}); status.Code(err) != codes.NotFound {
+		t.Errorf("GetActor after DeleteActor err = %v, want NotFound", err)
+	}
+}
+
 func TestDeleteActor_WrongState(t *testing.T) {
 	ns := namespaceForTest("ns-delete-wrong-status")
 	tc := setupTest(t, ns)
@@ -1636,8 +1686,11 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PauseActor failed: %v", err)
 	}
-	if pauseResp.GetActor().GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
-		t.Fatalf("expected state ACTOR_STATE_PAUSED after pause, got %v", pauseResp.GetActor().GetStatus().GetState())
+	if pauseResp.GetActor().GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Fatalf("expected state ACTOR_STATE_SUSPENDED after pause, got %v", pauseResp.GetActor().GetStatus().GetState())
+	}
+	if localSnapshot(pauseResp.GetActor().GetStatus()) == nil {
+		t.Fatal("expected a local snapshot on the paused actor")
 	}
 	waitForWorkerAvailable(t, tc, workerName)
 
@@ -2634,14 +2687,14 @@ func TestSuspendActor_VolumeDetachFailure_DeleteActorAnyState(t *testing.T) {
 // TestPauseActor_VolumeLifecycle_DetachAndResumeAttach tests scenario D:
 // external volume lifecycle across PauseActor and ResumeActor:
 // 1. When an actor is resumed to RUNNING, external volumes are attached to the worker node.
-// 2. When the actor is paused, volumes are detached from the worker node and the actor transitions to ACTOR_STATE_PAUSED.
-// 3. When the actor is resumed from PAUSED, volumes are re-attached to the worker node and the actor transitions to ACTOR_STATE_RUNNING.
+// 2. When the actor is paused, volumes are detached from the worker node and the actor transitions to ACTOR_STATE_SUSPENDED with a local snapshot.
+// 3. When the actor is resumed from pause, volumes are re-attached to the worker node and the actor transitions to ACTOR_STATE_RUNNING.
 //
 // Workflow:
 // 1. Creates a template with an external volume and creates a mock worker pod on node1.
 // 2. Creates and resumes an actor to ACTOR_STATE_RUNNING; verifies volume is attached to node1.
-// 3. Calls PauseActor; verifies volume is detached from node1 and actor transitions to ACTOR_STATE_PAUSED.
-// 4. Calls ResumeActor from PAUSED; verifies volume is re-attached to node1 and actor transitions to ACTOR_STATE_RUNNING.
+// 3. Calls PauseActor; verifies volume is detached from node1 and actor transitions to ACTOR_STATE_SUSPENDED with a local snapshot.
+// 4. Calls ResumeActor from pause; verifies volume is re-attached to node1 and actor transitions to ACTOR_STATE_RUNNING.
 // 5. Cleans up by suspending and deleting the actor.
 func TestPauseActor_VolumeLifecycle_DetachAndResumeAttach(t *testing.T) {
 	ns := namespaceForTest("ns-pause-vol-lifecycle")
@@ -2690,7 +2743,7 @@ func TestPauseActor_VolumeLifecycle_DetachAndResumeAttach(t *testing.T) {
 	}
 	plugin.mu.Unlock()
 
-	// 3. PauseActor: volume is detached from node1 and actor transitions to ACTOR_STATE_PAUSED.
+	// 3. PauseActor: volume is detached from node1 and actor transitions to ACTOR_STATE_SUSPENDED with a local snapshot.
 	_, err = tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-vol-actor"},
 	})
@@ -2704,8 +2757,11 @@ func TestPauseActor_VolumeLifecycle_DetachAndResumeAttach(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
-		t.Errorf("actor state = %v, want ACTOR_STATE_PAUSED", getResp.GetStatus().GetState())
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("actor state = %v, want ACTOR_STATE_SUSPENDED", getResp.GetStatus().GetState())
+	}
+	if localSnapshot(getResp.GetStatus()) == nil {
+		t.Error("expected a local snapshot on the paused actor")
 	}
 	plugin.mu.Lock()
 	if diff := cmp.Diff([]string{"node1"}, plugin.detachedNodes); diff != "" {
@@ -2714,12 +2770,12 @@ func TestPauseActor_VolumeLifecycle_DetachAndResumeAttach(t *testing.T) {
 	plugin.mu.Unlock()
 	waitForWorkerAvailable(t, tc, workerName)
 
-	// 4. ResumeActor from PAUSED: volume is re-attached to node1 and actor transitions to ACTOR_STATE_RUNNING.
+	// 4. ResumeActor from pause: volume is re-attached to node1 and actor transitions to ACTOR_STATE_RUNNING.
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-vol-actor"},
 	})
 	if err != nil {
-		t.Fatalf("ResumeActor from PAUSED failed: %v", err)
+		t.Fatalf("ResumeActor from pause failed: %v", err)
 	}
 
 	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
@@ -2756,7 +2812,7 @@ func TestPauseActor_VolumeLifecycle_DetachAndResumeAttach(t *testing.T) {
 // TestPauseActor_VolumeDetachFailure_RetrySuccess tests scenario D:
 // when volume detachment fails during PauseActor:
 // 1. PauseActor fails, leaving the actor in ACTOR_STATE_PAUSING.
-// 2. A subsequent retry of PauseActor re-attempts volume detachment and succeeds, transitioning the actor to ACTOR_STATE_PAUSED.
+// 2. A subsequent retry of PauseActor re-attempts volume detachment and succeeds, transitioning the actor to ACTOR_STATE_SUSPENDED.
 //
 // Workflow:
 // 1. Creates a template with an external volume and creates a mock worker pod on node1.
@@ -2764,7 +2820,7 @@ func TestPauseActor_VolumeLifecycle_DetachAndResumeAttach(t *testing.T) {
 // 3. Calls PauseActor; plugin is configured to fail DetachVolume on attempt 1.
 // 4. Verifies PauseActor returns an error and actor state is left in ACTOR_STATE_PAUSING.
 // 5. Calls PauseActor a second time (retry); detachment succeeds.
-// 6. Verifies actor state transitions to ACTOR_STATE_PAUSED.
+// 6. Verifies actor state transitions to ACTOR_STATE_SUSPENDED with a local snapshot.
 // 7. Cleans up by deleting the actor with AnyState=true.
 func TestPauseActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
 	ns := namespaceForTest("ns-pause-vol-detach-retry")
@@ -2837,15 +2893,18 @@ func TestPauseActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
 		t.Fatalf("expected retry PauseActor to succeed, got: %v", err)
 	}
 
-	// 6. Verify actor state transitions to ACTOR_STATE_PAUSED.
+	// 6. Verify actor state transitions to ACTOR_STATE_SUSPENDED with a local snapshot.
 	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-detach-retry-actor"},
 	})
 	if err != nil {
 		t.Fatalf("GetActor after successful pause retry: %v", err)
 	}
-	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
-		t.Errorf("actor state = %v, want ACTOR_STATE_PAUSED", getResp.GetStatus().GetState())
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("actor state = %v, want ACTOR_STATE_SUSPENDED", getResp.GetStatus().GetState())
+	}
+	if localSnapshot(getResp.GetStatus()) == nil {
+		t.Error("expected a local snapshot on the paused actor")
 	}
 
 	// 7. Clean up by deleting the actor with AnyState=true.
@@ -3968,7 +4027,7 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 	}
 	waitForWorkerAvailable(t, tc, worker)
 
-	// Resume from PAUSED: the local checkpoint was captured on v2 and the
+	// Resume from pause: the local checkpoint was captured on v2 and the
 	// actor's template is v2, so the restore must be FULL.
 	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("ResumeActor(from v2 pause) failed: %v", err)
@@ -4044,7 +4103,7 @@ func TestPauseActor(t *testing.T) {
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
-			State:                  ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			AssignedNode:           "node1",
 			LastAssignedGeneration: 2,
 			Snapshots: []*ateapipb.Snapshot{
@@ -4066,7 +4125,7 @@ func TestPauseActor(t *testing.T) {
 }
 
 // TestResumeActor_PausedLocalSnapshotMissing_Crashes tests that if the local checkpoint
-// files on the worker node are missing (e.g. node reboot, /tmp wipe) when resuming a PAUSED actor,
+// files on the worker node are missing (e.g. node reboot, /tmp wipe) when resuming a paused actor,
 // atelet returns a terminal file system error and ateapi marks the actor ACTOR_STATE_CRASHED
 // while releasing the assigned worker pod.
 func TestResumeActor_PausedLocalSnapshotMissing_Crashes(t *testing.T) {
@@ -4106,8 +4165,8 @@ func TestResumeActor_PausedLocalSnapshotMissing_Crashes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
-		t.Fatalf("actor state = %v, want ACTOR_STATE_PAUSED", getResp.GetStatus().GetState())
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Fatalf("actor state = %v, want ACTOR_STATE_SUSPENDED", getResp.GetStatus().GetState())
 	}
 	if ls := localSnapshot(getResp.GetStatus()); ls == nil {
 		t.Fatal("expected local snapshot to be present on paused actor")
@@ -4680,7 +4739,7 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 	}
 }
 
-// TestSuspendActor_FromPaused suspends a PAUSED actor end-to-end: instead of
+// TestSuspendActor_FromPaused suspends a paused actor end-to-end: instead of
 // checkpointing a running workload, ateapi asks the atelet on the node
 // holding the pause snapshot to upload it, then finalizes the actor with a
 // durable ActorSnapshot and no node pinning left behind.
@@ -4929,7 +4988,7 @@ func TestCheckpointFailureCrashes(t *testing.T) {
 }
 
 // TestResumeActor_RelocatesAfterSuspendFromPaused covers the capacity-recovery
-// flow: a PAUSED actor is pinned to the node holding its local snapshot, so it
+// flow: a paused actor is pinned to the node holding its local snapshot, so it
 // cannot resume while that node is full. Suspending it uploads the snapshot and
 // drops the node pinning, after which it is scheduled onto a worker on a different
 // node.

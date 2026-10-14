@@ -32,7 +32,7 @@ import (
 // is unknown.
 //
 // Current behavior: AssignedNode is left empty, and the actor is crashed
-// instead of left PAUSED, since a local snapshot with an unknown node can
+// instead of left paused, since a local snapshot with an unknown node can
 // never be safely resumed. The step fails with FailedPrecondition rather than
 // reporting the pause as done.
 func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
@@ -156,7 +156,7 @@ func TestEnsurePausedFinalized_AlreadyCrashed(t *testing.T) {
 // TestEnsurePausedFinalized_KeepsCrashFromWorkerDelete verifies that a crash
 // the DeleteWorker workflow commits while ensurePausedFinalized is freeing the
 // worker is kept: the step's update is pinned to the actor version it checked,
-// so it fails Aborted instead of committing PAUSED over the crash.
+// so it fails Aborted instead of committing SUSPENDED over the crash.
 func TestEnsurePausedFinalized_KeepsCrashFromWorkerDelete(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
@@ -269,8 +269,11 @@ func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 				t.Fatalf("ensurePausedFinalized: %v", err)
 			}
 
-			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
-				t.Fatalf("state = %v, want PAUSED", got.GetStatus().GetState())
+			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+				t.Fatalf("state = %v, want SUSPENDED", got.GetStatus().GetState())
+			}
+			if !latestSnapshotIsLocalOnly(got.GetStatus()) {
+				t.Errorf("snapshots = %v, want the latest one local only", got.GetStatus().GetSnapshots())
 			}
 			localSnap := findLatestLocalSnapshot(got.GetStatus())
 			if localSnap.GetFidelity() != tc.want {
@@ -357,11 +360,13 @@ func TestEnsurePausedFinalized_MissingLocalSnapshotClearsAssignment(t *testing.T
 
 // TestPauseActorWorkflow_RejectedAndIdempotentPaths covers the two
 // short-circuit paths of the pause workflow: rejection of the pause edge for
-// a non-RUNNING actor and the idempotent fast-forward for a PAUSED one.
+// a non-RUNNING actor and the idempotent fast-forward for a paused one. Both
+// are SUSPENDED: a node-local latest snapshot is what tells them apart.
 func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 	tests := []struct {
 		name      string
 		seedState ateapipb.ActorState
+		seedOpts  []func(*ateapipb.Actor)
 		// wantErr true means PauseActor must fail with FailedPrecondition.
 		wantErr bool
 		// wantState is the stored state after the call.
@@ -376,11 +381,12 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 			wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 		},
 		{
-			// Pausing a PAUSED actor succeeds idempotently via IsComplete
+			// Pausing a paused actor succeeds idempotently via IsComplete
 			// fast-forward without calling atelet.
 			name:      "already paused succeeds",
-			seedState: ateapipb.ActorState_ACTOR_STATE_PAUSED,
-			wantState: ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			seedOpts:  []func(*ateapipb.Actor){withPausedShape("node-1")},
+			wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 		},
 	}
 	for _, tc := range tests {
@@ -390,7 +396,7 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 			defer cleanup()
 			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
-			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedState)
+			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedState, tc.seedOpts...)
 
 			actor, err := w.PauseActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if tc.wantErr {
@@ -420,8 +426,8 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 // TestEnsureMarkedPausing_StateMatrix verifies the pause edge's state gating
 // against every actor state: RUNNING takes the edge, PAUSING skips (a
 // previous attempt already marked the actor), everything else is rejected
-// with FailedPrecondition. PAUSED is rejected here because the orchestrator
-// early-returns before this step for a fully paused actor.
+// with FailedPrecondition. SUSPENDED is rejected whatever its snapshots: the
+// orchestrator early-returns before this step for a paused actor.
 func TestEnsureMarkedPausing_StateMatrix(t *testing.T) {
 	allowed := map[ateapipb.ActorState]bool{
 		ateapipb.ActorState_ACTOR_STATE_RUNNING: true,

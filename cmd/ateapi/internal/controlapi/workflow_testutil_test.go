@@ -147,6 +147,19 @@ func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, ac
 	storetest.MustCreateActor(t, ctx, st, actor)
 }
 
+// withPausedShape seeds the shape a pause leaves behind: a node-local
+// snapshot at the latest generation, pinned to node. Pair it with
+// ACTOR_STATE_SUSPENDED to seed a paused actor.
+func withPausedShape(node string) func(*ateapipb.Actor) {
+	return func(a *ateapipb.Actor) {
+		a.Status.AssignedNode = node
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", node),
+		}
+	}
+}
+
 // allActorStates enumerates every ActorState value, for exhaustive
 // CheckPrerequisite table tests. It is derived from the generated enum map so
 // states added to the proto are covered automatically.
