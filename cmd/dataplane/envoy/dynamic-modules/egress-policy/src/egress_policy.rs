@@ -20,6 +20,7 @@ use std::rc::Rc;
 use envoy_proxy_dynamic_modules_rust_sdk::{
   abi::envoy_dynamic_module_type_metadata_source, EnvoyHttpFilter,
 };
+// Use quiality flavor of Rapidhash to trade collision resistance over performance.
 use rapidhash::quality::RapidHasher;
 use serde::Deserialize;
 
@@ -38,10 +39,11 @@ pub struct EgressPolicy {
   pub hash: u64,
 }
 
-/// A pattern and the mode applied when it matches.
 #[derive(Debug, Deserialize, PartialEq, Eq, Hash)]
 pub struct SniRule {
   pub pattern: String,
+  // TODO(yanavlasov): optimize this to use enum to reduce memory usage.
+  // Mode determines which filter chain (MITM or passthrough) is selected if the patter matches.
   pub mode: String,
 }
 
@@ -55,6 +57,8 @@ impl EgressPolicy {
       ATE_POLICY_JSON_KEY,
     )?;
     let mut policy = serde_json::from_slice::<Self>(metadata.as_slice()).ok()?;
+    // Once the policy was parsed overwrite JSON string in the metadata with empty value so it does
+    // not consume memory.
     envoy_filter.set_dynamic_metadata_string(ATE_POLICY_EGRESS_NAMESPACE, ATE_POLICY_JSON_KEY, "");
     let mut hasher = RapidHasher::default();
     Hash::hash(&policy, &mut hasher);
@@ -62,6 +66,10 @@ impl EgressPolicy {
     Some(Rc::new(policy))
   }
 }
+
+// ==========================================
+// Tests
+// ==========================================
 
 #[cfg(test)]
 mod tests {

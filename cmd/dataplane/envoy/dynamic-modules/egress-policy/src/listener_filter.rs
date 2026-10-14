@@ -135,6 +135,10 @@ impl<ELF: EnvoyListenerFilter> ListenerFilter<ELF> for EgressPolicyFilter {
         let sni = envoy_filter
           .get_requested_server_name()
           .map(|value| String::from_utf8_lossy(value.as_slice()).into_owned());
+        // Read policy hash from the filter state and lookup the policy for this hash
+        // in the worker thread local store.
+        // Since the HTTP filter in the CONNECt filter chain holds a reference to the
+        // policy object in store, it is guaranteed that policy lookup will always succeed.
         let policy = envoy_filter
           .get_filter_state_bytes(ATE_POLICY_EGRESS_HASH)
           .and_then(|value| std::str::from_utf8(value.as_slice()).ok()?.parse::<u64>().ok())
@@ -169,6 +173,10 @@ pub fn new_listener_filter_config_fn<
 ) -> Option<Box<dyn ListenerFilterConfig<ELF>>> {
   Some(Box::new(EgressPolicyFilterConfig))
 }
+
+// ==========================================
+// Tests
+// ==========================================
 
 #[cfg(test)]
 mod tests {

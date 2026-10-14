@@ -19,7 +19,6 @@ use std::rc::Rc;
 use envoy_proxy_dynamic_modules_rust_sdk::{
   abi::{
     envoy_dynamic_module_type_on_http_filter_request_headers_status,
-    envoy_dynamic_module_type_on_http_filter_response_headers_status,
   },
   envoy_log_trace, EnvoyCounterId, EnvoyGaugeId, EnvoyHttpFilter, EnvoyHttpFilterConfig,
   HttpFilter, HttpFilterConfig,
@@ -91,12 +90,18 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyStoreFilter {
     let mut local_store = GlobalEgressPolicyStore::get_local_store();
     if let Some(existing_policy) = local_store.lookup(policy.hash) {
       let _ = envoy_filter.increment_counter(self.policy_shared, 1);
+      // Use the policy that was alredy in the store.
       self.policy = existing_policy;
     } else {
       local_store.store(policy.hash, &policy);
       let _ = envoy_filter.increase_gauge(self.store_size, 1);
       self.policy = policy;
     }
+    // Dynamic module API does not yet support writing filter state values
+    // that are shared with the upstream (will be available in Envoy v1.40).
+    // Write non shared value, and then write shared value in the set_filter_state
+    // filter which is next in the filter chain.
+    // TODO(yanavlasov): remove this workaround after Envoy v1.40 is released.
     envoy_filter.set_filter_state_bytes(
       ATE_POLICY_EGRESS_HASH_NOT_SHARED,
       self.policy.hash.to_string().as_bytes(),
@@ -104,15 +109,14 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyStoreFilter {
     envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
   }
 
-  fn on_response_headers(
-    &mut self,
-    _envoy_filter: &mut EHF,
-    _end_of_stream: bool,
-  ) -> envoy_dynamic_module_type_on_http_filter_response_headers_status {
-    envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
-  }
-
+  // on_stream_complete is called right before the filter object is dropped
+  // This is the last callback that still has valid filter ref.
   fn on_stream_complete(&mut self, envoy_filter: &mut EHF) {
+    // Reference count 2 for the policy object means that it is held by the policy
+    // store table and this filter that is about to be dropped.
+    // To avoid leaking the policy in the store, remove it from the store. When on_stream_complete
+    // callback finishes and and filter is dropped, the only remaining reference to the policy is
+    // decremented and the policy object will be dropped as well.
     if Rc::strong_count(&self.policy) == 2 {
       GlobalEgressPolicyStore::get_local_store().remove(self.policy.hash);
       let _ = envoy_filter.decrease_gauge(self.store_size, 1);
@@ -140,7 +144,9 @@ pub fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter
   }))
 }
 
-// ========= Unit Tests ==========
+// ==========================================
+// Tests
+// ==========================================
 
 #[cfg(test)]
 mod tests {
@@ -345,20 +351,5 @@ mod tests {
       envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
     );
     assert_eq!(filter.policy, Rc::default());
-  }
-
-  #[test]
-  fn test_on_response_headers() {
-    let config = EgressPolicyStoreFilterConfig {
-      store_size: EnvoyGaugeId(0),
-      parse_errors: EnvoyCounterId(0),
-      policy_shared: EnvoyCounterId(0),
-    };
-    let mut mock_filter = MockEnvoyHttpFilter::default();
-    let mut filter = config.new_http_filter(&mut mock_filter);
-    assert_eq!(
-      filter.on_response_headers(&mut mock_filter, false),
-      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
-    );
   }
 }

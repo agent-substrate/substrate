@@ -25,11 +25,16 @@ use crate::egress_policy::EgressPolicy;
 /// Per-thread store for egress policies.
 #[derive(Debug, Default)]
 pub struct EgressPolicyStore {
+  // The 64 bit key is computed by Rapidhash and is shared via filter state
+  // between the HTTP filter that populates policy store and inner listener
+  // filter that looks up the policy by this key and enforces it.
   pub policies: HashMap<u64, Rc<EgressPolicy>>,
 }
 
-// SAFETY: Each `EgressPolicyStore` and its `Rc<EgressPolicy>` entries are created and accessed
-// exclusively on the owning worker thread via `ThreadLocal`.
+// This is needed to mollify Rust's borrows checker, as otherwise it will not
+// allow retruning a mutable reference of EgressPolicyStore from the ThreadLocal store. 
+// It is safe to mollify borrows checker, because EgressPolicyStore object are creted and accessed
+// on the same worker thread, and never cross thread boundaries. They are also never dropped.
 unsafe impl Send for EgressPolicyStore {}
 
 impl EgressPolicyStore {
@@ -82,6 +87,10 @@ impl GlobalEgressPolicyStore {
 
 /// Process-wide [`GlobalEgressPolicyStore`] instance.
 pub static GLOBAL_EGRESS_POLICY_STORE: GlobalEgressPolicyStore = GlobalEgressPolicyStore::new();
+
+// ==========================================
+// Tests
+// ==========================================
 
 #[cfg(test)]
 mod tests {
