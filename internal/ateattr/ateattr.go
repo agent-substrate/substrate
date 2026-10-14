@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/sandboxclass"
 )
 
 // Dotted ate.* matches the metric-instrument naming (atenet.*, atelet.*), not the
@@ -372,7 +373,7 @@ const SandboxClassUnknown = "unknown"
 // Empty reports as unknown rather than the gvisor default, so a manifest
 // problem stays visible.
 func NormalizeSandboxClass(class string) string {
-	if resources.IsSandboxClass(class) {
+	if sandboxclass.Valid(class) {
 		return class
 	}
 	return SandboxClassUnknown
