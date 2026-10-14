@@ -185,7 +185,13 @@ runs on a freshly started actor and its resume is a no-op. Its successful `Resum
 
 The last cycle of a task is not suspended: the actor is deleted straight from running. A
 task of `n` cycles therefore records `n - 1` `SuspendActor` samples, and `TaskWallClock`
-does not include a final suspend.
+does not include a final suspend. `DeleteActor` therefore times deleting a running actor,
+including its sandbox teardown, so it is not comparable with older runs that suspended the
+actor before deleting it.
+
+`locust_users` counts live actors rather than virtual users: it rises when a user starts an
+actor and falls when that actor is deleted, so it dips between tasks while a user waits to
+start its next actor.
 
 `CreateAtespace` is sent once per worker, not per task, and again only if `CreateActor`
 reports the atespace missing.
