@@ -259,6 +259,34 @@ Only settings something supplied are recorded. A setting left on its default
 is left out on purpose, so it keeps following the default if a later release
 changes it.
 
+## Mirroring bundled gVisor assets
+
+The bundled `gvisor-default` SandboxConfig pins release archives under
+`gs://gvisor/releases/`. To fetch the same archives from the cluster's object
+store instead, set a replacement base URL:
+
+```yaml
+sandbox:
+  gvisorAssetBaseURL: s3://substrate-assets/gvisor/releases/
+```
+
+The equivalent flag is
+`--gvisor-asset-base-url=s3://substrate-assets/gvisor/releases/`, and the
+environment variable is `ATE_GVISOR_ASSET_BASE_URL`. Both `gs://` and `s3://`
+bases are accepted. The scheme must match the storage backend served by the
+node object-store plugin.
+
+The installer replaces only the `gs://gvisor/releases/` prefix. It preserves
+the release path and SHA-256, and rewrites every matching asset in every
+bundled version. For example, the setting above turns
+`gs://gvisor/releases/nightly/<date>/<arch>/gvisor.tar.zstd` into
+`s3://substrate-assets/gvisor/releases/nightly/<date>/<arch>/gvisor.tar.zstd`.
+
+This setting does not copy or probe the archives. Mirror the exact pinned bytes
+at those paths before deploying; atelet rejects content that does not match the
+bundled SHA-256. The SandboxConfig's pause image is separate and still needs an
+image-registry mirror on a network-isolated cluster.
+
 ## Settings
 
 Defaults are also shown by `ate-setup --help` and by `--help` on the owning
@@ -311,6 +339,7 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `podcert.workersPerSigner`                   | `ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER`        | `--podcert-workers-per-signer`                     | `0`                   | (global)                                 |
 | `record.dir`                                 | `ATE_RECORD_DIR`                                | `--record-dir`                                     | —                     | (global)                                 |
 | `rolloutTimeout`                             | `ATE_INSTALL_ROLLOUT_TIMEOUT`                   | `--rollout-timeout`                                | `1m0s`                | (global)                                 |
+| `sandbox.gvisorAssetBaseURL`                 | `ATE_GVISOR_ASSET_BASE_URL`                     | `--gvisor-asset-base-url`                          | —                     | (global)                                 |
 | `storage.bucketName`                         | `BUCKET_NAME`                                   | `--storage-bucket-name`                            | —                     | (global)                                 |
 
 ## Secrets
