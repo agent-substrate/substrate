@@ -53,18 +53,6 @@ const (
 	TargetPortHeader = "X-Ate-Target-Port"
 )
 
-// writeUpstreamError answers a request whose actor leg failed. A request cut
-// off by deactivation is retryable, since the actor is healthy and will be
-// resumed on demand; anything else is a bad gateway.
-func writeUpstreamError(ctx context.Context, w http.ResponseWriter) {
-	if errors.Is(context.Cause(ctx), errActorDeactivated) {
-		w.Header().Set("Retry-After", "1")
-		http.Error(w, "actor is suspending, retry", http.StatusServiceUnavailable)
-		return
-	}
-	http.Error(w, "bad gateway", http.StatusBadGateway)
-}
-
 // ParsePort parses s as a TCP port number, returning ok=false for anything
 // outside the valid 1-65535 range (including non-numeric input).
 func ParsePort(s string) (port int, ok bool) {
@@ -209,7 +197,14 @@ func newActorProxy(upstream *url.URL, dial DialFunc) *httputil.ReverseProxy {
 		Transport: newProtocolMirrorTransport(dial),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			slog.WarnContext(r.Context(), "atunnel upstream request failed", slog.Any("err", err))
-			writeUpstreamError(r.Context(), w)
+			// A request cut off by deactivation is retryable: the actor is
+			// healthy and will be resumed on demand.
+			if errors.Is(context.Cause(r.Context()), errActorDeactivated) {
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "actor is suspending, retry", http.StatusServiceUnavailable)
+				return
+			}
+			http.Error(w, "bad gateway", http.StatusBadGateway)
 		},
 	}
 }
@@ -362,7 +357,7 @@ func (s *Server) ServeConnectHTTP(w http.ResponseWriter, r *http.Request) {
 	upstream, err := active.dial(dialCtx, "tcp", net.JoinHostPort(s.upstream.Hostname(), port))
 	if err != nil {
 		slog.WarnContext(r.Context(), "atunnel CONNECT upstream failed", slog.Any("actor", active.ref), slog.String("port", port), slog.Any("err", err))
-		writeUpstreamError(ctx, w)
+		http.Error(w, "bad gateway", http.StatusBadGateway)
 		return
 	}
 	defer upstream.Close()
