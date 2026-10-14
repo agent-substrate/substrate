@@ -326,7 +326,7 @@ func TestRejectStorageEnv(t *testing.T) {
 				os.Setenv("ATE_STORAGE_BACKEND", *tc.value)
 			}
 			err := rejectStorageEnv()
-			if got := err != nil && strings.Contains(err.Error(), "snapshot-plugin sidecar"); got != tc.want {
+			if got := err != nil && strings.Contains(err.Error(), "objectstore-plugin sidecar"); got != tc.want {
 				t.Errorf("rejectStorageEnv() = %v, want error naming the sidecar: %t", err, tc.want)
 			}
 		})

@@ -119,7 +119,7 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 
 // actorJWT mints the JWT src asks for. Every error it returns is already a
 // client-facing denial.
-func (h *Handler) actorJWT(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, src *ateapipb.ActorJWTSource) ([]byte, error) {
+func (h *Handler) actorJWT(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, src *ateapipb.ActorJwtSource) ([]byte, error) {
 	jwt, err := h.actorJWTs.Token(ctx, ref, src)
 	if err != nil {
 		slog.ErrorContext(ctx, "egress denied: actor JWT mint failed",

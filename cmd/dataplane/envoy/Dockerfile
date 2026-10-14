@@ -34,7 +34,7 @@ RUN cargo build --release --locked
 # Pin the multi-platform image index, not one platform's manifest, so that the
 # --platform the installer passes (the host architecture on kind, linux/amd64
 # otherwise) selects a matching Envoy binary.
-FROM envoyproxy/envoy:v1.39.1@sha256:57e14a549d7bd43c8d3f6d03e8cfa653e037d4b38e133acd9b54f38c524401b4
+FROM envoyproxy/envoy:v1.39.4@sha256:74bd4eb5629708d3fadca1a5e6b85d208f338d7bb54e06b69565905c5294cc01
 
 # Copy the built dynamic module shared library from the builder stage
 COPY --from=builder /usr/src/dynamic-modules/egress-policy/target/release/libenvoy_substrate_egress_policy.so /usr/local/lib/libenvoy_substrate_egress_policy.so

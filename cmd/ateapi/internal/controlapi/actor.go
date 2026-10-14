@@ -219,7 +219,7 @@ func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsReq
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListActors(ctx, req.GetAtespace(), toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actors in db: %w", err))
 	}
@@ -298,6 +298,12 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				return apierror.FailedPrecondition(
 					"actor must be %s to change its actor template (got: %s)", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, state)
+			}
+			// A paused actor's latest snapshot is node-local and was captured
+			// from the old template's sandbox; suspend or revert it first.
+			if latestSnapshotIsLocalOnly(oldVal.GetStatus()) {
+				return apierror.FailedPrecondition(
+					"actor must hold no node-local snapshot to change its actor template: suspend or revert it first")
 			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
 			if err != nil {
@@ -429,8 +435,8 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	}
 	start := time.Now()
 	// Template dims only once the record resolved: the request names only the
-	// actor, so failures before the load carry none. No pool pair: delete only
-	// runs from SUSPENDED or CRASHED, which already released the worker.
+	// actor, so failures before the load carry none. No pool pair, even when
+	// any_state deletes an actor that still holds a worker.
 	defer func() {
 		var attrs []attribute.KeyValue
 		if deleted != nil {
@@ -542,7 +548,7 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorR
 	return &ateapipb.RevertActorResponse{Actor: actor}, nil
 }
 
-func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJWTRequest) (*ateapipb.MintActorJWTResponse, error) {
+func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJwtRequest) (*ateapipb.MintActorJwtResponse, error) {
 	if errs := apivalidation.ValidateMintActorJWTRequest(ctx, req); len(errs) > 0 {
 		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
@@ -566,7 +572,7 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 		return nil, fmt.Errorf("at least one audience must be requested")
 	}
 
-	// JWT timestamps have one-second resolution; truncating keeps expires_at
+	// JWT timestamps have one-second resolution; truncating keeps expire_time
 	// equal to the exp claim.
 	now := time.Now().Truncate(time.Second)
 	expiresAt := now.Add(time.Duration(req.GetExpirationSeconds()) * time.Second)
@@ -591,9 +597,9 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 		return nil, fmt.Errorf("while signing actor JWT: %w", err)
 	}
 
-	return &ateapipb.MintActorJWTResponse{
-		ActorJwt:  actorJWT,
-		ExpiresAt: timestamppb.New(expiresAt),
+	return &ateapipb.MintActorJwtResponse{
+		ActorJwt:   actorJWT,
+		ExpireTime: timestamppb.New(expiresAt),
 	}, nil
 }
 

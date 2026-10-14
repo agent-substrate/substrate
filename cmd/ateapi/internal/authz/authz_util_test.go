@@ -15,10 +15,21 @@
 package authz
 
 import (
+	"context"
+	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/google/go-cmp/cmp"
 )
+
+func testSystemPrincipals() SystemPrincipals {
+	return SystemPrincipals{
+		ControllerSPIFFEID:    installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
+		EgressGatewaySPIFFEID: installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace),
+		IngressRouterSPIFFEID: installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
+	}
+}
 
 func TestFormatMember(t *testing.T) {
 	tests := []struct {
@@ -76,5 +87,51 @@ func TestParseBootstrapOwners(t *testing.T) {
 		if _, err := parseBootstrapOwners([]string{bad}); err == nil {
 			t.Errorf("parseBootstrapOwners(%q) succeeded, want error", bad)
 		}
+	}
+}
+
+func TestParseSystemPrincipals(t *testing.T) {
+	const router = "spiffe://cluster.local/ns/ate-system/sa/atenet-router"
+	got, err := parseSystemPrincipals(SystemPrincipals{
+		ControllerSPIFFEID:    "spiffe://cluster.local/ns/ate-system/sa/ate-controller",
+		EgressGatewaySPIFFEID: router,
+		IngressRouterSPIFFEID: router,
+	})
+	if err != nil {
+		t.Fatalf("parseSystemPrincipals failed: %v", err)
+	}
+	want := map[string][]string{
+		"user:spiffe%3A//cluster.local/ns/ate-system/sa/ate-controller": {RoleController},
+		"user:spiffe%3A//cluster.local/ns/ate-system/sa/atenet-router":  {RoleEgressGateway, RoleIngressRouter},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("parseSystemPrincipals (-want +got):\n%s", diff)
+	}
+}
+
+func TestNewRejectsInvalidSystemPrincipals(t *testing.T) {
+	defaults := testSystemPrincipals()
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*SystemPrincipals)
+		wantErr string
+	}{
+		{"empty controller SPIFFE ID", func(p *SystemPrincipals) { p.ControllerSPIFFEID = "" }, "invalid controller SPIFFE ID"},
+		{"empty egress gateway SPIFFE ID", func(p *SystemPrincipals) { p.EgressGatewaySPIFFEID = "" }, "invalid egress_gateway SPIFFE ID"},
+		{"empty ingress router SPIFFE ID", func(p *SystemPrincipals) { p.IngressRouterSPIFFEID = "" }, "invalid ingress_router SPIFFE ID"},
+		{"bare ServiceAccount name", func(p *SystemPrincipals) { p.ControllerSPIFFEID = "ate-controller" }, "invalid controller SPIFFE ID"},
+		{"non-spiffe URI", func(p *SystemPrincipals) {
+			p.EgressGatewaySPIFFEID = "https://cluster.local/ns/ate-system/sa/atenet-egress"
+		}, "invalid egress_gateway SPIFFE ID"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := defaults
+			tc.mutate(&p)
+			// Principals are validated before the store is touched, so no
+			// database is needed.
+			if _, _, err := New(context.Background(), nil, nil, nil, p); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("New(%+v) error = %v, want substring %q", p, err, tc.wantErr)
+			}
+		})
 	}
 }

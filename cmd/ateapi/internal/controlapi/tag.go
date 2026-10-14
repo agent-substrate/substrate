@@ -88,7 +88,7 @@ func (s *RPCService) ListTags(ctx context.Context, req *ateapipb.ListTagsRequest
 	if errs := apivalidation.ValidateListTagsRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	page, err := s.impl.ListTags(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListTags(ctx, req.GetAtespace(), toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing tags: %w", err))
 	}

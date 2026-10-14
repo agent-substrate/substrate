@@ -45,7 +45,7 @@ const (
 	Control_CreateActorEgressPolicy_FullMethodName    = "/ateapi.Control/CreateActorEgressPolicy"
 	Control_UpdateActorEgressPolicy_FullMethodName    = "/ateapi.Control/UpdateActorEgressPolicy"
 	Control_DeleteActorEgressPolicy_FullMethodName    = "/ateapi.Control/DeleteActorEgressPolicy"
-	Control_MintActorJWT_FullMethodName               = "/ateapi.Control/MintActorJWT"
+	Control_MintActorJwt_FullMethodName               = "/ateapi.Control/MintActorJwt"
 	Control_MintActorCertificate_FullMethodName       = "/ateapi.Control/MintActorCertificate"
 	Control_CreateTag_FullMethodName                  = "/ateapi.Control/CreateTag"
 	Control_GetTag_FullMethodName                     = "/ateapi.Control/GetTag"
@@ -93,11 +93,13 @@ type ControlClient interface {
 	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
 	// to the template's commit scope where required (Full capture, Data commit).
 	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
-	// Pause a given actor and keep its snapshots on node VM.
+	// Pause a given actor: checkpoint it to its worker's node and leave it
+	// SUSPENDED with that node-local snapshot, pinned to the node. A paused
+	// actor is told from a suspended one by its snapshots, not its state.
 	PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
-	// Revert an actor to SUSPENDED state.
+	// Revert an actor to SUSPENDED state at its durable snapshot.
 	// Only crashed, running or paused actors can be reverted.
 	RevertActor(ctx context.Context, in *RevertActorRequest, opts ...grpc.CallOption) (*RevertActorResponse, error)
 	// Delete an actor. Only suspended or crashed actors can be deleted unless
@@ -114,7 +116,7 @@ type ControlClient interface {
 	// Create a Substrate-issued JWT asserting the actor identity.
 	//
 	// * Called by the egress gateway when actor JWT injection is configured for outbound requests.
-	MintActorJWT(ctx context.Context, in *MintActorJWTRequest, opts ...grpc.CallOption) (*MintActorJWTResponse, error)
+	MintActorJwt(ctx context.Context, in *MintActorJwtRequest, opts ...grpc.CallOption) (*MintActorJwtResponse, error)
 	// Create a Substrate-issued SPIFFE certificate asserting the actor identity.
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/actor/${atespace}/${actor}
@@ -319,10 +321,10 @@ func (c *controlClient) DeleteActorEgressPolicy(ctx context.Context, in *DeleteA
 	return out, nil
 }
 
-func (c *controlClient) MintActorJWT(ctx context.Context, in *MintActorJWTRequest, opts ...grpc.CallOption) (*MintActorJWTResponse, error) {
+func (c *controlClient) MintActorJwt(ctx context.Context, in *MintActorJwtRequest, opts ...grpc.CallOption) (*MintActorJwtResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MintActorJWTResponse)
-	err := c.cc.Invoke(ctx, Control_MintActorJWT_FullMethodName, in, out, cOpts...)
+	out := new(MintActorJwtResponse)
+	err := c.cc.Invoke(ctx, Control_MintActorJwt_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -635,11 +637,13 @@ type ControlServer interface {
 	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
 	// to the template's commit scope where required (Full capture, Data commit).
 	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
-	// Pause a given actor and keep its snapshots on node VM.
+	// Pause a given actor: checkpoint it to its worker's node and leave it
+	// SUSPENDED with that node-local snapshot, pinned to the node. A paused
+	// actor is told from a suspended one by its snapshots, not its state.
 	PauseActor(context.Context, *PauseActorRequest) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
-	// Revert an actor to SUSPENDED state.
+	// Revert an actor to SUSPENDED state at its durable snapshot.
 	// Only crashed, running or paused actors can be reverted.
 	RevertActor(context.Context, *RevertActorRequest) (*RevertActorResponse, error)
 	// Delete an actor. Only suspended or crashed actors can be deleted unless
@@ -656,7 +660,7 @@ type ControlServer interface {
 	// Create a Substrate-issued JWT asserting the actor identity.
 	//
 	// * Called by the egress gateway when actor JWT injection is configured for outbound requests.
-	MintActorJWT(context.Context, *MintActorJWTRequest) (*MintActorJWTResponse, error)
+	MintActorJwt(context.Context, *MintActorJwtRequest) (*MintActorJwtResponse, error)
 	// Create a Substrate-issued SPIFFE certificate asserting the actor identity.
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/actor/${atespace}/${actor}
@@ -777,8 +781,8 @@ func (UnimplementedControlServer) UpdateActorEgressPolicy(context.Context, *Upda
 func (UnimplementedControlServer) DeleteActorEgressPolicy(context.Context, *DeleteActorEgressPolicyRequest) (*EgressPolicy, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteActorEgressPolicy not implemented")
 }
-func (UnimplementedControlServer) MintActorJWT(context.Context, *MintActorJWTRequest) (*MintActorJWTResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method MintActorJWT not implemented")
+func (UnimplementedControlServer) MintActorJwt(context.Context, *MintActorJwtRequest) (*MintActorJwtResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MintActorJwt not implemented")
 }
 func (UnimplementedControlServer) MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintActorCertificate not implemented")
@@ -1104,20 +1108,20 @@ func _Control_DeleteActorEgressPolicy_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Control_MintActorJWT_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MintActorJWTRequest)
+func _Control_MintActorJwt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MintActorJwtRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ControlServer).MintActorJWT(ctx, in)
+		return srv.(ControlServer).MintActorJwt(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Control_MintActorJWT_FullMethodName,
+		FullMethod: Control_MintActorJwt_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).MintActorJWT(ctx, req.(*MintActorJWTRequest))
+		return srv.(ControlServer).MintActorJwt(ctx, req.(*MintActorJwtRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1700,8 +1704,8 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_DeleteActorEgressPolicy_Handler,
 		},
 		{
-			MethodName: "MintActorJWT",
-			Handler:    _Control_MintActorJWT_Handler,
+			MethodName: "MintActorJwt",
+			Handler:    _Control_MintActorJwt_Handler,
 		},
 		{
 			MethodName: "MintActorCertificate",
@@ -1828,6 +1832,7 @@ const (
 	WorkerService_RegisterWorker_FullMethodName            = "/ateapi.WorkerService/RegisterWorker"
 	WorkerService_MintAteomActorCertificate_FullMethodName = "/ateapi.WorkerService/MintAteomActorCertificate"
 	WorkerService_RequestActorSuspend_FullMethodName       = "/ateapi.WorkerService/RequestActorSuspend"
+	WorkerService_ReportActorSnapshotState_FullMethodName  = "/ateapi.WorkerService/ReportActorSnapshotState"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
@@ -1875,6 +1880,19 @@ type WorkerServiceClient interface {
 	// retries a suspend it had already been granted therefore sees a failure
 	// rather than a repeat of its success.
 	RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error)
+	// ReportActorSnapshotState records which snapshots of an Actor the calling
+	// atelet holds on its node, and which of them are durable. Only atelet can
+	// observe when an upload finishes or a local copy is deleted, and the
+	// control plane needs both to decide where the Actor can resume.
+	//
+	// Only atelet should call this, with its own client certificate. The
+	// control plane serves it only for an Actor on the caller's node.
+	// Idempotent: each report carries the whole state and replaces the previous
+	// one. Returns ABORTED while another operation holds the Actor; retry.
+	//
+	// TODO(#2570): not served yet. Every call returns UNIMPLEMENTED until the
+	// handler lands.
+	ReportActorSnapshotState(ctx context.Context, in *ReportActorSnapshotStateRequest, opts ...grpc.CallOption) (*ReportActorSnapshotStateResponse, error)
 }
 
 type workerServiceClient struct {
@@ -1909,6 +1927,16 @@ func (c *workerServiceClient) RequestActorSuspend(ctx context.Context, in *Reque
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RequestActorSuspendResponse)
 	err := c.cc.Invoke(ctx, WorkerService_RequestActorSuspend_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ReportActorSnapshotState(ctx context.Context, in *ReportActorSnapshotStateRequest, opts ...grpc.CallOption) (*ReportActorSnapshotStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportActorSnapshotStateResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ReportActorSnapshotState_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1960,6 +1988,19 @@ type WorkerServiceServer interface {
 	// retries a suspend it had already been granted therefore sees a failure
 	// rather than a repeat of its success.
 	RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error)
+	// ReportActorSnapshotState records which snapshots of an Actor the calling
+	// atelet holds on its node, and which of them are durable. Only atelet can
+	// observe when an upload finishes or a local copy is deleted, and the
+	// control plane needs both to decide where the Actor can resume.
+	//
+	// Only atelet should call this, with its own client certificate. The
+	// control plane serves it only for an Actor on the caller's node.
+	// Idempotent: each report carries the whole state and replaces the previous
+	// one. Returns ABORTED while another operation holds the Actor; retry.
+	//
+	// TODO(#2570): not served yet. Every call returns UNIMPLEMENTED until the
+	// handler lands.
+	ReportActorSnapshotState(context.Context, *ReportActorSnapshotStateRequest) (*ReportActorSnapshotStateResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
 
@@ -1978,6 +2019,9 @@ func (UnimplementedWorkerServiceServer) MintAteomActorCertificate(context.Contex
 }
 func (UnimplementedWorkerServiceServer) RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RequestActorSuspend not implemented")
+}
+func (UnimplementedWorkerServiceServer) ReportActorSnapshotState(context.Context, *ReportActorSnapshotStateRequest) (*ReportActorSnapshotStateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportActorSnapshotState not implemented")
 }
 func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
 func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
@@ -2054,6 +2098,24 @@ func _WorkerService_RequestActorSuspend_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_ReportActorSnapshotState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportActorSnapshotStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ReportActorSnapshotState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ReportActorSnapshotState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ReportActorSnapshotState(ctx, req.(*ReportActorSnapshotStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerService_ServiceDesc is the grpc.ServiceDesc for WorkerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2072,6 +2134,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RequestActorSuspend",
 			Handler:    _WorkerService_RequestActorSuspend_Handler,
+		},
+		{
+			MethodName: "ReportActorSnapshotState",
+			Handler:    _WorkerService_ReportActorSnapshotState_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

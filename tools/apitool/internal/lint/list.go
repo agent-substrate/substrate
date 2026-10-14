@@ -21,13 +21,15 @@ import (
 	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
 )
 
-// ListMethodShape requires a "List*" method's request to have exactly
-// page_size/page_token fields plus an optional atespace field, and its
+const listOptionsTypeFullName = "ateapi.ListOptions"
+
+// ListMethodShape requires a "List*" method's request to have exactly an
+// options field of type ListOptions plus an optional atespace field, and its
 // response to have exactly a repeated message field plus a next_page_token
 // field - nothing else.
 var ListMethodShape = Rule{
 	Name: "list-method-shape",
-	Description: `A "List*" method's request has page_size/page_token fields (plus an optional atespace field), and its ` +
+	Description: `A "List*" method's request has a ListOptions options field (plus an optional atespace field), and its ` +
 		"response has a repeated message field, named after the method's own plural, plus a next_page_token field - nothing else.",
 	Check: checkListMethodShape,
 }
@@ -57,36 +59,30 @@ func checkListMethodShape(api *model.API) ([]Finding, error) {
 	return findings, nil
 }
 
-// listRequestAllowedFields are the only fields a List request may have:
-// page_size/page_token (required) plus an optional atespace scoping field.
-// Sorting and filtering per AIP-132 are not supported, so nothing else
-// belongs here.
-var listRequestAllowedFields = map[string]bool{
-	"atespace":   true,
-	"page_size":  true,
-	"page_token": true,
-}
-
 func checkListRequest(messagesByName map[string]model.Message, subject, inputName string) []Finding {
 	req, ok := messagesByName[inputName]
 	if !ok {
 		return []Finding{{Subject: subject, Message: "request type " + inputName + " not found"}}
 	}
 
+	// Sorting and filtering per AIP-132 are not supported, so nothing besides
+	// atespace and options belongs here.
 	var findings []Finding
-	if findFieldByName(req, "page_size") == nil {
-		findings = append(findings, Finding{Subject: subject, Message: "request has no page_size field"})
-	}
-	if findFieldByName(req, "page_token") == nil {
-		findings = append(findings, Finding{Subject: subject, Message: "request has no page_token field"})
-	}
+	var optionsFields int
 	for _, f := range req.Fields {
-		if !listRequestAllowedFields[f.Name] {
+		switch {
+		case f.Name == "atespace":
+		case f.Name == "options" && f.TypeKind == "message" && f.TypeFullName == listOptionsTypeFullName:
+			optionsFields++
+		default:
 			findings = append(findings, Finding{
 				Subject: subject,
-				Message: fmt.Sprintf("field %q is not part of the standard List request shape - only atespace, page_size, and page_token are allowed (sorting/filtering per AIP-132 is not supported)", f.Name),
+				Message: fmt.Sprintf("field %q is not part of the standard List request shape - only atespace and an options field of type %s are allowed (sorting/filtering per AIP-132 is not supported)", f.Name, listOptionsTypeFullName),
 			})
 		}
+	}
+	if optionsFields == 0 {
+		findings = append(findings, Finding{Subject: subject, Message: "request has no options field of type " + listOptionsTypeFullName})
 	}
 	return findings
 }

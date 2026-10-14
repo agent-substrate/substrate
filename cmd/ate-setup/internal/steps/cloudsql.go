@@ -180,7 +180,8 @@ func cloudSQLDSN(s cloudSQLSettings) (string, error) {
 // sidecar's configuration, and nothing else. It is empty without Cloud SQL,
 // which prunes the keys a previous Cloud SQL install left behind.
 //
-// The health checks listen on 9801 because ateapi's metrics own 9090.
+// The health checks listen on 9801 because ateapi's metrics and health servers
+// own 9090 and 9091.
 func cloudSQLEnvVars(s cloudSQLSettings) map[string]string {
 	if s.Instance == "" {
 		return map[string]string{}

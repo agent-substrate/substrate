@@ -42,7 +42,7 @@ func testWorkerUID(podName string) string {
 // unit tests never reach (worker cache, atelet dialer, k8s clients) are nil,
 // so a step that unexpectedly executes against them fails the test loudly.
 // External snapshots go to an in-memory object store through the control
-// snapshot plugin.
+// object-store plugin.
 func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplName string) *ActorWorkflow {
 	t.Helper()
 	storetest.MustCreateAtespace(t, context.Background(), st, tmplAtespace)
@@ -66,7 +66,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 // directly rather than going through newTestActorWorkflow.
 func newFinalizeWorkflow(persistence store.Interface) (*ActorWorkflow, *objectstoretest.Fake) {
 	objects := objectstoretest.New()
-	return &ActorWorkflow{store: persistence, snapshotPlugin: objectstoreplugintest.ControlClient(objects)}, objects
+	return &ActorWorkflow{store: persistence, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}, objects
 }
 
 // mustActorSnapshotURI builds the URI of a snapshot the actor took under
@@ -145,6 +145,31 @@ func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, ac
 		opt(actor)
 	}
 	storetest.MustCreateActor(t, ctx, st, actor)
+}
+
+// withPausedShape seeds the shape a pause leaves behind: a node-local
+// snapshot at the latest generation, pinned to node. Pair it with
+// ACTOR_STATE_SUSPENDED to seed a paused actor.
+func withPausedShape(node string) func(*ateapipb.Actor) {
+	return func(a *ateapipb.Actor) {
+		a.Status.AssignedNode = node
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", node),
+		}
+	}
+}
+
+// withPauseInProgress seeds the shape a pause has between MarkPausing and
+// FinalizePaused: a node-local snapshot at the latest generation that has no
+// locality yet. Pair it with ACTOR_STATE_SUSPENDING.
+func withPauseInProgress() func(*ateapipb.Actor) {
+	return func(a *ateapipb.Actor) {
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", ""),
+		}
+	}
 }
 
 // allActorStates enumerates every ActorState value, for exhaustive

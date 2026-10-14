@@ -177,7 +177,7 @@ Rules:
 
 ### 3.2 List
 
-*Follows [AIP-132](https://google.aip.dev/132).*
+*Adapted from [AIP-132](https://google.aip.dev/132).*
 
 ```proto
 rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
@@ -186,14 +186,19 @@ message ListActorsRequest {
   // The atespace to list actors from.
   string atespace = 1;
 
-  // Maximum number of actors to return. The server may return fewer.
+  // Pagination controls. Reused across every List<Type>Request.
+  ListOptions options = 2;
+}
+
+message ListOptions {
+  // Maximum number of resources to return. The server may return fewer.
   // If unspecified, defaults to a server-chosen value.
   // The maximum value is 1000; values above 1000 are coerced to 1000.
-  int32 page_size = 2;
+  int32 page_size = 1;
 
-  // Pagination token from a previous ListActors response.
+  // Pagination token from a previous response of the same List method.
   // Omit or leave empty for the first request.
-  string page_token = 3;
+  string page_token = 2;
 }
 
 message ListActorsResponse {
@@ -208,11 +213,14 @@ message ListActorsResponse {
 Rules:
 - RPC name **must** begin with `List` followed by the **plural** resource name.
 - Both the request and response message names **must** match the RPC name with `Request`/`Response` suffixes. (Unlike Get/Create/Update, List responses are not the resource itself.)
+- `page_size` and `page_token` **must** be carried in a `ListOptions` field named `options`. Further non-resource "control" fields belong in `ListOptions`, not as loose top-level fields on the request.
 - `next_page_token` **must** be present on every List response message. It **must** be empty when there are no further pages.
 - The repeated resource field **must** use the plural form of the resource name (e.g., `actors`, not `actor`).
 - If a user provides a `page_size` above the maximum, coerce it silently. If a user provides a negative value, return `INVALID_ARGUMENT`.
 - Sorting and filtering as specified in AIP-132 are not supported.
 - Clients must iterate over all pages until an empty `next_page_token` is returned. Clients should not assume that an empty result (i.e. len(actors) == 0) means the end of the stream.
+
+**Divergence from AIP-132:** AIP-132 puts `page_size` and `page_token` at the top level of the request. Substrate groups them in a shared `ListOptions` message, following the `DeleteOptions` pattern (section #3.5), so every List method carries the same controls with the same validation.
 
 ### 3.3 Create
 
@@ -357,6 +365,7 @@ Rules:
 - Use standard abbreviations where well-established: `config`, `spec`, `id`, `info`, `stats`.
 - Adjectives come before the noun: `suspended_actors`, not `actors_suspended`.
 - Avoid prepositions in field names: `error_reason`, not `reason_for_error`.
+- `google.protobuf.Timestamp` fields **must** end in `_time`, following [AIP-142](https://google.aip.dev/142): use `create_time`, `expire_time`, or `crash_time`, not `created_at` or `expires_at`.
 
 ### 5.1 Enum naming
 

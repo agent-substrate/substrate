@@ -306,7 +306,7 @@ func TestValidateActorUpdate(t *testing.T) {
 		field.ErrorList{field.Required(field.NewPath("status", "state"), "")},
 	}, {
 		"change actor.status.state",
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.State = ateapipb.ActorState_ACTOR_STATE_PAUSED })),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.State = ateapipb.ActorState_ACTOR_STATE_RUNNING })),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.State = ateapipb.ActorState_ACTOR_STATE_CRASHED })),
 		nil,
 	}, {
@@ -716,20 +716,20 @@ func TestValidateListActorsRequest(t *testing.T) {
 		field.ErrorList{field.Invalid(field.NewPath("atespace"), "NS1", "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"valid, positive page_size",
-		&ateapipb.ListActorsRequest{Atespace: "ns1", PageSize: 10},
+		&ateapipb.ListActorsRequest{Atespace: "ns1", Options: &ateapipb.ListOptions{PageSize: 10}},
 		nil,
 	}, {
 		"negative page_size",
-		&ateapipb.ListActorsRequest{Atespace: "ns1", PageSize: -1},
-		field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "").WithOrigin("minimum")},
+		&ateapipb.ListActorsRequest{Atespace: "ns1", Options: &ateapipb.ListOptions{PageSize: -1}},
+		field.ErrorList{field.Invalid(field.NewPath("options", "page_size"), int32(-1), "").WithOrigin("minimum")},
 	}, {
 		"valid page_token",
-		&ateapipb.ListActorsRequest{Atespace: "ns1", PageToken: strings.Repeat("x", 256)},
+		&ateapipb.ListActorsRequest{Atespace: "ns1", Options: &ateapipb.ListOptions{PageToken: strings.Repeat("x", 256)}},
 		nil,
 	}, {
 		"too-large page_token",
-		&ateapipb.ListActorsRequest{Atespace: "ns1", PageToken: strings.Repeat("x", 257)},
-		field.ErrorList{field.TooLongCharacters(field.NewPath("page_token"), "", 256).WithOrigin("maxLength")},
+		&ateapipb.ListActorsRequest{Atespace: "ns1", Options: &ateapipb.ListOptions{PageToken: strings.Repeat("x", 257)}},
+		field.ErrorList{field.TooLongCharacters(field.NewPath("options", "page_token"), "", 256).WithOrigin("maxLength")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1097,8 +1097,8 @@ func withActorWorkerAssignment(mods ...func(*ateapipb.WorkerAssignment)) func(*a
 }
 
 func TestValidateMintActorJWTRequest(t *testing.T) {
-	withExpiration := func(seconds int64) *ateapipb.MintActorJWTRequest {
-		return &ateapipb.MintActorJWTRequest{
+	withExpiration := func(seconds int64) *ateapipb.MintActorJwtRequest {
+		return &ateapipb.MintActorJwtRequest{
 			Actor:             &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
 			Audiences:         []string{"https://example.com"},
 			ExpirationSeconds: seconds,
@@ -1107,7 +1107,7 @@ func TestValidateMintActorJWTRequest(t *testing.T) {
 	path := field.NewPath("expiration_seconds")
 	tests := []struct {
 		name string
-		req  *ateapipb.MintActorJWTRequest
+		req  *ateapipb.MintActorJwtRequest
 		want field.ErrorList
 	}{
 		{name: "minimum expiration", req: withExpiration(300)},
