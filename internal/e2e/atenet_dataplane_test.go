@@ -15,6 +15,7 @@
 package e2e
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 )
@@ -32,6 +33,34 @@ func TestAtenetDataplaneEgressPolicyDenial(t *testing.T) {
 			t.Error("AgentGateway direct policy denial was not recognized")
 		}
 	})
+}
+
+func TestAtenetDataplaneWebSocketEgressDenial(t *testing.T) {
+	const (
+		standard = "WebSocket egress is not supported"
+		agw      = "missing substrate egress request policy"
+	)
+	for _, tt := range []struct {
+		dataplane string
+		status    int
+		body      string
+		want      bool
+	}{
+		{"", http.StatusForbidden, standard, true},
+		{"", http.StatusForbidden, agw, false},
+		{"", http.StatusOK, standard, false},
+		{"agentgateway", http.StatusForbidden, standard, true},
+		{"agentgateway", http.StatusForbidden, agw, true},
+		{"agentgateway", http.StatusForbidden, "other", false},
+		{"agentgateway", http.StatusBadGateway, agw, false},
+	} {
+		t.Run(fmt.Sprintf("%q/%d/%s", tt.dataplane, tt.status, tt.body), func(t *testing.T) {
+			t.Setenv(AtenetDataplaneEnv, tt.dataplane)
+			if got := CurrentAtenetDataplane().IsWebSocketEgressDenied(tt.status, tt.body); got != tt.want {
+				t.Errorf("IsWebSocketEgressDenied(%d, %q) = %v, want %v", tt.status, tt.body, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestAtenetDataplaneEgressConnectStats(t *testing.T) {
