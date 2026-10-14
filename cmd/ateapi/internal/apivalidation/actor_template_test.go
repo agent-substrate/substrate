@@ -791,10 +791,18 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("external_volume_template", "capacity"), nil, "")},
 	}, {
+		name: "external volume template capacity with an exponent",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "1e9", StorageClassName: "fast-ssd"}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("external_volume_template", "capacity"), nil, "")},
+	}, {
+		// Within maxLength, but the whole-number part is past uint64.
 		name: "external volume template capacity at the length bound",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: strings.Repeat("1", 30) + "Gi", StorageClassName: "fast-ssd"}}}
 		},
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("external_volume_template", "capacity"), nil, "")},
 	}, {
 		name: "external volume template capacity too long",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
@@ -855,6 +863,12 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "two gigs"}}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "limits").Index(0).Child("quantity"), nil, "")},
+	}, {
+		name: "limit quantity too long",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: strings.Repeat("1", 33)}}}
+		},
+		want: field.ErrorList{field.TooLong(field.NewPath("containers").Index(0).Child("resources", "limits").Index(0).Child("quantity"), nil, 32).WithOrigin("maxLength")},
 	}, {
 		name: "too many limits",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {

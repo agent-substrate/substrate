@@ -285,43 +285,48 @@ func ValidateUUID(uuid string, fldPath *field.Path) field.ErrorList {
 	return nil
 }
 
-// cpuLimitMax bounds cpu limits. The wire carries ceil(cores × 1000)
-// millicores and caps it at 999999 (strictly below 1000 cores), so a limit
-// above 999.999 cores rounds up out of range.
-var cpuLimitMax = resource.MustParse("999.999")
+// The most a cpu limit and a byte quantity may be: what the wire holds, which
+// is ceil(cores × 1000) millicores up to 999999 and an int64 byte count.
+var (
+	cpuMax   = resource.MustParse("999.999")
+	bytesMax = resource.MustParse("9223372036854775807")
+)
 
-// memoryLimitMax bounds memory limits at what the wire's int64 byte count
-// holds; resource.Quantity.Value wraps silently past it.
-var memoryLimitMax = resource.MustParse("9223372036854775807")
+// maxQuantityLength is the maxLength of the API fields that carry a quantity.
+const maxQuantityLength = 32
 
-// ValidateLimit validates one resource limit entry at fldPath: only cpu and
-// memory are supported, the quantity must be greater than zero, and it must
-// fit the scalars the control plane converts it to (cpuLimitMax and
-// memoryLimitMax). The bounds compare Quantities rather than the converted
-// integers, which wrap for very large values. An empty quantity is left to
-// the required tag.
+// ValidateLimit validates a cpu or memory limit at fldPath.
 func ValidateLimit(fldPath *field.Path, name, quantity string) field.ErrorList {
-	if name != ResourceCPU && name != ResourceMemory {
-		return field.ErrorList{field.NotSupported(fldPath.Child("name"), name, []string{ResourceCPU, ResourceMemory})}
+	switch name {
+	case ResourceCPU:
+		return validateQuantity(fldPath.Child("quantity"), quantity, resource.Milli, cpuMax)
+	case ResourceMemory:
+		return ValidateBytes(fldPath.Child("quantity"), quantity)
 	}
-	if quantity == "" {
+	return field.ErrorList{field.NotSupported(fldPath.Child("name"), name, []string{ResourceCPU, ResourceMemory})}
+}
+
+// ValidateBytes validates a quantity of bytes at fldPath.
+func ValidateBytes(fldPath *field.Path, quantity string) field.ErrorList {
+	return validateQuantity(fldPath, quantity, 0, bytesMax)
+}
+
+// validateQuantity checks that quantity parses and is a whole number of unit,
+// from one unit up to limit, so it never needs a finer suffix to write back. An
+// empty or over-long quantity is left to the required and maxLength tags.
+func validateQuantity(fldPath *field.Path, quantity string, unit resource.Scale, limit resource.Quantity) field.ErrorList {
+	if quantity == "" || len(quantity) > maxQuantityLength {
 		return nil
 	}
-	q, err := resource.ParseQuantity(quantity)
+	q, err := ParseQuantity(quantity)
 	if err != nil {
-		return field.ErrorList{field.Invalid(fldPath.Child("quantity"), quantity, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
+		return field.ErrorList{field.Invalid(fldPath, quantity, err.Error())}
 	}
-	var errs field.ErrorList
-	if q.Sign() <= 0 {
-		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "must be greater than zero"))
+	one := resource.NewScaledQuantity(1, unit)
+	if n := q.ScaledValue(unit); q.Cmp(limit) > 0 || n < 1 || q.Cmp(*resource.NewScaledQuantity(n, unit)) != 0 {
+		return field.ErrorList{field.Invalid(fldPath, quantity, fmt.Sprintf("must be a multiple of %s between %s and %s", one, one, limit.String()))}
 	}
-	switch {
-	case name == ResourceCPU && q.Cmp(cpuLimitMax) > 0:
-		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "cpu limit must be at most 999.999 cores"))
-	case name == ResourceMemory && q.Cmp(memoryLimitMax) > 0:
-		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "memory limit must be at most 9223372036854775807 bytes"))
-	}
-	return errs
+	return nil
 }
 
 // ValidatePinnedImage requires a well-formed OCI image reference pinned by
