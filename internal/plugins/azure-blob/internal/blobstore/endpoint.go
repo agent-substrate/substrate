@@ -74,6 +74,17 @@ func (t *endpointTransport) Do(req *http.Request) (*http.Response, error) {
 	out := req.WithContext(ctx)
 	if req.Body != nil && req.Body != http.NoBody {
 		out.Body = &requestBody{ReadCloser: req.Body, watch: watch}
+		if getBody := req.GetBody; getBody != nil {
+			// net/http resends the body from GetBody when it retries on a
+			// new connection; those reads must restart the timer too.
+			out.GetBody = func() (io.ReadCloser, error) {
+				b, err := getBody()
+				if err != nil {
+					return nil, err
+				}
+				return &requestBody{ReadCloser: b, watch: watch}, nil
+			}
+		}
 	}
 	resp, err := t.client.Do(out)
 	watch.responded()

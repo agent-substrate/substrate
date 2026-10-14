@@ -283,6 +283,56 @@ func TestSlowDownloadConsumerIsNotStalled(t *testing.T) {
 	}
 }
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// TestResentRequestBodyRestartsStallTimer sends the body from GetBody, as
+// net/http does when it retries on a new connection, one byte at a time over
+// more than the stall timeout: each read is progress.
+func TestResentRequestBodyRestartsStallTimer(t *testing.T) {
+	const data = "block data"
+	base := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.GetBody == nil {
+			return nil, errors.New("request has no GetBody")
+		}
+		body, err := req.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		var got []byte
+		b := make([]byte, 1)
+		for {
+			n, err := body.Read(b)
+			got = append(got, b[:n]...)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			time.Sleep(testStallTimeout / 2)
+		}
+		if err := req.Context().Err(); err != nil {
+			return nil, fmt.Errorf("context after sending %q: %w", got, err)
+		}
+		return &http.Response{StatusCode: http.StatusCreated, Body: http.NoBody, Request: req}, nil
+	})
+	endpoint, err := url.Parse("https://account.blob.core.windows.net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, endpoint.String()+"/snapshots/file", strings.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := newEndpointTransport(endpoint, base, testStallTimeout).Do(req)
+	if err != nil {
+		t.Fatalf("Do() = %v, want the resent body to count as progress", err)
+	}
+	_ = resp.Body.Close()
+}
+
 func TestNewAzureRequiresHTTPS(t *testing.T) {
 	_, err := NewAzure("http://account.blob.core.windows.net", []string{"snapshots"}, staticCredential{})
 	if err == nil || !strings.Contains(err.Error(), "must use https") {
