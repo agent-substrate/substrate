@@ -219,7 +219,7 @@ func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsReq
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListActors(ctx, req.GetAtespace(), toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actors in db: %w", err))
 	}

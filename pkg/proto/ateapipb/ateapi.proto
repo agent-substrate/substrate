@@ -1526,20 +1526,10 @@ message GetAtespaceRequest {
 }
 
 message ListAtespacesRequest {
-  // Requested page size; the server may return fewer, or occasionally
-  // slightly more. If unspecified, defaults to a server-chosen value;
-  // values above 1000 are coerced to 1000.
+  // Pagination controls.
   //
   // +k8s:optional
-  // +k8s:minimum=1
-  int32 page_size = 1;
-
-  // Pagination token from a previous ListAtespaces response.
-  // Omit or leave empty for the first request.
-  //
-  // +k8s:optional
-  // +k8s:maxLength=256
-  string page_token = 2;
+  ListOptions options = 1;
 }
 
 message ListAtespacesResponse {
@@ -1584,20 +1574,10 @@ message ListActorTemplatesRequest {
   // +k8s:format=k8s-short-name
   string atespace = 1;
 
-  // Requested page size; the server may return fewer, or occasionally
-  // slightly more. If unspecified, defaults to a server-chosen value;
-  // values above 1000 are coerced to 1000.
+  // Pagination controls.
   //
   // +k8s:optional
-  // +k8s:minimum=1
-  int32 page_size = 2;
-
-  // Pagination token from a previous ListActorTemplates response.
-  // Omit or leave empty for the first request.
-  //
-  // +k8s:optional
-  // +k8s:maxLength=256
-  string page_token = 3;
+  ListOptions options = 2;
 }
 
 message ListActorTemplatesResponse {
@@ -1880,20 +1860,10 @@ message ListTagsRequest {
   // +k8s:format=k8s-short-name
   string atespace = 1;
 
-  // Requested page size; the server may return fewer, or occasionally
-  // slightly more. If unspecified, defaults to a server-chosen value;
-  // values above 1000 are coerced to 1000.
+  // Pagination controls.
   //
   // +k8s:optional
-  // +k8s:minimum=1
-  int32 page_size = 2;
-
-  // Pagination token from a previous ListTags response.
-  // Omit or leave empty for the first request.
-  //
-  // +k8s:optional
-  // +k8s:maxLength=256
-  string page_token = 3;
+  ListOptions options = 2;
 }
 
 message ListTagsResponse {
@@ -1968,6 +1938,24 @@ message DeleteOptions {
   string uid = 2;
 }
 
+// ListOptions are the pagination controls a List request may carry.
+message ListOptions {
+  // Requested page size; the server may return fewer, or occasionally
+  // slightly more. If unspecified, defaults to a server-chosen value;
+  // values above 1000 are coerced to 1000.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int32 page_size = 1;
+
+  // Pagination token from a previous response of the same List method.
+  // Omit or leave empty for the first request.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
+  string page_token = 2;
+}
+
 // ListWorkerActorAssignmentsRequest asks for a page of the Actors hosted by a
 // given Worker.
 message ListWorkerActorAssignmentsRequest {
@@ -1977,19 +1965,10 @@ message ListWorkerActorAssignmentsRequest {
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef worker = 1;
 
-  // Requested page size; the server may return fewer. If unspecified, defaults
-  // to a server-chosen value; values above 1000 are coerced to 1000.
+  // Pagination controls.
   //
   // +k8s:optional
-  // +k8s:minimum=1
-  int32 page_size = 2;
-
-  // Pagination token from a previous ListWorkerActorAssignments response.
-  // Omit or leave empty for the first request.
-  //
-  // +k8s:optional
-  // +k8s:maxLength=256
-  string page_token = 3;
+  ListOptions options = 2;
 }
 
 // ListWorkerActorAssignmentsResponse is one page of a Worker's Actors.
@@ -2002,20 +1981,10 @@ message ListWorkerActorAssignmentsResponse {
 }
 
 message ListWorkersRequest {
-  // Requested page size; the server may return fewer, or occasionally
-  // slightly more. If unspecified, defaults to a server-chosen value;
-  // values above 1000 are coerced to 1000.
+  // Pagination controls.
   //
   // +k8s:optional
-  // +k8s:minimum=1
-  int32 page_size = 1;
-
-  // Pagination token from a previous ListWorkers response.
-  // Omit or leave empty for the first request.
-  //
-  // +k8s:optional
-  // +k8s:maxLength=256
-  string page_token = 2;
+  ListOptions options = 1;
 }
 
 message ListWorkersResponse {
@@ -2097,20 +2066,10 @@ message ListActorsRequest {
   // +k8s:format=k8s-short-name
   string atespace = 1;
 
-  // Requested page size; the server may return fewer, or occasionally
-  // slightly more. If unspecified, defaults to a server-chosen value;
-  // values above 1000 are coerced to 1000.
+  // Pagination controls.
   //
   // +k8s:optional
-  // +k8s:minimum=1
-  int32 page_size = 2;
-
-  // Pagination token from a previous ListActors response.
-  // Omit or leave empty for the first request.
-  //
-  // +k8s:optional
-  // +k8s:maxLength=256
-  string page_token = 3;
+  ListOptions options = 2;
 }
 
 message ListActorsResponse {

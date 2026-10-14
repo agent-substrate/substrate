@@ -78,7 +78,7 @@ var getTagsCmd = &cobra.Command{
 		var tags []*ateapipb.Tag
 		pageToken := ""
 		for {
-			resp, err := client.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: getTagAtespaceFlag, PageSize: 1000, PageToken: pageToken})
+			resp, err := client.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: getTagAtespaceFlag, Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken}})
 			if err != nil {
 				return fmt.Errorf("failed to list tags: %w", err)
 			}

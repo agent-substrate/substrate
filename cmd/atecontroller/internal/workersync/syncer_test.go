@@ -519,7 +519,7 @@ func TestSyncer_EnqueueRegisteredWorkers_StreamsPagesAndRetriesLatePage(t *testi
 	// The second page fails once before serving.
 	failed := false
 	api.setListHook(func(req *ateapipb.ListWorkersRequest) error {
-		if req.GetPageToken() == "1" && !failed {
+		if req.GetOptions().GetPageToken() == "1" && !failed {
 			failed = true
 			return status.Error(codes.Unavailable, "transient failure on page")
 		}
