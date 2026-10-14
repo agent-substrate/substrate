@@ -152,7 +152,7 @@ func main() {
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := serverboot.InitMetrics(ctx, "atelet")
+	mp, servePull, err := serverboot.InitMetrics(ctx, "atelet")
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
@@ -170,7 +170,9 @@ func main() {
 	// readiness flips to not-ready on SIGTERM so /readyz reports 503 while the
 	// pod drains, while /healthz stays 200 for liveness.
 	readiness := &serverboot.Readiness{}
-	go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
+	if servePull {
+		go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
+	}
 	go serverboot.StartHealthServer(ctx, *healthListenAddr, readiness)
 
 	// The OTLP relay lets the ateom pods on this node export telemetry over a

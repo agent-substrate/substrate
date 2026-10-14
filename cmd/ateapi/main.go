@@ -157,14 +157,16 @@ func main() {
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := serverboot.InitMetrics(ctx, "ateapi")
+	mp, servePull, err := serverboot.InitMetrics(ctx, "ateapi")
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 	// The probes have their own server, so /metrics starts here and serves
 	// during the store connect and the schema migrations.
-	go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
+	if servePull {
+		go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
+	}
 
 	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
 		ServiceName: "ateapi",

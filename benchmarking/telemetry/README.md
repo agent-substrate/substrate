@@ -205,7 +205,8 @@ kubectl set env -n ate-system deployment/ate-api-server OTEL_GO_X_OBSERVABILITY=
 
 Scrape `:9090/metrics` on the process. That endpoint is a Prometheus reader
 that does not use the OTLP path. Thus it continues to operate during the
-congestion that it measures.
+congestion that it measures. The endpoint is off when `OTEL_METRICS_EXPORTER`
+is `otlp` or `none`.
 
 | Metric | Shows |
 |---|---|

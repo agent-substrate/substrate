@@ -276,7 +276,8 @@ component name as the scope (`"atelet"`, `"ateapi"`, `"atecontroller"`):
   (`cmd/atelet`).
 
 The meter provider itself is set up once per binary by
-`serverboot.InitMetrics` (Prometheus reader plus OTLP push),
+`serverboot.InitMetrics` (OTLP push and a Prometheus reader, each one while
+`OTEL_METRICS_EXPORTER` selects it, and whether to serve `/metrics`),
 `serverboot.InitMetricsBridged` (OTLP push with a foreign Prometheus registry
 bridged onto it, or that registry alone under `OTEL_METRICS_EXPORTER=prometheus`,
 and whether to serve it; atecontroller), or `serverboot.InitMetricsPushOnlyVia`

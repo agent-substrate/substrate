@@ -83,13 +83,15 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	mp, err := serverboot.InitMetrics(ctx, serviceName)
+	mp, servePull, err := serverboot.InitMetrics(ctx, serviceName)
 	if err != nil {
 		return fmt.Errorf("init metrics: %w", err)
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
-	go serverboot.StartMetricsServer(ctx, *metricsAddr)
+	if servePull {
+		go serverboot.StartMetricsServer(ctx, *metricsAddr)
+	}
 
 	client, err := newKubeClient()
 	if err != nil {

@@ -242,19 +242,33 @@ func tracesPushEnabled(ctx context.Context) bool {
 	return resolveExportersEnv(ctx, tracesExporterEnv, []string{ExporterOTLP}, Exporters{ExporterOTLP: true}).Has(ExporterOTLP)
 }
 
-// InitMetrics registers a global MeterProvider with both a Prometheus
-// reader (exposed via StartMetricsServer's /metrics handler) and an
-// OTLP periodic reader, the latter while OTEL_METRICS_EXPORTER selects otlp.
-// The Prometheus reader registers on the default registry.
-func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvider, error) {
+// InitMetrics registers a global MeterProvider with the readers that
+// OTEL_METRICS_EXPORTER selects: an OTLP periodic reader for otlp, and a
+// Prometheus reader on the default registry for prometheus. Unset selects
+// both.
+//
+// servePull reports whether the Prometheus reader is installed. The caller
+// then serves it with StartMetricsServer; otherwise the caller starts no
+// metrics server, because /metrics would serve nothing of its own.
+func InitMetrics(ctx context.Context, serviceName string) (mp *sdkmetric.MeterProvider, servePull bool, err error) {
 	if serviceName == "" {
-		return nil, fmt.Errorf("serviceName is required")
+		return nil, false, fmt.Errorf("serviceName is required")
 	}
-	promReader, err := prometheus.New()
+	exporters := metricsExporters(ctx, true)
+	servePull = exporters.Has(exporterPrometheus)
+	var readers []sdkmetric.Reader
+	if servePull {
+		promReader, err := prometheus.New()
+		if err != nil {
+			return nil, false, fmt.Errorf("create Prometheus metric exporter: %w", err)
+		}
+		readers = append(readers, promReader)
+	}
+	mp, err = newMeterProvider(ctx, serviceName, exporters.Has(ExporterOTLP), false, nil, nil, readers...)
 	if err != nil {
-		return nil, fmt.Errorf("create Prometheus metric exporter: %w", err)
+		return nil, false, err
 	}
-	return newMeterProvider(ctx, serviceName, metricsPushEnabled(ctx, true), false, nil, nil, promReader)
+	return mp, servePull, nil
 }
 
 // InitMetricsBridged is for a binary whose scraped endpoint serves a registry

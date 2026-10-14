@@ -449,33 +449,40 @@ func TestMetricsPushEnabled(t *testing.T) {
 	}
 }
 
-func TestInitMetricsExportsOverOTLPByDefault(t *testing.T) {
-	collector := startMetricsCollector(t, "")
-	mp, err := InitMetrics(t.Context(), "test-default")
-	if err != nil {
-		t.Fatalf("InitMetrics: %v", err)
-	}
-	addOne(t, mp, "ate.test.default.count")
-	if pushed := collector.flush(t, mp); pushed["ate.test.default.count"] != 1 {
-		t.Errorf("the instrument was not pushed: %v", pushed)
-	}
-}
-
-// With OTEL_METRICS_EXPORTER=none the instruments are still served for a
-// scrape and nothing is pushed, so a scraped component reaches the backend
-// once.
-func TestInitMetricsExporterNoneKeepsPrometheusOnly(t *testing.T) {
-	collector := startMetricsCollector(t, "none")
-	mp, err := InitMetrics(t.Context(), "test-none")
-	if err != nil {
-		t.Fatalf("InitMetrics: %v", err)
-	}
-	addOne(t, mp, "ate.test.none.count")
-	if !gatheredNames(t, prometheus.DefaultGatherer)["ate_test_none_count_total"] {
-		t.Error("/metrics does not serve the instrument")
-	}
-	if pushed := collector.flush(t, mp); pushed != nil {
-		t.Errorf("OTEL_METRICS_EXPORTER=none still pushed %v", pushed)
+// InitMetrics installs the readers that OTEL_METRICS_EXPORTER selects, and
+// servePull tells the caller whether to serve /metrics. otlp and none turn
+// /metrics off, so a component serves it only when an exporter asks for it.
+func TestInitMetricsFollowsExporterPolicy(t *testing.T) {
+	for _, tt := range []struct {
+		name, value string
+		push, pull  bool
+	}{
+		{name: "unset", value: "", push: true, pull: true},
+		{name: "otlp", value: "otlp", push: true, pull: false},
+		{name: "prometheus", value: "prometheus", push: false, pull: true},
+		{name: "list", value: "otlp,prometheus", push: true, pull: true},
+		{name: "none", value: "none", push: false, pull: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			collector := startMetricsCollector(t, tt.value)
+			mp, servePull, err := InitMetrics(t.Context(), "test-policy")
+			if err != nil {
+				t.Fatalf("InitMetrics: %v", err)
+			}
+			if servePull != tt.pull {
+				t.Errorf("servePull = %t, want %t", servePull, tt.pull)
+			}
+			// Each case uses its own name: the Prometheus readers of earlier
+			// cases stay on the default registry.
+			name := "ate.test.policy." + tt.name + ".count"
+			addOne(t, mp, name)
+			if served := gatheredNames(t, prometheus.DefaultGatherer)["ate_test_policy_"+tt.name+"_count_total"]; served != tt.pull {
+				t.Errorf("the default registry has the instrument = %t, want %t", served, tt.pull)
+			}
+			if pushed := collector.flush(t, mp)[name] == 1; pushed != tt.push {
+				t.Errorf("the instrument was pushed = %t, want %t", pushed, tt.push)
+			}
+		})
 	}
 }
 
@@ -645,7 +652,7 @@ func TestInitMetricsPushOnlyRequiresServiceName(t *testing.T) {
 }
 
 func TestInitMetricsRequiresServiceName(t *testing.T) {
-	if _, err := InitMetrics(context.Background(), ""); err == nil {
+	if _, _, err := InitMetrics(context.Background(), ""); err == nil {
 		t.Error("InitMetrics(\"\") must return an error")
 	}
 }
