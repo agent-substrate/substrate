@@ -75,8 +75,9 @@ func supervise(path string, argv []string) int {
 	for sig := range sigs {
 		if sig != unix.SIGCHLD {
 			_ = child.Signal(sig)
-			continue
 		}
+		// Reap after every signal: os/signal drops signals when sigs is full,
+		// so the SIGCHLD for the child's exit may never arrive.
 		if status, exited := reap(child.Pid); exited {
 			return exitCode(status)
 		}
