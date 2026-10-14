@@ -42,7 +42,7 @@ type dialResult struct {
 	Error string `json:"error,omitempty"`
 }
 
-// defaultDialTimeout bounds a /dial that names no timeout.
+// defaultDialTimeout is the /dial timeout when the request sets none.
 const defaultDialTimeout = 3 * time.Second
 
 // newHTTPHandler is the HTTP/1.1 origin an Actor's egress lands on. It exists so
@@ -85,10 +85,10 @@ func newHTTPHandler(body string) http.Handler {
 }
 
 // dial opens a TCP connection to ?address=<host:port> within ?timeout=
-// (default 3s) and closes it again. It lets a suite test reachability from
-// this pod's place in the network, such as whether a NetworkPolicy admits it.
-// A malformed request is a 400, so a caller's mistake cannot read as an
-// unreachable address.
+// (default 3s) and closes it again. A suite uses it to check what this pod
+// can reach, such as whether a NetworkPolicy lets the pod's traffic through.
+// A malformed request gets a 400 rather than ok=false, so a mistake in the
+// caller is not mistaken for an unreachable address.
 func dial(w http.ResponseWriter, r *http.Request) {
 	address := r.URL.Query().Get("address")
 	if _, port, err := net.SplitHostPort(address); err != nil || port == "" {

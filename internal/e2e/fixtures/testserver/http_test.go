@@ -234,9 +234,8 @@ func TestHTTPWithoutCertificateServesOnlyCleartext(t *testing.T) {
 // 200, the decoded result.
 func getDial(t *testing.T, originURL, query string) (int, dialResult) {
 	t.Helper()
-	// No keep-alives: back-to-back requests on a pooled transport can leave a
-	// spare dialed connection that never sends a request, which the origin's
-	// Shutdown waits 5s on, past startOriginServer's 1s budget.
+	// Its own transport with keep-alives off, so each call opens one connection
+	// and closes it after the response.
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
 	response, err := client.Get(originURL + "/dial?" + query)
 	if err != nil {
