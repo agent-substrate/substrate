@@ -15,7 +15,9 @@
 package ateinterceptors
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -25,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -145,7 +148,7 @@ func TestFindUnknownFields(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := findUnknownFields(tt.in())
+			got, _ := findUnknownFields(tt.in())
 			field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, tt.want, got)
 		})
 	}
@@ -194,6 +197,130 @@ func TestRejectUnknownFieldsUnaryInterceptor(t *testing.T) {
 		}
 		if resp != "handled" {
 			t.Errorf("resp = %v, want %q", resp, "handled")
+		}
+	})
+}
+
+// templateRequest is a CreateActorTemplateRequest whose snapshot_config carries
+// the given unknown bytes.
+func templateRequest(unknown []byte) *ateapipb.CreateActorTemplateRequest {
+	cfg := &ateapipb.SnapshotConfig{StorageLocation: "s3://bucket/snapshots"}
+	cfg.ProtoReflect().SetUnknown(unknown)
+	return &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl1"},
+			SnapshotConfig: cfg,
+		},
+	}
+}
+
+// onPause encodes the removed SnapshotConfig.on_pause as a client built
+// against the older API sends it.
+func onPause() []byte {
+	b := protowire.AppendTag(nil, 1, protowire.VarintType)
+	return protowire.AppendVarint(b, 1)
+}
+
+func TestRejectUnknownFieldsUnaryInterceptorRemovedFields(t *testing.T) {
+	info := &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/CreateActorTemplate"}
+	ctx := principal.InjectContext(context.Background(), principal.PrincipalInfo{ID: "spiffe://cluster.local/ns/kagent/sa/kagent-controller", Kind: principal.KindMTLS})
+
+	t.Run("on_pause is accepted and kept as sent", func(t *testing.T) {
+		removedFieldLogged.Clear()
+		log := captureDefaultLog(t)
+		var got *ateapipb.CreateActorTemplateRequest
+		handler := func(ctx context.Context, req any) (any, error) {
+			got = req.(*ateapipb.CreateActorTemplateRequest)
+			return "handled", nil
+		}
+
+		for range 2 {
+			if _, err := RejectUnknownFieldsUnaryInterceptor(ctx, templateRequest(onPause()), info, handler); err != nil {
+				t.Fatalf("interceptor error = %v, want nil", err)
+			}
+		}
+		// Kept, so the stored template returns it to a client that compares
+		// what it reads back with what it wrote.
+		if got, want := got.GetActorTemplate().GetSnapshotConfig().ProtoReflect().GetUnknown(), onPause(); !bytes.Equal(got, want) {
+			t.Errorf("snapshot_config unknown fields = %x, want %x", got, want)
+		}
+		if got, want := got.GetActorTemplate().GetSnapshotConfig().GetStorageLocation(), "s3://bucket/snapshots"; got != want {
+			t.Errorf("storage_location = %q, want %q", got, want)
+		}
+		if got, want := strings.Count(log.String(), "Request carries a removed field"), 1; got != want {
+			t.Fatalf("removed-field log lines = %d, want %d (once per principal): %s", got, want, log.String())
+		}
+		for _, want := range []string{`"field":"actor_template.snapshot_config.on_pause"`, `"method":"/ateapi.Control/CreateActorTemplate"`, "kagent-controller"} {
+			if !strings.Contains(log.String(), want) {
+				t.Errorf("log missing %s: %s", want, log.String())
+			}
+		}
+
+		other := principal.InjectContext(context.Background(), principal.PrincipalInfo{ID: "another-client", Kind: principal.KindJWT})
+		if _, err := RejectUnknownFieldsUnaryInterceptor(other, templateRequest(onPause()), info, handler); err != nil {
+			t.Fatalf("interceptor error = %v, want nil", err)
+		}
+		if got, want := strings.Count(log.String(), "Request carries a removed field"), 2; got != want {
+			t.Errorf("removed-field log lines = %d, want %d (a second principal is logged): %s", got, want, log.String())
+		}
+	})
+
+	tests := []struct {
+		name    string
+		unknown []byte
+		wantErr string
+	}{
+		{
+			name:    "another unknown tag is still refused",
+			unknown: unknownField(9999),
+			wantErr: "actor_template.snapshot_config: Invalid value: unknown field with protobuf tag 9999",
+		},
+		{
+			name:    "on_pause beside another unknown tag refuses the other one",
+			unknown: append(onPause(), unknownField(9999)...),
+			wantErr: "actor_template.snapshot_config: Invalid value: unknown field with protobuf tag 9999",
+		},
+		{
+			name:    "tag 1 with another wire type is not on_pause and is refused",
+			unknown: protowire.AppendString(protowire.AppendTag(nil, 1, protowire.BytesType), "s3://bucket"),
+			wantErr: "actor_template.snapshot_config: Invalid value: unknown field with protobuf tag 1",
+		},
+		{
+			name:    "a request without on_pause reaches the handler",
+			unknown: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			_, err := RejectUnknownFieldsUnaryInterceptor(ctx, templateRequest(tt.unknown), info,
+				func(ctx context.Context, req any) (any, error) {
+					called = true
+					return "handled", nil
+				})
+			if tt.wantErr == "" {
+				if err != nil || !called {
+					t.Fatalf("interceptor error = %v, handler called = %v; want nil, true", err, called)
+				}
+				return
+			}
+			if got, want := apierror.Code(err), codes.InvalidArgument; got != want {
+				t.Fatalf("status code = %v, want %v (error: %v)", got, want, err)
+			}
+			if got := err.Error(); got != tt.wantErr {
+				t.Errorf("error message = %q, want %q", got, tt.wantErr)
+			}
+			if called {
+				t.Error("handler was called despite the rejection")
+			}
+		})
+	}
+
+	t.Run("tag 1 on another message is refused", func(t *testing.T) {
+		_, err := RejectUnknownFieldsUnaryInterceptor(ctx, withUnknown(&ateapipb.CreateActorTemplateRequest{}, 1), info,
+			func(ctx context.Context, req any) (any, error) { return nil, nil })
+		if got, want := apierror.Code(err), codes.InvalidArgument; got != want {
+			t.Fatalf("status code = %v, want %v (error: %v)", got, want, err)
 		}
 	})
 }

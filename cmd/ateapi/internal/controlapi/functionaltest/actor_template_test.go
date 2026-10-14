@@ -15,6 +15,7 @@
 package functionaltest
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"testing"
@@ -28,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -339,6 +341,58 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(controlTemplate).ToObjectRef()}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestCreateActorTemplate_RemovedOnPause sends snapshot_config.on_pause (field
+// 1, a varint) on the wire, as a client built before its removal does: the
+// template is created and returns the field as it was sent, on create and on
+// get, so the client reads back what it wrote; any other unknown field is
+// still refused.
+func TestCreateActorTemplate_RemovedOnPause(t *testing.T) {
+	ns := namespaceForTest("ns-template-removed-on-pause")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+
+	request := func(name string, unknown []byte) *ateapipb.CreateActorTemplateRequest {
+		cfg := &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"}
+		cfg.ProtoReflect().SetUnknown(unknown)
+		return &ateapipb.CreateActorTemplateRequest{
+			ActorTemplate: &ateapipb.ActorTemplate{
+				Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+				Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+				SnapshotConfig: cfg,
+				SandboxConfig: &ateapipb.SandboxConfig{
+					SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+					ConfigName:   "gvisor-default",
+				},
+			},
+		}
+	}
+	onPause := protowire.AppendVarint(protowire.AppendTag(nil, 1, protowire.VarintType), 1)
+
+	created, err := tc.client.CreateActorTemplate(ctx, request("tmpl-on-pause", onPause))
+	if err != nil {
+		t.Fatalf("CreateActorTemplate with on_pause: %v", err)
+	}
+	if got := created.GetSnapshotConfig().ProtoReflect().GetUnknown(); !bytes.Equal(got, onPause) {
+		t.Errorf("created snapshot_config unknown fields = %x, want %x", got, onPause)
+	}
+	got, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-on-pause"}})
+	if err != nil {
+		t.Fatalf("GetActorTemplate: %v", err)
+	}
+	if got := got.GetSnapshotConfig().ProtoReflect().GetUnknown(); !bytes.Equal(got, onPause) {
+		t.Errorf("stored snapshot_config unknown fields = %x, want %x", got, onPause)
+	}
+	if got, want := created.GetSnapshotConfig().GetStorageLocation(), "gs://my-bucket/snapshots"; got != want {
+		t.Errorf("storage_location = %q, want %q", got, want)
+	}
+
+	other := protowire.AppendVarint(protowire.AppendTag(nil, 9999, protowire.VarintType), 1)
+	_, err = tc.client.CreateActorTemplate(ctx, request("tmpl-other-unknown", other))
+	assertGrpcError(t, err, codes.InvalidArgument, "actor_template.snapshot_config: Invalid value: unknown field with protobuf tag 9999")
 }
 
 func TestListActorTemplates_InvalidPageToken(t *testing.T) {
