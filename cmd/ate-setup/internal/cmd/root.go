@@ -164,9 +164,7 @@ func recordRun(cmd *cobra.Command, runErr error) {
 	// failed before it had an environment to ask.
 	var version string
 	if env != nil {
-		if v, _, err := env.SubstrateVersion(); err == nil {
-			version = v
-		}
+		version = env.SubstrateVersion()
 	}
 
 	var path string

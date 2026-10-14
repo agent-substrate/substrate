@@ -36,8 +36,9 @@ var (
 	SnapshotScratchDir = filepath.Join(nodepath.BasePath, "snapshot-scratch")
 )
 
-func RunSCBinaryPath(sha256 string) string {
-	return filepath.Join(nodepath.StaticFilesDir, "runsc-"+sha256)
+// AssetPath returns the cache path for a single-file sandbox asset
+func AssetPath(sha256 string) string {
+	return filepath.Join(nodepath.StaticFilesDir, "asset-"+sha256)
 }
 
 // GVisorReleaseDir is the directory a gVisor release tarball (gvisor.tar.bz2,

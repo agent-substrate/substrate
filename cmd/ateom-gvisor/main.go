@@ -63,6 +63,14 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
+func flagsConfigPath() string {
+	path := "internal_flags.json"
+	if koDataPath := os.Getenv("KO_DATA_PATH"); koDataPath != "" {
+		path = filepath.Join(koDataPath, path)
+	}
+	return path
+}
+
 var (
 	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
 
@@ -183,15 +191,11 @@ func do(ctx context.Context) error {
 	if err := resources.ValidateWorkerPodUID(*podUID); err != nil {
 		return fmt.Errorf("in resources.ValidateWorkerPodUID: %w", err)
 	}
+	// atelet owns the directory and the sandbox versions file in it; only the
+	// socket below is this process's. Both outlive a container restart.
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
 	}
-	// Clean up the ateom directory during graceful shutdown (#1677).
-	defer func() {
-		if err := os.RemoveAll(ateomDir); err != nil {
-			slog.ErrorContext(ctx, "Failed to remove the ateom directory on shutdown", slog.Any("err", err))
-		}
-	}()
 
 	// Prepare the pod cgroup so runsc can create per-actor-container leaves under
 	// it with real accounting.
@@ -212,13 +216,23 @@ func do(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("while opening unix socket: %w", err)
 	}
+	defer func() {
+		if err := os.Remove(sockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.ErrorContext(ctx, "Failed to remove the ateom socket on shutdown", slog.Any("err", err))
+		}
+	}()
+
+	flags, err := newFlagStore(ctx, flagsConfigPath())
+	if err != nil {
+		return err
+	}
 
 	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
 	tunnel, err := ateomtunnel.Start(ctx, *tunnelConfig, ateomnet.ActorHTTPUpstream)
 	if err != nil {
 		return err
 	}
-	ateomService := NewService(tunnel, actorLogger, *maxActors)
+	ateomService := NewService(tunnel, actorLogger, *maxActors, flags)
 	// The controller sets both from the downward API.
 	pool := ateomstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
@@ -331,12 +345,15 @@ type AteomService struct {
 	// stats handlers' lock-free read, the way containerStatsReader does for the
 	// micro-VM runtime. nil means the real read.
 	readSandboxCgroup func(dir string) (cgroupstats.Sample, error)
+
+	// flags holds the watched JSON flag configuration.
+	flags *flagStore
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(tunnel *ateomtunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int) *AteomService {
+func NewService(tunnel *ateomtunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore) *AteomService {
 	return &AteomService{
 		locks:       actorlock.New(),
 		inFlight:    actorlock.NewInFlight(),
@@ -345,6 +362,7 @@ func NewService(tunnel *ateomtunnel.Tunnel, actorLogger *actorlog.ActorLogger, m
 		tunnel:      tunnel,
 		actorLogger: actorLogger,
 		cgroupRoot:  defaultCgroupRoot,
+		flags:       flags,
 	}
 }
 
@@ -612,6 +630,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
+		flags:          s.flags,
 	}
 	var containersToDelete []string
 	defer func() {
@@ -644,10 +663,16 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
 	containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-	if err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, nil); err != nil {
+	// Attribute runsc CLI output and the pause container's stdio to the actor.
+	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
+	if err != nil {
+		return nil, fmt.Errorf("while starting pause log pipe: %w", err)
+	}
+	defer pw.Close()
+	if err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, nil); err != nil {
 		return nil, fmt.Errorf("while creating pause container: %w", err)
 	}
-	if err := rcmd.cmdStart(ctx, os.Stdout, ocispec.PauseContainer); err != nil {
+	if err := rcmd.cmdStart(ctx, pw, ocispec.PauseContainer); err != nil {
 		return nil, fmt.Errorf("while starting pause container: %w", err)
 	}
 
@@ -744,6 +769,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		path:      req.GetRunscPath(),
 		actorUID:  req.GetActorUid(),
 		actorDirs: req.GetActorDirs(),
+		flags:     s.flags,
 	}
 
 	checkpointPath := req.GetActorDirs().GetCheckpointDir()
@@ -961,6 +987,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
+		flags:          s.flags,
 	}
 	var containersToDelete []string
 	defer func() {
@@ -996,16 +1023,22 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
 
+	// Attribute runsc CLI output and the pause container's stdio to the actor.
+	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
+	if err != nil {
+		return nil, fmt.Errorf("while starting pause log pipe: %w", err)
+	}
+	defer pw.Close()
 	switch fidelity {
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		// Create and start pause container (cold boot with durable-dir volumes restored from fs/)
 		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-		err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, restoreArgs)
+		err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, restoreArgs)
 		timing.pauseCreate = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
-		err = rcmd.cmdStart(ctx, os.Stdout, ocispec.PauseContainer)
+		err = rcmd.cmdStart(ctx, pw, ocispec.PauseContainer)
 		timing.pauseRestore = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while starting pause container: %w", err)
@@ -1013,18 +1046,16 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Create and restore pause container (restores both process/rootfs and fs/ durable-dir volumes)
 		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-		err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, restoreArgs)
+		err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, restoreArgs)
 		timing.pauseCreate = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
-		err = rcmd.cmdRestore(ctx, os.Stdout, ocispec.PauseContainer, checkpointDir)
+		err = rcmd.cmdRestore(ctx, pw, ocispec.PauseContainer, checkpointDir)
 		timing.pauseRestore = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while restoring pause container: %w", err)
 		}
-	default:
-		return nil, fmt.Errorf("unexpected snapshot fidelity: %v", fidelity)
 	}
 
 	// Create and restore each application container, each with its own log pipe so
@@ -1061,8 +1092,6 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			if err != nil {
 				return nil, fmt.Errorf("while restoring %q application container: %w", ac.GetName(), err)
 			}
-		default:
-			return nil, fmt.Errorf("unexpected snapshot fidelity: %v", fidelity)
 		}
 	}
 
@@ -1124,6 +1153,7 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources
 		path:      runscPath,
 		actorUID:  actorUID,
 		actorDirs: actorDirs,
+		flags:     s.flags,
 	}
 
 	// Detached from the caller: a deadline mid-`runsc delete` would leave the

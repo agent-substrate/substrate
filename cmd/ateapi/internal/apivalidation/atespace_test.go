@@ -136,20 +136,24 @@ func TestValidateListAtespacesRequest(t *testing.T) {
 		nil,
 	}, {
 		"valid, positive page_size",
-		validReq(func(r *ateapipb.ListAtespacesRequest) { r.PageSize = 10 }),
+		validReq(func(r *ateapipb.ListAtespacesRequest) { r.Options = &ateapipb.ListOptions{PageSize: 10} }),
 		nil,
 	}, {
 		"negative page_size",
-		validReq(func(r *ateapipb.ListAtespacesRequest) { r.PageSize = -1 }),
-		field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "").WithOrigin("minimum")},
+		validReq(func(r *ateapipb.ListAtespacesRequest) { r.Options = &ateapipb.ListOptions{PageSize: -1} }),
+		field.ErrorList{field.Invalid(field.NewPath("options", "page_size"), int32(-1), "").WithOrigin("minimum")},
 	}, {
 		"valid page_token",
-		validReq(func(r *ateapipb.ListAtespacesRequest) { r.PageToken = strings.Repeat("x", 256) }),
+		validReq(func(r *ateapipb.ListAtespacesRequest) {
+			r.Options = &ateapipb.ListOptions{PageToken: strings.Repeat("x", 256)}
+		}),
 		nil,
 	}, {
 		"too-large page_token",
-		validReq(func(r *ateapipb.ListAtespacesRequest) { r.PageToken = strings.Repeat("x", 257) }),
-		field.ErrorList{field.TooLongCharacters(field.NewPath("page_token"), "", 256).WithOrigin("maxLength")},
+		validReq(func(r *ateapipb.ListAtespacesRequest) {
+			r.Options = &ateapipb.ListOptions{PageToken: strings.Repeat("x", 257)}
+		}),
+		field.ErrorList{field.TooLongCharacters(field.NewPath("options", "page_token"), "", 256).WithOrigin("maxLength")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

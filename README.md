@@ -142,15 +142,6 @@ curl -X POST \
    -i http://localhost:8000/
 ```
 
-Worker capacity is versioned: the dataplane (the atelet DaemonSet and the
-worker pods) schedules only on nodes that carry the
-`ate.dev/substrate-version` label, and the install stamps it on every node
-that exists when it runs. A node added later hosts no workers until you label
-it with the installed version
-(`kubectl label node <node> ate.dev/substrate-version=<build version>`).
-`kubectl get ds -n ate-system -l app=atelet -L ate.dev/substrate-version`
-prints the installed version, off the atelet DaemonSet the install created.
-
 ### GKE Quickstart (Development)
 
 1. Create and configure your environment file:
@@ -193,11 +184,6 @@ prints the installed version, off the atelet DaemonSet the install created.
    starts with an empty, default-deny one, so it resolves no Secrets until you
    grant each atespace the namespaces it may read; see
    [Enable it](docs/egress-credential-injection.md#enable-it).
-
-   Nodes that GKE adds later (autoscaling, auto-repair, node upgrades) are
-   born with the node pool's labels, so the pool needs
-   `ate.dev/substrate-version` too; see
-   [Node version labels](tools/setup-gcp/README.md).
 
 5. You can then deploy the sample applications. See [demos/counter/README.md](demos/counter/README.md) or [demos/sandbox/README.md](demos/sandbox/README.md) for detailed walkthroughs.
    ```bash
@@ -264,7 +250,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Egress Traffic](docs/egress-traffic.md): Which protocols an Actor may reach the outside world with and which are blocked.
 * [Enabling man-in-the-middle (MITM) interception for Actor Egress policy](docs/egress-trust-bundle.md): Egress policies such as header injection depend on MITM interception of Actor traffic. This guide explains how an Actor should be configured to enable interception.
 * [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.
-* [Rolling Upgrade Runbook](docs/upgrade.md): Upgrade a running substrate node by node without losing actor state.
+* [Upgrade Runbook](docs/upgrade.md): Upgrade a running install to a newer supported release, and roll back if needed.
 * [Security Guide](docs/security.md): Security overview, security principles, and threat modeling.
 * [Roadmap](docs/roadmap.md): Current limitations and what is planned next.
 * [Benchmarking Guide](benchmarking/README.md): Locust-based load tests, monitoring stack, and the orchestrated benchmark harness.

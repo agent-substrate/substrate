@@ -330,7 +330,9 @@ func TestPlugin_DetachVolume(t *testing.T) {
 
 	ctx := context.Background()
 	plugin.InitControllerCapabilities(ctx)
+	var unpublishCalled int
 	driver.controllerUnpublishVolumeFunc = func(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+		unpublishCalled++
 		if req.GetNodeId() != "node-1" {
 			t.Errorf("ControllerUnpublishVolume received NodeId %q, want %q", req.GetNodeId(), "node-1")
 		}
@@ -343,9 +345,13 @@ func TestPlugin_DetachVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DetachVolume failed: %v", err)
 	}
+	if unpublishCalled != 1 {
+		t.Errorf("expected 1 call to ControllerUnpublishVolume, got %d", unpublishCalled)
+	}
 
 	// Test Unimplemented warning bypass
 	driver.controllerUnpublishVolumeFunc = func(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+		unpublishCalled++
 		if req.GetNodeId() != "node-1" {
 			t.Errorf("ControllerUnpublishVolume received NodeId %q, want %q", req.GetNodeId(), "node-1")
 		}
@@ -354,6 +360,9 @@ func TestPlugin_DetachVolume(t *testing.T) {
 	err = plugin.DetachVolume(ctx, "test-vol", "node-1")
 	if err != nil {
 		t.Errorf("DetachVolume should have ignored Unimplemented error, got: %v", err)
+	}
+	if unpublishCalled != 2 {
+		t.Errorf("expected 2 calls to ControllerUnpublishVolume, got %d", unpublishCalled)
 	}
 }
 

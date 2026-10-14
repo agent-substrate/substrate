@@ -72,6 +72,9 @@ deploy() {
   # benchmarking/monitoring.yaml is otherwise optional.
   echo "Ensuring benchmarking namespace exists..."
   kubectl create namespace benchmarking --dry-run=client -o yaml | kubectl apply -f -
+  # The boomer workers call the Substrate API, which ate-system's
+  # NetworkPolicies admit only from namespaces carrying this label.
+  kubectl label namespace benchmarking ate.dev/api-access=true --overwrite
   if [[ -n "${AGENTSESSION_SCRIPT}" ]]; then
     echo "Validating agent-session script ${AGENTSESSION_SCRIPT}..."
     (cd "${SCRIPT_DIR}/../.." && go run ./cmd/benchmarking/boomer-worker --check-agentsession-script "${AGENTSESSION_SCRIPT}")

@@ -218,11 +218,6 @@ var defaultRPCPermissions = map[string]rpcRule{
 		return onActor(RelationCanDelete, r.GetActor(), field.NewPath("actor"))
 	})),
 
-	// TODO: grant the system components that call the RPCs below
-	// (atenet-router: ResumeActor; atenet-egress: GetActor,
-	// GetActorEgressPolicy; ate-controller: worker RPCs) through system roles
-	// in model.fga.
-
 	// Actor lifecycle.
 	ateapipb.Control_PauseActor_FullMethodName: rule(checksOf(func(r *ateapipb.PauseActorRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanPause, r.GetActor(), field.NewPath("actor"))
@@ -269,6 +264,12 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 	ateapipb.Control_DrainWorker_FullMethodName: rule(checksOf(func(r *ateapipb.DrainWorkerRequest) ([]check, field.ErrorList) {
 		return onWorker(RelationCanDrain, r.GetWorker().GetName(), field.NewPath("worker", "name"))
+	})),
+	ateapipb.Control_MarkWorkerAvailable_FullMethodName: rule(checksOf(func(r *ateapipb.MarkWorkerAvailableRequest) ([]check, field.ErrorList) {
+		return onWorker(RelationCanUpdate, r.GetWorker().GetName(), field.NewPath("worker", "name"))
+	})),
+	ateapipb.Control_MarkWorkerUnavailable_FullMethodName: rule(checksOf(func(r *ateapipb.MarkWorkerUnavailableRequest) ([]check, field.ErrorList) {
+		return onWorker(RelationCanUpdate, r.GetWorker().GetName(), field.NewPath("worker", "name"))
 	})),
 	ateapipb.Control_ListWorkerActorAssignments_FullMethodName: rule(checksOf(func(r *ateapipb.ListWorkerActorAssignmentsRequest) ([]check, field.ErrorList) {
 		return onWorker(RelationCanListActorAssignments, r.GetWorker().GetName(), field.NewPath("worker", "name"))

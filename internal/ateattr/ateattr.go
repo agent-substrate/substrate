@@ -27,7 +27,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -106,8 +105,6 @@ const (
 	ActorStateRunning    = "running"
 	ActorStateSuspending = "suspending"
 	ActorStateSuspended  = "suspended"
-	ActorStatePausing    = "pausing"
-	ActorStatePaused     = "paused"
 	ActorStateCrashed    = "crashed"
 	ActorStateDeleting   = "deleting"
 	ActorStateReverting  = "reverting"
@@ -127,10 +124,6 @@ func ActorStateValue(state ateapipb.ActorState) string {
 		return ActorStateSuspending
 	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
 		return ActorStateSuspended
-	case ateapipb.ActorState_ACTOR_STATE_PAUSING:
-		return ActorStatePausing
-	case ateapipb.ActorState_ACTOR_STATE_PAUSED:
-		return ActorStatePaused
 	case ateapipb.ActorState_ACTOR_STATE_CRASHED:
 		return ActorStateCrashed
 	case ateapipb.ActorState_ACTOR_STATE_DELETING:
@@ -379,12 +372,10 @@ const SandboxClassUnknown = "unknown"
 // Empty reports as unknown rather than the gvisor default, so a manifest
 // problem stays visible.
 func NormalizeSandboxClass(class string) string {
-	switch atev1alpha1.SandboxClass(class) {
-	case atev1alpha1.SandboxClassGvisor, atev1alpha1.SandboxClassMicroVM:
+	if resources.IsSandboxClass(class) {
 		return class
-	default:
-		return SandboxClassUnknown
 	}
+	return SandboxClassUnknown
 }
 
 // SandboxClassAttribute sets ate.sandbox.class. No source of the class is

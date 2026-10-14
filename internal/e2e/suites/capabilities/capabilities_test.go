@@ -138,7 +138,7 @@ func deployFixture(t *testing.T, ctx context.Context, clients *e2e.Clients, buck
 	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
 		Template: "internal/e2e/fixtures/capabilities/capabilities-templates.yaml.tmpl",
-	}, bucket, "capabilities", false)
+	}, bucket, "capabilities", nil)
 	return atespace
 }
 

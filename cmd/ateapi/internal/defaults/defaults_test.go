@@ -64,10 +64,10 @@ func TestApply(t *testing.T) {
 	}, {
 		name: "wakeup probe gets timeout and path",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 8080}}},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 8080}}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{
 				HttpGet:        &ateapipb.HttpGetAction{Port: 8080, Path: "/"},
 				TimeoutSeconds: 30,
 			}},
@@ -75,21 +75,21 @@ func TestApply(t *testing.T) {
 	}, {
 		name: "wakeup probe without http_get gets only the timeout",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{}},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{TimeoutSeconds: 30}},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{TimeoutSeconds: 30}},
 		}},
 	}, {
 		name: "set wakeup probe fields are kept",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{
 				HttpGet:        &ateapipb.HttpGetAction{Port: 8080, Path: "/healthz"},
 				TimeoutSeconds: 5,
 			}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{
 				HttpGet:        &ateapipb.HttpGetAction{Port: 8080, Path: "/healthz"},
 				TimeoutSeconds: 5,
 			}},
@@ -97,14 +97,14 @@ func TestApply(t *testing.T) {
 	}, {
 		name: "every container is defaulted",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "a", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 1}}},
+			{Name: "a", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 1}}},
 			{Name: "b"},
-			{Name: "c", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 3}}},
+			{Name: "c", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 3}}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "a", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 1, Path: "/"}, TimeoutSeconds: 30}},
+			{Name: "a", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 1, Path: "/"}, TimeoutSeconds: 30}},
 			{Name: "b"},
-			{Name: "c", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 3, Path: "/"}, TimeoutSeconds: 30}},
+			{Name: "c", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 3, Path: "/"}, TimeoutSeconds: 30}},
 		}},
 	}, {
 		name: "actor has no defaults",
