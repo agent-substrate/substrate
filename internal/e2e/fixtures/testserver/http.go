@@ -15,26 +15,46 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 )
+
+// echoedHeaders is the /echoheaders response body.
+type echoedHeaders struct {
+	// Headers holds the request headers the origin received, keyed by
+	// canonical name, with repeated values joined by ",".
+	Headers map[string]string `json:"headers"`
+}
 
 // newHTTPHandler is the HTTP/1.1 origin an Actor's egress lands on. It exists so
 // a test can assert the destination port is recovered from SO_ORIGINAL_DST
 // rather than defaulted from the URL scheme: the actor fetches its /healthz on a
 // non-standard port, and the gateway's access log is expected to carry that
 // port. The optional body makes the same fixture useful for assertions about a
-// response inside the egress tunnel.
+// response inside the egress tunnel. /echoheaders returns the request headers as
+// they arrived, which is how a suite sees what the gateway put on the wire.
 func newHTTPHandler(body string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if body != "" {
 			_, _ = io.WriteString(w, body)
+		}
+	})
+	mux.HandleFunc("/echoheaders", func(w http.ResponseWriter, r *http.Request) {
+		echoed := echoedHeaders{Headers: make(map[string]string, len(r.Header))}
+		for name, values := range r.Header {
+			echoed.Headers[name] = strings.Join(values, ",")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(echoed); err != nil {
+			log.Printf("testserver http: encoding /echoheaders response: %v", err)
 		}
 	})
 	return mux
@@ -49,7 +69,7 @@ func newHTTPCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "http",
-		Short: "Serve an HTTP/1.1 origin answering /healthz.",
+		Short: "Serve an HTTP/1.1 origin answering /healthz and /echoheaders.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			server := &http.Server{
@@ -62,9 +82,9 @@ func newHTTPCmd() *cobra.Command {
 			return serveHTTP(server, certFile, keyFile)
 		},
 	}
-	cmd.Flags().StringVar(&listenAddress, "listen", ":8080", "Address the HTTP origin listens on.")
-	cmd.Flags().StringVar(&certFile, "tls-cert", "", "PEM certificate file; enables HTTPS when paired with --tls-key.")
-	cmd.Flags().StringVar(&keyFile, "tls-key", "", "PEM private key file; enables HTTPS when paired with --tls-cert.")
+	cmd.Flags().StringVar(&listenAddress, "listen", ":8080", "Address the origin serves cleartext HTTP on.")
+	cmd.Flags().StringVar(&certFile, "tls-cert", "", "PEM certificate file; with --tls-key, also serves HTTPS on :8443.")
+	cmd.Flags().StringVar(&keyFile, "tls-key", "", "PEM private key file; with --tls-cert, also serves HTTPS on :8443.")
 	cmd.Flags().StringVar(&body, "body", "", "Response body for /healthz.")
 	return cmd
 }

@@ -64,11 +64,8 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.RequireCanonicalNamespace("deploy ate-system"); err != nil {
 		return err
 	}
-	// Fail fast on an unusable build version or credential provider selection
-	// before touching the cluster.
-	if _, _, err := e.SubstrateVersion(); err != nil {
-		return err
-	}
+	// Fail fast on an unusable credential provider selection before touching
+	// the cluster.
 	provider, err := e.Cfg.CredentialProvider()
 	if err != nil {
 		return err
@@ -82,12 +79,6 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 
 	// The namespace has to exist before RBAC or CRDs are applied.
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
-		return err
-	}
-
-	// Before the bundle: the atelet DaemonSet applied below and the demo
-	// WorkerPools' version-pinned pods schedule only to version-labeled nodes.
-	if err := e.LabelNodesSubstrateVersion(ctx); err != nil {
 		return err
 	}
 
@@ -139,13 +130,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err != nil {
 		return err
 	}
-	// The atelet DaemonSet in the bundle is version-keyed; fill its
-	// placeholders after the render (kustomize and ko pass them through).
-	manifests, err = e.SubstituteVersion(manifests)
-	if err != nil {
-		return err
-	}
-	if err := e.Kube.ApplyBytes(ctx, manifests); err != nil {
+	if err := e.applyWithAPIServerEnvHash(ctx, manifests); err != nil {
 		return err
 	}
 
@@ -172,10 +157,6 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
-	ateletName, err := e.AteletDaemonSetName()
-	if err != nil {
-		return err
-	}
 	log.Step("Waiting for ATE system components to be ready...")
 	type rollout struct{ kind, name string }
 	var waits []rollout
@@ -184,7 +165,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		rollout{kube.KindDeployment, "ate-controller"},
 		rollout{kube.KindDeployment, "atenet-router"},
 		rollout{kube.KindDeployment, "atenet-egress"},
-		rollout{kube.KindDaemonSet, ateletName},
+		rollout{kube.KindDaemonSet, "atelet"},
 	)
 	if provider.Kubernetes() {
 		waits = append(waits, rollout{kube.KindDeployment, k8sCredentialProviderDeployment})
@@ -311,7 +292,11 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := e.renderResolveApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
+	manifest, err := e.renderResolve(ctx, e.Cfg.Manifest("ate-api-server.yaml"))
+	if err != nil {
+		return err
+	}
+	if err := e.applyWithAPIServerEnvHash(ctx, manifest); err != nil {
 		return err
 	}
 	// After the manifest, which resets the pod template to the sidecar-free base.
@@ -350,9 +335,6 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
 		return err
 	}
-	if err := e.LabelNodesSubstrateVersion(ctx); err != nil {
-		return err
-	}
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
@@ -371,18 +353,10 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	manifest, err = e.SubstituteVersion(manifest)
-	if err != nil {
-		return err
-	}
 	if err := e.Kube.ApplyBytes(ctx, manifest); err != nil {
 		return err
 	}
-	ateletName, err := e.AteletDaemonSetName()
-	if err != nil {
-		return err
-	}
-	return e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, e.Namespace(), ateletName, e.Cfg.RolloutTimeout)
+	return e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, e.Namespace(), "atelet", e.Cfg.RolloutTimeout)
 }
 
 // DeployAtenet redeploys the atenet dataplane: router and egress.

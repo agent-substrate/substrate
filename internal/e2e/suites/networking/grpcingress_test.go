@@ -109,8 +109,9 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		// The counter cannot speak h2c. Envoy returns HTTP 502; agentgateway
-		// reports the upstream failure with gRPC's Unavailable status.
+		// The counter cannot speak h2c. Through atunnel's HTTPS listener Envoy
+		// returns HTTP 502; through a CONNECT tunnel the failure is gRPC's
+		// Unavailable status.
 		grpcStatus := resp.Header.Get("Grpc-Status")
 		if grpcStatus == "" {
 			grpcStatus = resp.Trailer.Get("Grpc-Status")
@@ -265,7 +266,7 @@ func TestIngressGRPC(t *testing.T) {
 // shared one would be deleted out from under another.
 func deployGRPCEchoTemplate(t *testing.T, ctx context.Context, bucket string) e2e.SubstrateFixture {
 	t.Helper()
-	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, e2e.GetClients(), grpcEchoFixtureManifests, bucket, "networking", false)
+	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, e2e.GetClients(), grpcEchoFixtureManifests, bucket, "networking", nil)
 	return e2e.SubstrateFixture{
 		Atespace:   atespace,
 		Name:       "grpcecho",

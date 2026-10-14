@@ -269,13 +269,13 @@ message ImageVolumeMount {
 // WakeupProbe describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
 message WakeupProbe {
-  HTTPGetAction http_get = 1;
+  HttpGetAction http_get = 1;
   // How long to keep polling before giving up and failing the actor start.
   int32 timeout_seconds = 2;
 }
 
-// HTTPGetAction performs an HTTP GET against the container.
-message HTTPGetAction {
+// HttpGetAction performs an HTTP GET against the container.
+message HttpGetAction {
   // Path to access on the HTTP server.
   string path = 1;
   // TCP port to connect to (1..65535).

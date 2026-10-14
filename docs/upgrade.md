@@ -63,6 +63,18 @@ Every item has to hold. Nothing in the roll stops you if one does not.
   kubectl get ds -n ate-system -l app=atelet
   ```
 
+- [ ] If you are upgrading across the release that added the ate-system
+  NetworkPolicies, every namespace whose pods call the Substrate API
+  directly (not through `kubectl ate`) is labeled
+  `ate.dev/api-access=true`. The new manifests deny the API to every
+  other namespace as soon as they are applied. Worker pods are never
+  admitted, labeled or not. See
+  [`ate-system-networkpolicies.yaml`](../manifests/ate-install/ate-system-networkpolicies.yaml).
+
+  ```bash
+  kubectl label namespace <ns> ate.dev/api-access=true
+  ```
+
 - [ ] Every serving pool is pinned to `$OLD_VERSION`. An unpinned pool
   cannot take part in the roll.
 

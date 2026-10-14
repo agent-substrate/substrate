@@ -21,8 +21,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
@@ -146,6 +148,114 @@ func TestCreateAPIServerEnvVarsRejectsCustomBundledIdentity(t *testing.T) {
 	)}
 	if err := e.CreateAPIServerEnvVars(t.Context()); err == nil || !strings.Contains(err.Error(), "bundled PostgreSQL requires roles") {
 		t.Fatalf("CreateAPIServerEnvVars() error = %v, want fixed-identity error", err)
+	}
+}
+
+// A run without a connection string must not point an install that uses an
+// external PostgreSQL at the bundled one: records hold no connection strings,
+// so a forgotten export is the common way to get here.
+func TestCreateAPIServerEnvVarsKeepsExternalPostgres(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		cloudSQL config.CloudSQLConfig
+		recorded string
+		wantErr  bool
+	}{
+		{name: "fresh install", recorded: ""},
+		{name: "bundled install", recorded: bundledPostgresDSN(postgressetup.ReadWriteUser)},
+		{name: "external install", recorded: "postgres://runtime@database/atepg", wantErr: true},
+		{
+			// An explicitly empty instance is how an operator leaves Cloud SQL.
+			name:     "leaving Cloud SQL",
+			cloudSQL: config.CloudSQLConfig{InstanceSet: true},
+			recorded: "user=svc@p.iam host=127.0.0.1 port=5432 dbname=atepg sslmode=disable",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Config{
+				PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole,
+				CloudSQL: tc.cloudSQL,
+			}
+			e := &Env{Cfg: &cfg, Kube: fakeKube(t,
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
+				&corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem},
+					Data:       map[string][]byte{"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte(tc.recorded)},
+				},
+			)}
+			err := e.CreateAPIServerEnvVars(t.Context())
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING is not set") {
+				t.Fatalf("CreateAPIServerEnvVars() error = %v, want the missing connection string named", err)
+			}
+			secret, err := e.Kube.GetSecret(t.Context(), NamespaceAteSystem, SecretAPIEnvVars)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(secret.Data["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"]); got != tc.recorded || len(secret.StringData) != 0 {
+				t.Fatalf("Secret rewritten: Data %q, StringData %v", got, secret.StringData)
+			}
+		})
+	}
+}
+
+// The owner login is no more recorded than the read-write one, so a run that
+// gives only the read-write connection string must not replace a separate owner.
+func TestCreateAPIServerEnvVarsKeepsOwnerLogin(t *testing.T) {
+	const readWrite = "postgres://runtime@database/atepg"
+	for _, tc := range []struct {
+		name          string
+		owner         string
+		recordedRW    string
+		recordedOwner string
+		wantErr       bool
+	}{
+		{name: "separate owner not given", recordedRW: readWrite, recordedOwner: "postgres://owner@database/atepg", wantErr: true},
+		{name: "separate owner given", owner: "postgres://owner@database/atepg", recordedRW: readWrite, recordedOwner: "postgres://owner@database/atepg"},
+		{name: "one login", recordedRW: readWrite, recordedOwner: readWrite},
+		{
+			name:          "moving off the bundled database",
+			recordedRW:    bundledPostgresDSN(postgressetup.ReadWriteUser),
+			recordedOwner: bundledPostgresDSN(postgressetup.OwnerUser),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Config{PostgresReadWriteConnectionString: readWrite, PostgresOwnerConnectionString: tc.owner}
+			e := &Env{Cfg: &cfg, Kube: fakeKube(t,
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
+				&corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem},
+					Data: map[string][]byte{
+						"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte(tc.recordedRW),
+						"ATE_API_POSTGRES_OWNER_CONNECTION_STRING":      []byte(tc.recordedOwner),
+					},
+				},
+			)}
+			err := e.CreateAPIServerEnvVars(t.Context())
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "ATE_API_POSTGRES_OWNER_CONNECTION_STRING is not set") {
+				t.Fatalf("CreateAPIServerEnvVars() error = %v, want the missing owner connection string named", err)
+			}
+			secret, err := e.Kube.GetSecret(t.Context(), NamespaceAteSystem, SecretAPIEnvVars)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(secret.Data["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"]); got != tc.recordedOwner || len(secret.StringData) != 0 {
+				t.Fatalf("Secret rewritten: owner %q, StringData %v", got, secret.StringData)
+			}
+		})
 	}
 }
 
@@ -411,4 +521,92 @@ func TestAnnotateAPIServerEnvHash(t *testing.T) {
 			t.Errorf("%s = %q, want %q", envHashAnnotation, got, want)
 		}
 	})
+}
+
+// CreateAPIServerEnvVars only writes the environment. The deploy that runs
+// it then applies the Deployment with the new digest, so ate-api-server rolls
+// once, onto the new image. Only create api-server-env-vars, which applies no
+// Deployment, patches the running one.
+func TestOnlyAStandaloneEnvUpdateRollsTheAPIServer(t *testing.T) {
+	newEnv := func(t *testing.T) *Env {
+		return &Env{Cfg: &config.Config{PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg"},
+			Kube: fakeKube(t,
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}},
+				apiServerDeployment(SecretAPIEnvVars),
+			)}
+	}
+	stamped := func(t *testing.T, e *Env) bool {
+		dep, err := e.Kube.GetDeployment(t.Context(), NamespaceAteSystem, "ate-api-server")
+		if err != nil {
+			t.Fatalf("GetDeployment() error = %v", err)
+		}
+		_, ok := dep.Spec.Template.Annotations[envHashAnnotation]
+		return ok
+	}
+
+	t.Run("deploy", func(t *testing.T) {
+		e := newEnv(t)
+		if err := e.CreateAPIServerEnvVars(t.Context()); err != nil {
+			t.Fatalf("CreateAPIServerEnvVars() error = %v", err)
+		}
+		if stamped(t, e) {
+			t.Errorf("CreateAPIServerEnvVars() patched the running Deployment; the deploy's apply should carry the digest")
+		}
+	})
+	t.Run("standalone", func(t *testing.T) {
+		e := newEnv(t)
+		if err := e.UpdateAPIServerEnvVars(t.Context()); err != nil {
+			t.Fatalf("UpdateAPIServerEnvVars() error = %v", err)
+		}
+		if !stamped(t, e) {
+			t.Errorf("UpdateAPIServerEnvVars() left the running Deployment unstamped, so it would not roll")
+		}
+	})
+}
+
+// The applied Deployment carries the digest, so one apply rolls a new image
+// and a new environment together, and a fresh install starts out stamped. A
+// manifest without it fails instead of applying unstamped.
+func TestStampAPIServerEnvHash(t *testing.T) {
+	objs, err := kube.DecodeManifestBytes([]byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-api-server
+  namespace: ate-system
+spec:
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-controller
+  namespace: ate-system
+spec:
+  template:
+    metadata: {}
+`))
+	if err != nil {
+		t.Fatalf("DecodeManifestBytes() error = %v", err)
+	}
+	if err := stampAPIServerEnvHash(objs, "digest"); err != nil {
+		t.Fatalf("stampAPIServerEnvHash() error = %v", err)
+	}
+	annotations := func(obj *unstructured.Unstructured) map[string]string {
+		a, _, _ := unstructured.NestedStringMap(obj.Object, "spec", "template", "metadata", "annotations")
+		return a
+	}
+	if got := annotations(objs[0]); got[envHashAnnotation] != "digest" || got["prometheus.io/scrape"] != "true" {
+		t.Errorf("ate-api-server pod template annotations = %v, want the digest added to the existing ones", got)
+	}
+	if got := annotations(objs[1]); got[envHashAnnotation] != "" {
+		t.Errorf("ate-controller pod template annotations = %v, want no digest", got)
+	}
+	if err := stampAPIServerEnvHash(objs[1:], "digest"); err == nil {
+		t.Errorf("stampAPIServerEnvHash() without ate-api-server error = nil, want an error")
+	}
 }

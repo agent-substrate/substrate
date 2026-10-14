@@ -12,8 +12,8 @@ Two joinable JSON log records feed it, each written by both layers:
 
 | record (`msg`) | emitter | keys |
 |---|---|---|
-| `Restore timing breakdown` | atelet and ateom-microvm | `ate.actor.restore.duration.<phase>` / `ateom.actor.restore.duration.<phase>` |
-| `Checkpoint timing breakdown` | atelet and ateom-microvm | `ate.actor.checkpoint.duration.<phase>` / `ateom.actor.checkpoint.duration.<phase>` |
+| `Restore timing breakdown` | atelet, ateom-microvm and ateom-gvisor | `ate.actor.restore.duration.<phase>` / `ateom.actor.restore.duration.<phase>` |
+| `Checkpoint timing breakdown` | atelet, ateom-microvm and ateom-gvisor | `ate.actor.checkpoint.duration.<phase>` / `ateom.actor.checkpoint.duration.<phase>` |
 
 Every record carries the full actor identity (`ate.actor.uid`, name,
 atespace, template) and the snapshot scope, which the histograms are barred
@@ -74,13 +74,18 @@ A failed atelet operation still writes its record, marked with `error.type`
 **Phase percentiles.** Per layer, operation, sandbox class, snapshot kind,
 scope and phase: count, p50, p90, p95 and max. A `golden` restore downloads
 the golden image and a `latest` one the actor's own, so they are separate
-rows, as are gVisor and micro-VM checkpoints. The atelet rows split a checkpoint between
-`sandbox_assets`, `ateom_checkpoint` and `persist`, and a restore between
-`volume_mount`, `manifest_fetch`, `sandbox_assets`, `download`, `oci_unpack`
-and `ateom_restore`. The ateom rows split the `ateom_*` phase further:
+rows, as are gVisor and micro-VM operations. The atelet rows split a
+checkpoint between `sandbox_assets`, `ateom_checkpoint` and `persist`, and a
+restore between `volume_mount`, `manifest_fetch`, `sandbox_assets`,
+`download`, `oci_unpack` and `ateom_restore`. The ateom rows split the
+`ateom_*` phase further with the runtime's own phases: for micro-VM
 `prep` / `pause` / `snapshot` / `durable_dir` / `rootfs_upper` / `teardown`
-for a checkpoint, `prep` / `bundles` / `upper_join` / `lowers` / `tap` /
-`vmm_launch` / `vm_restore` / `resume` / `wakeup_probe` for a restore.
+on a checkpoint and `prep` / … / `vm_restore` / `wakeup_probe` on a restore;
+for gVisor `pause` / `checkpoint` / `durable_dir` / `resume` / `teardown` and
+`prep` / `net_setup` / … / `pause_restore` / `app_restore` / `wakeup_probe` /
+`activate` (the full lists are in `cmd/ateom-*/phaselog.go`). The ateom
+records carry no sandbox class or kind of their own; a paired one takes both
+from its atelet record, so both layers split into the same rows.
 
 Concurrency matters when reading them: the atelet restore phases overlap
 (the download runs alongside the asset fetch and OCI unpack), the three
@@ -106,6 +111,27 @@ every time are systematic; different phases each time are environmental.
 
 The parser is deliberately tolerant: it scans any line for a JSON object and
 matches on `msg`, so raw `kubectl logs` dumps (even with prefixes) work.
+
+## Automated runs
+
+The locust runner (`benchmarking/locust/runner.py`) does the collection
+itself at the end of a headless run: `phase_breakdown.py` reads the atelet
+and worker pod logs through the Kubernetes API while the pods still exist
+(the orchestrator deletes them as soon as the runner exits) and appends the
+percentiles to the run's `stats.jsonl`, one row per layer / operation /
+class / kind / scope / phase (`metric: phase_<layer>_<op>_<class>_<kind>_<scope>_<phase>`;
+the measurements map carries those dimensions as fields next to `count`,
+`p50_ms`, `p90_ms`, `p95_ms`, `max_ms`, all as strings like the runner's
+other rows). A `phase_breakdown_summary` row is always written: pods read
+and failed, the record count, and the atelet record counts next to locust's
+`SuspendActor` / `ResumeActor` request and failure counts. More records than
+requests is normal (boomer suspends its actors on shutdown); fewer records
+than successful requests means records were lost, to pods that could not be
+read or to a node log rotated during the run, and the runner's log says
+which. `--no-phase-breakdown`
+skips it. The runner's service account needs `list` on `pods` and `get` on
+`pods/log` in `ate-system` and `benchmark-workloads`
+(`automation/manifests/runner-job.yaml.tmpl`).
 
 ## Tests
 
