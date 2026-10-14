@@ -27,6 +27,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -423,21 +424,32 @@ type location struct {
 	prefix string
 }
 
+// parseURI resolves an azblob://<container>/<prefix> snapshot URI. The blob
+// name prefix is the URI's decoded path, as for the in-tree object stores:
+// ate-api-server derives tag and owner prefixes from a snapshot URI by
+// parsing and re-encoding it, so only the decoded path names the same blobs
+// in every URI it sends for one snapshot.
 func (s *Server) parseURI(raw string) (location, error) {
 	const scheme = "azblob://"
 	if !strings.HasPrefix(raw, scheme) {
 		return location{}, fmt.Errorf("snapshot URI %q must use azblob://", raw)
 	}
-	rest := strings.TrimPrefix(raw, scheme)
-	container, objectPrefix, ok := strings.Cut(rest, "/")
-	if !ok || container == "" || objectPrefix == "" {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return location{}, fmt.Errorf("snapshot URI %q is invalid", raw)
+	}
+	container, objectPrefix := parsed.Host, strings.TrimPrefix(parsed.Path, "/")
+	if container == "" || objectPrefix == "" {
 		return location{}, fmt.Errorf("snapshot URI %q must name a container and non-empty prefix", raw)
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return location{}, fmt.Errorf("snapshot URI %q must not have userinfo, a query or a fragment", raw)
 	}
 	store, ok := s.stores[container]
 	if !ok {
 		return location{}, fmt.Errorf("snapshot URI container %q is not one of the plugin's configured containers %v", container, slices.Sorted(maps.Keys(s.stores)))
 	}
-	if strings.ContainsAny(objectPrefix, "?#") || !validKey(objectPrefix) {
+	if !validKey(objectPrefix) {
 		return location{}, fmt.Errorf("snapshot URI %q has an invalid prefix", raw)
 	}
 	if s.prefix != "" {
