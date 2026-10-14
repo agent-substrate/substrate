@@ -730,11 +730,13 @@ what to set before the run:
   timeout. Three misses of the liveness probe (`pg_isready`) restart
   postgres mid-run; three misses of the readiness probe (`nc`) drop the pod
   from the Service, and ateapi loses its connections without a restart. Give
-  both `timeoutSeconds: 5` and `failureThreshold: 6`, and requests that
-  match the load.
+  both `timeoutSeconds: 5` and `failureThreshold: 6`, and give the postgres
+  container CPU and memory requests sized for the run: on a saturated node
+  the request is its share of the CPU, and a starved postgres is what misses
+  the probes.
 * **Parking budget.** `--parked-request-budget` (default `5s`) has to cover a
   pause-and-resume cycle under load, tens of seconds, times the
-  oversubscription; a 2x run needs minutes. Watch
+  oversubscription (live actors per worker slot); at 2x that is minutes. Watch
   `atenet.router.parking.wait.duration{outcome="budget_exhausted"}`. See
   [docs/request-parking.md](../docs/request-parking.md).
 * **Synchronized bursts.** Clients that step in lockstep send one request per
@@ -749,9 +751,10 @@ what to set before the run:
   overflow!` in `dmesg`.
 * **Restores under full load.** A node's restore throughput falls as its
   sandboxes burn CPU, and a restore wave onto a saturated node makes the
-  wakeup probe time out: the actor is crashed. Pace admission (creates per
-  second) to the restore rate, and keep restores off nodes running at their
-  CPU limit.
+  wakeup probe time out: the actor is crashed. Substrate does not steer
+  restores away from busy nodes, so keep CPU headroom instead: fewer resident
+  sandboxes per node, and admission (creates per second) paced to the restore
+  rate.
 * **The kubelet.** Hundreds of sandboxes per node starve its heartbeat; after
   the 300 s toleration the taint manager evicts every pod on the node.
   Reserve CPU for it (`systemReserved`, `kubeReserved`) before going above a
