@@ -122,7 +122,10 @@ func writeSparsePart(dst io.Writer, src *os.File, size int64, ranges []extentRan
 			return err
 		}
 	}
-	zw := newSerialZstd(dst)
+	// Sized frames rather than one streaming frame per part, so the download can
+	// decode them in parallel (parZstdReader). One worker: the parts already run
+	// one per core.
+	zw := newParZstd(dst, 1)
 	if first {
 		if err := binary.Write(zw, binary.LittleEndian, size); err != nil {
 			zw.Close()
