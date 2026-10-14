@@ -28,13 +28,18 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
-// startFakeSandbox starts a short-lived process and records it as the sandbox.
+// startFakeSandbox starts a process that runs until killed and records it as
+// the sandbox.
 func startFakeSandbox(t *testing.T) (*exec.Cmd, *sandboxProcess) {
 	t.Helper()
-	cmd := exec.Command("sleep", "0.1")
+	cmd := exec.Command("sleep", "30")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
 	actorDirs := &ateompb.ActorDirs{RootDir: t.TempDir()}
 	if err := os.MkdirAll(pidFileDir(actorDirs), 0o700); err != nil {
 		t.Fatal(err)
@@ -53,7 +58,8 @@ func startFakeSandbox(t *testing.T) (*exec.Cmd, *sandboxProcess) {
 
 func TestSandboxWaitGoneAfterReap(t *testing.T) {
 	cmd, p := startFakeSandbox(t)
-	go func() { _ = cmd.Wait() }()
+	_ = cmd.Process.Kill()
+	go func() { _, _ = cmd.Process.Wait() }()
 	if err := p.waitGone(5 * time.Second); err != nil {
 		t.Fatalf("waitGone = %v, want nil", err)
 	}
@@ -61,9 +67,8 @@ func TestSandboxWaitGoneAfterReap(t *testing.T) {
 
 func TestSandboxWaitGoneWaitsForReap(t *testing.T) {
 	cmd, p := startFakeSandbox(t)
-	defer func() { _ = cmd.Wait() }()
-	// Left a zombie: exited, but nothing reaps it.
-	time.Sleep(200 * time.Millisecond)
+	// a zombie: killed, but nothing reaps it until cleanup
+	_ = cmd.Process.Kill()
 	err := p.waitGone(100 * time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "still present") {
 		t.Fatalf("waitGone = %v, want a still present error", err)
@@ -71,8 +76,7 @@ func TestSandboxWaitGoneWaitsForReap(t *testing.T) {
 }
 
 func TestSandboxWaitGoneTimesOutWhileRunning(t *testing.T) {
-	cmd, p := startFakeSandbox(t)
-	defer func() { _ = cmd.Wait() }()
+	_, p := startFakeSandbox(t)
 	err := p.waitGone(10 * time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "still present") {
 		t.Fatalf("waitGone = %v, want a still present error", err)
