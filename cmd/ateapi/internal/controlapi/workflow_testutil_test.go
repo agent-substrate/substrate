@@ -69,6 +69,17 @@ func newFinalizeWorkflow(persistence store.Interface) (*ActorWorkflow, *objectst
 	return &ActorWorkflow{store: persistence, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}, objects
 }
 
+// newWireFinalizeWorkflow is newWireCaptureWorkflow with an in-memory object
+// store behind the control object-store plugin, for the suspend tests that
+// check which external snapshots a finalize collects.
+func newWireFinalizeWorkflow(t *testing.T, persistence store.Interface) (*ActorWorkflow, *capturingAtelet, *objectstoretest.Fake) {
+	t.Helper()
+	w, atelet := newWireCaptureWorkflow(t, persistence)
+	objects := objectstoretest.New()
+	w.objectStorePlugin = objectstoreplugintest.ControlClient(objects)
+	return w, atelet, objects
+}
+
 // mustActorSnapshotURI builds the URI of a snapshot the actor took under
 // template's storage location, the way the suspend workflow does.
 func mustActorSnapshotURI(t *testing.T, template *ateapipb.ActorTemplate, actor *ateapipb.Actor, name string) resources.SnapshotURI {
@@ -160,9 +171,9 @@ func withPausedShape(node string) func(*ateapipb.Actor) {
 	}
 }
 
-// withPauseInProgress seeds the shape a pause has between MarkPausing and
-// FinalizePaused: a node-local snapshot at the latest generation that has no
-// locality yet. Pair it with ACTOR_STATE_SUSPENDING.
+// withPauseInProgress seeds the shape a pause has between marking the actor
+// SUSPENDING and finalizing it: a node-local snapshot at the latest generation
+// that has no locality yet. Pair it with ACTOR_STATE_SUSPENDING.
 func withPauseInProgress() func(*ateapipb.Actor) {
 	return func(a *ateapipb.Actor) {
 		a.Status.LastAssignedGeneration = 1
@@ -205,6 +216,111 @@ func assertPrerequisiteResult(t *testing.T, st ateapipb.ActorState, err error, w
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Errorf("state %v: status.Code = %v, want %v", st, got, codes.FailedPrecondition)
 	}
+}
+
+// suspendTestTemplateRef names the template seedSuspendTemplate stores.
+func suspendTestTemplateRef() *ateapipb.ObjectRef {
+	return &ateapipb.ObjectRef{Atespace: "ns", Name: "tmpl1"}
+}
+
+// seedSuspendTemplate stores the ActorTemplate the suspend and pause workflow
+// tests run their actors from, with the given snapshot config, and returns it
+// as stored.
+func seedSuspendTemplate(t *testing.T, ctx context.Context, st store.Interface, snapshotConfig *ateapipb.SnapshotConfig) *ateapipb.ActorTemplate {
+	t.Helper()
+	ref := suspendTestTemplateRef()
+	storetest.MustCreateAtespace(t, ctx, st, ref.GetAtespace())
+	created, err := st.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
+		SnapshotConfig: snapshotConfig,
+		SandboxConfig: &ateapipb.SandboxConfig{
+			SandboxClass: "gvisor",
+			ConfigName:   "gvisor",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActorTemplate: %v", err)
+	}
+	stored, err := st.GetActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(created))
+	if err != nil {
+		t.Fatalf("GetActorTemplate: %v", err)
+	}
+	return stored
+}
+
+// seedWireWorker stores the Worker wireTestAssignment names and places
+// assignment on it (none when nil), so a finalize step has a real assignment
+// to release.
+func seedWireWorker(t *testing.T, ctx context.Context, st store.Interface, assignment *ateapipb.ActorAssignment) {
+	t.Helper()
+	wa := wireTestAssignment()
+	if _, err := st.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: wa.GetWorker().GetName()},
+		WorkerNamespace: wa.GetWorkerNamespace(),
+		WorkerPool:      wa.GetWorkerPool(),
+		WorkerPod:       wa.GetWorkerPod(),
+		WorkerPodUid:    wa.GetWorkerPodUid(),
+		NodeName:        wa.GetNodeName(),
+		Status:          &ateapipb.WorkerStatus{},
+	}); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+	seedAssignment(t, st, wa.GetWorker().GetName(), assignment)
+}
+
+// assignmentOf is the worker assignment that places actor on a worker.
+func assignmentOf(actor *ateapipb.Actor) *ateapipb.ActorAssignment {
+	return &ateapipb.ActorAssignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()},
+		ActorUid: actor.GetMetadata().GetUid(),
+	}
+}
+
+// newMarkOnlyWorkflow builds an ActorWorkflow whose atelet dial always fails,
+// so a suspend or pause stops right after its mark step and leaves the actor
+// as that step committed it.
+func newMarkOnlyWorkflow(st store.Interface) *ActorWorkflow {
+	return &ActorWorkflow{store: st, dialer: newDanglingDialer()}
+}
+
+// assertStoppedAtDial verifies a workflow built by newMarkOnlyWorkflow failed
+// dialing atelet: it got past its mark step, and the failure is retryable.
+func assertStoppedAtDial(t *testing.T, err error) {
+	t.Helper()
+	if !errors.Is(err, ErrNoAteletOnNode) {
+		t.Fatalf("err = %v, want ErrNoAteletOnNode from the atelet dial", err)
+	}
+}
+
+// updateDuringCheckpoint makes atelet's Checkpoint mutate the stored actor
+// before it returns, standing in for a writer that lands between a workflow's
+// atelet call and its finalize step.
+func updateDuringCheckpoint(t *testing.T, atelet *capturingAtelet, st store.Interface, actorRef resources.ActorRef, mutate func(*ateapipb.ActorStatus)) {
+	atelet.onCheckpoint = func(ctx context.Context) error {
+		actor, err := st.GetActor(ctx, actorRef)
+		if err != nil {
+			t.Errorf("GetActor during Checkpoint: %v", err)
+			return err
+		}
+		if _, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+			mutate(toUpdate.Status)
+			return nil
+		}); err != nil {
+			t.Errorf("UpdateActor during Checkpoint: %v", err)
+			return err
+		}
+		return nil
+	}
+}
+
+// mustReadActor reads the stored actor.
+func mustReadActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) *ateapipb.Actor {
+	t.Helper()
+	actor, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor(%s): %v", actorRef, err)
+	}
+	return actor
 }
 
 // workerDeletedDuringReleaseStore runs the DeleteWorker workflow's release of
