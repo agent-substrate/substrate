@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -53,7 +52,7 @@ var getTagsCmd = &cobra.Command{
 		}
 
 		ctx := cmd.Context()
-		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		client, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -79,7 +78,7 @@ var getTagsCmd = &cobra.Command{
 		var tags []*ateapipb.Tag
 		pageToken := ""
 		for {
-			resp, err := client.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: getTagAtespaceFlag, PageSize: 1000, PageToken: pageToken})
+			resp, err := client.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: getTagAtespaceFlag, Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken}})
 			if err != nil {
 				return fmt.Errorf("failed to list tags: %w", err)
 			}
@@ -106,7 +105,7 @@ var createTagCmd = &cobra.Command{
 			return err
 		}
 		ctx := cmd.Context()
-		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		client, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -136,7 +135,7 @@ var updateTagCmd = &cobra.Command{
 			return err
 		}
 		ctx := cmd.Context()
-		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		client, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -157,7 +156,7 @@ var deleteTagCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		client, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}

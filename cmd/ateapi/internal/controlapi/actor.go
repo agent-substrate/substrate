@@ -219,7 +219,7 @@ func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsReq
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListActors(ctx, req.GetAtespace(), toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actors in db: %w", err))
 	}
@@ -298,6 +298,12 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				return apierror.FailedPrecondition(
 					"actor must be %s to change its actor template (got: %s)", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, state)
+			}
+			// A paused actor's latest snapshot is node-local and was captured
+			// from the old template's sandbox; suspend or revert it first.
+			if latestSnapshotIsLocalOnly(oldVal.GetStatus()) {
+				return apierror.FailedPrecondition(
+					"actor must hold no node-local snapshot to change its actor template: suspend or revert it first")
 			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
 			if err != nil {
@@ -566,7 +572,7 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 		return nil, fmt.Errorf("at least one audience must be requested")
 	}
 
-	// JWT timestamps have one-second resolution; truncating keeps expires_at
+	// JWT timestamps have one-second resolution; truncating keeps expire_time
 	// equal to the exp claim.
 	now := time.Now().Truncate(time.Second)
 	expiresAt := now.Add(time.Duration(req.GetExpirationSeconds()) * time.Second)
@@ -592,8 +598,8 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 	}
 
 	return &ateapipb.MintActorJwtResponse{
-		ActorJwt:  actorJWT,
-		ExpiresAt: timestamppb.New(expiresAt),
+		ActorJwt:   actorJWT,
+		ExpireTime: timestamppb.New(expiresAt),
 	}, nil
 }
 

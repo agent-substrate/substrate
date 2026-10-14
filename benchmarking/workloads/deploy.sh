@@ -65,6 +65,9 @@ OTLP_ENDPOINT=""
 # The timeout, in whole seconds, for waiting for the ateom worker pods to be
 # ready.
 WAIT_TIMEOUT_SECS=300
+# fake-atelet's tuning on the fake data plane, as FAKE_ATELET_<FLAG>=VALUE
+# entries for the fake-atelet-tuning ConfigMap; --fake-atelet-env adds one.
+FAKE_ATELET_ENV=()
 
 usage() {
   echo "Usage: $0 [options]"
@@ -85,6 +88,10 @@ usage() {
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
   echo "  --wait-timeout SECONDS      The timeout in seconds for waiting for the ateom workers to be ready (default: 300)"
+  echo "  --fake-atelet-env NAME=VALUE"
+  echo "                              On a substrate installed with --fake-data-plane, set a fake-atelet flag:"
+  echo "                              FAKE_ATELET_DELAY=500ms sets --delay, FAKE_ATELET_DELAY_RESTORE=2s sets"
+  echo "                              --delay-restore. Repeatable; unset flags keep fake-atelet's defaults"
   echo "  -h, --help                  Show this help message"
 }
 
@@ -201,15 +208,66 @@ wait_templates_ready() {
   done
 }
 
+# fake_data_plane reports whether substrate was installed with
+# --fake-data-plane, which serves the WorkerPool with fake Workers instead of
+# worker pods.
+fake_data_plane() {
+  [[ -n "$(kubectl get deployment/fake-workersync --namespace=ate-system -o name --ignore-not-found)" ]]
+}
+
+# tune_fake_atelet writes FAKE_ATELET_ENV, and nothing else, to the
+# fake-atelet-tuning ConfigMap fake-atelet loads its flags from, and restarts
+# fake-atelet when that changes the ConfigMap. No install creates or resets
+# it: the installer chooses the fake data plane, and the benchmark tunes it.
+tune_fake_atelet() {
+  local before after
+  before="$(kubectl get configmap fake-atelet-tuning --namespace=ate-system -o jsonpath='{.data}' --ignore-not-found)"
+  local literals=()
+  local entry
+  for entry in "${FAKE_ATELET_ENV[@]}"; do
+    literals+=("--from-literal=${entry}")
+  done
+  kubectl create configmap fake-atelet-tuning --namespace=ate-system "${literals[@]}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  after="$(kubectl get configmap fake-atelet-tuning --namespace=ate-system -o jsonpath='{.data}')"
+  if [[ "${before}" == "${after}" ]]; then
+    return 0
+  fi
+  echo "Restarting fake-atelet with its new tuning (${FAKE_ATELET_ENV[*]:-defaults})..."
+  # The DaemonSet name carries the version, so it is addressed by label.
+  local ds
+  for ds in $(kubectl get daemonset --namespace=ate-system -l app=atelet -o name); do
+    kubectl rollout restart --namespace=ate-system "${ds}"
+    kubectl rollout status --namespace=ate-system "${ds}" --timeout="${WAIT_TIMEOUT_SECS}s"
+  done
+}
+
 deploy() {
   resolve_otlp_endpoint
+  # Before the pool, so its fake Workers are served by the tuned fake-atelet.
+  if fake_data_plane; then
+    tune_fake_atelet
+  elif ((${#FAKE_ATELET_ENV[@]} > 0)); then
+    echo "Error: --fake-atelet-env needs substrate installed with --fake-data-plane" >&2
+    exit 1
+  fi
   echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
-  kubectl wait --for=create deployment/benchmark-ateom \
-    --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
-  kubectl rollout status deployment/benchmark-ateom \
-    --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
+  if fake_data_plane; then
+    # No Deployment is made for the pool; fake-workersync counts a fake Worker
+    # ready once its capacity is reported, and writes that to the pool's
+    # status.
+    if ((WORKER_COUNT > 0)); then
+      kubectl wait --for=jsonpath='{.status.readyReplicas}'="${WORKER_COUNT}" workerpool/benchmark-ateom \
+        --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
+    fi
+  else
+    kubectl wait --for=create deployment/benchmark-ateom \
+      --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
+    kubectl rollout status deployment/benchmark-ateom \
+      --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
+  fi
 
   # The store enforces that a template's atespace exists at create time.
   run_kubectl_ate create atespace benchmark-workloads >/dev/null 2>&1 \
@@ -311,6 +369,13 @@ while [[ "$#" -gt 0 ]]; do
     --wait-timeout=*)
       WAIT_TIMEOUT_SECS="${1#*=}"
       ;;
+    --fake-atelet-env)
+      shift
+      FAKE_ATELET_ENV+=("$1")
+      ;;
+    --fake-atelet-env=*)
+      FAKE_ATELET_ENV+=("${1#*=}")
+      ;;
     -h|--help)
       usage
       exit 0
@@ -349,6 +414,13 @@ if [[ "${action}" == "deploy" && -z "${STORAGE_CLASS_NAME}" && " ${TEMPLATES[*]}
   echo "Error: the glutton-storage template needs --storage-class-name" >&2
   exit 1
 fi
+
+for entry in "${FAKE_ATELET_ENV[@]}"; do
+  if ! [[ "${entry}" =~ ^FAKE_ATELET_[A-Z_]+=.+$ ]]; then
+    echo "Error: --fake-atelet-env must be FAKE_ATELET_<FLAG>=VALUE, such as FAKE_ATELET_DELAY=500ms, got '${entry}'" >&2
+    exit 1
+  fi
+done
 
 if [[ "${action}" == "deploy" ]]; then
   build_kubectl_ate

@@ -22,9 +22,11 @@
 //	testserver egressprobe --listen=:8080  a client that drives the egress gateway
 //	testserver websocket --listen=:8080  a websocket server that responds to PINGs
 //
-// Each pod runs exactly one subcommand on one listener, so the wire behavior of
-// any given pod is unchanged from when these were separate binaries -- the grpc
-// pod still speaks nothing but cleartext HTTP/2, for instance.
+// Each pod runs exactly one subcommand, so the wire behavior of any given pod is
+// unchanged from when these were separate binaries -- the grpc pod still speaks
+// nothing but cleartext HTTP/2, for instance. Given --tls-cert and --tls-key,
+// http and websocket also serve HTTPS on :8443 beside their cleartext --listen,
+// so one pod answers both schemes for the same name.
 //
 // The subcommand shape follows Kubernetes' test/images/agnhost: a single
 // extendable CLI whose modes are cobra subcommands, matching the rest of this

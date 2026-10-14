@@ -24,9 +24,10 @@ the report.
   or the [GKE Quickstart](../../README.md#gke-quickstart-development). For GKE
   the scripts below read `.ate-dev-env.sh` from the repository root
   (`collect_logs.sh` sources it itself; set `NO_DEV_ENV` to opt out).
-* The **microVM** sandbox class, if you want the inner (ateom) phases: see
-  [microvm-local.md](microvm-local.md). ateom-gvisor writes no breakdown
-  record, so on a gVisor pool the report shows the atelet layer only.
+* A **micro-VM** or **gVisor** pool: both ateoms write the inner records,
+  so the report shows both layers for either class (a worker image that
+  predates the gVisor records shows the atelet layer only on a gVisor pool).
+  For micro-VM see [microvm-local.md](microvm-local.md).
 * `kubectl`, `kubectl-ate` (`go install ./cmd/kubectl-ate`), and `python3`
   (standard library only).
 
@@ -92,6 +93,12 @@ atespace produce one record pair each.
 
 ## 3. Collect the node logs
 
+(A headless `runner.py` run does this step and the next one itself, and
+writes the percentiles into its `stats.jsonl`; see
+[benchmarking/analysis/README.md](../../benchmarking/analysis/README.md#automated-runs).
+The rest of this section is the by-hand path for a run driven from the web
+UI, as above.)
+
 Collect **while the pods still exist**. `benchmarking/automation/
 orchestrator.py` deletes the workload and ate-system pods right after each
 test and does not run this step yet, so on a cluster you manage yourself this
@@ -153,9 +160,9 @@ phases scale with dirty memory.
 
 ## Troubleshooting
 
-* **Only atelet rows, no ateom rows.** The pool is gVisor (ateom-gvisor emits
-  no record), or the worker image predates the records. Check
-  `kubectl get workerpools -A` and step 1's grep.
+* **Only atelet rows, no ateom rows.** The worker image predates the ateom
+  records (check step 1's grep against a worker pod), or the ateom records
+  fell outside the collection window.
 * **Counts differ between layers.** The collection window cut through a
   cycle, or a worker pod restarted and took its log with it (the script dumps
   a restarted container's previous log as `<pod>.previous.log`). On GKE the

@@ -49,7 +49,8 @@ func TestParseValid(t *testing.T) {
 		"agentsession_script_file": "/etc/agentsession/script.yaml",
 		"total_actors": 50,
 		"spawn_concurrency": 5,
-		"actor_deadline": 60.0
+		"actor_deadline": 60.0,
+		"target_rps": 2500.5
 	}`)
 
 	cfg, err := Parse(jsonBlob, Config{})
@@ -119,6 +120,9 @@ func TestParseValid(t *testing.T) {
 	}
 	if cfg.ActorDeadline != 60*time.Second {
 		t.Errorf("ActorDeadline: got %v, want 60s", cfg.ActorDeadline)
+	}
+	if cfg.TargetRPS != 2500.5 {
+		t.Errorf("TargetRPS: got %v, want 2500.5", cfg.TargetRPS)
 	}
 }
 
@@ -198,6 +202,10 @@ func TestParseInvalidValues(t *testing.T) {
 		{
 			name: "negative sweperf num cycles",
 			json: `{"sweperf_num_cycles": -1}`,
+		},
+		{
+			name: "negative target rps",
+			json: `{"target_rps": -1}`,
 		},
 		{
 			name: "negative sweperf poll interval",

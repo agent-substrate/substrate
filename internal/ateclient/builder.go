@@ -128,7 +128,7 @@ func (c *Client) Close() {
 
 // NewClient creates a new Ate API client. If endpoint is empty, it automatically
 // port-forwards to the ate-api-server pod in substrate's system namespace.
-func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool) (*Client, error) {
+func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool, extraOpts ...grpc.DialOption) (*Client, error) {
 	tp, err := initTracing(ctx, traceEnabled)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize tracing: %w", err)
@@ -136,9 +136,9 @@ func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenF
 
 	var cli *Client
 	if endpoint != "" {
-		cli, err = dialDirect(ctx, kubeconfigPath, k8sContext, endpoint, tokenFile, traceEnabled)
+		cli, err = dialDirect(ctx, kubeconfigPath, k8sContext, endpoint, tokenFile, traceEnabled, extraOpts...)
 	} else {
-		cli, err = dialPortForward(ctx, kubeconfigPath, k8sContext, tokenFile, traceEnabled)
+		cli, err = dialPortForward(ctx, kubeconfigPath, k8sContext, tokenFile, traceEnabled, extraOpts...)
 	}
 
 	if err != nil {
@@ -152,7 +152,7 @@ func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenF
 	return cli, nil
 }
 
-func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool) (*Client, error) {
+func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool, extraOpts ...grpc.DialOption) (*Client, error) {
 	config, err := LoadKubeConfig(kubeconfigPath, k8sContext)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
@@ -185,8 +185,9 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, token
 	opts = append(opts, tokenOpt)
 
 	if traceEnabled {
-		opts = append(opts, grpc.WithUnaryInterceptor(newTraceInterceptor()))
+		opts = append(opts, grpc.WithChainUnaryInterceptor(newTraceInterceptor()))
 	}
+	opts = append(opts, extraOpts...)
 
 	conn, err := grpc.NewClient(endpoint, opts...)
 	if err != nil {
@@ -207,7 +208,7 @@ func LoadKubeConfig(kubeconfigPath, k8sContext string) (*rest.Config, error) {
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides).ClientConfig()
 }
 
-func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile string, traceEnabled bool) (*Client, error) {
+func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile string, traceEnabled bool, extraOpts ...grpc.DialOption) (*Client, error) {
 	config, err := LoadKubeConfig(kubeconfigPath, k8sContext)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
@@ -247,8 +248,9 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 	opts = append(opts, tokenOpt)
 
 	if traceEnabled {
-		opts = append(opts, grpc.WithUnaryInterceptor(newTraceInterceptor()))
+		opts = append(opts, grpc.WithChainUnaryInterceptor(newTraceInterceptor()))
 	}
+	opts = append(opts, extraOpts...)
 
 	conn, err := grpc.NewClient(localEndpoint, opts...)
 	if err != nil {

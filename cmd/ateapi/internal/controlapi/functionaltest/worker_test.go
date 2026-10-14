@@ -315,12 +315,12 @@ func TestValidation_Worker(t *testing.T) {
 	defer tc.cleanup()
 
 	t.Run("ListWorkers", func(t *testing.T) {
-		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{PageSize: -1})
+		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{Options: &ateapipb.ListOptions{PageSize: -1}})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
 	t.Run("ListWorkers invalid token", func(t *testing.T) {
-		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{PageToken: "%%%"})
+		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{Options: &ateapipb.ListOptions{PageToken: "%%%"}})
 		assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
 	})
 }

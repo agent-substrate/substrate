@@ -48,8 +48,7 @@ func (s *RPCService) ListWorkerActorAssignments(ctx context.Context, req *ateapi
 		return nil, fmt.Errorf("while fetching worker %s: %w", name, err)
 	}
 
-	page, err := s.impl.ListWorkerAssignments(ctx, name,
-		store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListWorkerAssignments(ctx, name, toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing the assignments of worker %s: %w", name, err))
 	}
@@ -64,7 +63,7 @@ func (s *RPCService) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersR
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListWorkers(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListWorkers(ctx, toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing workers in db: %w", err))
 	}

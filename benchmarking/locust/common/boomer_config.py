@@ -24,6 +24,7 @@ Flag registration lives in the modules that own each flag:
   * --mem-target / --mem-churn / --mem-read → common.memload_config.add_memload_arguments
   * --cpu-cores / --cpu-duty-cycle  → common.cpuload_config.add_cpuload_arguments
   * --max-pings-per-wake            → common.ping_config.add_ping_arguments
+  * --target-rps                    → common.rate_config.add_rate_arguments
 
 This module ties them together so boomer-Go workers can pick up the values
 the operator set in the web UI form:
@@ -76,6 +77,7 @@ _FLAGS = {
     "--total-actors": int,
     "--spawn-concurrency": int,
     "--actor-deadline": float,
+    "--target-rps": float,
 }
 
 
@@ -157,6 +159,7 @@ def init_boomer_config() -> None:
     from common.lifecycle_mode import add_lifecycle_mode_arguments
     from common.memload_config import add_memload_arguments
     from common.ping_config import add_ping_arguments
+    from common.rate_config import add_rate_arguments
     from common.resume_mode import add_resume_mode_arguments
     from common.spawn_config import add_spawn_arguments
     from common.sweperf_config import add_sweperf_arguments

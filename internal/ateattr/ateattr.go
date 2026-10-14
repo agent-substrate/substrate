@@ -106,8 +106,6 @@ const (
 	ActorStateRunning    = "running"
 	ActorStateSuspending = "suspending"
 	ActorStateSuspended  = "suspended"
-	ActorStatePausing    = "pausing"
-	ActorStatePaused     = "paused"
 	ActorStateCrashed    = "crashed"
 	ActorStateDeleting   = "deleting"
 	ActorStateReverting  = "reverting"
@@ -127,10 +125,6 @@ func ActorStateValue(state ateapipb.ActorState) string {
 		return ActorStateSuspending
 	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
 		return ActorStateSuspended
-	case ateapipb.ActorState_ACTOR_STATE_PAUSING:
-		return ActorStatePausing
-	case ateapipb.ActorState_ACTOR_STATE_PAUSED:
-		return ActorStatePaused
 	case ateapipb.ActorState_ACTOR_STATE_CRASHED:
 		return ActorStateCrashed
 	case ateapipb.ActorState_ACTOR_STATE_DELETING:

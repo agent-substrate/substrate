@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -128,7 +129,7 @@ func TestUpdateJWTPoolRotation(t *testing.T) {
 		{"activate", func(p *localjwtauthority.ConcretePool) error { return p.Activate("next") }, []string{"old", "next"}, "next"},
 		{"remove", func(p *localjwtauthority.ConcretePool) error { return p.RemoveAuthority("old") }, []string{"next"}, "next"},
 	} {
-		if err := updateJWTPool(ctx, secrets, "actor-id-jwt-pool", step.change); err != nil {
+		if err := updateJWTPool(ctx, io.Discard, secrets, "actor-id-jwt-pool", step.change); err != nil {
 			t.Fatalf("%s: %v", step.name, err)
 		}
 		ids, active := poolState(t, kc)
@@ -139,6 +140,7 @@ func TestUpdateJWTPoolRotation(t *testing.T) {
 }
 
 func TestUpdateJWTPoolRetriesConflict(t *testing.T) {
+	setVerbosity(t, vBasic)
 	kc := newPoolClientset(t)
 	conflicted := false
 	kc.PrependReactor("update", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
@@ -175,7 +177,8 @@ func TestUpdateJWTPoolRetriesConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := updateJWTPool(context.Background(), kc.CoreV1().Secrets("ate-system"), "actor-id-jwt-pool", func(p *localjwtauthority.ConcretePool) error {
+	var errOut strings.Builder
+	if err := updateJWTPool(context.Background(), &errOut, kc.CoreV1().Secrets("ate-system"), "actor-id-jwt-pool", func(p *localjwtauthority.ConcretePool) error {
 		return p.AddAuthority(next)
 	}); err != nil {
 		t.Fatalf("updateJWTPool: %v", err)
@@ -183,6 +186,10 @@ func TestUpdateJWTPoolRetriesConflict(t *testing.T) {
 	ids, _ := poolState(t, kc)
 	if diff := cmp.Diff([]string{"old", "other", "next"}, ids); diff != "" {
 		t.Errorf("key IDs (-want +got):\n%s", diff)
+	}
+	wantLog := "Conflict updating secret \"actor-id-jwt-pool\" (attempt 2); retrying...\n"
+	if got := errOut.String(); got != wantLog {
+		t.Errorf("stderr = %q, want %q", got, wantLog)
 	}
 }
 
@@ -202,7 +209,7 @@ func TestUpdateJWTPoolLeavesSecretOnError(t *testing.T) {
 			if tc.secret != nil {
 				kc = fake.NewClientset(tc.secret)
 			}
-			err := updateJWTPool(context.Background(), kc.CoreV1().Secrets("ate-system"), "actor-id-jwt-pool", func(p *localjwtauthority.ConcretePool) error {
+			err := updateJWTPool(context.Background(), io.Discard, kc.CoreV1().Secrets("ate-system"), "actor-id-jwt-pool", func(p *localjwtauthority.ConcretePool) error {
 				return p.RemoveAuthority("old")
 			})
 			if err == nil {
@@ -219,7 +226,7 @@ func TestUpdateJWTPoolLeavesSecretOnError(t *testing.T) {
 
 func TestUpdateJWTPoolMissingSecret(t *testing.T) {
 	kc := fake.NewClientset()
-	err := updateJWTPool(context.Background(), kc.CoreV1().Secrets("ate-system"), "actor-id-jwt-pool", func(*localjwtauthority.ConcretePool) error {
+	err := updateJWTPool(context.Background(), io.Discard, kc.CoreV1().Secrets("ate-system"), "actor-id-jwt-pool", func(*localjwtauthority.ConcretePool) error {
 		t.Error("change ran without a pool")
 		return nil
 	})
@@ -235,7 +242,7 @@ func TestListJWTKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := updateJWTPool(context.Background(), secrets, "actor-id-jwt-pool", func(p *localjwtauthority.ConcretePool) error {
+	if err := updateJWTPool(context.Background(), io.Discard, secrets, "actor-id-jwt-pool", func(p *localjwtauthority.ConcretePool) error {
 		return p.AddAuthority(next)
 	}); err != nil {
 		t.Fatal(err)

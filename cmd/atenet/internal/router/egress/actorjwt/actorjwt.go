@@ -88,7 +88,7 @@ func (m *Minter) mint(ctx context.Context, key string, ref resources.ActorRef, r
 	if err != nil {
 		return "", fmt.Errorf("minting an actor JWT for %s: %w", ref, err)
 	}
-	reuseFor := time.Until(resp.GetExpiresAt().AsTime()) - time.Duration(req.GetExpirationSeconds())*time.Second/3
+	reuseFor := time.Until(resp.GetExpireTime().AsTime()) - time.Duration(req.GetExpirationSeconds())*time.Second/3
 	m.tokens.Set(key, resp.GetActorJwt(), reuseFor)
 	return resp.GetActorJwt(), nil
 }

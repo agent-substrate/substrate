@@ -1,0 +1,214 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# fake-workersync, the fake data plane's stand-in for ate-controller. ate-setup
+# delete ate-system deletes this file by name whether or not the install had
+# the fake data plane, so the ClusterRole and its binding never outlive it.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fake-workersync
+  namespace: ate-system
+
+---
+
+# fake-workersync watches every WorkerPool and writes its status, and reads
+# what each fake-atelet node can allocate.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fake-workersync
+rules:
+- apiGroups: ["ate.dev"]
+  resources: ["workerpools"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["ate.dev"]
+  resources: ["workerpools/status"]
+  verbs: ["update"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["list"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fake-workersync
+subjects:
+- kind: ServiceAccount
+  name: fake-workersync
+  namespace: ate-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fake-workersync
+
+---
+
+# fake-workersync places fake Workers on the nodes that run a fake-atelet pod,
+# and sends each node's capacity reports to its relay.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fake-workersync-pods
+  namespace: ate-system
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fake-workersync-pods
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: fake-workersync
+  namespace: ate-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: fake-workersync-pods
+
+---
+
+# Resolving ate-api-server's k8s:/// target reads its EndpointSlices, through
+# the Role atelet is bound to.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fake-workersync-endpointslices
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: fake-workersync
+  namespace: ate-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: atelet-endpointslices
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-workersync
+  namespace: ate-system
+  labels:
+    app: fake-workersync
+spec:
+  replicas: 1
+  # One fake-workersync at a time: a second, as a rolling update runs beside
+  # the first, registers Workers the other never learns of.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: fake-workersync
+  template:
+    metadata:
+      labels:
+        app: fake-workersync
+    spec:
+      serviceAccountName: fake-workersync
+      containers:
+      - name: fake-workersync
+        image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/isolate/fake-workersync
+        # Ready once it has adopted the registered fake Workers, which needs
+        # ate-api-server serving.
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          periodSeconds: 2
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        ports:
+        - name: health
+          containerPort: 9091
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: servicedns-ca
+          mountPath: /run/servicedns-ca
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+      volumes:
+      # The same client identity boomer presents to ate-api-server (see
+      # internal/benchmarking/boomer/boomerutil.DialControl), also presented
+      # to the relay, plus the trust bundle the relay's certificate must chain
+      # to.
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: ca.crt
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+
+---
+
+# Under ate-system's default-deny ingress, admits fake-workersync's capacity
+# reports to the relay on each fake-atelet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fake-atelet-relay
+  namespace: ate-system
+spec:
+  podSelector:
+    matchLabels:
+      app: atelet
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: fake-workersync
+    ports:
+    - protocol: TCP
+      port: relay

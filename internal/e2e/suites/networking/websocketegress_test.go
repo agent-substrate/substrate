@@ -70,7 +70,7 @@ func TestActorEgressSecureWebSocket(t *testing.T) {
 	ctx := t.Context()
 	_, address, _ := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
 		Name: "wss-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
-		Args: []string{"websocket", "--echo"}, Port: 443, TargetPort: 8443, HealthPath: "/readyz",
+		Args: []string{"websocket", "--echo"}, Port: 80, TargetPort: 8080, TLSPort: 443, HealthPath: "/readyz",
 	}, true)
 	_, router, actorRef := prepareProtocolActor(t, ctx, "wss")
 	raw := postEgressWithStatus(t, ctx, router, actorRef, "/websocket", map[string]any{

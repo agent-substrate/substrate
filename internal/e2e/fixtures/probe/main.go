@@ -318,10 +318,12 @@ func parseFetchHeaders(params []string) (http.Header, error) {
 // path. Parameters to the fetch are passed as URL query parameters:
 //
 //   - url=<URL to fetch>: required.
-//   - roots=bundle|system: the TLS trust anchors. "bundle" (the default)
+//   - roots=bundle|system|pem: the TLS trust anchors. "bundle" (the default)
 //     loads the projected trust bundle at trustFile; "system" uses the
-//     image's system roots. TestActorEgressMITMTrust documents why each mode
-//     passes or fails.
+//     image's system roots; "pem" trusts only the certificates in ca.
+//     TestActorEgressMITMTrust documents why each mode passes or fails.
+//   - ca=<PEM>: the certificates roots=pem trusts. Required by roots=pem and
+//     rejected with any other mode.
 //   - header=<name>:<value>: repeatable; set on the request, so a suite can
 //     pre-seed a header and observe whether the gateway overwrites it.
 //   - dial=<host:port>: connect to this address instead of the URL's host,
@@ -352,12 +354,20 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 	}
 	roots := r.URL.Query().Get("roots")
 	switch roots {
-	case "", "bundle", "system":
+	case "", "bundle", "system", "pem":
 	default:
 		// Fail closed on typos: silently treating an unknown value as
 		// "bundle" would flip a suite's negative control into a positive
 		// fetch with a misleading failure message.
-		resp["error"] = "unknown roots value " + strconv.Quote(roots) + " (want bundle or system)"
+		resp["error"] = "unknown roots value " + strconv.Quote(roots) + " (want bundle, system or pem)"
+		writeJSON(w, resp)
+		return
+	}
+	// The same fail-closed reasoning: a ca the fetch would ignore, or a
+	// roots=pem with nothing to trust, is a suite bug, not a result.
+	ca := r.URL.Query().Get("ca")
+	if (roots == "pem") != (ca != "") {
+		resp["error"] = "the ca parameter goes with roots=pem, and roots=pem needs it"
 		writeJSON(w, resp)
 		return
 	}
@@ -376,7 +386,17 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	tlsCfg := &tls.Config{}
-	if roots != "system" {
+	switch roots {
+	case "system":
+	case "pem":
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM([]byte(ca)) {
+			resp["error"] = "no certificates parsed from the ca parameter"
+			writeJSON(w, resp)
+			return
+		}
+		tlsCfg.RootCAs = pool
+	default:
 		b, err := os.ReadFile(trustFile)
 		if err != nil {
 			resp["error"] = "reading trust bundle: " + err.Error()

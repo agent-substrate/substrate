@@ -256,8 +256,8 @@ func TestDurableDirLifecycle(t *testing.T) {
 			},
 		},
 		{
-			// Suspend from PAUSED uploads the MEMORY local snapshot.
-			name: "preferredFidelity:MEMORY, suspend from PAUSED",
+			// Suspend from paused uploads the MEMORY local snapshot.
+			name: "preferredFidelity:MEMORY, suspend from paused",
 			tc: actorLifecycleTestCase{
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				wantMemoryAfterPause:   2,
@@ -271,8 +271,8 @@ func TestDurableDirLifecycle(t *testing.T) {
 			},
 		},
 		{
-			// Suspend from PAUSED uploads the VOLUMES local snapshot.
-			name: "preferredFidelity:VOLUMES, suspend from PAUSED",
+			// Suspend from paused uploads the VOLUMES local snapshot.
+			name: "preferredFidelity:VOLUMES, suspend from paused",
 			tc: actorLifecycleTestCase{
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				wantMemoryAfterPause:   1,
@@ -286,8 +286,8 @@ func TestDurableDirLifecycle(t *testing.T) {
 			},
 		},
 		{
-			// Suspend from PAUSED uploads the ROOTFS local snapshot.
-			name: "preferredFidelity:ROOTFS, suspend from PAUSED",
+			// Suspend from paused uploads the ROOTFS local snapshot.
+			name: "preferredFidelity:ROOTFS, suspend from paused",
 			tc: actorLifecycleTestCase{
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 				wantMemoryAfterPause:   1,
@@ -587,7 +587,7 @@ type actorLifecycleTestCase struct {
 	microVMOnly bool
 
 	// suspendWhilePaused pauses the actor again before the suspend step, so
-	// the suspend runs from PAUSED: it must upload the node-local pause
+	// the suspend runs from paused: it must upload the node-local pause
 	// snapshot instead of checkpointing a running workload. The counter
 	// expectations are unchanged — both origins capture the state after the
 	// second call.
@@ -657,7 +657,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorPaused(ctx, t, clients, actorID)
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q again...", actorID)
@@ -690,7 +690,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		}); err != nil {
 			t.Fatalf("failed to pause Actor before suspend: %v", err)
 		}
-		waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+		waitForActorPaused(ctx, t, clients, actorID)
 	}
 	t.Logf("Suspending Actor %q...", actorID)
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
@@ -913,7 +913,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorPaused(ctx, t, clients, actorName)
 
 	// Resuming the actor again
 	t.Logf("Resuming Actor %q again...", actorName)
@@ -1111,26 +1111,26 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	}
 	validateCounterResponse(t, resp, "after revert from RUNNING", 2, 2)
 
-	// Revert from PAUSED. Resume prefers a local snapshot over the external
+	// Revert from paused. Resume prefers a local snapshot over the external
 	// one, so clearing LocalSnapshot is what prevents this pause's count=2
 	// checkpoint from restoring on the next resume.
 	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorPaused(ctx, t, clients, actorName)
 
 	reverted, err = clients.SubstrateAPI.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef})
 	if err != nil {
-		t.Fatalf("RevertActor from PAUSED: %v", err)
+		t.Fatalf("RevertActor from paused: %v", err)
 	}
 	if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Fatalf("state after revert from PAUSED = %v, want SUSPENDED", got)
+		t.Fatalf("state after revert from paused = %v, want SUSPENDED", got)
 	}
 	if hasLocalSnapshot(reverted.GetActor().GetStatus()) {
-		t.Fatal("local snapshot pointer survived revert from PAUSED")
+		t.Fatal("local snapshot pointer survived revert from paused")
 	}
 	if got := durableSnapshotURI(reverted.GetActor().GetStatus()); got != snapshotURI {
-		t.Fatalf("snapshot URI after revert from PAUSED = %q, want %q", got, snapshotURI)
+		t.Fatalf("snapshot URI after revert from paused = %q, want %q", got, snapshotURI)
 	}
 
 	// SUSPENDED is rejected with FailedPrecondition rather than no-oping.
@@ -1141,15 +1141,15 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	// Final resume: if the pause checkpoint had been restored, the counter
 	// would advance from 2 to 3. Expecting 2 proves the external snapshot won.
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
-		t.Fatalf("failed to resume Actor after PAUSED revert: %v", err)
+		t.Fatalf("failed to resume Actor after paused revert: %v", err)
 	}
 	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
-		t.Fatalf("failed to call actor after PAUSED revert: %v", err)
+		t.Fatalf("failed to call actor after paused revert: %v", err)
 	}
-	validateCounterResponse(t, resp, "after revert from PAUSED", 2, 2)
+	validateCounterResponse(t, resp, "after revert from paused", 2, 2)
 
 	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef, AnyState: true}); err != nil {
 		t.Fatalf("failed to delete Actor: %v", err)
@@ -1276,7 +1276,7 @@ func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.C
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorPaused(ctx, t, clients, actorName)
 
 	// 4. Delete the paused actor with any-state
 	t.Logf("Deleting paused Actor %q with any-state...", actorName)
@@ -1413,6 +1413,26 @@ func hasStorageClass(ctx context.Context, clients *e2e.Clients, name string) boo
 
 func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedState ateapipb.ActorState) {
 	waitForActorStateWithTimeout(ctx, t, clients, actorName, expectedState, 60*time.Second)
+}
+
+// waitForActorPaused waits for the shape a pause leaves behind: SUSPENDED,
+// holding a node-local snapshot and pinned to its node. A plain suspend
+// leaves neither.
+func waitForActorPaused(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string) {
+	t.Helper()
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	})
+	if err != nil {
+		t.Fatalf("GetActor %q after pause: %v", actorName, err)
+	}
+	if !hasLocalSnapshot(resp.GetStatus()) {
+		t.Fatalf("Actor %q is SUSPENDED after pause but holds no local snapshot: %v", actorName, resp.GetStatus())
+	}
+	if resp.GetStatus().GetAssignedNode() == "" {
+		t.Fatalf("Actor %q is paused but not pinned to a node: %v", actorName, resp.GetStatus())
+	}
 }
 
 func waitForActorStateWithTimeout(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedState ateapipb.ActorState, timeout time.Duration) {

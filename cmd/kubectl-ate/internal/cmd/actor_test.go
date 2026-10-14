@@ -318,16 +318,20 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			matched := filterAndDisplayLogLine(tc.line, logLineFilter{target: tc.target, source: logSource(tc.source), container: tc.container}, &buf)
+			var outBuf bytes.Buffer
+			var errBuf bytes.Buffer
+			matched := filterAndDisplayLogLine(tc.line, logLineFilter{target: tc.target, source: logSource(tc.source), container: tc.container}, &outBuf, &errBuf)
 
 			if matched != tc.wantMatched {
 				t.Errorf("got matched = %v, want %v", matched, tc.wantMatched)
 			}
 
-			gotOutput := strings.TrimSpace(buf.String())
+			gotOutput := strings.TrimSpace(outBuf.String())
 			if gotOutput != tc.wantOutput {
 				t.Errorf("got output %q, want %q", gotOutput, tc.wantOutput)
+			}
+			if errBuf.Len() != 0 {
+				t.Errorf("got unexpected error output %q", errBuf.String())
 			}
 		})
 	}

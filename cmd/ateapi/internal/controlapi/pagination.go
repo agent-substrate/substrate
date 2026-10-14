@@ -19,6 +19,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 const maxPageSize = 1000
@@ -30,6 +31,10 @@ func effectivePageSize(requested int32) int32 {
 		return maxPageSize
 	}
 	return requested
+}
+
+func toStoreListOptions(opts *ateapipb.ListOptions) store.ListOptions {
+	return store.ListOptions{PageSize: effectivePageSize(opts.GetPageSize()), PageToken: opts.GetPageToken()}
 }
 
 func mapListError(err error) error {

@@ -30,9 +30,13 @@ const (
 	// AttrArchitecture is the CPU architecture ("amd64", "arm64", etc.).
 	AttrArchitecture = "architecture"
 
-	// TODO: Add AttrCPUFeatures ("cpu_features"), AttrGVisorAssetHash
-	// ("gvisor_asset_hash"), and other compatibility attributes as snapshot
-	// compatibility expands.
+	// AttrSandboxRuntimeHash identifies the sandbox runtime binaries: a
+	// sha256 over a SandboxConfig version's asset digests and pause image
+	// digest, computed by atelet.
+	AttrSandboxRuntimeHash = "sandbox_runtime_hash"
+
+	// TODO: Add AttrCPUFeatures ("cpu_features") and other compatibility
+	// attributes as snapshot compatibility expands.
 )
 
 // ProbeHost inspects the current host and returns its v1 VersionedSandboxCompat

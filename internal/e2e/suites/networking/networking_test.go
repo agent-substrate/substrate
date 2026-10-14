@@ -139,10 +139,79 @@ func TestActorEgress(t *testing.T) {
 	})
 }
 
+func TestActorEgressMultiplexing(t *testing.T) {
+	ctx := context.Background()
+	dataplane := e2e.CurrentAtenetDataplane()
+
+	origin := egressHTTPTarget()
+	target := e2e.DeployServerPod(t, ctx, origin)
+
+	fixture := e2e.EgressFixture()
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-mux", fixture, e2e.EgressAllowAll()...)
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForActorRoute(t, ctx, router, actorRef)
+
+	beforeScrape, err := dataplane.ScrapeMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeMetrics before /mux: %v", err)
+	}
+
+	url := fmt.Sprintf("http://%s/fetch", target.Address())
+	payload, err := json.Marshal(map[string]string{"url": url})
+	if err != nil {
+		t.Fatalf("marshaling the mux request for %s: %v", url, err)
+	}
+
+	since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
+	status, body := postThroughEgressActor(t, ctx, router, actorRef, "/mux", payload)
+	if status != http.StatusOK {
+		t.Fatalf("Actor egress mux of %s returned HTTP %d, want 200; body: %s", url, status, body)
+	}
+	t.Logf("Actor egress mux of %s succeeded; body: %s", url, body)
+
+	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(origin.Port))
+
+	afterScrape, err := dataplane.ScrapeMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeMetrics after /mux: %v", err)
+	}
+
+	const (
+		// Different dataplane may have different stream concurrency.
+		wantConnectionsAtLeast = 1
+		wantRequests           = 250
+	)
+	stats := dataplane.EgressConnectStats(beforeScrape, afterScrape)
+	if stats.Connections != -1 && stats.Connections < wantConnectionsAtLeast {
+		t.Errorf("egress connect connections = %d, want at least %d", stats.Connections, wantConnectionsAtLeast)
+	}
+	if stats.Requests != -1 && stats.Requests != wantRequests {
+		t.Errorf("egress connect requests = %d, want %d", stats.Requests, wantRequests)
+	}
+}
+
+// egressHTTPSTarget returns an origin whose /healthz answers with body over
+// HTTPS on 443 (and cleartext on 80): testserver's http subcommand serving a
+// service-DNS certificate, which the gateway trusts once
+// hack/setup-e2e-egress-tls-kind.sh has run.
+func egressHTTPSTarget(name, body string) e2e.ServerPod {
+	return e2e.ServiceDNSTLS(e2e.ServerPod{
+		Name:       name,
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"http", "--body=" + body},
+	})
+}
+
 // TestActorEgressHTTPS covers the same path as TestActorEgress with a TLS
 // origin, through the gateway's TLS interception.
 func TestActorEgressHTTPS(t *testing.T) {
 	ctx := context.Background()
+	const originBody = "https origin"
+	target := e2e.DeployServerPod(t, ctx, egressHTTPSTarget("httpstarget", originBody))
+
 	fixture := e2e.EgressFixture()
 	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-https", fixture, e2e.EgressAllowAll()...)
 	router := mustRouterClient(t, ctx)
@@ -153,11 +222,15 @@ func TestActorEgressHTTPS(t *testing.T) {
 	since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
 
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
-	status, body := fetchThroughEgressActor(t, ctx, router, actorRef, "https://example.com/")
+	url := "https://" + target.SvcName() + "/healthz"
+	status, body := fetchThroughEgressActor(t, ctx, router, actorRef, url)
 	if status != http.StatusOK {
-		t.Fatalf("Actor HTTPS egress fetch returned HTTP %d, want 200; body: %s", status, body)
+		t.Fatalf("Actor HTTPS egress fetch of %s returned HTTP %d, want 200; body: %s", url, status, body)
 	}
-	t.Logf("Actor HTTPS egress fetch succeeded; body: %s", body)
+	if got := decodeEgressFetch(t, body); got.Body != originBody || !got.TLS {
+		t.Errorf("Actor HTTPS egress fetch of %s = %+v, want verified TLS and body %q", url, got, originBody)
+	}
+	t.Logf("Actor HTTPS egress fetch of %s succeeded; body: %s", url, body)
 
 	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, "443")
 }
@@ -224,6 +297,24 @@ func fetchThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.Rout
 		t.Fatalf("marshaling the fetch request for %s: %v", url, err)
 	}
 	return postThroughEgressActor(t, ctx, router, actorRef, "/", payload)
+}
+
+// egressFetchResponse is the egress demo's answer to a fetch.
+type egressFetchResponse struct {
+	StatusCode int    `json:"statusCode"`
+	Body       string `json:"body"`
+	TLS        bool   `json:"tls"`
+	Error      string `json:"error"`
+}
+
+// decodeEgressFetch parses the body fetchThroughEgressActor returned.
+func decodeEgressFetch(t *testing.T, body []byte) egressFetchResponse {
+	t.Helper()
+	var got egressFetchResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decoding the egress demo's fetch response: %v (body %q)", err, body)
+	}
+	return got
 }
 
 // postThroughEgressActor POSTs payload to path on the egress demo Actor and
@@ -503,7 +594,8 @@ func TestActorEgressHTTPSNonStandardPort(t *testing.T) {
 		Name:       "https-origin",
 		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"http", "--body=" + expectedBody},
-		Port:       8443,
+		Port:       8080,
+		TLSPort:    8443,
 	}, true)
 	actorName, router, actorRef := prepareProtocolActor(t, ctx, "https-port")
 	since := metav1.NewTime(time.Now().Add(-time.Minute))
@@ -523,7 +615,7 @@ func TestActorEgressHTTPSNonStandardPort(t *testing.T) {
 	if got.Error != "" || got.StatusCode != http.StatusOK || got.Body != expectedBody || got.Protocol != "HTTP/1.1" || !got.TLS {
 		t.Errorf("HTTPS observation = %+v; want verified TLS, HTTP/1.1, status 200 and body %q", got, expectedBody)
 	}
-	assertProtocolGateway(t, ctx, since, actorName, target.Address())
+	assertProtocolGateway(t, ctx, since, actorName, target.TLSAddress())
 }
 
 func prepareProtocolOrigin(t *testing.T, ctx context.Context, spec e2e.ServerPod, encrypted bool) (e2e.Server, string, string) {
@@ -533,6 +625,9 @@ func prepareProtocolOrigin(t *testing.T, ctx context.Context, spec e2e.ServerPod
 	var reserved e2e.Server
 	var rootCA string
 	if encrypted {
+		if spec.TLSPort == 0 {
+			t.Fatalf("encrypted origin %s sets no TLSPort to publish its HTTPS listener on", spec.Name)
+		}
 		reserved = e2e.CreateServerService(t, ctx, spec)
 		// The unified gateway verifies local origins against service-DNS roots.
 		secret, err := e2e.GetClients().K8s.CoreV1().Secrets("podcertificate-controller-system").Get(ctx, "service-dns-ca-pool", metav1.GetOptions{})
@@ -556,7 +651,6 @@ func prepareProtocolOrigin(t *testing.T, ctx context.Context, spec e2e.ServerPod
 		spec.Volumes = []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: originSecret.Name}}}}
 		spec.VolumeMounts = []corev1.VolumeMount{{Name: "tls", MountPath: "/run/origin-tls", ReadOnly: true}}
 		spec.Args = append(spec.Args, "--tls-cert=/run/origin-tls/tls.crt", "--tls-key=/run/origin-tls/tls.key")
-		spec.HealthScheme = corev1.URISchemeHTTPS
 	}
 	target := e2e.DeployServerPod(t, ctx, spec)
 	if encrypted && target.ClusterIP != reserved.ClusterIP {
@@ -567,8 +661,12 @@ func prepareProtocolOrigin(t *testing.T, ctx context.Context, spec e2e.ServerPod
 	if net.ParseIP(target.ClusterIP).To4() != nil {
 		family = "IPv4"
 	}
-	t.Logf("origin %s/%s at %s (%s), TLS=%v", target.Namespace, spec.Name, target.Address(), family, encrypted)
-	address := protocolOriginRequest(target, spec.Name)
+	dialed := target.Address()
+	if encrypted {
+		dialed = target.TLSAddress()
+	}
+	t.Logf("origin %s/%s at %s (%s), TLS=%v", target.Namespace, spec.Name, dialed, family, encrypted)
+	address := protocolOriginRequest(target)
 	return target, address, rootCA
 }
 
@@ -771,22 +869,31 @@ func valueString(value *string) string {
 	return *value
 }
 
-// The unified gateway needs the origin's DNS name for SNI; the outer CONNECT
-// log still records target.Address().
-func protocolOriginRequest(target e2e.Server, service string) string {
-	return net.JoinHostPort(service+"."+target.Namespace+".svc.cluster.local", strconv.Itoa(target.Port))
+// protocolOriginRequest is the host:port an actor fetches target at: its DNS
+// name, which the unified gateway needs for SNI, on its TLS port if it has one.
+// The CONNECT authority in the gateway's access log is the ClusterIP on the
+// same port, target.TLSAddress() or target.Address().
+func protocolOriginRequest(target e2e.Server) string {
+	port := target.Port
+	if target.TLSPort != 0 {
+		port = target.TLSPort
+	}
+	return net.JoinHostPort(target.Name+"."+target.Namespace+".svc.cluster.local", strconv.Itoa(port))
 }
 
 func TestProtocolOriginRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name, ip string
+		tlsPort  int
+		want     string
 	}{
-		{"IPv4", "10.0.0.7"},
-		{"IPv6", "fd00::7"},
+		{"IPv4", "10.0.0.7", 0, "origin.test.svc.cluster.local:8080"},
+		{"IPv6", "fd00::7", 0, "origin.test.svc.cluster.local:8080"},
+		{"TLS", "10.0.0.7", 8443, "origin.test.svc.cluster.local:8443"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			target := e2e.Server{Namespace: "test", ClusterIP: tc.ip, Port: 8443}
-			if got, want := protocolOriginRequest(target, "origin"), "origin.test.svc.cluster.local:8443"; got != want {
+			target := e2e.Server{Name: "origin", Namespace: "test", ClusterIP: tc.ip, Port: 8080, TLSPort: tc.tlsPort}
+			if got, want := protocolOriginRequest(target), tc.want; got != want {
 				t.Fatalf("origin request = %q, want %q", got, want)
 			}
 		})

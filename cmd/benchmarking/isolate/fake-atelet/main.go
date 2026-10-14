@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Command fake-atelet stands in for atelet in control-plane benchmarks. It
-// runs as atelet's DaemonSet would, on the benchmark nodes only, so
+// runs in atelet's DaemonSet, installed by ate-setup --fake-data-plane, so
 // ate-api-server dials it as the node's atelet. It answers every AteomHerder
 // call with success after a delay, without running or saving any workload,
 // and relays fake-workersync's capacity reports for the fake Workers on its
@@ -57,8 +57,8 @@ import (
 var (
 	port             = pflag.Int("port", atelet.DefaultPort, "Port to serve AteomHerder on. ate-api-server dials atelet.DefaultPort.")
 	relayPort        = pflag.Int("relay-port", fakeworker.DefaultRelayPort, "Port to serve fake-workersync's capacity reports on.")
-	relayAllowedID   = pflag.String("relay-allowed-spiffe-id", installdefaults.SPIFFEID("benchmark-workloads", "fake-workersync"), "The only SPIFFE ID allowed to send capacity reports.")
-	healthListenAddr = pflag.String("health-listen-addr", ":9090", "Address to serve /healthz and /readyz on.")
+	relayAllowedID   = pflag.String("relay-allowed-spiffe-id", installdefaults.SPIFFEID("ate-system", "fake-workersync"), "The only SPIFFE ID allowed to send capacity reports.")
+	healthListenAddr = pflag.String("health-listen-addr", ":9091", "Address to serve /healthz and /readyz on.")
 
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle presented as the serving certificate and the ate-api-server client certificate.")
 	clientCACerts        = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify client certificates.")
@@ -66,13 +66,13 @@ var (
 	ateapiCAFile         = pflag.String("ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify ate-api-server.")
 	ateapiServerName     = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ate-api-server certificate.")
 
-	delay                       = pflag.Duration("delay", 0, "How long each AteomHerder call takes before it succeeds, not counting the actor certificate mint on Run and Restore.")
-	delayRun                    = pflag.Duration("delay-run", -1, "Override --delay for Run. Negative uses --delay.")
-	delayRestore                = pflag.Duration("delay-restore", -1, "Override --delay for Restore. Negative uses --delay.")
-	delayCheckpoint             = pflag.Duration("delay-checkpoint", -1, "Override --delay for Checkpoint. Negative uses --delay.")
-	delayUploadPausedCheckpoint = pflag.Duration("delay-upload-paused-checkpoint", -1, "Override --delay for UploadPausedCheckpoint. Negative uses --delay.")
-	delayTerminate              = pflag.Duration("delay-terminate", -1, "Override --delay for Terminate. Negative uses --delay.")
-	mintActorCertificate        = pflag.Bool("mint-actor-certificate", true, "On each Run and Restore that names an egress gateway, mint the actor's certificate from ate-api-server before the delay, as ateom does before starting the workload.")
+	delay                = pflag.Duration("delay", 0, "How long each AteomHerder call takes before it succeeds, not counting the actor certificate mint on Run and Restore.")
+	delayRun             = pflag.Duration("delay-run", -1, "Override --delay for Run. Negative uses --delay.")
+	delayRestore         = pflag.Duration("delay-restore", -1, "Override --delay for Restore. Negative uses --delay.")
+	delayCheckpoint      = pflag.Duration("delay-checkpoint", -1, "Override --delay for Checkpoint. Negative uses --delay.")
+	delayPromoteSnapshot = pflag.Duration("delay-promote-snapshot", -1, "Override --delay for PromoteSnapshot. Negative uses --delay.")
+	delayTerminate       = pflag.Duration("delay-terminate", -1, "Override --delay for Terminate. Negative uses --delay.")
+	mintActorCertificate = pflag.Bool("mint-actor-certificate", true, "On each Run and Restore that names an egress gateway, mint the actor's certificate from ate-api-server before the delay, as ateom does before starting the workload.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -90,7 +90,10 @@ func main() {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
-	callDelays, err := resolveDelays(*delay, *delayRun, *delayRestore, *delayCheckpoint, *delayUploadPausedCheckpoint, *delayTerminate)
+	if err := applyTuningEnv(pflag.CommandLine, os.LookupEnv); err != nil {
+		serverboot.Fatal(ctx, "Invalid tuning environment", err)
+	}
+	callDelays, err := resolveDelays(*delay, *delayRun, *delayRestore, *delayCheckpoint, *delayPromoteSnapshot, *delayTerminate)
 	if err != nil {
 		serverboot.Fatal(ctx, "Invalid --delay", err)
 	}

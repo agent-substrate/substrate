@@ -264,6 +264,12 @@ changes it.
 Defaults are also shown by `ate-setup --help` and by `--help` on the owning
 command. A setting with no default is unset unless something supplies it.
 
+Settings for the demos, benchmarks, and e2e tests are listed with them: the
+[counter](../demos/counter/README.md#settings) and
+[claude-code-multiplex](../demos/claude-code-multiplex/README.md#settings)
+demos, the [benchmarks](../benchmarking/README.md#settings), and the
+[e2e tests](../internal/e2e/README.md#settings).
+
 | Key                                          | Environment variable                            | Flag                                               | Default               | Applies to                               |
 |----------------------------------------------|-------------------------------------------------|----------------------------------------------------|-----------------------|------------------------------------------|
 | `actorJWT.algorithm`                         | `ACTOR_JWT_ALGORITHM`                           | `--actor-jwt-algorithm`                            | `ES256`               | (global)                                 |
@@ -284,18 +290,12 @@ command. A setting with no default is unset unless something supplies it.
 | `atenet.dataplane`                           | `ATE_ATENET_DATAPLANE`                          | `--atenet-dataplane`                               | `envoy`               | (global)                                 |
 | `atenet.egress.additionalExtprocService`     | `ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE`         | `--experimental-additional-egress-extproc-service` | —                     | (global)                                 |
 | `atenet.egress.credentialProvider`           | `ATE_CREDENTIAL_PROVIDER`                       | `--credential-provider`                            | —                     | (global)                                 |
-| `benchmark.actorMemory`                      | `BENCHMARK_ACTOR_MEMORY`                        | `--benchmark-actor-memory`                         | —                     | (global)                                 |
-| `benchmark.sandboxClass`                     | `ATE_BENCHMARK_SANDBOX_CLASS`                   | `--sandbox-class`                                  | `gvisor`              | `deploy benchmarks`, `delete benchmarks` |
-| `benchmark.workerCount`                      | `ATE_BENCHMARK_WORKER_COUNT`                    | `--worker-count`                                   | `1`                   | `deploy benchmarks`, `delete benchmarks` |
 | `clusterSize`                                | `ATE_INSTALL_CLUSTER_SIZE`                      | `--cluster-size`                                   | `size0`               | (global)                                 |
 | `context`                                    | `KUBECTL_CONTEXT`                               | `--context`                                        | —                     | (global)                                 |
 | `cordonControlPlane`                         | `ATE_INSTALL_CORDON_CONTROL_PLANE`              | `--cordon-control-plane`                           | `false`               | (global)                                 |
 | `csi.setup`                                  | `SETUP_CSI`                                     | `--setup-csi`                                      | `none`                | `deploy ate-system`                      |
-| `demo.anthropicAPIKey`                       | `ANTHROPIC_API_KEY`                             | — (no flag)                                        | — (secret)            | (global)                                 |
-| `demo.counter.storageClass`                  | `STORAGE_CLASS`                                 | `--storage-class`                                  | `standard`            | `deploy demo counter`                    |
-| `demo.counter.withExternalVolume`            | `ATE_DEMO_COUNTER_WITH_EXTERNAL_VOLUME`         | `--with-external-volume`                           | `false`               | `deploy demo counter`                    |
 | `docker.buildFlags`                          | `DOCKER_BUILD_FLAGS`                            | `--docker-build-flags`                             | —                     | (global)                                 |
-| `e2e.envoyConcurrency`                       | `E2E_ATE_ENVOY_CONCURRENCY`                     | `--e2e-envoy-concurrency`                          | `0`                   | (global)                                 |
+| `fakeDataPlane.enabled`                      | `ATE_INSTALL_FAKE_DATA_PLANE`                   | `--fake-data-plane`                                | `false`               | (global)                                 |
 | `gcp.clusterLocation`                        | `CLUSTER_LOCATION`                              | `--gcp-cluster-location`                           | —                     | (global)                                 |
 | `gcp.clusterName`                            | `CLUSTER_NAME`                                  | `--gcp-cluster-name`                               | —                     | (global)                                 |
 | `gcp.projectID`                              | `PROJECT_ID`                                    | `--gcp-project-id`                                 | —                     | (global)                                 |

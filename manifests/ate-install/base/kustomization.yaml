@@ -37,3 +37,4 @@ resources:
   - ../atelet.yaml
   - ../atenet-router.yaml
   - ../ate-otel-config.yaml
+  - ../ate-system-networkpolicies.yaml

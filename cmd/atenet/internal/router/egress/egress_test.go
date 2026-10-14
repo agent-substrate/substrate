@@ -227,8 +227,8 @@ func (m *egressMockClient) MintActorJwt(_ context.Context, req *ateapipb.MintAct
 		return nil, m.mintErr
 	}
 	return &ateapipb.MintActorJwtResponse{
-		ActorJwt:  fmt.Sprintf("jwt-%d", n),
-		ExpiresAt: timestamppb.New(time.Now().Add(time.Duration(req.GetExpirationSeconds()) * time.Second)),
+		ActorJwt:   fmt.Sprintf("jwt-%d", n),
+		ExpireTime: timestamppb.New(time.Now().Add(time.Duration(req.GetExpirationSeconds()) * time.Second)),
 	}, nil
 }
 

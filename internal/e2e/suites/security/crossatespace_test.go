@@ -310,11 +310,11 @@ func deployAtespaces(t *testing.T, ctx context.Context, clients *e2e.Clients, bu
 	a, _ := e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/security/atespace-a-pool.yaml.tmpl",
 		Template: "internal/e2e/fixtures/security/atespace-template.yaml.tmpl",
-	}, bucket, "sec-a", false)
+	}, bucket, "sec-a", nil)
 	b, _ := e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/security/atespace-b-namespace.yaml.tmpl",
 		Template: "internal/e2e/fixtures/security/atespace-template.yaml.tmpl",
-	}, bucket, "sec-b", false)
+	}, bucket, "sec-b", nil)
 	if a == b {
 		t.Fatalf("both fixtures rendered to atespace %q — the fixture no longer isolates anything", a)
 	}

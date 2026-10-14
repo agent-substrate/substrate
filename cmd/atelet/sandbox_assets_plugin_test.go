@@ -227,7 +227,7 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 	t.Run("cache hit", func(t *testing.T) {
 		f := newAssetHerderFixture(t, "s3")
 		sum := f.put(t, "kata-assets/vmlinux", content)
-		cached := ateletpath.RunSCBinaryPath(sum)
+		cached := ateletpath.AssetPath(sum)
 		if err := os.WriteFile(cached, content, 0o755); err != nil {
 			t.Fatal(err)
 		}

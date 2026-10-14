@@ -215,6 +215,13 @@ func TestShimTranslatesFlags(t *testing.T) {
 		args: []string{"--deploy-ate-system", "--cluster-size", "size10", "--cordon-control-plane"},
 		want: []string{"--cluster-size=size10 --cordon-control-plane deploy ate-system --setup-csi=none"},
 	}, {
+		name: "--fake-data-plane is forwarded to every action",
+		args: []string{"--deploy-ate-system", "--fake-data-plane", "--deploy-atelet"},
+		want: []string{
+			"--fake-data-plane deploy ate-system --setup-csi=none",
+			"--fake-data-plane deploy atelet",
+		},
+	}, {
 		name: "--cluster-size takes an attached value",
 		args: []string{"--cluster-size=size10", "--deploy-ate-apiserver"},
 		want: []string{"--cluster-size=size10 deploy apiserver"},
@@ -482,33 +489,68 @@ func TestExampleConfigurationParses(t *testing.T) {
 	}
 }
 
-// The settings table is generated from the registry, so a setting added
-// without documenting it is the drift this catches.
-func TestOperatorDocListsEverySetting(t *testing.T) {
-	path := docPath(t, "docs/operator-install.md")
-	raw, err := os.ReadFile(path)
+const operatorDoc = "docs/operator-install.md"
+
+// settingDocs maps a key prefix to the document that lists the settings under
+// it. Demo, benchmark, and e2e settings are documented with what uses them,
+// so the operator page lists only what an install uses.
+var settingDocs = []struct{ prefix, doc string }{
+	{"demo.counter.", "demos/counter/README.md"},
+	{"demo.anthropicAPIKey", "demos/claude-code-multiplex/README.md"},
+	{"benchmark.", "benchmarking/README.md"},
+	{"e2e.", "internal/e2e/README.md"},
+}
+
+// settingDoc returns the document that lists the setting with this key.
+func settingDoc(key string) string {
+	for _, d := range settingDocs {
+		if strings.HasPrefix(key, d.prefix) {
+			return d.doc
+		}
+	}
+	return operatorDoc
+}
+
+// readDoc returns the contents of a repository file, by relative path.
+func readDoc(t *testing.T, rel string) string {
+	t.Helper()
+	raw, err := os.ReadFile(docPath(t, rel))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	doc := string(raw)
+	return string(raw)
+}
+
+// The settings tables are written by hand, so a setting added without
+// documenting it is the drift this catches. A demo, benchmark, or e2e setting
+// must also stay out of the operator page.
+func TestDocsListEverySetting(t *testing.T) {
+	docs := map[string]string{operatorDoc: readDoc(t, operatorDoc)}
+	for _, d := range settingDocs {
+		docs[d.doc] = readDoc(t, d.doc)
+	}
 
 	for _, s := range config.All() {
 		t.Run(s.Key, func(t *testing.T) {
+			rel := settingDoc(s.Key)
 			want := []string{"`" + s.Key + "`", "`" + s.Env + "`"}
 			// A secret has no flag, so the docs have none to name.
 			if s.Flag != "" {
 				want = append(want, "`--"+s.Flag+"`")
 			}
 			for _, want := range want {
-				if !strings.Contains(doc, want) {
-					t.Errorf("docs/operator-install.md does not mention %s", want)
+				if !strings.Contains(docs[rel], want) {
+					t.Errorf("%s does not mention %s", rel, want)
 				}
+			}
+			if rel != operatorDoc && strings.Contains(docs[operatorDoc], "`"+s.Key+"`") {
+				t.Errorf("%s lists %s, which belongs in %s", operatorDoc, s.Key, rel)
 			}
 		})
 	}
 }
 
-// The operator documentation must not name a setting that no longer exists:
+// The settings documentation must not name a setting that no longer exists:
 // following it would configure nothing and the install would silently use a
 // default.
 func TestDocsNameNoRemovedSetting(t *testing.T) {
@@ -528,7 +570,11 @@ func TestDocsNameNoRemovedSetting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RepoRoot: %v", err)
 	}
-	for _, rel := range []string{"docs/operator-install.md", "docs/examples/substrate-install.yaml"} {
+	files := []string{operatorDoc, "docs/examples/substrate-install.yaml"}
+	for _, d := range settingDocs {
+		files = append(files, d.doc)
+	}
+	for _, rel := range files {
 		raw, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
 			t.Fatalf("ReadFile(%s): %v", rel, err)

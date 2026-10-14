@@ -236,3 +236,24 @@ func waitForEgressTrustBundle(t *testing.T, ctx context.Context, clients *Client
 	}
 	t.Fatalf("timed out waiting for ClusterTrustBundle %q to carry the pool's root certificates (last observed: %.80q...); is atecontroller's EgressMITMTrustReconciler running?", EgressTrustBundleObjectName, last)
 }
+
+// ServiceDNSTrustBundle returns the service-DNS signer's roots as PEM, for a
+// fetch that has to verify a ServiceDNSTLS server's own certificate rather than
+// a leaf the egress gateway minted.
+func ServiceDNSTrustBundle(t *testing.T, ctx context.Context, clients *Clients) string {
+	t.Helper()
+	// The ClusterTrustBundle podcertcontroller publishes for the signer.
+	const name = "servicedns.podcert.ate.dev:identity:primary-bundle"
+	bundles, err := clustertrustbundle.NewClient(clients.K8s, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctb, err := bundles.Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("getting ClusterTrustBundle %q: %v", name, err)
+	}
+	if blocks, ok := certificateBlocks(ctb.Spec.TrustBundle); !ok || len(blocks) == 0 {
+		t.Fatalf("ClusterTrustBundle %q holds no certificates: %.80q", name, ctb.Spec.TrustBundle)
+	}
+	return ctb.Spec.TrustBundle
+}

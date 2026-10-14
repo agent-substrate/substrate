@@ -26,7 +26,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"google.golang.org/grpc"
@@ -635,4 +637,216 @@ func TestGRPCInvalidRequests(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMux(t *testing.T) {
+	var completed atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/fetch" {
+			t.Errorf("path = %s, want /fetch", r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(body) != muxBodySize {
+			t.Errorf("len(body) = %d, want %d", len(body), muxBodySize)
+		}
+		completed.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	payload, err := json.Marshal(fetchRequest{URL: srv.URL + "/fetch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/mux", strings.NewReader(string(payload)))
+	newHandler(http.DefaultClient).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := int(completed.Load()); got != muxRequestCount {
+		t.Errorf("completed = %d, want %d", got, muxRequestCount)
+	}
+}
+
+func TestMuxNon200Fails(t *testing.T) {
+	var seen atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if int(seen.Add(1)) == muxRequestCount {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	payload, err := json.Marshal(fetchRequest{URL: srv.URL + "/fetch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/mux", strings.NewReader(string(payload)))
+	newHandler(http.DefaultClient).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusInternalServerError, recorder.Body.String())
+	}
+}
+
+func TestMuxInvalidRequests(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		body   string
+		status int
+	}{
+		{name: "method", method: http.MethodGet, body: `{}`, status: http.StatusMethodNotAllowed},
+		{name: "malformed JSON", method: http.MethodPost, body: `{`, status: http.StatusBadRequest},
+		{name: "missing hostname", method: http.MethodPost, body: `{"url":"http:///path"}`, status: http.StatusBadRequest},
+		{name: "https scheme", method: http.MethodPost, body: `{"url":"https://example.com/fetch"}`, status: http.StatusBadRequest},
+	}
+
+	handler := newHandler(http.DefaultClient)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(test.method, "/mux", strings.NewReader(test.body))
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != test.status {
+				t.Errorf("status = %d, want %d; body = %s", recorder.Code, test.status, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestPost(t *testing.T) {
+	headersReceived := make(chan struct{})
+	var bodyBytes atomic.Int32
+	srv, rootCA := startIPTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/fetch" {
+			t.Errorf("path = %s, want /fetch", r.URL.Path)
+		}
+		close(headersReceived)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		bodyBytes.Store(int32(len(body)))
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/post", handlePost(50*time.Millisecond))
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- postHandler(t, mux, "/post", fetchRequest{
+			URL:    srv.URL + "/fetch",
+			RootCA: rootCA,
+		})
+	}()
+
+	<-headersReceived
+	if got := bodyBytes.Load(); got != 0 {
+		t.Fatalf("body bytes immediately after headers = %d, want 0", got)
+	}
+
+	rec := <-done
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/post status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := int(bodyBytes.Load()); got != muxBodySize {
+		t.Errorf("body bytes after /post completed = %d, want %d", got, muxBodySize)
+	}
+}
+
+func TestPostInvalidRequests(t *testing.T) {
+	handler := newHandler(http.DefaultClient)
+
+	t.Run("method not allowed", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/post", nil)
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusMethodNotAllowed {
+			t.Errorf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+		}
+	})
+	t.Run("invalid rootCA", func(t *testing.T) {
+		recorder := postHandler(t, handler, "/post", fetchRequest{
+			URL:    "https://example.com/fetch",
+			RootCA: "not-a-cert",
+		})
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+		}
+	})
+}
+
+func TestSlowHeaders(t *testing.T) {
+	headersCompleted := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		close(headersCompleted)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer srv.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/slow-headers", handleSlowHeaders(80*time.Millisecond))
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- postHandler(t, mux, "/slow-headers", fetchRequest{
+			URL: srv.URL + "/",
+		})
+	}()
+
+	select {
+	case <-headersCompleted:
+		t.Fatal("headers completed before headerDelay elapsed")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-headersCompleted
+	rec := <-done
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/slow-headers status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestSlowHeadersInvalidRequests(t *testing.T) {
+	handler := newHandler(http.DefaultClient)
+
+	t.Run("method not allowed", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/slow-headers", nil)
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusMethodNotAllowed {
+			t.Errorf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+		}
+	})
+	t.Run("https rejected", func(t *testing.T) {
+		recorder := postHandler(t, handler, "/slow-headers", fetchRequest{
+			URL: "https://example.net/",
+		})
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+		}
+	})
 }

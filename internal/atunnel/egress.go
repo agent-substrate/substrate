@@ -32,6 +32,7 @@ import (
 // egressDialer opens an authenticated tunnel to an original destination.
 type egressDialer interface {
 	DialContext(context.Context, string) (net.Conn, error)
+	Close() error
 }
 
 type actorCertificateSource interface {
@@ -259,12 +260,16 @@ func (e *Egress) Deactivate(ctx context.Context, actorUID string) error {
 		active.wg.Wait()
 		close(done)
 	}()
+	var err error
 	select {
 	case <-done:
-		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("atunnel: waiting for active egress streams to stop: %w", ctx.Err())
+		err = fmt.Errorf("atunnel: waiting for active egress streams to stop: %w", ctx.Err())
 	}
+	if active.dialer != nil {
+		err = errors.Join(err, active.dialer.Close())
+	}
+	return err
 }
 
 func (e *Egress) handle(downstream net.Conn, active *egressActivation) {

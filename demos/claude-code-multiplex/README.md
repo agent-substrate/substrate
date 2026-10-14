@@ -28,7 +28,7 @@ This guide assumes you know Kubernetes and the general shape of agent runtimes (
 
 - A Kubernetes cluster with **Agent Substrate** installed (`./hack/install-ate.sh` from this repo's root).
 - `kubectl` configured against that cluster (the dashboard uses the operator's kubeconfig via [`client-go`](https://github.com/kubernetes/client-go) for pod-log reads).
-- Network reach to the substrate **api** gRPC service (`api.ate-system:443`). When running the dashboard from outside the cluster, port-forward it in a separate terminal (same convention as [`demos/sandbox/README.md`](../sandbox/README.md#3-port-forward-services)) and keep it running for the lifetime of the demo:
+- Network reach to the substrate **api** gRPC service (`api.ate-system:443`). If you run the dashboard as a pod in the cluster, label its namespace `ate.dev/api-access=true`, because ate-system's NetworkPolicies admit API clients only from labeled namespaces (see [`ate-system-networkpolicies.yaml`](../../manifests/ate-install/ate-system-networkpolicies.yaml)). When running the dashboard from outside the cluster, port-forward it in a separate terminal (same convention as [`demos/sandbox/README.md`](../sandbox/README.md#3-port-forward-services)) and keep it running for the lifetime of the demo:
   ```bash
   # Terminal 1: api port-forward
   kubectl port-forward svc/api 8080:443 -n ate-system
@@ -104,6 +104,18 @@ Click "Give a task". The UI picks a random idle agent and creates a task for it.
 - The released pod becomes available for the next queued task on a different agent.
 
 With three agents and two pods, the third agent stays suspended (state snapshotted) until a pod opens up.
+
+## Settings
+
+The installer reads this setting in addition to those in
+[docs/operator-install.md](../../docs/operator-install.md#settings), through the same
+environment variable and configuration document channels.
+
+| Key                    | Environment variable | Flag        | Default    | Applies to |
+|------------------------|----------------------|-------------|------------|------------|
+| `demo.anthropicAPIKey` | `ANTHROPIC_API_KEY`  | — (no flag) | — (secret) | (global)   |
+
+It is a secret, so it has no flag and the run report prints `<set>` for it.
 
 ## Upstream blockers worked around for this demo
 

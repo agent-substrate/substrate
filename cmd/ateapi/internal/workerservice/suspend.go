@@ -124,7 +124,7 @@ func checkActorHostedBy(ctx context.Context, actor *ateapipb.Actor, workerName, 
 		return apierror.NotFound("Actor %s not found", actorRef)
 	}
 	// An Actor with no assignment has no worker to speak for it: it is
-	// SUSPENDED, PAUSED, or CRASHED, and nothing hosts it.
+	// SUSPENDED (paused or not) or CRASHED, and nothing hosts it.
 	if assigned := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); assigned != workerName {
 		slog.WarnContext(ctx, "Refusing a suspend request for an actor hosted elsewhere",
 			slog.String("worker", workerName),

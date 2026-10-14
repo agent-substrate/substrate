@@ -81,12 +81,18 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 				return err
 			}
 		} else {
+			if err := e.refuseBundledOverExternal(ctx); err != nil {
+				return err
+			}
 			if readWriteDSN, ownerDSN, err = e.postgresReadWriteConnectionStrings(); err != nil {
 				return err
 			}
 		}
 	}
 	if ownerDSN == "" {
+		if err := e.refuseDroppingOwnerLogin(ctx); err != nil {
+			return err
+		}
 		ownerDSN = readWriteDSN
 	}
 	schema := e.Cfg.PostgresSchemaName()
@@ -156,8 +162,40 @@ func buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema string) map[string]str
 	}
 }
 
-// recordedConnectionStrings reads the credentials paired with an adopted Cloud
-// SQL instance.
+// refuseBundledOverExternal stops a run that names no database from moving an
+// install off its external PostgreSQL, since records hold no connection strings.
+func (e *Env) refuseBundledOverExternal(ctx context.Context) error {
+	// An explicitly empty Cloud SQL instance asks for the bundled database.
+	if e.Cfg.CloudSQL.InstanceSet {
+		return nil
+	}
+	recorded, _, err := e.recordedConnectionStrings(ctx)
+	if err != nil {
+		return err
+	}
+	if recorded == "" || usesBundledPostgres(recorded) {
+		return nil
+	}
+	return fmt.Errorf("ate-api-server uses an external PostgreSQL, but ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING is not set")
+}
+
+// refuseDroppingOwnerLogin stops a run that names no owner connection string
+// from replacing a separate owner login with the read-write one. The bundled
+// database's owner login is ate-setup's own, so it does not count.
+func (e *Env) refuseDroppingOwnerLogin(ctx context.Context) error {
+	recordedReadWrite, recordedOwner, err := e.recordedConnectionStrings(ctx)
+	if err != nil {
+		return err
+	}
+	if recordedOwner == recordedReadWrite || usesBundledPostgres(recordedOwner) {
+		return nil
+	}
+	return fmt.Errorf("ate-api-server uses a separate PostgreSQL owner login, but ATE_API_POSTGRES_OWNER_CONNECTION_STRING is not set; " +
+		"set it to the read-write connection string to use one login")
+}
+
+// recordedConnectionStrings reads the connection strings in the cluster's
+// Secret.
 func (e *Env) recordedConnectionStrings(ctx context.Context) (string, string, error) {
 	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
 	if err != nil || secret == nil {

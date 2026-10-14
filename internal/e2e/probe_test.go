@@ -16,29 +16,36 @@ package e2e
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// TestProbeTemplate_TrustBundle checks that the probe template includes the
-// trust bundle only when a suite asks for it with WithTrustBundle.
+// TestProbeTemplate_TrustBundle checks that the probe template projects
+// exactly the trust bundles a suite asks for, into one file.
 func TestProbeTemplate_TrustBundle(t *testing.T) {
 	t.Setenv(sandboxClassEnv, "")
 	for _, tc := range []struct {
 		name string
-		cfg  probeConfig
-		want bool
+		opts []ProbeOption
+		want []string
 	}{
-		{"default", probeConfig{}, false},
-		{"WithTrustBundle", probeConfig{trustBundle: true}, true},
+		{"default", nil, nil},
+		{"WithTrustBundle", []ProbeOption{WithTrustBundle()}, []string{"egress-mitm.ate.dev"}},
+		{"WithSystemRoots", []ProbeOption{WithSystemRoots()}, []string{"system-roots.ate.dev"}},
+		{"both", []ProbeOption{WithTrustBundle(), WithSystemRoots()}, []string{"egress-mitm.ate.dev", "system-roots.ate.dev"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var cfg probeConfig
+			for _, opt := range tc.opts {
+				opt(&cfg)
+			}
 			// Strict decoding is what proves the fragment landed at the right
 			// depth: misindented, it would fail the protojson decode or parse
 			// as some other field.
-			inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", tc.cfg.trustBundle)
+			inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", cfg.trustBundles)
 			rendered, err := os.ReadFile(renderManifest(t, probeManifests.Template, inline, blocks))
 			if err != nil {
 				t.Fatalf("reading rendered manifest: %v", err)
@@ -48,28 +55,34 @@ func TestProbeTemplate_TrustBundle(t *testing.T) {
 				t.Fatalf("probe template manifest yields %d documents, want 1", len(templates))
 			}
 
-			var source *ateapipb.TrustBundleDataSource
+			var sources []*ateapipb.TrustBundleDataSource
 			for _, vol := range templates[0].GetVolumes() {
 				for _, ds := range vol.GetSystemInfo().GetDataSources() {
 					if ds.GetTrustBundle() != nil {
-						source = ds.GetTrustBundle()
+						sources = append(sources, ds.GetTrustBundle())
 					}
 				}
 			}
-			if (source != nil) != tc.want {
-				t.Fatalf("trustBundle data source present = %v, want %v", source != nil, tc.want)
-			}
-			if source == nil {
+			if tc.want == nil {
+				if len(sources) != 0 {
+					t.Fatalf("trustBundle data sources = %v, want none", sources)
+				}
 				return
 			}
-			// The projected name must select the bundle atecontroller
-			// publishes, or actors fail closed on a name atelet rejects.
-			if names := source.GetNames(); len(names) != 1 || !strings.HasPrefix(EgressTrustBundleObjectName, names[0]+":") {
-				t.Errorf("trustBundle name = %q, want just the bundle backing %q", names, EgressTrustBundleObjectName)
+			if len(sources) != 1 {
+				t.Fatalf("got %d trustBundle data sources, want one projecting every name into one file", len(sources))
 			}
-			if source.GetPath() == "" {
+			if got := sources[0].GetNames(); !slices.Equal(got, tc.want) {
+				t.Errorf("trustBundle names = %q, want %q", got, tc.want)
+			}
+			if sources[0].GetPath() == "" {
 				t.Error("trustBundle projection has no path")
 			}
 		})
+	}
+	// The egress name must select the bundle atecontroller publishes, or
+	// actors fail closed on a name atelet rejects.
+	if !strings.HasPrefix(EgressTrustBundleObjectName, egressTrustBundleName+":") {
+		t.Errorf("egress trust bundle name %q does not select %q", egressTrustBundleName, EgressTrustBundleObjectName)
 	}
 }

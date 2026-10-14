@@ -85,7 +85,7 @@ func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespa
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListAtespaces(ctx, store.ListOptions{PageSize: req.PageSize, PageToken: req.PageToken})
+	page, err := s.impl.ListAtespaces(ctx, toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,6 @@ func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespa
 }
 
 func (s *ServiceImpl) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error) {
-	opts.PageSize = effectivePageSize(opts.PageSize)
 	page, err := s.store.ListAtespaces(ctx, opts)
 	if err != nil {
 		return page, mapListError(fmt.Errorf("while listing atespaces in db: %w", err))

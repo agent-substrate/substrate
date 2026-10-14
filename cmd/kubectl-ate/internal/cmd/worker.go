@@ -82,9 +82,8 @@ func workersHostingAtespace(ctx context.Context, lister ActorLister, atespace st
 	pageToken := ""
 	for {
 		resp, err := lister.ListActors(ctx, &ateapipb.ListActorsRequest{
-			PageSize:  1000,
-			PageToken: pageToken,
-			Atespace:  atespace,
+			Options:  &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
+			Atespace: atespace,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to list actors in atespace %q: %w", atespace, err)
@@ -107,8 +106,7 @@ func listAllWorkers(ctx context.Context, lister WorkerLister) ([]*ateapipb.Worke
 	pageToken := ""
 	for {
 		resp, err := lister.ListWorkers(ctx, &ateapipb.ListWorkersRequest{
-			PageSize:  1000,
-			PageToken: pageToken,
+			Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to list workers: %w", err)
@@ -208,8 +206,7 @@ func (r *GetWorkersRunner) Run(ctx context.Context) error {
 }
 
 func runGetWorkers(cmd *cobra.Command, args []string) error {
-	ctx := cmd.Context()
-	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+	apiClient, err := newAPIClient(cmd)
 	if err != nil {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 	}
@@ -227,7 +224,7 @@ func runGetWorkers(cmd *cobra.Command, args []string) error {
 		outputFmt:    outputFmt,
 		out:          cmd.OutOrStdout(),
 	}
-	return runner.Run(ctx)
+	return runner.Run(cmd.Context())
 }
 
 // PodMetricsLister abstracts fetching Kubernetes pod metrics.
@@ -258,6 +255,7 @@ type TopWorkersRunner struct {
 	sandboxClass     string
 	outputFmt        string
 	out              io.Writer
+	stderr           io.Writer
 }
 
 func (r *TopWorkersRunner) Run(ctx context.Context) error {
@@ -275,6 +273,7 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 	if r.podMetricsLister != nil {
 		podMetricsList, err := r.podMetricsLister.ListPodMetrics(ctx, r.namespace, metav1.ListOptions{})
 		if err != nil {
+			vlogf(r.stderr, vBasic, "Failed to list pod metrics (CPU/memory will be unavailable): %v", err)
 			metricsUnavailable = true
 		} else {
 			for _, pm := range podMetricsList {
@@ -298,7 +297,9 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 		if !metricsUnavailable {
 			key := ns + "/" + podName
 			if pm, ok := metricsMap[key]; ok {
-				cpuStr, memStr = extractContainerUsage(pm)
+				cpuStr, memStr = extractContainerUsage(pm, r.stderr)
+			} else {
+				vlogf(r.stderr, vBasic, "No pod metrics returned for worker pod %s", key)
 			}
 		}
 
@@ -316,7 +317,7 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 	return printer.PrintWorkerTopTo(r.out, items, r.outputFmt)
 }
 
-func extractContainerUsage(pm metricsv1beta1.PodMetrics) (string, string) {
+func extractContainerUsage(pm metricsv1beta1.PodMetrics, stderr io.Writer) (string, string) {
 	var cpuQuant, memQuant *resource.Quantity
 	for _, c := range pm.Containers {
 		if c.Name == "ateom" {
@@ -328,6 +329,8 @@ func extractContainerUsage(pm metricsv1beta1.PodMetrics) (string, string) {
 		}
 	}
 	if cpuQuant == nil && len(pm.Containers) > 0 {
+		vlogf(stderr, vFlow, "Container \"ateom\" not found in pod metrics for %s/%s; summing all %d container(s)",
+			pm.Namespace, pm.Name, len(pm.Containers))
 		var totalCPU, totalMem resource.Quantity
 		for _, c := range pm.Containers {
 			totalCPU.Add(c.Usage[corev1.ResourceCPU])
@@ -347,8 +350,7 @@ func extractContainerUsage(pm metricsv1beta1.PodMetrics) (string, string) {
 }
 
 func runTopWorkers(cmd *cobra.Command, args []string) error {
-	ctx := cmd.Context()
-	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+	apiClient, err := newAPIClient(cmd)
 	if err != nil {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 	}
@@ -356,7 +358,9 @@ func runTopWorkers(cmd *cobra.Command, args []string) error {
 
 	var metricsLister PodMetricsLister
 	metricsClient, err := ateclient.NewMetricsClientset(kubeconfig, k8sContext)
-	if err == nil {
+	if err != nil {
+		vlogf(cmd.ErrOrStderr(), vBasic, "Failed to create Kubernetes metrics client (CPU/memory will be unavailable): %v", err)
+	} else {
 		metricsLister = &k8sPodMetricsLister{metricsClient: metricsClient}
 	}
 
@@ -370,9 +374,10 @@ func runTopWorkers(cmd *cobra.Command, args []string) error {
 		sandboxClass:     topWorkerClassFlag,
 		outputFmt:        outputFmt,
 		out:              cmd.OutOrStdout(),
+		stderr:           cmd.ErrOrStderr(),
 	}
 
-	return runner.Run(ctx)
+	return runner.Run(cmd.Context())
 }
 
 func init() {

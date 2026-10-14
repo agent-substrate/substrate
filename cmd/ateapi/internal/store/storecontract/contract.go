@@ -749,7 +749,6 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			ateapipb.ActorState_ACTOR_STATE_CRASHED,
 			ateapipb.ActorState_ACTOR_STATE_DELETING,
 			ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			ateapipb.ActorState_ACTOR_STATE_PAUSED,
 		} {
 			t.Run(state.String(), func(t *testing.T) {
 				s := setup(t)

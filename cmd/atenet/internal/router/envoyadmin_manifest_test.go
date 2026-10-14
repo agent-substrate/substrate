@@ -357,19 +357,36 @@ func parseEnvoyAdminBootstrap(t *testing.T, raw string) envoyAdminBootstrap {
 
 func findDeployment(t *testing.T, path, name string) appsv1.Deployment {
 	t.Helper()
+	var d appsv1.Deployment
+	manifestObject(t, path, "Deployment", name, &d)
+	return d
+}
+
+// manifestObject decodes the object with the given kind and name in the
+// manifest at path into into.
+func manifestObject(t *testing.T, path, kind, name string, into any) {
+	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)
 	}
 	for _, doc := range strings.Split(string(raw), "\n---\n") {
-		var d appsv1.Deployment
-		if err := yaml.Unmarshal([]byte(doc), &d); err != nil {
+		var head struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &head); err != nil {
 			t.Fatalf("parsing a document of %s: %v", path, err)
 		}
-		if d.Kind == "Deployment" && d.Name == name {
-			return d
+		if head.Kind != kind || head.Metadata.Name != name {
+			continue
 		}
+		if err := yaml.Unmarshal([]byte(doc), into); err != nil {
+			t.Fatalf("decoding the %s %s from %s: %v", name, kind, path, err)
+		}
+		return
 	}
-	t.Fatalf("%s has no Deployment named %s", path, name)
-	return appsv1.Deployment{}
+	t.Fatalf("%s has no %s named %s", path, kind, name)
 }

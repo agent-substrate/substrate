@@ -218,6 +218,10 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	if snap == nil {
 		return nil, nil, apierror.FailedPrecondition("Actor %s holds no external snapshot to tag", actorRef)
 	}
+	// The actor's latest snapshot is local only. It must be uploaded before it can be tagged.
+	if latestSnapshotIsLocalOnly(actor.GetStatus()) {
+		return nil, nil, apierror.FailedPrecondition("Actor %s holds no external snapshot of its latest state to tag: suspend it first", actorRef)
+	}
 	// Every way an Actor comes to hold an external snapshot records the
 	// template its guest state was built under: a suspend through
 	// ensureSuspendedFinalized, a create from a tag through the tag's own UID.

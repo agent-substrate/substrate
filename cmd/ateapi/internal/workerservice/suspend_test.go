@@ -37,7 +37,7 @@ const (
 
 // seedHostedActor stores an actor assigned to workerName, as the placement
 // path leaves one that is RUNNING. An empty workerName seeds an actor with no
-// assignment at all, which is how a SUSPENDED, PAUSED, or CRASHED one looks.
+// assignment at all, which is how a SUSPENDED or CRASHED one looks.
 func seedHostedActor(t *testing.T, st store.Interface, workerName string) *ateapipb.Actor {
 	t.Helper()
 	actorStatus := &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}

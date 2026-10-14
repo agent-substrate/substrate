@@ -65,13 +65,6 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 			wantCode:  codes.FailedPrecondition,
 		},
 		{
-			name:      "delete paused actor rejected when not any_state",
-			seedState: ateapipb.ActorState_ACTOR_STATE_PAUSED,
-			anyState:  false,
-			wantErr:   true,
-			wantCode:  codes.FailedPrecondition,
-		},
-		{
 			name:      "any_state delete suspended actor succeeds",
 			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			anyState:  true,
@@ -80,12 +73,6 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 		{
 			name:      "any_state delete running actor succeeds",
 			seedState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			anyState:  true,
-			wantErr:   false,
-		},
-		{
-			name:      "any_state delete paused actor succeeds",
-			seedState: ateapipb.ActorState_ACTOR_STATE_PAUSED,
 			anyState:  true,
 			wantErr:   false,
 		},
@@ -168,8 +155,6 @@ func TestEnsureMarkedDeleting_StateMatrix(t *testing.T) {
 				ateapipb.ActorState_ACTOR_STATE_RUNNING:     true,
 				ateapipb.ActorState_ACTOR_STATE_RESUMING:    true,
 				ateapipb.ActorState_ACTOR_STATE_SUSPENDING:  true,
-				ateapipb.ActorState_ACTOR_STATE_PAUSING:     true,
-				ateapipb.ActorState_ACTOR_STATE_PAUSED:      true,
 				ateapipb.ActorState_ACTOR_STATE_SUSPENDED:   true,
 				ateapipb.ActorState_ACTOR_STATE_CRASHED:     true,
 				ateapipb.ActorState_ACTOR_STATE_REVERTING:   true,

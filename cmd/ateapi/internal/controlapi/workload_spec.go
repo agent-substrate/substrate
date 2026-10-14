@@ -220,7 +220,7 @@ func toAteletActorMetadataField(in ateapipb.ActorMetadataField) ateletpb.ActorMe
 // toAteletWakeupProbe projects the template wakeup probe field onto the ateletpb wire
 // type. Returns nil when the source is nil so containers without a probe
 // stay unchanged on the wire.
-func toAteletWakeupProbe(in *ateapipb.ContainerWakeupProbe) *ateletpb.WakeupProbe {
+func toAteletWakeupProbe(in *ateapipb.WakeupProbe) *ateletpb.WakeupProbe {
 	if in == nil {
 		return nil
 	}

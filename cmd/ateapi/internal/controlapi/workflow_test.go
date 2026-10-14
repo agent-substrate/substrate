@@ -57,7 +57,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 			wantStored: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
 		},
 		{
-			name:      "pause marks the actor pausing",
+			name:      "pause marks the actor suspending",
 			seedState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) {
 				if _, err := w.ensureMarkedPausing(context.Background(), ref, actor, tmpl); err != nil {
@@ -65,8 +65,8 @@ func TestActorStateChangeRecords(t *testing.T) {
 				}
 			},
 			wantOp:     ateattr.OperationPause,
-			wantState:  ateattr.ActorStatePausing,
-			wantStored: ateapipb.ActorState_ACTOR_STATE_PAUSING,
+			wantState:  ateattr.ActorStateSuspending,
+			wantStored: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
 		},
 		{
 			name:      "delete marks the actor deleting",

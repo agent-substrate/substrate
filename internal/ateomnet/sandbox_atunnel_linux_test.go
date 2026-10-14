@@ -96,3 +96,79 @@ func TestSandboxEgressReachesAtunnelOnAnyPort(t *testing.T) {
 		go accept()
 	}
 }
+
+func TestSandboxLinkLocalDoesNotReachAtunnel(t *testing.T) {
+	roottest.Require(t, "creates network namespaces")
+	ctx := context.Background()
+	const egressPort = 15001
+
+	n, err := ateomnet.SetupSandboxNetwork(ctx, ateomnet.SandboxNetworkConfig{
+		ActorUID:   "99999999-9999-9999-9999-999999999999",
+		Veth:       true,
+		EgressPort: egressPort,
+	})
+	if err != nil {
+		t.Fatalf("SetupSandboxNetwork: %v", err)
+	}
+	t.Cleanup(func() { ateomnet.CleanupSandboxNetwork(n) })
+
+	listeners, err := netns.Listen(ctx, n.GatewayNetNS, []uint16{egressPort})
+	if err != nil {
+		t.Fatalf("netns.Listen: %v", err)
+	}
+	defer listeners[0].Close()
+	listener := listeners[0].(*net.TCPListener)
+
+	if err := listener.SetDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	var linkLocalDialErr error
+	if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
+		conn, err := net.DialTimeout("tcp", "169.254.169.254:80", 250*time.Millisecond)
+		linkLocalDialErr = err
+		if conn != nil {
+			conn.Close()
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("dial to link-local address: %v", err)
+	}
+	if linkLocalDialErr == nil {
+		t.Fatal("dial to link-local address succeeded")
+	}
+	if timeout, ok := linkLocalDialErr.(net.Error); ok && timeout.Timeout() {
+		t.Fatalf("link-local dial timed out instead of being rejected: %v", linkLocalDialErr)
+	}
+	if conn, err := listener.Accept(); err == nil {
+		conn.Close()
+		t.Fatal("link-local connection reached atunnel")
+	} else if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
+		t.Fatalf("Accept after link-local dial: %v", err)
+	}
+
+	if err := listener.SetDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	const allowedDestination = "192.0.2.1:443"
+	if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
+		conn, err := net.Dial("tcp", allowedDestination)
+		if err != nil {
+			return err
+		}
+		return conn.Close()
+	}); err != nil {
+		t.Fatalf("dial to allowed CIDR: %v", err)
+	}
+	conn, err := listener.Accept()
+	if err != nil {
+		t.Fatalf("accept allowed connection: %v", err)
+	}
+	defer conn.Close()
+	destination, err := atunnel.TCPOriginalDestination(conn)
+	if err != nil {
+		t.Fatalf("TCPOriginalDestination: %v", err)
+	}
+	if destination != allowedDestination {
+		t.Errorf("atunnel saw destination %q, want %q", destination, allowedDestination)
+	}
+}

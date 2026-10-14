@@ -159,7 +159,7 @@ func assetsAfterCollateral(prepFailedPhase string, assets time.Duration) time.Du
 // the actor that wrote the snapshot. An empty result means the manifest has not
 // been read yet, so the kind is not knowable.
 func restoreSnapshotKind(req *ateletpb.RestoreRequest, rec *sandboxAssetsRecord) string {
-	if req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
+	if req.GetSnapshot().GetObject() == nil {
 		return ateattr.SnapshotKindLocal
 	}
 	if rec == nil {
@@ -177,7 +177,7 @@ func restoreSnapshotKind(req *ateletpb.RestoreRequest, rec *sandboxAssetsRecord)
 // writes the node-local one, a suspend the actor's durable latest, and a commit
 // by an actor in the golden atespace the template's golden image.
 func checkpointSnapshotKind(req *ateletpb.CheckpointRequest) string {
-	if req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
+	if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_DEFERRED {
 		return ateattr.SnapshotKindLocal
 	}
 	if req.GetAtespace() == resources.GoldenActorAtespace {

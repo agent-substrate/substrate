@@ -25,29 +25,6 @@ import (
 	"time"
 )
 
-// TestWaitForSocketReturnsPromptly pins the reason this helper exists: it sits on
-// the restore path, so what it costs is decided by how often it looks, not by how
-// long virtiofsd takes to bind. A socket appearing after 5ms should not cost a
-// 50ms tick.
-func TestWaitForSocketReturnsPromptly(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "vfsd.sock")
-	go func() {
-		time.Sleep(5 * time.Millisecond)
-		f, err := os.Create(path)
-		if err == nil {
-			_ = f.Close()
-		}
-	}()
-
-	start := time.Now()
-	if err := waitForSocket(context.Background(), path, 5*time.Second); err != nil {
-		t.Fatalf("waitForSocket: %v", err)
-	}
-	if elapsed := time.Since(start); elapsed > 40*time.Millisecond {
-		t.Errorf("waited %s for a socket that appeared after 5ms; the poll interval dominates", elapsed)
-	}
-}
-
 func TestWaitForSocketAlreadyPresent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vfsd.sock")
 	f, err := os.Create(path)

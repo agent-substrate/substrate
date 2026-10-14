@@ -26,7 +26,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path"
 	"slices"
 	"strings"
 	"testing"
@@ -37,49 +36,21 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	corev1 "k8s.io/api/core/v1"
 )
 
 const probeTemplate = "probe"
 
 var probeNamespace string
 
-// servingBundle is the echo-https pod's certificate chain and key, in one file.
-const servingBundle = "/run/servicedns.podcert.ate.dev/credential-bundle.pem"
-
-// The origins the injection fetches reach, one per scheme.
-var (
-	// echoHTTPSServer serves the certificate kubelet requests for it from the
-	// cluster's service-DNS signer, which names the Services selecting the pod
-	// as <name>.<namespace>.svc. The egress gateway trusts that signer once
-	// hack/setup-e2e-egress-tls-kind.sh has run.
-	echoHTTPSServer = e2e.ServerPod{
-		Name:         "echo-https",
-		ImportPath:   "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
-		Args:         []string{"http", "--tls-cert=" + servingBundle, "--tls-key=" + servingBundle},
-		Port:         443,
-		TargetPort:   8443,
-		HealthScheme: corev1.URISchemeHTTPS,
-		Volumes: []corev1.Volume{{
-			Name: "servicedns",
-			VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
-				Sources: []corev1.VolumeProjection{{PodCertificate: &corev1.PodCertificateProjection{
-					SignerName:           "servicedns.podcert.ate.dev/identity",
-					KeyType:              "ECDSAP256",
-					CredentialBundlePath: path.Base(servingBundle),
-				}}},
-			}},
-		}},
-		VolumeMounts: []corev1.VolumeMount{{Name: "servicedns", MountPath: path.Dir(servingBundle), ReadOnly: true}},
-	}
-	echoHTTPServer = e2e.ServerPod{
-		Name:       "echo-http",
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
-		Args:       []string{"http"},
-		Port:       80,
-		TargetPort: 8080,
-	}
-)
+// echoServer is the origin the injection fetches reach, over HTTPS and
+// cleartext HTTP alike: testserver's /echoheaders returns the headers it
+// received. Its certificate comes from the cluster's service-DNS signer, which
+// the egress gateway trusts once hack/setup-e2e-egress-tls-kind.sh has run.
+var echoServer = e2e.ServiceDNSTLS(e2e.ServerPod{
+	Name:       "echo",
+	ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+	Args:       []string{"http"},
+})
 
 // The hosts of the fail-closed cases.
 const (
@@ -115,7 +86,7 @@ var withPlaceholder = []string{"header=" + url.QueryEscape("Authorization:"+plac
 //     (default-deny), 403 or 500 for a URI naming a provider this gateway
 //     does not serve — over HTTPS and plain HTTP alike.
 //
-// The echo origins run in the cluster, so the HTTPS one needs the gateway to
+// The echo origin runs in the cluster, so its HTTPS side needs the gateway to
 // trust the service-DNS signer its certificate comes from, which
 // hack/setup-e2e-egress-tls-kind.sh adds after the install. The install must
 // be made with the bundled provider, which deploys the k8s-credential-provider
@@ -132,20 +103,16 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	echoHTTPS := e2e.DeployServerPod(t, ctx, echoHTTPSServer)
-	httpSpec := echoHTTPServer
-	httpSpec.Namespace = echoHTTPS.Namespace
-	echoHTTP := e2e.DeployServerPod(t, ctx, httpSpec)
-	// The names the service-DNS signer certifies.
-	httpsHost := echoHTTPSServer.Name + "." + echoHTTPS.Namespace + ".svc"
-	httpHost := echoHTTPServer.Name + "." + echoHTTP.Namespace + ".svc"
+	echo := e2e.DeployServerPod(t, ctx, echoServer)
+	// The name the service-DNS signer certifies.
+	echoHost := echo.SvcName()
 
 	e2e.ConfigureCredentialProvider(t)
 
 	probeNamespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egresscredinject", e2e.WithTrustBundle())
 
 	const id = "probe-credinject"
-	createAndResumeActor(t, ctx, clients, id, httpsHost, httpHost)
+	createAndResumeActor(t, ctx, clients, id, echoHost)
 	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	rc, err := e2e.NewRouterClient(ctx)
@@ -155,18 +122,18 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 	defer rc.Close()
 
 	// HTTPS is injected on the gateway's MITM leg and plain HTTP on its
-	// cleartext leg, each by a rule with the same effect.
+	// cleartext leg, each by a rule with the same effect. dial is where the
+	// echo origin serves the scheme.
 	legs := []struct {
 		scheme string
-		host   string
-		echo   e2e.Server
+		dial   string
 	}{
-		{"https", httpsHost, echoHTTPS},
-		{"http", httpHost, echoHTTP},
+		{"https", echo.TLSAddress()},
+		{"http", echo.Address()},
 	}
 	for _, leg := range legs {
 		t.Run(leg.scheme, func(t *testing.T) {
-			origin := leg.scheme + "://" + leg.host + "/echoheaders"
+			origin := leg.scheme + "://" + echoHost + "/echoheaders"
 
 			// The upstream must receive the policy's credential instead of the
 			// actor's placeholder.
@@ -210,7 +177,7 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 		for _, leg := range legs {
 			t.Run(tt.name+"/"+leg.scheme, func(t *testing.T) {
 				origin := leg.scheme + "://" + tt.host + "/"
-				withDial := slices.Concat(withPlaceholder, []string{"dial=" + url.QueryEscape(leg.echo.Address())})
+				withDial := slices.Concat(withPlaceholder, []string{"dial=" + url.QueryEscape(leg.dial)})
 				got := probeFetch(t, ctx, rc, id, origin, withDial)
 				if got.Error != "" {
 					t.Fatalf("fetch of %s failed at the transport (%s), want an HTTP denial %v from the gateway", origin, got.Error, tt.wantStatuses)
@@ -327,10 +294,9 @@ func probeFetch(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, ori
 }
 
 // createAndResumeActor first deletes any actor left by an earlier run, since
-// actor records outlive the fixture namespace. echoHTTPSHost and echoHTTPHost
-// are the echo origins' names, whose rules inject a credential the provider
-// resolves.
-func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id, echoHTTPSHost, echoHTTPHost string) {
+// actor records outlive the fixture namespace. echoHost is the echo origin's
+// name, whose rules inject a credential the provider resolves.
+func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id, echoHost string) {
 	t.Helper()
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
 	// NotFound is the normal case on a fresh run. Other errors don't stop the
@@ -356,10 +322,10 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 		}
 	})
 	// Exercise each credential outcome on both HTTP and HTTPS: the echo
-	// origins' credential resolves, and each fail-closed host's cannot.
+	// origin's credential resolves, and each fail-closed host's cannot.
 	rules := []*ateapipb.EgressRule{
-		e2e.EgressInjectHeader("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHTTPSHost),
-		e2e.EgressInjectHeaderHTTP("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHTTPHost),
+		e2e.EgressInjectHeader("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost),
+		e2e.EgressInjectHeaderHTTP("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost),
 	}
 	for _, credential := range []struct {
 		host string

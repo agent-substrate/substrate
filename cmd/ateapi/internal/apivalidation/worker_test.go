@@ -22,6 +22,7 @@ import (
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -620,6 +621,125 @@ func TestValidateRequestActorSuspendRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, ValidateRequestActorSuspendRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+func TestValidateReportActorSnapshotStateRequest(t *testing.T) {
+	report := func(gen int32) *ateapipb.SnapshotReport {
+		return &ateapipb.SnapshotReport{
+			Uuid:            fmt.Sprintf("snap-%d", gen),
+			Generation:      gen,
+			Fidelity:        ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			Object:          &ateapipb.ObjectSnapshot{SnapshotUri: fmt.Sprintf("gs://bucket/actors/a/snap-%d", gen)},
+			LocalCommitTime: timestamppb.Now(),
+		}
+	}
+	valid := func(mutate ...func(*ateapipb.ReportActorSnapshotStateRequest)) *ateapipb.ReportActorSnapshotStateRequest {
+		durable := report(1)
+		durable.DurableCompleteTime = timestamppb.Now()
+		r := &ateapipb.ReportActorSnapshotStateRequest{
+			Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+			ActorUid: apiOtherWorkerName,
+			State: &ateapipb.ActorSnapshotState{
+				LatestLocal:   report(2),
+				Uploading:     report(2),
+				LatestDurable: durable,
+				UploadDueTime: timestamppb.Now(),
+			},
+		}
+		for _, m := range mutate {
+			m(r)
+		}
+		return r
+	}
+	local := field.NewPath("state", "latest_local")
+	tests := []struct {
+		name string
+		req  *ateapipb.ReportActorSnapshotStateRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		req:  valid(),
+	}, {
+		name: "valid detach: no local snapshot",
+		req: valid(func(r *ateapipb.ReportActorSnapshotStateRequest) {
+			r.State.LatestLocal = nil
+			r.State.Uploading = nil
+			r.State.UploadDueTime = nil
+		}),
+	}, {
+		name: "valid empty state",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State = &ateapipb.ActorSnapshotState{} }),
+	}, {
+		name: "missing actor",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.Actor = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("actor"), "")},
+	}, {
+		name: "missing actor.atespace",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.Actor.Atespace = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor", "atespace"), "")},
+	}, {
+		name: "invalid actor.name",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.Actor.Name = "UPPER" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_uid",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.ActorUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
+	}, {
+		name: "invalid actor_uid",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.ActorUid = "not-a-uuid" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "missing state",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("state"), "")},
+	}, {
+		name: "missing uuid",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State.LatestLocal.Uuid = "" }),
+		want: field.ErrorList{field.Required(local.Child("uuid"), "")},
+	}, {
+		name: "invalid uuid",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State.LatestLocal.Uuid = "../escape" }),
+		want: field.ErrorList{field.Invalid(local.Child("uuid"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "generation below 1",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State.LatestLocal.Generation = -1 }),
+		want: field.ErrorList{field.Invalid(local.Child("generation"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "missing fidelity",
+		req: valid(func(r *ateapipb.ReportActorSnapshotStateRequest) {
+			r.State.LatestLocal.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+		}),
+		want: field.ErrorList{field.Required(local.Child("fidelity"), "")},
+	}, {
+		name: "unknown fidelity",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State.LatestLocal.Fidelity = 4 }),
+		want: field.ErrorList{field.Invalid(local.Child("fidelity"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "missing object",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State.LatestLocal.Object = nil }),
+		want: field.ErrorList{field.Required(local.Child("object"), "")},
+	}, {
+		name: "missing object.snapshot_uri",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State.LatestLocal.Object.SnapshotUri = "" }),
+		want: field.ErrorList{field.Required(local.Child("object", "snapshot_uri"), "")},
+	}, {
+		name: "valid without local_commit_time",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State.LatestDurable.LocalCommitTime = nil }),
+	}, {
+		name: "uploading is validated",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State.Uploading.Uuid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("state", "uploading", "uuid"), "")},
+	}, {
+		name: "latest_durable is validated",
+		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State.LatestDurable.Object = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("state", "latest_durable", "object"), "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateReportActorSnapshotStateRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }

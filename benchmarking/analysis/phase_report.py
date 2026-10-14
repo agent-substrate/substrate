@@ -50,6 +50,7 @@ import re
 import statistics
 import sys
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -73,9 +74,11 @@ SANDBOX_CLASS_KEY = "ate.sandbox.class"
 TEMPLATE_KEY = "ate.template.name"
 ERROR_TYPE_KEY = "error.type"
 
-# Only ateom-microvm writes the ateom records, and they carry no sandbox
-# class of their own; the atelet record of the same operation does.
-ATEOM_SANDBOX_CLASS = "microvm"
+# The ateom records carry no sandbox class or snapshot kind of their own;
+# both ateoms write the same two messages, and the atelet record of the same
+# operation says which runtime it was. join_layers copies them across.
+MICROVM = "microvm"
+GVISOR = "gvisor"
 
 # The phase every record reports, and the one the report derives: the part of
 # the total no logged phase accounts for.
@@ -88,11 +91,14 @@ PHASE_ORDER = [
     # atelet restore
     "volume_mount", "manifest_fetch", "sandbox_assets", "download",
     "oci_unpack", "ateom_restore",
-    # ateom restore
-    "prep", "bundles", "upper_join", "lowers", "tap", "vmm_launch",
-    "vm_restore", "resume", "wakeup_probe",
+    # ateom restore: micro-VM (cmd/ateom-microvm/phaselog.go) and gVisor
+    # (cmd/ateom-gvisor/phaselog.go), each in its own sequential order
+    "prep", "egress_prepare", "net_setup", "bundles", "upper_join", "lowers",
+    "pause_rootfs", "pause_create", "pause_restore",
+    "app_rootfs", "app_create", "app_restore",
+    "tap", "vmm_launch", "vm_restore", "resume", "wakeup_probe", "activate",
     # atelet + ateom checkpoint
-    "pause", "snapshot", "durable_dir", "rootfs_upper",
+    "pause", "checkpoint", "snapshot", "durable_dir", "rootfs_upper",
     "ateom_checkpoint", "teardown", "persist",
     UNATTRIBUTED, TOTAL,
 ]
@@ -101,8 +107,9 @@ _PHASE_RANK = {name: i for i, name in enumerate(PHASE_ORDER)}
 # Which atelet phase wraps the ateom record.
 INNER_PHASE = {"restore": "ateom_restore", "checkpoint": "ateom_checkpoint"}
 
-# The ateom checkpoint captures that run concurrently on the paused guest: the
-# paused window costs their max, not their sum.
+# The micro-VM checkpoint captures that run concurrently on the paused guest:
+# the paused window costs their max, not their sum. gVisor's checkpoint phases
+# are sequential.
 CONCURRENT_CAPTURES = ("snapshot", "durable_dir", "rootfs_upper")
 
 # Slack on the window in which the ateom record of an operation must land:
@@ -155,24 +162,28 @@ def parse_time(s: str) -> float | None:
         return None
 
 
-def unattributed(source: str, op: str, phases: dict[str, float]) -> float | None:
+def unattributed(source: str, op: str, sandbox_class: str, phases: dict[str, float]) -> float | None:
     """The total minus what the logged phases account for, where that is
-    well-defined: the atelet checkpoint phases are sequential; the ateom
-    checkpoint is prep, pause, the concurrent captures (max), then teardown.
-    The atelet restore phases overlap by design (download runs alongside the
-    asset fetch and OCI unpack) and the ateom restore phases partition their
-    total by construction, so neither gets a residual. The phases are
-    sub-intervals of the total, so a negative result is a bug in the emitter
-    or in this formula; it is not clamped, so that it shows."""
+    well-defined: the atelet checkpoint phases are sequential; the micro-VM
+    ateom checkpoint is prep, pause, the concurrent captures (max), then
+    teardown; the gVisor ateom checkpoint phases are all sequential. The
+    atelet restore phases overlap by design (download runs alongside the
+    asset fetch and OCI unpack) and both ateoms' restore phases partition
+    their total by construction, so neither gets a residual; nor does an
+    ateom checkpoint whose runtime is unknown (its atelet record is missing).
+    The phases are sub-intervals of the total, so a negative result is a bug
+    in the emitter or in this formula; it is not clamped, so that it shows."""
     total = phases.get(TOTAL)
     if total is None:
         return None
     if (source, op) == ("atelet", "checkpoint"):
         spent = sum(phases.get(p, 0.0) for p in ("sandbox_assets", "ateom_checkpoint", "persist"))
-    elif (source, op) == ("ateom", "checkpoint"):
+    elif (source, op, sandbox_class) == ("ateom", "checkpoint", MICROVM):
         spent = (phases.get("prep", 0.0) + phases.get("pause", 0.0)
                  + max(phases.get(p, 0.0) for p in CONCURRENT_CAPTURES)
                  + phases.get("teardown", 0.0))
+    elif (source, op, sandbox_class) == ("ateom", "checkpoint", GVISOR):
+        spent = sum(v for k, v in phases.items() if k != TOTAL)
     else:
         return None
     return total - spent
@@ -200,9 +211,6 @@ def parse_line(obj: dict, out: Parsed) -> None:
             if not phases:
                 continue
             time_s = obj.get("time", "")
-            residual = unattributed(source, op, phases)
-            if residual is not None:
-                phases[UNATTRIBUTED] = residual
             out.breakdowns.append(Breakdown(
                 source=source,
                 op=op,
@@ -210,8 +218,7 @@ def parse_line(obj: dict, out: Parsed) -> None:
                 ts=parse_time(time_s),
                 actor_uid=obj.get(ACTOR_UID_KEY, ""),
                 template=obj.get(TEMPLATE_KEY, ""),
-                sandbox_class=obj.get(SANDBOX_CLASS_KEY, "")
-                or (ATEOM_SANDBOX_CLASS if source == "ateom" else ""),
+                sandbox_class=obj.get(SANDBOX_CLASS_KEY, ""),
                 scope=obj.get(SCOPE_KEY, ""),
                 kind=obj.get(KIND_KEY, ""),
                 phases=phases,
@@ -219,6 +226,27 @@ def parse_line(obj: dict, out: Parsed) -> None:
             ))
             out.lines_matched += 1
             return
+
+
+def parse_lines(lines: Iterable[str], out: Parsed | None = None) -> Parsed:
+    """Parse one pod log, line by line, into out (a new Parsed by default).
+    This is also the entry point for a caller that already holds the log
+    text, such as the locust runner reading pods through the Kubernetes API."""
+    out = Parsed() if out is None else out
+    for line in lines:
+        # kubectl log dumps may prefix each line (pod name, timestamp);
+        # recover the JSON object from the first brace.
+        brace = line.find("{")
+        if brace < 0:
+            continue
+        out.lines_seen += 1
+        try:
+            obj = json.loads(line[brace:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            parse_line(obj, out)
+    return out
 
 
 def parse_files(paths: list[str]) -> Parsed:
@@ -245,19 +273,7 @@ def parse_files(paths: list[str]) -> Parsed:
                             out.lines_seen += 1
                             parse_line(obj, out)
                     continue
-        for line in text.splitlines():
-            # kubectl log dumps may prefix each line (pod name, timestamp);
-            # recover the JSON object from the first brace.
-            brace = line.find("{")
-            if brace < 0:
-                continue
-            out.lines_seen += 1
-            try:
-                obj = json.loads(line[brace:])
-            except json.JSONDecodeError:
-                continue
-            if isinstance(obj, dict):
-                parse_line(obj, out)
+        parse_lines(text.splitlines(), out)
     return out
 
 
@@ -341,7 +357,8 @@ def pair_records(breakdowns: list[Breakdown]) -> dict[int, Breakdown]:
     operation without a match prints without one. Matching in time order
     with a consumed set keeps rapid cycles of one actor from sharing or
     swapping records. A paired ateom record also inherits the snapshot kind
-    its layer does not log, so the two layers' percentiles split alike."""
+    and sandbox class its layer does not log, so the two layers' percentiles
+    split alike and the residual knows which runtime's rule applies."""
     by_actor: dict[tuple, list[Breakdown]] = defaultdict(list)
     for b in breakdowns:
         if b.source == "ateom" and b.ts is not None:
@@ -367,6 +384,20 @@ def pair_records(breakdowns: list[Breakdown]) -> dict[int, Breakdown]:
         pairs[id(op)] = inner
         if not inner.kind:
             inner.kind = op.kind
+        if not inner.sandbox_class:
+            inner.sandbox_class = op.sandbox_class
+    return pairs
+
+
+def join_layers(breakdowns: list[Breakdown]) -> dict[int, Breakdown]:
+    """Pair the layers' records, then derive each record's unattributed
+    residual, which for an ateom checkpoint depends on the runtime the pairing
+    just identified. Returns the pairs, as pair_records does."""
+    pairs = pair_records(breakdowns)
+    for b in breakdowns:
+        residual = unattributed(b.source, b.op, b.sandbox_class, b.phases)
+        if residual is not None:
+            b.phases[UNATTRIBUTED] = residual
     return pairs
 
 
@@ -376,7 +407,7 @@ def report_waterfalls(breakdowns: list[Breakdown], writer, slowest: int,
     ateom_* phase, and the gap between that phase and the ateom total (RPC
     and queueing between the layers)."""
     if pairs is None:
-        pairs = pair_records(breakdowns)
+        pairs = join_layers(breakdowns)
     atelet = [b for b in breakdowns if b.source == "atelet" and not b.failed]
     atelet.sort(key=lambda b: b.phases.get(TOTAL, 0), reverse=True)
 
@@ -400,6 +431,30 @@ def report_waterfalls(breakdowns: list[Breakdown], writer, slowest: int,
                 if TOTAL in inner.phases:
                     gap = b.phases[name] - inner.phases[TOTAL]
                     writer(f"    (gap)  {'rpc/queueing':13} {fmt_s(gap)}")
+
+
+def stats_rows(rows: list[dict], timestamp: str, tag: str, test_name: str) -> list[dict]:
+    """report_phases() rows in the shape of the benchmark runner's stats.jsonl
+    (benchmarking/locust/runner.py): one object per metric with the run's
+    timestamp, tag and test name, and a flat, string-valued measurements map,
+    as the runner's other writers emit. The metric name carries the row's
+    dimensions so a dashboard can select a phase the way it selects a locust
+    request type; the dimensions are also fields of the map, since phase
+    names contain underscores and the name cannot be split back apart."""
+    out = []
+    for r in rows:
+        dims = {k: (r[k] if r[k] and r[k] != "-" else "none")
+                for k in ("layer", "op", "class", "kind", "scope", "phase")}
+        metric = "_".join(("phase", *dims.values()))
+        measurements = {**dims, **{k: r[k] for k in ("count", "p50_ms", "p90_ms", "p95_ms", "max_ms")}}
+        out.append({
+            "timestamp": timestamp,
+            "tag": tag,
+            "test_name": test_name,
+            "metric": re.sub(r"[^a-z0-9_]+", "_", metric.lower()),
+            "measurements": {k: str(v) for k, v in measurements.items()},
+        })
+    return out
 
 
 def write_csv(dest: Path, name: str, rows: list[dict]) -> None:
@@ -434,9 +489,10 @@ def main() -> int:
         print("no matching records; are these the atelet and worker pod logs?", file=sys.stderr)
         return 1
 
-    # Pair before the percentiles: a paired ateom record takes its kind from
-    # the atelet record, so both layers' rows split the same way.
-    pairs = pair_records(parsed.breakdowns)
+    # Pair before the percentiles: a paired ateom record takes its kind and
+    # sandbox class from the atelet record, so both layers' rows split the
+    # same way and each checkpoint's residual uses its runtime's rule.
+    pairs = join_layers(parsed.breakdowns)
     print()
     phase_rows = report_phases(parsed.breakdowns, print)
     report_waterfalls(parsed.breakdowns, print, args.slowest, pairs)

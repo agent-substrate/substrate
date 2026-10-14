@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 type tarEntry struct {
@@ -31,6 +32,7 @@ type tarEntry struct {
 	mode     int64
 	body     string
 	linkname string
+	modTime  time.Time
 }
 
 func defaultMode(typeflag byte) int64 {
@@ -59,6 +61,7 @@ func buildTar(t *testing.T, entries []tarEntry) []byte {
 			Mode:     mode,
 			Size:     int64(len(e.body)),
 			Linkname: e.linkname,
+			ModTime:  e.modTime,
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			t.Fatalf("tar.WriteHeader(%+v): %v", hdr, err)
@@ -479,6 +482,71 @@ func TestUnpackLayer_ReadOnlyDir(t *testing.T) {
 	// t.TempDir's cleanup succeed, which plain os.RemoveAll could not on 0555).
 	if err := RemoveAllWritable(filepath.Join(dir, "ko-app")); err != nil {
 		t.Errorf("RemoveAllWritable on restored read-only dir: %v", err)
+	}
+}
+
+// Files and directories keep the mtimes their tar entries record, so Python can
+// trust the .pyc files shipped in an image. A directory keeps its mtime although
+// its children are written after it, read-only directories included, and a link
+// entry never re-stamps its target.
+func TestUnpackLayer_RestoresModTimes(t *testing.T) {
+	var (
+		fileTime  = time.Date(2025, 9, 10, 9, 37, 24, 0, time.UTC)
+		dirTime   = time.Date(2025, 9, 10, 9, 30, 0, 0, time.UTC)
+		subTime   = time.Date(2024, 2, 29, 12, 0, 0, 0, time.UTC)
+		staleTime = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+		linkTime  = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	)
+	entries := []tarEntry{
+		{name: "app/", typeflag: tar.TypeDir, modTime: staleTime},
+		{name: "app/main.py", typeflag: tar.TypeReg, body: "print()\n", modTime: fileTime},
+		{name: "app/sub/", typeflag: tar.TypeDir, modTime: subTime},
+		{name: "app/sub/mod.py", typeflag: tar.TypeReg, body: "x = 1\n", modTime: fileTime},
+		// Chtimes would follow a symlink, and a hardlink shares the target's
+		// inode: either way, the target must keep its own mtime.
+		{name: "app/sym", typeflag: tar.TypeSymlink, linkname: "main.py", modTime: linkTime},
+		{name: "app/hard", typeflag: tar.TypeLink, linkname: "app/main.py", modTime: linkTime},
+		// A repeated dir entry: the last one's mtime wins, as its mode does.
+		{name: "app/", typeflag: tar.TypeDir, modTime: dirTime},
+		{name: "ro/", typeflag: tar.TypeDir, mode: 0o555, modTime: dirTime},
+		{name: "ro/bin", typeflag: tar.TypeReg, mode: 0o755, body: "bin", modTime: fileTime},
+	}
+	dir, _, err := runUnpack(t, entries)
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
+	}
+	// Plain os.RemoveAll (t.TempDir's cleanup) can't delete under a 0555 dir.
+	t.Cleanup(func() {
+		if err := RemoveAllWritable(filepath.Join(dir, "ro")); err != nil {
+			t.Errorf("RemoveAllWritable(ro): %v", err)
+		}
+	})
+
+	for _, tc := range []struct {
+		path string
+		want time.Time
+	}{
+		{path: "app/main.py", want: fileTime},
+		{path: "app/sub/mod.py", want: fileTime},
+		{path: "app/hard", want: fileTime},
+		{path: "app/sub", want: subTime},
+		{path: "app", want: dirTime},
+		{path: "ro/bin", want: fileTime},
+		{path: "ro", want: dirTime},
+	} {
+		fi, err := os.Lstat(filepath.Join(dir, tc.path))
+		if err != nil {
+			t.Errorf("lstat %s: %v", tc.path, err)
+			continue
+		}
+		if got := fi.ModTime(); !got.Equal(tc.want) {
+			t.Errorf("%s mtime = %v, want %v", tc.path, got.UTC(), tc.want)
+		}
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "ro")); err != nil {
+		t.Errorf("stat ro: %v", err)
+	} else if fi.Mode().Perm() != 0o555 {
+		t.Errorf("ro mode = %v, want the image's 0555 preserved", fi.Mode().Perm())
 	}
 }
 

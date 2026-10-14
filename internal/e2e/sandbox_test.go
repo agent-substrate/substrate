@@ -102,7 +102,7 @@ func renderPool(t *testing.T, relPath string) *v1alpha1.WorkerPool {
 // same misplaced-placeholder tripwire renderPool's strict mode does.
 func renderTemplates(t *testing.T, relPath string) []*ateapipb.ActorTemplate {
 	t.Helper()
-	inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", false)
+	inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", nil)
 	rendered, err := os.ReadFile(renderManifest(t, relPath, inline, blocks))
 	if err != nil {
 		t.Fatalf("reading the rendered %s: %v", relPath, err)

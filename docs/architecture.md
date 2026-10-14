@@ -421,12 +421,18 @@ stateDiagram-v2
     RESUMING --> RUNNING : restore / boot complete
     RUNNING --> SUSPENDING : SuspendActor
     SUSPENDING --> SUSPENDED : checkpoint complete
-    RUNNING --> PAUSING : PauseActor
-    PAUSING --> PAUSED : node-local checkpoint complete
-    PAUSED --> RESUMING : ResumeActor (pinned to the snapshot's node)
-    PAUSED --> SUSPENDING : SuspendActor (uploads the node-local snapshot)
+    RUNNING --> SUSPENDING : PauseActor
+    SUSPENDED --> SUSPENDING : SuspendActor (paused: uploads the node-local snapshot)
     SUSPENDED --> [*] : DeleteActor
 ```
+
+A pause and a suspend both pass through `SUSPENDING`, and a paused actor and
+a suspended actor are both `SUSPENDED`. They differ only in the shape of
+`status.snapshots`: after a pause the latest snapshot has a
+`locality` (the node holding its files) and no `durableSnapshot`, and
+`status.assignedNode` pins the actor to that node, so `ResumeActor` restores
+it there from the local files. After a suspend the latest snapshot has a
+`COMPLETED` `durableSnapshot` and the actor is pinned to no node.
 
 ### Phase 1: Creation (`CreateActor`)
 
@@ -486,9 +492,9 @@ tags cannot be deleted until they are.
 
 ### Phase 4: Recovery (`RevertActor`) and Deletion (`DeleteActor`)
 
-An actor in `ACTOR_STATE_RUNNING`, `ACTOR_STATE_PAUSED`, or `ACTOR_STATE_CRASHED` can be reverted back to `ACTOR_STATE_SUSPENDED` via `RevertActor`. Reverting terminates any active sandbox, discards any local pause checkpoint or partial in-progress snapshot, and preserves the actor's last completed external snapshot so a subsequent `ResumeActor` restores from that checkpoint.
+An actor in `ACTOR_STATE_RUNNING` or `ACTOR_STATE_CRASHED`, or a paused actor (`ACTOR_STATE_SUSPENDED` with a node-local latest snapshot), can be reverted back to `ACTOR_STATE_SUSPENDED` at its durable snapshot via `RevertActor`. Reverting terminates any active sandbox, discards any local pause checkpoint or partial in-progress snapshot, and preserves the actor's last completed external snapshot so a subsequent `ResumeActor` restores from that checkpoint.
 
-By default, only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` state can be deleted from the Control Plane. With the `any_state` flag enabled, an actor in any state (such as `ACTOR_STATE_RUNNING` or `ACTOR_STATE_PAUSED`) can be deleted directly; the workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
+By default, only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` state can be deleted from the Control Plane. With the `any_state` flag enabled, an actor in any state (such as `ACTOR_STATE_RUNNING`) can be deleted directly; the workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
 
 After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage collected.
 

@@ -39,7 +39,7 @@ import (
 
 const (
 	testAteletID     = "spiffe://cluster.local/ns/ate-system/sa/atelet"
-	testWorkerSyncID = "spiffe://cluster.local/ns/benchmark-workloads/sa/fake-workersync"
+	testWorkerSyncID = "spiffe://cluster.local/ns/ate-system/sa/fake-workersync"
 )
 
 // stubRelay is a stand-in fake-atelet relay: it records each report and

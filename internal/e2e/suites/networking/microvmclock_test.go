@@ -75,7 +75,7 @@ func TestMicroVMClockAfterDelayedRestore(t *testing.T) {
 
 	target, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
 		Name: "clock-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
-		Args: []string{"http", "--body=delayed restore clock"}, Port: 8443,
+		Args: []string{"http", "--body=delayed restore clock"}, Port: 8080, TLSPort: 8443,
 	}, true)
 	logOriginCertificateValidity(t, ctx, target, rootCA, suspendBoundary)
 
@@ -103,7 +103,7 @@ func TestMicroVMClockAfterDelayedRestore(t *testing.T) {
 	if got.Error != "" || got.StatusCode != 200 || got.Body != "delayed restore clock" || got.Protocol != "HTTP/1.1" || !got.TLS {
 		t.Errorf("delayed-restore HTTPS observation = %+v; want one verified TLS HTTP/1.1 8443 request", got)
 	}
-	assertProtocolGateway(t, ctx, since, actorName, target.Address())
+	assertProtocolGateway(t, ctx, since, actorName, target.TLSAddress())
 }
 
 func logOriginCertificateValidity(t *testing.T, ctx context.Context, target e2e.Server, rootCA string, suspendBoundary time.Time) {

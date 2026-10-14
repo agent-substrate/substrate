@@ -273,6 +273,13 @@ var Registry = []Setting{
 			"labeled and tainted ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone",
 	},
 	{
+		Key: "fakeDataPlane.enabled", Env: "ATE_INSTALL_FAKE_DATA_PLANE", Flag: "fake-data-plane",
+		Kind: KindBool, Default: "false",
+		Usage: "Install the fake data plane for control-plane benchmarks: fake-atelet in place of " +
+			"atelet, and fake-workersync in place of ate-controller. Actors do not exist; never " +
+			"use it on a cluster that serves real actors",
+	},
+	{
 		Key: "otlpEndpoint", Env: "ATE_OTLP_ENDPOINT", Flag: "otlp-endpoint", Kind: KindString,
 		Usage: "Send control plane telemetry to this OTLP collector instead of the cluster default",
 	},

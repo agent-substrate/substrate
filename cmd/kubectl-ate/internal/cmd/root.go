@@ -30,6 +30,7 @@ var (
 	tokenFile    string
 	outputFmt    string
 	traceEnabled bool
+	verbosity    int
 )
 
 var rootCmd = &cobra.Command{
@@ -60,4 +61,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&tokenFile, "token-file", "", "Path to a bearer token for ate-api authentication, or - to read it from stdin. Defaults to a Kubernetes ServiceAccount token.")
 	rootCmd.PersistentFlags().StringVarP(&outputFmt, "output", "o", "table", "Output format. One of: table|json|yaml")
 	rootCmd.PersistentFlags().BoolVar(&traceEnabled, "trace", false, "Enable tracing for the request")
+	rootCmd.PersistentFlags().CountVarP(&verbosity, "verbose", "v", "Increase output verbosity; may be repeated (e.g. -v, -vv, -vvvvv)")
+
+	// Register --version without a -v shorthand so -v stays free for --verbose.
+	rootCmd.Flags().Bool("version", false, "version for "+rootCmd.DisplayName())
+	_ = rootCmd.Flags().SetAnnotation("version", cobra.FlagSetByCobraAnnotation, []string{"true"})
 }

@@ -261,13 +261,13 @@ func (f *fakeControl) ListWorkers(_ context.Context, in *ateapipb.ListWorkersReq
 	// retrying a failed page with the same token resumes from the same place.
 	names := slices.Sorted(maps.Keys(f.workers))
 	start := 0
-	if in.GetPageToken() != "" {
+	if in.GetOptions().GetPageToken() != "" {
 		var err error
-		if start, err = strconv.Atoi(in.GetPageToken()); err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "malformed page token %q", in.GetPageToken())
+		if start, err = strconv.Atoi(in.GetOptions().GetPageToken()); err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "malformed page token %q", in.GetOptions().GetPageToken())
 		}
 	}
-	size := int(in.GetPageSize())
+	size := int(in.GetOptions().GetPageSize())
 	if f.listPageSize > 0 {
 		size = f.listPageSize
 	}

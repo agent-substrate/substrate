@@ -193,6 +193,9 @@ func TestRenderServerPod(t *testing.T) {
 			pod, service := renderServerPodDocs(t, tc.spec)
 
 			container := pod.Spec.Containers[0]
+			if len(container.Ports) != 1 || len(service.Spec.Ports) != 1 {
+				t.Fatalf("rendered container ports %+v and Service ports %+v, want one each without TLSPort", container.Ports, service.Spec.Ports)
+			}
 			if got, want := container.Args, []string{"http", "--listen=:" + strconv.Itoa(tc.wantListen)}; !slices.Equal(got, want) {
 				t.Errorf("container args = %v, want %v", got, want)
 			}
@@ -288,11 +291,96 @@ func TestRenderServerPod_Volumes(t *testing.T) {
 	}
 }
 
-func TestRenderServerPod_HTTPSProbe(t *testing.T) {
-	pod, _ := renderServerPodDocs(t, ServerPod{Name: "tls", Port: 8443, HealthScheme: corev1.URISchemeHTTPS})
-	probe := pod.Spec.Containers[0].ReadinessProbe.HTTPGet
+// TestRenderServerPod_TLSPort covers a server answering both schemes: the
+// cleartext listener on Port as usual, plus testserver's HTTPS listener on 8443
+// published on TLSPort and probed over HTTPS.
+func TestRenderServerPod_TLSPort(t *testing.T) {
+	pod, service := renderServerPodDocs(t, ServerPod{Name: "tls", Port: 80, TargetPort: 8080, TLSPort: 443})
+	container := pod.Spec.Containers[0]
+
+	if len(container.Ports) != 2 || container.Ports[1].Name != "serve-tls" || container.Ports[1].ContainerPort != 8443 {
+		t.Errorf("container ports = %+v, want serve plus serve-tls on 8443", container.Ports)
+	}
+	if len(service.Spec.Ports) != 2 {
+		t.Fatalf("Service ports = %+v, want serve and serve-tls", service.Spec.Ports)
+	}
+	if got := service.Spec.Ports[0]; got.Port != 80 || got.TargetPort.IntValue() != 8080 {
+		t.Errorf("Service serve port = %+v, want 80 -> 8080", got)
+	}
+	if got := service.Spec.Ports[1]; got.Name != "serve-tls" || got.Port != 443 || got.TargetPort.IntValue() != 8443 {
+		t.Errorf("Service serve-tls port = %+v, want 443 -> 8443", got)
+	}
+	probe := container.ReadinessProbe.HTTPGet
 	if probe.Scheme != corev1.URISchemeHTTPS || probe.Port.IntValue() != 8443 {
-		t.Fatalf("probe = %+v, want HTTPS on 8443", probe)
+		t.Errorf("probe = %+v, want HTTPS on 8443", probe)
+	}
+}
+
+func TestServiceDNSTLS(t *testing.T) {
+	base := ServerPod{
+		Name:         "wss-origin",
+		ImportPath:   "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:         []string{"websocket", "--echo"},
+		HealthPath:   "/readyz",
+		Volumes:      []corev1.Volume{{Name: "extra", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
+		VolumeMounts: []corev1.VolumeMount{{Name: "extra", MountPath: "/run/extra"}},
+	}
+	spec := ServiceDNSTLS(base)
+
+	// Pure: the caller's spec, often a package-level var, is left as it was.
+	if len(base.Args) != 2 || len(base.Volumes) != 1 || len(base.VolumeMounts) != 1 || base.Port != 0 || base.TLSPort != 0 {
+		t.Errorf("ServiceDNSTLS modified its argument: %+v", base)
+	}
+	if spec.Port != 80 || spec.TargetPort != 8080 || spec.TLSPort != 443 || spec.HealthPath != "/readyz" {
+		t.Errorf("ports or health path = Port %d TargetPort %d TLSPort %d HealthPath %q, want 80, 8080, 443, /readyz", spec.Port, spec.TargetPort, spec.TLSPort, spec.HealthPath)
+	}
+	if explicit := ServiceDNSTLS(ServerPod{Port: 8080, TLSPort: 8443}); explicit.Port != 8080 || explicit.TargetPort != 0 || explicit.TLSPort != 8443 {
+		t.Errorf("ServiceDNSTLS replaced ports the caller set: %+v", explicit)
+	}
+
+	pod, _ := renderServerPodDocs(t, spec)
+	container := pod.Spec.Containers[0]
+	wantArgs := []string{"websocket", "--echo", "--tls-cert=" + serviceDNSBundle, "--tls-key=" + serviceDNSBundle, "--listen=:8080"}
+	if !slices.Equal(container.Args, wantArgs) {
+		t.Errorf("args = %q, want %q", container.Args, wantArgs)
+	}
+	probe := container.ReadinessProbe.HTTPGet
+	if probe.Scheme != corev1.URISchemeHTTPS || probe.Path != "/readyz" || probe.Port.IntValue() != 8443 {
+		t.Errorf("probe = %+v, want HTTPS /readyz on 8443", probe)
+	}
+
+	if len(pod.Spec.Volumes) != 2 || len(container.VolumeMounts) != 2 {
+		t.Fatalf("rendered volumes %+v and mounts %+v, want the caller's plus one each", pod.Spec.Volumes, container.VolumeMounts)
+	}
+	projected := pod.Spec.Volumes[1].Projected
+	if projected == nil || len(projected.Sources) != 1 || projected.Sources[0].PodCertificate == nil {
+		t.Fatalf("added volume = %+v, want a podCertificate projection", pod.Spec.Volumes[1])
+	}
+	cert := projected.Sources[0].PodCertificate
+	if cert.SignerName != "servicedns.podcert.ate.dev/identity" || cert.KeyType != "ECDSAP256" || cert.CredentialBundlePath != "credential-bundle.pem" {
+		t.Errorf("podCertificate = %+v, want an ECDSAP256 service-DNS credential bundle", cert)
+	}
+	mount := container.VolumeMounts[1]
+	if mount.Name != pod.Spec.Volumes[1].Name || mount.MountPath+"/"+cert.CredentialBundlePath != serviceDNSBundle || !mount.ReadOnly {
+		t.Errorf("added mount = %+v, want the podCertificate volume read-only at %s", mount, serviceDNSBundle)
+	}
+}
+
+func TestServerAddresses(t *testing.T) {
+	for _, tc := range []struct{ ip, wantAddress, wantTLSAddress string }{
+		{"10.96.0.7", "10.96.0.7:80", "10.96.0.7:443"},
+		{"fd00:10:96::7", "[fd00:10:96::7]:80", "[fd00:10:96::7]:443"},
+	} {
+		server := Server{Name: "mitm-origin", Namespace: "abcd-123", ClusterIP: tc.ip, Port: 80, TLSPort: 443}
+		if got, want := server.SvcName(), "mitm-origin.abcd-123.svc"; got != want {
+			t.Errorf("SvcName() with ClusterIP %s = %q, want %q", tc.ip, got, want)
+		}
+		if got := server.Address(); got != tc.wantAddress {
+			t.Errorf("Address() = %q, want %q", got, tc.wantAddress)
+		}
+		if got := server.TLSAddress(); got != tc.wantTLSAddress {
+			t.Errorf("TLSAddress() = %q, want %q", got, tc.wantTLSAddress)
+		}
 	}
 }
 

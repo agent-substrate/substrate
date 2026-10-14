@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -84,6 +85,18 @@ func (s *Server) MintAteomActorCertificate(ctx context.Context, req *ateapipb.Mi
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  false,
+	}
+
+	err = substratex509.AddActorIdentityToCertificate(
+		&substratex509.ActorIdentity{
+			Atespace:  dbActor.GetMetadata().GetAtespace(),
+			ActorName: dbActor.GetMetadata().GetName(),
+			ActorUid:  dbActor.GetMetadata().GetUid(),
+		},
+		template,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("while adding Substrate extension: %w", err)
 	}
 
 	// Sign and return the actor cert.

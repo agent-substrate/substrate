@@ -1703,18 +1703,18 @@ func TestValidateTagRequestPayloads(t *testing.T) {
 		{
 			name: "list: negative page_size",
 			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
-				req := &ateapipb.ListTagsRequest{PageSize: -1}
+				req := &ateapipb.ListTagsRequest{Options: &ateapipb.ListOptions{PageSize: -1}}
 				return Validate_ListTagsRequest(ctx, op, nil, req, nil)
 			},
-			want: field.ErrorList{field.Invalid(field.NewPath("page_size"), nil, "").WithOrigin("minimum")},
+			want: field.ErrorList{field.Invalid(field.NewPath("options", "page_size"), nil, "").WithOrigin("minimum")},
 		},
 		{
 			name: "list: over-long page_token",
 			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
-				req := &ateapipb.ListTagsRequest{PageToken: strings.Repeat("t", 257)}
+				req := &ateapipb.ListTagsRequest{Options: &ateapipb.ListOptions{PageToken: strings.Repeat("t", 257)}}
 				return Validate_ListTagsRequest(ctx, op, nil, req, nil)
 			},
-			want: field.ErrorList{field.TooLong(field.NewPath("page_token"), nil, 256).WithOrigin("maxLength")},
+			want: field.ErrorList{field.TooLong(field.NewPath("options", "page_token"), nil, 256).WithOrigin("maxLength")},
 		},
 	}
 	for _, tt := range tests {
@@ -1727,8 +1727,8 @@ func TestValidateTagRequestPayloads(t *testing.T) {
 
 func validGoldenSnapshotStatus(mutate ...func(*ateapipb.GoldenSnapshotStatus)) *ateapipb.GoldenSnapshotStatus {
 	s := &ateapipb.GoldenSnapshotStatus{
-		GoldenTag:            &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "01234567-89ab-cdef-0123-456789abcdef"},
-		TakeGoldenSnapshotAt: &timestamppb.Timestamp{Seconds: 867},
+		GoldenTag:    &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "01234567-89ab-cdef-0123-456789abcdef"},
+		SnapshotTime: &timestamppb.Timestamp{Seconds: 867},
 	}
 	for _, m := range mutate {
 		m(s)
@@ -1756,8 +1756,8 @@ func TestValidateGoldenSnapshotStatus(t *testing.T) {
 		{
 			name: "valid failed",
 			obj: &ateapipb.GoldenSnapshotStatus{
-				TakeGoldenSnapshotAt: &timestamppb.Timestamp{Seconds: 867},
-				ErrorMessage:         "GoldenActorCrashed: golden actor crashed before its snapshot was taken",
+				SnapshotTime: &timestamppb.Timestamp{Seconds: 867},
+				ErrorMessage: "GoldenActorCrashed: golden actor crashed before its snapshot was taken",
 			},
 		},
 		{
@@ -1806,14 +1806,14 @@ func TestValidateGoldenSnapshotStatusUpdate(t *testing.T) {
 		{
 			// The reconciler restarts the warmup clock on every resume, so the
 			// deadline must stay mutable.
-			name:   "take_golden_snapshot_at changed",
+			name:   "snapshot_time changed",
 			oldObj: valid(),
 			newObj: valid(func(s *ateapipb.GoldenSnapshotStatus) {
-				s.TakeGoldenSnapshotAt = &timestamppb.Timestamp{Seconds: 5309}
+				s.SnapshotTime = &timestamppb.Timestamp{Seconds: 5309}
 			}),
 		},
 		{
-			name:   "take_golden_snapshot_at set",
+			name:   "snapshot_time set",
 			oldObj: &ateapipb.GoldenSnapshotStatus{},
 			newObj: valid(),
 		},

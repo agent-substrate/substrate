@@ -25,7 +25,9 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/portforward"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 const (
@@ -35,6 +37,8 @@ const (
 	// AgentGateway exposes native Prometheus metrics; it does not export these
 	// instruments through the OTLP collector.
 	agentGatewayRouterStatsPort = 15020
+	// Envoy exposes its Prometheus stats on the admin listener.
+	egressEnvoyAdminPort = 15000
 )
 
 // PlatformMetricPrefixes are the Prometheus metric-name prefixes (OTLP dots
@@ -153,6 +157,72 @@ func MissingPlatformMetrics(scrape string, prefixes []string) []string {
 		}
 	}
 	return missing
+}
+
+// Port-forward each ready atenet-egress pod's Envoy admin port and read its
+// stats/prometheus endpoint, returning the concatenated Prometheus exposition text.
+func ScrapeEgressEnvoyMetrics(ctx context.Context) (string, error) {
+	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
+	if err != nil {
+		return "", fmt.Errorf("loading kubeconfig: %w", err)
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return "", fmt.Errorf("creating k8s client: %w", err)
+	}
+
+	ns := SystemNamespace()
+	pods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=atenet-egress",
+	})
+	if err != nil {
+		return "", fmt.Errorf("listing atenet-egress pods: %w", err)
+	}
+
+	var b strings.Builder
+	ready := 0
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !portforward.IsPodReady(pod) {
+			continue
+		}
+		ready++
+		body, err := scrapeEgressEnvoyPod(ctx, config, clientset, ns, pod.Name)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(body)
+	}
+	if ready == 0 {
+		return "", fmt.Errorf("no ready atenet-egress pods in %s", ns)
+	}
+	return b.String(), nil
+}
+
+func scrapeEgressEnvoyPod(ctx context.Context, config *rest.Config, clientset kubernetes.Interface, namespace, podName string) (string, error) {
+	localPort, stop, err := portforward.PodPortForward(ctx, config, clientset, namespace, podName, egressEnvoyAdminPort)
+	if err != nil {
+		return "", err
+	}
+	defer stop()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/stats/prometheus", localPort), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("scraping egress Envoy metrics on %s: %w", podName, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading egress Envoy metrics on %s: %w", podName, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("egress Envoy metrics on %s returned %d: %s", podName, resp.StatusCode, body)
+	}
+	return string(body), nil
 }
 
 // LifecycleEventMetric is the count connector's view of the actor lifecycle

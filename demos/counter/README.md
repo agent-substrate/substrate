@@ -180,6 +180,17 @@ it, resume it (even on a different worker), and confirm the count continues —
 the actor's counter lives in guest RAM, so a continuing count proves the
 guest-memory snapshot survived the round trip.
 
+## Settings
+
+The installer reads these settings in addition to those in
+[docs/operator-install.md](../../docs/operator-install.md#settings), through the same
+flag, environment variable, and configuration document channels.
+
+| Key                               | Environment variable                    | Flag                     | Default    | Applies to            |
+|-----------------------------------|-----------------------------------------|--------------------------|------------|-----------------------|
+| `demo.counter.storageClass`       | `STORAGE_CLASS`                         | `--storage-class`        | `standard` | `deploy demo counter` |
+| `demo.counter.withExternalVolume` | `ATE_DEMO_COUNTER_WITH_EXTERNAL_VOLUME` | `--with-external-volume` | `false`    | `deploy demo counter` |
+
 ## How to Uninstall
 
 To remove the counter demo resources from your cluster, run:

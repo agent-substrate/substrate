@@ -43,6 +43,11 @@ const (
 // apply under --cordon-control-plane.
 const cordonControlPlaneComponent = installDir + "/components/cordon-control-plane"
 
+// fakeDataPlaneComponent is the kustomize component that puts fake-atelet in
+// atelet's DaemonSet and fake-workersync in place of ate-controller, layered
+// over the atelet and ate-controller applies under --fake-data-plane.
+const fakeDataPlaneComponent = installDir + "/components/fake-data-plane"
+
 // SystemOverlay picks the kustomization for a full control plane install.
 //
 // The choice is a product of two switches: kind vs GKE, and the atenet router
@@ -66,15 +71,19 @@ func SystemOverlay(cfg *config.Config) string {
 }
 
 // render emits the manifests at path, an absolute manifest file or
-// kustomization directory, before image resolution. Under
-// --cordon-control-plane it composes path with the cordon-control-plane
-// component, so the same node pinning reaches every control plane workload
-// whichever apply path delivers it. The component's patch has a name-regex
-// target and kustomize leaves a stream alone when nothing in it matches, so
-// wrapping a manifest that carries none of those workloads is harmless.
-func (e *Env) render(path string) ([]byte, error) {
+// kustomization directory, before image resolution, composed with the given
+// component directories. Under --cordon-control-plane it adds the
+// cordon-control-plane component, so the same node pinning reaches every
+// control plane workload whichever apply path delivers it. The component's
+// patch has a name-regex target and kustomize leaves a stream alone when
+// nothing in it matches, so wrapping a manifest that carries none of those
+// workloads is harmless.
+func (e *Env) render(path string, components ...string) ([]byte, error) {
 	if e.Cfg.CordonControlPlane {
-		return kustomize.Compose(path, e.Cfg.Path(cordonControlPlaneComponent))
+		components = append(components, e.Cfg.Path(cordonControlPlaneComponent))
+	}
+	if len(components) > 0 {
+		return kustomize.Compose(path, components...)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -98,6 +107,17 @@ func (e *Env) renderBytes(manifest []byte) ([]byte, error) {
 	return manifest, nil
 }
 
+// renderDataPlane is render for the manifests that carry atelet or
+// ate-controller. Under --fake-data-plane it composes them with the
+// fake-data-plane component, whose patches leave a manifest without their
+// target alone.
+func (e *Env) renderDataPlane(path string) ([]byte, error) {
+	if !e.Cfg.FakeDataPlane {
+		return e.render(path)
+	}
+	return e.render(path, e.Cfg.Path(fakeDataPlaneComponent))
+}
+
 // renderResolve renders path and resolves its image references.
 func (e *Env) renderResolve(ctx context.Context, path string) ([]byte, error) {
 	manifest, err := e.render(path)
@@ -119,7 +139,11 @@ func (e *Env) renderResolveApply(ctx context.Context, path string) error {
 // renderSystemManifests produces the full control plane manifest with all
 // image references resolved.
 func (e *Env) renderSystemManifests(ctx context.Context) ([]byte, error) {
-	return e.renderResolve(ctx, e.Cfg.Path(SystemOverlay(e.Cfg)))
+	manifest, err := e.renderDataPlane(e.Cfg.Path(SystemOverlay(e.Cfg)))
+	if err != nil {
+		return nil, err
+	}
+	return e.ResolveManifestBytes(ctx, manifest)
 }
 
 // renderAtenetRouterManifest produces the atenet router manifest for the
@@ -529,16 +553,5 @@ func (e *Env) applyOtelEndpointOverride(ctx context.Context) error {
 			return err
 		}
 	}
-	// atelet DaemonSet names carry a version suffix; restart whichever
-	// versions are installed.
-	daemonSets, err := e.Kube.DaemonSetNames(ctx, e.Namespace(), "app=atelet")
-	if err != nil {
-		return err
-	}
-	for _, name := range daemonSets {
-		if err := e.Kube.RolloutRestart(ctx, e.Namespace(), name, now); err != nil {
-			return err
-		}
-	}
-	return nil
+	return e.Kube.RolloutRestart(ctx, e.Namespace(), "atelet", now)
 }

@@ -87,9 +87,9 @@ func newWebsocketCmd() *cobra.Command {
 			return serveHTTP(server, certFile, keyFile)
 		},
 	}
-	cmd.Flags().StringVar(&listenAddress, "listen", ":80", "Address the websocket server listens on.")
-	cmd.Flags().StringVar(&certFile, "tls-cert", "", "PEM certificate file; enables HTTPS when paired with --tls-key.")
-	cmd.Flags().StringVar(&keyFile, "tls-key", "", "PEM private key file; enables HTTPS when paired with --tls-cert.")
+	cmd.Flags().StringVar(&listenAddress, "listen", ":80", "Address the websocket server serves cleartext on.")
+	cmd.Flags().StringVar(&certFile, "tls-cert", "", "PEM certificate file; with --tls-key, also serves HTTPS on :8443.")
+	cmd.Flags().StringVar(&keyFile, "tls-key", "", "PEM private key file; with --tls-cert, also serves HTTPS on :8443.")
 	cmd.Flags().BoolVar(&echo, "echo", false, "Echo every WebSocket message with its original type and payload.")
 	return cmd
 }

@@ -61,7 +61,7 @@ type capacityRelay interface {
 	Prune(live map[string]string)
 }
 
-// node is a benchmark node and what it can allocate.
+// node is a fake-atelet node and what it can allocate.
 type node struct {
 	name        string
 	allocatable corev1.ResourceList
@@ -71,7 +71,7 @@ type node struct {
 type cluster interface {
 	// Pools returns every WorkerPool.
 	Pools() ([]*atev1alpha1.WorkerPool, error)
-	// Nodes returns the benchmark nodes, sorted by name.
+	// Nodes returns the nodes that run a fake-atelet pod, sorted by name.
 	Nodes(ctx context.Context) ([]node, error)
 	// Relays returns the fake-atelet relay address on each node that has one.
 	Relays(ctx context.Context) (map[string]string, error)
@@ -94,7 +94,7 @@ type fakeWorker struct {
 	node            string
 	// created is set once ate-api-server has the Worker. A Worker is tracked
 	// from before its create, so a create the server commits but the caller
-	// sees fail is still retired, or deleted at shutdown.
+	// sees fail is still retired, or deleted by --cleanup.
 	created bool
 	// labels and sandboxClass are what the Worker is registered with.
 	labels       map[string]string
@@ -141,13 +141,52 @@ func newController(client workerClient, relay capacityRelay, cl cluster, run str
 	return &controller{client: client, relay: relay, cluster: cl, run: run, concurrency: concurrency, drainGrace: drainGrace, now: time.Now, newUID: uuid.NewString, workers: map[string]*fakeWorker{}}
 }
 
+// adoptUntilServed runs adopt until it succeeds, waiting between tries from
+// initial up to maxBackoff. fake-workersync is installed in the same apply as
+// ate-api-server, so it retries the errors of a server that does not serve
+// yet; any other error, or the end of ctx, ends it with that error.
+func (c *controller) adoptUntilServed(ctx context.Context, initial, maxBackoff time.Duration) error {
+	backoff := initial
+	for {
+		err := c.adopt(ctx)
+		if err == nil || ctx.Err() != nil {
+			return err
+		}
+		switch status.Code(err) {
+		case codes.Unavailable, codes.DeadlineExceeded:
+		default:
+			return err
+		}
+		slog.WarnContext(ctx, "Failed to load registered fake Workers; retrying", slog.Any("err", err), slog.Duration("backoff", backoff))
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(backoff):
+		}
+		backoff = min(2*backoff, maxBackoff)
+	}
+}
+
+// nodes returns the nodes the tracked Workers are on.
+func (c *controller) nodes() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for _, w := range c.workers {
+		if w.node != "" && !slices.Contains(out, w.node) {
+			out = append(out, w.node)
+		}
+	}
+	return out
+}
+
 // adopt loads the fake Workers of this run that are already registered, as
 // after a restart, so they are reconciled rather than created again.
 func (c *controller) adopt(ctx context.Context) error {
 	prefix := fakeworker.Prefix(c.run)
 	var token string
 	for {
-		page, err := c.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{PageSize: 1000, PageToken: token})
+		page, err := c.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: token}})
 		if err != nil {
 			return fmt.Errorf("while listing Workers: %w", err)
 		}
@@ -248,12 +287,12 @@ func (c *controller) reconcile(ctx context.Context) error {
 	// A real pool replaces every worker pod when its sandbox class, limits or
 	// actor count change, and each new pod reports its capacity once, so its
 	// fake Workers are replaced (see fits). So is a Worker whose node has left
-	// the benchmark set, as a pod is when its node goes away; with no
-	// benchmark node listed, Workers are left where they are, since nothing
+	// the fake-atelet set, as a pod is when its node goes away; with no
+	// fake-atelet node listed, Workers are left where they are, since nothing
 	// could replace them. A replaced pod gets a new Worker
 	// in the same pass, while the old one drains, as a Deployment creates a
 	// replacement pod without waiting for the old one to terminate.
-	onBenchmarkNode := func(w *fakeWorker) bool {
+	onFakeAteletNode := func(w *fakeWorker) bool {
 		_, ok := allocatable[w.node]
 		return ok || len(nodes) == 0
 	}
@@ -266,7 +305,7 @@ func (c *controller) reconcile(ctx context.Context) error {
 			continue
 		}
 		d, ok := desired[w.pod]
-		if ok && !w.draining && onBenchmarkNode(w) && fits(w, d.pool, allocatable) && current[w.pod] == nil {
+		if ok && !w.draining && onFakeAteletNode(w) && fits(w, d.pool, allocatable) && current[w.pod] == nil {
 			current[w.pod] = w
 			continue
 		}
@@ -299,7 +338,7 @@ func (c *controller) reconcile(ctx context.Context) error {
 	_ = g.Wait()
 
 	for _, wp := range pools {
-		if err := c.syncStatus(ctx, wp, onBenchmarkNode, allocatable); err != nil {
+		if err := c.syncStatus(ctx, wp, onFakeAteletNode, allocatable); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -317,7 +356,7 @@ func (c *controller) reconcile(ctx context.Context) error {
 func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w *fakeWorker, nodes []string, allocatable map[string]corev1.ResourceList, relays map[string]string) error {
 	if w == nil {
 		if len(nodes) == 0 {
-			return errors.New("no benchmark node to place fake Workers on")
+			return errors.New("no fake-atelet node to place fake Workers on")
 		}
 		w = &fakeWorker{
 			name:         c.newUID(),
@@ -348,7 +387,7 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 		if fixed == nil {
 			alloc, ok := allocatable[w.node]
 			if !ok {
-				return fmt.Errorf("node %s of Worker %s is not a benchmark node", w.node, name)
+				return fmt.Errorf("node %s of Worker %s is not a fake-atelet node", w.node, name)
 			}
 			fixed = t.capacity(alloc)
 		}
@@ -470,7 +509,7 @@ func (c *controller) retire(ctx context.Context, name string) error {
 		w.drainedAt = c.now()
 		c.mu.Unlock()
 	}
-	assigned, err := c.client.ListWorkerActorAssignments(ctx, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: ref, PageSize: 1})
+	assigned, err := c.client.ListWorkerActorAssignments(ctx, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: ref, Options: &ateapipb.ListOptions{PageSize: 1}})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			c.forget(name)
@@ -497,16 +536,16 @@ func (c *controller) forget(name string) {
 // syncStatus writes the pool's status as the WorkerPool controller does from
 // its Deployment: a replica is a registered Worker, ready once its capacity
 // is reported, and the selector is the one worker pods would carry.
-func (c *controller) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool, onBenchmarkNode func(*fakeWorker) bool, allocatable map[string]corev1.ResourceList) error {
+func (c *controller) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool, onFakeAteletNode func(*fakeWorker) bool, allocatable map[string]corev1.ResourceList) error {
 	want := atev1alpha1.WorkerPoolStatus{
 		Selector: labels.SelectorFromSet(labels.Set{fakeworker.WorkerPoolLabel: wp.Name}).String(),
 	}
 	c.mu.Lock()
 	for _, w := range c.workers {
 		// A Worker its pool no longer wants, made from an older template, or
-		// off the benchmark nodes is no replica even before its drain lands.
+		// off the fake-atelet nodes is no replica even before its drain lands.
 		if w.namespace != wp.Namespace || w.pool != wp.Name || !w.created || w.draining ||
-			w.index >= int(wp.Spec.Replicas) || !onBenchmarkNode(w) || !fits(w, wp, allocatable) {
+			w.index >= int(wp.Spec.Replicas) || !onFakeAteletNode(w) || !fits(w, wp, allocatable) {
 			continue
 		}
 		want.Replicas++
@@ -526,9 +565,8 @@ func (c *controller) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool,
 	return nil
 }
 
-// deleteAll deletes every fake Worker this run registered, as at shutdown,
-// after the benchmark has deleted its actors. It keeps going past a failure
-// and reports every one.
+// deleteAll deletes every fake Worker this run registered, for --cleanup. It
+// keeps going past a failure and reports every one.
 func (c *controller) deleteAll(ctx context.Context) error {
 	c.mu.Lock()
 	names := slices.Sorted(maps.Keys(c.workers))

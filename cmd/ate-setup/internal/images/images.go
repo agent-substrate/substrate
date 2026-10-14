@@ -46,6 +46,8 @@ var Components = []string{
 	"cmd/atenet",
 	"cmd/ateom-gvisor",
 	"cmd/ateom-microvm",
+	"cmd/benchmarking/isolate/fake-atelet",
+	"cmd/benchmarking/isolate/fake-workersync",
 	"cmd/credential-provider/kubernetes-secrets",
 	"cmd/objectstore-plugin",
 	"cmd/podcertcontroller",

@@ -37,7 +37,7 @@ func listAPI(reqFields, respFields []model.Field) *model.API {
 }
 
 func TestListMethodShape(t *testing.T) {
-	compliantReq := []model.Field{{Name: "page_size"}, {Name: "page_token"}}
+	compliantReq := []model.Field{{Name: "options", TypeKind: "message", TypeFullName: "ateapi.ListOptions"}}
 	compliantResp := []model.Field{
 		{Name: "widgets", Repeated: true, TypeKind: "message", TypeFullName: "test.Widget"},
 		{Name: "next_page_token"},
@@ -51,8 +51,20 @@ func TestListMethodShape(t *testing.T) {
 	}{
 		{"compliant", compliantReq, compliantResp, 0},
 		{
-			name:           "missing page_size and page_token",
+			name:           "missing options",
 			reqFields:      nil,
+			respFields:     compliantResp,
+			wantViolations: 1,
+		},
+		{
+			name:           "loose page_size and page_token outside ListOptions",
+			reqFields:      []model.Field{{Name: "page_size"}, {Name: "page_token"}},
+			respFields:     compliantResp,
+			wantViolations: 3,
+		},
+		{
+			name:           "options field of the wrong type",
+			reqFields:      []model.Field{{Name: "options", TypeKind: "message", TypeFullName: "ateapi.DeleteOptions"}},
 			respFields:     compliantResp,
 			wantViolations: 2,
 		},

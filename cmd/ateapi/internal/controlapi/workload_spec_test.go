@@ -341,7 +341,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesWakeupProbe(t *testing.T) {
 			{
 				Name:  "with-probe",
 				Image: "main",
-				WakeupProbe: &ateapipb.ContainerWakeupProbe{
+				WakeupProbe: &ateapipb.WakeupProbe{
 					HttpGet:        &ateapipb.HttpGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},

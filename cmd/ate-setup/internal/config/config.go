@@ -194,6 +194,11 @@ type Config struct {
 	// ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone.
 	CordonControlPlane bool
 
+	// FakeDataPlane installs fake-atelet in place of atelet and
+	// fake-workersync in place of ate-controller
+	// (ATE_INSTALL_FAKE_DATA_PLANE), for control-plane benchmarks.
+	FakeDataPlane bool
+
 	// AdditionalEgressExtprocService is the optional NS/SVC:PORT external processor filter.
 	AdditionalEgressExtprocService string
 
@@ -431,6 +436,10 @@ func (c *Config) ScriptEnv() []string {
 	delete(merged, "ATE_INSTALL_CORDON_CONTROL_PLANE")
 	if c.CordonControlPlane {
 		merged["ATE_INSTALL_CORDON_CONTROL_PLANE"] = "true"
+	}
+	delete(merged, "ATE_INSTALL_FAKE_DATA_PLANE")
+	if c.FakeDataPlane {
+		merged["ATE_INSTALL_FAKE_DATA_PLANE"] = "true"
 	}
 	if c.AdditionalEgressExtprocService != "" {
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"] = c.AdditionalEgressExtprocService

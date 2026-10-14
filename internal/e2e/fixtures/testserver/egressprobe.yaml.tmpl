@@ -25,6 +25,7 @@ metadata:
   namespace: ${NAMESPACE}
   labels:
     app: egressprobe
+    ate.dev/worker-pool: egressprobe
 spec:
   restartPolicy: Never
   containers:

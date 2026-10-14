@@ -1,0 +1,220 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Ingress NetworkPolicies for the ate-system control plane.
+#
+# Every pod in ate-system is denied ingress by default; the policies below
+# admit only the flows the control plane needs. NetworkPolicies are additive,
+# so a port is reachable exactly when some policy here (or another one that
+# selects the pod, such as k8s-credential-provider's) admits it. Ports that no
+# policy admits -- the router's /statusz port (4040), the bundled postgres from
+# anything but ate-api-server, atelet's AteomHerder from anything but
+# ate-api-server -- are reachable only through `kubectl port-forward`, which
+# NetworkPolicy does not filter.
+#
+# Policies only take effect on a cluster whose network plugin enforces them
+# (GKE Dataplane V2, Calico, Cilium, kindnet, ...).
+#
+# Several workloads are applied by the installer outside this bundle (postgres,
+# atenet-egress, k8s-credential-provider); their policies live here anyway so
+# the default deny never lands without the allow rules that go with it. A
+# policy whose pods do not exist selects nothing.
+#
+# Ports are named rather than numbered where the workloads name them, so the
+# same policy covers both atenet dataplanes (envoy serves the egress gateway on
+# 443, agentgateway on 8443, both as "https").
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: ate-system
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+---
+# The Substrate API. Admits control plane components and pods in namespaces
+# labeled ate.dev/api-access=true (e.g. benchmarks, dashboards). Worker pods
+# (ate.dev/worker-pool) are excluded. Requests are still authenticated and
+# authorized by ate-api-server; this restricts network-level ingress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ate-api-server
+  namespace: ate-system
+spec:
+  podSelector:
+    matchLabels:
+      app: ate-api-server
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchExpressions:
+        - key: app
+          operator: In
+          values:
+          - ate-controller
+          - atelet
+          - atenet-egress
+          - atenet-router
+    - namespaceSelector:
+        matchLabels:
+          ate.dev/api-access: "true"
+      podSelector:
+        matchExpressions:
+        - key: ate.dev/worker-pool
+          operator: DoesNotExist
+    ports:
+    - protocol: TCP
+      port: 443
+---
+# The bundled postgres is reached only by ate-api-server. The installer runs
+# psql through `kubectl exec`, and the probes are exec probes, so neither needs
+# network access.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+  namespace: ate-system
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: ate-api-server
+    ports:
+    - protocol: TCP
+      port: postgres
+---
+# atelet's gRPC port is called only by ate-api-server, which dials the atelet
+# pod IP. Worker pods talk to atelet over its node-local Unix socket, not this
+# port. The hostPort mapping lands on the pod, so this policy covers it too.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: atelet
+  namespace: ate-system
+spec:
+  podSelector:
+    matchLabels:
+      app: atelet
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: ate-api-server
+    ports:
+    - protocol: TCP
+      port: grpc
+---
+# The router's data ports carry every request to an actor, from pods in any
+# namespace and from load balancers and Gateways outside the cluster, so they
+# admit any source. What can actually reach them is decided by the Service
+# type (ClusterIP by default), any Gateway or LoadBalancer in front of the
+# router, and the cluster's firewall rules; the router itself checks the target
+# actor of every request.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: atenet-router
+  namespace: ate-system
+spec:
+  podSelector:
+    matchLabels:
+      app: atenet-router
+  policyTypes:
+  - Ingress
+  ingress:
+  - ports:
+    - protocol: TCP
+      port: http
+    - protocol: TCP
+      port: https
+    - protocol: TCP
+      port: connect
+    - protocol: TCP
+      port: connect-tls
+---
+# The egress gateway is reached by atunnel in worker pods, which the
+# WorkerPool controller labels ate.dev/worker-pool, in whatever namespace the
+# WorkerPool lives in.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: atenet-egress
+  namespace: ate-system
+spec:
+  podSelector:
+    matchLabels:
+      app: atenet-egress
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector: {}
+      podSelector:
+        matchExpressions:
+        - key: ate.dev/worker-pool
+          operator: Exists
+    ports:
+    - protocol: TCP
+      port: https
+---
+# Metrics and health endpoints. Kubelet probes come from the node and scrapers
+# run in whatever namespace the monitoring stack uses (GKE Managed Prometheus,
+# otel-system, a user's Prometheus), so these admit any source. They serve
+# metrics and readiness only; the router's /statusz is not among them.
+#
+# k8s-credential-provider is left out: its own policy admits only the egress
+# gateway, and it stays that way (docs/egress-credential-injection.md). Its
+# kubelet probes come from the node, which NetworkPolicy does not block.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ate-system-observability
+  namespace: ate-system
+spec:
+  podSelector:
+    matchExpressions:
+    - key: app
+      operator: NotIn
+      values:
+      - k8s-credential-provider
+  policyTypes:
+  - Ingress
+  ingress:
+  - ports:
+    - protocol: TCP
+      port: metrics
+    - protocol: TCP
+      port: prometheus
+    - protocol: TCP
+      port: envoy-metrics
+    - protocol: TCP
+      port: health
+    - protocol: TCP
+      port: healthz
+    - protocol: TCP
+      port: stats
+    - protocol: TCP
+      port: readiness
