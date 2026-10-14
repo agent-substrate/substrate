@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/serverboot"
+	"github.com/agent-substrate/substrate/pkg/assetfetch"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"github.com/spf13/pflag"
@@ -167,9 +168,9 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 // as objectstorage.NewFromEnv selects it.
 func assetScheme() string {
 	if objectstorage.UsesS3() {
-		return "s3"
+		return assetfetch.S3URIScheme
 	}
-	return "gs"
+	return assetfetch.GCSURIScheme
 }
 
 // healthcheck dials the plugin at socket and waits up to timeout for it to

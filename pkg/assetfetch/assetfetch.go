@@ -15,15 +15,17 @@
 // Package assetfetch holds the checks every object-store plugin applies when
 // it serves AssetProvider.FetchAsset, whatever its storage backend:
 //
-//   - CheckObjectName refuses an object stored under a snapshot or tag
-//     location, before anything is read.
+//   - ParseObjectURI accepts a canonical object URI outside snapshot and tag
+//     locations, before anything is read.
+//   - CheckObjectName applies the object-name policy for outside plugins whose
+//     URIs do not have ParseObjectURI's <scheme>://<bucket>/<object> shape.
 //   - Stager.Fetch downloads into a directory private to the plugin, within
 //     its capacity, enforces max_bytes while copying, verifies the sha256, and
 //     only then replaces the caller's file.
 //
-// A plugin parses its own URI scheme into an object name and an opener, and
-// leaves the rest to this package. Errors are gRPC statuses with the codes
-// objectstore.v1 documents for FetchAsset.
+// A plugin selects the URI schemes it serves and supplies an object opener.
+// Errors are gRPC statuses with the codes objectstore.v1 documents for
+// FetchAsset.
 package assetfetch
 
 import (
@@ -40,6 +42,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
@@ -52,6 +55,12 @@ import (
 // MaxURIBytes bounds asset_uri, as the SandboxConfig CRD bounds
 // AssetFile.url, so the checks below stay cheap whatever a SandboxConfig names.
 const MaxURIBytes = 2048
+
+// Object-store URI schemes served by the in-tree plugin.
+const (
+	GCSURIScheme = "gs"
+	S3URIScheme  = "s3"
+)
 
 // sha256Pattern matches the SandboxConfig's sha256 format.
 var sha256Pattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -72,6 +81,37 @@ func ParseURI(uri string) (*url.URL, error) {
 		return nil, status.Error(codes.InvalidArgument, "asset URI must not carry user info, a query or a fragment")
 	}
 	return u, nil
+}
+
+// ParseObjectURI accepts <scheme>://<bucket>/<object> for scheme or one of
+// additionalSchemes. It requires a bucket without a port and an object name in
+// the canonical, non-snapshot form CheckObjectName accepts.
+func ParseObjectURI(uri, scheme string, additionalSchemes ...string) (bucket, object string, err error) {
+	u, err := ParseURI(uri)
+	if err != nil {
+		return "", "", err
+	}
+	if u.Scheme != scheme && !slices.Contains(additionalSchemes, u.Scheme) {
+		if len(additionalSchemes) == 0 {
+			return "", "", status.Errorf(codes.InvalidArgument,
+				"asset URI %s: scheme %q is not served by this plugin, whose storage backend serves %s://",
+				uri, u.Scheme, scheme)
+		}
+		schemes := append([]string{scheme}, additionalSchemes...)
+		return "", "", status.Errorf(codes.InvalidArgument,
+			"asset URI %s has scheme %q, want one of %s", uri, u.Scheme, strings.Join(schemes, ", "))
+	}
+	object = strings.TrimPrefix(u.Path, "/")
+	if u.Host == "" || object == "" {
+		return "", "", status.Errorf(codes.InvalidArgument, "asset URI %s must name a bucket and an object", uri)
+	}
+	if u.Hostname() != u.Host {
+		return "", "", status.Errorf(codes.InvalidArgument, "asset URI %s must name a bucket without a port", uri)
+	}
+	if err := CheckObjectName(uri, u.Scheme+"://"+u.Host, object); err != nil {
+		return "", "", err
+	}
+	return u.Host, object, nil
 }
 
 // CheckObjectName requires object, the name of the object uri points at

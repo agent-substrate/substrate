@@ -62,6 +62,42 @@ func TestParseURI(t *testing.T) {
 	}
 }
 
+func TestParseObjectURI(t *testing.T) {
+	tests := []struct {
+		name                string
+		uri                 string
+		schemes             []string
+		wantBucket, wantKey string
+		wantCode            codes.Code
+	}{
+		{
+			name: "GCS object", uri: "gs://bucket/kata-assets/vmlinux", schemes: []string{GCSURIScheme, S3URIScheme},
+			wantBucket: "bucket", wantKey: "kata-assets/vmlinux", wantCode: codes.OK,
+		},
+		{
+			name: "S3 object", uri: "s3://bucket/kata-assets/vmlinux", schemes: []string{S3URIScheme},
+			wantBucket: "bucket", wantKey: "kata-assets/vmlinux", wantCode: codes.OK,
+		},
+		{name: "wrong scheme", uri: "gs://bucket/object", schemes: []string{S3URIScheme}, wantCode: codes.InvalidArgument},
+		{name: "missing bucket", uri: "gs:///object", schemes: []string{GCSURIScheme}, wantCode: codes.InvalidArgument},
+		{name: "missing object", uri: "gs://bucket", schemes: []string{GCSURIScheme}, wantCode: codes.InvalidArgument},
+		{name: "bucket port", uri: "s3://bucket:9000/object", schemes: []string{S3URIScheme}, wantCode: codes.InvalidArgument},
+		{name: "empty decoded segment", uri: "s3://bucket/x%2F/object", schemes: []string{S3URIScheme}, wantCode: codes.InvalidArgument},
+		{name: "snapshot object", uri: "gs://bucket/atespaces/team-a/tags/tag1/file", schemes: []string{GCSURIScheme}, wantCode: codes.PermissionDenied},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bucket, object, err := ParseObjectURI(tc.uri, tc.schemes[0], tc.schemes[1:]...)
+			if got := status.Code(err); got != tc.wantCode {
+				t.Fatalf("ParseObjectURI() error = %v, want %s", err, tc.wantCode)
+			}
+			if bucket != tc.wantBucket || object != tc.wantKey {
+				t.Errorf("ParseObjectURI() = (%q, %q), want (%q, %q)", bucket, object, tc.wantBucket, tc.wantKey)
+			}
+		})
+	}
+}
+
 func TestCheckObjectName(t *testing.T) {
 	const base = "https://acct.blob.core.windows.net/assets"
 	for _, tc := range []struct {
