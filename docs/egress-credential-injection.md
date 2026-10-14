@@ -38,11 +38,13 @@ flowchart LR
     gateway["Egress gateway<br/>applies the EgressPolicy"]
     provider["Credential provider"]
     store[("Secret store")]
+    ateapi["ateapi"]
     upstream["Upstream API"]
 
     actor -->|"HTTPS request,<br/>placeholder header"| gateway
-    gateway -->|"fetch credential<br/>for this actor"| provider
+    gateway -->|"credentialUri:<br/>fetch credential<br/>for this actor"| provider
     provider -->|"authorize, then read"| store
+    gateway -->|"actorJwt:<br/>mint a JWT<br/>for this actor"| ateapi
     gateway -->|"request with<br/>the credential"| upstream
 ```
 
