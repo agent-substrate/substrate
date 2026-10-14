@@ -19,7 +19,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -28,7 +27,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -131,7 +129,7 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 	cmd.Stdout = out
 	cmd.Stderr = out
 
-	err := reaper.RunCommand(cmd)
+	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("while running `runsc create`: %w", err)
 	}
@@ -158,7 +156,7 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 	cmd.Stdout = out
 	cmd.Stderr = out
 
-	err := reaper.RunCommand(cmd)
+	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("while running `runsc start`: %w", err)
 	}
@@ -194,7 +192,7 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 	cmd := exec.CommandContext(ctx, r.path, r.checkpointArgs(containerName, checkpointPath, fsCheckpointPaths)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	err := reaper.RunCommand(cmd)
+	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("while running `runsc checkpoint`: %w", err)
 	}
@@ -232,7 +230,7 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 	cmd := exec.CommandContext(ctx, r.path, r.fsCheckpointArgs(containerName, checkpointPath, fsCheckpointPaths)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	err := reaper.RunCommand(cmd)
+	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("while running `runsc fscheckpoint`: %w", err)
 	}
@@ -275,7 +273,7 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 	cmd := exec.CommandContext(ctx, r.path, r.restoreArgs(containerName, checkpointPath)...)
 	cmd.Stdout = out
 	cmd.Stderr = out
-	if err := reaper.RunCommand(cmd); err != nil {
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("while running `runsc restore`: %w", err)
 	}
 	return nil
@@ -295,7 +293,7 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	err := reaper.RunCommand(cmd)
+	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("while running `runsc delete`: %w", err)
 	}
@@ -314,7 +312,7 @@ func (r *runsc) cmdState(ctx context.Context, containerName string) error {
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := reaper.RunCommand(cmd); err != nil {
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("while running `runsc state`: %w", err)
 	}
 	return nil
@@ -334,7 +332,7 @@ func (r *runsc) cmdList(ctx context.Context) ([]string, error) {
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = os.Stderr
-	if err := reaper.RunCommand(cmd); err != nil {
+	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("while running `runsc list`: %w", err)
 	}
 	return strings.Fields(out.String()), nil
@@ -361,7 +359,7 @@ func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error
 	cmd := exec.CommandContext(ctx, r.path, r.killArgs(containerName, signal)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := reaper.RunCommand(cmd); err != nil {
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("while running `runsc kill`: %w", err)
 	}
 	return nil
@@ -381,10 +379,6 @@ func (r *runsc) waitArgs(containerName string) []string {
 
 // cmdWait blocks until the given container's process exits. Used during
 // graceful shutdown to confirm the actor has stopped before ateom exits.
-//
-// Deliberately outside the reaper: this blocks for as long as the actor runs,
-// and an entry held that long would hold off reaping and, past MaxDefer, every
-// other runsc invocation with it.
 func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
 	slog.InfoContext(ctx, "About to run runsc wait", slog.String("container", containerName))
 
@@ -392,15 +386,6 @@ func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		// Running outside the reaper means the reaper can collect this process
-		// first, leaving os/exec nothing to wait for. `runsc wait` only exits
-		// once the container has, so that is the answer we came for -- and
-		// reporting it as a failure would stop the caller escalating to
-		// SIGKILL.
-		if errors.Is(err, syscall.ECHILD) {
-			slog.DebugContext(ctx, "runsc wait was collected by the child reaper", slog.String("container", containerName))
-			return nil
-		}
 		return fmt.Errorf("while running `runsc wait`: %w", err)
 	}
 	return nil

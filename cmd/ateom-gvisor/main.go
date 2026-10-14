@@ -40,11 +40,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
+	"github.com/agent-substrate/substrate/internal/ateominit"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateomphaselog"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
-	"github.com/agent-substrate/substrate/internal/childreap"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
@@ -77,9 +77,6 @@ var (
 
 	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
-
-	// reaper collects children orphaned in the pod PID namespace.
-	reaper = childreap.New()
 )
 
 // minUsageSampleInterval is the floor of --usage-sample-interval, the same as
@@ -93,6 +90,7 @@ const minUsageSampleInterval = 50 * time.Second
 const workloadGracePeriod = 30 * time.Minute
 
 func main() {
+	ateominit.RunIfPID1()
 	pflag.Parse()
 	if *showVersion {
 		fmt.Println(version.String())
@@ -198,9 +196,6 @@ func do(ctx context.Context) error {
 	if _, err := ateomcgroup.Delegate(ctx); err != nil {
 		return fmt.Errorf("while setting up cgroup delegation: %w", err)
 	}
-
-	go reaper.Run(ctx)
-	slog.InfoContext(ctx, "Child process reaper launched")
 
 	// Clean up any old socket.
 	sockPath := nodepath.AteomSocketPath(*podUID)
