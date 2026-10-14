@@ -74,6 +74,7 @@ type grpcEchoStreamedMsg struct {
 // The origin is an in-cluster cleartext-HTTP/2 server, deployed per test into
 // its own namespace, so nothing in this test depends on the internet.
 func TestActorEgressGRPC(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	target := e2e.DeployServerPod(t, ctx, grpcEcho).Address()
 

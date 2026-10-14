@@ -21,6 +21,7 @@ import (
 )
 
 func TestAccessLogField(t *testing.T) {
+	t.Parallel()
 	line := `http.status=101 ate.actor.name=ws-1 substrate.connect.authority="10.96.0.7:80" ate.atespace=networking-e2e`
 	for _, test := range []struct {
 		key, want string
@@ -39,6 +40,7 @@ func TestAccessLogField(t *testing.T) {
 }
 
 func TestProtocolGatewayAccessLogMatches(t *testing.T) {
+	t.Parallel()
 	actorRef := resources.ActorRef{Atespace: "networking-e2e", Name: "ws-1"}
 	for _, test := range []struct {
 		name, container, line string
@@ -139,5 +141,88 @@ func TestProtocolGatewayAccessLogMatches(t *testing.T) {
 	valid := gatewayAccessLogLine{container: "agentgateway", text: `CONNECT tunnel terminated target=10.96.0.7:80 actor_name=ws-1 actor_uid=uid-1 atespace=networking-e2e`}
 	if protocolGatewayAccessLogMatches(valid, actorRef, "10.96.0.7:80", false) {
 		t.Fatal("opaque CONNECT evidence must not satisfy the MITM matcher")
+	}
+}
+
+func TestEgressConnectAccessLogMatches(t *testing.T) {
+	t.Parallel()
+	const atespace, actorName, port = "networking-e2e", "egress-1", "80"
+	for _, test := range []struct {
+		name, container, line string
+		want                  bool
+	}{
+		{
+			name:      "agentgateway tunnel by the actor",
+			container: "agentgateway",
+			line:      `CONNECT tunnel terminated target=10.96.0.7:80 actor_name=egress-1 actor_uid=uid-1 atespace=networking-e2e`,
+			want:      true,
+		},
+		{
+			name:      "agentgateway tunnel by another actor",
+			container: "agentgateway",
+			line:      `CONNECT tunnel terminated target=10.96.0.7:80 actor_name=egress-2 actor_uid=uid-2 atespace=networking-e2e`,
+			want:      false,
+		},
+		{
+			name:      "agentgateway tunnel by an actor whose name extends this one",
+			container: "agentgateway",
+			line:      `CONNECT tunnel terminated target=10.96.0.7:80 actor_name=egress-10 actor_uid=uid-2 atespace=networking-e2e`,
+			want:      false,
+		},
+		{
+			name:      "agentgateway tunnel in another atespace",
+			container: "agentgateway",
+			line:      `CONNECT tunnel terminated target=10.96.0.7:80 actor_name=egress-1 actor_uid=uid-1 atespace=other`,
+			want:      false,
+		},
+		{
+			name:      "agentgateway tunnel to another port",
+			container: "agentgateway",
+			line:      `CONNECT tunnel terminated target=10.96.0.7:443 actor_name=egress-1 actor_uid=uid-1 atespace=networking-e2e`,
+			want:      false,
+		},
+		{
+			name:      "agentgateway tunnel naming no actor",
+			container: "agentgateway",
+			line:      `CONNECT tunnel terminated target=10.96.0.7:80`,
+			want:      false,
+		},
+		{
+			name:      "agentgateway request record",
+			container: "agentgateway",
+			line:      `http.status=200 ate.actor.name=egress-1 substrate.connect.authority="10.96.0.7:80" ate.atespace=networking-e2e`,
+			want:      false,
+		},
+		{
+			name:      "envoy CONNECT by the actor",
+			container: "envoy",
+			line:      `[egress] authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/worker-for-actor/networking-e2e/egress-1"`,
+			want:      true,
+		},
+		{
+			name:      "envoy CONNECT by another actor",
+			container: "envoy",
+			line:      `[egress] authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/worker-for-actor/networking-e2e/egress-2"`,
+			want:      false,
+		},
+		{
+			name:      "envoy CONNECT by an actor whose name extends this one",
+			container: "envoy",
+			line:      `[egress] authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/worker-for-actor/networking-e2e/egress-10"`,
+			want:      false,
+		},
+		{
+			name:      "envoy CONNECT to another port",
+			container: "envoy",
+			line:      `[egress] authority=10.96.0.7:443 code=200 peer_san="spiffe://substrate-actor.local/worker-for-actor/networking-e2e/egress-1"`,
+			want:      false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := egressConnectAccessLogMatches(gatewayAccessLogLine{container: test.container, text: test.line}, atespace, actorName, port)
+			if got != test.want {
+				t.Fatalf("egressConnectAccessLogMatches() = %t, want %t", got, test.want)
+			}
+		})
 	}
 }
