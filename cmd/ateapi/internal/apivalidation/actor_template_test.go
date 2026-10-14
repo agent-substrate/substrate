@@ -222,7 +222,7 @@ func TestValidateListActorTemplatesRequest(t *testing.T) {
 		want field.ErrorList
 	}{{
 		"valid",
-		&ateapipb.ListActorTemplatesRequest{PageSize: 10},
+		&ateapipb.ListActorTemplatesRequest{Options: &ateapipb.ListOptions{PageSize: 10}},
 		nil,
 	}, {
 		"zero page size",
@@ -238,8 +238,8 @@ func TestValidateListActorTemplatesRequest(t *testing.T) {
 		field.ErrorList{field.Invalid(field.NewPath("atespace"), "NS_1", "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"negative page size",
-		&ateapipb.ListActorTemplatesRequest{PageSize: -1},
-		field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "").WithOrigin("minimum")},
+		&ateapipb.ListActorTemplatesRequest{Options: &ateapipb.ListOptions{PageSize: -1}},
+		field.ErrorList{field.Invalid(field.NewPath("options", "page_size"), int32(-1), "").WithOrigin("minimum")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

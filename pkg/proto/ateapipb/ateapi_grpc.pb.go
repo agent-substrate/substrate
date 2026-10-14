@@ -93,11 +93,13 @@ type ControlClient interface {
 	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
 	// to the template's commit scope where required (Full capture, Data commit).
 	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
-	// Pause a given actor and keep its snapshots on node VM.
+	// Pause a given actor: checkpoint it to its worker's node and leave it
+	// SUSPENDED with that node-local snapshot, pinned to the node. A paused
+	// actor is told from a suspended one by its snapshots, not its state.
 	PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
-	// Revert an actor to SUSPENDED state.
+	// Revert an actor to SUSPENDED state at its durable snapshot.
 	// Only crashed, running or paused actors can be reverted.
 	RevertActor(ctx context.Context, in *RevertActorRequest, opts ...grpc.CallOption) (*RevertActorResponse, error)
 	// Delete an actor. Only suspended or crashed actors can be deleted unless
@@ -635,11 +637,13 @@ type ControlServer interface {
 	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
 	// to the template's commit scope where required (Full capture, Data commit).
 	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
-	// Pause a given actor and keep its snapshots on node VM.
+	// Pause a given actor: checkpoint it to its worker's node and leave it
+	// SUSPENDED with that node-local snapshot, pinned to the node. A paused
+	// actor is told from a suspended one by its snapshots, not its state.
 	PauseActor(context.Context, *PauseActorRequest) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
-	// Revert an actor to SUSPENDED state.
+	// Revert an actor to SUSPENDED state at its durable snapshot.
 	// Only crashed, running or paused actors can be reverted.
 	RevertActor(context.Context, *RevertActorRequest) (*RevertActorResponse, error)
 	// Delete an actor. Only suspended or crashed actors can be deleted unless

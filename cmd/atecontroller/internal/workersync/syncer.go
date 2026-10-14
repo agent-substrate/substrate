@@ -574,7 +574,7 @@ func (s *WorkerPoolSyncer) listWorkersPageWithRetry(ctx context.Context, pageTok
 		Cap:   s.listCap,
 	}
 	for {
-		page, err := s.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{PageSize: 1000, PageToken: pageToken})
+		page, err := s.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken}})
 		if err == nil {
 			return page, nil
 		}

@@ -196,11 +196,11 @@ func runscPathFor(paths map[string]string) string {
 // the shared static-files cache and returns its local path. On a cache hit it
 // returns immediately.
 func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string, error) {
-	if err := resources.ValidateRunscHash(entry.SHA256); err != nil {
+	if err := resources.ValidateAssetHash(entry.SHA256); err != nil {
 		return "", wrapFileSystemErr("while validating asset hash", err)
 	}
 
-	localPath := ateletpath.RunSCBinaryPath(entry.SHA256)
+	localPath := ateletpath.AssetPath(entry.SHA256)
 	_, err := os.Stat(localPath)
 	if err == nil {
 		slog.DebugContext(ctx, "Sandbox asset cache hit", slog.String("path", localPath))
@@ -233,7 +233,7 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 // the shared static-files cache, returning the local path of the extracted
 // `runsc` binary.
 func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) (string, error) {
-	if err := resources.ValidateRunscHash(entry.SHA256); err != nil {
+	if err := resources.ValidateAssetHash(entry.SHA256); err != nil {
 		return "", wrapFileSystemErr("while validating asset hash", err)
 	}
 

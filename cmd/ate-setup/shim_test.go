@@ -215,6 +215,13 @@ func TestShimTranslatesFlags(t *testing.T) {
 		args: []string{"--deploy-ate-system", "--cluster-size", "size10", "--cordon-control-plane"},
 		want: []string{"--cluster-size=size10 --cordon-control-plane deploy ate-system --setup-csi=none"},
 	}, {
+		name: "--fake-data-plane is forwarded to every action",
+		args: []string{"--deploy-ate-system", "--fake-data-plane", "--deploy-atelet"},
+		want: []string{
+			"--fake-data-plane deploy ate-system --setup-csi=none",
+			"--fake-data-plane deploy atelet",
+		},
+	}, {
 		name: "--cluster-size takes an attached value",
 		args: []string{"--cluster-size=size10", "--deploy-ate-apiserver"},
 		want: []string{"--cluster-size=size10 deploy apiserver"},

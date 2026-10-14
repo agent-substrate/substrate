@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Command fake-atelet stands in for atelet in control-plane benchmarks. It
-// runs as atelet's DaemonSet would, on the benchmark nodes only, so
+// runs in atelet's DaemonSet, installed by ate-setup --fake-data-plane, so
 // ate-api-server dials it as the node's atelet. It answers every AteomHerder
 // call with success after a delay, without running or saving any workload,
 // and relays fake-workersync's capacity reports for the fake Workers on its
@@ -57,8 +57,8 @@ import (
 var (
 	port             = pflag.Int("port", atelet.DefaultPort, "Port to serve AteomHerder on. ate-api-server dials atelet.DefaultPort.")
 	relayPort        = pflag.Int("relay-port", fakeworker.DefaultRelayPort, "Port to serve fake-workersync's capacity reports on.")
-	relayAllowedID   = pflag.String("relay-allowed-spiffe-id", installdefaults.SPIFFEID("benchmark-workloads", "fake-workersync"), "The only SPIFFE ID allowed to send capacity reports.")
-	healthListenAddr = pflag.String("health-listen-addr", ":9090", "Address to serve /healthz and /readyz on.")
+	relayAllowedID   = pflag.String("relay-allowed-spiffe-id", installdefaults.SPIFFEID("ate-system", "fake-workersync"), "The only SPIFFE ID allowed to send capacity reports.")
+	healthListenAddr = pflag.String("health-listen-addr", ":9091", "Address to serve /healthz and /readyz on.")
 
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle presented as the serving certificate and the ate-api-server client certificate.")
 	clientCACerts        = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify client certificates.")
@@ -89,6 +89,9 @@ func main() {
 	defer stop()
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
+	if err := applyTuningEnv(pflag.CommandLine, os.LookupEnv); err != nil {
+		serverboot.Fatal(ctx, "Invalid tuning environment", err)
 	}
 	callDelays, err := resolveDelays(*delay, *delayRun, *delayRestore, *delayCheckpoint, *delayPromoteSnapshot, *delayTerminate)
 	if err != nil {

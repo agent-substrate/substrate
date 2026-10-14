@@ -16,8 +16,48 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/spf13/pflag"
 )
+
+// tuningFlags are the flags a FAKE_ATELET_<FLAG> environment variable can
+// set, as from the fake-atelet-tuning ConfigMap a benchmark writes: the
+// installer chooses the fake data plane, and the benchmark tunes it.
+var tuningFlags = []string{
+	"delay",
+	"delay-run",
+	"delay-restore",
+	"delay-checkpoint",
+	"delay-promote-snapshot",
+	"delay-terminate",
+	"mint-actor-certificate",
+}
+
+// tuningEnv is the environment variable that sets the tuning flag name.
+func tuningEnv(name string) string {
+	return "FAKE_ATELET_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+}
+
+// applyTuningEnv sets each tuning flag the command line left unset from its
+// environment variable, read through lookup. A flag on the command line
+// wins.
+func applyTuningEnv(fs *pflag.FlagSet, lookup func(string) (string, bool)) error {
+	for _, name := range tuningFlags {
+		if fs.Changed(name) {
+			continue
+		}
+		value, ok := lookup(tuningEnv(name))
+		if !ok {
+			continue
+		}
+		if err := fs.Set(name, value); err != nil {
+			return fmt.Errorf("%s=%q: %w", tuningEnv(name), value, err)
+		}
+	}
+	return nil
+}
 
 // resolveDelays applies each per-call override over the default delay. A
 // negative override means "use the default".

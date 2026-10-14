@@ -54,6 +54,11 @@ type fakeControl struct {
 	lostReply error
 	// drainErr, when set, fails every DrainWorker.
 	drainErr error
+	// listFailures fails that many ListWorkers calls with listCode before any
+	// succeeds; Unavailable, as while ate-api-server does not serve yet, when
+	// listCode is unset.
+	listFailures int
+	listCode     codes.Code
 }
 
 func newFakeControl() *fakeControl {
@@ -139,6 +144,13 @@ func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapipb.UpdateWorkerR
 func (f *fakeControl) ListWorkers(_ context.Context, _ *ateapipb.ListWorkersRequest, _ ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listFailures > 0 {
+		f.listFailures--
+		if f.listCode != codes.OK {
+			return nil, status.Error(f.listCode, "refused")
+		}
+		return nil, status.Error(codes.Unavailable, "no ready endpoints")
+	}
 	return &ateapipb.ListWorkersResponse{Workers: slices.Collect(maps.Values(f.workers))}, nil
 }
 
@@ -527,7 +539,7 @@ func TestWorkerOnADepartedNodeIsReplaced(t *testing.T) {
 }
 
 // An empty node list replaces nothing: there is nowhere to put a replacement.
-func TestNoBenchmarkNodeLeavesWorkersInPlace(t *testing.T) {
+func TestNoFakeAteletNodeLeavesWorkersInPlace(t *testing.T) {
 	c, ctl, _, cl := newTestController(pool("bench", 2, nil))
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -993,6 +1005,58 @@ func TestAdoptAfterRestart(t *testing.T) {
 	}
 	if ctl.workers[real.Metadata.Name] == nil || ctl.workers[otherRun.Metadata.Name] == nil {
 		t.Error("a Worker that is not this run's was retired")
+	}
+}
+
+// Installed with ate-api-server, fake-workersync starts before the server
+// serves, and keeps trying to adopt rather than exiting.
+func TestAdoptUntilServedRetries(t *testing.T) {
+	c, ctl, rel, cl := newTestController(pool("bench", 2, nil))
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	ctl.listFailures = 3
+
+	restarted := newController(ctl, rel, cl, testRun, 4, testDrainGrace)
+	if err := restarted.adoptUntilServed(context.Background(), time.Millisecond, 2*time.Millisecond); err != nil {
+		t.Fatalf("adoptUntilServed: %v", err)
+	}
+	if got := len(restarted.workers); got != 2 {
+		t.Errorf("adopted %d Workers, want 2", got)
+	}
+	if ctl.listFailures != 0 {
+		t.Errorf("%d ListWorkers failures left, want every one retried", ctl.listFailures)
+	}
+	// Each adopted Worker's node, so a restart keeps them in the node set.
+	if nodes := restarted.nodes(); len(nodes) == 0 {
+		t.Error("nodes() after adopt is empty, want the adopted Workers' nodes")
+	}
+}
+
+// An error retrying cannot cure, such as a refused identity, ends adopt at
+// once, so the pod fails visibly instead of looking healthy.
+func TestAdoptUntilServedFailsOnAPermanentError(t *testing.T) {
+	c, ctl, _, _ := newTestController()
+	ctl.listFailures, ctl.listCode = 1<<30, codes.PermissionDenied
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := c.adoptUntilServed(ctx, time.Millisecond, 5*time.Millisecond)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("adoptUntilServed() = %v, want PermissionDenied", err)
+	}
+	if ctx.Err() != nil {
+		t.Error("adoptUntilServed retried a permanent error until its context ended")
+	}
+}
+
+// A shutdown during the retries ends them with the last error.
+func TestAdoptUntilServedStopsWithItsContext(t *testing.T) {
+	c, ctl, _, _ := newTestController()
+	ctl.listFailures = 1 << 30
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := c.adoptUntilServed(ctx, time.Millisecond, 5*time.Millisecond); err == nil {
+		t.Error("adoptUntilServed() = nil after its context ended, want the last error")
 	}
 }
 

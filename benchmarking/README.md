@@ -323,6 +323,14 @@ wake, the script also shows what an always-on agent costs a system that
 suspends it between events: an internal timer cannot fire in a suspended
 sandbox, so each of those turns needs an external wake.
 
+`personal-assistant-light` is the same day with the RAM arrays scaled
+down to 28Mi and everything else unchanged (files, reads, CPU, dwell and
+the 61 wakes), for runs that want the always-on wake pattern with a small
+memory image: about 40 to 95 MB per pause under gVisor, and under micro-VM
+about 100 MB of guest before the script writes anything, bounded by the
+actor's memory limit. It fits a 256Mi actor. Run it with the same
+fractional think scale.
+
 To run a script of your own without rebuilding anything, hand it to the
 locust deploy:
 
@@ -432,6 +440,73 @@ warm-up until they have all joined at the spawn rate.
   paused counts as a success.
 * `CreateActor`, `ResumeActorWarmup`, `PauseActorWarmup`: A user's warm-up of
   its actor, in the step that added the user.
+
+### Isolate Mode
+
+A real cold resume is limited by the node's restore capacity, which hides the
+limits of ate-api-server and Postgres. Isolate mode takes the nodes out by
+installing substrate with a fake data plane:
+
+```bash
+hack/install-ate.sh --deploy-ate-system --fake-data-plane
+./benchmarking/workloads/deploy.sh --deploy --worker-count 200 \
+  --fake-atelet-env FAKE_ATELET_DELAY=500ms
+```
+
+`deploy.sh` deploys the usual WorkerPool, but the install serves it with two
+fakes from `cmd/benchmarking/isolate/` instead of worker pods:
+
+* `fake-workersync` stands in for ate-controller's WorkerPool controller and
+  worker syncer. It honors each pool's `spec.replicas` with fake Workers, none
+  backed by a pod, round robin on the nodes that run fake-atelet, and scales them
+  up and down with the pool, draining a Worker before deleting it. Each Worker
+  reports what a real worker would: cpu and memory from the pool's
+  `template.resources.limits`, or the node's allocatable without one, and 1000
+  actors, ateom's default, unless the pool's `ate.dev/fake-max-actors`
+  annotation says otherwise. It writes the pool's status, so
+  `kubectl get workerpool` and `kubectl scale workerpool` work. A node keeps
+  its Workers for `--node-grace`, five minutes by default, after its
+  fake-atelet pod goes, so a DaemonSet rollout does not move them; past that
+  they move to a node that still runs fake-atelet.
+* `fake-atelet` takes atelet's place in its DaemonSet, on every node atelet
+  would run on, and answers every
+  lifecycle call with success after its `--delay`, without running or
+  saving any workload. It writes one placeholder object per snapshot, because
+  ate-api-server refuses to tag an empty one. Like ateom, it mints the actor's
+  certificate from ate-api-server on every run and restore that names an
+  egress gateway, which the default install does; the mint is ate-api-server's
+  time, so it adds to `--delay`, the data plane's share of the call.
+  It also relays fake-workersync's capacity reports, as atelet relays ateom's:
+  ate-api-server accepts a report only from the atelet on the Worker's node.
+  The relay admits only fake-workersync's pod identity.
+
+The install also scales ate-controller to zero, whose worker syncer would
+delete the fake Workers. Its other controllers stop with it: no NetworkPolicy
+is made for a WorkerPool, and the egress MITM trust bundle is not derived.
+Fake actors need neither. fake-atelet takes the storage settings of atelet's
+objectstore-plugin sidecar, whose writes it takes over, so its snapshot
+placeholders go to the storage the install points atelet at. The install
+refuses a cluster whose WorkerPools still have worker pods, which would
+outlive ate-controller. A normal `hack/install-ate.sh --deploy-ate-system`
+puts the real data plane back, and `--delete-ate-system` removes the fakes
+either way. Never use the mode on a
+cluster that serves real actors: actors placed on fake Workers do not exist.
+
+The installer only chooses the fake data plane; the benchmark tunes it.
+fake-atelet reads each tuning flag from a `FAKE_ATELET_<FLAG>` variable in the
+optional `fake-atelet-tuning` ConfigMap, which no install creates or resets:
+`FAKE_ATELET_DELAY` sets `--delay`, `FAKE_ATELET_DELAY_RESTORE` overrides it
+for Restore alone, and `FAKE_ATELET_MINT_ACTOR_CERTIFICATE=false` skips the
+certificate mint. `deploy.sh --fake-atelet-env NAME=VALUE`, repeatable, writes
+that ConfigMap to exactly the given entries and restarts fake-atelet when it
+changes, before the WorkerPool is applied.
+
+Nothing answers behind the router, so the mode suits only a user class that
+sends the actors no requests, such as `ate_api.py`, which creates, gets,
+resumes and suspends actors. Every boomer user class pings its actors through
+the router. In `tests.yaml`, an `isolate` block selects the mode, and its
+keys become `deploy.sh --fake-atelet-env` entries: `delay` sets
+`FAKE_ATELET_DELAY`, and so on.
 
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.
