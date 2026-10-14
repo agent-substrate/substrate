@@ -561,7 +561,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			if tc.failure == "reset" {
 				// Reset refuses to remove a populated external-volume directory,
 				// but has already removed the system-info roots by then.
-				dir := ateletpath.VolumeHostPath(actorUID, "mounted")
+				dir := ateletpath.ExternalVolumeHostPath(actorUID, "mounted")
 				if err := os.MkdirAll(dir, 0o750); err != nil {
 					t.Fatal(err)
 				}

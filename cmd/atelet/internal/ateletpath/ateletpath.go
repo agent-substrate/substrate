@@ -199,16 +199,16 @@ func RestoreStateDir(actorUID string) string {
 	)
 }
 
-func VolumesDir(actorUID string) string {
+func ExternalVolumeMountsDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
 		"volumes",
 	)
 }
 
-func VolumeHostPath(actorUID, volumeName string) string {
+func ExternalVolumeHostPath(actorUID, volumeName string) string {
 	return filepath.Join(
-		VolumesDir(actorUID),
+		ExternalVolumeMountsDir(actorUID),
 		volumeName,
 	)
 }
@@ -223,7 +223,7 @@ func ActorDirs(actorUID string) *ateworkerpb.ActorDirs {
 		RestoreDir:                RestoreStateDir(actorUID),
 		DurableDirVolumeMountsDir: DurableDirVolumeMountsDir(actorUID),
 		SystemInfoVolumeRootsDir:  SystemInfoVolumeRootsDir(actorUID),
-		VolumesDir:                VolumesDir(actorUID),
+		ExternalVolumeMountsDir:   ExternalVolumeMountsDir(actorUID),
 		SandboxAssetsDir:          SandboxAssetsDir(actorUID),
 	}
 }

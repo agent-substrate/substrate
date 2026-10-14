@@ -359,7 +359,7 @@ func TestServerUnaryInterceptorRequestLogMasksEnvValues(t *testing.T) {
 			Containers: []*ateletpb.Container{
 				{
 					Name: "main",
-					Env: []*ateletpb.EnvEntry{
+					Env: []*ateletpb.EnvVar{
 						{Name: "API_KEY", Value: "sk-secret"},
 						{Name: "PLAIN", Value: "not-a-secret"},
 					},

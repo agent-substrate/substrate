@@ -81,8 +81,8 @@ func fsRestoreContainers(containers []*ateworkerpb.Container) []string {
 	for _, c := range containers {
 		ownsMount := false
 		for _, m := range c.GetDurableDirVolumeMounts() {
-			if !seen[m.GetVolumeName()] {
-				seen[m.GetVolumeName()] = true
+			if !seen[m.GetName()] {
+				seen[m.GetName()] = true
 				ownsMount = true
 			}
 		}

@@ -58,11 +58,11 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 		case vol.GetDurableDir() != nil:
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name:       vol.GetName(),
-				DurableDir: &ateletpb.DurableDirVolume{},
+				DurableDir: &ateletpb.DurableDirVolumeSource{},
 			})
 
 		case vol.GetSystemInfo() != nil:
-			ateletSystemInfo := &ateletpb.SystemInfoVolume{}
+			ateletSystemInfo := &ateletpb.SystemInfoVolumeSource{}
 			for _, dataSource := range vol.GetSystemInfo().GetDataSources() {
 				switch {
 				case dataSource.GetActorMetadata() != nil:
@@ -130,7 +130,7 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 			Resources:       ctrResources,
 		}
 		for _, env := range ctr.GetEnv() {
-			ateletCtr.Env = append(ateletCtr.Env, &ateletpb.EnvEntry{
+			ateletCtr.Env = append(ateletCtr.Env, &ateletpb.EnvVar{
 				Name:  env.GetName(),
 				Value: env.GetValue(),
 			})

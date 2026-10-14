@@ -121,7 +121,7 @@ func ValidateActorDirs(actorDirs *ateworkerpb.ActorDirs, fldPath *field.Path) fi
 		{"restore_dir", actorDirs.GetRestoreDir()},
 		{"durable_dir_volume_mounts_dir", actorDirs.GetDurableDirVolumeMountsDir()},
 		{"system_info_volume_roots_dir", actorDirs.GetSystemInfoVolumeRootsDir()},
-		{"volumes_dir", actorDirs.GetVolumesDir()},
+		{"external_volume_mounts_dir", actorDirs.GetExternalVolumeMountsDir()},
 		{"sandbox_assets_dir", actorDirs.GetSandboxAssetsDir()},
 	} {
 		errs = append(errs, validateAbsDir(actorDir.path, fldPath.Child(actorDir.name))...)

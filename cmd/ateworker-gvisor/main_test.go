@@ -77,7 +77,7 @@ func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 		RestoreDir:                "/node/actors/actor-a/restore",
 		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
 		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
-		VolumesDir:                "/node/actors/actor-a/volumes",
+		ExternalVolumeMountsDir:   "/node/actors/actor-a/volumes",
 		SandboxAssetsDir:          "/node/actors/actor-a/sandbox-assets",
 	}
 	for name, call := range map[string]func() error{
@@ -118,7 +118,7 @@ func TestRestoreWorkloadRejectsUnsupportedFidelity(t *testing.T) {
 		RestoreDir:                "/node/actors/actor-a/restore",
 		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
 		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
-		VolumesDir:                "/node/actors/actor-a/volumes",
+		ExternalVolumeMountsDir:   "/node/actors/actor-a/volumes",
 		SandboxAssetsDir:          sandboxAssetsDir,
 	}
 	// A zero service cannot acquire locks, configure networking, or open log pipes.

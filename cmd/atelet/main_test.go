@@ -286,7 +286,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 			Image:   image,
 			Command: []string{"/bin/app"},
 			Args:    []string{"serve"},
-			Env:     []*ateletpb.EnvEntry{{Name: "GREETING", Value: "hello"}},
+			Env:     []*ateletpb.EnvVar{{Name: "GREETING", Value: "hello"}},
 			SecurityContext: &ateletpb.SecurityContext{
 				Capabilities: &ateletpb.Capabilities{Add: []string{"NET_ADMIN"}, Drop: []string{"KILL"}},
 			},
@@ -796,10 +796,10 @@ func TestBuildWorkerWorkloadSpecForwardsContainerSpecs(t *testing.T) {
 func TestBuildWorkerWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 	in := &ateletpb.WorkloadSpec{
 		Volumes: []*ateletpb.Volume{
-			{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
-			{Name: "cache", DurableDir: &ateletpb.DurableDirVolume{}},
+			{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
+			{Name: "cache", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 			{Name: "scratch", External: &ateletpb.ExternalVolumeSource{}},
-			{Name: "system-info", SystemInfo: &ateletpb.SystemInfoVolume{}},
+			{Name: "system-info", SystemInfo: &ateletpb.SystemInfoVolumeSource{}},
 		},
 		Containers: []*ateletpb.Container{
 			{
@@ -826,21 +826,21 @@ func TestBuildWorkerWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 		Containers: []*ateworkerpb.Container{
 			{
 				Name: "main",
-				DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-					{VolumeName: "data", MountPath: "/home/counter"},
-					{VolumeName: "cache", MountPath: "/var/cache"},
+				DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+					{Name: "data", MountPath: "/home/counter"},
+					{Name: "cache", MountPath: "/var/cache"},
 				},
-				CsiVolumeMounts: []*ateworkerpb.VolumeMount{
-					{VolumeName: "scratch", MountPath: "/scratch"},
+				ExternalVolumeMounts: []*ateworkerpb.VolumeMount{
+					{Name: "scratch", MountPath: "/scratch"},
 				},
-				SystemInfoVolumeMounts: []*ateworkerpb.SystemInfoVolumeMount{
-					{VolumeName: "system-info", MountPath: "/run/ate"},
+				SystemInfoVolumeMounts: []*ateworkerpb.VolumeMount{
+					{Name: "system-info", MountPath: "/run/ate"},
 				},
 			},
 			{
 				Name: "sidecar",
-				DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-					{VolumeName: "data", MountPath: "/shared"},
+				DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+					{Name: "data", MountPath: "/shared"},
 				},
 			},
 			{Name: "no-volumes"},
@@ -865,7 +865,7 @@ func TestBuildWorkerWorkloadSpecValidation(t *testing.T) {
 			name: "missing volume definition",
 			in: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
-					{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+					{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 				},
 				Containers: []*ateletpb.Container{
 					{
@@ -899,7 +899,7 @@ func TestBuildWorkerWorkloadSpecValidation(t *testing.T) {
 			name: "duplicate volume names",
 			in: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
-					{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+					{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 					{Name: "data", External: &ateletpb.ExternalVolumeSource{}},
 				},
 				Containers: []*ateletpb.Container{
@@ -975,7 +975,7 @@ func TestRemoveActorDirsKeepsPopulatedVolume(t *testing.T) {
 	useTempNodeDirs(t)
 	const actorUID = "actor-uid-1"
 
-	stillMounted := filepath.Join(ateletpath.VolumeHostPath(actorUID, "data"), "payload")
+	stillMounted := filepath.Join(ateletpath.ExternalVolumeHostPath(actorUID, "data"), "payload")
 	if err := os.MkdirAll(filepath.Dir(stillMounted), 0o755); err != nil {
 		t.Fatalf("creating volume dir: %v", err)
 	}
@@ -1184,7 +1184,7 @@ func TestBuildWorkerWorkloadSpec_ImageVolumeMounts(t *testing.T) {
 	spec := &ateletpb.WorkloadSpec{
 		Volumes: []*ateletpb.Volume{
 			{Name: "agent", Image: &ateletpb.ImageVolumeSource{}},
-			{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+			{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 			{Name: "ext", External: &ateletpb.ExternalVolumeSource{}},
 		},
 		Containers: []*ateletpb.Container{{
@@ -1209,10 +1209,10 @@ func TestBuildWorkerWorkloadSpec_ImageVolumeMounts(t *testing.T) {
 	if len(ctr.GetImageVolumeMounts()) != 1 {
 		t.Fatalf("image volume mounts = %v, want 1", ctr.GetImageVolumeMounts())
 	}
-	if name, path := ctr.GetImageVolumeMounts()[0].GetVolumeName(), ctr.GetImageVolumeMounts()[0].GetMountPath(); name != "agent" || path != "/ate" {
+	if name, path := ctr.GetImageVolumeMounts()[0].GetName(), ctr.GetImageVolumeMounts()[0].GetMountPath(); name != "agent" || path != "/ate" {
 		t.Errorf("image volume mount = (%q, %q), want (agent, /ate)", name, path)
 	}
-	if len(ctr.GetDurableDirVolumeMounts()) != 1 || ctr.GetDurableDirVolumeMounts()[0].GetVolumeName() != "data" {
+	if len(ctr.GetDurableDirVolumeMounts()) != 1 || ctr.GetDurableDirVolumeMounts()[0].GetName() != "data" {
 		t.Errorf("durable mounts = %v, want just data", ctr.GetDurableDirVolumeMounts())
 	}
 }
@@ -1533,7 +1533,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Snapshot: &ateletpb.Snapshot{Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
-						{Name: "durable", DurableDir: &ateletpb.DurableDirVolume{}},
+						{Name: "durable", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 					},
 				},
 			},
@@ -1557,7 +1557,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Snapshot: &ateletpb.Snapshot{Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
-						{Name: "durable", DurableDir: &ateletpb.DurableDirVolume{}},
+						{Name: "durable", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 						{Name: "csi", External: &ateletpb.ExternalVolumeSource{}},
 					},
 				},

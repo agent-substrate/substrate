@@ -192,7 +192,7 @@ type actorContainer struct {
 	// spec is the container's OCI spec shaped for micro-VM execution.
 	spec *specs.Spec
 	// imageMounts are the image volumes this container mounts, and where.
-	imageMounts []*ateworkerpb.ImageVolumeMount
+	imageMounts []*ateworkerpb.VolumeMount
 }
 
 // resolvedRuntime holds the concrete binary paths for a request, taken from fetched
@@ -698,9 +698,9 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 			return nil, fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
 		}
 		for _, vm := range c.imageMounts {
-			src := imagecache.ImageVolumeMountPath(c.bundle, vm.GetVolumeName())
-			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetVolumeName()); err != nil {
-				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetVolumeName(), c.name, err)
+			src := imagecache.ImageVolumeMountPath(c.bundle, vm.GetName())
+			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetName()); err != nil {
+				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetName(), c.name, err)
 			}
 		}
 	}
@@ -710,7 +710,7 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 		}
 	}
 	if hasCsiVolumes(containers) {
-		if err := s.stageCsiVolumes(ctx, id, actorDirs.GetVolumesDir()); err != nil {
+		if err := s.stageCsiVolumes(ctx, id, actorDirs.GetExternalVolumeMountsDir()); err != nil {
 			return nil, fmt.Errorf("while staging CSI volumes: %w", err)
 		}
 	}

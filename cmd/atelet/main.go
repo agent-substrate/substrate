@@ -1754,10 +1754,10 @@ func buildWorkerWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*atew
 
 	out := &ateworkerpb.WorkloadSpec{}
 	for i, ctr := range spec.GetContainers() {
-		var ddMounts []*ateworkerpb.DurableDirVolumeMount
-		var csiMounts []*ateworkerpb.VolumeMount
-		var siMounts []*ateworkerpb.SystemInfoVolumeMount
-		var imgMounts []*ateworkerpb.ImageVolumeMount
+		var ddMounts []*ateworkerpb.VolumeMount
+		var extMounts []*ateworkerpb.VolumeMount
+		var siMounts []*ateworkerpb.VolumeMount
+		var imgMounts []*ateworkerpb.VolumeMount
 		for _, vm := range ctr.GetVolumeMounts() {
 			volName := vm.GetName()
 			vol, ok := volumes[volName]
@@ -1767,24 +1767,24 @@ func buildWorkerWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*atew
 
 			switch {
 			case vol.GetDurableDir() != nil:
-				ddMounts = append(ddMounts, &ateworkerpb.DurableDirVolumeMount{
-					VolumeName: volName,
-					MountPath:  vm.GetMountPath(),
+				ddMounts = append(ddMounts, &ateworkerpb.VolumeMount{
+					Name:      volName,
+					MountPath: vm.GetMountPath(),
 				})
 			case vol.GetExternal() != nil:
-				csiMounts = append(csiMounts, &ateworkerpb.VolumeMount{
-					VolumeName: volName,
-					MountPath:  vm.GetMountPath(),
+				extMounts = append(extMounts, &ateworkerpb.VolumeMount{
+					Name:      volName,
+					MountPath: vm.GetMountPath(),
 				})
 			case vol.GetSystemInfo() != nil:
-				siMounts = append(siMounts, &ateworkerpb.SystemInfoVolumeMount{
-					VolumeName: volName,
-					MountPath:  vm.GetMountPath(),
+				siMounts = append(siMounts, &ateworkerpb.VolumeMount{
+					Name:      volName,
+					MountPath: vm.GetMountPath(),
 				})
 			case vol.GetImage() != nil:
-				imgMounts = append(imgMounts, &ateworkerpb.ImageVolumeMount{
-					VolumeName: volName,
-					MountPath:  vm.GetMountPath(),
+				imgMounts = append(imgMounts, &ateworkerpb.VolumeMount{
+					Name:      volName,
+					MountPath: vm.GetMountPath(),
 				})
 			default:
 				return nil, fmt.Errorf("container %q mounts volume %q with no source set", ctr.GetName(), volName)
@@ -1793,7 +1793,7 @@ func buildWorkerWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*atew
 		container := &ateworkerpb.Container{
 			Name:                   ctr.GetName(),
 			DurableDirVolumeMounts: ddMounts,
-			CsiVolumeMounts:        csiMounts,
+			ExternalVolumeMounts:   extMounts,
 			SystemInfoVolumeMounts: siMounts,
 			ImageVolumeMounts:      imgMounts,
 			WakeupProbe:            toWorkerWakeupProbe(ctr.GetWakeupProbe()),
@@ -1920,7 +1920,7 @@ func resetActorDirs(actorUID string) error {
 
 	// Do not call RemoveAll on volume directories in case the unmount failed.
 	// We do not want to delete mount content.
-	volumesDir := ateletpath.VolumesDir(actorUID)
+	volumesDir := ateletpath.ExternalVolumeMountsDir(actorUID)
 	entries, err := os.ReadDir(volumesDir)
 	if err != nil && !os.IsNotExist(err) {
 		return wrapFileSystemErr("while reading volumes dir", err)
