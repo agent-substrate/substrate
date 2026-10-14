@@ -32,6 +32,7 @@ import (
 // egressDialer opens an authenticated tunnel to an original destination.
 type egressDialer interface {
 	DialContext(context.Context, string) (net.Conn, error)
+	Close() error
 }
 
 type actorCertificateSource interface {
@@ -47,6 +48,8 @@ type OriginalDestination func(net.Conn) (string, error)
 // is assigned to its worker.
 type Egress struct {
 	originalDestination OriginalDestination
+	// tunnelOpenTimeout bounds the wait for the gateway's CONNECT answer.
+	tunnelOpenTimeout time.Duration
 
 	mu sync.Mutex
 	// Keyed by actor UID, supplied by the namespace-specific listener.
@@ -70,8 +73,13 @@ func NewEgress(originalDestination OriginalDestination) (*Egress, error) {
 	if originalDestination == nil {
 		return nil, fmt.Errorf("atunnel: original destination resolver is required")
 	}
+	// The gateway answers within its 5s authorization timeout; a longer wait
+	// means it has queued the CONNECT behind its connection cap, and closing
+	// the connection is what frees that queue slot.
+	const tunnelOpenTimeout = 10 * time.Second
 	return &Egress{
 		originalDestination: originalDestination,
+		tunnelOpenTimeout:   tunnelOpenTimeout,
 		active:              map[string]*egressActivation{},
 	}, nil
 }
@@ -259,12 +267,16 @@ func (e *Egress) Deactivate(ctx context.Context, actorUID string) error {
 		active.wg.Wait()
 		close(done)
 	}()
+	var err error
 	select {
 	case <-done:
-		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("atunnel: waiting for active egress streams to stop: %w", ctx.Err())
+		err = fmt.Errorf("atunnel: waiting for active egress streams to stop: %w", ctx.Err())
 	}
+	if active.dialer != nil {
+		err = errors.Join(err, active.dialer.Close())
+	}
+	return err
 }
 
 func (e *Egress) handle(downstream net.Conn, active *egressActivation) {
@@ -293,7 +305,9 @@ func (e *Egress) handle(downstream net.Conn, active *egressActivation) {
 			slog.WarnContext(active.ctx, "atunnel failed to resolve original egress destination", slog.Any("err", err))
 			return
 		}
-		upstream, err := active.dialer.DialContext(active.ctx, destination)
+		dialCtx, cancelDial := context.WithTimeout(active.ctx, e.tunnelOpenTimeout)
+		upstream, err := active.dialer.DialContext(dialCtx, destination)
+		cancelDial()
 		if err != nil {
 			slog.WarnContext(active.ctx, "atunnel failed to open egress tunnel", slog.String("destination", destination), slog.Any("err", err))
 			return

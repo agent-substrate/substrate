@@ -58,6 +58,7 @@ func loadEnv(t *testing.T) {
 		"ATE_IMAGE_TAG",
 		"ATE_INSTALL_CLUSTER_SIZE",
 		"ATE_INSTALL_CORDON_CONTROL_PLANE",
+		"ATE_INSTALL_FAKE_DATA_PLANE",
 		"ATE_INSTALL_KIND",
 		"ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
 		"ATE_INSTALL_ROLLOUT_TIMEOUT",
@@ -203,6 +204,34 @@ func TestLoadCordonControlPlane(t *testing.T) {
 			_, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_CORDON_CONTROL_PLANE"]
 			if exported != tc.want {
 				t.Errorf("ScriptEnv() exports ATE_INSTALL_CORDON_CONTROL_PLANE = %v, want %v", exported, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadFakeDataPlane(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts Options
+		env  string
+		want bool
+	}{
+		{name: "off by default"},
+		{name: "flag", opts: Options{FakeDataPlane: true}, want: true},
+		{name: "environment", env: "true", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_INSTALL_FAKE_DATA_PLANE", tc.env)
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.FakeDataPlane != tc.want {
+				t.Errorf("FakeDataPlane = %v, want %v", cfg.FakeDataPlane, tc.want)
+			}
+			if _, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_FAKE_DATA_PLANE"]; exported != tc.want {
+				t.Errorf("ScriptEnv() exports ATE_INSTALL_FAKE_DATA_PLANE = %v, want %v", exported, tc.want)
 			}
 		})
 	}

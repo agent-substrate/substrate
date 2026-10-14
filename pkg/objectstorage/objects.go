@@ -38,6 +38,35 @@ var tracer = otel.Tracer("objectstorage")
 // storage backend, as opposed to a transient fetch failure.
 var ErrObjectNotFound = errors.New("object not found in storage backend")
 
+// ServiceError describes a storage service's failed response in terms its
+// backend has judged safe to log: never a URI, header or credential.
+type ServiceError struct {
+	// HTTPStatus is the status of the service's response.
+	HTTPStatus int
+	// Code is the service's error code, such as "PreconditionFailed", if the
+	// backend reports one.
+	Code string
+	// Message is the service's own description, if the backend reports one
+	// it knows names no caller, resource or credential.
+	Message string
+}
+
+// DescribeServiceError describes the storage service response that err
+// carries, if any. Each backend decides what of its errors is safe to
+// describe; an error in err's chain from any other source with an
+// HTTPStatusCode() int method, as the S3 SDK's response errors have, is
+// described by its status alone.
+func DescribeServiceError(err error) (ServiceError, bool) {
+	if desc, ok := describeGCSError(err); ok {
+		return desc, true
+	}
+	var withStatus interface{ HTTPStatusCode() int }
+	if errors.As(err, &withStatus) {
+		return ServiceError{HTTPStatus: withStatus.HTTPStatusCode()}, true
+	}
+	return ServiceError{}, false
+}
+
 type ObjectStorage interface {
 	GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error)
 	PutObject(ctx context.Context, bucket, object string, reader io.Reader) error

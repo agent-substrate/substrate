@@ -223,12 +223,12 @@ func TestValidation_Atespace(t *testing.T) {
 	defer tc.cleanup()
 
 	t.Run("ListAtespaces", func(t *testing.T) {
-		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{PageSize: -1})
+		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{Options: &ateapipb.ListOptions{PageSize: -1}})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
 	t.Run("ListAtespaces invalid token", func(t *testing.T) {
-		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{PageToken: "%%%"})
+		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{Options: &ateapipb.ListOptions{PageToken: "%%%"}})
 		assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
 	})
 

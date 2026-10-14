@@ -81,11 +81,6 @@ type Env struct {
 	// work on a machine with no container registry credentials configured, and
 	// the build-from-source resolver fails at construction without them.
 	resolver imageResolver
-
-	// substrateVersion caches the derived build version and its object-name
-	// suffix; see SubstrateVersion.
-	substrateVersion       string
-	substrateVersionSuffix string
 }
 
 // Namespace is the namespace the control plane is installed into. It is
@@ -230,16 +225,6 @@ func (e *Env) ResolveAndApplyBytes(ctx context.Context, manifest []byte) error {
 // Kustomize renders an overlay directory under the repository root.
 func (e *Env) Kustomize(overlay string) ([]byte, error) {
 	return kustomize.Build(e.Cfg.Path(overlay))
-}
-
-// KustomizeResolve renders an overlay and resolves its images, the
-// `kubectl kustomize ... | run_ko resolve -f -` pipeline.
-func (e *Env) KustomizeResolve(ctx context.Context, overlay string) ([]byte, error) {
-	built, err := e.Kustomize(overlay)
-	if err != nil {
-		return nil, err
-	}
-	return e.ResolveManifestBytes(ctx, built)
 }
 
 // EnsureAteSystemNamespace creates the control-plane namespace and waits for it

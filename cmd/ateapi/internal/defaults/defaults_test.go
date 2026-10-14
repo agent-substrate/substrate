@@ -64,47 +64,47 @@ func TestApply(t *testing.T) {
 	}, {
 		name: "wakeup probe gets timeout and path",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HTTPGetAction{Port: 8080}}},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 8080}}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{
-				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080, Path: "/"},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{
+				HttpGet:        &ateapipb.HttpGetAction{Port: 8080, Path: "/"},
 				TimeoutSeconds: 30,
 			}},
 		}},
 	}, {
 		name: "wakeup probe without http_get gets only the timeout",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{}},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{TimeoutSeconds: 30}},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{TimeoutSeconds: 30}},
 		}},
 	}, {
 		name: "set wakeup probe fields are kept",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{
-				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080, Path: "/healthz"},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{
+				HttpGet:        &ateapipb.HttpGetAction{Port: 8080, Path: "/healthz"},
 				TimeoutSeconds: 5,
 			}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{
-				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080, Path: "/healthz"},
+			{Name: "main", WakeupProbe: &ateapipb.WakeupProbe{
+				HttpGet:        &ateapipb.HttpGetAction{Port: 8080, Path: "/healthz"},
 				TimeoutSeconds: 5,
 			}},
 		}},
 	}, {
 		name: "every container is defaulted",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "a", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HTTPGetAction{Port: 1}}},
+			{Name: "a", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 1}}},
 			{Name: "b"},
-			{Name: "c", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HTTPGetAction{Port: 3}}},
+			{Name: "c", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 3}}},
 		}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
-			{Name: "a", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HTTPGetAction{Port: 1, Path: "/"}, TimeoutSeconds: 30}},
+			{Name: "a", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 1, Path: "/"}, TimeoutSeconds: 30}},
 			{Name: "b"},
-			{Name: "c", WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HTTPGetAction{Port: 3, Path: "/"}, TimeoutSeconds: 30}},
+			{Name: "c", WakeupProbe: &ateapipb.WakeupProbe{HttpGet: &ateapipb.HttpGetAction{Port: 3, Path: "/"}, TimeoutSeconds: 30}},
 		}},
 	}, {
 		name: "actor has no defaults",
@@ -117,17 +117,17 @@ func TestApply(t *testing.T) {
 	}, {
 		name: "egress policy defaults http and https ports only",
 		in: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HTTPRule{Hostnames: []string{"a.example.com"}}},
-			{Https: &ateapipb.HTTPSRule{Hostnames: []string{"b.example.com"}}},
-			{Http: &ateapipb.HTTPRule{Hostnames: []string{"c.example.com"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
-			{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"d.example.com"}}},
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"a.example.com"}}},
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"b.example.com"}}},
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"c.example.com"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
+			{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"d.example.com"}}},
 			{},
 		}},
 		want: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HTTPRule{Hostnames: []string{"a.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}},
-			{Https: &ateapipb.HTTPSRule{Hostnames: []string{"b.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
-			{Http: &ateapipb.HTTPRule{Hostnames: []string{"c.example.com"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
-			{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"d.example.com"}}},
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"a.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}},
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"b.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"c.example.com"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
+			{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"d.example.com"}}},
 			{},
 		}},
 	}, {

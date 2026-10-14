@@ -246,7 +246,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 		},
 	}
 	template := &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
 	}
 	inst.recordLifecycleOp(context.Background(), ateattr.OperationResume, time.Now(), nil,
 		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest, ateattr.SnapshotFidelityVolumes)...)
@@ -291,6 +291,16 @@ func TestLifecycleOpAttrsOmitsUnknownScope(t *testing.T) {
 		case ateattr.SnapshotFidelityKey, ateattr.SnapshotKindKey, ateattr.WorkerPoolNamespaceKey, ateattr.WorkerPoolNameKey:
 			t.Errorf("attribute %s must be omitted while unknown, got %q", kv.Key, kv.Value.AsString())
 		}
+	}
+}
+
+// TestLifecycleOpAttrsOmitsTemplateBeforeLoad guards a failure before or in the
+// load step, such as lease contention or a missing ActorTemplate: the workflow
+// holds no actor, so the template keys are omitted, as on a failed delete,
+// rather than recorded as the empty string.
+func TestLifecycleOpAttrsOmitsTemplateBeforeLoad(t *testing.T) {
+	if got := lifecycleOpAttrs(nil, nil, "", ""); len(got) != 0 {
+		t.Errorf("lifecycleOpAttrs(nil actor) = %v, want no attributes", got)
 	}
 }
 

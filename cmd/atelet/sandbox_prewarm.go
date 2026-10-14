@@ -57,6 +57,12 @@ var prewarmTimeout = 5 * time.Minute
 // permanently broken config forever.
 const prewarmMaxRetries = 8
 
+// prewarmFinished observes the result of each prewarm attempt, by config
+// name, once the worker's call has returned. A no-op in production; a var so
+// a test can wait for the worker's own prewarm call to return before it tears
+// down what that call writes into.
+var prewarmFinished = func(string, error) {}
+
 // sandboxAssetFetcher is the one slice of AteomHerder the prewarmer needs.
 // Prewarming through the same method as the Run/Restore path keeps the two
 // fetches from ever diverging on cache layout or validation.
@@ -226,6 +232,7 @@ func (p *sandboxPrewarmer) process(ctx context.Context, name string) {
 	}
 	if err == nil {
 		err = p.prewarm(ctx, cfg)
+		prewarmFinished(name, err)
 	}
 	if err == nil {
 		p.queue.Forget(name)

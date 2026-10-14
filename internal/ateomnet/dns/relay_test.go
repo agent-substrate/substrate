@@ -183,8 +183,16 @@ func newSilentResolver(t *testing.T) (address string, asked <-chan struct{}) {
 	return pc.LocalAddr().String(), seen
 }
 
-// serveLoopback runs the relay on loopback sockets and stops it on cleanup.
+// serveLoopback runs the relay on loopback sockets for an actor with an
+// egress policy, and stops it on cleanup.
 func serveLoopback(t *testing.T, relay *Relay) (*Server, net.Addr, net.Addr) {
+	t.Helper()
+	return serveLoopbackWithPolicy(t, relay, withPolicy)
+}
+
+// serveLoopbackWithPolicy is serveLoopback for an actor whose egress policy
+// policy supplies.
+func serveLoopbackWithPolicy(t *testing.T, relay *Relay, policy PolicySource) (*Server, net.Addr, net.Addr) {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -199,7 +207,7 @@ func serveLoopback(t *testing.T, relay *Relay) (*Server, net.Addr, net.Addr) {
 		dialer:      *relay.dialer,
 		udp:         pc,
 		tcpListener: lis,
-	})
+	}, policy)
 	if err != nil {
 		pc.Close()
 		t.Fatal(err)

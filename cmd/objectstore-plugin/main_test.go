@@ -58,7 +58,7 @@ func TestInstallStagingCapacityFitsVolume(t *testing.T) {
 		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
 			t.Fatal(err)
 		}
-		if obj.Kind == "DaemonSet" && strings.HasPrefix(obj.Name, "atelet-") {
+		if obj.Kind == "DaemonSet" && obj.Name == "atelet" {
 			ds = &obj
 		}
 	}

@@ -52,7 +52,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 			StorageLocation: "gs://snapshots",
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			SandboxClass: "gvisor",
 			ConfigName:   "gvisor",
 		},
 	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
@@ -145,6 +145,31 @@ func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, ac
 		opt(actor)
 	}
 	storetest.MustCreateActor(t, ctx, st, actor)
+}
+
+// withPausedShape seeds the shape a pause leaves behind: a node-local
+// snapshot at the latest generation, pinned to node. Pair it with
+// ACTOR_STATE_SUSPENDED to seed a paused actor.
+func withPausedShape(node string) func(*ateapipb.Actor) {
+	return func(a *ateapipb.Actor) {
+		a.Status.AssignedNode = node
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", node),
+		}
+	}
+}
+
+// withPauseInProgress seeds the shape a pause has between MarkPausing and
+// FinalizePaused: a node-local snapshot at the latest generation that has no
+// locality yet. Pair it with ACTOR_STATE_SUSPENDING.
+func withPauseInProgress() func(*ateapipb.Actor) {
+	return func(a *ateapipb.Actor) {
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", ""),
+		}
+	}
 }
 
 // allActorStates enumerates every ActorState value, for exhaustive

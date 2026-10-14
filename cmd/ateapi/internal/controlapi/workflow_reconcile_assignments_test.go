@@ -301,7 +301,6 @@ func TestReconcileAssignments_ReleasesByActorState(t *testing.T) {
 		// touching the Actor.
 		{name: "crashed unassigned is released", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, pointsAt: unassigned, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantRelease: true},
 		{name: "suspended unassigned is released", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, pointsAt: unassigned, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantRelease: true},
-		{name: "paused unassigned is released", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, pointsAt: unassigned, wantState: ateapipb.ActorState_ACTOR_STATE_PAUSED, wantRelease: true},
 		{name: "running elsewhere is released", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, pointsAt: otherWorker, wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantRelease: true},
 		{name: "suspended elsewhere is released", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, pointsAt: otherWorker, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantRelease: true},
 		{name: "resuming crashes", state: ateapipb.ActorState_ACTOR_STATE_RESUMING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantRelease: true},
@@ -601,7 +600,7 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 	}
 
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
+	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
 	stored, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if err != nil {
 		t.Fatalf("assignWorkerAttempt: %v", err)

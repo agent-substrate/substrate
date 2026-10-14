@@ -28,6 +28,7 @@ import (
 	"github.com/openfga/openfga/pkg/server"
 	"github.com/openfga/openfga/pkg/storage/postgres"
 	"github.com/openfga/openfga/pkg/storage/sqlcommon"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -42,6 +43,10 @@ const (
 	RoleOwner  = "owner"
 	RoleEditor = "editor"
 	RoleViewer = "viewer"
+
+	RoleController    = "controller"
+	RoleEgressGateway = "egress_gateway"
+	RoleIngressRouter = "ingress_router"
 
 	RelationCanCreateAtespace       = "can_create_atespace"
 	RelationCanListAtespaces        = "can_list_atespaces"
@@ -212,13 +217,26 @@ func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *ser
 	return storeID, modelID, nil
 }
 
+// SystemPrincipals holds the mTLS SPIFFE IDs of Substrate's own components.
+// The Authorizer grants each one its system component role on global:root on
+// every check, independent of any stored AccessPolicy.
+type SystemPrincipals struct {
+	ControllerSPIFFEID    string
+	EgressGatewaySPIFFEID string
+	IngressRouterSPIFFEID string
+}
+
 // New provisions the default OpenFGA store and authorization model via
 // EnsureStoreAndModel and returns the read-path Authorizer and write-path
 // PolicyManager. bootstrapOwners are principal IDs (with or without the
 // "user:" prefix) that the Authorizer treats as owners of global:root on every
 // check, independent of any stored AccessPolicy.
-func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string) (*Authorizer, *PolicyManager, error) {
+func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string, system SystemPrincipals) (*Authorizer, *PolicyManager, error) {
 	owners, err := parseBootstrapOwners(bootstrapOwners)
+	if err != nil {
+		return nil, nil, err
+	}
+	systemPrincipals, err := parseSystemPrincipals(system)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -227,10 +245,11 @@ func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, boot
 		return nil, nil, err
 	}
 	authorizer := &Authorizer{
-		fgaServer:       fgaServer,
-		storeID:         storeID,
-		modelID:         modelID,
-		bootstrapOwners: owners,
+		fgaServer:        fgaServer,
+		storeID:          storeID,
+		modelID:          modelID,
+		bootstrapOwners:  owners,
+		systemPrincipals: systemPrincipals,
 	}
 	policyManager := &PolicyManager{
 		fgaServer: fgaServer,
@@ -252,6 +271,31 @@ func parseBootstrapOwners(ids []string) (map[string]struct{}, error) {
 		owners[user] = struct{}{}
 	}
 	return owners, nil
+}
+
+// parseSystemPrincipals validates system's SPIFFE IDs and maps each OpenFGA
+// user string to the system component roles it holds.
+func parseSystemPrincipals(system SystemPrincipals) (map[string][]string, error) {
+	bindings := []struct {
+		role     string
+		spiffeID string
+	}{
+		{role: RoleController, spiffeID: system.ControllerSPIFFEID},
+		{role: RoleEgressGateway, spiffeID: system.EgressGatewaySPIFFEID},
+		{role: RoleIngressRouter, spiffeID: system.IngressRouterSPIFFEID},
+	}
+	out := make(map[string][]string, len(bindings))
+	for _, b := range bindings {
+		if _, err := spiffeid.FromString(b.spiffeID); err != nil {
+			return nil, fmt.Errorf("invalid %s SPIFFE ID %q: %w", b.role, b.spiffeID, err)
+		}
+		user, err := FormatMember("user:" + b.spiffeID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s SPIFFE ID %q: %w", b.role, b.spiffeID, err)
+		}
+		out[user] = append(out[user], b.role)
+	}
+	return out, nil
 }
 
 // ateFGAInitLockID is a 64-bit identifier ("atefga") for serializing

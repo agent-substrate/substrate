@@ -58,7 +58,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, nil)
+	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, nil, storetest.DefaultSystemPrincipals())
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}

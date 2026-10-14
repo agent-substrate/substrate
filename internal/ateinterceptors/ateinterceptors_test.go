@@ -396,9 +396,9 @@ func TestServerUnaryInterceptorResponseLogMasksActorJWT(t *testing.T) {
 	log := captureDefaultLog(t)
 
 	const token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhY3RvciJ9.c2lnbmF0dXJl"
-	resp := &ateapipb.MintActorJWTResponse{ActorJwt: token}
+	resp := &ateapipb.MintActorJwtResponse{ActorJwt: token}
 
-	got, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJWTRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJWT"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	got, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJwtRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJwt"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return resp, nil
 	})
 	if err != nil {
@@ -412,7 +412,7 @@ func TestServerUnaryInterceptorResponseLogMasksActorJWT(t *testing.T) {
 	if !strings.Contains(gotLog, `"actor_jwt":"`+protoredact.Placeholder+`"`) {
 		t.Fatalf("log does not show the redacted actor_jwt: %s", gotLog)
 	}
-	if got.(*ateapipb.MintActorJWTResponse).GetActorJwt() != token {
+	if got.(*ateapipb.MintActorJwtResponse).GetActorJwt() != token {
 		t.Fatalf("interceptor mutated the response returned to the client")
 	}
 }
@@ -445,7 +445,7 @@ func TestInternalServerUnaryInterceptorLogMasksBytesFields(t *testing.T) {
 
 func TestServerUnaryInterceptorLogsNilResponseOnHandlerError(t *testing.T) {
 	log := captureDefaultLog(t)
-	_, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJWTRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJWT"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	_, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJwtRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJwt"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return nil, apierror.PermissionDenied("no")
 	})
 	if status.Code(err) != codes.PermissionDenied {

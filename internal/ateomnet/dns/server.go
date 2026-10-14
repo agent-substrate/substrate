@@ -26,6 +26,9 @@ import (
 
 type serverConfig struct {
 	upstreams []string
+	// policy supplies the actor's egress policy, which each query is checked
+	// against. Nil refuses every query.
+	policy PolicySource
 }
 
 type netConn struct {
@@ -84,7 +87,8 @@ func newServer(
 	}
 
 	s.pendingRequests = newPendingRequests(s.limiter)
-	s.dns = newDNSHandler(s.pendingRequests, s.limiter, nil)
+	// The check fetches with serveCtx, so that Stop cancels one in progress.
+	s.dns = newDNSHandler(s.pendingRequests, s.limiter, egressPolicyCheck(serveCtx, config.policy))
 	s.udp = newUDPHandler(netC.udp, netC.egressUDP, udpAddrs, s.dns, s.pendingRequests)
 	s.tcp = newTCPHandler(config.upstreams, netC.tcpListener, netC.dialer, s.dns, s.limiter)
 
