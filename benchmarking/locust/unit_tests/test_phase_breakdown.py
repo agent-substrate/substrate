@@ -46,8 +46,8 @@ ATELET = json.dumps({
 ATEOM = json.dumps({
     "time": "2026-09-23T10:00:05.400000000Z", "msg": "Restore timing breakdown",
     "ate.actor.uid": "uid-1", "ate.template.name": "glutton", "ate.snapshot.scope": "full",
-    "ateom.actor.restore.duration.vm_restore": 0.8,
-    "ateom.actor.restore.duration.total": 1.05,
+    "ateworker.actor.restore.duration.vm_restore": 0.8,
+    "ateworker.actor.restore.duration.total": 1.05,
 })
 STATS_CSV = ("Type,Name,Request Count,Failure Count\n"
              "grpc,SuspendActor,0,0\ngrpc,ResumeActor,1,0\n,Aggregated,1,0\n")

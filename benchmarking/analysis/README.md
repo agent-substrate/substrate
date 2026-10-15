@@ -12,8 +12,8 @@ Two joinable JSON log records feed it, each written by both layers:
 
 | record (`msg`) | emitter | keys |
 |---|---|---|
-| `Restore timing breakdown` | atelet, ateworker-microvm and ateworker-gvisor | `ate.actor.restore.duration.<phase>` / `ateom.actor.restore.duration.<phase>` |
-| `Checkpoint timing breakdown` | atelet, ateworker-microvm and ateworker-gvisor | `ate.actor.checkpoint.duration.<phase>` / `ateom.actor.checkpoint.duration.<phase>` |
+| `Restore timing breakdown` | atelet, ateworker-microvm and ateworker-gvisor | `ate.actor.restore.duration.<phase>` / `ateworker.actor.restore.duration.<phase>` |
+| `Checkpoint timing breakdown` | atelet, ateworker-microvm and ateworker-gvisor | `ate.actor.checkpoint.duration.<phase>` / `ateworker.actor.checkpoint.duration.<phase>` |
 
 Every record carries the full actor identity (`ate.actor.uid`, name,
 atespace, template) and the snapshot scope, which the histograms are barred

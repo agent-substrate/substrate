@@ -75,19 +75,19 @@ func TestRestoreTimingPhases(t *testing.T) {
 
 	rec := renderPhaseRecord(t, attrs)
 	for k, want := range map[string]float64{
-		"ateom.actor.restore.duration.prep":           0.01,
-		"ateom.actor.restore.duration.egress_prepare": 0.12,
-		"ateom.actor.restore.duration.net_setup":      0.03,
-		"ateom.actor.restore.duration.pause_rootfs":   0.005,
-		"ateom.actor.restore.duration.pause_create":   0.2,
-		"ateom.actor.restore.duration.pause_restore":  0.9,
-		"ateom.actor.restore.duration.app_rootfs":     0.015,
-		"ateom.actor.restore.duration.app_create":     0.05,
-		"ateom.actor.restore.duration.app_restore":    0.4,
-		"ateom.actor.restore.duration.wakeup_probe":   0.25,
-		"ateom.actor.restore.duration.activate":       0.002,
-		"ateom.actor.restore.duration.total":          2,
-		"ate.actor.container.count":                   2,
+		"ateworker.actor.restore.duration.prep":           0.01,
+		"ateworker.actor.restore.duration.egress_prepare": 0.12,
+		"ateworker.actor.restore.duration.net_setup":      0.03,
+		"ateworker.actor.restore.duration.pause_rootfs":   0.005,
+		"ateworker.actor.restore.duration.pause_create":   0.2,
+		"ateworker.actor.restore.duration.pause_restore":  0.9,
+		"ateworker.actor.restore.duration.app_rootfs":     0.015,
+		"ateworker.actor.restore.duration.app_create":     0.05,
+		"ateworker.actor.restore.duration.app_restore":    0.4,
+		"ateworker.actor.restore.duration.wakeup_probe":   0.25,
+		"ateworker.actor.restore.duration.activate":       0.002,
+		"ateworker.actor.restore.duration.total":          2,
+		"ate.actor.container.count":                       2,
 	} {
 		got, ok := rec[k].(float64)
 		if !ok {
@@ -119,10 +119,10 @@ func TestCheckpointTimingPhases(t *testing.T) {
 		ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateomphaselog.CheckpointDurationKey, nil, timing.phases()))
 
 	for k, want := range map[string]float64{
-		"ateom.actor.checkpoint.duration.prep":        0.02,
-		"ateom.actor.checkpoint.duration.durable_dir": 0.3,
-		"ateom.actor.checkpoint.duration.teardown":    0.15,
-		"ateom.actor.checkpoint.duration.total":       0.5,
+		"ateworker.actor.checkpoint.duration.prep":        0.02,
+		"ateworker.actor.checkpoint.duration.durable_dir": 0.3,
+		"ateworker.actor.checkpoint.duration.teardown":    0.15,
+		"ateworker.actor.checkpoint.duration.total":       0.5,
 	} {
 		got, ok := rec[k].(float64)
 		if !ok {
@@ -131,7 +131,7 @@ func TestCheckpointTimingPhases(t *testing.T) {
 			t.Errorf("%s = %v, want %v", k, got, want)
 		}
 	}
-	if v, ok := rec["ateom.actor.checkpoint.duration.checkpoint"]; ok {
+	if v, ok := rec["ateworker.actor.checkpoint.duration.checkpoint"]; ok {
 		t.Errorf("checkpoint present with %v, want absent", v)
 	}
 	if rec["ate.snapshot.fidelity"] != "volumes" {

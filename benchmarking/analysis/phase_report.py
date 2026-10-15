@@ -22,9 +22,9 @@ under jsonPayload), and aggregates the two joinable record kinds the node
 side emits, each written by both layers:
 
   - "Restore timing breakdown"     atelet (ate.actor.restore.duration.*)
-                                   and ateom (ateom.actor.restore.duration.*)
+                                   and ateom (ateworker.actor.restore.duration.*)
   - "Checkpoint timing breakdown"  atelet (ate.actor.checkpoint.duration.*)
-                                   and ateom (ateom.actor.checkpoint.duration.*)
+                                   and ateom (ateworker.actor.checkpoint.duration.*)
 
 The report answers "where does the SuspendActor / ResumeActor time go":
 per-phase percentiles at each layer, and the slowest operations as nested
@@ -61,8 +61,8 @@ from pathlib import Path
 BREAKDOWN_PREFIXES = {
     ("atelet", "restore"): "ate.actor.restore.duration.",
     ("atelet", "checkpoint"): "ate.actor.checkpoint.duration.",
-    ("ateom", "restore"): "ateom.actor.restore.duration.",
-    ("ateom", "checkpoint"): "ateom.actor.checkpoint.duration.",
+    ("ateom", "restore"): "ateworker.actor.restore.duration.",
+    ("ateom", "checkpoint"): "ateworker.actor.checkpoint.duration.",
 }
 BREAKDOWN_MSGS = {"Restore timing breakdown", "Checkpoint timing breakdown"}
 

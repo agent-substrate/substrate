@@ -92,11 +92,11 @@ func TestSnapshotPhaseAttrs(t *testing.T) {
 	// Seconds, not slog.Duration's nanoseconds: the keys extend the atelet
 	// histograms' names, and those declare unit s.
 	for k, want := range map[string]float64{
-		"ateom.actor.checkpoint.duration.prep":     0.04,
-		"ateom.actor.checkpoint.duration.pause":    0.003,
-		"ateom.actor.checkpoint.duration.snapshot": 0.85,
-		"ateom.actor.checkpoint.duration.teardown": 0.23,
-		"ateom.actor.checkpoint.duration.total":    1.25,
+		"ateworker.actor.checkpoint.duration.prep":     0.04,
+		"ateworker.actor.checkpoint.duration.pause":    0.003,
+		"ateworker.actor.checkpoint.duration.snapshot": 0.85,
+		"ateworker.actor.checkpoint.duration.teardown": 0.23,
+		"ateworker.actor.checkpoint.duration.total":    1.25,
 	} {
 		got, ok := rec[k].(float64)
 		if !ok {
@@ -106,7 +106,7 @@ func TestSnapshotPhaseAttrs(t *testing.T) {
 		}
 	}
 	for _, k := range []string{
-		"ateom.actor.checkpoint.duration.durable_dir",
+		"ateworker.actor.checkpoint.duration.durable_dir",
 		// The phase key names the one step a datapoint timed; this record
 		// carries them all.
 		"ate.snapshot.phase",
@@ -151,10 +151,10 @@ func TestSnapshotPhaseAttrsFailure(t *testing.T) {
 			}
 			// The phases that ran before the failure are still on the record;
 			// the ones that never started are not.
-			if _, ok := rec["ateom.actor.checkpoint.duration.pause"]; !ok {
-				t.Error("missing ateom.actor.checkpoint.duration.pause")
+			if _, ok := rec["ateworker.actor.checkpoint.duration.pause"]; !ok {
+				t.Error("missing ateworker.actor.checkpoint.duration.pause")
 			}
-			if v, ok := rec["ateom.actor.checkpoint.duration.snapshot"]; ok {
+			if v, ok := rec["ateworker.actor.checkpoint.duration.snapshot"]; ok {
 				t.Errorf("snapshot phase present with %v, want absent", v)
 			}
 		})
@@ -208,7 +208,7 @@ func TestLogSnapshotPhases(t *testing.T) {
 	if rec["ate.snapshot.fidelity"] != ateattr.SnapshotFidelityVolumes {
 		t.Errorf("ate.snapshot.fidelity = %v, want %q", rec["ate.snapshot.fidelity"], ateattr.SnapshotFidelityVolumes)
 	}
-	if got := rec["ateom.actor.restore.duration.total"]; got != 2.0 {
-		t.Errorf("ateom.actor.restore.duration.total = %v, want 2", got)
+	if got := rec["ateworker.actor.restore.duration.total"]; got != 2.0 {
+		t.Errorf("ateworker.actor.restore.duration.total = %v, want 2", got)
 	}
 }

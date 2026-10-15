@@ -58,9 +58,9 @@ ATEOM_RESTORE = {
     "msg": "Restore timing breakdown",
     "ate.actor.uid": "uid-1", "ate.template.name": "swebench-astropy-7336",
     "ate.snapshot.scope": "full",
-    "ateom.actor.restore.duration.vm_restore": 0.8,
-    "ateom.actor.restore.duration.wakeup_probe": 0.2,
-    "ateom.actor.restore.duration.total": 1.05,
+    "ateworker.actor.restore.duration.vm_restore": 0.8,
+    "ateworker.actor.restore.duration.wakeup_probe": 0.2,
+    "ateworker.actor.restore.duration.total": 1.05,
 }
 
 ATELET_CHECKPOINT = {
@@ -79,12 +79,12 @@ ATEOM_CHECKPOINT = {
     "msg": "Checkpoint timing breakdown",
     "ate.actor.uid": "uid-1", "ate.template.name": "swebench-astropy-7336",
     "ate.snapshot.scope": "full",
-    "ateom.actor.checkpoint.duration.prep": 0.04,
-    "ateom.actor.checkpoint.duration.pause": 0.01,
-    "ateom.actor.checkpoint.duration.snapshot": 0.5,
-    "ateom.actor.checkpoint.duration.rootfs_upper": 0.9,
-    "ateom.actor.checkpoint.duration.teardown": 0.2,
-    "ateom.actor.checkpoint.duration.total": 1.2,
+    "ateworker.actor.checkpoint.duration.prep": 0.04,
+    "ateworker.actor.checkpoint.duration.pause": 0.01,
+    "ateworker.actor.checkpoint.duration.snapshot": 0.5,
+    "ateworker.actor.checkpoint.duration.rootfs_upper": 0.9,
+    "ateworker.actor.checkpoint.duration.teardown": 0.2,
+    "ateworker.actor.checkpoint.duration.total": 1.2,
 }
 
 # The same actor's ateom restore record from an hour earlier: a different
@@ -233,8 +233,8 @@ class UnattributedTest(unittest.TestCase):
     def test_microvm_ateom_checkpoint_counts_the_concurrent_captures_once(self):
         # prep + pause + max(snapshot, rootfs_upper) + teardown; the two
         # captures overlapped, so only the slower one is spent wall time.
-        phases = {k[len("ateom.actor.checkpoint.duration."):]: v
-                  for k, v in ATEOM_CHECKPOINT.items() if k.startswith("ateom.actor.checkpoint.duration.")}
+        phases = {k[len("ateworker.actor.checkpoint.duration."):]: v
+                  for k, v in ATEOM_CHECKPOINT.items() if k.startswith("ateworker.actor.checkpoint.duration.")}
         got = phase_report.unattributed("ateom", "checkpoint", "microvm", phases)
         self.assertAlmostEqual(got, 1.2 - (0.04 + 0.01 + 0.9 + 0.2))
 
@@ -254,10 +254,10 @@ class UnattributedTest(unittest.TestCase):
         ateom = {
             "time": "2026-09-23T10:00:55.000000000Z", "msg": "Checkpoint timing breakdown",
             "ate.actor.uid": "uid-1", "ate.template.name": "swebench-astropy-7336", "ate.snapshot.scope": "full",
-            "ateom.actor.checkpoint.duration.pause": 0.02,
-            "ateom.actor.checkpoint.duration.checkpoint": 0.15,
-            "ateom.actor.checkpoint.duration.teardown": 0.05,
-            "ateom.actor.checkpoint.duration.total": 0.25,
+            "ateworker.actor.checkpoint.duration.pause": 0.02,
+            "ateworker.actor.checkpoint.duration.checkpoint": 0.15,
+            "ateworker.actor.checkpoint.duration.teardown": 0.05,
+            "ateworker.actor.checkpoint.duration.total": 0.25,
         }
         out = parse(ateom, atelet)
         phase_report.join_layers(out.breakdowns)

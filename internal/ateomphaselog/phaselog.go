@@ -38,8 +38,8 @@ import (
 // worker_checkpoint phases of atelet's ate.actor.*.duration histograms, whose
 // names they extend, and are joined per actor by benchmarking tooling.
 const (
-	RestoreDurationKey    = "ateom.actor.restore.duration"
-	CheckpointDurationKey = "ateom.actor.checkpoint.duration"
+	RestoreDurationKey    = "ateworker.actor.restore.duration"
+	CheckpointDurationKey = "ateworker.actor.checkpoint.duration"
 )
 
 // Phase is one timed step of a snapshot operation. A zero duration means the
