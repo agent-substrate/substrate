@@ -447,10 +447,10 @@ func (a *AgentClient) CreateSandboxForActor(ctx context.Context, opts CreateSand
 func (a *AgentClient) StartRootfsContainer(ctx context.Context, cid string, spec *specs.Spec) error {
 	pbSpec := SpecToAgentPB(spec)
 	pbSpec.Root = &agentpb.Root{Path: GuestSharedRootfs(cid), Readonly: false}
-	// Per-container cgroup under the shared /ateomchv parent, so the guest
+	// Per-container cgroup under the shared /actor parent, so the guest
 	// kernel accounts an actor's containers hierarchically (see agentstats).
 	if pbSpec.Linux != nil {
-		pbSpec.Linux.CgroupsPath = "/ateomchv/" + cid
+		pbSpec.Linux.CgroupsPath = "/actor/" + cid
 	}
 	if err := a.CreateContainer(ctx, &agentpb.CreateContainerRequest{
 		ContainerId: cid,
