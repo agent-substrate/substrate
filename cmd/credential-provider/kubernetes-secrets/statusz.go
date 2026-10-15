@@ -16,7 +16,8 @@
 // serving an HTML dashboard by default and JSON under ?format=json (or
 // Accept: application/json). It shows the provider's configuration as the
 // running process holds it — notably the authorization policy loaded at
-// startup, which the ConfigMap on disk may have since drifted from. Names
+// startup, which the ConfigMap on disk may have since drifted from, with the
+// namespaces its namespace selectors match now. Names
 // and configuration only, never secret values.
 package main
 
@@ -88,7 +89,7 @@ provider: {{.ProviderName}}<br>
 required caller SAN: {{.InjectorSAN}}<br>
 args: {{.Args}}</p>
 
-<h2>Namespace policy (as loaded at startup)</h2>
+<h2>Namespace policy (as loaded at startup, namespace selectors as matched now)</h2>
 {{if .PolicyGrants}}
 <table>
 <tr><th>atespace</th><th>allowed namespaces</th></tr>
