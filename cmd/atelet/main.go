@@ -32,6 +32,8 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/spf13/pflag"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 	"go.ate.dev/substrate/cmd/atelet/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/credentialprovider"
@@ -47,6 +49,7 @@ import (
 	"go.ate.dev/substrate/internal/clustertrustbundle"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/otlprelay"
@@ -94,11 +97,12 @@ var (
 	metricsListenAddr = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	healthListenAddr  = pflag.String("health-listen-addr", ":9091", "Address and port the /readyz and /healthz probe server should listen on.")
 
-	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle atelet presents as its gRPC serving certificate.")
-	clientCACerts        = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify gRPC client certificates.")
-	ateapiAddress        = pflag.String("ateapi-address", "k8s:///api.ate-system.svc:443", "ateapi gRPC target used by the credential broker.")
-	ateapiCAFile         = pflag.String("ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify ateapi.")
-	ateapiServerName     = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ateapi certificate.")
+	grpcServerCredBundle  = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle atelet presents as its gRPC serving certificate.")
+	clientCACerts         = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify gRPC client certificates.")
+	herderAllowedSPIFFEID = pflag.String("herder-allowed-spiffe-id", installdefaults.SPIFFEID(installdefaults.NamespaceFromPodEnv(), installdefaults.APIServerServiceAccount), "The only SPIFFE ID allowed to call AteomHerder.")
+	ateapiAddress         = pflag.String("ateapi-address", "k8s:///api.ate-system.svc:443", "ateapi gRPC target used by the credential broker.")
+	ateapiCAFile          = pflag.String("ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify ateapi.")
+	ateapiServerName      = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ateapi certificate.")
 
 	// The kubelet already knows how to authenticate to its node's cloud
 	// registry, via an exec plugin the node ships. Pointing atelet at the same
@@ -407,7 +411,12 @@ func main() {
 	snapshots.Start()
 	go systemInfoVolumes.run(ctx)
 
-	tlsCfg, err := ateletServerTLSConfig(*grpcServerCredBundle, *clientCACerts)
+	herderCaller, err := spiffeid.FromString(*herderAllowedSPIFFEID)
+	if err != nil {
+		serverboot.Fatal(ctx, "Invalid --herder-allowed-spiffe-id", err)
+	}
+	// Any pod can get a podidentity certificate, so also check the caller.
+	tlsCfg, err := ateletServerTLSConfig(*grpcServerCredBundle, *clientCACerts, verifyClientSPIFFEID(herderCaller))
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to build server TLS config", err)
 	}
@@ -466,8 +475,10 @@ func main() {
 	ateFactory.Start(stopCh)
 	workerPodFactory.Start(stopCh)
 
-	workerFacingTLS := tlsCfg.Clone()
-	workerFacingTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)
+	workerFacingTLS, err := ateletServerTLSConfig(*grpcServerCredBundle, *clientCACerts, verifyClientOnSameNode(ateletIdentity))
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to build credential broker TLS config", err)
+	}
 	if err := os.Remove(nodepath.WorkerSupportSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
 		serverboot.Fatal(ctx, "Failed to remove stale credential broker socket", err)
 	}
@@ -2169,8 +2180,13 @@ func removeActorDirs(actorUID string) error {
 
 // ateletServerTLSConfig builds a *tls.Config for a gRPC server that presents the
 // credential bundle at servingBundlePath, requires a client certificate
-// chaining to a CA in clientCAPath.
-func ateletServerTLSConfig(servingBundlePath, clientCAPath string) (*tls.Config, error) {
+// chaining to a CA in clientCAPath, and authorizes the client with
+// verifyClient. verifyClient must be set on the config GetConfigForClient
+// returns; crypto/tls ignores the outer config's VerifyConnection.
+func ateletServerTLSConfig(servingBundlePath, clientCAPath string, verifyClient func(tls.ConnectionState) error) (*tls.Config, error) {
+	if verifyClient == nil {
+		return nil, fmt.Errorf("client authorization callback is required")
+	}
 	loadClientCAs := credbundle.PoolLoader(clientCAPath)
 	if _, err := loadClientCAs(); err != nil {
 		return nil, fmt.Errorf("load CA bundle %s: %w", clientCAPath, err)
@@ -2184,13 +2200,32 @@ func ateletServerTLSConfig(servingBundlePath, clientCAPath string) (*tls.Config,
 				return nil, err
 			}
 			return &tls.Config{
-				MinVersion:     tls.VersionTLS13,
-				GetCertificate: serverCert,
-				ClientAuth:     tls.RequireAndVerifyClientCert,
-				ClientCAs:      clientCAs,
+				MinVersion:       tls.VersionTLS13,
+				GetCertificate:   serverCert,
+				ClientAuth:       tls.RequireAndVerifyClientCert,
+				ClientCAs:        clientCAs,
+				VerifyConnection: verifyClient,
 			}, nil
 		},
 	}, nil
+}
+
+// verifyClientSPIFFEID returns a TLS callback that accepts only a client whose
+// verified certificate carries exactly the SPIFFE ID want.
+func verifyClientSPIFFEID(want spiffeid.ID) func(tls.ConnectionState) error {
+	return func(state tls.ConnectionState) error {
+		if len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 {
+			return fmt.Errorf("verified client certificate is required")
+		}
+		got, err := x509svid.IDFromCert(state.VerifiedChains[0][0])
+		if err != nil {
+			return fmt.Errorf("client certificate has no valid SPIFFE ID: %w", err)
+		}
+		if got != want {
+			return fmt.Errorf("client SPIFFE ID %q is not authorized, want %q", got, want)
+		}
+		return nil
+	}
 }
 
 func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {
