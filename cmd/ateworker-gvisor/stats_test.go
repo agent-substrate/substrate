@@ -36,7 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -108,7 +108,7 @@ func TestGetWorkloadStats(t *testing.T) {
 	setHostedActor(s, &testActor)
 
 	before := time.Now().UnixNano()
-	got, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
+	got, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
 	after := time.Now().UnixNano()
 	if err != nil {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
@@ -120,14 +120,14 @@ func TestGetWorkloadStats(t *testing.T) {
 	// Checked above; zeroed so the rest can be compared as a whole.
 	got.GetSample().ObservedAtUnixNano = 0
 
-	want := &ateompb.GetWorkloadStatsResponse{Sample: &ateompb.WorkloadStatsSample{
+	want := &ateworkerpb.GetWorkloadStatsResponse{Sample: &ateworkerpb.WorkloadStatsSample{
 		Atespace:              "space-a",
 		ActorName:             "actor-a",
 		ActorUid:              "uid-a",
 		ActorTemplateAtespace: "ns-a",
 		ActorTemplateName:     "template-a",
 		SandboxClass:          "gvisor",
-		Source:                ateompb.StatsSource_STATS_SOURCE_CGROUP,
+		Source:                ateworkerpb.StatsSource_STATS_SOURCE_CGROUP,
 		MemoryCurrentBytes:    157286400,
 		MemoryPeakBytes:       209715200,
 		MemoryWorkingSetBytes: 136314880,
@@ -203,7 +203,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 				setHostedActor(s, tc.active)
 			}
 
-			resp, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: tc.actorUID})
+			resp, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: tc.actorUID})
 			if resp != nil {
 				t.Errorf("GetWorkloadStats() returned response %v, want nil", resp)
 			}
@@ -227,7 +227,7 @@ func TestGetWorkloadStatsDoesNotTakeLock(t *testing.T) {
 	}
 	defer s.locks.Unlock(testActor.UID)
 
-	if _, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: "uid-a"}); err != nil {
+	if _, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: "uid-a"}); err != nil {
 		t.Errorf("GetWorkloadStats() error = %v, want nil", err)
 	}
 }
@@ -257,7 +257,7 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 	// The keyed read against the same fixture is the reference: the discovery
 	// read must produce the identical sample, since both are the same
 	// measurement with a different addressing mode.
-	want, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
+	want, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
 	if err != nil {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
 	}
@@ -286,8 +286,8 @@ func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
 // pendingFor is the entry the discovery read answers for a workload with no
 // numbers yet: attribution and the runtime family, source UNSPECIFIED,
 // measurements absent. observed_at is zeroed by the caller before comparing.
-func pendingFor(attr resources.ActorAttribution) *ateompb.WorkloadStatsSample {
-	return &ateompb.WorkloadStatsSample{
+func pendingFor(attr resources.ActorAttribution) *ateworkerpb.WorkloadStatsSample {
+	return &ateworkerpb.WorkloadStatsSample{
 		Atespace:              attr.Ref.Atespace,
 		ActorName:             attr.Ref.Name,
 		ActorUid:              attr.UID,
@@ -381,7 +381,7 @@ func TestGetWorkloadStatsTransition(t *testing.T) {
 		return cgroupstats.Read(dir)
 	}
 
-	_, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
+	_, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
 	if got := apierror.Code(err); got != codes.NotFound {
 		t.Errorf("GetWorkloadStats() during transition: code = %v, want %v (err: %v)", got, codes.NotFound, err)
 	}
@@ -443,7 +443,7 @@ func TestGetActiveWorkloadStatsOneNoCgroup(t *testing.T) {
 		t.Fatalf("GetActiveWorkloadStats() returned %d samples, want 2: %v", len(got.GetSamples()), got)
 	}
 	for _, sample := range got.GetSamples() {
-		measured := sample.GetSource() != ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED
+		measured := sample.GetSource() != ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED
 		if want := sample.GetActorUid() == testActor.UID; measured != want {
 			t.Errorf("actor %q measured = %v, want %v", sample.GetActorUid(), measured, want)
 		}
@@ -479,7 +479,7 @@ func TestGetActiveWorkloadStatsOneUnreadable(t *testing.T) {
 		t.Fatalf("GetActiveWorkloadStats() returned %d samples, want 2: %v", len(got.GetSamples()), got)
 	}
 	for _, sample := range got.GetSamples() {
-		measured := sample.GetSource() != ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED
+		measured := sample.GetSource() != ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED
 		if want := sample.GetActorUid() == testActor.UID; measured != want {
 			t.Errorf("actor %q measured = %v, want %v", sample.GetActorUid(), measured, want)
 		}
@@ -497,9 +497,9 @@ func testActivation() *ateomstats.Activation {
 }
 
 // sweepAndList runs one sampler sweep, then the discovery read that serves it.
-func sweepAndList(s *AteomService) (*ateompb.GetActiveWorkloadStatsResponse, error) {
+func sweepAndList(s *AteomService) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
 	s.sweepUsage(context.Background())
-	return s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	return s.GetActiveWorkloadStats(context.Background(), &ateworkerpb.GetActiveWorkloadStatsRequest{})
 }
 
 // deadCgroup is a sandbox leaf after the kernel OOM-killed the sentry: the leaf
@@ -668,7 +668,7 @@ func TestDrainNeverKillsPauseContainer(t *testing.T) {
 	if resources.IsValidResourceName(ocispec.PauseContainer) {
 		t.Fatalf("%q is a valid container name; a spec could then put it on the drain's kill list", ocispec.PauseContainer)
 	}
-	spec := []*ateompb.Container{{Name: "app"}, {Name: "sidecar"}}
+	spec := []*ateworkerpb.Container{{Name: "app"}, {Name: "sidecar"}}
 	for _, name := range containerNames(spec) {
 		if name == ocispec.PauseContainer {
 			t.Fatalf("containerNames(%v) includes %q", spec, ocispec.PauseContainer)

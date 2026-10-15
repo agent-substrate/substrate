@@ -54,7 +54,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
@@ -72,7 +72,7 @@ func rootfsUpperTarFile(containerID string) (string, error) {
 }
 
 // containerNames returns the names of the actor's containers.
-func containerNames(containers []*ateompb.Container) []string {
+func containerNames(containers []*ateworkerpb.Container) []string {
 	names := make([]string, len(containers))
 	for i, c := range containers {
 		names[i] = c.GetName()
@@ -85,7 +85,7 @@ func containerNames(containers []*ateompb.Container) []string {
 // a ROOTFS or MEMORY snapshot left in snapshotDir. Either way any previous
 // activation's contents are gone first. Must run after CleanupSandboxState
 // has dropped the overlay mounts that used the dir.
-func stageRootfsUpper(actorDirs *ateompb.ActorDirs, snapshotDir string, containers []string) error {
+func stageRootfsUpper(actorDirs *ateworkerpb.ActorDirs, snapshotDir string, containers []string) error {
 	if snapshotDir == "" {
 		return resetRootfsUpperDir(actorDirs)
 	}
@@ -97,7 +97,7 @@ func stageRootfsUpper(actorDirs *ateompb.ActorDirs, snapshotDir string, containe
 // know about this directory, so ateom wipes any previous activation's contents
 // itself. The per-container fs/work subdirectories are created by the overlay
 // staging (kata.StageMergedRootfs).
-func resetRootfsUpperDir(actorDirs *ateompb.ActorDirs) error {
+func resetRootfsUpperDir(actorDirs *ateworkerpb.ActorDirs) error {
 	dir := rootfsUpperDir(actorDirs)
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("while clearing rootfs upper dir %q: %w", dir, err)

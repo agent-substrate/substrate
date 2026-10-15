@@ -21,7 +21,7 @@
 package ateomstats
 
 import (
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -36,10 +36,10 @@ type attributionSource interface {
 }
 
 var (
-	_ attributionSource = (*ateompb.RunWorkloadRequest)(nil)
-	_ attributionSource = (*ateompb.RestoreWorkloadRequest)(nil)
-	_ attributionSource = (*ateompb.CheckpointWorkloadRequest)(nil)
-	_ attributionSource = (*ateompb.TerminateWorkloadRequest)(nil)
+	_ attributionSource = (*ateworkerpb.RunWorkloadRequest)(nil)
+	_ attributionSource = (*ateworkerpb.RestoreWorkloadRequest)(nil)
+	_ attributionSource = (*ateworkerpb.CheckpointWorkloadRequest)(nil)
+	_ attributionSource = (*ateworkerpb.TerminateWorkloadRequest)(nil)
 )
 
 // ActorAttributionFromRequest extracts the attribution an ateom should retain

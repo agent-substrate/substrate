@@ -33,7 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomphaselog"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -65,7 +65,7 @@ import (
 //
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
-func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (_ *ateompb.CheckpointWorkloadResponse, err error) {
+func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (_ *ateworkerpb.CheckpointWorkloadResponse, err error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
@@ -123,8 +123,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	durable := hasDurableVolumes(req.GetSpec().GetContainers())
 	csi := hasCsiVolumes(req.GetSpec().GetContainers())
 	switch scope {
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		// TODO: Revisit handling for CSI volumes since snapshots are currently quietly ignored.
 		if !durable && !csi {
 			return nil, apierror.FailedPrecondition(
@@ -189,7 +189,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	shipsRootfs := includesRootfs(scope)
 	var durableFiles []string
 	g, gctx := errgroup.WithContext(ctx)
-	if scope == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+	if scope == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		g.Go(func() error {
 			t := time.Now()
 			d, err := s.snapshotVMState(gctx, client, ra, actorUID, checkpointDir)
@@ -251,7 +251,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		slog.Duration("durable_dir", dDurable), slog.Duration("rootfs_upper", dUpper),
 		slog.Duration("teardown", dTeardown))
 	s.recordFinalIfEnded(ctx, hosted)
-	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
+	return &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
 }
 
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot
@@ -334,7 +334,7 @@ func listFiles(dir string) ([]string, error) {
 
 // teardownActor stops the ateom-owned CH VMM for an actor. ra may be
 // nil (e.g. ateom restarted and lost in-memory state).
-func (s *AteomService) teardownActor(ctx context.Context, id string, actorDirs *ateompb.ActorDirs, ra *runningActor, client *ch.Client) error {
+func (s *AteomService) teardownActor(ctx context.Context, id string, actorDirs *ateworkerpb.ActorDirs, ra *runningActor, client *ch.Client) error {
 	// Stop offering the guest to GetWorkloadStats first, before anything below
 	// makes it stop answering. Clearing it here rather than alongside the
 	// attribution is what keeps a poll that lands mid-teardown on the
@@ -406,7 +406,7 @@ func (s *AteomService) teardownActor(ctx context.Context, id string, actorDirs *
 
 // TerminateWorkload stops the running actor, tears down its VMM, and cleans up
 // networking and overlays.
-func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
+func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
@@ -429,7 +429,7 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor terminated", attribution)
 
-	return &ateompb.TerminateWorkloadResponse{}, nil
+	return &ateworkerpb.TerminateWorkloadResponse{}, nil
 }
 
 // endPreviousActivation ends the activation a re-host is about to replace. A VM
@@ -437,7 +437,7 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 // left running, so it is stopped, read first for the final record. This happens
 // after a checkpoint that failed before its teardown, or on a retried Run or
 // Restore. Ending the activation also stops a late recordInitial from writing.
-func (s *AteomService) endPreviousActivation(ctx context.Context, actorUID string, actorDirs *ateompb.ActorDirs) error {
+func (s *AteomService) endPreviousActivation(ctx context.Context, actorUID string, actorDirs *ateworkerpb.ActorDirs) error {
 	old := s.lookupActor(actorUID)
 	if s.runningVM(actorUID) != nil {
 		if old != nil {
@@ -454,7 +454,7 @@ func (s *AteomService) endPreviousActivation(ctx context.Context, actorUID strin
 }
 
 // stopActorVM tears down the actor's micro-VM, if any, keeping it hosted.
-func (s *AteomService) stopActorVM(ctx context.Context, actorUID string, actorDirs *ateompb.ActorDirs) error {
+func (s *AteomService) stopActorVM(ctx context.Context, actorUID string, actorDirs *ateworkerpb.ActorDirs) error {
 	ra := s.runningVM(actorUID)
 	chSocket := kata.CLHSocketPath(actorUID)
 	if ra != nil && ra.apiSocket != "" {
@@ -463,7 +463,7 @@ func (s *AteomService) stopActorVM(ctx context.Context, actorUID string, actorDi
 	return s.teardownActor(ctx, actorUID, actorDirs, ra, ch.NewClient(chSocket))
 }
 
-func (s *AteomService) terminateWorkload(ctx context.Context, actor resources.ActorAttribution, actorDirs *ateompb.ActorDirs) error {
+func (s *AteomService) terminateWorkload(ctx context.Context, actor resources.ActorAttribution, actorDirs *ateworkerpb.ActorDirs) error {
 	var errs []error
 	if err := s.tunnel.Deactivate(ctx, actor); err != nil {
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))

@@ -198,7 +198,7 @@ const (
 	StatsKindFinal    = "final"
 )
 
-// Values for StatsSourceKey, mirroring ateompb.StatsSource. The two sources do
+// Values for StatsSourceKey, mirroring ateworkerpb.StatsSource. The two sources do
 // not measure the same thing (the cgroup source charges the sandbox runtime's
 // overhead along with the workload, the guest-agent source sees only the
 // workload's containers), so rollups must group by this key rather than sum

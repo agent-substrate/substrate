@@ -31,7 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/actorlock"
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // writeSnapshotConfig writes a config.json holding the given fs devices (plus the
@@ -230,17 +230,17 @@ func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		req  *ateompb.RestoreWorkloadRequest
+		req  *ateworkerpb.RestoreWorkloadRequest
 	}{
 		{
 			name: "nil actor_dirs",
-			req:  &ateompb.RestoreWorkloadRequest{ActorUid: "actor-a"},
+			req:  &ateworkerpb.RestoreWorkloadRequest{ActorUid: "actor-a"},
 		},
 		{
 			name: "empty restore_dir",
-			req: &ateompb.RestoreWorkloadRequest{
+			req: &ateworkerpb.RestoreWorkloadRequest{
 				ActorUid: "actor-a",
-				ActorDirs: &ateompb.ActorDirs{
+				ActorDirs: &ateworkerpb.ActorDirs{
 					RootDir:                   "/node/actors/actor-a",
 					OciBundleDir:              "/node/actors/actor-a/bundle",
 					CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
@@ -410,7 +410,7 @@ func TestNewReseedNonce(t *testing.T) {
 func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
 	s := &AteomService{}
 	ctx := context.Background()
-	dirs := &ateompb.ActorDirs{
+	dirs := &ateworkerpb.ActorDirs{
 		RootDir:                   "/node/actors/actor-a",
 		OciBundleDir:              "/node/actors/actor-a/bundle",
 		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
@@ -422,11 +422,11 @@ func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
 	assets := map[string]string{assetCH: "/bin/sh"}
 	for name, call := range map[string]func() error{
 		"RunWorkload": func() error {
-			_, err := s.RunWorkload(ctx, &ateompb.RunWorkloadRequest{ActorDirs: dirs, RuntimeAssetPaths: assets})
+			_, err := s.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{ActorDirs: dirs, RuntimeAssetPaths: assets})
 			return err
 		},
 		"RestoreWorkload": func() error {
-			_, err := s.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{ActorDirs: dirs, RuntimeAssetPaths: assets})
+			_, err := s.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{ActorDirs: dirs, RuntimeAssetPaths: assets})
 			return err
 		},
 	} {

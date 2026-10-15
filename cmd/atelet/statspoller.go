@@ -39,7 +39,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // workerPoolLabel is the label the pool controller stamps on every worker pod
@@ -82,9 +82,9 @@ func clampActorStatsPollInterval(ctx context.Context, configured time.Duration) 
 }
 
 // activeStatsClient is the one RPC the poller makes, as a narrow interface so
-// tests can fake an ateom without a socket. ateompb.AteomClient satisfies it.
+// tests can fake an ateom without a socket. ateworkerpb.AteomClient satisfies it.
 type activeStatsClient interface {
-	GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*ateompb.GetActiveWorkloadStatsResponse, error)
+	GetActiveWorkloadStats(ctx context.Context, req *ateworkerpb.GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*ateworkerpb.GetActiveWorkloadStatsResponse, error)
 }
 
 // statsPoller discovers the node's ateoms from the filesystem and turns their
@@ -298,7 +298,7 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 			}
 			defer closer.Close()
 
-			resp, err := client.GetActiveWorkloadStats(callCtx, &ateompb.GetActiveWorkloadStatsRequest{})
+			resp, err := client.GetActiveWorkloadStats(callCtx, &ateworkerpb.GetActiveWorkloadStatsRequest{})
 			if err != nil {
 				slog.DebugContext(ctx, "Actor stats sweep: skipping ateom", slog.String("pod_uid", podUID), slog.Any("err", err))
 				return nil
@@ -312,7 +312,7 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 			// available.
 			for _, sample := range resp.GetSamples() {
 				cpuAt := cpuKey{actorUID: sample.GetActorUid(), epoch: sample.GetEpochUnixNano()}
-				if sample.GetSource() == ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED {
+				if sample.GetSource() == ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED {
 					// Pending: hosted but not measured, so it adds nothing
 					// and its CPU baseline carries forward.
 					if last, ok := p.lastCPU[cpuAt]; ok {
@@ -591,7 +591,7 @@ func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsIn
 			if err != nil {
 				return nil, nil, err
 			}
-			return ateompb.NewAteomClient(conn), closer, nil
+			return ateworkerpb.NewAteomClient(conn), closer, nil
 		},
 		inst:      inst,
 		startedAt: time.Now().UnixNano(),

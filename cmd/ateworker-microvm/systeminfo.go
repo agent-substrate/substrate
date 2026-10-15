@@ -49,13 +49,13 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"golang.org/x/sys/unix"
 )
 
 // hasSystemInfoVolumes reports whether any container mounts a system-info
 // volume.
-func hasSystemInfoVolumes(containers []*ateompb.Container) bool {
+func hasSystemInfoVolumes(containers []*ateworkerpb.Container) bool {
 	for _, c := range containers {
 		if len(c.GetSystemInfoVolumeMounts()) > 0 {
 			return true

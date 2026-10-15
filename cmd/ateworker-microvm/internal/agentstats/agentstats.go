@@ -15,7 +15,7 @@
 // Package agentstats turns the kata guest agent's per-container cgroup
 // accounting into the resource-usage sample ateom reports.
 //
-// The micro-VM ateom uses it to answer ateompb.Ateom/GetWorkloadStats. The host
+// The micro-VM ateom uses it to answer ateworkerpb.Ateom/GetWorkloadStats. The host
 // cgroup is the wrong place to look on this runtime: the guest's RAM is a fixed
 // allocation cloud-hypervisor takes at boot, so the host cgroup reads roughly
 // the same whether the actor is idle or saturated. The numbers that move with

@@ -22,17 +22,17 @@ package main
 import (
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // ociBundlePath is the container's OCI bundle.
-func ociBundlePath(actorDirs *ateompb.ActorDirs, containerName string) string {
+func ociBundlePath(actorDirs *ateworkerpb.ActorDirs, containerName string) string {
 	return filepath.Join(actorDirs.GetOciBundleDir(), containerName)
 }
 
 // rootfsUpperDir is the host directory backing the actor's rootfs overlay
 // uppers: one subdirectory per container (see kata.UpperWorkDirs). Local to
 // this binary: atelet never touches it, so it is not one of the ActorDirs.
-func rootfsUpperDir(actorDirs *ateompb.ActorDirs) string {
+func rootfsUpperDir(actorDirs *ateworkerpb.ActorDirs) string {
 	return filepath.Join(actorDirs.GetRootDir(), "rootfs-upper")
 }

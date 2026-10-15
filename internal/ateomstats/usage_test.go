@@ -25,16 +25,16 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 var testPool = Pool{Namespace: "team-a", Name: "default"}
 
-func measuredSample() *ateompb.WorkloadStatsSample {
-	return &ateompb.WorkloadStatsSample{
+func measuredSample() *ateworkerpb.WorkloadStatsSample {
+	return &ateworkerpb.WorkloadStatsSample{
 		Atespace: "ns", ActorName: "a", ActorUid: "uid-1", ActorTemplateAtespace: "ns", ActorTemplateName: "t",
 		SandboxClass:          "gvisor",
-		Source:                ateompb.StatsSource_STATS_SOURCE_CGROUP,
+		Source:                ateworkerpb.StatsSource_STATS_SOURCE_CGROUP,
 		MemoryCurrentBytes:    40 << 20,
 		MemoryPeakBytes:       48 << 20,
 		MemoryWorkingSetBytes: 32 << 20,
@@ -101,7 +101,7 @@ func TestUsageAttrsMeasured(t *testing.T) {
 func TestUsageAttrsPendingHasNoMeasurements(t *testing.T) {
 	t.Parallel()
 	s := measuredSample()
-	s.Source = ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED
+	s.Source = ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED
 	got := attrMap(UsageAttrs(testPool, ateattr.StatsKindPeriodic, s))
 	checkShape(t, got)
 	for _, k := range actorevent.UsageSampled.Conditional {
@@ -225,10 +225,10 @@ func TestStartSamplerSurvivesAPanic(t *testing.T) {
 
 func TestStatsSourceLabel(t *testing.T) {
 	t.Parallel()
-	for src, want := range map[ateompb.StatsSource]string{
-		ateompb.StatsSource_STATS_SOURCE_CGROUP:      ateattr.StatsSourceCgroup,
-		ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT: ateattr.StatsSourceGuestAgent,
-		ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED: ateattr.StatsSourceUnspecified,
+	for src, want := range map[ateworkerpb.StatsSource]string{
+		ateworkerpb.StatsSource_STATS_SOURCE_CGROUP:      ateattr.StatsSourceCgroup,
+		ateworkerpb.StatsSource_STATS_SOURCE_GUEST_AGENT: ateattr.StatsSourceGuestAgent,
+		ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED: ateattr.StatsSourceUnspecified,
 	} {
 		if got := StatsSourceLabel(src); got != want {
 			t.Errorf("StatsSourceLabel(%v) = %q, want %q", src, got, want)

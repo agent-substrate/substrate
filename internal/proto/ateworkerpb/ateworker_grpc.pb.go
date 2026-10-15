@@ -16,9 +16,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v4.25.3
-// source: ateom.proto
+// source: ateworker.proto
 
-package ateompb
+package ateworkerpb
 
 import (
 	context "context"
@@ -33,12 +33,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Ateom_RunWorkload_FullMethodName            = "/ateom.Ateom/RunWorkload"
-	Ateom_CheckpointWorkload_FullMethodName     = "/ateom.Ateom/CheckpointWorkload"
-	Ateom_RestoreWorkload_FullMethodName        = "/ateom.Ateom/RestoreWorkload"
-	Ateom_GetWorkloadStats_FullMethodName       = "/ateom.Ateom/GetWorkloadStats"
-	Ateom_GetActiveWorkloadStats_FullMethodName = "/ateom.Ateom/GetActiveWorkloadStats"
-	Ateom_TerminateWorkload_FullMethodName      = "/ateom.Ateom/TerminateWorkload"
+	Ateom_RunWorkload_FullMethodName            = "/ateworker.Ateom/RunWorkload"
+	Ateom_CheckpointWorkload_FullMethodName     = "/ateworker.Ateom/CheckpointWorkload"
+	Ateom_RestoreWorkload_FullMethodName        = "/ateworker.Ateom/RestoreWorkload"
+	Ateom_GetWorkloadStats_FullMethodName       = "/ateworker.Ateom/GetWorkloadStats"
+	Ateom_GetActiveWorkloadStats_FullMethodName = "/ateworker.Ateom/GetActiveWorkloadStats"
+	Ateom_TerminateWorkload_FullMethodName      = "/ateworker.Ateom/TerminateWorkload"
 )
 
 // AteomClient is the client API for Ateom service.
@@ -440,7 +440,7 @@ func _Ateom_TerminateWorkload_Handler(srv interface{}, ctx context.Context, dec 
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Ateom_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "ateom.Ateom",
+	ServiceName: "ateworker.Ateom",
 	HandlerType: (*AteomServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -469,5 +469,5 @@ var Ateom_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "ateom.proto",
+	Metadata: "ateworker.proto",
 }

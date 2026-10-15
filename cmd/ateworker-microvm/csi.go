@@ -23,11 +23,11 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // hasCsiVolumes reports whether any container mounts a CSI volume.
-func hasCsiVolumes(containers []*ateompb.Container) bool {
+func hasCsiVolumes(containers []*ateworkerpb.Container) bool {
 	for _, c := range containers {
 		if len(c.GetCsiVolumeMounts()) > 0 {
 			return true

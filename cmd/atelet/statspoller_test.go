@@ -34,13 +34,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // fakeStatsAteom answers GetActiveWorkloadStats with a canned response or
 // error, standing in for one ateom socket.
 type fakeStatsAteom struct {
-	resp *ateompb.GetActiveWorkloadStatsResponse
+	resp *ateworkerpb.GetActiveWorkloadStatsResponse
 	err  error
 
 	// mu guards the recordings below: the sweep probes ateoms concurrently.
@@ -52,7 +52,7 @@ type fakeStatsAteom struct {
 	sawDeadline bool
 }
 
-func (f *fakeStatsAteom) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*ateompb.GetActiveWorkloadStatsResponse, error) {
+func (f *fakeStatsAteom) GetActiveWorkloadStats(ctx context.Context, req *ateworkerpb.GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
 	f.mu.Lock()
 	f.calls++
 	_, f.sawDeadline = ctx.Deadline()
@@ -61,9 +61,9 @@ func (f *fakeStatsAteom) GetActiveWorkloadStats(ctx context.Context, req *ateomp
 }
 
 // executingResponse builds the sample an executing ateom would echo.
-func executingResponse(templateNS, templateName string, class string, source ateompb.StatsSource, current, workingSet uint64) *ateompb.GetActiveWorkloadStatsResponse {
-	return &ateompb.GetActiveWorkloadStatsResponse{
-		Samples: []*ateompb.WorkloadStatsSample{{
+func executingResponse(templateNS, templateName string, class string, source ateworkerpb.StatsSource, current, workingSet uint64) *ateworkerpb.GetActiveWorkloadStatsResponse {
+	return &ateworkerpb.GetActiveWorkloadStatsResponse{
+		Samples: []*ateworkerpb.WorkloadStatsSample{{
 			ActorTemplateAtespace: templateNS,
 			ActorTemplateName:     templateName,
 			SandboxClass:          class,
@@ -75,13 +75,13 @@ func executingResponse(templateNS, templateName string, class string, source ate
 }
 
 // measuredSample is one measured entry of a multi-actor response.
-func measuredSample(actorUID, templateNS, templateName string, current, workingSet, cpuUsec uint64) *ateompb.WorkloadStatsSample {
-	return &ateompb.WorkloadStatsSample{
+func measuredSample(actorUID, templateNS, templateName string, current, workingSet, cpuUsec uint64) *ateworkerpb.WorkloadStatsSample {
+	return &ateworkerpb.WorkloadStatsSample{
 		ActorUid:              actorUID,
 		ActorTemplateAtespace: templateNS,
 		ActorTemplateName:     templateName,
 		SandboxClass:          "gvisor",
-		Source:                ateompb.StatsSource_STATS_SOURCE_CGROUP,
+		Source:                ateworkerpb.StatsSource_STATS_SOURCE_CGROUP,
 		MemoryCurrentBytes:    current,
 		MemoryWorkingSetBytes: workingSet,
 		CpuUsageUsec:          cpuUsec,
@@ -90,8 +90,8 @@ func measuredSample(actorUID, templateNS, templateName string, current, workingS
 
 // pendingSample is one pending entry: attribution present, source
 // UNSPECIFIED, measurements absent.
-func pendingSample(actorUID, templateNS, templateName string) *ateompb.WorkloadStatsSample {
-	return &ateompb.WorkloadStatsSample{
+func pendingSample(actorUID, templateNS, templateName string) *ateworkerpb.WorkloadStatsSample {
+	return &ateworkerpb.WorkloadStatsSample{
 		ActorUid:              actorUID,
 		ActorTemplateAtespace: templateNS,
 		ActorTemplateName:     templateName,
@@ -104,7 +104,7 @@ func pendingSample(actorUID, templateNS, templateName string) *ateompb.WorkloadS
 const testStartedAt = 1000
 
 // atEpoch sets the activation a sample belongs to.
-func atEpoch(s *ateompb.WorkloadStatsSample, epoch int64) *ateompb.WorkloadStatsSample {
+func atEpoch(s *ateworkerpb.WorkloadStatsSample, epoch int64) *ateworkerpb.WorkloadStatsSample {
 	s.EpochUnixNano = epoch
 	return s
 }
@@ -116,15 +116,15 @@ func baseline(p *statsPoller, actorUID string, epoch int64) (uint64, bool) {
 }
 
 // availableResponse is an idle ateom's answer: the empty list.
-func availableResponse() *ateompb.GetActiveWorkloadStatsResponse {
-	return &ateompb.GetActiveWorkloadStatsResponse{}
+func availableResponse() *ateworkerpb.GetActiveWorkloadStatsResponse {
+	return &ateworkerpb.GetActiveWorkloadStatsResponse{}
 }
 
 // pendingResponse is a workload with no numbers yet, per the response
 // contract: attribution present, source UNSPECIFIED, measurements absent.
-func pendingResponse(actorUID string) *ateompb.GetActiveWorkloadStatsResponse {
-	return &ateompb.GetActiveWorkloadStatsResponse{
-		Samples: []*ateompb.WorkloadStatsSample{{
+func pendingResponse(actorUID string) *ateworkerpb.GetActiveWorkloadStatsResponse {
+	return &ateworkerpb.GetActiveWorkloadStatsResponse{
+		Samples: []*ateworkerpb.WorkloadStatsSample{{
 			ActorUid:              actorUID,
 			ActorTemplateAtespace: "ns-a",
 			ActorTemplateName:     "tmpl-a",
@@ -193,9 +193,9 @@ func TestStatsPollerCollectAggregates(t *testing.T) {
 	// worker, one mid-boot: the same-template pair sums, the others contribute
 	// nothing.
 	fakes := map[string]*fakeStatsAteom{
-		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
-		"uid-2": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 500, 300)},
-		"uid-3": {resp: executingResponse("ns-b", "tmpl-b", "microvm", ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT, 42, 40)},
+		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateworkerpb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
+		"uid-2": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateworkerpb.StatsSource_STATS_SOURCE_CGROUP, 500, 300)},
+		"uid-3": {resp: executingResponse("ns-b", "tmpl-b", "microvm", ateworkerpb.StatsSource_STATS_SOURCE_GUEST_AGENT, 42, 40)},
 		"uid-4": {resp: availableResponse()},
 		"uid-5": {resp: pendingResponse("uid-5-actor")},
 	}
@@ -231,7 +231,7 @@ func TestStatsPollerCollectAggregates(t *testing.T) {
 // The healthy ateom's sample must still be aggregated.
 func TestStatsPollerCollectSkipsFailures(t *testing.T) {
 	fakes := map[string]*fakeStatsAteom{
-		"uid-healthy": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)},
+		"uid-healthy": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateworkerpb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)},
 		"uid-stale":   nil, // directory with no reachable socket: dial fails
 		"uid-broken":  {err: errors.New("rpc error: connection refused")},
 	}
@@ -337,14 +337,14 @@ func gaugePointCount(t *testing.T, reader *sdkmetric.ManualReader, name string) 
 
 // cpuResponse is executingResponse with only the CPU counter set, for the
 // delta tests.
-func cpuResponse(actorUID string, cpuUsec uint64) *ateompb.GetActiveWorkloadStatsResponse {
-	return &ateompb.GetActiveWorkloadStatsResponse{
-		Samples: []*ateompb.WorkloadStatsSample{{
+func cpuResponse(actorUID string, cpuUsec uint64) *ateworkerpb.GetActiveWorkloadStatsResponse {
+	return &ateworkerpb.GetActiveWorkloadStatsResponse{
+		Samples: []*ateworkerpb.WorkloadStatsSample{{
 			ActorUid:              actorUID,
 			ActorTemplateAtespace: "ns-a",
 			ActorTemplateName:     "tmpl-a",
 			SandboxClass:          "gvisor",
-			Source:                ateompb.StatsSource_STATS_SOURCE_CGROUP,
+			Source:                ateworkerpb.StatsSource_STATS_SOURCE_CGROUP,
 			CpuUsageUsec:          cpuUsec,
 		}},
 	}
@@ -372,7 +372,7 @@ func TestStatsPollerCPUDeltas(t *testing.T) {
 
 	// A new activation that began after atelet started: its value is all
 	// usage atelet has not charged.
-	fake.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	fake.resp = &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		atEpoch(cpuResponse("uid-a", 250).Samples[0], testStartedAt+1),
 	}}
 	if got := p.collect(context.Background())[key].cpuDeltaUsec; got != 250 {
@@ -396,8 +396,8 @@ func TestStatsPollerCPUDeltas(t *testing.T) {
 // than vanishing, and the two never merge.
 func TestStatsPollerWorkerPoolLabels(t *testing.T) {
 	fakes := map[string]*fakeStatsAteom{
-		"uid-pooled":   {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)},
-		"uid-unpooled": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
+		"uid-pooled":   {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateworkerpb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)},
+		"uid-unpooled": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateworkerpb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
 	}
 	p, _ := newPollerFixture(t, fakes)
 	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
@@ -425,8 +425,8 @@ func TestStatsPollerWorkerPoolLabels(t *testing.T) {
 func TestStatsPollerCollectSaturatesCorruptSamples(t *testing.T) {
 	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
 	fakes := map[string]*fakeStatsAteom{
-		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, math.MaxUint64, math.MaxUint64)},
-		"uid-2": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
+		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateworkerpb.StatsSource_STATS_SOURCE_CGROUP, math.MaxUint64, math.MaxUint64)},
+		"uid-2": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateworkerpb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
 	}
 	p, _ := newPollerFixture(t, fakes)
 
@@ -495,7 +495,7 @@ func TestNewWorkerPoolFetcher(t *testing.T) {
 // that feeds the monotonic counter and can never be re-attributed -- on the
 // pooled label set.
 func TestStatsPollerPoolCacheSurvivesListFlap(t *testing.T) {
-	resp := executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp := executingResponse("ns-a", "tmpl-a", "gvisor", ateworkerpb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
 	resp.GetSamples()[0].ActorUid = "uid-a"
 	resp.GetSamples()[0].CpuUsageUsec = 1000
 	fake := &fakeStatsAteom{resp: resp}
@@ -519,7 +519,7 @@ func TestStatsPollerPoolCacheSurvivesListFlap(t *testing.T) {
 	// Sweep 2: the list fails AND the actor consumed CPU. Both the sample and
 	// its delta must still group under the pool.
 	listOK = false
-	resp2 := executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp2 := executingResponse("ns-a", "tmpl-a", "gvisor", ateworkerpb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
 	resp2.GetSamples()[0].ActorUid = "uid-a"
 	resp2.GetSamples()[0].CpuUsageUsec = 1600
 	fake.resp = resp2
@@ -564,7 +564,7 @@ func TestStatsPollerPoolCachePrunes(t *testing.T) {
 // labels (the residual, documented case) and heals on the next good list.
 func TestStatsPollerPoolCacheMissDuringOutage(t *testing.T) {
 	fakes := map[string]*fakeStatsAteom{
-		"uid-new": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
+		"uid-new": {resp: executingResponse("ns-a", "tmpl-a", "gvisor", ateworkerpb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
 	}
 	p, _ := newPollerFixture(t, fakes)
 	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef { return nil }
@@ -583,7 +583,7 @@ func TestStatsPollerPoolCacheMissDuringOutage(t *testing.T) {
 // all-nil flap test above -- a whole-map fallback would pass that test and
 // fail this one.
 func TestStatsPollerPoolCachePartialListFallsBack(t *testing.T) {
-	resp := executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp := executingResponse("ns-a", "tmpl-a", "gvisor", ateworkerpb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
 	resp.GetSamples()[0].ActorUid = "uid-a"
 	resp.GetSamples()[0].CpuUsageUsec = 1000
 	fake := &fakeStatsAteom{resp: resp}
@@ -606,7 +606,7 @@ func TestStatsPollerPoolCachePartialListFallsBack(t *testing.T) {
 	}
 
 	full = false
-	resp2 := executingResponse("ns-a", "tmpl-a", "gvisor", ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
+	resp2 := executingResponse("ns-a", "tmpl-a", "gvisor", ateworkerpb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)
 	resp2.GetSamples()[0].ActorUid = "uid-a"
 	resp2.GetSamples()[0].CpuUsageUsec = 1250
 	fake.resp = resp2
@@ -624,7 +624,7 @@ func TestStatsPollerPoolCachePartialListFallsBack(t *testing.T) {
 // a pending entry contributes nothing.
 func TestStatsPollerFoldsMultiActorWorker(t *testing.T) {
 	fakes := map[string]*fakeStatsAteom{
-		"uid-w1": {resp: &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+		"uid-w1": {resp: &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 			measuredSample("actor-1", "ns-a", "tmpl-a", 1000, 700, 0),
 			measuredSample("actor-2", "ns-a", "tmpl-a", 500, 300, 0),
 			measuredSample("actor-3", "ns-b", "tmpl-b", 42, 40, 0),
@@ -658,7 +658,7 @@ func TestStatsPollerFoldsMultiActorWorker(t *testing.T) {
 // a pending sibling neither gains a baseline nor disturbs the others'.
 func TestStatsPollerMultiActorCPUBaselines(t *testing.T) {
 	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
-	fake := &fakeStatsAteom{resp: &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	fake := &fakeStatsAteom{resp: &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1000),
 		measuredSample("actor-2", "ns-a", "tmpl-a", 1, 1, 5000),
 		pendingSample("actor-3", "ns-a", "tmpl-a"),
@@ -673,7 +673,7 @@ func TestStatsPollerMultiActorCPUBaselines(t *testing.T) {
 	}
 
 	// actor-1 advances by 600, actor-2 by 250; the sum lands on the shared key.
-	fake.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	fake.resp = &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1600),
 		measuredSample("actor-2", "ns-a", "tmpl-a", 1, 1, 5250),
 		pendingSample("actor-3", "ns-a", "tmpl-a"),
@@ -684,7 +684,7 @@ func TestStatsPollerMultiActorCPUBaselines(t *testing.T) {
 
 	// actor-2 starts a new activation; actor-1 keeps advancing. The new
 	// activation charges its value, not a negative delta.
-	fake.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	fake.resp = &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1700),
 		atEpoch(measuredSample("actor-2", "ns-a", "tmpl-a", 1, 1, 40), testStartedAt+1),
 	}}
@@ -701,14 +701,14 @@ func TestStatsPollerMultiActorCPUBaselines(t *testing.T) {
 // the actor is measured again, not lost.
 func TestStatsPollerPendingKeepsCPUBaseline(t *testing.T) {
 	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
-	fake := &fakeStatsAteom{resp: &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	fake := &fakeStatsAteom{resp: &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1000),
 	}}}
 	p, _ := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-w1": fake})
 
 	p.collect(context.Background()) // baseline 1000
 
-	fake.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	fake.resp = &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		pendingSample("actor-1", "ns-a", "tmpl-a"),
 	}}
 	if got := p.collect(context.Background()); len(got) != 0 {
@@ -718,7 +718,7 @@ func TestStatsPollerPendingKeepsCPUBaseline(t *testing.T) {
 		t.Fatalf("baseline after pending sweep = %d (present=%v), want 1000 kept", got, ok)
 	}
 
-	fake.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	fake.resp = &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1600),
 	}}
 	if got := p.collect(context.Background())[key].cpuDeltaUsec; got != 600 {
@@ -731,21 +731,21 @@ func TestStatsPollerPendingKeepsCPUBaseline(t *testing.T) {
 // charges its first value in full only if it began after atelet started.
 func TestStatsPollerCPUEpochs(t *testing.T) {
 	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
-	sample := func(epoch int64, cpu uint64) *ateompb.WorkloadStatsSample {
+	sample := func(epoch int64, cpu uint64) *ateworkerpb.WorkloadStatsSample {
 		return atEpoch(measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, cpu), epoch)
 	}
 	for _, tc := range []struct {
 		name      string
-		sweeps    []*ateompb.WorkloadStatsSample // nil is a pending sweep
-		wantDelta int64                          // on the last sweep
+		sweeps    []*ateworkerpb.WorkloadStatsSample // nil is a pending sweep
+		wantDelta int64                              // on the last sweep
 	}{
-		{"increase within an activation", []*ateompb.WorkloadStatsSample{sample(2000, 1000), sample(2000, 1400)}, 400},
-		{"decrease within an activation", []*ateompb.WorkloadStatsSample{sample(2000, 1000), sample(2000, 400)}, 0},
-		{"new activation after start", []*ateompb.WorkloadStatsSample{sample(2000, 1000), sample(3000, 400)}, 400},
-		{"new activation across a pending sweep", []*ateompb.WorkloadStatsSample{sample(2000, 1000), nil, sample(3000, 400)}, 400},
-		{"first sight of an activation after start", []*ateompb.WorkloadStatsSample{sample(2000, 700)}, 700},
-		{"first sight of an activation at start", []*ateompb.WorkloadStatsSample{sample(testStartedAt, 700)}, 0},
-		{"first sight of an activation before start", []*ateompb.WorkloadStatsSample{sample(testStartedAt-1, 700)}, 0},
+		{"increase within an activation", []*ateworkerpb.WorkloadStatsSample{sample(2000, 1000), sample(2000, 1400)}, 400},
+		{"decrease within an activation", []*ateworkerpb.WorkloadStatsSample{sample(2000, 1000), sample(2000, 400)}, 0},
+		{"new activation after start", []*ateworkerpb.WorkloadStatsSample{sample(2000, 1000), sample(3000, 400)}, 400},
+		{"new activation across a pending sweep", []*ateworkerpb.WorkloadStatsSample{sample(2000, 1000), nil, sample(3000, 400)}, 400},
+		{"first sight of an activation after start", []*ateworkerpb.WorkloadStatsSample{sample(2000, 700)}, 700},
+		{"first sight of an activation at start", []*ateworkerpb.WorkloadStatsSample{sample(testStartedAt, 700)}, 0},
+		{"first sight of an activation before start", []*ateworkerpb.WorkloadStatsSample{sample(testStartedAt-1, 700)}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeStatsAteom{}
@@ -755,7 +755,7 @@ func TestStatsPollerCPUEpochs(t *testing.T) {
 				if sw == nil {
 					sw = atEpoch(pendingSample("actor-1", "ns-a", "tmpl-a"), 3000)
 				}
-				fake.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{sw}}
+				fake.resp = &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{sw}}
 				got = 0
 				if agg := p.collect(context.Background())[key]; agg != nil {
 					got = agg.cpuDeltaUsec
@@ -775,7 +775,7 @@ func TestStatsPollerCPUEpochs(t *testing.T) {
 func TestStatsPollerRestoreChargesEachActivationOnce(t *testing.T) {
 	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
 	const before, after = 2000, 3000
-	src := &fakeStatsAteom{resp: &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	src := &fakeStatsAteom{resp: &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		atEpoch(measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1000), before),
 	}}}
 	dst := &fakeStatsAteom{resp: availableResponse()}
@@ -784,10 +784,10 @@ func TestStatsPollerRestoreChargesEachActivationOnce(t *testing.T) {
 
 	// The source still measures its activation; the destination hosts the new
 	// one, not yet measured.
-	src.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	src.resp = &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		atEpoch(measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1300), before),
 	}}
-	dst.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	dst.resp = &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		atEpoch(pendingSample("actor-1", "ns-a", "tmpl-a"), after),
 	}}
 	if got := p.collect(context.Background())[key].cpuDeltaUsec; got != 300 {
@@ -796,7 +796,7 @@ func TestStatsPollerRestoreChargesEachActivationOnce(t *testing.T) {
 
 	// Only the destination hosts it now, 200 into its activation.
 	src.resp = availableResponse()
-	dst.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	dst.resp = &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		atEpoch(measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 200), after),
 	}}
 	if got := p.collect(context.Background())[key].cpuDeltaUsec; got != 200 {
@@ -812,7 +812,7 @@ func TestStatsPollerRestoreChargesEachActivationOnce(t *testing.T) {
 // increase rather than the activation in full.
 func TestStatsPollerKeepsBaselineOfSilentWorker(t *testing.T) {
 	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
-	fake := &fakeStatsAteom{resp: &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	fake := &fakeStatsAteom{resp: &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		atEpoch(measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1000), 2000),
 	}}}
 	p, _ := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-w1": fake})
@@ -825,7 +825,7 @@ func TestStatsPollerKeepsBaselineOfSilentWorker(t *testing.T) {
 	}
 
 	fake.err = nil
-	fake.resp = &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	fake.resp = &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		atEpoch(measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1600), 2000),
 	}}
 	if got := p.collect(context.Background())[key].cpuDeltaUsec; got != 600 {
@@ -837,7 +837,7 @@ func TestStatsPollerKeepsBaselineOfSilentWorker(t *testing.T) {
 // that stops answering for good, as one killed without cleanup, keeps its
 // baselines for as long as its directory stays.
 func TestStatsPollerSilentWorkerKeepsBaselinesUntilDirGone(t *testing.T) {
-	fake := &fakeStatsAteom{resp: &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	fake := &fakeStatsAteom{resp: &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		atEpoch(measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1000), 2000),
 	}}}
 	p, _ := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-w1": fake})
@@ -862,7 +862,7 @@ func TestStatsPollerSilentWorkerKeepsBaselinesUntilDirGone(t *testing.T) {
 // TestStatsPollerDropsBaselineOfGoneWorker pins that a worker whose
 // directory is gone takes its baselines with it.
 func TestStatsPollerDropsBaselineOfGoneWorker(t *testing.T) {
-	fake := &fakeStatsAteom{resp: &ateompb.GetActiveWorkloadStatsResponse{Samples: []*ateompb.WorkloadStatsSample{
+	fake := &fakeStatsAteom{resp: &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: []*ateworkerpb.WorkloadStatsSample{
 		atEpoch(measuredSample("actor-1", "ns-a", "tmpl-a", 1, 1, 1000), 2000),
 	}}}
 	p, _ := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-w1": fake})

@@ -23,7 +23,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // fakeRunsc stands in for *runsc. containers is the set runsc has a record of;
@@ -80,7 +80,7 @@ func assertCalls(t *testing.T, f *fakeRunsc, want ...string) {
 	}
 }
 
-var appContainers = []*ateompb.Container{{Name: "app"}}
+var appContainers = []*ateworkerpb.Container{{Name: "app"}}
 
 func TestCleanupContainers_DeletesEveryContainerRunscKnows(t *testing.T) {
 	f := newFakeRunsc("app", "_pause")

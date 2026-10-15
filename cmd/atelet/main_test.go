@@ -41,7 +41,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
@@ -299,11 +299,11 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareOCIBundles: %v", err)
 	}
-	want := []*ateompb.ContainerSpec{{
+	want := []*ateworkerpb.ContainerSpec{{
 		Args:         []string{"/bin/app", "serve"},
 		Env:          []string{"GREETING=hello", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 		Capabilities: []string{"CAP_AUDIT_WRITE", "CAP_NET_ADMIN", "CAP_NET_BIND_SERVICE"},
-		Resources:    &ateompb.ResourceLimits{MemoryBytes: 1 << 30, CpuMillis: 500},
+		Resources:    &ateworkerpb.ResourceLimits{MemoryBytes: 1 << 30, CpuMillis: 500},
 	}}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("prepareOCIBundles container specs mismatch (-want +got):\n%s", diff)
@@ -361,7 +361,7 @@ func TestCheckpointSnapshotFiles(t *testing.T) {
 		{name: "manifest name", files: []string{"checkpoint.img", sandboxManifestName}, required: true, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			files, data, err := checkpointSnapshotFiles(&ateompb.CheckpointWorkloadResponse{SnapshotFiles: tc.files, DataSnapshotFiles: tc.data}, tc.required)
+			files, data, err := checkpointSnapshotFiles(&ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: tc.files, DataSnapshotFiles: tc.data}, tc.required)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("checkpointSnapshotFiles() = %v, %v, %v; wantErr %v", files, data, err, tc.wantErr)
 			}
@@ -493,13 +493,13 @@ func TestCheckLocalSnapshotFilesRejectsSymlink(t *testing.T) {
 func TestToAteomFidelity(t *testing.T) {
 	tests := []struct {
 		in   ateletpb.SnapshotFidelity
-		want ateompb.SnapshotFidelity
+		want ateworkerpb.SnapshotFidelity
 	}{
-		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
-		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
-		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS},
-		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
-		{ateletpb.SnapshotFidelity(99), ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
+		{ateletpb.SnapshotFidelity(99), ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
 	}
 	for _, tc := range tests {
 		if got := toAteomFidelity(tc.in); got != tc.want {
@@ -717,12 +717,12 @@ func TestBuildAteomWorkloadSpecForwardsWakeupProbe(t *testing.T) {
 			},
 		},
 	}
-	want := &ateompb.WorkloadSpec{
-		Containers: []*ateompb.Container{
+	want := &ateworkerpb.WorkloadSpec{
+		Containers: []*ateworkerpb.Container{
 			{
 				Name: "with-probe",
-				WakeupProbe: &ateompb.WakeupProbe{
-					HttpGet:        &ateompb.HttpGetAction{Path: "/health", Port: 8080},
+				WakeupProbe: &ateworkerpb.WakeupProbe{
+					HttpGet:        &ateworkerpb.HttpGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},
 			},
@@ -742,14 +742,14 @@ func TestBuildAteomWorkloadSpecForwardsContainerSpecs(t *testing.T) {
 	in := &ateletpb.WorkloadSpec{
 		Containers: []*ateletpb.Container{{Name: "main"}, {Name: "sidecar"}},
 	}
-	containerSpecs := []*ateompb.ContainerSpec{
+	containerSpecs := []*ateworkerpb.ContainerSpec{
 		{Args: []string{"/app", "serve"}},
 		{Args: []string{"/sidecar"}},
 	}
-	want := &ateompb.WorkloadSpec{
-		Containers: []*ateompb.Container{
-			{Name: "main", ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/app", "serve"}}},
-			{Name: "sidecar", ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/sidecar"}}},
+	want := &ateworkerpb.WorkloadSpec{
+		Containers: []*ateworkerpb.Container{
+			{Name: "main", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app", "serve"}}},
+			{Name: "sidecar", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/sidecar"}}},
 		},
 	}
 	got, err := buildAteomWorkloadSpec(in, containerSpecs)
@@ -790,24 +790,24 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 	}
 	// ateom needs the volume NAME as well as the path: the name selects the
 	// per-volume directory on the host, and an actor may have several.
-	want := &ateompb.WorkloadSpec{
-		Containers: []*ateompb.Container{
+	want := &ateworkerpb.WorkloadSpec{
+		Containers: []*ateworkerpb.Container{
 			{
 				Name: "main",
-				DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+				DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
 					{VolumeName: "data", MountPath: "/home/counter"},
 					{VolumeName: "cache", MountPath: "/var/cache"},
 				},
-				CsiVolumeMounts: []*ateompb.VolumeMount{
+				CsiVolumeMounts: []*ateworkerpb.VolumeMount{
 					{VolumeName: "scratch", MountPath: "/scratch"},
 				},
-				SystemInfoVolumeMounts: []*ateompb.SystemInfoVolumeMount{
+				SystemInfoVolumeMounts: []*ateworkerpb.SystemInfoVolumeMount{
 					{VolumeName: "system-info", MountPath: "/run/ate"},
 				},
 			},
 			{
 				Name: "sidecar",
-				DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+				DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
 					{VolumeName: "data", MountPath: "/shared"},
 				},
 			},
@@ -900,7 +900,7 @@ func TestToAteomEgressGateway(t *testing.T) {
 	if got := toAteomEgressGateway(nil); got != nil {
 		t.Fatalf("toAteomEgressGateway(nil) = %v, want nil", got)
 	}
-	want := &ateompb.EgressGateway{Address: "egress.example:443"}
+	want := &ateworkerpb.EgressGateway{Address: "egress.example:443"}
 	got := toAteomEgressGateway(&ateletpb.EgressGateway{Address: want.Address})
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("toAteomEgressGateway mismatch (-want +got):\n%s", diff)

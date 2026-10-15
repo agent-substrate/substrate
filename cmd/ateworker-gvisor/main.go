@@ -50,7 +50,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/preview"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/sizing"
@@ -247,7 +247,7 @@ func do(ctx context.Context) error {
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
 	)
-	ateompb.RegisterAteomServer(svr, ateomService)
+	ateworkerpb.RegisterAteomServer(svr, ateomService)
 	reflection.Register(svr)
 	readiness := &serverboot.Readiness{}
 
@@ -311,7 +311,7 @@ type workloadSession struct {
 
 // AteomService is a service for shepherding single microvm.
 type AteomService struct {
-	ateompb.UnimplementedAteomServer
+	ateworkerpb.UnimplementedAteomServer
 
 	// Serializes lifecycle RPCs per actor.
 	locks *actorlock.Locks
@@ -350,7 +350,7 @@ type AteomService struct {
 	flags *flagStore
 }
 
-var _ ateompb.AteomServer = (*AteomService)(nil)
+var _ ateworkerpb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
 func NewService(tunnel *ateomtunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore) *AteomService {
@@ -539,7 +539,7 @@ func waitContainerStop(ctx context.Context, done <-chan error) error {
 	}
 }
 
-func containerNames(containers []*ateompb.Container) []string {
+func containerNames(containers []*ateworkerpb.Container) []string {
 	names := make([]string, 0, len(containers))
 	for _, c := range containers {
 		names = append(names, c.GetName())
@@ -556,7 +556,7 @@ func validateRunscPath(p string) error {
 	return nil
 }
 
-func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
+func validateActorDirs(actorDirs *ateworkerpb.ActorDirs) error {
 	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
 		return apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
@@ -566,21 +566,21 @@ func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 // supportedFidelities are the snapshot fidelities this runtime serves. gVisor
 // keeps rootfs changes inside its memory checkpoint, so it cannot capture
 // ROOTFS without MEMORY.
-var supportedFidelities = []ateompb.SnapshotFidelity{
-	ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
-	ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+var supportedFidelities = []ateworkerpb.SnapshotFidelity{
+	ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+	ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 }
 
 // validateFidelity rejects a checkpoint or restore request whose fidelity
 // this runtime cannot serve.
-func validateFidelity(fidelity ateompb.SnapshotFidelity) error {
+func validateFidelity(fidelity ateworkerpb.SnapshotFidelity) error {
 	if errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity")); len(errs) > 0 {
 		return apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 	return nil
 }
 
-func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
+func (s *AteomService) RunWorkload(ctx context.Context, req *ateworkerpb.RunWorkloadRequest) (resp *ateworkerpb.RunWorkloadResponse, retErr error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
@@ -708,12 +708,12 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())})
 	s.recordInitial(ctx, hosted)
 
-	return &ateompb.RunWorkloadResponse{}, nil
+	return &ateworkerpb.RunWorkloadResponse{}, nil
 }
 
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
-func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (_ *ateompb.CheckpointWorkloadResponse, err error) {
+func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (_ *ateworkerpb.CheckpointWorkloadResponse, err error) {
 	// Taken before the lock, so prep covers the wait for it.
 	tStart := time.Now()
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
@@ -782,7 +782,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	containers := req.GetSpec().GetContainers()
 	durablePaths := durableFSCheckpointPaths(containers)
 	switch fidelity {
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		if len(durablePaths) == 0 {
 			return nil, fmt.Errorf("no durable-dir volumes found for VOLUMES snapshot")
 		}
@@ -791,7 +791,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		if err != nil {
 			return nil, fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
 		}
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Checkpoint pause container (root of the sandbox), splitting durable-dir
 		// volumes into <checkpointPath>/fs when present.
 		sandbox, sbErr := openSandboxProcess(req.GetActorDirs())
@@ -839,7 +839,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
 
-	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
+	return &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
 }
 
 // listSnapshotFiles returns the (relative) names of regular files directly under
@@ -872,14 +872,14 @@ func listSnapshotFiles(dir string) ([]string, error) {
 // is left running: it is the sandbox, and cleanupContainers deletes the others
 // through it before deleting it last. Killing it first leaves the sentry a
 // zombie until reaped, which runsc delete mistakes for a live sandbox.
-func stopContainers(ctx context.Context, rcmd containerRuntime, containers []*ateompb.Container) {
+func stopContainers(ctx context.Context, rcmd containerRuntime, containers []*ateworkerpb.Container) {
 	for _, ctr := range containers {
 		_ = rcmd.cmdKill(ctx, ctr.GetName(), "SIGKILL")
 		_ = rcmd.cmdWait(ctx, ctr.GetName())
 	}
 }
 
-func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []*ateompb.Container) error {
+func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []*ateworkerpb.Container) error {
 	// Application containers first, the pause (root) container last.
 	names := make([]string, 0, len(containers)+1)
 	for _, ctr := range containers {
@@ -925,7 +925,7 @@ func isContainerAlreadyGone(ctx context.Context, rcmd containerRuntime, name str
 	return !slices.Contains(ids, name), nil
 }
 
-func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
+func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateworkerpb.RestoreWorkloadRequest) (resp *ateworkerpb.RestoreWorkloadResponse, retErr error) {
 	// Taken before the lock, so prep covers the wait for it.
 	tStart := time.Now()
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
@@ -1043,7 +1043,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 	defer pw.Close()
 	switch fidelity {
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		// Create and start pause container (cold boot with durable-dir volumes restored from fs/)
 		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
 		err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, restoreArgs)
@@ -1056,7 +1056,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		if err != nil {
 			return nil, fmt.Errorf("while starting pause container: %w", err)
 		}
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Create and restore pause container (restores both process/rootfs and fs/ durable-dir volumes)
 		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
 		err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, restoreArgs)
@@ -1093,13 +1093,13 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
 		switch fidelity {
-		case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 			err = rcmd.cmdStart(ctx, pw, ac.GetName())
 			timing.appRestore += lap(&tLast)
 			if err != nil {
 				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
 			}
-		case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 			err = rcmd.cmdRestore(ctx, pw, ac.GetName(), checkpointDir)
 			timing.appRestore += lap(&tLast)
 			if err != nil {
@@ -1124,10 +1124,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(containers)})
 	s.recordInitial(ctx, hosted)
 
-	return &ateompb.RestoreWorkloadResponse{}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{}, nil
 }
 
-func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
+func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
@@ -1153,10 +1153,10 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor terminated", attribution)
 
-	return &ateompb.TerminateWorkloadResponse{}, nil
+	return &ateworkerpb.TerminateWorkloadResponse{}, nil
 }
 
-func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateompb.ActorDirs, containers []*ateompb.Container) error {
+func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) error {
 	var errs []error
 	if err := s.tunnel.Deactivate(ctx, resources.ActorAttribution{Ref: actorRef, UID: actorUID}); err != nil {
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))

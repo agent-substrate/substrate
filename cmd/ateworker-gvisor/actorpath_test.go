@@ -23,12 +23,12 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/roottest"
 )
 
 func TestResetRunscStateAndPidFileDirs(t *testing.T) {
-	actorDirs := &ateompb.ActorDirs{RootDir: t.TempDir()}
+	actorDirs := &ateworkerpb.ActorDirs{RootDir: t.TempDir()}
 	if err := os.MkdirAll(filepath.Join(runscStateDir(actorDirs), "stale"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestResetRunscStateAndPidFileDirs(t *testing.T) {
 // until it is detached.
 func TestResetRunscStateAndPidFileDirs_DetachesMounts(t *testing.T) {
 	roottest.Require(t, "mount/unmount")
-	actorDirs := &ateompb.ActorDirs{RootDir: t.TempDir()}
+	actorDirs := &ateworkerpb.ActorDirs{RootDir: t.TempDir()}
 	if err := os.MkdirAll(runscStateDir(actorDirs), 0o700); err != nil {
 		t.Fatal(err)
 	}

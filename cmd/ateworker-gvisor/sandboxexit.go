@@ -26,7 +26,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // sandboxExitTimeout bounds the wait for a checkpointed sandbox to go away.
@@ -42,7 +42,7 @@ type sandboxProcess struct {
 
 // openSandboxProcess pins the sandbox before it can exit, so a reused pid is
 // never mistaken for it.
-func openSandboxProcess(actorDirs *ateompb.ActorDirs) (*sandboxProcess, error) {
+func openSandboxProcess(actorDirs *ateworkerpb.ActorDirs) (*sandboxProcess, error) {
 	b, err := os.ReadFile(pidFilePath(actorDirs, ocispec.PauseContainer))
 	if err != nil {
 		return nil, err

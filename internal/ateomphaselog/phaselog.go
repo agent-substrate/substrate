@@ -26,7 +26,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc/status"
 )
@@ -56,13 +56,13 @@ type Phase struct {
 // values, the same way ateattr.SnapshotFidelityValue does for the atelet
 // enum. An unrecognized fidelity reports as unknown rather than stringified,
 // so no wire value can widen the value set readers key on.
-func FidelityLogValue(fidelity ateompb.SnapshotFidelity) string {
+func FidelityLogValue(fidelity ateworkerpb.SnapshotFidelity) string {
 	switch fidelity {
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		return ateattr.SnapshotFidelityVolumes
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 		return ateattr.SnapshotFidelityRootfs
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		return ateattr.SnapshotFidelityMemory
 	default:
 		return ateattr.SnapshotFidelityUnknown
@@ -79,7 +79,7 @@ func FidelityLogValue(fidelity ateompb.SnapshotFidelity) string {
 // it completed, marked with error.type (the gRPC code, context errors as
 // DeadlineExceeded / Canceled) so a reader can leave it out of a latency
 // distribution. Absence means success.
-func SnapshotPhaseAttrs(a resources.ActorAttribution, fidelity ateompb.SnapshotFidelity, durationKey string, err error, phases []Phase) []slog.Attr {
+func SnapshotPhaseAttrs(a resources.ActorAttribution, fidelity ateworkerpb.SnapshotFidelity, durationKey string, err error, phases []Phase) []slog.Attr {
 	attrs := ateattr.ActorLogAttrs(a)
 	attrs = append(attrs, slog.String(string(ateattr.SnapshotFidelityKey), FidelityLogValue(fidelity)))
 	if err != nil {
@@ -103,6 +103,6 @@ func SnapshotPhaseAttrs(a resources.ActorAttribution, fidelity ateompb.SnapshotF
 }
 
 // LogSnapshotPhases emits the SnapshotPhaseAttrs record under msg.
-func LogSnapshotPhases(ctx context.Context, msg string, a resources.ActorAttribution, fidelity ateompb.SnapshotFidelity, durationKey string, err error, phases []Phase) {
+func LogSnapshotPhases(ctx context.Context, msg string, a resources.ActorAttribution, fidelity ateworkerpb.SnapshotFidelity, durationKey string, err error, phases []Phase) {
 	slog.LogAttrs(ctx, slog.LevelInfo, msg, SnapshotPhaseAttrs(a, fidelity, durationKey, err, phases)...)
 }

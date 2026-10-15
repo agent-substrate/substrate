@@ -47,7 +47,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
@@ -66,7 +66,7 @@ func durableTarFile(volumeName string) (string, error) {
 }
 
 // hasDurableVolumes reports whether any container mounts a durable-dir volume.
-func hasDurableVolumes(containers []*ateompb.Container) bool {
+func hasDurableVolumes(containers []*ateworkerpb.Container) bool {
 	for _, c := range containers {
 		if len(c.GetDurableDirVolumeMounts()) > 0 {
 			return true
@@ -77,7 +77,7 @@ func hasDurableVolumes(containers []*ateompb.Container) bool {
 
 // durableVolumeNames returns the sorted, deduplicated durable-dir volume names
 // mounted by workload containers.
-func durableVolumeNames(containers []*ateompb.Container) []string {
+func durableVolumeNames(containers []*ateworkerpb.Container) []string {
 	var names []string
 	for _, c := range containers {
 		for _, m := range c.GetDurableDirVolumeMounts() {

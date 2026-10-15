@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // startFakeSandbox starts a process that runs until killed and records it as
@@ -40,7 +40,7 @@ func startFakeSandbox(t *testing.T) (*exec.Cmd, *sandboxProcess) {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	})
-	actorDirs := &ateompb.ActorDirs{RootDir: t.TempDir()}
+	actorDirs := &ateworkerpb.ActorDirs{RootDir: t.TempDir()}
 	if err := os.MkdirAll(pidFileDir(actorDirs), 0o700); err != nil {
 		t.Fatal(err)
 	}

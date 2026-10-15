@@ -23,7 +23,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -34,7 +34,7 @@ const fsCheckpointManifest = "fscheckpoint.pb"
 // across containers. Every mount is emitted even when a volume is shared across
 // multiple mounts: runsc creates one shared tmpfs under whichever mount is
 // set up first and deduplicates by vfs.Filesystem when saving.
-func durableFSCheckpointPaths(containers []*ateompb.Container) []string {
+func durableFSCheckpointPaths(containers []*ateworkerpb.Container) []string {
 	var paths []string
 	for _, c := range containers {
 		for _, m := range c.GetDurableDirVolumeMounts() {

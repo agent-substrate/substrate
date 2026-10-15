@@ -28,7 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
@@ -88,12 +88,12 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // ocispec.GVisorCgroupLeaf supplies the leaf name for both shaping and stats.
 const sandboxCgroupContainer = ocispec.PauseContainer
 
-// GetWorkloadStats implements ateompb.Ateom/GetWorkloadStats.
+// GetWorkloadStats implements ateworkerpb.Ateom/GetWorkloadStats.
 //
 // It must not take the actor's lifecycle lock, which is held across whole
 // boots and checkpoints: polls would stall behind runsc, and a checkpoint
 // would wait on telemetry. The cgroup files are read with no lock held.
-func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWorkloadStatsRequest) (*ateompb.GetWorkloadStatsResponse, error) {
+func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.GetWorkloadStatsRequest) (*ateworkerpb.GetWorkloadStatsResponse, error) {
 	if req.GetActorUid() == "" {
 		return nil, apierror.InvalidArgument("actor_uid is required")
 	}
@@ -132,15 +132,15 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 	// The reading advanced the activation's CPU, so the cache keeps up with it.
 	hosted.usage.Store(sample)
 
-	return &ateompb.GetWorkloadStatsResponse{Sample: sample}, nil
+	return &ateworkerpb.GetWorkloadStatsResponse{Sample: sample}, nil
 }
 
-// GetActiveWorkloadStats implements ateompb.Ateom/GetActiveWorkloadStats: the
+// GetActiveWorkloadStats implements ateworkerpb.Ateom/GetActiveWorkloadStats: the
 // discovery read. It serves each actor's latest sample from the sampler, so a
 // poll costs no read of its own; an actor not sampled yet is pending.
-func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest) (*ateompb.GetActiveWorkloadStatsResponse, error) {
+func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateworkerpb.GetActiveWorkloadStatsRequest) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
 	hosted := s.hostedActors()
-	samples := make([]*ateompb.WorkloadStatsSample, 0, len(hosted))
+	samples := make([]*ateworkerpb.WorkloadStatsSample, 0, len(hosted))
 	for _, h := range hosted {
 		sample := h.usage.Latest()
 		if sample == nil {
@@ -151,7 +151,7 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 
 	// An empty list is "available", per the proto: a normal answer for a
 	// scraper to get, not an error.
-	return &ateompb.GetActiveWorkloadStatsResponse{Samples: samples}, nil
+	return &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: samples}, nil
 }
 
 // sweepUsage samples every hosted actor between its initial reading and its
@@ -220,7 +220,7 @@ func (s *AteomService) recordFinalIfEnded(ctx context.Context, h *hostedActor) {
 // terminate ended, from its newest measured sample.
 func (s *AteomService) recordFinal(ctx context.Context, h *hostedActor) {
 	pending := h.usage.WithEpoch(pendingSample(&h.attribution))
-	h.usage.Final(func(measured *ateompb.WorkloadStatsSample) {
+	h.usage.Final(func(measured *ateworkerpb.WorkloadStatsSample) {
 		if measured == nil {
 			measured = pending
 		}
@@ -232,8 +232,8 @@ func (s *AteomService) recordFinal(ctx context.Context, h *hostedActor) {
 // read reports it: attribution and the runtime family, measurements absent --
 // source stays STATS_SOURCE_UNSPECIFIED, which the sample's contract defines
 // as "not measured" rather than "measured as zero".
-func pendingSample(active *resources.ActorAttribution) *ateompb.WorkloadStatsSample {
-	return &ateompb.WorkloadStatsSample{
+func pendingSample(active *resources.ActorAttribution) *ateworkerpb.WorkloadStatsSample {
+	return &ateworkerpb.WorkloadStatsSample{
 		Atespace:              active.Ref.Atespace,
 		ActorName:             active.Ref.Name,
 		ActorUid:              active.UID,
@@ -248,9 +248,9 @@ func pendingSample(active *resources.ActorAttribution) *ateompb.WorkloadStatsSam
 
 // measure reads h's sandbox cgroup as a reading of its activation, returning
 // the raw cgroup reading alongside it for the dead-sandbox check.
-func (s *AteomService) measure(ctx context.Context, h *hostedActor) (*ateompb.WorkloadStatsSample, cgroupstats.Sample, error) {
+func (s *AteomService) measure(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, cgroupstats.Sample, error) {
 	var raw cgroupstats.Sample
-	sample, err := h.usage.Measure(ctx, func() (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
+	sample, err := h.usage.Measure(ctx, func() (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
 		sample, r, err := s.sampleSandbox(&h.attribution)
 		raw = r
 		return sample, nil, err
@@ -265,7 +265,7 @@ func (s *AteomService) measure(ctx context.Context, h *hostedActor) (*ateompb.Wo
 // pending sample for the sweep.
 // The read holds no lifecycle lock, so the keyed caller re-checks the actor
 // record it loaded after this returns.
-func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateompb.WorkloadStatsSample, cgroupstats.Sample, error) {
+func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateworkerpb.WorkloadStatsSample, cgroupstats.Sample, error) {
 	read := s.readSandboxCgroup
 	if read == nil {
 		read = cgroupstats.Read
@@ -276,7 +276,7 @@ func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateom
 		return nil, cgroupstats.Sample{}, err
 	}
 
-	return &ateompb.WorkloadStatsSample{
+	return &ateworkerpb.WorkloadStatsSample{
 		Atespace:              active.Ref.Atespace,
 		ActorName:             active.Ref.Name,
 		ActorUid:              active.UID,
@@ -284,7 +284,7 @@ func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateom
 		ActorTemplateName:     active.TemplateName,
 
 		SandboxClass: string(atev1alpha1.SandboxClassGvisor),
-		Source:       ateompb.StatsSource_STATS_SOURCE_CGROUP,
+		Source:       ateworkerpb.StatsSource_STATS_SOURCE_CGROUP,
 
 		MemoryCurrentBytes:    sample.MemoryCurrentBytes,
 		MemoryPeakBytes:       sample.MemoryPeakBytes,

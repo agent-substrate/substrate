@@ -29,7 +29,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
 )
@@ -38,13 +38,13 @@ type runsc struct {
 	path     string
 	actorUID string
 	// actorDirs are the actor's directories, from the request.
-	actorDirs *ateompb.ActorDirs
+	actorDirs *ateworkerpb.ActorDirs
 	// size is the actor's declared limits.
 	size sizing.SandboxSize
 	// durableVolumes are the durable-dir volume names declared to the sandbox.
 	durableVolumes []string
 	// containers are the workload's containers, from the request.
-	containers []*ateompb.Container
+	containers []*ateworkerpb.Container
 	// flags holds the configured flags; must not be nil.
 	flags *flagStore
 }
@@ -73,7 +73,7 @@ func (r *runsc) buildArgs(command, containerName string, extraArgs ...string) []
 
 // durableVolumeNames returns the sorted, deduplicated durable-dir volume names
 // mounted by workload containers.
-func durableVolumeNames(spec *ateompb.WorkloadSpec) []string {
+func durableVolumeNames(spec *ateworkerpb.WorkloadSpec) []string {
 	var names []string
 	for _, c := range spec.GetContainers() {
 		for _, m := range c.GetDurableDirVolumeMounts() {
@@ -86,10 +86,10 @@ func durableVolumeNames(spec *ateompb.WorkloadSpec) []string {
 
 // pauseContainer is the sandbox root container. It only reaps, so it gets no
 // capabilities and mounts nothing.
-func pauseContainer() *ateompb.Container {
-	return &ateompb.Container{
+func pauseContainer() *ateworkerpb.Container {
+	return &ateworkerpb.Container{
 		Name:          ocispec.PauseContainer,
-		ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/pause"}},
+		ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/pause"}},
 	}
 }
 
@@ -98,7 +98,7 @@ func pauseContainer() *ateompb.Container {
 func (r *runsc) writeSpec(containerName string) error {
 	container := pauseContainer()
 	if containerName != ocispec.PauseContainer {
-		i := slices.IndexFunc(r.containers, func(c *ateompb.Container) bool { return c.GetName() == containerName })
+		i := slices.IndexFunc(r.containers, func(c *ateworkerpb.Container) bool { return c.GetName() == containerName })
 		if i < 0 {
 			return fmt.Errorf("container %q is not in the workload spec", containerName)
 		}

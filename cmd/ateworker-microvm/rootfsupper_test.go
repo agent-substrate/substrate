@@ -24,7 +24,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/tarutil"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // upperDirWith returns a rootfs upper directory laid out the way the host
@@ -111,7 +111,7 @@ func TestStageRootfsUpper(t *testing.T) {
 
 	t.Run("pristine without a snapshot", func(t *testing.T) {
 		stale := upperDirWith(t, map[string]string{"app_ovl/fs/stale.txt": "stale"})
-		dirs := &ateompb.ActorDirs{RootDir: filepath.Dir(stale)}
+		dirs := &ateworkerpb.ActorDirs{RootDir: filepath.Dir(stale)}
 		if err := os.Rename(stale, rootfsUpperDir(dirs)); err != nil {
 			t.Fatal(err)
 		}
@@ -126,7 +126,7 @@ func TestStageRootfsUpper(t *testing.T) {
 
 	t.Run("re-materialized from a snapshot", func(t *testing.T) {
 		stale := upperDirWith(t, map[string]string{"app_ovl/fs/stale.txt": "stale"})
-		dirs := &ateompb.ActorDirs{RootDir: filepath.Dir(stale)}
+		dirs := &ateworkerpb.ActorDirs{RootDir: filepath.Dir(stale)}
 		if err := os.Rename(stale, rootfsUpperDir(dirs)); err != nil {
 			t.Fatal(err)
 		}

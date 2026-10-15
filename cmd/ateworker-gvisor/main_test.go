@@ -35,7 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -45,19 +45,19 @@ func TestRPCsRejectMissingActorDirs(t *testing.T) {
 	ctx := context.Background()
 	for name, call := range map[string]func() error{
 		"RunWorkload": func() error {
-			_, err := s.RunWorkload(ctx, &ateompb.RunWorkloadRequest{})
+			_, err := s.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{})
 			return err
 		},
 		"RestoreWorkload": func() error {
-			_, err := s.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{})
+			_, err := s.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{})
 			return err
 		},
 		"CheckpointWorkload": func() error {
-			_, err := s.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{})
+			_, err := s.CheckpointWorkload(ctx, &ateworkerpb.CheckpointWorkloadRequest{})
 			return err
 		},
 		"TerminateWorkload": func() error {
-			_, err := s.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{})
+			_, err := s.TerminateWorkload(ctx, &ateworkerpb.TerminateWorkloadRequest{})
 			return err
 		},
 	} {
@@ -70,7 +70,7 @@ func TestRPCsRejectMissingActorDirs(t *testing.T) {
 func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 	s := &AteomService{}
 	ctx := context.Background()
-	dirs := &ateompb.ActorDirs{
+	dirs := &ateworkerpb.ActorDirs{
 		RootDir:                   "/node/actors/actor-a",
 		OciBundleDir:              "/node/actors/actor-a/bundle",
 		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
@@ -81,19 +81,19 @@ func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 	}
 	for name, call := range map[string]func() error{
 		"RunWorkload": func() error {
-			_, err := s.RunWorkload(ctx, &ateompb.RunWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
+			_, err := s.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
 			return err
 		},
 		"RestoreWorkload": func() error {
-			_, err := s.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
+			_, err := s.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
 			return err
 		},
 		"CheckpointWorkload": func() error {
-			_, err := s.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
+			_, err := s.CheckpointWorkload(ctx, &ateworkerpb.CheckpointWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
 			return err
 		},
 		"TerminateWorkload": func() error {
-			_, err := s.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
+			_, err := s.TerminateWorkload(ctx, &ateworkerpb.TerminateWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
 			return err
 		},
 	} {
@@ -111,7 +111,7 @@ func TestRestoreWorkloadRejectsUnsupportedFidelity(t *testing.T) {
 	if err := os.WriteFile(runscPath, nil, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dirs := &ateompb.ActorDirs{
+	dirs := &ateworkerpb.ActorDirs{
 		RootDir:                   "/node/actors/actor-a",
 		OciBundleDir:              "/node/actors/actor-a/bundle",
 		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
@@ -122,9 +122,9 @@ func TestRestoreWorkloadRejectsUnsupportedFidelity(t *testing.T) {
 	}
 	// A zero service cannot acquire locks, configure networking, or open log pipes.
 	s := &AteomService{}
-	for _, fidelity := range []ateompb.SnapshotFidelity{0, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, 99} {
+	for _, fidelity := range []ateworkerpb.SnapshotFidelity{0, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, 99} {
 		t.Run(fidelity.String(), func(t *testing.T) {
-			resp, err := s.RestoreWorkload(context.Background(), &ateompb.RestoreWorkloadRequest{
+			resp, err := s.RestoreWorkload(context.Background(), &ateworkerpb.RestoreWorkloadRequest{
 				ActorDirs: dirs,
 				RunscPath: runscPath,
 				Fidelity:  fidelity,

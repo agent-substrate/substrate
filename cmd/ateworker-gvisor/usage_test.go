@@ -29,7 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ateomstats/ateomstatstest"
 	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 func withUsageRecorder(s *AteomService) *ateomstatstest.Recorder {
@@ -55,16 +55,16 @@ func TestSweepStampsEpochAndDiscoveryServesIt(t *testing.T) {
 	epoch := time.Unix(1700, 0)
 	h := hostWithEpoch(s, epoch, true)
 
-	before, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	before, err := s.GetActiveWorkloadStats(context.Background(), &ateworkerpb.GetActiveWorkloadStatsRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := before.GetSamples()[0]; got.GetSource() != ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED || got.GetEpochUnixNano() != epoch.UnixNano() {
+	if got := before.GetSamples()[0]; got.GetSource() != ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED || got.GetEpochUnixNano() != epoch.UnixNano() {
 		t.Errorf("before a sweep: source %v epoch %d, want pending with epoch %d", got.GetSource(), got.GetEpochUnixNano(), epoch.UnixNano())
 	}
 
 	s.sweepUsage(context.Background())
-	after, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	after, err := s.GetActiveWorkloadStats(context.Background(), &ateworkerpb.GetActiveWorkloadStatsRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestGetWorkloadStatsStampsEpoch(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
 	epoch := time.Unix(1700, 0)
 	hostWithEpoch(s, epoch, true)
-	got, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: testActor.UID})
+	got, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: testActor.UID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestReadFinalWritesNothingUntilRecorded(t *testing.T) {
 		t.Fatalf("records after the pre-snapshot read = %v, want none", got)
 	}
 	read := h.usage.Latest()
-	if read == nil || read.GetSource() != ateompb.StatsSource_STATS_SOURCE_CGROUP {
+	if read == nil || read.GetSource() != ateworkerpb.StatsSource_STATS_SOURCE_CGROUP {
 		t.Fatalf("pre-snapshot read stored %v, want a measured sample", read)
 	}
 	if err := os.RemoveAll(filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(testActor.UID, sandboxCgroupContainer))); err != nil {
@@ -231,7 +231,7 @@ func TestSweepWaitsForInitialAndStopsAtFinal(t *testing.T) {
 func TestGetWorkloadStatsStoresItsSample(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
 	h := hostWithEpoch(s, time.Now(), true)
-	got, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: testActor.UID})
+	got, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: testActor.UID})
 	if err != nil {
 		t.Fatal(err)
 	}

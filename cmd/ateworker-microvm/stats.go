@@ -29,7 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
@@ -90,7 +90,7 @@ type guestStatsTarget struct {
 	workloadIDs []string
 }
 
-// GetWorkloadStats implements ateompb.Ateom/GetWorkloadStats.
+// GetWorkloadStats implements ateworkerpb.Ateom/GetWorkloadStats.
 //
 // The sample comes from inside the guest, not from the host cgroup. On this
 // runtime the host cgroup holds cloud-hypervisor, whose memory is the guest RAM
@@ -101,7 +101,7 @@ type guestStatsTarget struct {
 // It must not take the actor's lifecycle lock, which is held across a whole
 // cold boot, snapshot, or restore; blocking there would silence the poller
 // through the phases whose usage matters most.
-func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWorkloadStatsRequest) (*ateompb.GetWorkloadStatsResponse, error) {
+func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.GetWorkloadStatsRequest) (*ateworkerpb.GetWorkloadStatsResponse, error) {
 	if req.GetActorUid() == "" {
 		return nil, apierror.InvalidArgument("actor_uid is required")
 	}
@@ -137,16 +137,16 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 	// The reading advanced the activation's CPU, so the cache keeps up with it.
 	hosted.usage.Store(sample)
 
-	return &ateompb.GetWorkloadStatsResponse{Sample: sample}, nil
+	return &ateworkerpb.GetWorkloadStatsResponse{Sample: sample}, nil
 }
 
-// GetActiveWorkloadStats implements ateompb.Ateom/GetActiveWorkloadStats: the
+// GetActiveWorkloadStats implements ateworkerpb.Ateom/GetActiveWorkloadStats: the
 // discovery read. It serves each actor's latest sample from the sampler, so a
 // poll puts no load of its own on the guests; an actor not sampled yet is
 // pending.
-func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest) (*ateompb.GetActiveWorkloadStatsResponse, error) {
+func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateworkerpb.GetActiveWorkloadStatsRequest) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
 	hosted := s.hostedActors()
-	samples := make([]*ateompb.WorkloadStatsSample, 0, len(hosted))
+	samples := make([]*ateworkerpb.WorkloadStatsSample, 0, len(hosted))
 	for _, h := range hosted {
 		sample := h.usage.Latest()
 		if sample == nil {
@@ -157,7 +157,7 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 
 	// An empty list is "available", per the proto: a normal answer for a
 	// scraper to get, not an error.
-	return &ateompb.GetActiveWorkloadStatsResponse{Samples: samples}, nil
+	return &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: samples}, nil
 }
 
 // sweepUsage samples every hosted actor between its initial reading and its
@@ -194,7 +194,7 @@ func (s *AteomService) sampleHostedGuest(ctx context.Context, h *hostedActor) {
 		return
 	}
 	sample := h.usage.WithEpoch(pendingSample(&h.attribution))
-	measured, err := h.usage.Measure(ctx, func() (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
+	measured, err := h.usage.Measure(ctx, func() (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
 		return s.sampleGuestInSlot(ctx, h)
 	})
 	if errors.Is(err, errStaleGuestTarget) {
@@ -215,8 +215,8 @@ func (s *AteomService) sampleHostedGuest(ctx context.Context, h *hostedActor) {
 }
 
 // measureGuest reads h's guest as a reading of its activation.
-func (s *AteomService) measureGuest(ctx context.Context, h *hostedActor) (*ateompb.WorkloadStatsSample, error) {
-	return h.usage.Measure(ctx, func() (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
+func (s *AteomService) measureGuest(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, error) {
+	return h.usage.Measure(ctx, func() (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
 		return s.sampleGuest(ctx, h)
 	})
 }
@@ -224,7 +224,7 @@ func (s *AteomService) measureGuest(ctx context.Context, h *hostedActor) (*ateom
 // sampleGuestInSlot reads h's guest while holding one of s.guestSlots. The slot
 // is taken inside the reading, so a sweep waiting for another reading of the
 // same actor holds no slot.
-func (s *AteomService) sampleGuestInSlot(ctx context.Context, h *hostedActor) (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
+func (s *AteomService) sampleGuestInSlot(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
 	select {
 	case s.guestSlots <- struct{}{}:
 	case <-ctx.Done():
@@ -250,7 +250,7 @@ func (s *AteomService) recordInitial(ctx context.Context, h *hostedActor) {
 	}()
 	ctx, cancel := context.WithTimeout(ctx, statsSweepBudget)
 	defer cancel()
-	sample, err := h.usage.Measure(ctx, func() (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
+	sample, err := h.usage.Measure(ctx, func() (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
 		return s.sampleGuestInSlot(ctx, h)
 	})
 	if err != nil {
@@ -289,7 +289,7 @@ func (s *AteomService) readFinal(ctx context.Context, h *hostedActor) {
 // terminate ended, from its newest measured sample.
 func (s *AteomService) recordFinal(ctx context.Context, h *hostedActor) {
 	pending := h.usage.WithEpoch(pendingSample(&h.attribution))
-	h.usage.Final(func(measured *ateompb.WorkloadStatsSample) {
+	h.usage.Final(func(measured *ateworkerpb.WorkloadStatsSample) {
 		if measured == nil {
 			measured = pending
 		}
@@ -301,8 +301,8 @@ func (s *AteomService) recordFinal(ctx context.Context, h *hostedActor) {
 // read reports it: attribution and the runtime family, measurements absent --
 // source stays STATS_SOURCE_UNSPECIFIED, which the sample's contract defines
 // as "not measured" rather than "measured as zero".
-func pendingSample(active *resources.ActorAttribution) *ateompb.WorkloadStatsSample {
-	return &ateompb.WorkloadStatsSample{
+func pendingSample(active *resources.ActorAttribution) *ateworkerpb.WorkloadStatsSample {
+	return &ateworkerpb.WorkloadStatsSample{
 		Atespace:              active.Ref.Atespace,
 		ActorName:             active.Ref.Name,
 		ActorUid:              active.UID,
@@ -331,7 +331,7 @@ var errStaleGuestTarget = errors.New("guest agent connection belongs to a differ
 // callers express the routine ones differently: an error code for the keyed
 // read, a pending sample for the sweep. The read holds no lifecycle lock, so
 // the keyed caller re-checks the actor record it loaded after this returns.
-func (s *AteomService) sampleGuest(ctx context.Context, h *hostedActor) (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
+func (s *AteomService) sampleGuest(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
 	active := &h.attribution
 	// The actor is the one here, but there is no guest to ask yet. Usually that
 	// is a poll landing in the boot or the restore: the ateom retains the
@@ -360,7 +360,7 @@ func (s *AteomService) sampleGuest(ctx context.Context, h *hostedActor) (*ateomp
 		return nil, nil, fmt.Errorf("no container stats from the guest agent: %w", err)
 	}
 
-	return &ateompb.WorkloadStatsSample{
+	return &ateworkerpb.WorkloadStatsSample{
 		Atespace:              active.Ref.Atespace,
 		ActorName:             active.Ref.Name,
 		ActorUid:              active.UID,
@@ -368,7 +368,7 @@ func (s *AteomService) sampleGuest(ctx context.Context, h *hostedActor) (*ateomp
 		ActorTemplateName:     active.TemplateName,
 
 		SandboxClass: string(atev1alpha1.SandboxClassMicroVM),
-		Source:       ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT,
+		Source:       ateworkerpb.StatsSource_STATS_SOURCE_GUEST_AGENT,
 
 		MemoryCurrentBytes:    sample.MemoryCurrentBytes,
 		MemoryPeakBytes:       sample.MemoryPeakBytes,

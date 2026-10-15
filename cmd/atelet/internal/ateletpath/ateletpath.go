@@ -20,7 +20,7 @@ import (
 	"path/filepath"
 
 	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 var (
@@ -197,8 +197,8 @@ func VolumeHostPath(actorUID, volumeName string) string {
 
 // ActorDirs is the directory set atelet passes to ateom for an actor. ateom
 // takes these from the request rather than deriving them from the actor UID.
-func ActorDirs(actorUID string) *ateompb.ActorDirs {
-	return &ateompb.ActorDirs{
+func ActorDirs(actorUID string) *ateworkerpb.ActorDirs {
+	return &ateworkerpb.ActorDirs{
 		RootDir:                   ActorPath(actorUID),
 		OciBundleDir:              OCIBundleDir(actorUID),
 		CheckpointDir:             CheckpointStateDir(actorUID),

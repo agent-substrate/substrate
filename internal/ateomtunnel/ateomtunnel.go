@@ -35,7 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 )
@@ -193,7 +193,7 @@ type ActorEgress struct {
 
 // PrepareEgress mints the actor's certificate and builds its gateway client. A
 // nil gateway means the actor has no tunneled egress and yields a nil result.
-func (t *Tunnel) PrepareEgress(ctx context.Context, actor resources.ActorAttribution, gateway *ateompb.EgressGateway) (*ActorEgress, error) {
+func (t *Tunnel) PrepareEgress(ctx context.Context, actor resources.ActorAttribution, gateway *ateworkerpb.EgressGateway) (*ActorEgress, error) {
 	if gateway == nil {
 		return nil, nil
 	}

@@ -33,7 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -59,7 +59,7 @@ func useTempNodeDirs(t *testing.T) {
 // restore was handed. Like a real ateom it takes every actor directory from
 // the request, never derived from the actor UID.
 type fakeAteom struct {
-	ateompb.UnimplementedAteomServer
+	ateworkerpb.UnimplementedAteomServer
 	// snapshotFiles are written at checkpoint and reported back to atelet as
 	// the exact set the snapshot consists of.
 	snapshotFiles map[string]string
@@ -67,35 +67,35 @@ type fakeAteom struct {
 	// most recent RestoreWorkload.
 	restored map[string]string
 	// actorDirs records the ActorDirs each RPC arrived with, by RPC name.
-	actorDirs map[string]*ateompb.ActorDirs
+	actorDirs map[string]*ateworkerpb.ActorDirs
 	// preserveRestoreDir records the PreserveRestoreDir flag from the most
 	// recent RestoreWorkload request.
 	preserveRestoreDir bool
 	// fidelities records the fidelity each checkpoint or restore arrived
 	// with, by RPC name.
-	fidelities map[string]ateompb.SnapshotFidelity
+	fidelities map[string]ateworkerpb.SnapshotFidelity
 }
 
-func (f *fakeAteom) recordFidelity(rpc string, fidelity ateompb.SnapshotFidelity) {
+func (f *fakeAteom) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFidelity) {
 	if f.fidelities == nil {
-		f.fidelities = map[string]ateompb.SnapshotFidelity{}
+		f.fidelities = map[string]ateworkerpb.SnapshotFidelity{}
 	}
 	f.fidelities[rpc] = fidelity
 }
 
-func (f *fakeAteom) recordActorDirs(rpc string, actorDirs *ateompb.ActorDirs) {
+func (f *fakeAteom) recordActorDirs(rpc string, actorDirs *ateworkerpb.ActorDirs) {
 	if f.actorDirs == nil {
-		f.actorDirs = map[string]*ateompb.ActorDirs{}
+		f.actorDirs = map[string]*ateworkerpb.ActorDirs{}
 	}
 	f.actorDirs[rpc] = actorDirs
 }
 
-func (f *fakeAteom) RunWorkload(_ context.Context, req *ateompb.RunWorkloadRequest) (*ateompb.RunWorkloadResponse, error) {
+func (f *fakeAteom) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkloadRequest) (*ateworkerpb.RunWorkloadResponse, error) {
 	f.recordActorDirs("RunWorkload", req.GetActorDirs())
-	return &ateompb.RunWorkloadResponse{}, nil
+	return &ateworkerpb.RunWorkloadResponse{}, nil
 }
 
-func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
+func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (*ateworkerpb.CheckpointWorkloadResponse, error) {
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
 	f.recordFidelity("CheckpointWorkload", req.GetFidelity())
 	dir := req.GetActorDirs().GetCheckpointDir()
@@ -106,10 +106,10 @@ func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateompb.Checkpoin
 		}
 		names = append(names, name)
 	}
-	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: names}, nil
+	return &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: names}, nil
 }
 
-func (f *fakeAteom) RestoreWorkload(_ context.Context, req *ateompb.RestoreWorkloadRequest) (*ateompb.RestoreWorkloadResponse, error) {
+func (f *fakeAteom) RestoreWorkload(_ context.Context, req *ateworkerpb.RestoreWorkloadRequest) (*ateworkerpb.RestoreWorkloadResponse, error) {
 	f.recordActorDirs("RestoreWorkload", req.GetActorDirs())
 	f.recordFidelity("RestoreWorkload", req.GetFidelity())
 	f.preserveRestoreDir = req.GetPreserveRestoreDir()
@@ -122,12 +122,12 @@ func (f *fakeAteom) RestoreWorkload(_ context.Context, req *ateompb.RestoreWorkl
 		}
 		f.restored[name] = string(body)
 	}
-	return &ateompb.RestoreWorkloadResponse{}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{}, nil
 }
 
-func (f *fakeAteom) TerminateWorkload(_ context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
+func (f *fakeAteom) TerminateWorkload(_ context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
 	f.recordActorDirs("TerminateWorkload", req.GetActorDirs())
-	return &ateompb.TerminateWorkloadResponse{}, nil
+	return &ateworkerpb.TerminateWorkloadResponse{}, nil
 }
 
 // serveFakeAteom serves ateom on a unix socket and points atelet's dialer at
@@ -146,7 +146,7 @@ func serveFakeAteom(t *testing.T, f *fakeAteom) {
 		t.Fatalf("listening on %q: %v", sock, err)
 	}
 	srv := grpc.NewServer()
-	ateompb.RegisterAteomServer(srv, f)
+	ateworkerpb.RegisterAteomServer(srv, f)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 

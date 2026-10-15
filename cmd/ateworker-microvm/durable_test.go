@@ -22,26 +22,26 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
 func TestHasDurableVolumes(t *testing.T) {
 	tests := []struct {
 		name       string
-		containers []*ateompb.Container
+		containers []*ateworkerpb.Container
 		want       bool
 	}{
 		{name: "no containers"},
 		{
 			name:       "container without durable volumes",
-			containers: []*ateompb.Container{{Name: "app"}},
+			containers: []*ateworkerpb.Container{{Name: "app"}},
 		},
 		{
 			name: "one of several containers has a durable volume",
-			containers: []*ateompb.Container{
+			containers: []*ateworkerpb.Container{
 				{Name: "sidecar"},
-				{Name: "app", DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+				{Name: "app", DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
 					{VolumeName: "data", MountPath: "/home/counter"},
 				}},
 			},
@@ -58,12 +58,12 @@ func TestHasDurableVolumes(t *testing.T) {
 }
 
 func TestDurableVolumeNames(t *testing.T) {
-	containers := []*ateompb.Container{
-		{Name: "app", DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+	containers := []*ateworkerpb.Container{
+		{Name: "app", DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
 			{VolumeName: "data", MountPath: "/data"},
 			{VolumeName: "cache", MountPath: "/cache"},
 		}},
-		{Name: "sidecar", DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+		{Name: "sidecar", DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
 			{VolumeName: "data", MountPath: "/shared"},
 		}},
 	}

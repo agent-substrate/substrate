@@ -28,7 +28,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/volumepath"
 	"github.com/agent-substrate/substrate/pkg/sandboxclass"
 	"github.com/distribution/reference"
@@ -108,7 +108,7 @@ func ValidateWorkerPodUID(workerPodUID string) error {
 
 // ValidateActorDirs checks that every directory atelet passes to ateom is
 // set, absolute and clean.
-func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.ErrorList {
+func ValidateActorDirs(actorDirs *ateworkerpb.ActorDirs, fldPath *field.Path) field.ErrorList {
 	if actorDirs == nil {
 		return field.ErrorList{field.Required(fldPath, "")}
 	}
@@ -131,8 +131,8 @@ func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.
 // fidelity the calling sandbox runtime cannot serve. Each runtime passes the
 // levels it implements; anything else, including an unset fidelity, is
 // refused before the request touches the guest.
-func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, supported []ateompb.SnapshotFidelity, fldPath *field.Path) field.ErrorList {
-	if fidelity == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+func ValidateSnapshotFidelity(fidelity ateworkerpb.SnapshotFidelity, supported []ateworkerpb.SnapshotFidelity, fldPath *field.Path) field.ErrorList {
+	if fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 		return field.ErrorList{field.Required(fldPath, "")}
 	}
 	names := make([]string, 0, len(supported))

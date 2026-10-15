@@ -16,7 +16,7 @@
 
 package main
 
-import "github.com/agent-substrate/substrate/internal/proto/ateompb"
+import "github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 
 // The fidelity ladder, lowest to highest, each level including the ones
 // below it: VOLUMES holds the durable volumes, ROOTFS adds each container's
@@ -26,13 +26,13 @@ import "github.com/agent-substrate/substrate/internal/proto/ateompb"
 // includesRootfs reports whether snapshots at this fidelity carry the
 // containers' rootfs uppers, so a checkpoint tars them and a restore puts
 // them back.
-func includesRootfs(f ateompb.SnapshotFidelity) bool {
-	return f == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS || f == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+func includesRootfs(f ateworkerpb.SnapshotFidelity) bool {
+	return f == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS || f == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 }
 
 // includesMemory reports whether snapshots at this fidelity carry the guest
 // itself, so a restore resumes it (and its CPU counters) rather than
 // cold-booting a fresh one.
-func includesMemory(f ateompb.SnapshotFidelity) bool {
-	return f == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+func includesMemory(f ateworkerpb.SnapshotFidelity) bool {
+	return f == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 }

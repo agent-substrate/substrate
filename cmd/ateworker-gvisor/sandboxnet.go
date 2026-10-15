@@ -27,11 +27,11 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // actorResolvConf writes the resolver bind source outside the actor's rootfs.
-func actorResolvConf(actorDirs *ateompb.ActorDirs) (string, error) {
+func actorResolvConf(actorDirs *ateworkerpb.ActorDirs) (string, error) {
 	pod, err := os.ReadFile("/etc/resolv.conf")
 	if err != nil {
 		return "", fmt.Errorf("reading the worker pod resolv.conf: %w", err)

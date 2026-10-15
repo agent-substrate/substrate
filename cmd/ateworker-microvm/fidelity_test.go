@@ -23,7 +23,7 @@ import (
 	"google.golang.org/grpc/codes"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // TestFidelityLadder pins which layers each level carries: the checkpoint's
@@ -31,13 +31,13 @@ import (
 // these two predicates.
 func TestFidelityLadder(t *testing.T) {
 	for _, tc := range []struct {
-		fidelity               ateompb.SnapshotFidelity
+		fidelity               ateworkerpb.SnapshotFidelity
 		wantRootfs, wantMemory bool
 	}{
-		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, false, false},
-		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, false, false},
-		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, true, false},
-		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, true, true},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, false, false},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, false, false},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, true, false},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, true, true},
 	} {
 		t.Run(tc.fidelity.String(), func(t *testing.T) {
 			if got := includesRootfs(tc.fidelity); got != tc.wantRootfs {
@@ -57,14 +57,14 @@ func TestFidelityLadder(t *testing.T) {
 func TestValidateFidelity(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		fidelity ateompb.SnapshotFidelity
+		fidelity ateworkerpb.SnapshotFidelity
 		wantErr  bool
 	}{
-		{"volumes", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, false},
-		{"rootfs", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, false},
-		{"memory", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, false},
-		{"unspecified", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, true},
-		{"outside the enum", ateompb.SnapshotFidelity(99), true},
+		{"volumes", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, false},
+		{"rootfs", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, false},
+		{"memory", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, false},
+		{"unspecified", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, true},
+		{"outside the enum", ateworkerpb.SnapshotFidelity(99), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateFidelity(tc.fidelity)

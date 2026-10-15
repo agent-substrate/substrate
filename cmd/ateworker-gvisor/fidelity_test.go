@@ -24,7 +24,7 @@ import (
 	"google.golang.org/grpc/codes"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // TestValidateFidelity pins what this runtime serves. gVisor keeps rootfs
@@ -33,14 +33,14 @@ import (
 func TestValidateFidelity(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		fidelity ateompb.SnapshotFidelity
+		fidelity ateworkerpb.SnapshotFidelity
 		wantErr  bool
 	}{
-		{"volumes", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, false},
-		{"memory", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, false},
-		{"rootfs is not served", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, true},
-		{"unspecified", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, true},
-		{"outside the enum", ateompb.SnapshotFidelity(99), true},
+		{"volumes", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, false},
+		{"memory", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, false},
+		{"rootfs is not served", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, true},
+		{"unspecified", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, true},
+		{"outside the enum", ateworkerpb.SnapshotFidelity(99), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateFidelity(tc.fidelity)
@@ -52,7 +52,7 @@ func TestValidateFidelity(t *testing.T) {
 			}
 		})
 	}
-	err := validateFidelity(ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS)
+	err := validateFidelity(ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS)
 	for _, want := range []string{"SNAPSHOT_FIDELITY_VOLUMES", "SNAPSHOT_FIDELITY_MEMORY"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("rootfs rejection %q does not list %s as supported", err, want)
@@ -65,7 +65,7 @@ func TestValidateFidelity(t *testing.T) {
 // system work, so a misrouted request cannot leave the actor half-handled.
 func TestRPCsRejectRootfsBeforeTouchingTheSandbox(t *testing.T) {
 	s := &AteomService{}
-	dirs := &ateompb.ActorDirs{
+	dirs := &ateworkerpb.ActorDirs{
 		RootDir:                   "/node/actors/actor-a",
 		OciBundleDir:              "/node/actors/actor-a/bundle",
 		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
@@ -74,13 +74,13 @@ func TestRPCsRejectRootfsBeforeTouchingTheSandbox(t *testing.T) {
 		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
 		VolumesDir:                "/node/actors/actor-a/volumes",
 	}
-	rootfs := ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	rootfs := ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 
-	_, err := s.CheckpointWorkload(context.Background(), &ateompb.CheckpointWorkloadRequest{ActorUid: "actor-a", ActorDirs: dirs, Fidelity: rootfs})
+	_, err := s.CheckpointWorkload(context.Background(), &ateworkerpb.CheckpointWorkloadRequest{ActorUid: "actor-a", ActorDirs: dirs, Fidelity: rootfs})
 	if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "fidelity") {
 		t.Errorf("CheckpointWorkload(ROOTFS) = %v, want InvalidArgument naming the fidelity", err)
 	}
-	_, err = s.RestoreWorkload(context.Background(), &ateompb.RestoreWorkloadRequest{ActorUid: "actor-a", ActorDirs: dirs, Fidelity: rootfs})
+	_, err = s.RestoreWorkload(context.Background(), &ateworkerpb.RestoreWorkloadRequest{ActorUid: "actor-a", ActorDirs: dirs, Fidelity: rootfs})
 	if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "fidelity") {
 		t.Errorf("RestoreWorkload(ROOTFS) = %v, want InvalidArgument naming the fidelity", err)
 	}

@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -53,7 +53,7 @@ func renderPhaseRecord(t *testing.T, attrs []slog.Attr) map[string]any {
 func TestSnapshotPhaseAttrs(t *testing.T) {
 	t.Parallel()
 
-	attrs := SnapshotPhaseAttrs(phaseLogAttribution(), ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+	attrs := SnapshotPhaseAttrs(phaseLogAttribution(), ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		CheckpointDurationKey, nil, []Phase{
 			{Name: "prep", D: 40 * time.Millisecond},
 			{Name: "pause", D: 3 * time.Millisecond},
@@ -140,7 +140,7 @@ func TestSnapshotPhaseAttrsFailure(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			rec := renderPhaseRecord(t, SnapshotPhaseAttrs(phaseLogAttribution(),
-				ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, CheckpointDurationKey, tt.err,
+				ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, CheckpointDurationKey, tt.err,
 				[]Phase{
 					{Name: "prep", D: 40 * time.Millisecond},
 					{Name: "pause", D: 3 * time.Millisecond},
@@ -167,14 +167,14 @@ func TestFidelityLogValue(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		scope ateompb.SnapshotFidelity
+		scope ateworkerpb.SnapshotFidelity
 		want  string
 	}{
-		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateattr.SnapshotFidelityMemory},
-		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateattr.SnapshotFidelityVolumes},
-		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateattr.SnapshotFidelityRootfs},
-		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateattr.SnapshotFidelityUnknown},
-		{ateompb.SnapshotFidelity(99), ateattr.SnapshotFidelityUnknown},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateattr.SnapshotFidelityMemory},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateattr.SnapshotFidelityVolumes},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateattr.SnapshotFidelityRootfs},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateattr.SnapshotFidelityUnknown},
+		{ateworkerpb.SnapshotFidelity(99), ateattr.SnapshotFidelityUnknown},
 	}
 	for _, tt := range tests {
 		if got := FidelityLogValue(tt.scope); got != tt.want {
@@ -192,7 +192,7 @@ func TestLogSnapshotPhases(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	LogSnapshotPhases(context.Background(), "Restore timing breakdown", phaseLogAttribution(),
-		ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, RestoreDurationKey, nil,
+		ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, RestoreDurationKey, nil,
 		[]Phase{{Name: ateattr.SnapshotPhaseTotal, D: 2 * time.Second}})
 
 	var rec map[string]any

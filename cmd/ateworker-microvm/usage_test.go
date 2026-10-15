@@ -27,7 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ateomstats/ateomstatstest"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 func withUsageRecorder(s *AteomService) *ateomstatstest.Recorder {
@@ -57,11 +57,11 @@ func TestSweepStampsEpochAndDiscoveryServesIt(t *testing.T) {
 	epoch := time.Unix(1700, 0)
 	setActivation(s, running(ateomstats.NewActivation(epoch, false)))
 
-	before, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	before, err := s.GetActiveWorkloadStats(context.Background(), &ateworkerpb.GetActiveWorkloadStatsRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := before.GetSamples()[0]; got.GetSource() != ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED || got.GetEpochUnixNano() != epoch.UnixNano() {
+	if got := before.GetSamples()[0]; got.GetSource() != ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED || got.GetEpochUnixNano() != epoch.UnixNano() {
 		t.Errorf("before a sweep: source %v epoch %d, want pending with epoch %d", got.GetSource(), got.GetEpochUnixNano(), epoch.UnixNano())
 	}
 	if len(agent.calls) != 0 {
@@ -69,7 +69,7 @@ func TestSweepStampsEpochAndDiscoveryServesIt(t *testing.T) {
 	}
 
 	s.sweepUsage(context.Background())
-	after, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	after, err := s.GetActiveWorkloadStats(context.Background(), &ateworkerpb.GetActiveWorkloadStatsRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -24,38 +24,38 @@ import (
 	"path/filepath"
 
 	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // ociBundlePath is the container's OCI bundle.
-func ociBundlePath(actorDirs *ateompb.ActorDirs, containerName string) string {
+func ociBundlePath(actorDirs *ateworkerpb.ActorDirs, containerName string) string {
 	return filepath.Join(actorDirs.GetOciBundleDir(), containerName)
 }
 
 // runscStateDir is runsc --root for the actor's sandbox.
-func runscStateDir(actorDirs *ateompb.ActorDirs) string {
+func runscStateDir(actorDirs *ateworkerpb.ActorDirs) string {
 	return filepath.Join(actorDirs.GetRootDir(), "runsc-state")
 }
 
 // pidFileDir is where runsc writes <container>.pid.
-func pidFileDir(actorDirs *ateompb.ActorDirs) string {
+func pidFileDir(actorDirs *ateworkerpb.ActorDirs) string {
 	return filepath.Join(actorDirs.GetRootDir(), "pidfiles")
 }
 
 // pidFilePath is where runsc writes the container's pid.
-func pidFilePath(actorDirs *ateompb.ActorDirs, containerName string) string {
+func pidFilePath(actorDirs *ateworkerpb.ActorDirs, containerName string) string {
 	return filepath.Join(pidFileDir(actorDirs), containerName+".pid")
 }
 
 // resolvConfPath is the resolver bind source outside the actor's rootfs.
-func resolvConfPath(actorDirs *ateompb.ActorDirs) string {
+func resolvConfPath(actorDirs *ateworkerpb.ActorDirs) string {
 	return filepath.Join(actorDirs.GetRootDir(), "resolv.conf")
 }
 
 // resetRunscStateAndPidFileDirs empties both directories for a new activation.
 // runsc can leave mounts behind in its state directory (its null-netns), which
 // must be detached in this mount namespace before they can be removed.
-func resetRunscStateAndPidFileDirs(actorDirs *ateompb.ActorDirs) error {
+func resetRunscStateAndPidFileDirs(actorDirs *ateworkerpb.ActorDirs) error {
 	for _, dir := range []string{runscStateDir(actorDirs), pidFileDir(actorDirs)} {
 		if err := imagecache.UnmountAllUnder(dir); err != nil {
 			return fmt.Errorf("while unmounting under %q: %w", dir, err)

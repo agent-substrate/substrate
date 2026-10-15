@@ -19,13 +19,13 @@ package main
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 func TestHasCsiVolumes(t *testing.T) {
 	tests := []struct {
 		name       string
-		containers []*ateompb.Container
+		containers []*ateworkerpb.Container
 		want       bool
 	}{
 		{
@@ -35,10 +35,10 @@ func TestHasCsiVolumes(t *testing.T) {
 		},
 		{
 			name: "no CSI volumes",
-			containers: []*ateompb.Container{
+			containers: []*ateworkerpb.Container{
 				{
 					Name: "c1",
-					DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+					DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
 						{VolumeName: "data", MountPath: "/data"},
 					},
 				},
@@ -47,10 +47,10 @@ func TestHasCsiVolumes(t *testing.T) {
 		},
 		{
 			name: "has CSI volumes",
-			containers: []*ateompb.Container{
+			containers: []*ateworkerpb.Container{
 				{
 					Name: "c1",
-					CsiVolumeMounts: []*ateompb.VolumeMount{
+					CsiVolumeMounts: []*ateworkerpb.VolumeMount{
 						{VolumeName: "csi-vol", MountPath: "/csi"},
 					},
 				},
@@ -59,13 +59,13 @@ func TestHasCsiVolumes(t *testing.T) {
 		},
 		{
 			name: "multiple containers, one has CSI",
-			containers: []*ateompb.Container{
+			containers: []*ateworkerpb.Container{
 				{
 					Name: "c1",
 				},
 				{
 					Name: "c2",
-					CsiVolumeMounts: []*ateompb.VolumeMount{
+					CsiVolumeMounts: []*ateworkerpb.VolumeMount{
 						{VolumeName: "csi-vol", MountPath: "/csi"},
 					},
 				},

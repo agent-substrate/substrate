@@ -39,7 +39,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/wakeupprobe"
@@ -188,7 +188,7 @@ type actorContainer struct {
 	// spec is the container's OCI spec shaped for micro-VM execution.
 	spec *specs.Spec
 	// imageMounts are the image volumes this container mounts, and where.
-	imageMounts []*ateompb.ImageVolumeMount
+	imageMounts []*ateworkerpb.ImageVolumeMount
 }
 
 // resolvedRuntime holds the concrete binary paths for a request, taken from fetched
@@ -231,7 +231,7 @@ func (s *AteomService) resolveRuntime(paths map[string]string) resolvedRuntime {
 //     are on disk and passed as runtime asset paths.
 //   - Each container's bundle holds the overlay spec its rootfs/ is composed
 //     from. ateom builds the OCI spec itself.
-func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
+func (s *AteomService) RunWorkload(ctx context.Context, req *ateworkerpb.RunWorkloadRequest) (resp *ateworkerpb.RunWorkloadResponse, retErr error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
@@ -291,7 +291,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
 	slog.InfoContext(ctx, "Actor started (overlay rootfs)", slog.String("id", p.actorUID))
-	return &ateompb.RunWorkloadResponse{}, nil
+	return &ateworkerpb.RunWorkloadResponse{}, nil
 }
 
 // actorBootParams is what a cold boot needs about an actor. It comes from a Run
@@ -300,13 +300,13 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 type actorBootParams struct {
 	actorRef         resources.ActorRef
 	actorUID         string
-	actorDirs        *ateompb.ActorDirs
+	actorDirs        *ateworkerpb.ActorDirs
 	templateAtespace string
 	templateName     string
-	containers       []*ateompb.Container
+	containers       []*ateworkerpb.Container
 	assetPaths       map[string]string
 	// egressGateway is nil unless actor TCP should be redirected through atunnel.
-	egressGateway *ateompb.EgressGateway
+	egressGateway *ateworkerpb.EgressGateway
 	// size is the actor's declared limits (from the ActorTemplate), supplied on
 	// the RunWorkload / RestoreWorkload RPC. It sizes the VM itself (vCPUs,
 	// memory); a container's own cgroup limit comes from its declared resources.
@@ -644,7 +644,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 // and records the bundle rootfs that backs the overlay's RO lower. No host disk is
 // mounted here — the merged overlays are assembled in stageMergedRootfs after the
 // sandbox state is clean. Both RunWorkload and RestoreWorkload go through here.
-func (s *AteomService) buildActorContainers(actorUID string, actorDirs *ateompb.ActorDirs, containers []*ateompb.Container) ([]actorContainer, error) {
+func (s *AteomService) buildActorContainers(actorUID string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) ([]actorContainer, error) {
 	ctrs := make([]actorContainer, len(containers))
 	for i, c := range containers {
 		cn := c.GetName()
@@ -687,7 +687,7 @@ func (s *AteomService) buildActorContainers(actorUID string, actorDirs *ateompb.
 // wipes SharedDir) and stageRootfsUpper (which owns the upper contents). The returned virtiofsd cmd outlives this call (CH
 // demand-pages from it); the caller owns it (tracked on runningActor, killed
 // in teardownActor).
-func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateompb.ActorDirs, ctrs []actorContainer, containers []*ateompb.Container, procAttr *syscall.SysProcAttr) (*exec.Cmd, error) {
+func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateworkerpb.ActorDirs, ctrs []actorContainer, containers []*ateworkerpb.Container, procAttr *syscall.SysProcAttr) (*exec.Cmd, error) {
 	upperBase := rootfsUpperDir(actorDirs)
 	for _, c := range ctrs {
 		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, id, c.name); err != nil {

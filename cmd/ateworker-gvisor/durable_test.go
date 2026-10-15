@@ -22,21 +22,21 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 func TestDurableFSCheckpointPaths(t *testing.T) {
-	containers := []*ateompb.Container{
+	containers := []*ateworkerpb.Container{
 		{
 			Name: "app",
-			DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+			DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
 				{VolumeName: "data", MountPath: "/var/data"},
 				{VolumeName: "cache", MountPath: "/var/cache"},
 			},
 		},
 		{
 			Name: "sidecar",
-			DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+			DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
 				{VolumeName: "logs", MountPath: "/var/log/app"},
 			},
 		},
