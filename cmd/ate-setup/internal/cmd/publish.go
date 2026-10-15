@@ -58,11 +58,11 @@ The result is what "deploy --image-repo REPO --image-tag TAG" installs:
   VERSION=TAG ate-setup publish release-images --ko-docker-repo REPO
 
 If REPO already holds every image for the tag on every platform, nothing is
-built unless --force is set. After pushing, every image is checked for every
-platform, and a missing one fails the command.`,
+built unless --overwrite is set. After pushing, every image is checked for
+every platform, and a missing one fails the command.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		opts := steps.PublishReleaseOptions{Force: env.Cfg.Resolved().Bool("publish.force")}
+		opts := steps.PublishReleaseOptions{Force: env.Cfg.Resolved().Bool("publish.overwrite")}
 		return env.PublishReleaseImages(cmd.Context(), cmd.OutOrStdout(), opts)
 	},
 }
@@ -73,7 +73,7 @@ func init() {
 	publishCmd.AddCommand(publishReleaseImagesCmd)
 
 	config.RegisterCommand(config.Setting{
-		Key: "publish.force", Env: "ATE_PUBLISH_FORCE", Flag: "force",
+		Key: "publish.overwrite", Env: "ATE_PUBLISH_OVERWRITE", Flag: "overwrite",
 		Kind: config.KindBool, Default: "false",
 		Commands: []string{publishReleaseImagesPath},
 		Usage:    "Rebuild and replace images the registry already holds for the tag",
