@@ -89,6 +89,11 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyStoreFilter {
     envoy_log_trace!("egress policy store: policy={:?}", policy);
     let mut local_store = GlobalEgressPolicyStore::get_local_store();
     if let Some(existing_policy) = local_store.lookup(policy.hash) {
+      // Sanity check that the policy is the same and fail closed on hash collisions.
+      if existing_policy != policy {
+        envoy_filter.send_response(400, &[], Some(b"hash collision"), Some("hash_collision"));
+        return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
+      }
       let _ = envoy_filter.increment_counter(self.policy_shared, 1);
       // Use the policy that was alredy in the store.
       self.policy = existing_policy;
@@ -351,5 +356,75 @@ mod tests {
       envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
     );
     assert_eq!(filter.policy, Rc::default());
+  }
+
+  #[test]
+  fn test_on_request_headers_hash_collision() {
+    let mut setup_mock = MockEnvoyHttpFilter::default();
+    setup_mock
+      .expect_get_metadata_string()
+      .returning(|_, _, _| {
+        Some(EnvoyBuffer::new(
+          br#"{"rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#,
+        ))
+      })
+      .once();
+    setup_mock
+      .expect_set_dynamic_metadata_string()
+      .return_const(())
+      .once();
+    let incoming_policy = EgressPolicy::new_from_metadata(&mut setup_mock).unwrap();
+    let colliding_hash = incoming_policy.hash;
+
+    // Create a different policy but with the same hash to test filter behavior.
+    let existing_policy = Rc::new(EgressPolicy {
+      rules: vec![SniRule {
+        pattern: "other.example.com".to_string(),
+        mode: "passthrough".to_string(),
+      }],
+      hash: colliding_hash,
+    });
+    GlobalEgressPolicyStore::get_local_store().store(colliding_hash, &existing_policy);
+
+    let mut filter = EgressPolicyStoreFilter::default();
+    let mut mock_filter = MockEnvoyHttpFilter::default();
+    mock_filter
+      .expect_get_metadata_string()
+      .withf(|source, namespace, key| {
+        *source == envoy_dynamic_module_type_metadata_source::Dynamic
+          && namespace == ATE_POLICY_EGRESS_NAMESPACE
+          && key == ATE_POLICY_JSON_KEY
+      })
+      .returning(|_, _, _| {
+        Some(EnvoyBuffer::new(
+          br#"{"rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#,
+        ))
+      })
+      .once();
+    mock_filter
+      .expect_set_dynamic_metadata_string()
+      .withf(|namespace, key, value| {
+        namespace == ATE_POLICY_EGRESS_NAMESPACE && key == ATE_POLICY_JSON_KEY && value.is_empty()
+      })
+      .return_const(())
+      .once();
+    mock_filter
+      .expect_send_response()
+      .withf(|status_code, headers, body, details| {
+        *status_code == 400
+          && headers.is_empty()
+          && body == &Some(&b"hash collision"[..])
+          && details == &Some("hash_collision")
+      })
+      .return_const(())
+      .once();
+
+    assert_eq!(
+      filter.on_request_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+    );
+    assert_eq!(filter.policy, Rc::default());
+
+    GlobalEgressPolicyStore::get_local_store().remove(colliding_hash);
   }
 }
