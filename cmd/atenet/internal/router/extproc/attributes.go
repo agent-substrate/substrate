@@ -58,13 +58,12 @@ const (
 	// actor dialed, set on every allowed CONNECT. The outer chain copies it
 	// into UpstreamDynamicPortFilterStateKey for the passthrough chain.
 	EgressDialedPortKey = "dialed_port"
-	// EgressPolicyMetadataNamespace holds the SNI rules returned on CONNECT.
-	// The outer chain copies it as JSON into filter state of the same name for
-	// the egress-policy module: {"rules": [{"pattern": ..., "mode": ...}]},
+	// EgressPolicyMetadataNamespace holds the SNI rules returned on CONNECT, as
+	// JSON under EgressPolicyJSONKey: {"rules": [{"pattern": ..., "mode": ...}]},
 	// most specific first.
 	EgressPolicyMetadataNamespace = "dev.ate.policy.egress"
-	// EgressPolicyHashFilterStateKey holds the hash of the egress policy object
-	// thread local policy store.
+	// EgressPolicyHashFilterStateKey holds the hash the inner listener uses to
+	// find those rules in the egress-policy module's per-thread store.
 	EgressPolicyHashFilterStateKey = "dev.ate.policy.egress.hash"
 	// EgressPolicyJSONKey, under EgressPolicyMetadataNamespace, holds the
 	// JSON-serialized SNI rules.

@@ -4,8 +4,8 @@ This Envoy dynamic module implements two extensions that work together to minimi
 memory usage by Substrate egress policies.
 
 To minimize memory usage egress policies are hashed using [Rapidhash](https://docs.rs/rapidhash/latest/rapidhash/)
-which produces collision resistant 64 bit hashes. Policies are then stored in the worker local
-store using computed hash and the hash is echanged between outer CONNECT request and inner
+which produces 64 bit hashes with low probability of collision. Policies are then stored in the worker local
+store using computed hash and the hash is exchanged between outer CONNECT request and inner
 listener that terminates TCP connection encapsulated in the CONNECT request.
 
 ## Details

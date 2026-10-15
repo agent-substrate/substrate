@@ -872,7 +872,7 @@ data:
         # Create one pool per unique tuple, containing the following filter state objects:
         # actor ID from "dev.ate.actor.identity"
         # CONNECT authority from "dev.ate.connect.authority"
-        # Egress policy from "dev.ate.policy.egress"
+        # Egress policy hash from "dev.ate.policy.egress.hash"
         # TODO(yanavlasov): use just the port from CONNECT athority to minimize number of pools.
         # Pools are create using hashes of filter state, which includes filter state objects that use
         # envoy.hashable_string factory.
@@ -895,7 +895,7 @@ data:
             idle_timeout: 30s
         # Copies every filter state object shared with the upstream onto the
         # internal listener's downstream connection: dev.ate.actor.identity,
-        # dev.ate.connect.authority, dev.ate.policy.egress, and
+        # dev.ate.connect.authority, dev.ate.policy.egress.hash, and
         # envoy.upstream.dynamic_port, all set on the CONNECT leg above.
         #
         # Without this none of them reaches mitm_listener, and nothing reports it:
