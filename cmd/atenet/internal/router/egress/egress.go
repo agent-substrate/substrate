@@ -340,7 +340,7 @@ func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (resources.A
 	}
 
 	// Check that this is an ateom certificate --- the SPIFFE URI should be of
-	// the form `spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}`.
+	// the form `spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}`.
 	if len(leaf.URIs) != 1 {
 		return resources.ActorRef{}, fmt.Errorf("actor certificate has %d URI SANs, want 1", len(leaf.URIs))
 	}

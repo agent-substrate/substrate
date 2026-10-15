@@ -33,7 +33,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// ateomActorJWTLifetime is the fixed lifetime of an ateom-for-actor JWT. It
+// ateomActorJWTLifetime is the fixed lifetime of a worker-for-actor JWT. It
 // is not chosen by the caller: the token's only consumers are node-side
 // plugins that exchange it for short-lived credentials.
 const ateomActorJWTLifetime = time.Hour
@@ -90,7 +90,7 @@ func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapipb.MintWorke
 	}
 	token, err := s.actorIDJWTPool.SignJWT(claims)
 	if err != nil {
-		return nil, fmt.Errorf("while signing ateom-for-actor JWT: %w", err)
+		return nil, fmt.Errorf("while signing worker-for-actor JWT: %w", err)
 	}
 	return &ateapipb.MintWorkerActorJwtResponse{
 		ActorJwt:   token,
@@ -108,7 +108,7 @@ func (s *Server) checkActorOnNode(ctx context.Context, actor *ateapipb.Actor, ca
 		return err
 	}
 	if hostingNode == "" || hostingNode != callerNode {
-		slog.WarnContext(ctx, "Refusing an ateom-for-actor JWT for an actor the caller's node does not host",
+		slog.WarnContext(ctx, "Refusing a worker-for-actor JWT for an actor the caller's node does not host",
 			slog.String("actor", resources.ActorRefFromActor(actor).String()),
 			slog.String("hosting_node", hostingNode),
 			slog.String("caller_node", callerNode))

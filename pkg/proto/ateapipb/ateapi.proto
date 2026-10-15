@@ -1929,7 +1929,7 @@ message MintActorJwtResponse {
   //
   // The subject and claim name say the token speaks for the actor itself.
   // A token minted for a Substrate component acting on the actor's behalf
-  // (WorkerService.MintWorkerActorJwt) uses `ateom-for-actor` in both places
+  // (WorkerService.MintWorkerActorJwt) uses `worker-for-actor` in both places
   // instead, so a relying party can grant the two different access.
   string actor_jwt = 1 [ debug_redact = true ];
 
@@ -2530,7 +2530,7 @@ service WorkerService {
   // Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
   // on behalf of a particular actor.
   //
-  // SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
+  // SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
   rpc MintWorkerActorCertificate(MintWorkerActorCertificateRequest) returns (MintWorkerActorCertificateResponse);
 
   // MintWorkerActorJwt creates a Substrate-issued JWT that asserts an ateom
@@ -2540,8 +2540,8 @@ service WorkerService {
   // credentials scoped to that actor.
   //
   // The token speaks for the ateom, not the actor: its subject is
-  // `ateom-for-actor/<atespace>/<name>` and its claims sit under
-  // `ateom-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
+  // `worker-for-actor/<atespace>/<name>` and its claims sit under
+  // `worker-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
   // fixed at one hour.
   rpc MintWorkerActorJwt(MintWorkerActorJwtRequest) returns (MintWorkerActorJwtResponse);
 
@@ -2685,8 +2685,8 @@ message MintWorkerActorJwtResponse {
   // MintActorJwtResponse.actor_jwt, except that it speaks for an ateom
   // acting on behalf of the actor rather than for the actor itself:
   //
-  // * sub: `ateom-for-actor/<atespace>/<name>`.
-  // * `ateom-for-actor.ate.dev`: A JSON object with the actor's `atespace`,
+  // * sub: `worker-for-actor/<atespace>/<name>`.
+  // * `worker-for-actor.ate.dev`: A JSON object with the actor's `atespace`,
   //   `actorName`, and `actorUID`.
   //
   // A relying party that trusts actor JWTs must not accept this token as the

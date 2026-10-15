@@ -34,8 +34,8 @@ const (
 	// claims under "actor.ate.dev".
 	KindActor
 	// KindAteomForActor is an ateom, or another Substrate component, acting
-	// on behalf of the actor. Subject "ateom-for-actor/<atespace>/<name>",
-	// claims under "ateom-for-actor.ate.dev".
+	// on behalf of the actor. Subject "worker-for-actor/<atespace>/<name>",
+	// claims under "worker-for-actor.ate.dev".
 	KindAteomForActor
 )
 
@@ -45,7 +45,7 @@ func (k Kind) SubjectPrefix() string {
 	case KindActor:
 		return "actor"
 	case KindAteomForActor:
-		return "ateom-for-actor"
+		return "worker-for-actor"
 	}
 	return ""
 }
@@ -57,7 +57,7 @@ func (k Kind) ClaimName() string {
 	case KindActor:
 		return "actor.ate.dev"
 	case KindAteomForActor:
-		return "ateom-for-actor.ate.dev"
+		return "worker-for-actor.ate.dev"
 	}
 	return ""
 }
@@ -99,7 +99,7 @@ type WireClaims struct {
 	// Substrate claims, under the claim name for the token's kind. Exactly
 	// one is set.
 	Actor         *WireSubstrateClaims `json:"actor.ate.dev,omitempty"`
-	AteomForActor *WireSubstrateClaims `json:"ateom-for-actor.ate.dev,omitempty"`
+	AteomForActor *WireSubstrateClaims `json:"worker-for-actor.ate.dev,omitempty"`
 }
 
 // Substrate returns the token's kind and its Substrate claims, or ok false if

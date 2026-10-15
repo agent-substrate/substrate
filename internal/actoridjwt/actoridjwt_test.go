@@ -33,8 +33,8 @@ func TestClaimsToWire_ClaimNamePerKind(t *testing.T) {
 		wantClaim  string
 		otherClaim string
 	}{
-		{KindActor, "actor.ate.dev", "ateom-for-actor.ate.dev"},
-		{KindAteomForActor, "ateom-for-actor.ate.dev", "actor.ate.dev"},
+		{KindActor, "actor.ate.dev", "worker-for-actor.ate.dev"},
+		{KindAteomForActor, "worker-for-actor.ate.dev", "actor.ate.dev"},
 	} {
 		claims := base
 		claims.Kind = tc.kind
@@ -89,7 +89,7 @@ func TestWireClaims_Substrate(t *testing.T) {
 		{name: "neither claim", wire: WireClaims{}},
 		{name: "both claims", wire: WireClaims{Actor: actor, AteomForActor: ateom}},
 		{name: "actor", wire: WireClaims{Actor: actor}, wantOK: true, wantKind: KindActor, wantClaims: actor},
-		{name: "ateom-for-actor", wire: WireClaims{AteomForActor: ateom}, wantOK: true, wantKind: KindAteomForActor, wantClaims: ateom},
+		{name: "worker-for-actor", wire: WireClaims{AteomForActor: ateom}, wantOK: true, wantKind: KindAteomForActor, wantClaims: ateom},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			kind, claims, ok := tc.wire.Substrate()
@@ -116,7 +116,7 @@ func TestKind_Names(t *testing.T) {
 	}{
 		{KindUnspecified, "", ""},
 		{KindActor, "actor", "actor.ate.dev"},
-		{KindAteomForActor, "ateom-for-actor", "ateom-for-actor.ate.dev"},
+		{KindAteomForActor, "worker-for-actor", "worker-for-actor.ate.dev"},
 	} {
 		if got := tc.kind.SubjectPrefix(); got != tc.prefix {
 			t.Errorf("Kind(%d).SubjectPrefix() = %q, want %q", tc.kind, got, tc.prefix)

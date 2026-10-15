@@ -5720,7 +5720,7 @@ type MintActorJwtResponse struct {
 	//
 	// The subject and claim name say the token speaks for the actor itself.
 	// A token minted for a Substrate component acting on the actor's behalf
-	// (WorkerService.MintWorkerActorJwt) uses `ateom-for-actor` in both places
+	// (WorkerService.MintWorkerActorJwt) uses `worker-for-actor` in both places
 	// instead, so a relying party can grant the two different access.
 	ActorJwt string `protobuf:"bytes,1,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
 	// expire_time is when actor_jwt expires. Equal to its exp claim.
@@ -8169,8 +8169,8 @@ type MintWorkerActorJwtResponse struct {
 	// MintActorJwtResponse.actor_jwt, except that it speaks for an ateom
 	// acting on behalf of the actor rather than for the actor itself:
 	//
-	// * sub: `ateom-for-actor/<atespace>/<name>`.
-	// * `ateom-for-actor.ate.dev`: A JSON object with the actor's `atespace`,
+	// * sub: `worker-for-actor/<atespace>/<name>`.
+	// * `worker-for-actor.ate.dev`: A JSON object with the actor's `atespace`,
 	//   `actorName`, and `actorUID`.
 	//
 	// A relying party that trusts actor JWTs must not accept this token as the

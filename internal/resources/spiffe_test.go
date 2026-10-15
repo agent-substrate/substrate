@@ -90,14 +90,14 @@ func TestAteomForActorRoundtrip(t *testing.T) {
 		wantRef ActorRef
 	}{
 		{
-			uri: "spiffe://substrate-actor.local/ateom-for-actor/foo/bar",
+			uri: "spiffe://substrate-actor.local/worker-for-actor/foo/bar",
 			wantRef: ActorRef{
 				Atespace: "foo",
 				Name:     "bar",
 			},
 		},
 		{
-			uri: "spiffe://substrate-actor.local/ateom-for-actor/fd6cab8c-17c8-4c9e-8893-28e28aff724b/045841a7-5dcb-47eb-a76f-6d8460bfe009",
+			uri: "spiffe://substrate-actor.local/worker-for-actor/fd6cab8c-17c8-4c9e-8893-28e28aff724b/045841a7-5dcb-47eb-a76f-6d8460bfe009",
 			wantRef: ActorRef{
 				Atespace: "fd6cab8c-17c8-4c9e-8893-28e28aff724b",
 				Name:     "045841a7-5dcb-47eb-a76f-6d8460bfe009",

@@ -44,7 +44,7 @@ type Server struct {
 	actorIDCAPool localca.Pool
 
 	// actorJWTIssuer is copied verbatim into the iss claim of every
-	// ateom-for-actor JWT, and actorIDJWTPool signs them. Both are the ones
+	// worker-for-actor JWT, and actorIDJWTPool signs them. Both are the ones
 	// Control.MintActorJwt uses.
 	actorJWTIssuer string
 	actorIDJWTPool localjwtauthority.Pool

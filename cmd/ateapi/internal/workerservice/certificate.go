@@ -76,7 +76,7 @@ func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapipb.M
 				Scheme: "spiffe",
 				// TODO(identity): Must be configurable per-install, so that each install can set it to a unique value.
 				Host: "substrate-actor.local",
-				Path: path.Join("ateom-for-actor", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
+				Path: path.Join("worker-for-actor", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
 			},
 		},
 		NotBefore:             time.Now().Add(-5 * time.Minute),

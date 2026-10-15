@@ -80,7 +80,7 @@ func TestMintWorkerActorJwt(t *testing.T) {
 	if claims.Issuer != testActorJWTIssuer {
 		t.Errorf("iss = %q, want %q", claims.Issuer, testActorJWTIssuer)
 	}
-	if want := "ateom-for-actor/team-a/my-actor"; claims.Subject != want {
+	if want := "worker-for-actor/team-a/my-actor"; claims.Subject != want {
 		t.Errorf("sub = %q, want %q", claims.Subject, want)
 	}
 	var audiences []string
@@ -92,10 +92,10 @@ func TestMintWorkerActorJwt(t *testing.T) {
 	}
 	kind, substrate, ok := claims.Substrate()
 	if !ok || kind != actoridjwt.KindAteomForActor {
-		t.Fatalf("token kind = %v (ok %v), want KindAteomForActor under ateom-for-actor.ate.dev", kind, ok)
+		t.Fatalf("token kind = %v (ok %v), want KindAteomForActor under worker-for-actor.ate.dev", kind, ok)
 	}
 	if got, want := *substrate, (actoridjwt.WireSubstrateClaims{Atespace: "team-a", ActorName: "my-actor", ActorUID: actor.GetMetadata().GetUid()}); got != want {
-		t.Errorf("ateom-for-actor.ate.dev = %+v, want %+v", got, want)
+		t.Errorf("worker-for-actor.ate.dev = %+v, want %+v", got, want)
 	}
 
 	expiresAt := resp.GetExpireTime().AsTime()

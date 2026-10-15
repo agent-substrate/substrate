@@ -1957,7 +1957,7 @@ type WorkerServiceClient interface {
 	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
 	// on behalf of a particular actor.
 	//
-	// SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
+	// SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
 	MintWorkerActorCertificate(ctx context.Context, in *MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*MintWorkerActorCertificateResponse, error)
 	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts an ateom
 	// acting on behalf of a particular actor: the JWT counterpart of
@@ -1966,8 +1966,8 @@ type WorkerServiceClient interface {
 	// credentials scoped to that actor.
 	//
 	// The token speaks for the ateom, not the actor: its subject is
-	// `ateom-for-actor/<atespace>/<name>` and its claims sit under
-	// `ateom-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
+	// `worker-for-actor/<atespace>/<name>` and its claims sit under
+	// `worker-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
 	// fixed at one hour.
 	MintWorkerActorJwt(ctx context.Context, in *MintWorkerActorJwtRequest, opts ...grpc.CallOption) (*MintWorkerActorJwtResponse, error)
 	// RequestActorSuspend asks the control plane to suspend an Actor that the
@@ -2086,7 +2086,7 @@ type WorkerServiceServer interface {
 	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
 	// on behalf of a particular actor.
 	//
-	// SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
+	// SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
 	MintWorkerActorCertificate(context.Context, *MintWorkerActorCertificateRequest) (*MintWorkerActorCertificateResponse, error)
 	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts an ateom
 	// acting on behalf of a particular actor: the JWT counterpart of
@@ -2095,8 +2095,8 @@ type WorkerServiceServer interface {
 	// credentials scoped to that actor.
 	//
 	// The token speaks for the ateom, not the actor: its subject is
-	// `ateom-for-actor/<atespace>/<name>` and its claims sit under
-	// `ateom-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
+	// `worker-for-actor/<atespace>/<name>` and its claims sit under
+	// `worker-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
 	// fixed at one hour.
 	MintWorkerActorJwt(context.Context, *MintWorkerActorJwtRequest) (*MintWorkerActorJwtResponse, error)
 	// RequestActorSuspend asks the control plane to suspend an Actor that the

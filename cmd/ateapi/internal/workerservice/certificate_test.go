@@ -156,7 +156,7 @@ func TestMintWorkerActorCertificate(t *testing.T) {
 		t.Error("leaf public key does not match CSR key")
 	}
 
-	wantURI := "spiffe://substrate-actor.local/ateom-for-actor/team-a/my-actor"
+	wantURI := "spiffe://substrate-actor.local/worker-for-actor/team-a/my-actor"
 	if len(leaf.URIs) != 1 || leaf.URIs[0].String() != wantURI {
 		t.Errorf("leaf URIs = %v, want [%s]", leaf.URIs, wantURI)
 	}

@@ -66,7 +66,7 @@ func ActorRefFromActorSPIFFEURL(u *url.URL) (ActorRef, error) {
 }
 
 // AteomForActorSPIFFEID returns
-// "spiffe://substrate-actor.local/ateom-for-actor/<atespace>/<name>", which
+// "spiffe://substrate-actor.local/worker-for-actor/<atespace>/<name>", which
 // ateapi mints into the actor certificate's URI SAN.
 func AteomForActorSPIFFEID(r ActorRef) *url.URL {
 	return &url.URL{
@@ -75,7 +75,7 @@ func AteomForActorSPIFFEID(r ActorRef) *url.URL {
 		// TODO(identity): Prefix with "atunnel" to prevent
 		// confusion between atunnel and an actor pretending to be
 		// an atunnel.
-		Path: path.Join("ateom-for-actor", r.Atespace, r.Name),
+		Path: path.Join("worker-for-actor", r.Atespace, r.Name),
 	}
 }
 
@@ -83,18 +83,18 @@ func AteomForActorSPIFFEID(r ActorRef) *url.URL {
 func ActorRefFromAteomForActorSPIFFEID(id string) (ActorRef, error) {
 	u, err := url.Parse(id)
 	if err != nil {
-		return ActorRef{}, fmt.Errorf("invalid ateom-for-actor SPIFFE ID %q: %w", id, err)
+		return ActorRef{}, fmt.Errorf("invalid worker-for-actor SPIFFE ID %q: %w", id, err)
 	}
 	return ActorRefFromAteomForActorSPIFFEURL(u)
 }
 
 func ActorRefFromAteomForActorSPIFFEURL(u *url.URL) (ActorRef, error) {
 	if u.Scheme != "spiffe" || u.Host != ActorSPIFFETrustDomain || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return ActorRef{}, fmt.Errorf("%q does not have format spiffe://<trust.domain>/ateom-for-actor/<atespace>/<name>", u.String())
+		return ActorRef{}, fmt.Errorf("%q does not have format spiffe://<trust.domain>/worker-for-actor/<atespace>/<name>", u.String())
 	}
 	segments := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
-	if len(segments) != 3 || segments[0] != "ateom-for-actor" {
-		return ActorRef{}, fmt.Errorf("%q does not have format spiffe://<trust.domain>/ateom-for-actor/<atespace>/<name>", u.String())
+	if len(segments) != 3 || segments[0] != "worker-for-actor" {
+		return ActorRef{}, fmt.Errorf("%q does not have format spiffe://<trust.domain>/worker-for-actor/<atespace>/<name>", u.String())
 	}
 	atespace, name := segments[1], segments[2]
 	if !IsValidResourceName(atespace) {

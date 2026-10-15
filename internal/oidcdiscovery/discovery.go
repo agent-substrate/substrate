@@ -58,6 +58,6 @@ func DiscoveryDocument(issuer string, algorithms []string) ([]byte, error) {
 		ResponseTypesSupported:           []string{"id_token"},
 		SubjectTypesSupported:            []string{"public"},
 		IDTokenSigningAlgValuesSupported: algs,
-		ClaimsSupported:                  []string{"iss", "sub", "aud", "exp", "nbf", "iat", "jti", "actor.ate.dev", "ateom-for-actor.ate.dev"},
+		ClaimsSupported:                  []string{"iss", "sub", "aud", "exp", "nbf", "iat", "jti", "actor.ate.dev", "worker-for-actor.ate.dev"},
 	})
 }
