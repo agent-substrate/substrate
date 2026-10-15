@@ -32,17 +32,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateletdial"
 	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/workercapacity"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-)
-
-// Files the atecontroller projects into the worker container from the downward
-// API, in milli-cores and bytes.
-const (
-	CapacityMountPath = "/run/worker-capacity"
-	CPULimitFile      = "cpu_milli"
-	MemoryLimitFile   = "memory_bytes"
 )
 
 const (
@@ -62,15 +55,15 @@ const (
 // in-place Pod vertical scaling (IPPR); capacity is read once at startup.
 // NOTE: Please do not implement this yet. IPPR needs more general consideration.
 func FromFiles(actors int) *ateletpb.WorkerResources {
-	return fromDir(CapacityMountPath, actors)
+	return fromDir(workercapacity.MountPath, actors)
 }
 
 func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 	return &ateletpb.WorkerResources{
 		Actors: int32(actors),
 		Resources: cpuMemory(
-			readLimit(filepath.Join(dir, CPULimitFile)),
-			readLimit(filepath.Join(dir, MemoryLimitFile)),
+			readLimit(filepath.Join(dir, workercapacity.CPULimitFile)),
+			readLimit(filepath.Join(dir, workercapacity.MemoryLimitFile)),
 		),
 	}
 }

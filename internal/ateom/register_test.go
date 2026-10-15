@@ -28,6 +28,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/workercapacity"
 )
 
 // testActors stands in for the worker's own ceiling, which is a flag in
@@ -49,10 +50,10 @@ func TestFromFiles(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, CPULimitFile), []byte(tc.cpu), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, workercapacity.CPULimitFile), []byte(tc.cpu), 0o600); err != nil {
 				t.Fatalf("writing CPU limit: %v", err)
 			}
-			if err := os.WriteFile(filepath.Join(dir, MemoryLimitFile), []byte(tc.memory), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, workercapacity.MemoryLimitFile), []byte(tc.memory), 0o600); err != nil {
 				t.Fatalf("writing memory limit: %v", err)
 			}
 
