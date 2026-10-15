@@ -31,4 +31,5 @@ import (
 	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/multitemplate"
 	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/parking"
 	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/sandbox"
+	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/sandboxmicrovm"
 )
