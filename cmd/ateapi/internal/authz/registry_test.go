@@ -140,7 +140,7 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
 			req: &ateapipb.CreateActorRequest{
 				Actor:               &ateapipb.Actor{Metadata: actorMeta, ActorTemplate: sharedTemplate},
-				InitialEgressPolicy: &ateapipb.EgressPolicyTemplate{},
+				InitialEgressPolicy: &ateapipb.EgressPolicy{},
 			},
 			want: []check{
 				{RelationCanCreateActor, "atespace:team-a"},
@@ -157,7 +157,7 @@ func TestDefaultRPCPermissions(t *testing.T) {
 					ActorTemplate: sharedTemplate,
 					SourceTag:     &ateapipb.ObjectRef{Atespace: "team-b", Name: "v1"},
 				},
-				InitialEgressPolicy: &ateapipb.EgressPolicyTemplate{},
+				InitialEgressPolicy: &ateapipb.EgressPolicy{},
 			},
 			want: []check{
 				{RelationCanCreateActor, "atespace:team-a"},
@@ -459,14 +459,14 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 					Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a"},
 					ActorTemplate: &ateapipb.ObjectRef{Atespace: "shared", Name: "tmpl"},
 				},
-				InitialEgressPolicy: &ateapipb.EgressPolicyTemplate{},
+				InitialEgressPolicy: &ateapipb.EgressPolicy{},
 			},
 			wantField: "actor.metadata.name",
 		},
 		{
 			name:       "CreateActor with an initial policy without an actor",
 			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
-			req:        &ateapipb.CreateActorRequest{InitialEgressPolicy: &ateapipb.EgressPolicyTemplate{}},
+			req:        &ateapipb.CreateActorRequest{InitialEgressPolicy: &ateapipb.EgressPolicy{}},
 			wantField:  "actor.metadata.atespace",
 		},
 		{

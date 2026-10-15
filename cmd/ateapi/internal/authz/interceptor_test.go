@@ -379,9 +379,12 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 	createActorWithPolicy := func(template *ateapipb.ObjectRef) rpcCall {
 		return rpcCall{ateapipb.Control_CreateActor_FullMethodName, &ateapipb.CreateActorRequest{
 			Actor: actorWithTemplate(template),
-			InitialEgressPolicy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{
-				Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}},
-			}}},
+			InitialEgressPolicy: &ateapipb.EgressPolicy{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: actor.GetAtespace(), Name: "default"},
+				Rules: []*ateapipb.EgressRule{{
+					Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}},
+				}},
+			},
 		}}
 	}
 	updateActor := func(template *ateapipb.ObjectRef) rpcCall {

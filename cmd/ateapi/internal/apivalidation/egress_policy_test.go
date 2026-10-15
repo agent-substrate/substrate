@@ -179,7 +179,7 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 			return r
 		}(),
 		want: field.ErrorList{
-			field.Invalid(field.NewPath("egress_policy", "metadata", "atespace"), "other", "must match actor.atespace"),
+			field.Invalid(field.NewPath("egress_policy", "metadata", "atespace"), "other", "must match the parent actor's atespace"),
 		},
 	}}
 	for _, tc := range tests {
@@ -319,7 +319,7 @@ func TestValidateUpdateActorEgressPolicyRequest(t *testing.T) {
 			return r
 		}(),
 		want: field.ErrorList{
-			field.Invalid(field.NewPath("egress_policy", "metadata", "atespace"), "other", "must match actor.atespace"),
+			field.Invalid(field.NewPath("egress_policy", "metadata", "atespace"), "other", "must match the parent actor's atespace"),
 		},
 	}, {
 		name: "invalid rule",

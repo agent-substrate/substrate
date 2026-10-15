@@ -128,8 +128,10 @@ goldenEgressPolicy:
         hostnames: [api.example.com]
 ```
 
-The template controller passes this field as `CreateActorRequest.initial_egress_policy`
-when creating the golden actor. The actor and its `default` egress policy are
+The template controller turns this field into an `EgressPolicy` with the golden
+actor's atespace and the name `default`, and passes it as
+`CreateActorRequest.initial_egress_policy` when creating the golden actor.
+The actor and its `default` egress policy are
 created atomically, so the policy exists before golden initialization can start.
 The policy receives its own UID, version, and timestamps. The template field
 contains only rules.
@@ -625,7 +627,7 @@ Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
     *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); the `actor_template` ref (atespace + name) selects the `ActorTemplate`.
     *   `actor.source_tag`: (Optional) `ObjectRef` of a `Tag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.snapshots` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
-    *   `initial_egress_policy`: (Optional) `EgressPolicyTemplate` containing at least one rule, with the same defaults and validation as `EgressPolicy.rules`. Creates the actor's `default` policy atomically with the actor; the server generates policy metadata. Requires permission to create an egress policy on the new actor as well as permission to create the actor and use its template. If omitted, no policy is created or inherited from the template or tag. Manage the resulting policy with the Actor egress policy RPCs.
+    *   `initial_egress_policy`: (Optional) `EgressPolicy` containing at least one rule. `metadata.name` must be `default` and `metadata.atespace` must match the actor's atespace, as with `CreateActorEgressPolicy`. Creates the policy atomically with the actor; the server generates the policy's UID, version, and timestamps. Requires permission to create an egress policy on the new actor as well as permission to create the actor and use its template. If omitted, no policy is created or inherited from the template or tag. Manage the resulting policy with the Actor egress policy RPCs.
 *   **Response:** the initialized `Actor`.
 
 #### `UpdateActor`

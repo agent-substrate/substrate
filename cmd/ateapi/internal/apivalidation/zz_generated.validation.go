@@ -2158,6 +2158,11 @@ func Validate_CreateActorRequest(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.CreateActorRequest) (errs field.ErrorList) {
 
+	// custom validation
+	if e := ValidateCustom_CreateActorRequest(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
 	{ // field ateapipb.CreateActorRequest.Actor
 		fn := func(
 			fldPath *field.Path,
@@ -2192,7 +2197,7 @@ func Validate_CreateActorRequest(
 	{ // field ateapipb.CreateActorRequest.InitialEgressPolicy
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateapipb.EgressPolicyTemplate,
+			obj, oldObj *ateapipb.EgressPolicy,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -2209,11 +2214,11 @@ func Validate_CreateActorRequest(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_EgressPolicyTemplate(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_EgressPolicy(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.CreateActorRequest) *ateapipb.EgressPolicyTemplate {
+			func(oldObj *ateapipb.CreateActorRequest) *ateapipb.EgressPolicy {
 				return oldObj.InitialEgressPolicy
 			})
 		errs = append(errs, fn(fldPath.Child("initial_egress_policy"), obj.InitialEgressPolicy, oldVal, oldObj != nil)...)

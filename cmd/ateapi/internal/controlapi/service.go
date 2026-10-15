@@ -108,7 +108,7 @@ func NewRPCService(
 
 // serviceStore enumerates the service methods consumed by the RPC layer.
 type serviceStore interface {
-	CreateActor(ctx context.Context, actor *ateapipb.Actor, initial *ateapipb.EgressPolicyTemplate) (*ateapipb.Actor, error)
+	CreateActor(ctx context.Context, actor *ateapipb.Actor, policy *ateapipb.EgressPolicy) (*ateapipb.Actor, error)
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 	ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error)
@@ -163,7 +163,7 @@ func (s *RPCService) GetPlugin(ctx context.Context, driverName string) (volume.V
 	return csiPlugin, nil
 }
 
-// ServiceImpl implements serviceStore and provides the "middleware" layer
+// ServiceImpl implements store.Interface and provides the "middleware" layer
 // between the RPC and storage layers.  It enforces invariants and validation
 // rules, and may implement additional logic beyond the storage layer.
 //
@@ -176,7 +176,7 @@ type ServiceImpl struct {
 	storageClassLister storagev1listers.StorageClassLister
 }
 
-var _ serviceStore = (*ServiceImpl)(nil)
+var _ store.Interface = (*ServiceImpl)(nil)
 
 // newServiceImpl creates an instance of the service's middleware
 // implementation layer.

@@ -30,6 +30,16 @@ func ValidateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRe
 	return Validate_CreateActorRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateCustom_CreateActorRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.CreateActorRequest) field.ErrorList {
+	policy := req.GetInitialEgressPolicy()
+	policyPath := p.Child("initial_egress_policy")
+	errs := validateEgressPolicyParentAtespace(req.GetActor().GetMetadata().GetAtespace(), policy, policyPath)
+	if policy != nil && len(policy.GetRules()) == 0 {
+		errs = append(errs, field.Required(policyPath.Child("rules"), "must contain at least one rule"))
+	}
+	return errs
+}
+
 func ValidateGetActorRequest(ctx context.Context, req *ateapipb.GetActorRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)

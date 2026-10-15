@@ -53,25 +53,24 @@ func ValidateEgressPolicyUpdate(ctx context.Context, p *field.Path, newVal, oldV
 }
 
 func ValidateCustom_CreateActorEgressPolicyRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.CreateActorEgressPolicyRequest) field.ErrorList {
-	return validateEgressPolicyParentAtespace(req.GetActor(), req.GetEgressPolicy(), p)
+	return validateEgressPolicyParentAtespace(req.GetActor().GetAtespace(), req.GetEgressPolicy(), p.Child("egress_policy"))
 }
 
 func ValidateCustom_UpdateActorEgressPolicyRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.UpdateActorEgressPolicyRequest) field.ErrorList {
-	return validateEgressPolicyParentAtespace(req.GetActor(), req.GetEgressPolicy(), p)
+	return validateEgressPolicyParentAtespace(req.GetActor().GetAtespace(), req.GetEgressPolicy(), p.Child("egress_policy"))
 }
 
-func validateEgressPolicyParentAtespace(actor *ateapipb.ObjectRef, policy *ateapipb.EgressPolicy, p *field.Path) field.ErrorList {
-	if actor == nil || actor.Atespace == "" {
+func validateEgressPolicyParentAtespace(actorAtespace string, policy *ateapipb.EgressPolicy, p *field.Path) field.ErrorList {
+	if actorAtespace == "" {
 		return nil // regular DV will handle it
 	}
-	actorAtespace := actor.GetAtespace()
 	if policy == nil || policy.Metadata == nil || policy.Metadata.Atespace == "" {
 		return nil // regular DV will handle it
 	}
 	policyAtespace := policy.GetMetadata().GetAtespace()
 	if actorAtespace != policyAtespace {
 		return field.ErrorList{
-			field.Invalid(p.Child("egress_policy", "metadata", "atespace"), policyAtespace, "must match actor.atespace"),
+			field.Invalid(p.Child("metadata", "atespace"), policyAtespace, "must match the parent actor's atespace"),
 		}
 	}
 	return nil

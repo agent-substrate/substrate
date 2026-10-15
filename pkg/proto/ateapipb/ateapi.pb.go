@@ -2643,7 +2643,8 @@ type ActorTemplate struct {
 	// +k8s:optional
 	Status *ActorTemplateStatus `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
 	// Egress policy for the golden Actor during initialization. The template
-	// controller supplies this as CreateActorRequest.initial_egress_policy
+	// controller supplies a policy with these rules and generated metadata
+	// as CreateActorRequest.initial_egress_policy
 	// when creating the golden Actor. Other Actors created from this template
 	// do not inherit this policy, including when using the golden snapshot.
 	// If absent, no policy is created. When set, at least one rule is required.
@@ -4841,6 +4842,8 @@ func (x *GetActorRequest) GetActor() *ObjectRef {
 }
 
 // Request to create a new Actor.
+//
+// +k8s:customValidation # initial policy must match the actor's atespace and contain rules
 type CreateActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor to create.
@@ -4848,14 +4851,16 @@ type CreateActorRequest struct {
 	// +k8s:required
 	Actor *Actor `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// Optional initial egress policy, created atomically with the Actor as its
-	// "default" policy. The server assigns the policy's metadata. When set,
-	// at least one rule is required, and the caller must have permission to
-	// create an egress policy on the Actor in addition to creating the Actor.
+	// "default" policy. metadata.name must be "default" and metadata.atespace
+	// must match actor.metadata.atespace. UID, version, and timestamps are
+	// server-managed. When set, at least one rule is required, and the caller
+	// must have permission to create an egress policy on the Actor in addition
+	// to creating the Actor.
 	// If absent, no policy is created or inherited from the template or tag.
 	// The policy can subsequently be managed through the Actor egress policy RPCs.
 	//
 	// +k8s:optional
-	InitialEgressPolicy *EgressPolicyTemplate `protobuf:"bytes,2,opt,name=initial_egress_policy,json=initialEgressPolicy,proto3" json:"initial_egress_policy,omitempty"`
+	InitialEgressPolicy *EgressPolicy `protobuf:"bytes,2,opt,name=initial_egress_policy,json=initialEgressPolicy,proto3" json:"initial_egress_policy,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -4897,7 +4902,7 @@ func (x *CreateActorRequest) GetActor() *Actor {
 	return nil
 }
 
-func (x *CreateActorRequest) GetInitialEgressPolicy() *EgressPolicyTemplate {
+func (x *CreateActorRequest) GetInitialEgressPolicy() *EgressPolicy {
 	if x != nil {
 		return x.InitialEgressPolicy
 	}
@@ -9678,10 +9683,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0eactor_template\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\ractorTemplate\x12/\n" +
 	"\aoptions\x18\x02 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions\":\n" +
 	"\x0fGetActorRequest\x12'\n" +
-	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"\x8b\x01\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"\x83\x01\n" +
 	"\x12CreateActorRequest\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\x12P\n" +
-	"\x15initial_egress_policy\x18\x02 \x01(\v2\x1c.ateapi.EgressPolicyTemplateR\x13initialEgressPolicy\"9\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\x12H\n" +
+	"\x15initial_egress_policy\x18\x02 \x01(\v2\x14.ateapi.EgressPolicyR\x13initialEgressPolicy\"9\n" +
 	"\x12UpdateActorRequest\x12#\n" +
 	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\">\n" +
 	"\x13SuspendActorRequest\x12'\n" +
@@ -10320,7 +10325,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	94,  // 86: ateapi.DeleteActorTemplateRequest.options:type_name -> ateapi.DeleteOptions
 	33,  // 87: ateapi.GetActorRequest.actor:type_name -> ateapi.ObjectRef
 	15,  // 88: ateapi.CreateActorRequest.actor:type_name -> ateapi.Actor
-	17,  // 89: ateapi.CreateActorRequest.initial_egress_policy:type_name -> ateapi.EgressPolicyTemplate
+	16,  // 89: ateapi.CreateActorRequest.initial_egress_policy:type_name -> ateapi.EgressPolicy
 	15,  // 90: ateapi.UpdateActorRequest.actor:type_name -> ateapi.Actor
 	33,  // 91: ateapi.SuspendActorRequest.actor:type_name -> ateapi.ObjectRef
 	15,  // 92: ateapi.SuspendActorResponse.actor:type_name -> ateapi.Actor

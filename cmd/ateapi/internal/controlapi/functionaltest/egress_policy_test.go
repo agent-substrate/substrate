@@ -76,25 +76,42 @@ func TestCreateActor_InitialEgressPolicy(t *testing.T) {
 	t.Cleanup(tc.cleanup)
 	createTemplate(t, tc, ns)
 	ctx := t.Context()
+	newPolicy := func(mods ...func(*ateapipb.EgressPolicy)) *ateapipb.EgressPolicy {
+		policy := &ateapipb.EgressPolicy{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: resources.SingletonName},
+			Rules: []*ateapipb.EgressRule{
+				{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}},
+				{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}},
+			},
+		}
+		for _, mod := range mods {
+			mod(policy)
+		}
+		return policy
+	}
 
 	for _, tt := range []struct {
 		name   string
-		policy *ateapipb.EgressPolicyTemplate
+		policy *ateapipb.EgressPolicy
 		valid  bool
 	}{
 		{name: "omitted", valid: true},
-		{name: "configured", valid: true, policy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}},
-			{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}},
-		}}},
-		{name: "empty", policy: &ateapipb.EgressPolicyTemplate{}},
-		{name: "invalid", policy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
-			{Https: &ateapipb.HttpsRule{Hostnames: []string{"bad/host"}}},
-		}}},
-		{name: "conflicting", policy: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
-			{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}},
-			{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
-		}}},
+		{name: "configured", valid: true, policy: newPolicy(func(p *ateapipb.EgressPolicy) {
+			p.Metadata.Uid = "caller-supplied-uid"
+			p.Metadata.Version = 999
+			p.Metadata.CreateTime = timestamppb.New(time.Unix(1, 0))
+			p.Metadata.UpdateTime = timestamppb.New(time.Unix(1, 0))
+		})},
+		{name: "empty", policy: newPolicy(func(p *ateapipb.EgressPolicy) { p.Rules = nil })},
+		{name: "missing-metadata", policy: newPolicy(func(p *ateapipb.EgressPolicy) { p.Metadata = nil })},
+		{name: "missing-name", policy: newPolicy(func(p *ateapipb.EgressPolicy) { p.Metadata.Name = "" })},
+		{name: "wrong-name", policy: newPolicy(func(p *ateapipb.EgressPolicy) { p.Metadata.Name = "custom" })},
+		{name: "missing-atespace", policy: newPolicy(func(p *ateapipb.EgressPolicy) { p.Metadata.Atespace = "" })},
+		{name: "wrong-atespace", policy: newPolicy(func(p *ateapipb.EgressPolicy) { p.Metadata.Atespace = "other" })},
+		{name: "invalid", policy: newPolicy(func(p *ateapipb.EgressPolicy) { p.Rules[0].Http.Hostnames = []string{"bad/host"} })},
+		{name: "conflicting", policy: newPolicy(func(p *ateapipb.EgressPolicy) {
+			p.Rules = append(p.Rules, &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}})
+		})},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: tt.name}
@@ -135,6 +152,9 @@ func TestCreateActor_InitialEgressPolicy(t *testing.T) {
 			md := policy.GetMetadata()
 			if md.GetAtespace() != ref.Atespace || md.GetName() != resources.SingletonName || md.GetUid() == "" || md.GetUid() == actor.GetMetadata().GetUid() || md.GetVersion() != 1 || md.GetCreateTime() == nil || md.GetUpdateTime() == nil {
 				t.Fatalf("unexpected policy metadata: %v", md)
+			}
+			if md.GetUid() == "caller-supplied-uid" || md.GetCreateTime().AsTime().Equal(time.Unix(1, 0)) || md.GetUpdateTime().AsTime().Equal(time.Unix(1, 0)) {
+				t.Fatalf("caller-supplied server metadata was retained: %v", md)
 			}
 
 			// Repeating CreateActor must not replace the policy on the existing actor.

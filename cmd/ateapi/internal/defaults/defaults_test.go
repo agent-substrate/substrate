@@ -145,22 +145,6 @@ func TestApply(t *testing.T) {
 			{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"tcp.example.com"}}},
 		}}},
 	}, {
-		name: "nil initial egress policy is tolerated",
-		in:   (*ateapipb.EgressPolicyTemplate)(nil),
-		want: (*ateapipb.EgressPolicyTemplate)(nil),
-	}, {
-		name: "initial egress policy defaults ports",
-		in: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}},
-			{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}},
-			{Https: &ateapipb.HttpsRule{Hostnames: []string{"custom.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{8443}}}},
-		}},
-		want: &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}},
-			{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
-			{Https: &ateapipb.HttpsRule{Hostnames: []string{"custom.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{8443}}}},
-		}},
-	}, {
 		name: "tag has no defaults",
 		in:   &ateapipb.Tag{Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED},
 		want: &ateapipb.Tag{Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED},
