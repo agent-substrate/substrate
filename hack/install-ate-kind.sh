@@ -41,4 +41,4 @@ export KUBECTL_CONTEXT="${KUBECTL_CONTEXT:-kind-${KIND_CLUSTER_NAME}}"
 # unset other env from ate-dev-env.sh in case the developer already sourced them
 unset GCE_REGION CLUSTER_LOCATION NETWORK SUBNETWORK MEMORYSTORE_INSTANCE PROJECT_ID
 
-hack/install-ate.sh "$@"
+go run ./cmd/ate-setup "$@"
