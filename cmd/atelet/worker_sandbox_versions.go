@@ -14,7 +14,7 @@
 
 package main
 
-// This file decides how one worker pod's sandbox versions file is built,
+// This file decides how one worker pod's sandbox runtimes file is built,
 // in the steps syncPod runs:
 //   - resolve: find the SandboxConfig of the pod's WorkerPool
 //   - plan: pick the config's versions this node can run
@@ -64,7 +64,7 @@ import (
 // The same failures on a restorable version leave it out of the file instead.
 var errPermanent = errors.New("permanent failure")
 
-// sandboxPlan is what one worker's sandbox versions file is built from.
+// sandboxPlan is what one worker's sandbox runtimes file is built from.
 type sandboxPlan struct {
 	config       string
 	sandboxClass v1alpha1.SandboxClass // the config's; decides which attributes its runtimes report
@@ -218,7 +218,7 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan) 
 				// actors on this node; a transient failure is retried whole.
 				return nil, err
 			}
-			slog.WarnContext(ctx, "Leaving a sandbox version out of the worker sandbox versions file", slog.Any("err", err))
+			slog.WarnContext(ctx, "Leaving a sandbox version out of the worker sandbox runtimes file", slog.Any("err", err))
 			continue
 		}
 		seen[h] = true
@@ -389,7 +389,7 @@ func runtimeHash(rec *sandboxAssetsRecord, pauseDigest string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// syncPod writes pod's sandbox versions file:
+// syncPod writes pod's sandbox runtimes file:
 //   - plan: resolve the pool's config and its versions for this node
 //   - build: hash and probe each version's runtime
 //   - write: replace the file if its content changed
@@ -409,12 +409,12 @@ func (s *workerSandboxSyncer) write(ctx context.Context, uid, config string, wan
 	if err := os.MkdirAll(s.podDir(uid), 0o700); err != nil {
 		return fmt.Errorf("while creating worker directory: %w", err)
 	}
-	wrote, err := sandboxruntimes.Write(s.versionsFile(uid), want)
+	wrote, err := sandboxruntimes.Write(s.runtimesFile(uid), want)
 	if err != nil {
 		return err
 	}
 	if wrote {
-		slog.InfoContext(ctx, "Wrote worker sandbox versions",
+		slog.InfoContext(ctx, "Wrote worker sandbox runtimes",
 			slog.String("pod_uid", uid),
 			slog.String("sandbox_config", config),
 			slog.String("default_runtime_hash", want.DefaultRuntime[hardware.AttrSandboxRuntimeHash]),
@@ -423,6 +423,6 @@ func (s *workerSandboxSyncer) write(ctx context.Context, uid, config string, wan
 	return nil
 }
 
-func (s *workerSandboxSyncer) versionsFile(uid string) string {
+func (s *workerSandboxSyncer) runtimesFile(uid string) string {
 	return filepath.Join(s.podDir(uid), nodepath.SandboxRuntimesFileName)
 }

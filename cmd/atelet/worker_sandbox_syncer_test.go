@@ -443,13 +443,13 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 				if err := os.MkdirAll(dir, 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := sandboxruntimes.Write(s.versionsFile("pod-a"), tt.existing); err != nil {
+				if _, err := sandboxruntimes.Write(s.runtimesFile("pod-a"), tt.existing); err != nil {
 					t.Fatal(err)
 				}
 			}
 			var fileBefore time.Time
 			if _, err := os.Stat(dir); err == nil {
-				file, err := os.Stat(s.versionsFile("pod-a"))
+				file, err := os.Stat(s.runtimesFile("pod-a"))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -465,7 +465,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 			if _, err := os.Stat(dir); (err == nil) != tt.wantDir {
 				t.Errorf("directory exists = %v (%v), want %v", err == nil, err, tt.wantDir)
 			}
-			got, err := sandboxruntimes.Read(s.versionsFile("pod-a"))
+			got, err := sandboxruntimes.Read(s.runtimesFile("pod-a"))
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				t.Fatal(err)
 			}
@@ -473,7 +473,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 				t.Errorf("file mismatch (-want +got):\n%s", diff)
 			}
 			if tt.wantUntouched {
-				if after, err := os.Stat(s.versionsFile("pod-a")); err != nil || !after.ModTime().Equal(fileBefore) {
+				if after, err := os.Stat(s.runtimesFile("pod-a")); err != nil || !after.ModTime().Equal(fileBefore) {
 					t.Errorf("an equal file was rewritten (mtime %v -> %v, %v)", fileBefore, after.ModTime(), err)
 				}
 			}
@@ -631,7 +631,7 @@ func TestWorkerSandboxSyncerRun(t *testing.T) {
 			// A pod Add event queued before the caches sync.
 			s.queue.Add("pod-live")
 			matches := func() bool {
-				return exists(s.podDir("pod-gone")) == tt.wantOrphan && exists(s.versionsFile("pod-live")) == tt.wantFile
+				return exists(s.podDir("pod-gone")) == tt.wantOrphan && exists(s.runtimesFile("pod-live")) == tt.wantFile
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -648,7 +648,7 @@ func TestWorkerSandboxSyncerRun(t *testing.T) {
 				time.Sleep(300 * time.Millisecond)
 				if !matches() {
 					t.Errorf("before every cache synced: pod-gone directory exists = %v, pod-live file exists = %v; want %v, %v",
-						exists(s.podDir("pod-gone")), exists(s.versionsFile("pod-live")), tt.wantOrphan, tt.wantFile)
+						exists(s.podDir("pod-gone")), exists(s.runtimesFile("pod-live")), tt.wantOrphan, tt.wantFile)
 				}
 			}
 
@@ -735,7 +735,7 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 			podFactory.Start(ctx.Done())
 
 			for _, pod := range tt.pods {
-				waitFor(t, "the file of "+string(pod.UID), func() bool { return exists(s.versionsFile(string(pod.UID))) })
+				waitFor(t, "the file of "+string(pod.UID), func() bool { return exists(s.runtimesFile(string(pod.UID))) })
 			}
 			if tt.change != nil {
 				if err := tt.change(ctx, kube); err != nil {
@@ -743,7 +743,7 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 				}
 			}
 			for _, uid := range tt.wantFiles {
-				waitFor(t, "the file of "+uid, func() bool { return exists(s.versionsFile(uid)) })
+				waitFor(t, "the file of "+uid, func() bool { return exists(s.runtimesFile(uid)) })
 			}
 			for _, uid := range tt.wantNoDirs {
 				waitFor(t, "the directory of "+uid+" to be removed", func() bool { return !exists(s.podDir(uid)) })

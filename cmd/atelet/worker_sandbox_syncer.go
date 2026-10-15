@@ -24,7 +24,7 @@ package main
 //   - finish: forget the UID, or retry it with backoff up to
 //     syncMaxRetries times
 //
-// worker_sandbox_versions.go builds the sandbox config version file for each
+// worker_sandbox_versions.go builds the sandbox runtimes file for each
 // worker pod.
 
 import (
@@ -78,7 +78,7 @@ const syncMaxJitter = 30 * time.Second
 // unresolved pool without retrying forever.
 const syncMaxRetries = 8
 
-// workerSandboxSyncer keeps a sandbox versions file in each local worker's
+// workerSandboxSyncer keeps a sandbox runtimes file in each local worker's
 // directory under workersDir: the runtimes of the enabled versions of the
 // SandboxConfig the worker's pool uses. It creates a worker's directory once
 // it writes the pod's file and removes it when the pod is gone.
@@ -157,14 +157,14 @@ func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInforme
 		return nil, err
 	}
 	go s.run(ctx, pods.Informer().HasSynced, workerPools.Informer().HasSynced, configs.Informer().HasSynced)
-	slog.InfoContext(ctx, "Worker sandbox versions syncer started")
+	slog.InfoContext(ctx, "Worker sandbox runtimes syncer started")
 	return s, nil
 }
 
 // watch registers handler on inf and logs inf's list/watch failures.
 func watch(ctx context.Context, kind string, inf cache.SharedIndexInformer, handler cache.ResourceEventHandler) error {
 	if err := inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
-		slog.WarnContext(ctx, kind+" list/watch failed; workers on this node cannot update their sandbox versions until it recovers", slog.Any("err", err))
+		slog.WarnContext(ctx, kind+" list/watch failed; workers on this node cannot update their sandbox runtimes until it recovers", slog.Any("err", err))
 	}); err != nil {
 		// Fails only on an already-started informer, where the default
 		// reflector logging applies.
@@ -351,16 +351,16 @@ func (s *workerSandboxSyncer) finish(ctx context.Context, uid string, err error)
 	case err == nil:
 		s.queue.Forget(uid)
 	case errors.Is(err, errPermanent):
-		slog.WarnContext(ctx, "Cannot sync worker sandbox versions; not retrying until the pool's SandboxConfig changes or atelet restarts", slog.String("pod_uid", uid), slog.Any("err", err))
+		slog.WarnContext(ctx, "Cannot sync worker sandbox runtimes; not retrying until the pool's SandboxConfig changes or atelet restarts", slog.String("pod_uid", uid), slog.Any("err", err))
 		s.queue.Forget(uid)
 	case ctx.Err() != nil:
 		// Shutting down, not a sync failure.
 	case s.queue.NumRequeues(uid) < syncMaxRetries:
-		slog.WarnContext(ctx, "Could not sync worker sandbox versions; will retry",
+		slog.WarnContext(ctx, "Could not sync worker sandbox runtimes; will retry",
 			slog.String("pod_uid", uid), slog.Int("retries", s.queue.NumRequeues(uid)), slog.Any("err", err))
 		s.queue.AddRateLimited(uid)
 	default:
-		slog.WarnContext(ctx, "Could not sync worker sandbox versions; giving up until the pool's SandboxConfig changes or atelet restarts",
+		slog.WarnContext(ctx, "Could not sync worker sandbox runtimes; giving up until the pool's SandboxConfig changes or atelet restarts",
 			slog.String("pod_uid", uid), slog.Int("retries", syncMaxRetries), slog.Any("err", err))
 		s.queue.Forget(uid)
 	}
