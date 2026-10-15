@@ -174,9 +174,12 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create atelet metrics", err)
 	}
 
-	// readiness flips to not-ready on SIGTERM so /readyz reports 503 while the
-	// pod drains, while /healthz stays 200 for liveness.
+	// /readyz reports 503 until the gRPC server starts and again after SIGTERM
+	// while the pod drains. /healthz stays 200 for liveness. The health server
+	// starts here, before the boot steps below: the wait for the snapshot plugin
+	// alone can take longer than the liveness probe allows.
 	readiness := &serverboot.Readiness{}
+	markServing := readiness.AddStartupCheck("grpc")
 	go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
 	go serverboot.StartHealthServer(ctx, *healthListenAddr, readiness)
 
@@ -441,6 +444,7 @@ func main() {
 	slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))
 
 	drainDone := drainOnShutdown(shutdownCtx, svr, readiness)
+	markServing()
 	if err := svr.Serve(lis); err != nil {
 		serverboot.Fatal(ctx, "Failed to serve", err)
 	}

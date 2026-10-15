@@ -429,6 +429,24 @@ func (r *Readiness) AddCheck(name string, check func(context.Context) error) {
 	r.checks = append(r.checks, &readinessCheck{name: name, fn: check})
 }
 
+// errNotStarted is the error of a startup check before the server starts.
+var errNotStarted = errors.New("the server has not started")
+
+// AddStartupCheck registers a check that fails until the returned function is
+// called, so /readyz returns 503 while the server boots. Call the function when
+// the server can accept requests. The health server can then start early, and
+// /healthz answers the liveness probe during a long boot.
+func (r *Readiness) AddStartupCheck(name string) (markStarted func()) {
+	var started atomic.Bool
+	r.AddCheck(name, func(context.Context) error {
+		if !started.Load() {
+			return errNotStarted
+		}
+		return nil
+	})
+	return func() { started.Store(true) }
+}
+
 // notReadyReason returns why /readyz should answer 503, or "" if it should
 // answer 200. Draining wins over the checks, which are not run.
 func (r *Readiness) notReadyReason(ctx context.Context) string {

@@ -301,6 +301,31 @@ func TestReadyzFollowsCheck(t *testing.T) {
 	}
 }
 
+// A startup check keeps /readyz at 503 until the server marks itself started,
+// while /healthz answers the liveness probe for the whole boot.
+func TestReadyzFollowsStartupCheck(t *testing.T) {
+	readiness := &Readiness{}
+	markStarted := readiness.AddStartupCheck("grpc")
+	mux := healthMux(readiness)
+
+	if got := getCode(t, mux, "/readyz"); got != http.StatusServiceUnavailable {
+		t.Errorf("/readyz before the server starts = %d, want %d", got, http.StatusServiceUnavailable)
+	}
+	if got := getCode(t, mux, "/healthz"); got != http.StatusOK {
+		t.Errorf("/healthz before the server starts = %d, want %d", got, http.StatusOK)
+	}
+
+	markStarted()
+	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
+		t.Errorf("/readyz after the server starts = %d, want %d", got, http.StatusOK)
+	}
+
+	readiness.MarkNotReady()
+	if got := getCode(t, mux, "/readyz"); got != http.StatusServiceUnavailable {
+		t.Errorf("/readyz during drain = %d, want %d", got, http.StatusServiceUnavailable)
+	}
+}
+
 func TestReadyzCheckTimeout(t *testing.T) {
 	readiness := &Readiness{}
 	readiness.AddCheck("store", func(ctx context.Context) error {
