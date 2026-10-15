@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -128,4 +130,27 @@ func koResolve(t *testing.T, manifest string) []byte {
 		t.Fatalf("FindRepoRoot: %v", err)
 	}
 	return RunCmdOutput(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), "ko", "resolve", "-f", manifest)
+}
+
+// ResolveFixtureImage builds a fixture through the same ko resolver used by
+// fixture manifests and returns its digest-pinned image reference.
+func ResolveFixtureImage(t *testing.T, importPath string) string {
+	t.Helper()
+	pod := corev1.Pod{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "fixture", Image: "ko://" + importPath}}}}
+	raw, err := yaml.Marshal(pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(t.TempDir(), "fixture-image.yaml")
+	if err := os.WriteFile(manifest, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(koResolve(t, manifest), &pod); err != nil {
+		t.Fatal(err)
+	}
+	image := pod.Spec.Containers[0].Image
+	if !strings.Contains(image, "@sha256:") {
+		t.Fatalf("fixture image %q is not pinned by digest", image)
+	}
+	return image
 }
