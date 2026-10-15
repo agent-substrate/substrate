@@ -1103,7 +1103,20 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 				Version:      testRuntime().Version,
 			},
 		},
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("sandbox_class"), "", 63).WithOrigin("maxLength")},
+		want: field.ErrorList{
+			field.TooLong(defaultRuntimePath.Child("sandbox_class"), "", 63).WithOrigin("maxLength"),
+			field.NotSupported[string](defaultRuntimePath.Child("sandbox_class"), nil, nil),
+		},
+	}, {
+		name: "unsupported default_runtime.sandbox_class",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity: &ateletpb.WorkerResources{},
+			DefaultRuntime: &ateletpb.SandboxRuntime{
+				SandboxClass: "kata",
+				Version:      testRuntime().Version,
+			},
+		},
+		want: field.ErrorList{field.NotSupported[string](defaultRuntimePath.Child("sandbox_class"), nil, nil)},
 	}, {
 		name: "missing default_runtime.version",
 		obj: &ateletpb.RegisterWorkerRequest{
@@ -1243,6 +1256,17 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 			RestorableRuntimes: []*ateletpb.SandboxRuntime{{SandboxClass: "gvisor"}},
 		},
 		want: field.ErrorList{field.Required(restorablePath.Index(0).Child("version"), "")},
+	}, {
+		name: "unsupported restorable_runtimes sandbox_class",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity:       &ateletpb.WorkerResources{},
+			DefaultRuntime: testRuntime(),
+			RestorableRuntimes: []*ateletpb.SandboxRuntime{{
+				SandboxClass: "GVISOR",
+				Version:      testRuntime().Version,
+			}},
+		},
+		want: field.ErrorList{field.NotSupported[string](restorablePath.Index(0).Child("sandbox_class"), nil, nil)},
 	}, {
 		name: "restorable_runtimes at the bound",
 		obj: &ateletpb.RegisterWorkerRequest{

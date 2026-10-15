@@ -55,13 +55,13 @@ type global
     define can_list_atespaces: viewer
     define can_create_worker: owner or controller
     define can_list_workers: viewer or controller
-    define can_get: viewer
 
     # Listing across all atespaces (List RPCs with an empty atespace).
     # atenet-router and atenet-egress, one binary, list actors as their ateapi
     # health check.
     define can_list_actors: viewer or ingress_router or egress_gateway
     define can_list_actor_templates: viewer
+    define can_list_tags: viewer
 
     # --- Policy Governance ---
     define can_create_access_policy: owner
@@ -93,6 +93,8 @@ type atespace
     define can_create_actor_template: editor
     define can_list_actors: viewer
     define can_list_actor_templates: viewer
+    define can_create_tag: editor
+    define can_list_tags: viewer
     define can_get: viewer
     define can_delete: owner
 
@@ -106,8 +108,25 @@ type actor_template
     # can_get for now; a separate relation so running a template can later
     # require more than reading it.
     define can_use_template: viewer from parent_atespace
+    define can_delete: editor from parent_atespace
+
+# A named snapshot owned by an atespace. Its scope controls which atespaces
+# CreateActor accepts it in, which the handler enforces; can_use_tag controls
+# who may clone it. Managing the tag stays with its owning atespace.
+#
+# TODO: A tag is a durable copy of an actor's memory and disk, including any
+# secrets it held, and it outlives the actor. Any atespace editor can tag any
+# actor in the atespace, publish it, and clone it. Restrict who can create,
+# publish, and clone tags once the tag scoping design is settled.
+type tag
+  relations
+    define parent_atespace: [atespace]
+
+    define can_get: viewer from parent_atespace
     define can_update: editor from parent_atespace
     define can_delete: editor from parent_atespace
+    # Create actors from this tag (CreateActor source_tag).
+    define can_use_tag: editor from parent_atespace
 
 type actor
   relations
@@ -129,10 +148,13 @@ type actor
     define can_update_egress_policy: editor from parent_atespace
     define can_delete_egress_policy: editor from parent_atespace
 
-    # --- Hardened System & Infrastructure Operations ---
-
     # Node Restriction: Only the node hosting the scheduled worker can mint ateom actor credentials
     define can_mint_ateom_actor_credential: host_node
+
+    # Credentials asserting the actor's own identity. Only the egress gateway
+    # mints them; an editor holding one could impersonate the actor.
+    define can_mint_actor_jwt: egress_gateway from parent_atespace
+    define can_mint_actor_certificate: egress_gateway from parent_atespace
 
     # Data Plane Ingress: Routers (or editors) can resume
     define can_resume: [user] or editor from parent_atespace or ingress_router from parent_atespace

@@ -3871,40 +3871,6 @@ func Validate_ExternalVolume(
 		errs = append(errs, fn(fldPath.Child("volume_type"), &obj.VolumeType, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.ExternalVolume.Status
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateapipb.ExternalVolume_Status,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 3); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.ExternalVolume) *ateapipb.ExternalVolume_Status {
-				return &oldObj.Status
-			})
-		errs = append(errs, fn(fldPath.Child("status"), &obj.Status, oldVal, oldObj != nil)...)
-	}
-
 	{ // field ateapipb.ExternalVolume.VolumeContext
 		fn := func(
 			fldPath *field.Path,
@@ -7392,6 +7358,10 @@ func Validate_SandboxRuntime(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// custom validation
+			if e := ValidateCustom_SandboxRuntime_SandboxClass(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 63); len(e) != 0 {
 				errs = append(errs, e...)
 			}
@@ -9932,6 +9902,10 @@ func Validate_Worker(
 			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_Worker_SandboxClass(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 63); len(e) != 0 {
 				errs = append(errs, e...)

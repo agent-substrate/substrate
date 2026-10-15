@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -134,14 +135,141 @@ func TestMintAteomActorJwt_Errors(t *testing.T) {
 			Audiences: []string{"snapshot-plugin"},
 		}
 	}
+	const otherActorUID = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+	// onWorker is an actor status naming worker-1, which runs on node-1.
+	onWorker := func(state ateapipb.ActorState) *ateapipb.ActorStatus {
+		return &ateapipb.ActorStatus{State: state, WorkerAssignment: &ateapipb.WorkerAssignment{Worker: &ateapipb.ObjectRef{Name: "worker-1"}}}
+	}
+	// pausingOnWorker is a pause in progress: SUSPENDING on worker-1 with a
+	// latest snapshot that is node-local and not yet captured.
+	pausingOnWorker := func() *ateapipb.ActorStatus {
+		status := onWorker(ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
+		status.AssignedNode = "node-1"
+		status.LastAssignedGeneration = 1
+		status.Snapshots = []*ateapipb.Snapshot{{Uuid: "snap-1", Generation: 1, Owner: ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR}}
+		return status
+	}
+	released := map[string]string{}
+	rebooked := map[string]string{otherActorUID: "worker-1"}
 	tests := []struct {
 		name   string
 		ctx    context.Context
 		mutate func(*ateapipb.MintAteomActorJwtRequest)
 		// status, when set, replaces the actor's status for the case.
 		status *ateapipb.ActorStatus
-		want   codes.Code
+		// assignments, when set, replaces the store's worker assignments
+		// (actor UID to worker) for the case. By default worker-1 holds the
+		// actor.
+		assignments map[string]string
+		// assignmentErr, when set, fails the store's worker assignment
+		// lookup.
+		assignmentErr error
+		want          codes.Code
 	}{
+		{
+			name:   "running actor on its worker's node",
+			ctx:    authed,
+			status: onWorker(ateapipb.ActorState_ACTOR_STATE_RUNNING),
+			want:   codes.OK,
+		},
+		{
+			name:   "resuming actor on its worker's node",
+			ctx:    authed,
+			status: onWorker(ateapipb.ActorState_ACTOR_STATE_RESUMING),
+			want:   codes.OK,
+		},
+		{
+			// Suspending a running actor uploads its checkpoint from its worker.
+			name:   "running actor being suspended on its worker's node",
+			ctx:    authed,
+			status: onWorker(ateapipb.ActorState_ACTOR_STATE_SUSPENDING),
+			want:   codes.OK,
+		},
+		{
+			name:   "running actor being paused on its worker's node",
+			ctx:    authed,
+			status: pausingOnWorker(),
+			want:   codes.OK,
+		},
+		{
+			// Pause, suspend and crash release the worker before they clear the
+			// actor's status, which keeps naming the worker until they do.
+			name:        "running actor whose worker was released",
+			ctx:         authed,
+			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_RUNNING),
+			assignments: released,
+			want:        codes.NotFound,
+		},
+		{
+			// A resume that finds its worker ineligible releases it, then
+			// crashes the actor.
+			name:        "resuming actor whose worker was released",
+			ctx:         authed,
+			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_RESUMING),
+			assignments: released,
+			want:        codes.NotFound,
+		},
+		{
+			name:        "suspending actor whose worker was released",
+			ctx:         authed,
+			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_SUSPENDING),
+			assignments: released,
+			want:        codes.NotFound,
+		},
+		{
+			name:        "pausing actor whose worker was released",
+			ctx:         authed,
+			status:      pausingOnWorker(),
+			assignments: released,
+			want:        codes.NotFound,
+		},
+		{
+			// The released worker took another actor. Its node hosts that one,
+			// not this one.
+			name:        "running actor whose worker was rebooked for another actor",
+			ctx:         authed,
+			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_RUNNING),
+			assignments: rebooked,
+			want:        codes.NotFound,
+		},
+		{
+			name:        "resuming actor whose worker was rebooked for another actor",
+			ctx:         authed,
+			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_RESUMING),
+			assignments: rebooked,
+			want:        codes.NotFound,
+		},
+		{
+			name:        "suspending actor whose worker was rebooked for another actor",
+			ctx:         authed,
+			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_SUSPENDING),
+			assignments: rebooked,
+			want:        codes.NotFound,
+		},
+		{
+			name:        "pausing actor whose worker was rebooked for another actor",
+			ctx:         authed,
+			status:      pausingOnWorker(),
+			assignments: rebooked,
+			want:        codes.NotFound,
+		},
+		{
+			// The store binds the actor to a different worker than its status
+			// names, so the status's worker does not host it.
+			name:        "actor held by a worker other than the one its status names",
+			ctx:         authed,
+			status:      onWorker(ateapipb.ActorState_ACTOR_STATE_RUNNING),
+			assignments: map[string]string{actor.GetMetadata().GetUid(): "worker-2"},
+			want:        codes.NotFound,
+		},
+		{
+			// A failed lookup refuses the mint rather than trusting the status.
+			name:          "worker assignment lookup fails",
+			ctx:           authed,
+			status:        onWorker(ateapipb.ActorState_ACTOR_STATE_RUNNING),
+			assignmentErr: errors.New("connection reset"),
+			want:          codes.Internal,
+		},
 		{
 			name: "unauthenticated",
 			ctx:  ateletauthtest.ContextWith(nil),
@@ -258,12 +386,18 @@ func TestMintAteomActorJwt_Errors(t *testing.T) {
 		},
 	}
 	hostedStatus := actor.GetStatus()
+	hostedAssignments := st.assignments
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			actor.Status = hostedStatus
 			if tc.status != nil {
 				actor.Status = tc.status
 			}
+			st.assignments = hostedAssignments
+			if tc.assignments != nil {
+				st.assignments = tc.assignments
+			}
+			st.assignmentErr = tc.assignmentErr
 			req := valid()
 			if tc.mutate != nil {
 				tc.mutate(req)
