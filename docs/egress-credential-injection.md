@@ -162,8 +162,9 @@ Concurrent requests that need the same token share one mint.
 | Request decided by an `http` or `https` rule, does not carry the header | Forwarded unchanged; no credential is fetched |
 | Request decided by an `http` or `https` rule, carries the header, no provider configured (`--credential-provider='{"enabled":false}'`) | **500** (Envoy) or **403** (agentgateway), fail closed |
 | Secret missing, or namespace not authorized for the atespace | **403**, fail closed |
-| Provider unreachable or timed out | **503**, fail closed but retryable |
-| Provider returns an empty credential, or one containing control characters | **503**, fail closed |
+| Provider unreachable, timed out or overloaded | **503**, fail closed but retryable |
+| Provider fails with any other code, such as `Internal` or `Unimplemented` | **502**, fail closed |
+| Provider returns an empty credential, or one containing control characters | **502**, fail closed |
 | URI names a provider class this gateway does not serve; unusable header name; unparseable URI | **500** (Envoy) or **403** (agentgateway), fail closed |
 | Request decided by an `http` or `https` rule, carries the header of an `actorJwt` entry, mint succeeds | Header value replaced with the prefix and the actor's JWT, with or without a provider |
 | `actorJwt` entry, the actor no longer exists | **403**, fail closed |
@@ -334,9 +335,10 @@ A provider should:
   the provider's decision.
 
 **Status codes.** The gateway maps a `FetchSecret` failure onto the actor's
-request: `NotFound` and `PermissionDenied` deny with 403 (retrying cannot
-succeed); `Unavailable` and `DeadlineExceeded` fail closed with a retryable
-503; any other code denies with 403.
+request: `NotFound`, `PermissionDenied`, `FailedPrecondition` and
+`InvalidArgument` deny with 403 (retrying cannot succeed); `Unavailable`,
+`DeadlineExceeded` and `ResourceExhausted` fail closed with a retryable 503;
+any other code is a provider fault and fails closed with 502.
 
 ### The reference provider
 

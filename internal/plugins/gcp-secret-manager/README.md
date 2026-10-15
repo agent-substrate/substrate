@@ -71,7 +71,7 @@ gateway sets no deadline of its own and Envoy abandons the request after its 5s
 ext_proc message timeout, so keep the flag below that.
 
 The gateway answers `Unavailable` and `DeadlineExceeded` with a retryable 503
-and every other code with a 403:
+and the other codes below with a 403:
 
 | Condition | Code |
 |---|---|

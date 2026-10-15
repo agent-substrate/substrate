@@ -225,17 +225,54 @@ func TestInjectionDenials(t *testing.T) {
 			want:         envoy_type.StatusCode_Forbidden,
 		},
 		{
-			// An unclassified error denies rather than inviting retries.
-			name:         "unexpected provider error denies",
-			provider:     &fakeProvider{err: errors.New("provider down")},
+			name:         "precondition failure denies as non-retryable",
+			provider:     &fakeProvider{err: status.Error(codes.FailedPrecondition, "secret not ready")},
 			providerName: injectionProviderName,
 			want:         envoy_type.StatusCode_Forbidden,
 		},
 		{
-			name:         "empty secret fails closed",
-			provider:     &fakeProvider{resp: bearerTokenResponse("")},
+			name:         "URI the provider rejects denies as non-retryable",
+			provider:     &fakeProvider{err: status.Error(codes.InvalidArgument, "malformed URI")},
+			providerName: injectionProviderName,
+			want:         envoy_type.StatusCode_Forbidden,
+		},
+		{
+			name:         "provider overloaded is retryable",
+			provider:     &fakeProvider{err: status.Error(codes.ResourceExhausted, "quota")},
 			providerName: injectionProviderName,
 			want:         envoy_type.StatusCode_ServiceUnavailable,
+		},
+		{
+			// A provider fault is not a refusal, so it is not a 403.
+			name:         "provider internal error is a bad gateway",
+			provider:     &fakeProvider{err: status.Error(codes.Internal, "bug")},
+			providerName: injectionProviderName,
+			want:         envoy_type.StatusCode_BadGateway,
+		},
+		{
+			name:         "provider without FetchSecret is a bad gateway",
+			provider:     &fakeProvider{err: status.Error(codes.Unimplemented, "no FetchSecret")},
+			providerName: injectionProviderName,
+			want:         envoy_type.StatusCode_BadGateway,
+		},
+		{
+			name:         "unclassified provider error is a bad gateway",
+			provider:     &fakeProvider{err: errors.New("provider down")},
+			providerName: injectionProviderName,
+			want:         envoy_type.StatusCode_BadGateway,
+		},
+		{
+			// The provider answered, so a retry cannot help.
+			name:         "empty secret is a bad gateway",
+			provider:     &fakeProvider{resp: bearerTokenResponse("")},
+			providerName: injectionProviderName,
+			want:         envoy_type.StatusCode_BadGateway,
+		},
+		{
+			name:         "secret with a control character is a bad gateway",
+			provider:     &fakeProvider{resp: bearerTokenResponse("a\x00b")},
+			providerName: injectionProviderName,
+			want:         envoy_type.StatusCode_BadGateway,
 		},
 	}
 	for _, leg := range []string{extproc.EgressTLSMITMFilterChainName, extproc.EgressCleartextFilterChainName} {
