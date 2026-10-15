@@ -109,8 +109,8 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 	}
 }
 
-// Both shapers leave the process identity as Build set it.
-func TestShapers_PreserveProcessUser(t *testing.T) {
+// Both shapers leave the process identity and cwd as Build set them.
+func TestShapers_PreserveProcess(t *testing.T) {
 	for _, tc := range []struct {
 		runtime string
 		shape   func(*specs.Spec) error
@@ -130,6 +130,7 @@ func TestShapers_PreserveProcessUser(t *testing.T) {
 			opts := parityOptions
 			opts.Container = proto.Clone(parityOptions.Container).(*ateworkerpb.Container)
 			opts.Container.ContainerSpec.User = &ateworkerpb.ProcessUser{Uid: 65532, Gid: 65534, AdditionalGids: []uint32{44}}
+			opts.Container.ContainerSpec.Cwd = "/work"
 			spec := Build(opts)
 			if err := tc.shape(spec); err != nil {
 				t.Fatalf("shaping the spec: %v", err)
@@ -137,6 +138,9 @@ func TestShapers_PreserveProcessUser(t *testing.T) {
 			want := specs.User{UID: 65532, GID: 65534, AdditionalGids: []uint32{44}}
 			if !reflect.DeepEqual(spec.Process.User, want) {
 				t.Errorf("Process.User = %+v after shaping, want %+v", spec.Process.User, want)
+			}
+			if spec.Process.Cwd != "/work" {
+				t.Errorf("Process.Cwd = %q after shaping, want /work", spec.Process.Cwd)
 			}
 		})
 	}

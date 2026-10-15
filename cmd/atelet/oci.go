@@ -80,7 +80,10 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 	return out
 }
 
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) (*imagecache.Image, error) {
+// prepareOCIDirectory pulls the container's image and writes the overlay spec
+// the worker composes its rootfs from. It returns the image and the process's
+// working directory, which the worker creates through the overlay.
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) (*imagecache.Image, string, error) {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -93,7 +96,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	// actordirs.ResetActorDirs already wiped the bundle dir on the Run/Restore
 	// path).
 	if err := imagecache.RemoveAllWritable(bundlePath); err != nil {
-		return nil, fmt.Errorf("while clearing bundle %q: %w", bundlePath, err)
+		return nil, "", fmt.Errorf("while clearing bundle %q: %w", bundlePath, err)
 	}
 
 	// The bundle's rootfs is composed by worker as an overlay mount just before
@@ -104,7 +107,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	// it deliberately runs with no capabilities, so it cannot mount.
 	for _, d := range []string{"rootfs", "upper", "work"} {
 		if err := os.MkdirAll(path.Join(bundlePath, d), 0o700); err != nil {
-			return nil, fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)
+			return nil, "", fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)
 		}
 	}
 
@@ -126,15 +129,22 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		return err
 	})
 	if err := g.Wait(); err != nil {
-		return nil, err
+		return nil, "", err
+	}
+	cwd, err := resolveCwd(&img.Config)
+	if err != nil {
+		return nil, "", fmt.Errorf("while resolving the working directory of container %q: %w", containerName, err)
 	}
 
-	// Every bind target must exist in the rootfs for the mount to attach;
-	// worker creates them through the mounted overlay (they land in the
-	// actor's upper).
+	// Every bind target must exist in the rootfs for the mount to attach, and
+	// the working directory for the process to start; worker creates them
+	// through the mounted overlay (they land in the actor's upper).
 	var extraDirs []string
 	for _, vm := range volumeMounts {
 		extraDirs = append(extraDirs, vm.GetMountPath())
+	}
+	if cwd != "/" {
+		extraDirs = append(extraDirs, cwd)
 	}
 	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
 		ImageDigest:  img.Digest.String(),
@@ -142,10 +152,22 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		ExtraDirs:    extraDirs,
 		ImageVolumes: imageVolumes,
 	}); err != nil {
-		return nil, fmt.Errorf("while writing overlay spec: %w", err)
+		return nil, "", fmt.Errorf("while writing overlay spec: %w", err)
 	}
 
-	return img, nil
+	return img, cwd, nil
+}
+
+// resolveCwd reads the image's WORKDIR; none means "/". The OCI spec requires
+// an absolute path.
+func resolveCwd(imageCfg *v1.Config) (string, error) {
+	if imageCfg == nil || imageCfg.WorkingDir == "" {
+		return "/", nil
+	}
+	if !path.IsAbs(imageCfg.WorkingDir) {
+		return "", fmt.Errorf("image WorkingDir %q is not absolute", imageCfg.WorkingDir)
+	}
+	return path.Clean(imageCfg.WorkingDir), nil
 }
 
 // resolveImageVolumes pulls the image behind every image-typed volume this
