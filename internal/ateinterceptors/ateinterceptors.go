@@ -22,6 +22,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -34,7 +35,8 @@ const ServerElapsedTrailer = "x-server-elapsed-us"
 
 // ServerUnaryInterceptor is for ateapi. A handler's error reaches the caller
 // with the code apierror gives it; any other error, including a status received
-// from an upstream service, is Internal.
+// from an upstream service, is Internal with an opaque message. The original
+// error is logged; a valid trace ID links the caller's error to that log.
 //
 // Request and response bodies are logged as they are: redaction of debug_redact
 // fields happens in the shared slog handler (internal/contextlogging) that
@@ -68,7 +70,10 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 		if st, ok := apierror.FromError(err); ok {
 			return nil, st.Err()
 		}
-		return nil, status.Errorf(codes.Internal, "internal server error: %v", err)
+		if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+			return nil, status.Errorf(codes.Internal, "internal server error (trace_id: %s)", sc.TraceID())
+		}
+		return nil, status.Error(codes.Internal, "internal server error")
 	}
 
 	return resp, err

@@ -16,6 +16,7 @@ package ateinterceptors
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	"go.opentelemetry.io/otel/trace"
 	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -54,13 +56,13 @@ func TestStatusErrorInterceptor(t *testing.T) {
 			name:       "WrappedStatusBecomesInternal",
 			handlerErr: fmt.Errorf("outer error: %w", status.Error(codes.NotFound, "actor not found")),
 			wantCode:   codes.Internal,
-			wantMsg:    "internal server error: outer error: rpc error: code = NotFound desc = actor not found",
+			wantMsg:    "internal server error",
 		},
 		{
 			name:       "RawErrorFallback",
 			handlerErr: errors.New("database connection failed"),
 			wantCode:   codes.Internal,
-			wantMsg:    "internal server error: database connection failed",
+			wantMsg:    "internal server error",
 		},
 		{
 			name:       "APIErrorInChain",
@@ -115,6 +117,46 @@ func TestStatusErrorInterceptor(t *testing.T) {
 
 			if st.Message() != tt.wantMsg {
 				t.Errorf("expected message %q, got %q", tt.wantMsg, st.Message())
+			}
+		})
+	}
+}
+
+func TestServerUnaryInterceptorUnexpectedErrorDiagnostics(t *testing.T) {
+	const backendMessage = "database connection to 10.0.0.7:5432 failed"
+	sc := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1},
+		SpanID:  trace.SpanID{2},
+	})
+	for _, traced := range []bool{false, true} {
+		t.Run(strconv.FormatBool(traced), func(t *testing.T) {
+			log := captureDefaultLog(t)
+			ctx := t.Context()
+			wantMessage := "internal server error"
+			if traced {
+				ctx = trace.ContextWithSpanContext(ctx, sc)
+				wantMessage += " (trace_id: " + sc.TraceID().String() + ")"
+			}
+			backendErr := fmt.Errorf("while loading actor: %w", errors.New(backendMessage))
+			resp, err := ServerUnaryInterceptor(ctx, "request", &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, func(context.Context, any) (any, error) {
+				return nil, backendErr
+			})
+			st := status.Convert(err)
+			if resp != nil || st.Code() != codes.Internal || st.Message() != wantMessage {
+				t.Fatalf("response = %v, status = %v; want nil, Internal %q", resp, st, wantMessage)
+			}
+			var record struct {
+				Error   string `json:"err"`
+				TraceID string `json:"trace_id"`
+			}
+			if err := json.Unmarshal(log.Bytes(), &record); err != nil {
+				t.Fatalf("decode log: %v", err)
+			}
+			if record.Error != backendErr.Error() {
+				t.Errorf("logged error = %q, want %q", record.Error, backendErr)
+			}
+			if traced && record.TraceID != sc.TraceID().String() {
+				t.Errorf("logged trace ID = %q, want %q", record.TraceID, sc.TraceID())
 			}
 		})
 	}
