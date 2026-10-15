@@ -38,7 +38,27 @@ const (
 	// parZstdQueue is how many chunks may be outstanding per worker, so the producer
 	// can run ahead while workers compress.
 	parZstdQueue = 2
+	// parZstdMinChunk is the floor for a right-sized chunk. Below this the frame
+	// headers start to cost more than the buffer saves.
+	parZstdMinChunk = 64 << 10
+	// parZstdChunkSlack covers the size header and per-extent headers that
+	// writeSparseZstd writes alongside the payload, so an input that just fits
+	// still lands in one frame.
+	parZstdChunkSlack = 4 << 10
 )
+
+// chunkFor sizes a frame for an input of n bytes. A small input gets a small
+// buffer rather than a full parZstdChunk one (#2553).
+func chunkFor(n int64) int {
+	want := n + parZstdChunkSlack
+	if want >= parZstdChunk {
+		return parZstdChunk
+	}
+	if want < parZstdMinChunk {
+		return parZstdMinChunk
+	}
+	return int(want)
+}
 
 // parZstd is an io.WriteCloser that compresses what it is given as parallel zstd
 // frames, written to dst in order. Close flushes the tail and reports the first
@@ -47,7 +67,12 @@ type parZstd struct {
 	dst     io.Writer
 	workers int
 
-	buf     []byte
+	chunk int
+	buf   []byte
+	// free returns used buffers; quota holds one token per buffer that may still
+	// be created. Buffers are allocated on demand, so a small input never
+	// reserves the whole pool.
+	quota   chan struct{}
 	free    chan []byte
 	jobs    chan parZstdJob
 	ordered chan chan []byte
@@ -60,28 +85,54 @@ type parZstdJob struct {
 	out chan []byte
 }
 
-// newParZstd starts the worker pool, capped at GOMAXPROCS (workers <= 0 asks for it).
-func newParZstd(dst io.Writer, workers int) *parZstd {
+// newParZstd starts the worker pool, capped at GOMAXPROCS (workers <= 0 asks for
+// it). chunk is the per-frame size; it is clamped to parZstdChunk, and a caller
+// that knows its input is smaller should pass chunkFor(size) so a small object
+// does not reserve a full-size buffer.
+func newParZstd(dst io.Writer, workers, chunk int) *parZstd {
 	if workers <= 0 || workers > runtime.GOMAXPROCS(0) {
 		workers = runtime.GOMAXPROCS(0)
+	}
+	if chunk <= 0 || chunk > parZstdChunk {
+		chunk = parZstdChunk
 	}
 	p := &parZstd{
 		dst:     dst,
 		workers: workers,
+		chunk:   chunk,
+		quota:   make(chan struct{}, workers*parZstdQueue),
 		free:    make(chan []byte, workers*parZstdQueue),
 		jobs:    make(chan parZstdJob, workers),
 		ordered: make(chan chan []byte, workers*parZstdQueue),
 		done:    make(chan struct{}),
 	}
+	// One token per buffer the pool is allowed to hold. The buffers themselves
+	// are created only when a chunk actually needs one.
 	for range workers * parZstdQueue {
-		p.free <- make([]byte, 0, parZstdChunk)
+		p.quota <- struct{}{}
 	}
 	for range workers {
 		go p.worker()
 	}
 	go p.writer()
-	p.buf = <-p.free
+	p.buf = p.getBuf()
 	return p
+}
+
+// getBuf takes a recycled buffer if one is waiting, otherwise creates one while
+// the pool is still under its cap, otherwise waits for a worker to return one.
+func (p *parZstd) getBuf() []byte {
+	select {
+	case b := <-p.free:
+		return b
+	default:
+	}
+	select {
+	case b := <-p.free:
+		return b
+	case <-p.quota:
+		return make([]byte, 0, p.chunk)
+	}
 }
 
 // worker compresses whole chunks. Each holds its own encoder: the encoders are
@@ -134,7 +185,7 @@ func (p *parZstd) flush() {
 	out := make(chan []byte, 1)
 	p.ordered <- out
 	p.jobs <- parZstdJob{buf: p.buf, out: out}
-	p.buf = <-p.free
+	p.buf = p.getBuf()
 }
 
 func (p *parZstd) Close() error {

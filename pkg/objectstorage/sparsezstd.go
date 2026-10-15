@@ -78,8 +78,10 @@ func writeSparseZstd(dst io.Writer, src *os.File) (logical, dataBytes int64, err
 		return 0, 0, err
 	}
 
-	// One worker per chunk the file can fill, so a small object does not pay for a pool.
-	zw := newParZstd(dst, int(size/parZstdChunk)+1)
+	// One worker per chunk the file can fill, so a small object does not pay for a
+	// pool, and a chunk no larger than the file so a small object does not reserve
+	// a full-size buffer either (#2553).
+	zw := newParZstd(dst, int(size/parZstdChunk)+1, chunkFor(size))
 	// fail closes the encoder before returning err (Close flushes/frees state).
 	fail := func(e error) (int64, int64, error) {
 		zw.Close()

@@ -78,6 +78,15 @@ func TestSparseZstdRoundTrip(t *testing.T) {
 		{"multi-extent", 8 * M, []region{
 			{0, 4096, 0x44}, {2 * M, 100000, 0x55}, {5 * M, 8192, 0x66},
 		}},
+		// Sizes where chunkFor changes the frame it picks (#2553): either side
+		// of the floor, either side of a full chunk, and past one chunk.
+		{"tiny-metadata-file", 36, []region{{0, 36, 0x77}}},
+		{"just-under-min-chunk", parZstdMinChunk - 1, []region{{0, parZstdMinChunk - 1, 0x88}}},
+		{"exactly-min-chunk", parZstdMinChunk, []region{{0, parZstdMinChunk, 0x99}}},
+		{"just-under-full-chunk", parZstdChunk - parZstdChunkSlack - 1, []region{{0, parZstdChunk - parZstdChunkSlack - 1, 0xAA}}},
+		{"exactly-full-chunk", parZstdChunk, []region{{0, parZstdChunk, 0xBB}}},
+		{"just-over-full-chunk", parZstdChunk + 1, []region{{0, parZstdChunk + 1, 0xCC}}},
+		{"spans-several-chunks", 2*parZstdChunk + 12345, []region{{0, 2*parZstdChunk + 12345, 0xDD}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
