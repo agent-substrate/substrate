@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -283,7 +284,7 @@ func TestApplyActorSnapshotState(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := applyActorSnapshotState(tt.status, reportNode, tt.state)
+			err := applyActorSnapshotState(context.Background(), tt.status, reportNode, tt.state)
 			if tt.wantCode != codes.OK {
 				if got := apierror.Code(err); got != tt.wantCode {
 					t.Fatalf("applyActorSnapshotState() error = %v, want code %v", err, tt.wantCode)
@@ -295,6 +296,86 @@ func TestApplyActorSnapshotState(t *testing.T) {
 			}
 			if diff := cmp.Diff(tt.want, tt.status, protocmp.Transform()); diff != "" {
 				t.Errorf("status mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// A reported durable snapshot older than the latest COMPLETED one, or at a
+// generation status no longer has, is logged at Info, once, with the
+// generation it named. A repeat of the latest, and one that is applied, aren't
+// logged.
+func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
+	const (
+		pending   = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+		completed = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	)
+	tests := []struct {
+		name      string
+		status    *ateapipb.ActorStatus
+		gen       int32
+		wantMsg   string
+		wantAttrs map[string]string
+	}{{
+		name: "below the latest COMPLETED generation",
+		status: &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 1, reportNode, pending),
+			withDurable(t, 2, reportNode, completed),
+		}},
+		gen:       1,
+		wantMsg:   msgDurableOlder,
+		wantAttrs: map[string]string{"generation": "1", "uuid": snapName(1), "latest_completed_generation": "2"},
+	}, {
+		name: "a generation status no longer has",
+		status: &ateapipb.ActorStatus{LastAssignedGeneration: 3, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 3, reportNode, pending),
+		}},
+		gen:       2,
+		wantMsg:   msgDurableNotRecorded,
+		wantAttrs: map[string]string{"generation": "2", "uuid": snapName(2)},
+	}, {
+		name: "the latest COMPLETED generation itself",
+		status: &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, reportNode, completed),
+		}},
+		gen: 2,
+	}, {
+		name: "applied",
+		status: &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, reportNode, pending),
+		}},
+		gen: 2,
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			type logged struct {
+				msg   string
+				attrs map[string]string
+			}
+			var got []logged
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slogHandlerFunc(func(r slog.Record) {
+				if r.Message != msgDurableOlder && r.Message != msgDurableNotRecorded {
+					return
+				}
+				l := logged{msg: r.Message, attrs: map[string]string{}}
+				r.Attrs(func(a slog.Attr) bool {
+					l.attrs[a.Key] = a.Value.String()
+					return true
+				})
+				got = append(got, l)
+			})))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			if err := applyLatestDurable(context.Background(), tt.status, reported(t, tt.gen)); err != nil {
+				t.Fatalf("applyLatestDurable() error = %v", err)
+			}
+			var want []logged
+			if tt.wantMsg != "" {
+				want = []logged{{msg: tt.wantMsg, attrs: tt.wantAttrs}}
+			}
+			if diff := cmp.Diff(want, got, cmp.AllowUnexported(logged{})); diff != "" {
+				t.Errorf("logged records mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

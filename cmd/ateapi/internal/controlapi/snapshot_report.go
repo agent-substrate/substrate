@@ -70,7 +70,7 @@ func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef
 	}
 
 	applied := proto.Clone(before).(*ateapipb.Actor)
-	if err := applyActorSnapshotState(applied.GetStatus(), node, state); err != nil {
+	if err := applyActorSnapshotState(leaseCtx, applied.GetStatus(), node, state); err != nil {
 		return err
 	}
 	if proto.Equal(applied.GetStatus(), before.GetStatus()) {
@@ -132,11 +132,17 @@ func actorOnNode(actor *ateapipb.Actor, node string) bool {
 	return false
 }
 
+// Messages logged for a reported durable snapshot that changes nothing.
+const (
+	msgDurableOlder       = "Ignoring a durable snapshot older than the latest completed one"
+	msgDurableNotRecorded = "Ignoring a durable snapshot at a generation the actor no longer records"
+)
+
 // applyActorSnapshotState applies the two facts a report carries: an upload
 // finished, and the atelet on node detached the Actor. A report with neither
 // latest_local nor uploading is a detach.
-func applyActorSnapshotState(status *ateapipb.ActorStatus, node string, state *ateapipb.ActorSnapshotState) error {
-	if err := applyLatestDurable(status, state.GetLatestDurable()); err != nil {
+func applyActorSnapshotState(ctx context.Context, status *ateapipb.ActorStatus, node string, state *ateapipb.ActorSnapshotState) error {
+	if err := applyLatestDurable(ctx, status, state.GetLatestDurable()); err != nil {
 		return err
 	}
 	if state.GetLatestLocal() == nil && state.GetUploading() == nil {
@@ -149,17 +155,27 @@ func applyActorSnapshotState(status *ateapipb.ActorStatus, node string, state *a
 // the fidelity from its manifest. Its uuid and upload URI must match the
 // recorded ones. A generation at or below the latest COMPLETED one changes
 // nothing, and so does one status no longer has, such as one a revert
-// discarded.
-func applyLatestDurable(status *ateapipb.ActorStatus, reported *ateapipb.SnapshotReport) error {
+// discarded. A late report is expected, so an older generation and a
+// discarded one are logged at Info. A repeat of the latest isn't logged.
+func applyLatestDurable(ctx context.Context, status *ateapipb.ActorStatus, reported *ateapipb.SnapshotReport) error {
 	if reported == nil {
 		return nil
 	}
 	if latest := findLatestDurableSnapshot(status, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); latest.GetGeneration() >= reported.GetGeneration() {
+		if latest.GetGeneration() > reported.GetGeneration() {
+			slog.InfoContext(ctx, msgDurableOlder,
+				slog.Int("generation", int(reported.GetGeneration())),
+				slog.String("uuid", reported.GetUuid()),
+				slog.Int("latest_completed_generation", int(latest.GetGeneration())))
+		}
 		return nil
 	}
 	snap := findSnapshotByGeneration(status.GetSnapshots(), reported.GetGeneration())
 	if snap == nil {
 		if reported.GetGeneration() <= status.GetLastAssignedGeneration() {
+			slog.InfoContext(ctx, msgDurableNotRecorded,
+				slog.Int("generation", int(reported.GetGeneration())),
+				slog.String("uuid", reported.GetUuid()))
 			return nil
 		}
 		return apierror.FailedPrecondition("snapshot generation %d (%s) is not recorded for this actor", reported.GetGeneration(), reported.GetUuid())
