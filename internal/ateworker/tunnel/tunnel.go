@@ -30,9 +30,9 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateletdial"
-	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/atunnel/dns"
 	"github.com/agent-substrate/substrate/internal/atunnel/egress"
+	"github.com/agent-substrate/substrate/internal/atunnel/ingress"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/nodepath"
@@ -95,7 +95,7 @@ func RegisterFlags(fs FlagSet) *Config {
 // Tunnel is the atunnel state one worker shares across its actors.
 type Tunnel struct {
 	// Ingress proxies router traffic to the active actors.
-	Ingress *atunnel.Server
+	Ingress *ingress.Server
 	// Egress tunnels the active actors' outbound TCP to the egress gateway.
 	Egress *egress.Proxy
 	// EgressPort is the local atunnel listener used as the target of the
@@ -131,7 +131,7 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 	}
 
 	// Ingress
-	ingress, err := atunnel.NewServer(atunnel.Config{
+	ingressServer, err := ingress.NewServer(ingress.Config{
 		CredentialBundlePath: cfg.CredentialBundle,
 		TrustBundlePath:      cfg.TrustBundle,
 		AllowedClientID:      cfg.ClientIdentity,
@@ -140,10 +140,10 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configuring ingress: %w", err)
 	}
-	if err := serve(ctx, "atunnel", cfg.ListenAddress, ingress.Serve); err != nil {
+	if err := serve(ctx, "atunnel", cfg.ListenAddress, ingressServer.Serve); err != nil {
 		return nil, err
 	}
-	if err := serve(ctx, "atunnel CONNECT", cfg.ConnectListenAddress, ingress.ServeConnect); err != nil {
+	if err := serve(ctx, "atunnel CONNECT", cfg.ConnectListenAddress, ingressServer.ServeConnect); err != nil {
 		return nil, err
 	}
 
@@ -158,7 +158,7 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 	}
 
 	return &Tunnel{
-			Ingress:    ingress,
+			Ingress:    ingressServer,
 			Egress:     egressProxy,
 			EgressPort: egressPort,
 			DNSRelay:   dnsRelay,
@@ -237,7 +237,7 @@ func (t *Tunnel) PrepareEgress(ctx context.Context, actor resources.ActorAttribu
 
 // Activate starts admitting the actor's traffic. Ingress reaches the actor
 // through dial; egress is activated only when it was prepared.
-func (t *Tunnel) Activate(actor resources.ActorAttribution, dial atunnel.DialFunc, actorEgress *ActorEgress) error {
+func (t *Tunnel) Activate(actor resources.ActorAttribution, dial ingress.DialFunc, actorEgress *ActorEgress) error {
 	if err := t.Ingress.Activate(actor.Ref.Atespace, actor.Ref.Name, actor.UID, dial); err != nil {
 		return fmt.Errorf("while activating actor ingress: %w", err)
 	}

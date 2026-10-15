@@ -36,7 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/atunnel"
+	atunnelingress "github.com/agent-substrate/substrate/internal/atunnel/ingress"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -441,7 +441,7 @@ func TestHandleRequestHeaders(t *testing.T) {
 			for _, headerOption := range mutation.GetSetHeaders() {
 				gotMutations[strings.ToLower(headerOption.Header.Key)] = string(headerOption.Header.RawValue)
 			}
-			if _, ok := gotMutations[strings.ToLower(atunnel.TargetPortHeader)]; ok {
+			if _, ok := gotMutations[strings.ToLower(atunnelingress.TargetPortHeader)]; ok {
 				t.Errorf("target port must be emitted only as dynamic metadata")
 			}
 			if got, want := gotMutations[strings.ToLower(atenet.TargetActorHeader)], "team-a/"+testUUID; got != want {
@@ -463,7 +463,7 @@ func TestHandleRequestHeaders(t *testing.T) {
 // produces the same "<workerIP>:443" original-dst mutation as an ordinary
 // request (the router only ever dials the worker's atunnel server), and
 // reports the arbitrary port itself in dynamic metadata for Envoy to write to
-// atunnel.TargetPortHeader.
+// atunnelingress.TargetPortHeader.
 func TestHandleRequestHeadersHandlesConnectMethod(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 	authority := testUUID + ".team-a.actors.resources.substrate.ate.dev:9090"

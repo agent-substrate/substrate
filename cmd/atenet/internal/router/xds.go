@@ -73,7 +73,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
-	"github.com/agent-substrate/substrate/internal/atunnel"
+	atunnelingress "github.com/agent-substrate/substrate/internal/atunnel/ingress"
 )
 
 const (
@@ -409,7 +409,7 @@ func (x *XdsServer) SetUpstreamTls(credentialBundlePath, trustBundlePath, spiffe
 }
 
 // SetUpstreamConnect makes actor traffic reach atunnel through CONNECT tunnels
-// on atunnel.DefaultConnectPort, one per actor and port. It needs
+// on atunnelingress.DefaultConnectPort, one per actor and port. It needs
 // SetUpstreamTls, since that listener only accepts mTLS.
 func (x *XdsServer) SetUpstreamConnect(enabled bool) {
 	x.mu.Lock()
@@ -974,7 +974,7 @@ func (x *XdsServer) buildActorConnectCluster() *clusterv3.Cluster {
 		LbPolicy: clusterv3.Cluster_CLUSTER_PROVIDED,
 		LbConfig: &clusterv3.Cluster_OriginalDstLbConfig_{
 			OriginalDstLbConfig: &clusterv3.Cluster_OriginalDstLbConfig{
-				UpstreamPortOverride: wrapperspb.UInt32(atunnel.DefaultConnectPort),
+				UpstreamPortOverride: wrapperspb.UInt32(atunnelingress.DefaultConnectPort),
 			},
 		},
 		TransportSocket: x.buildUpstreamTransportSocket(),
@@ -1022,7 +1022,7 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 				RequestHeadersToAdd: []*corev3.HeaderValueOption{
 					{
 						Header: &corev3.HeaderValue{
-							Key: atunnel.TargetPortHeader,
+							Key: atunnelingress.TargetPortHeader,
 							Value: fmt.Sprintf("%%DYNAMIC_METADATA(%s:%s)%%",
 								ingress.OriginalDstMetadataKey, ingress.OriginalDstPortKey),
 						},
@@ -1577,7 +1577,7 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 	// gRPC requires a negotiated "h2"; http/1.1 keeps plain HTTPS clients
 	// working alongside it. HTTP/1.1-only actors are safe either way: atunnel
 	// downgrades every non-gRPC request to HTTP/1.1 on the actor leg (see
-	// atunnel.protocolMirrorTransport), so offering h2 at the edge cannot
+	// atunnelingress.protocolMirrorTransport), so offering h2 at the edge cannot
 	// change what an actor receives.
 	alpn := []string{"h2", "http/1.1"}
 

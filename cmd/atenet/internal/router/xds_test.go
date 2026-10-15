@@ -50,7 +50,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
-	"github.com/agent-substrate/substrate/internal/atunnel"
+	atunnelingress "github.com/agent-substrate/substrate/internal/atunnel/ingress"
 )
 
 func TestActorRoutingFilterStateFilter(t *testing.T) {
@@ -1172,7 +1172,7 @@ func TestXdsServer_BuildOriginalDstCluster_UsesMetadataKey(t *testing.T) {
 // TestXdsServer_ActorClusterProtocolOptions pins where downstream-protocol
 // mirroring is allowed: only on the mTLS atunnel leg, where atunnel guards
 // HTTP/1.1-only actors by downgrading non-gRPC HTTP/2 (see
-// atunnel.protocolMirrorTransport). The legacy plaintext cluster dials the
+// atunnelingress.protocolMirrorTransport). The legacy plaintext cluster dials the
 // actor directly with no such guard, so it must carry no protocol options at
 // all — Envoy's implicit HTTP/1.1.
 func TestXdsServer_ActorClusterProtocolOptions(t *testing.T) {
@@ -1229,7 +1229,7 @@ func TestXdsServer_BuildRoutesWritesTargetPortHeader(t *testing.T) {
 		t.Fatalf("route adds request headers %v, want exactly one", headers)
 	}
 	header := headers[0]
-	if got, want := header.GetHeader().GetKey(), atunnel.TargetPortHeader; got != want {
+	if got, want := header.GetHeader().GetKey(), atunnelingress.TargetPortHeader; got != want {
 		t.Errorf("header key = %q, want %q", got, want)
 	}
 	if got, want := header.GetHeader().GetValue(), "%DYNAMIC_METADATA(envoy.filters.listener.original_dst:port)%"; got != want {
@@ -1455,7 +1455,7 @@ func downstreamTLS(t *testing.T, raw any) *tlsv3.DownstreamTlsContext {
 // listener always offers h2 before http/1.1: gRPC over TLS requires a
 // negotiated "h2", and the offer is unconditional because atunnel downgrades
 // every non-gRPC request to HTTP/1.1 on the actor leg (see
-// atunnel.protocolMirrorTransport and TestProtocolMirrorTransport), so an
+// atunnelingress.protocolMirrorTransport and TestProtocolMirrorTransport), so an
 // HTTP/1.1-only actor cannot tell what the client negotiated at the edge. The
 // CONNECT-TLS listener stays ALPN-free: its clients speak HTTP/1.1 CONNECT,
 // and an h2 offer there would move them onto extended CONNECT the tunnel path

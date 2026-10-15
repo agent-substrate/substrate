@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package atunnel carries actor ingress and egress through a worker pod.
-package atunnel
+// Package ingress carries actor ingress through a worker pod.
+package ingress
 
 import (
 	"context"
@@ -104,16 +104,16 @@ type activation struct {
 // NewServer creates a Server and validates its TLS material.
 func NewServer(cfg Config) (*Server, error) {
 	if cfg.CredentialBundlePath == "" {
-		return nil, fmt.Errorf("atunnel: credential bundle path is required")
+		return nil, fmt.Errorf("ingress: credential bundle path is required")
 	}
 	if cfg.TrustBundlePath == "" {
-		return nil, fmt.Errorf("atunnel: trust bundle path is required")
+		return nil, fmt.Errorf("ingress: trust bundle path is required")
 	}
 	if cfg.AllowedClientID == "" {
-		return nil, fmt.Errorf("atunnel: allowed client identity is required")
+		return nil, fmt.Errorf("ingress: allowed client identity is required")
 	}
 	if cfg.Upstream == nil || cfg.Upstream.Scheme == "" || cfg.Upstream.Host == "" {
-		return nil, fmt.Errorf("atunnel: upstream URL is required")
+		return nil, fmt.Errorf("ingress: upstream URL is required")
 	}
 
 	// Load once at startup so a malformed or missing projection fails the pod
@@ -124,7 +124,7 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	loadClientCAs := credbundle.PoolLoader(cfg.TrustBundlePath)
 	if _, err := loadClientCAs(); err != nil {
-		return nil, fmt.Errorf("atunnel: loading trust bundle: %w", err)
+		return nil, fmt.Errorf("ingress: loading trust bundle: %w", err)
 	}
 
 	s := &Server{
@@ -137,14 +137,14 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	verifyConnection := func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {
-			return fmt.Errorf("atunnel: client certificate is required")
+			return fmt.Errorf("ingress: client certificate is required")
 		}
 		for _, uri := range cs.PeerCertificates[0].URIs {
 			if uri.String() == cfg.AllowedClientID {
 				return nil
 			}
 		}
-		return fmt.Errorf("atunnel: client is not %q", cfg.AllowedClientID)
+		return fmt.Errorf("ingress: client is not %q", cfg.AllowedClientID)
 	}
 	s.tlsConfig = &tls.Config{
 		MinVersion: tls.VersionTLS12,
@@ -271,11 +271,11 @@ func (t protocolMirrorTransport) CloseIdleConnections() {
 func loadCredentialBundle(path string) (*tls.Certificate, error) {
 	pemBytes, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("atunnel: reading credential bundle: %w", err)
+		return nil, fmt.Errorf("ingress: reading credential bundle: %w", err)
 	}
 	cert, err := tls.X509KeyPair(pemBytes, pemBytes)
 	if err != nil {
-		return nil, fmt.Errorf("atunnel: parsing credential bundle: %w", err)
+		return nil, fmt.Errorf("ingress: parsing credential bundle: %w", err)
 	}
 	return &cert, nil
 }
@@ -385,7 +385,7 @@ func (s *Server) serveH1Connect(w http.ResponseWriter, upstream net.Conn, ctx co
 		return
 	}
 
-	relayIngressWithHalfClose(ctx, log, upstream, rw, downstream, downstream)
+	relayWithHalfClose(ctx, log, upstream, rw, downstream, downstream)
 }
 
 func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream net.Conn, ctx context.Context, log *slog.Logger) {
@@ -397,14 +397,14 @@ func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream
 		return
 	}
 
-	relayIngressWithHalfClose(ctx, log, upstream, r.Body, flushingWriter{ResponseWriter: w}, r.Body)
+	relayWithHalfClose(ctx, log, upstream, r.Body, flushingWriter{ResponseWriter: w}, r.Body)
 }
 
-// relayIngressWithHalfClose copies a CONNECT stream between the router
+// relayWithHalfClose copies a CONNECT stream between the router
 // (downstream) and the actor (upstream). It half-closes the actor connection
 // when the router stops sending, and closes the downstream when the actor
 // does, so a router that reuses tunnels doesn't send into a dead one.
-func relayIngressWithHalfClose(ctx context.Context, log *slog.Logger, upstream net.Conn, downstreamReader io.Reader, downstreamWriter io.Writer, downstreamCloser io.Closer) {
+func relayWithHalfClose(ctx context.Context, log *slog.Logger, upstream net.Conn, downstreamReader io.Reader, downstreamWriter io.Writer, downstreamCloser io.Closer) {
 	start := time.Now()
 	go func() {
 		n, err := io.Copy(upstream, downstreamReader)
@@ -446,10 +446,10 @@ func (w flushingWriter) Write(p []byte) (int, error) {
 // same name is replaced.
 func (s *Server) Activate(atespace, actorName, actorUID string, dial DialFunc) error {
 	if !resources.IsValidResourceName(atespace) || !resources.IsValidResourceName(actorName) {
-		return fmt.Errorf("atunnel: invalid actor reference %q/%q", atespace, actorName)
+		return fmt.Errorf("ingress: invalid actor reference %q/%q", atespace, actorName)
 	}
 	if dial == nil {
-		return fmt.Errorf("atunnel: actor dialer is required")
+		return fmt.Errorf("ingress: actor dialer is required")
 	}
 	ref := resources.ActorRef{Atespace: atespace, Name: actorName}
 
@@ -457,7 +457,7 @@ func (s *Server) Activate(atespace, actorName, actorUID string, dial DialFunc) e
 	defer s.mu.Unlock()
 	if old, ok := s.active[ref]; ok {
 		if old.uid == actorUID {
-			return fmt.Errorf("atunnel: actor %s is already active", ref)
+			return fmt.Errorf("ingress: actor %s is already active", ref)
 		}
 		old.cancel()
 		closeIdleUpstreamConnections(old)
@@ -524,7 +524,7 @@ func (s *Server) Deactivate(ctx context.Context, atespace, actorName, actorUID s
 		return nil
 	case <-ctx.Done():
 		closeIdleUpstreamConnections(active)
-		return fmt.Errorf("atunnel: waiting for active requests to stop: %w", ctx.Err())
+		return fmt.Errorf("ingress: waiting for active requests to stop: %w", ctx.Err())
 	}
 }
 
@@ -576,7 +576,7 @@ func (s *Server) authorize(r *http.Request) (*activation, context.Context, func(
 
 // errActorDeactivated is the cancel cause of a request whose actor was
 // deactivated, which tells a suspend apart from the router hanging up.
-var errActorDeactivated = errors.New("atunnel: actor deactivated")
+var errActorDeactivated = errors.New("ingress: actor deactivated")
 
 func (s *Server) reject(w http.ResponseWriter) {
 	w.Header().Set(staleAssignmentHeader, "true")

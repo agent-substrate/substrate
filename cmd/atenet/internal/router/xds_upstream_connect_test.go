@@ -36,7 +36,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/atunnel"
+	atunnelingress "github.com/agent-substrate/substrate/internal/atunnel/ingress"
 )
 
 // upstreamConnectSnapshot also enables the CONNECT listener, so main_internal
@@ -396,8 +396,8 @@ func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 	if lb.GetMetadataKey() != nil {
 		t.Error("actor_connect reads a metadata key; the worker address comes from filter state")
 	}
-	if got := lb.GetUpstreamPortOverride().GetValue(); got != atunnel.DefaultConnectPort {
-		t.Errorf("actor_connect port = %d, want atunnel's CONNECT port %d", got, atunnel.DefaultConnectPort)
+	if got := lb.GetUpstreamPortOverride().GetValue(); got != atunnelingress.DefaultConnectPort {
+		t.Errorf("actor_connect port = %d, want atunnel's CONNECT port %d", got, atunnelingress.DefaultConnectPort)
 	}
 	upstreamTLS := &tlsv3.UpstreamTlsContext{}
 	if err := c.GetTransportSocket().GetTypedConfig().UnmarshalTo(upstreamTLS); err != nil {

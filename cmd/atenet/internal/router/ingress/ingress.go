@@ -38,7 +38,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/atunnel"
+	atunnelingress "github.com/agent-substrate/substrate/internal/atunnel/ingress"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -100,7 +100,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		targetAuthority = md.Host
 	}
 	if _, portStr, err := net.SplitHostPort(targetAuthority); err == nil {
-		if p, ok := atunnel.ParsePort(portStr); ok {
+		if p, ok := atunnelingress.ParsePort(portStr); ok {
 			targetPort = p
 		}
 	}
