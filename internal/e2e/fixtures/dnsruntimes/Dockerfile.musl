@@ -1,0 +1,85 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+FROM golang:1.25-alpine AS go-builder
+RUN apk add --no-cache gcc musl-dev
+WORKDIR /src
+COPY main.go resolv_linux.go resolv_other.go /src/agent/
+RUN cd /src/agent && go mod init dnsruntimes-agent && CGO_ENABLED=0 go build -o /out/dnsruntimes-agent .
+
+COPY testdata/probes/go-resolver/main.go /src/go-resolver/main.go
+RUN cd /src/go-resolver && go mod init go-resolver \
+    && CGO_ENABLED=0 go build -tags netgo -o /out/go-pure . \
+    && CGO_ENABLED=1 go build -tags netcgo -o /out/go-cgo .
+
+FROM rust:alpine AS rust-builder
+RUN apk add --no-cache musl-dev
+WORKDIR /src/rust
+COPY testdata/probes/rust/Cargo.toml ./Cargo.toml
+COPY testdata/probes/rust/src/ ./src/
+RUN cargo build --release && cp target/release/rust-probe /rust-probe
+
+FROM alpine:3.21
+RUN apk add --no-cache \
+    ca-certificates \
+    curl \
+    gcc \
+    musl-dev \
+    nodejs \
+    openjdk17-jdk \
+    python3 \
+    py3-dnspython
+
+RUN mkdir -p /opt/probes /opt/probes/java /opt/probes/node
+
+# 1. C getaddrinfo probe (musl)
+COPY testdata/probes/c-getaddrinfo/main.c /tmp/c-getaddrinfo.c
+RUN gcc -O2 -Wall /tmp/c-getaddrinfo.c -o /opt/probes/libc-getaddrinfo && rm /tmp/c-getaddrinfo.c
+
+# 2. Go pure & Go cgo probes
+COPY --from=go-builder /out/go-pure /opt/probes/go-pure
+COPY --from=go-builder /out/go-cgo /opt/probes/go-cgo
+
+# 3. Node.js probes (dns.lookup & c-ares dns.resolve)
+COPY testdata/probes/node/probe.mjs /opt/probes/node/probe.mjs
+RUN printf '#!/bin/sh\nexec node /opt/probes/node/probe.mjs "$@"\n' > /opt/probes/node-lookup \
+    && printf '#!/bin/sh\nexec node /opt/probes/node/probe.mjs "$@"\n' > /opt/probes/node-resolve \
+    && chmod +x /opt/probes/node-lookup /opt/probes/node-resolve
+
+# 4. Python probes (socket.getaddrinfo & dnspython)
+COPY testdata/probes/python/probe.py /opt/probes/python-socket
+RUN cp /opt/probes/python-socket /opt/probes/python-dnspython \
+    && chmod +x /opt/probes/python-socket /opt/probes/python-dnspython
+
+# 5. Java probes (InetAddress & Netty DnsNameResolver)
+ENV NETTY_VER=4.1.115.Final
+RUN for mod in common buffer transport codec codec-dns resolver resolver-dns; do \
+      curl -fsSL "https://repo1.maven.org/maven2/io/netty/netty-${mod}/${NETTY_VER}/netty-${mod}-${NETTY_VER}.jar" \
+        -o "/opt/probes/java/netty-${mod}.jar"; \
+    done
+COPY testdata/probes/java/Probe.java /opt/probes/java/Probe.java
+RUN javac -cp "/opt/probes/java/*" /opt/probes/java/Probe.java \
+    && printf '#!/bin/sh\nexec java -cp "/opt/probes/java:/opt/probes/java/*" Probe "$@"\n' > /opt/probes/java-inetaddress \
+    && printf '#!/bin/sh\nexec java -cp "/opt/probes/java:/opt/probes/java/*" Probe "$@"\n' > /opt/probes/java-netty \
+    && chmod +x /opt/probes/java-inetaddress /opt/probes/java-netty
+
+# 6. Rust probes (std::net::ToSocketAddrs & hickory-resolver)
+COPY --from=rust-builder /rust-probe /opt/probes/rust-std
+RUN cp /opt/probes/rust-std /opt/probes/rust-hickory \
+    && chmod +x /opt/probes/rust-std /opt/probes/rust-hickory
+
+# 7. dnsruntimes-agent entrypoint binary
+COPY --from=go-builder /out/dnsruntimes-agent /usr/local/bin/dnsruntimes-agent
+
+ENTRYPOINT ["/usr/local/bin/dnsruntimes-agent"]
