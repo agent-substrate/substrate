@@ -132,9 +132,7 @@ func (e *Env) CreateActorIDCACertsSecret(ctx context.Context) error {
 // none is asked for.
 const defaultAPILogLevel = "info"
 
-// CreateAPIConfig writes the ate-api-server config file. ate-api-server
-// re-reads it while running, so a changed log level takes effect without a
-// restart.
+// CreateAPIConfig writes the ate-api-server config file.
 func (e *Env) CreateAPIConfig(ctx context.Context) error {
 	log.Step("create_api_config")
 	if err := e.Kube.EnsureNamespace(ctx, e.Namespace()); err != nil {
