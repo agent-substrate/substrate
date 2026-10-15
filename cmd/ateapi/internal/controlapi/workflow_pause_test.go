@@ -92,6 +92,9 @@ func TestPauseActor_Finalized_WorkerGone(t *testing.T) {
 	if got := (*records)[0].attrs[string(ateattr.ActorUIDKey)]; got == "" {
 		t.Error("crash record carries no ate.actor.uid")
 	}
+	if got := (*records)[0].attrs[string(ateattr.ActorOperationNameKey)]; got != ateattr.OperationSuspend {
+		t.Errorf("crash record %s = %q, want %q", ateattr.ActorOperationNameKey, got, ateattr.OperationSuspend)
+	}
 }
 
 // TestPauseActor_Finalized_AlreadyCrashed verifies that if the actor was
@@ -299,6 +302,9 @@ func TestPauseActor_Finalized_MissingLocalSnapshotClearsAssignment(t *testing.T)
 	}
 	if len(*records) != 1 {
 		t.Fatalf("got %d crash records, want 1", len(*records))
+	}
+	if got := (*records)[0].attrs[string(ateattr.ActorOperationNameKey)]; got != ateattr.OperationSuspend {
+		t.Errorf("crash record %s = %q, want %q", ateattr.ActorOperationNameKey, got, ateattr.OperationSuspend)
 	}
 }
 

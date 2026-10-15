@@ -163,9 +163,9 @@ groups:
               stability: development
               value: unknown
               brief: >
-                No lifecycle operation is running, such as when a running or
-                paused actor crashes because its worker is lost, or the
-                operation is not in this list. This is the default value.
+                No lifecycle operation is running, such as when a running actor
+                crashes because its worker is lost, or the operation is not in
+                this list. This is the default value.
 
   - id: registry.ate.template
     type: attribute_group
