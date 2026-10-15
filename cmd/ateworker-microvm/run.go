@@ -227,7 +227,7 @@ func (s *AteWorkerService) resolveRuntime(paths map[string]string) resolvedRunti
 //   - The runtime assets (guest kernel, guest OS image, cloud-hypervisor, virtiofsd)
 //     are on disk and passed as runtime asset paths.
 //   - Each container's bundle holds the overlay spec its rootfs/ is composed
-//     from. ateom builds the OCI spec itself.
+//     from. ateworker builds the OCI spec itself.
 func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.RunWorkloadRequest) (resp *ateworkerpb.RunWorkloadResponse, retErr error) {
 	if req.GetSpec().GetRuntimeGolden() && req.GetAtespace() != resources.GoldenActorAtespace {
 		return nil, apierror.InvalidArgument("runtime golden capture requires a golden actor")

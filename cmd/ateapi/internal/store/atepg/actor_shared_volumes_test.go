@@ -30,7 +30,7 @@ func TestCreateActorSharedVolumeTransaction(t *testing.T) {
 	p := setupPostgresPersistence(t)
 	ctx := context.Background()
 	createTestAtespace(t, p, "team")
-	v, err := p.CreateSharedVolume(ctx, &ateapipb.SharedVolume{Metadata: &ateapipb.ResourceMetadata{Atespace: "team", Name: "data"}, VolumeId: "disk", VolumeType: "mock", Status: &ateapipb.SharedVolumeStatus{State: ateapipb.SharedVolumeState_SHARED_VOLUME_STATE_READY}})
+	_, err := p.CreateSharedVolume(ctx, &ateapipb.SharedVolume{Metadata: &ateapipb.ResourceMetadata{Atespace: "team", Name: "data"}, VolumeId: "disk", VolumeType: "mock", Status: &ateapipb.SharedVolumeStatus{State: ateapipb.SharedVolumeState_SHARED_VOLUME_STATE_READY}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestCreateActorSharedVolumeTransaction(t *testing.T) {
 		}
 	}
 	ref := resources.SharedVolumeRef{Atespace: "team", Name: "data"}
-	v, err = p.GetSharedVolume(ctx, ref)
+	v, err := p.GetSharedVolume(ctx, ref)
 	if err != nil {
 		t.Fatal(err)
 	}
