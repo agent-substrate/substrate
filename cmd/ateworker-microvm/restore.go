@@ -31,15 +31,12 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateworker/phaselog"
 	"github.com/agent-substrate/substrate/internal/workerstats"
 
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
-
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
-	"github.com/agent-substrate/substrate/internal/wakeupprobe"
 )
 
 // restoreMemMode picks how cloud-hypervisor should load guest RAM, from what the VMM
@@ -233,6 +230,10 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 // comes back from the memory snapshot; the durable-dir volumes were restored by the
 // caller from their tar.
 func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBootParams, scope ateworkerpb.SnapshotFidelity, restoreDir string, preserveRestoreDir bool, tStart time.Time) (retErr error) {
+	runtimeGolden, err := readRuntimeGolden(restoreDir)
+	if err != nil {
+		return err
+	}
 	actorUID := p.actorUID
 
 	rr := s.resolveRuntime(p.assetPaths)
@@ -450,9 +451,17 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		return fmt.Errorf("while reseeding guest CRNG: %w", err)
 	}
 
+	if runtimeGolden {
+		// The restored kernel has never mounted the share. The host has now
+		// staged this actor's real volumes; create its sandbox and processes.
+		if err := s.startActorContainers(ctx, guestAC, actorUID, kata.VsockSocketPath(actorUID), ctrs); err != nil {
+			return err
+		}
+	}
+
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
-		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
+	if err := s.waitActorReady(ctx, p); err != nil {
+		return err
 	}
 
 	// Where a resume goes. Like the boot phases, this used to be a single total,
@@ -501,28 +510,10 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		guestAgent:  guestAC,
 	}
 
-	// Re-attach stdout/stderr forwarding for each container over the agent
-	// connection dialed after resume: the restored guest's containers are alive, so
-	// ReadStdout/ReadStderr pick up where they left off.
-	attribution := p.actorAttribution()
-	for _, c := range containers {
-		s.startActorLogForwarding(guestAC, attribution, c.GetName(), c.GetName())
-	}
-
 	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
 		return err
 	}
-	s.setRunningVM(actorUID, ra)
-
-	// Publish the guest to GetWorkloadStats, past the last error return above
-	// for the same reason as in coldBootActor. Same client the forwarding above
-	// reads over.
-	s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: guestAC, workloadIDs: ra.workloadIDs})
-	// Looked up while the caller holds the actor's lock, so it is this
-	// activation.
-	if hosted := s.lookupActor(actorUID); hosted != nil {
-		go s.recordInitial(context.WithoutCancel(ctx), hosted)
-	}
+	s.publishActorApplication(ctx, p, ra, ctrs)
 
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))

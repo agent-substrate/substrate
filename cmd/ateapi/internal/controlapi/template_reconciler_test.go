@@ -390,7 +390,7 @@ func TestGoldenSnapshotWarmupFor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := goldenSnapshotWarmupFor(tt.containers); got != tt.want {
+			if got := goldenSnapshotWarmupFor(&ateapipb.ActorTemplate{Containers: tt.containers}); got != tt.want {
 				t.Errorf("goldenSnapshotWarmupFor() = %v, want %v", got, tt.want)
 			}
 		})
@@ -1009,5 +1009,12 @@ func TestReconcileOne_GoldenTagConflict(t *testing.T) {
 				t.Fatal("resync queued a terminally failed template")
 			}
 		})
+	}
+}
+
+func TestRuntimeGoldenNeedsNoApplicationWarmup(t *testing.T) {
+	tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME}}}
+	if got := goldenSnapshotWarmupFor(tmpl); got != 0 {
+		t.Fatalf("runtime warmup = %s, want zero", got)
 	}
 }

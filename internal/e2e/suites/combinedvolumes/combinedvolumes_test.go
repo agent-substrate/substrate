@@ -41,6 +41,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -68,6 +70,10 @@ const (
 
 	// probeWrittenContent is the fixed string the probe's /writefile writes.
 	probeWrittenContent = "written by probe"
+
+	sharedVolume = "shared"
+	sharedPath   = "/mnt/ate-shared"
+	sharedFile   = "handoff.txt"
 
 	payloadName    = "payload.txt"
 	payloadContent = "delivered by an image volume"
@@ -234,10 +240,10 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 				&ateapipb.VolumeMount{Name: extVolume, MountPath: extPathB})
 			tmpl.Volumes = append(tmpl.Volumes, &ateapipb.Volume{
 				Name: extVolume,
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					Capacity:         extCapacity,
 					StorageClassName: storageClass,
-				},
+				}},
 			})
 		},
 	})
@@ -468,4 +474,175 @@ func TestCombinedVolumes(t *testing.T) {
 			requireContentAtBoth(resumeCtx, t, router, actorRef, extPathA+"/"+postSnapshotName, extPathB+"/"+postSnapshotName, probeWrittenContent)
 		})
 	})
+}
+
+// createHandoffTemplate builds a probe ActorTemplate that references the
+// SharedVolume named volumeName.
+func createHandoffTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, volumeName string) *ateapipb.ActorTemplate {
+	t.Helper()
+
+	env, err := e2e.CheckEnv("BUCKET_NAME")
+	if err != nil {
+		t.Fatalf("CheckEnv: %v", err)
+	}
+	probeAtespace, _ := e2e.DeployProbe(t, env["BUCKET_NAME"], "combinedvolumes")
+	src := e2e.SubstrateFixture{
+		Atespace:      probeAtespace,
+		Name:          probeName,
+		PoolNamespace: probeAtespace,
+		PoolName:      probeName,
+		DeployWith:    "the combinedvolumes suite's own DeployProbe",
+	}
+	return e2e.CreateSubstrateTemplateFrom(ctx, t, clients, ns.Name, src, e2e.SubstrateTemplateOptions{
+		Atespace:     atespace,
+		Name:         "handoff-" + ns.Name,
+		PoolName:     probeName,
+		PoolReplicas: 2,
+		Labels:       map[string]string{"combinedvolumes": ns.Name},
+		SnapshotConfig: &ateapipb.SnapshotConfig{
+			StorageLocation: fmt.Sprintf("gs://%s/%s/", env["BUCKET_NAME"], ns.Name),
+		},
+		Modify: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts,
+				&ateapipb.VolumeMount{Name: sharedVolume, MountPath: sharedPath})
+			tmpl.Volumes = append(tmpl.Volumes, &ateapipb.Volume{
+				Name:     sharedVolume,
+				External: &ateapipb.ExternalVolumeSource{SharedVolume: &ateapipb.SharedVolumeRef{Name: volumeName}},
+			})
+		},
+	})
+}
+
+// createHandoffActor creates a suspended actor from tmpl and registers its
+// teardown, which must run before the shared volume's.
+func createHandoffActor(ctx context.Context, t *testing.T, clients *e2e.Clients, tmpl *ateapipb.ActorTemplate, name string) resources.ActorRef {
+	t.Helper()
+
+	actorRef := resources.ActorRef{Atespace: atespace, Name: name}
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			ActorTemplate: e2e.TemplateRef(tmpl),
+		},
+	}); err != nil {
+		t.Fatalf("CreateActor(%s): %v", name, err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx := context.Background()
+		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef()})
+		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: actorRef.ToObjectRef()})
+	})
+	return actorRef
+}
+
+func TestSharedVolumeHandoff(t *testing.T) {
+	ctx := context.Background()
+	clients := e2e.GetClients()
+	ns := e2e.CreateNamespace(t)
+
+	if storageClassOrEmpty(ctx, t, clients) == "" {
+		t.Skipf("StorageClass %q is not installed", e2e.StorageClass)
+	}
+
+	volumeName := "shared-" + ns.Name
+	// The template is created first because it creates the suite's atespace.
+	tmpl := createHandoffTemplate(ctx, t, clients, ns, volumeName)
+
+	volumeRef := &ateapipb.ObjectRef{Atespace: atespace, Name: volumeName}
+	if _, err := clients.SubstrateAPI.CreateSharedVolume(ctx, &ateapipb.CreateSharedVolumeRequest{
+		SharedVolume: &ateapipb.SharedVolume{
+			Metadata:         &ateapipb.ResourceMetadata{Atespace: atespace, Name: volumeName},
+			StorageClassName: e2e.StorageClass,
+			Capacity:         extCapacity,
+			DeleteTrigger:    ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL,
+		},
+	}); err != nil {
+		t.Fatalf("CreateSharedVolume: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := clients.SubstrateAPI.DeleteSharedVolume(context.Background(), &ateapipb.DeleteSharedVolumeRequest{SharedVolume: volumeRef}); err != nil {
+			t.Errorf("DeleteSharedVolume: %v", err)
+		}
+	})
+
+	producer := createHandoffActor(ctx, t, clients, tmpl, "producer-"+ns.Name)
+	consumer := createHandoffActor(ctx, t, clients, tmpl, "consumer-"+ns.Name)
+
+	router, err := e2e.NewRouterClient(ctx)
+	if err != nil {
+		t.Fatalf("NewRouterClient: %v", err)
+	}
+	defer router.Close()
+
+	handoffFile := sharedPath + "/" + sharedFile
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: producer.ToObjectRef()}); err != nil {
+		t.Fatalf("ResumeActor(producer): %v", err)
+	}
+	requireUnreadable(ctx, t, router, producer, handoffFile)
+	if got := probeJSON(ctx, t, router, producer, "/writefile?path="+handoffFile); got["error"] != "" {
+		t.Fatalf("writing %s: %s", handoffFile, got["error"])
+	}
+	requireContent(ctx, t, router, producer, handoffFile, probeWrittenContent)
+
+	_, err = e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: consumer.ToObjectRef()})
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), producer.Name) {
+		t.Fatalf("ResumeActor(consumer) while the producer holds the volume = %v, want FailedPrecondition naming %q", err, producer.Name)
+	}
+	blocked, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: consumer.ToObjectRef()})
+	if err != nil {
+		t.Fatalf("GetActor(consumer): %v", err)
+	}
+	if got := blocked.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("consumer state after a refused claim = %s, want ACTOR_STATE_SUSPENDED", got)
+	}
+
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: producer.ToObjectRef()}); err != nil {
+		t.Fatalf("SuspendActor(producer): %v", err)
+	}
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: consumer.ToObjectRef()}); err != nil {
+		t.Fatalf("ResumeActor(consumer): %v", err)
+	}
+	requireContent(ctx, t, router, consumer, handoffFile, probeWrittenContent)
+
+	if _, err := clients.SubstrateAPI.DeleteSharedVolume(ctx, &ateapipb.DeleteSharedVolumeRequest{SharedVolume: volumeRef}); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("DeleteSharedVolume while referenced = %v, want FailedPrecondition", err)
+	}
+	stored, err := clients.SubstrateAPI.GetSharedVolume(ctx, &ateapipb.GetSharedVolumeRequest{SharedVolume: volumeRef})
+	if err != nil {
+		t.Fatalf("GetSharedVolume: %v", err)
+	}
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: consumer.ToObjectRef()})
+	if err != nil {
+		t.Fatalf("GetActor(consumer): %v", err)
+	}
+	var mounted string
+	for _, vol := range actor.GetStatus().GetExternalVolumes() {
+		if vol.GetName() == sharedVolume {
+			mounted = vol.GetStorageVolumeId()
+		}
+	}
+	if mounted != stored.GetVolumeId() {
+		t.Errorf("the consumer mounted %q, want the shared volume %q", mounted, stored.GetVolumeId())
+	}
+}
+
+func TestSharedVolumeMissing(t *testing.T) {
+	ctx := context.Background()
+	clients := e2e.GetClients()
+	ns := e2e.CreateNamespace(t)
+
+	if storageClassOrEmpty(ctx, t, clients) == "" {
+		t.Skipf("StorageClass %q is not installed", e2e.StorageClass)
+	}
+
+	tmpl := createHandoffTemplate(ctx, t, clients, ns, "absent-"+ns.Name)
+	_, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: "orphan-" + ns.Name},
+			ActorTemplate: e2e.TemplateRef(tmpl),
+		},
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("CreateActor with an unresolvable volume reference = %v, want FailedPrecondition", err)
+	}
 }

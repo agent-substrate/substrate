@@ -38,6 +38,8 @@ func Apply(m proto.Message) {
 		applyAtespaceDefaults(v)
 	case *ateapipb.EgressPolicy:
 		applyEgressPolicyDefaults(v)
+	case *ateapipb.SharedVolume:
+		applySharedVolumeDefaults(v)
 	case *ateapipb.Tag:
 		applyTagDefaults(v)
 	case *ateapipb.Worker:
@@ -108,6 +110,15 @@ func applyEgressPolicyDefaults(p *ateapipb.EgressPolicy) {
 		case r.GetHttps() != nil && r.Https.Ports == nil:
 			r.Https.Ports = &ateapipb.Ports{Numbers: []int32{443}}
 		}
+	}
+}
+
+func applySharedVolumeDefaults(v *ateapipb.SharedVolume) {
+	if v == nil {
+		return
+	}
+	if v.AccessMode == ateapipb.AccessMode_ACCESS_MODE_UNSPECIFIED {
+		v.AccessMode = ateapipb.AccessMode_ACCESS_MODE_READ_WRITE_ONCE
 	}
 }
 

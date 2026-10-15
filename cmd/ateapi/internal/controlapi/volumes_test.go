@@ -63,12 +63,12 @@ func TestActorVolumesStorageClassErrors(t *testing.T) {
 	tmpl := &ateapipb.ActorTemplate{
 		Volumes: []*ateapipb.Volume{{
 			Name: "data-vol",
-			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+			External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 				StorageClassName: "standard",
-			},
+			}},
 		}},
 	}
-	volumes := []*ateapipb.ExternalVolume{{
+	volumes := []*ateapipb.ExternalVolumeRef{{
 		Name:       "data-vol",
 		VolumeType: "mock-standard",
 	}}
@@ -91,12 +91,12 @@ func TestActorVolumesStorageClassErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			lister := &fakeStorageClassLister{getErr: tt.getErr}
 			t.Run("initial", func(t *testing.T) {
-				_, err := initialExternalVolumes(ctx, lister, tmpl)
+				_, err := initialActorVolumes(ctx, lister, tmpl)
 				if got := apierror.Code(err); got != tt.wantCode {
-					t.Fatalf("initialExternalVolumes() code = %v, want %v; error = %v", got, tt.wantCode, err)
+					t.Fatalf("initialActorVolumes() code = %v, want %v; error = %v", got, tt.wantCode, err)
 				}
 				if !strings.Contains(err.Error(), `StorageClass "standard"`) {
-					t.Errorf("initialExternalVolumes() error does not name the StorageClass: %v", err)
+					t.Errorf("initialActorVolumes() error does not name the StorageClass: %v", err)
 				}
 			})
 			t.Run("create", func(t *testing.T) {
@@ -120,9 +120,9 @@ func TestInitialActorVolumes(t *testing.T) {
 		Volumes: []*ateapipb.Volume{
 			{
 				Name: "data-vol-1",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
-				},
+				}},
 			},
 			{
 				Name: "scratch-vol",
@@ -133,14 +133,14 @@ func TestInitialActorVolumes(t *testing.T) {
 			},
 			{
 				Name: "data-vol-2",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "fast",
-				},
+				}},
 			},
 		},
 	}
 
-	want := []*ateapipb.ExternalVolume{
+	want := []*ateapipb.ExternalVolumeRef{
 		{
 			Name:       "data-vol-1",
 			VolumeType: "mock-standard",
@@ -163,12 +163,12 @@ func TestInitialActorVolumes(t *testing.T) {
 			},
 		},
 	}
-	initVols, err := initialExternalVolumes(context.Background(), scLister, tmpl)
+	initVols, err := initialActorVolumes(context.Background(), scLister, tmpl)
 	if err != nil {
-		t.Fatalf("initialExternalVolumes failed: %v", err)
+		t.Fatalf("initialActorVolumes failed: %v", err)
 	}
 	if diff := cmp.Diff(want, initVols, protocmp.Transform()); diff != "" {
-		t.Errorf("initialExternalVolumes mismatch (-want +got):\n%s", diff)
+		t.Errorf("initialActorVolumes mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -179,9 +179,9 @@ func TestCreateActorVolumes(t *testing.T) {
 		Volumes: []*ateapipb.Volume{
 			{
 				Name: "data-vol",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
-				},
+				}},
 			},
 		},
 	}
@@ -190,21 +190,21 @@ func TestCreateActorVolumes(t *testing.T) {
 		Volumes: []*ateapipb.Volume{
 			{
 				Name: "vol1",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
-				},
+				}},
 			},
 			{
 				Name: "vol2",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
-				},
+				}},
 			},
 			{
 				Name: "vol3",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
-				},
+				}},
 			},
 		},
 	}
@@ -212,22 +212,22 @@ func TestCreateActorVolumes(t *testing.T) {
 	tests := []struct {
 		name           string
 		tmpl           *ateapipb.ActorTemplate
-		inputVolumes   []*ateapipb.ExternalVolume
+		inputVolumes   []*ateapipb.ExternalVolumeRef
 		storageClasses map[string]*storagev1.StorageClass
 		wantErr        bool
-		wantRes        []*ateapipb.ExternalVolume
+		wantRes        []*ateapipb.ExternalVolumeRef
 	}{
 		{
 			name: "partial failure returns error and preserves succeeded, failed, and remaining volumes",
 			tmpl: multiVolTmpl,
-			inputVolumes: []*ateapipb.ExternalVolume{
+			inputVolumes: []*ateapipb.ExternalVolumeRef{
 				{Name: "vol1", VolumeType: "mock-standard"},
 				// Its type differs from its StorageClass's provisioner, so creating it fails.
 				{Name: "vol2", VolumeType: "mock-fast"},
 				{Name: "vol3", VolumeType: "mock-standard"},
 			},
 			wantErr: true,
-			wantRes: []*ateapipb.ExternalVolume{
+			wantRes: []*ateapipb.ExternalVolumeRef{
 				{
 					Name:            "vol1",
 					StorageVolumeId: "mock-vol-substrate-actor-uid-123-vol1",
@@ -240,14 +240,14 @@ func TestCreateActorVolumes(t *testing.T) {
 		{
 			name: "volume with a storage volume id is not created again",
 			tmpl: standardTmpl,
-			inputVolumes: []*ateapipb.ExternalVolume{
+			inputVolumes: []*ateapipb.ExternalVolumeRef{
 				{
 					Name:            "data-vol",
 					StorageVolumeId: "existing-vol-id",
 				},
 			},
 			wantErr: false,
-			wantRes: []*ateapipb.ExternalVolume{
+			wantRes: []*ateapipb.ExternalVolumeRef{
 				{
 					Name:            "data-vol",
 					StorageVolumeId: "existing-vol-id",
@@ -257,18 +257,18 @@ func TestCreateActorVolumes(t *testing.T) {
 		{
 			name: "volume not found in template returns error",
 			tmpl: &ateapipb.ActorTemplate{},
-			inputVolumes: []*ateapipb.ExternalVolume{
+			inputVolumes: []*ateapipb.ExternalVolumeRef{
 				{Name: "missing-vol"},
 			},
 			wantErr: true,
-			wantRes: []*ateapipb.ExternalVolume{
+			wantRes: []*ateapipb.ExternalVolumeRef{
 				{Name: "missing-vol"},
 			},
 		},
 		{
 			name: "storage class parameters are propagated to volume context",
 			tmpl: standardTmpl,
-			inputVolumes: []*ateapipb.ExternalVolume{
+			inputVolumes: []*ateapipb.ExternalVolumeRef{
 				{
 					Name:       "data-vol",
 					VolumeType: "mock-standard",
@@ -285,7 +285,7 @@ func TestCreateActorVolumes(t *testing.T) {
 				},
 			},
 			wantErr: false,
-			wantRes: []*ateapipb.ExternalVolume{
+			wantRes: []*ateapipb.ExternalVolumeRef{
 				{
 					Name:            "data-vol",
 					StorageVolumeId: "mock-vol-substrate-actor-uid-123-data-vol",
@@ -345,8 +345,8 @@ func (emptyIDVolumePlugin) CreateVolume(context.Context, volume.CreateVolumeRequ
 func TestCreateActorVolumesRejectsEmptyPluginID(t *testing.T) {
 	tmpl := &ateapipb.ActorTemplate{
 		Volumes: []*ateapipb.Volume{{
-			Name:                   "data-vol",
-			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard"},
+			Name:     "data-vol",
+			External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard"}},
 		}},
 	}
 	registry := &mockPluginRegistry{
@@ -355,7 +355,7 @@ func TestCreateActorVolumesRejectsEmptyPluginID(t *testing.T) {
 	scLister := &fakeStorageClassLister{storageClasses: map[string]*storagev1.StorageClass{
 		"standard": {ObjectMeta: metav1.ObjectMeta{Name: "standard"}, Provisioner: "mock-standard"},
 	}}
-	input := []*ateapipb.ExternalVolume{{Name: "data-vol", VolumeType: "mock-standard"}}
+	input := []*ateapipb.ExternalVolumeRef{{Name: "data-vol", VolumeType: "mock-standard"}}
 
 	res, err := createActorVolumes(context.Background(), registry, scLister, "actor-uid-123", tmpl, input)
 	if got := apierror.Code(err); got != codes.Internal {
@@ -383,14 +383,14 @@ func TestDeleteActorVolumes(t *testing.T) {
 	tests := []struct {
 		name        string
 		actorUID    string
-		volumes     []*ateapipb.ExternalVolume
+		volumes     []*ateapipb.ExternalVolumeRef
 		wantDeleted []string
 		wantErr     bool
 	}{
 		{
 			name:     "uses storage volume ID when present",
 			actorUID: "uid-abc",
-			volumes: []*ateapipb.ExternalVolume{
+			volumes: []*ateapipb.ExternalVolumeRef{
 				{Name: "vol1", StorageVolumeId: "storage-vol-123", VolumeType: "mock"},
 			},
 			wantDeleted: []string{"storage-vol-123"},
@@ -399,7 +399,7 @@ func TestDeleteActorVolumes(t *testing.T) {
 		{
 			name:     "falls back to actorVolumeID when storage volume ID is empty",
 			actorUID: "uid-abc",
-			volumes: []*ateapipb.ExternalVolume{
+			volumes: []*ateapipb.ExternalVolumeRef{
 				{Name: "vol1", StorageVolumeId: "", VolumeType: "mock"},
 			},
 			wantDeleted: []string{"substrate-uid-abc-vol1"},
@@ -479,7 +479,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: []*ateapipb.ExternalVolume{
+					ExternalVolumes: []*ateapipb.ExternalVolumeRef{
 						{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 						{Name: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
 					},
@@ -510,7 +510,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: []*ateapipb.ExternalVolume{
+					ExternalVolumes: []*ateapipb.ExternalVolumeRef{
 						{Name: "mounted-vol", StorageVolumeId: "storage-vol-mounted", VolumeType: "mock"},
 						{Name: "unmounted-vol", StorageVolumeId: "storage-vol-unmounted", VolumeType: "mock"},
 					},
@@ -539,7 +539,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: []*ateapipb.ExternalVolume{
+					ExternalVolumes: []*ateapipb.ExternalVolumeRef{
 						{Name: "vol1", StorageVolumeId: "", VolumeType: "mock"},
 						{Name: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
 					},
@@ -569,7 +569,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: []*ateapipb.ExternalVolume{
+					ExternalVolumes: []*ateapipb.ExternalVolumeRef{
 						{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 						{Name: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
 					},
@@ -587,7 +587,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: []*ateapipb.ExternalVolume{
+					ExternalVolumes: []*ateapipb.ExternalVolumeRef{
 						{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 					},
 				},
@@ -608,7 +608,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: []*ateapipb.ExternalVolume{
+					ExternalVolumes: []*ateapipb.ExternalVolumeRef{
 						{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 						{Name: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
 					},
@@ -632,7 +632,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
 					AssignedNode: "node-1",
-					ExternalVolumes: []*ateapipb.ExternalVolume{
+					ExternalVolumes: []*ateapipb.ExternalVolumeRef{
 						{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "unknown-plugin"},
 					},
 				},
@@ -646,7 +646,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
 					AssignedNode: "",
-					ExternalVolumes: []*ateapipb.ExternalVolume{
+					ExternalVolumes: []*ateapipb.ExternalVolumeRef{
 						{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 					},
 				},
@@ -684,5 +684,44 @@ func TestDetachActorVolumes(t *testing.T) {
 				t.Errorf("detachCalls mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestBorrowedVolumesAreNotProvisionedOrDeleted(t *testing.T) {
+	ctx := context.Background()
+	template := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{{Name: "shared-data", External: &ateapipb.ExternalVolumeSource{SharedVolume: &ateapipb.SharedVolumeRef{Name: "shared"}}}},
+	}
+	scLister := &fakeStorageClassLister{storageClasses: map[string]*storagev1.StorageClass{}}
+
+	initial, err := initialActorVolumes(ctx, scLister, template)
+	if err != nil {
+		t.Fatalf("initialActorVolumes: %v", err)
+	}
+	if len(initial) != 0 {
+		t.Errorf("initialActorVolumes() = %v, want no entry for a borrowed volume", initial)
+	}
+
+	borrowed := []*ateapipb.ExternalVolumeRef{{
+		Name:             "shared-data",
+		SharedVolumeName: "shared",
+		StorageVolumeId:  "disk/shared",
+		VolumeType:       "mock",
+	}}
+	plugin := &trackingVolumePlugin{}
+	registry := &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}}
+
+	got, err := createActorVolumes(ctx, registry, scLister, "actor-uid-123", template, borrowed)
+	if err != nil {
+		t.Fatalf("createActorVolumes: %v", err)
+	}
+	if diff := cmp.Diff(borrowed, got, protocmp.Transform()); diff != "" {
+		t.Errorf("createActorVolumes() mismatch (-want +got):\n%s", diff)
+	}
+	if err := deleteActorVolumes(ctx, registry, "actor-uid-123", borrowed); err != nil {
+		t.Fatalf("deleteActorVolumes: %v", err)
+	}
+	if len(plugin.deletedIDs) != 0 {
+		t.Errorf("deleted %v, want the borrowed volume left alone", plugin.deletedIDs)
 	}
 }

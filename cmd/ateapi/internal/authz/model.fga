@@ -62,6 +62,7 @@ type global
     define can_list_actors: viewer or ingress_router or egress_gateway
     define can_list_actor_templates: viewer
     define can_list_tags: viewer
+    define can_list_shared_volumes: viewer
 
     # --- Policy Governance ---
     define can_create_access_policy: owner
@@ -94,7 +95,12 @@ type atespace
     define can_list_actors: viewer
     define can_list_actor_templates: viewer
     define can_create_tag: editor
+    define can_create_shared_volume: editor
+    define can_get_shared_volume: viewer
+    define can_update_shared_volume: editor
+    define can_delete_shared_volume: editor
     define can_list_tags: viewer
+    define can_list_shared_volumes: viewer
     define can_get: viewer
     define can_delete: owner
 

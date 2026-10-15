@@ -1685,7 +1685,7 @@ func buildWorkerWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*atew
 		volumes[name] = vol
 	}
 
-	out := &ateworkerpb.WorkloadSpec{}
+	out := &ateworkerpb.WorkloadSpec{RuntimeGolden: spec.GetRuntimeGolden()}
 	for i, ctr := range spec.GetContainers() {
 		var ddMounts []*ateworkerpb.DurableDirVolumeMount
 		var csiMounts []*ateworkerpb.VolumeMount
@@ -1704,7 +1704,7 @@ func buildWorkerWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*atew
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
 				})
-			case vol.GetExternal() != nil:
+			case vol.GetExternal() != nil, vol.GetEmptyDir() != nil:
 				csiMounts = append(csiMounts, &ateworkerpb.VolumeMount{
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),

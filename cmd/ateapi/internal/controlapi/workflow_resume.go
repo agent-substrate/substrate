@@ -126,6 +126,26 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, err
 	}
 	actor = assigned
+	if len(borrowedVolumeRefs(actor)) > 0 {
+		mounts, claimErr := claimSharedVolumes(leaseCtx, w.store, actor)
+		if claimErr != nil {
+			return nil, false, claimErr
+		}
+
+		// After claiming, never release ownership until node access is gone.
+		defer func() {
+			if err == nil {
+				return
+			}
+			err = errors.Join(err, w.releaseFailedResumeClaims(leaseCtx, actorRef, actor, actorTemplate))
+		}()
+		// Attachment uses the current driver context, not metadata frozen at create.
+		updated, updateErr := w.store.UpdateActor(leaseCtx, actorRef, store.PreconditionFrom(actor), func(a *ateapipb.Actor) error { a.Status.ExternalVolumes = mounts; return nil })
+		if updateErr != nil {
+			return nil, false, updateErr
+		}
+		actor = updated
+	}
 	volumePublishContexts, err := w.ensureVolumesAttached(leaseCtx, actor, worker, actorTemplate)
 	if err != nil {
 		return nil, false, err
@@ -205,7 +225,7 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	ctx, done := stepSpan(ctx, "CreateVolumes")
 	defer func() { err = done(err) }()
 
-	pending := slices.ContainsFunc(actor.GetStatus().GetExternalVolumes(), func(vol *ateapipb.ExternalVolume) bool {
+	pending := slices.ContainsFunc(actor.GetStatus().GetExternalVolumes(), func(vol *ateapipb.ExternalVolumeRef) bool {
 		return vol.GetStorageVolumeId() == ""
 	})
 	if !pending {
@@ -216,7 +236,8 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 		return nil, apierror.FailedPrecondition("cannot create volumes for Actor %s in state %s", actorRef, st)
 	}
 
-	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetExternalVolumes())
+	volumes := actor.GetStatus().GetExternalVolumes()
+	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, volumes)
 	// createActorVolumes reports the state it got to even when it fails, so both
 	// paths persist the same field.
 	updatePrecondition := store.PreconditionFrom(actor)

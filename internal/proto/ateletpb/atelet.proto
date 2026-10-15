@@ -529,22 +529,30 @@ message WorkloadSpec {
   // +k8s:listType=map
   // +k8s:listMapKey=name
   repeated Volume volumes = 2;
+
+  // Capture only the pre-application runtime; golden actors only.
+  // +k8s:optional
+  bool runtime_golden = 3;
 }
 
 message DurableDirVolume {
 }
 
-message ExternalVolumeSource {
+// EmptyDirVolume is an empty host directory at the external volume path.
+message EmptyDirVolume {
+}
+
+message ExternalVolume {
   // Required, unlike the actor status counterpart: the control plane only
   // sends volumes that finished provisioning.
   //
   // +k8s:required
-  // +k8s:maxLength=256 # matches ExternalVolume.storage_volume_id's bound
+  // +k8s:maxLength=256 # matches ExternalVolumeRef.storage_volume_id's bound
   // +k8s:customValidation # no control characters
   string storage_volume_id = 1;
 
   // +k8s:optional
-  // +k8s:maxLength=253 # matches ExternalVolume.volume_type's bound
+  // +k8s:maxLength=253 # matches ExternalVolumeRef.volume_type's bound
   // +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
   string volume_type = 2;
 
@@ -665,7 +673,7 @@ message Volume {
   // +k8s:format=k8s-short-name
   string name = 1;
 
-  // Exactly one of durable_dir / external / system_info / image must be set.
+  // Exactly one of durable_dir / external / system_info / image / empty_dir must be set.
   //
   // +k8s:optional
   // +k8s:unionMember
@@ -673,7 +681,7 @@ message Volume {
 
   // +k8s:optional
   // +k8s:unionMember
-  ExternalVolumeSource external = 3;
+  ExternalVolume external = 3;
 
   // +k8s:optional
   // +k8s:unionMember
@@ -682,6 +690,10 @@ message Volume {
   // +k8s:optional
   // +k8s:unionMember
   ImageVolumeSource image = 5;
+
+  // +k8s:optional
+  // +k8s:unionMember
+  EmptyDirVolume empty_dir = 6;
 }
 
 message VolumeMount {

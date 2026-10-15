@@ -80,6 +80,12 @@ const (
 	RelationCanMintActorJWT         = "can_mint_actor_jwt"
 	RelationCanMintActorCertificate = "can_mint_actor_certificate"
 
+	RelationCanCreateSharedVolume = "can_create_shared_volume"
+	RelationCanGetSharedVolume    = "can_get_shared_volume"
+	RelationCanUpdateSharedVolume = "can_update_shared_volume"
+	RelationCanDeleteSharedVolume = "can_delete_shared_volume"
+	RelationCanListSharedVolumes  = "can_list_shared_volumes"
+
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100
 )

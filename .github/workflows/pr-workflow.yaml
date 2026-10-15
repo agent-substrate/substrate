@@ -164,6 +164,8 @@ jobs:
       # features", not an unset value. The e2e steps pass it to the suites as
       # --preview, so tests of a disabled gate skip themselves (see
       # internal/e2e/preview.go).
+      GOFLAGS: -tags=e2e_runtime_identity
+      E2E_RUNTIME_GOLDEN_REQUIRED: ${{ matrix.preview == 'on' && 'true' || 'false' }}
       ATE_PREVIEW: ${{ matrix.preview == 'on' && 'ALL' || '' }}
       # Appended to the lane and artifact names: e2e-gvisor runs without
       # preview features, e2e-gvisor-preview with them.
@@ -272,6 +274,8 @@ jobs:
       run: hack/e2e-focus-sandbox-class.sh gvisor
     - name: Run E2E tests (gVisor)
       env:
+        E2E_SANDBOX_CLASS: gvisor
+        E2E_RUNTIME_LOG_DIR: ${{ github.workspace }}/_artifacts/runtime-golden-gvisor
         E2E_PARALLELISM: 8
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-gvisor${{ env.LANE_SUFFIX }}.xml
       run: hack/run-e2e-kind.sh -v -args --no-color --preview="${ATE_PREVIEW}"
@@ -282,6 +286,7 @@ jobs:
       # variant by the single E2E_SANDBOX_CLASS knob (see internal/e2e/sandbox.go).
       env:
         E2E_SANDBOX_CLASS: microvm
+        E2E_RUNTIME_LOG_DIR: ${{ github.workspace }}/_artifacts/runtime-golden
         E2E_PARALLELISM: 8
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-microvm${{ env.LANE_SUFFIX }}.xml
       run: hack/run-e2e-kind.sh -v -args --no-color --preview="${ATE_PREVIEW}"

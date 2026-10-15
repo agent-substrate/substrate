@@ -586,8 +586,11 @@ func (x *EgressGateway) GetAddress() string {
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 type WorkloadSpec struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Containers    []*Container           `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Containers []*Container           `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
+	// Boot the runtime without creating a guest sandbox or application processes.
+	// Valid only for a golden actor; supported by gVisor and microVM.
+	RuntimeGolden bool `protobuf:"varint,2,opt,name=runtime_golden,json=runtimeGolden,proto3" json:"runtime_golden,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -627,6 +630,13 @@ func (x *WorkloadSpec) GetContainers() []*Container {
 		return x.Containers
 	}
 	return nil
+}
+
+func (x *WorkloadSpec) GetRuntimeGolden() bool {
+	if x != nil {
+		return x.RuntimeGolden
+	}
+	return false
 }
 
 type Container struct {
@@ -2032,11 +2042,12 @@ const file_ateworker_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +
 	"\x0f_egress_gateway\")\n" +
 	"\rEgressGateway\x12\x18\n" +
-	"\aaddress\x18\x01 \x01(\tR\aaddress\"D\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\"k\n" +
 	"\fWorkloadSpec\x124\n" +
 	"\n" +
 	"containers\x18\x01 \x03(\v2\x14.ateworker.ContainerR\n" +
-	"containers\"\xe6\x03\n" +
+	"containers\x12%\n" +
+	"\x0eruntime_golden\x18\x02 \x01(\bR\rruntimeGolden\"\xe6\x03\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x129\n" +
 	"\fwakeup_probe\x18\x02 \x01(\v2\x16.ateworker.WakeupProbeR\vwakeupProbe\x12[\n" +

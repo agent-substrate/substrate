@@ -32,25 +32,22 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/workerstats"
 
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
-
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
-	"github.com/agent-substrate/substrate/internal/wakeupprobe"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
-	"golang.org/x/sys/unix"
 )
 
 // runningActor holds the live state for one actor's micro-VM. ateworker owns the
 // cloud-hypervisor process directly (booted by RunWorkload or relaunched by
 // RestoreWorkload), so it tracks that process and its api-socket for teardown.
 type runningActor struct {
+	phase guestPhase
+
 	// baseID is the FROZEN base sandbox id propagated across this actor's restore
 	// lineage. For a cold-run actor this is the actor's own id; for a restored
 	// actor it is the id read from the snapshot's base-id file (the golden id,
@@ -232,6 +229,9 @@ func (s *AteWorkerService) resolveRuntime(paths map[string]string) resolvedRunti
 //   - Each container's bundle holds the overlay spec its rootfs/ is composed
 //     from. ateworker builds the OCI spec itself.
 func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.RunWorkloadRequest) (resp *ateworkerpb.RunWorkloadResponse, retErr error) {
+	if req.GetSpec().GetRuntimeGolden() && req.GetAtespace() != resources.GoldenActorAtespace {
+		return nil, apierror.InvalidArgument("runtime golden capture requires a golden actor")
+	}
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
@@ -256,6 +256,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 
 	p := actorBootParams{
+		runtimeGolden:    req.GetSpec().GetRuntimeGolden(),
 		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
 		actorUID:         req.GetActorUid(),
 		actorDirs:        req.GetActorDirs(),
@@ -298,6 +299,8 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 // request, or from a Restore request whose snapshot fidelity covers only the
 // durable-dir volumes (the workload itself cold-starts).
 type actorBootParams struct {
+	runtimeGolden bool
+
 	actorRef         resources.ActorRef
 	actorUID         string
 	actorDirs        *ateworkerpb.ActorDirs
@@ -532,6 +535,8 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	consoleLog := kata.ConsoleLogPath(actorUID)
 	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, vcpus,
 		agentInit(ctx, client.Info()), s.guestDebug)
+	// Only instrumented E2E builds add a boot-continuity marker.
+	vmCfg.Payload.Cmdline += runtimeBootMarker()
 	if err := client.CreateVM(ctx, vmCfg); err != nil {
 		return fmt.Errorf("while creating VM: %w", err)
 	}
@@ -587,55 +592,29 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		}
 	}()
 
-	// Post-boot kata-agent setup: sandbox, guest networking, start each container.
+	ra := &runningActor{phase: guestBooted, chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac}
+	// Capture at the one boundary before any guest sandbox or application exists.
+	if p.runtimeGolden {
+		s.setRunningVM(actorUID, ra)
+		return nil
+	}
 	if err := s.startActorContainers(ctx, ac, actorUID, vsockPath, ctrs); err != nil {
 		return err
 	}
 	tContainers := time.Now()
-
-	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
-		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
+	if err := s.waitActorReady(ctx, p); err != nil {
+		return err
 	}
-
-	// Everything from BootVM onward, split. ateworker used to log only the total, which
-	// hid where a cold boot actually goes: it is not the guest booting.
 	slog.InfoContext(ctx, "Actor boot phases", slog.String("id", actorUID),
 		slog.Duration("vsock_wait", tVsock.Sub(tBooted)),
 		slog.Duration("agent_dial", tDialed.Sub(tVsock)),
 		slog.Duration("containers", tContainers.Sub(tDialed)),
 		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
-
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
-	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
+	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(actorUID), egress); err != nil {
 		return err
 	}
-	s.setRunningVM(actorUID, ra)
-
-	// Forward each container's stdout/stderr into the pod logs, keyed by the
-	// container id (== the name; see StartRootfsContainer). The goroutines read
-	// over ac for the actor's lifetime and exit (io.EOF) when teardownActor
-	// closes ac.
-	workloadIDs := make([]string, 0, len(ctrs))
-	attribution := p.actorAttribution()
-	for _, c := range ctrs {
-		s.startActorLogForwarding(ac, attribution, c.name, c.name)
-		workloadIDs = append(workloadIDs, c.name)
-	}
-
-	// Publish the guest to GetWorkloadStats, past every error return above: a
-	// failing attempt closes ac on its way out (and coldBootActorRetrying may
-	// then try the whole boot again), so a target published earlier would leave
-	// the handler polling a connection nobody owns. Same client the forwarding
-	// above reads over — ttrpc multiplexes, and teardownActor ends both.
-	s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: ac, workloadIDs: workloadIDs})
-	// Looked up while the caller holds the actor's lock, so it is this
-	// activation even if the read below outlives the RPC.
-	if hosted := s.lookupActor(actorUID); hosted != nil {
-		go s.recordInitial(context.WithoutCancel(ctx), hosted)
-	}
-
+	s.publishActorApplication(ctx, p, ra, ctrs)
 	return nil
 }
 
@@ -848,95 +827,6 @@ func buildFsConfigs(id string) []ch.FsConfig {
 	}}
 }
 
-// startActorContainers performs the post-boot kata-agent setup the shim normally
-// does at boot: establish the sandbox once (mounting the kataShared virtio-fs base),
-// configure guest networking (eth0 IP/MAC/MTU + routes) once, then start each
-// container on its own overlay rootfs. On failure it dumps guest diagnostics.
-func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.AgentClient, id, vsockPath string, ctrs []actorContainer) error {
-	// Establish the agent sandbox + the kataShared virtio-fs mount (every
-	// container's merged rootfs, durable volumes, CSI volumes, and system-info
-	// volumes). All containers share it, so use the first container's hostname.
-	tStart := time.Now()
-	sbCtx, sbCancel := context.WithTimeout(ctx, 20*time.Second)
-	err := ac.CreateSandboxForActor(sbCtx, kata.CreateSandboxOpts{
-		SandboxID: id,
-		Hostname:  ctrs[0].spec.Hostname,
-	})
-	sbCancel()
-	if err != nil {
-		return fmt.Errorf("while creating agent sandbox: %w", err)
-	}
-	tSandbox := time.Now()
-
-	// Configure guest networking (the shim's job): eth0 IP/MAC/MTU, routes, ARP.
-	mtu := uint64(actorTapMTUOf(ctx, s.sandboxNetNS(id), "tap0_kata"))
-	netCtx, netCancel := context.WithTimeout(ctx, 20*time.Second)
-	err = s.configureGuestNetwork(netCtx, ac, mtu)
-	netCancel()
-	if err != nil {
-		if s.guestDebug {
-			dump := kata.DebugConsoleDump(ctx, vsockPath, "ip addr 2>&1; echo '== route =='; ip route 2>&1; echo '== neigh =='; ip neigh 2>&1")
-			slog.ErrorContext(ctx, "guest network config failed; dump", slog.String("dump", dump))
-		}
-		return fmt.Errorf("while configuring guest network: %w", err)
-	}
-
-	tNetwork := time.Now()
-
-	for _, c := range ctrs {
-		if err := s.startRootfsContainer(ctx, ac, vsockPath, c); err != nil {
-			return err
-		}
-	}
-	slog.InfoContext(ctx, "Agent setup phases", slog.String("id", id),
-		slog.Duration("sandbox", tSandbox.Sub(tStart)),
-		slog.Duration("network", tNetwork.Sub(tSandbox)),
-		slog.Duration("containers", time.Since(tNetwork)),
-		slog.Int("container_count", len(ctrs)))
-	return nil
-}
-
-// startRootfsContainer brings up one container on its host-merged rootfs (the
-// stock kata flow: create + start against shared/<name>/rootfs). On failure it
-// dumps the guest's view of the shared tree.
-//
-// Its spec binds every declared volume at its mount path.
-func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
-	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err := ac.StartRootfsContainer(cCtx, c.name, c.spec)
-	cancel()
-	if err != nil {
-		if s.guestDebug {
-			dump := kata.DebugConsoleDump(ctx, vsockPath,
-				"echo '== shared/containers =='; ls -la /run/kata-containers/shared/containers/ 2>&1 | head -40; "+
-					"echo '== rootfs =='; ls /run/kata-containers/shared/containers/"+c.name+"/rootfs/ 2>&1 | head; "+
-					"echo '== mounts =='; grep -E 'kata|virtiofs' /proc/mounts 2>&1")
-			slog.ErrorContext(ctx, "rootfs container failed; dump", slog.String("container", c.name), slog.String("dump", dump))
-		}
-		return fmt.Errorf("while starting rootfs container %q: %w", c.name, err)
-	}
-	return nil
-}
-
-// startActorLogForwarding spawns two goroutines that pump the actor container's
-// stdout and stderr (read over the kata-agent ttrpc client ac via repeated
-// ReadStdout/ReadStderr) through the shared actorlog forwarder, which annotates
-// each line with the actor's ate.dev/* labels and writes it to the pod's stdout.
-//
-// The streams are keyed by streamID == the kata containerID==execID (the overlay
-// workload id); lines are tagged with actorName + containerName
-// (ate.actor.container.name) so a multi-container actor demultiplexes.
-// The reader contexts are context.Background() — the goroutines are NOT bound to the
-// RPC that started them; they terminate when ac is closed (by teardownActor), which
-// makes the in-flight ReadStdout/ReadStderr fail and the StreamReader return io.EOF,
-// ending WrapContainerLogs. This keeps the agent connection (which ttrpc allows
-// concurrent Calls on) alive for forwarding while guaranteeing no goroutine outlives
-// the connection.
-func (s *AteWorkerService) startActorLogForwarding(ac *kata.AgentClient, a resources.ActorAttribution, streamID, containerName string) {
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), a, containerName)
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), a, containerName)
-}
-
 // errGuestStopped reports that the micro-VM stopped before the kata-agent
 // answered. Callers that can start over (a cold boot has no observable side
 // effects until the agent runs the containers) retry on it.
@@ -1031,36 +921,6 @@ func tailString(s string, n int) string {
 		return s
 	}
 	return s[len(s)-n:]
-}
-
-// configureGuestNetwork replicates the kata shim's guest network setup over the
-// agent: configure eth0 (IP/MAC/MTU), install the connected + default routes, and
-// pin the gateway's ARP entry to its fixed MAC (so a restored guest's frozen
-// neighbor entry stays valid).
-func (s *AteWorkerService) configureGuestNetwork(ctx context.Context, ac *kata.AgentClient, mtu uint64) error {
-	if err := ac.UpdateInterface(ctx, &agentpb.Interface{
-		Device: actornet.ActorVethName,
-		Name:   actornet.ActorVethName,
-		HwAddr: actorGuestMAC,
-		Mtu:    mtu,
-		IPAddresses: []*agentpb.IPAddress{
-			{Family: agentpb.IPFamily_v4, Address: actornet.ActorVethIP, Mask: "30"},
-		},
-	}); err != nil {
-		return err
-	}
-	if err := ac.UpdateRoutes(ctx, []*agentpb.Route{
-		{Dest: actornet.ActorVethSubnet, Device: actornet.ActorVethName, Scope: uint32(unix.RT_SCOPE_LINK), Family: agentpb.IPFamily_v4},
-		{Dest: "", Gateway: actornet.ActorVethGateway, Device: actornet.ActorVethName, Family: agentpb.IPFamily_v4},
-	}); err != nil {
-		return err
-	}
-	return ac.AddARPNeighbors(ctx, []*agentpb.ARPNeighbor{{
-		ToIPAddress: &agentpb.IPAddress{Family: agentpb.IPFamily_v4, Address: actornet.ActorVethGateway},
-		Device:      actornet.ActorVethName,
-		Lladdr:      gatewayMAC,
-		State:       0x80, // NUD_PERMANENT
-	}})
 }
 
 // waitForFile polls for path to exist, up to d. Used to wait for the kata-agent

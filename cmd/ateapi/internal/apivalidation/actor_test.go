@@ -605,7 +605,7 @@ func TestValidateActorUpdate(t *testing.T) {
 		name:   "adding a volume",
 		oldVal: validActor(withActorStatus()),
 		newVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
+			s.ExternalVolumes = []*ateapipb.ExternalVolumeRef{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
 		want:            nil,
 		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
@@ -613,17 +613,17 @@ func TestValidateActorUpdate(t *testing.T) {
 		name:   "adding a volume to an actor with no status",
 		oldVal: validActor(),
 		newVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
+			s.ExternalVolumes = []*ateapipb.ExternalVolumeRef{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
 		want:            nil,
 		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
 	}, {
 		name: "provisioning transition on an existing volume",
 		oldVal: validInput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
+			s.ExternalVolumes = []*ateapipb.ExternalVolumeRef{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
 		newVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalVolumes = []*ateapipb.ExternalVolume{{
+			s.ExternalVolumes = []*ateapipb.ExternalVolumeRef{{
 				Name:            "vol-a",
 				VolumeType:      "substrate.io/mock",
 				StorageVolumeId: "csi-426d29b7",
@@ -636,7 +636,7 @@ func TestValidateActorUpdate(t *testing.T) {
 		name:   "duplicate external_volumes volume_name",
 		oldVal: validActor(withActorStatus()),
 		newVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalVolumes = []*ateapipb.ExternalVolume{
+			s.ExternalVolumes = []*ateapipb.ExternalVolumeRef{
 				{Name: "vol-a", VolumeType: "substrate.io/mock"},
 				{Name: "vol-a", VolumeType: "substrate.io/mock"},
 			}
@@ -649,9 +649,9 @@ func TestValidateActorUpdate(t *testing.T) {
 		name:   "too many external_volumes",
 		oldVal: validActor(withActorStatus()),
 		newVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
-			vols := make([]*ateapipb.ExternalVolume, 33)
+			vols := make([]*ateapipb.ExternalVolumeRef, 33)
 			for i := range vols {
-				vols[i] = &ateapipb.ExternalVolume{Name: fmt.Sprintf("vol-%d", i), VolumeType: "substrate.io/mock"}
+				vols[i] = &ateapipb.ExternalVolumeRef{Name: fmt.Sprintf("vol-%d", i), VolumeType: "substrate.io/mock"}
 			}
 			s.ExternalVolumes = vols
 		})),

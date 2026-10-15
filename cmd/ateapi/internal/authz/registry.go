@@ -336,6 +336,39 @@ var defaultRPCPermissions = map[string]rpcRule{
 		return onTag(RelationCanDelete, r.GetTag(), field.NewPath("tag"))
 	})),
 
+	// Shared volumes are governed by their owning atespace.
+	ateapipb.Control_CreateSharedVolume_FullMethodName: rule(checksOf(func(r *ateapipb.CreateSharedVolumeRequest) ([]check, field.ErrorList) {
+		ref := r.GetSharedVolume().GetMetadata()
+		if errs := validateRef(ref, field.NewPath("shared_volume", "metadata")); len(errs) > 0 {
+			return nil, errs
+		}
+		return onAtespace(RelationCanCreateSharedVolume, ref.GetAtespace(), field.NewPath("shared_volume", "metadata", "atespace"))
+	})),
+	ateapipb.Control_GetSharedVolume_FullMethodName: rule(checksOf(func(r *ateapipb.GetSharedVolumeRequest) ([]check, field.ErrorList) {
+		ref := r.GetSharedVolume()
+		if errs := validateRef(ref, field.NewPath("shared_volume")); len(errs) > 0 {
+			return nil, errs
+		}
+		return onAtespace(RelationCanGetSharedVolume, ref.GetAtespace(), field.NewPath("shared_volume", "atespace"))
+	})),
+	ateapipb.Control_UpdateSharedVolume_FullMethodName: rule(checksOf(func(r *ateapipb.UpdateSharedVolumeRequest) ([]check, field.ErrorList) {
+		ref := r.GetSharedVolume().GetMetadata()
+		if errs := validateRef(ref, field.NewPath("shared_volume", "metadata")); len(errs) > 0 {
+			return nil, errs
+		}
+		return onAtespace(RelationCanUpdateSharedVolume, ref.GetAtespace(), field.NewPath("shared_volume", "metadata", "atespace"))
+	})),
+	ateapipb.Control_DeleteSharedVolume_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteSharedVolumeRequest) ([]check, field.ErrorList) {
+		ref := r.GetSharedVolume()
+		if errs := validateRef(ref, field.NewPath("shared_volume")); len(errs) > 0 {
+			return nil, errs
+		}
+		return onAtespace(RelationCanDeleteSharedVolume, ref.GetAtespace(), field.NewPath("shared_volume", "atespace"))
+	})),
+	ateapipb.Control_ListSharedVolumes_FullMethodName: rule(checksOf(func(r *ateapipb.ListSharedVolumesRequest) ([]check, field.ErrorList) {
+		return onAtespaceOrGlobal(RelationCanListSharedVolumes, r.GetAtespace(), field.NewPath("atespace"))
+	})),
+
 	// WorkerService is served only to atelet, which each handler
 	// authenticates by its mTLS SPIFFE ID.
 	ateapipb.WorkerService_RegisterWorker_FullMethodName:      inHandler("ateletauth: caller is atelet on the Worker's node"),

@@ -15,9 +15,11 @@
 package controlapi
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -215,11 +217,12 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			},
 		},
 		{
-			name: "skips non-DurableDir volumes",
+			name: "leaves unmounted external volumes out",
 			template: &ateapipb.ActorTemplate{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},
 				Volumes: []*ateapipb.Volume{
-					{Name: "unsupported"},
+					{Name: "borrowed", External: &ateapipb.ExternalVolumeSource{SharedVolume: &ateapipb.SharedVolumeRef{Name: "shared"}}},
+					{Name: "owned", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard"}}},
 					{Name: "home", DurableDir: &ateapipb.DurableDirVolumeSource{}},
 				},
 				Containers: []*ateapipb.Container{
@@ -390,9 +393,9 @@ func TestAppendExternalVolumes(t *testing.T) {
 		Volumes: []*ateapipb.Volume{
 			{
 				Name: "vol-1",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "pd-standard",
-				},
+				}},
 			},
 			{
 				Name:       "vol-2",
@@ -400,9 +403,9 @@ func TestAppendExternalVolumes(t *testing.T) {
 			},
 			{
 				Name: "unmounted-vol",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "pd-standard",
-				},
+				}},
 			},
 		},
 	}
@@ -413,7 +416,7 @@ func TestAppendExternalVolumes(t *testing.T) {
 			Name:     "actor-123",
 		},
 		Status: &ateapipb.ActorStatus{
-			ExternalVolumes: []*ateapipb.ExternalVolume{
+			ExternalVolumes: []*ateapipb.ExternalVolumeRef{
 				{
 					Name:            "vol-1",
 					StorageVolumeId: "vol-gce-pd-123",
@@ -448,7 +451,7 @@ func TestAppendExternalVolumes(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name: "vol-1",
-						External: &ateletpb.ExternalVolumeSource{
+						External: &ateletpb.ExternalVolume{
 							StorageVolumeId: "vol-gce-pd-123",
 							VolumeType:      "pd-standard",
 							VolumeContext:   map[string]string{"foo": "bar"},
@@ -470,7 +473,7 @@ func TestAppendExternalVolumes(t *testing.T) {
 			Atespace: "space-abc",
 			Name:     "actor-123",
 		},
-		Status: &ateapipb.ActorStatus{ExternalVolumes: []*ateapipb.ExternalVolume{}},
+		Status: &ateapipb.ActorStatus{ExternalVolumes: []*ateapipb.ExternalVolumeRef{}},
 	}
 	if err := appendExternalVolumes(&ateletpb.WorkloadSpec{}, template, missingActor, nil); err == nil {
 		t.Errorf("appendExternalVolumes expected error for missing volume, got nil")
@@ -640,5 +643,111 @@ func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
 	}
 	if r := got.GetContainers()[1].GetResources(); r != nil {
 		t.Errorf("unlimited container Resources = %v, want nil", r)
+	}
+}
+
+func TestWorkloadSpecFromActorTemplateRejectsUnknownVolumeSource(t *testing.T) {
+	_, err := workloadSpecFromActorTemplate(&ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-unknown"},
+		Volumes:  []*ateapipb.Volume{{Name: "unsupported"}},
+	}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("workloadSpecFromActorTemplate() error = %v, want one naming the volume", err)
+	}
+}
+
+func TestWorkloadSpecBorrowedVolume(t *testing.T) {
+	template := &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "space-abc", Name: "tmpl1"},
+		Volumes: []*ateapipb.Volume{
+			{Name: "borrowed", External: &ateapipb.ExternalVolumeSource{SharedVolume: &ateapipb.SharedVolumeRef{}}},
+			{Name: "owned", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard"}}},
+		},
+		Containers: []*ateapipb.Container{{
+			Name: "main",
+			VolumeMounts: []*ateapipb.VolumeMount{
+				{Name: "borrowed", MountPath: "/mnt/shared"},
+				{Name: "owned", MountPath: "/mnt/owned"},
+			},
+		}},
+	}
+	owned := &ateletpb.Volume{
+		Name: "owned",
+		External: &ateletpb.ExternalVolume{
+			StorageVolumeId: "disk-1",
+			VolumeType:      "pd.csi.storage.gke.io",
+		},
+	}
+
+	tests := []struct {
+		name  string
+		actor *ateapipb.Actor
+		want  []*ateletpb.Volume
+	}{
+		{
+			name: "golden actor gets an empty dir in place of the shared volume",
+			actor: &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: "tmpl1-uid"},
+				Status: &ateapipb.ActorStatus{ExternalVolumes: []*ateapipb.ExternalVolumeRef{
+					{Name: "owned", StorageVolumeId: "disk-1", VolumeType: "pd.csi.storage.gke.io"},
+				}},
+			},
+			want: []*ateletpb.Volume{
+				{Name: "borrowed", EmptyDir: &ateletpb.EmptyDirVolume{}},
+				owned,
+			},
+		},
+		{
+			name: "user actor mounts the shared volume's handle",
+			actor: &ateapipb.Actor{
+				Metadata:             &ateapipb.ResourceMetadata{Atespace: "space-abc", Name: "consumer"},
+				SharedVolumeBindings: map[string]string{"borrowed": "shared"},
+				Status: &ateapipb.ActorStatus{ExternalVolumes: []*ateapipb.ExternalVolumeRef{
+					{Name: "borrowed", SharedVolumeName: "shared", StorageVolumeId: "disk-shared", VolumeType: "nfs.csi.k8s.io", VolumeContext: map[string]string{"server": "10.0.0.2"}},
+					{Name: "owned", StorageVolumeId: "disk-1", VolumeType: "pd.csi.storage.gke.io"},
+				}},
+			},
+			want: []*ateletpb.Volume{
+				{
+					Name: "borrowed",
+					External: &ateletpb.ExternalVolume{
+						StorageVolumeId: "disk-shared",
+						VolumeType:      "nfs.csi.k8s.io",
+						VolumeContext:   map[string]string{"server": "10.0.0.2"},
+					},
+				},
+				owned,
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := workloadSpecFromActorTemplate(template, tc.actor, nil)
+			if err != nil {
+				t.Fatalf("workloadSpecFromActorTemplate: %v", err)
+			}
+			if diff := cmp.Diff(tc.want, got.GetVolumes(), protocmp.Transform()); diff != "" {
+				t.Errorf("volumes mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestRuntimeGoldenWorkloadBoundary(t *testing.T) {
+	for _, golden := range []bool{false, true} {
+		for _, mode := range []ateapipb.GoldenSnapshotMode{ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME} {
+			a := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "users"}}
+			if golden {
+				a.Metadata.Atespace = resources.GoldenActorAtespace
+			}
+			tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: mode}}}
+			spec, err := workloadSpecFromActorTemplate(tmpl, a, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if spec.GetRuntimeGolden() != (golden && mode == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME) {
+				t.Fatalf("incorrect boundary: golden=%v mode=%v spec=%v", golden, mode, spec)
+			}
+		}
 	}
 }

@@ -103,6 +103,13 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 			})
 	}()
 
+	// Reject impossible captures before disconnecting traffic, pausing the guest,
+	// or replacing any existing checkpoint files.
+	ra := s.runningVM(req.GetActorUid())
+	if ra != nil && ra.phase == guestBooted && scope != ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		return nil, apierror.FailedPrecondition("runtime golden requires MEMORY fidelity")
+	}
+
 	if err := s.tunnel.Deactivate(ctx, attribution); err != nil {
 		return nil, err
 	}
@@ -140,7 +147,6 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
 	// either way ateworker owns it and tracks its api-socket.
-	ra := s.runningVM(actorUID)
 	chSocket := kata.CLHSocketPath(actorUID)
 	if ra != nil && ra.apiSocket != "" {
 		chSocket = ra.apiSocket
@@ -169,6 +175,12 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
 		return nil, fmt.Errorf("while creating checkpoint dir %q: %w", checkpointDir, err)
+	}
+
+	if ra != nil && ra.phase == guestBooted {
+		if err := os.WriteFile(filepath.Join(checkpointDir, runtimeGoldenFile), []byte(runtimeGoldenFormat), 0o600); err != nil {
+			return nil, err
+		}
 	}
 
 	// Capture the snapshot's pieces CONCURRENTLY: the CH snapshot, the

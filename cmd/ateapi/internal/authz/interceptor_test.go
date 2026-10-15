@@ -657,6 +657,36 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 		{"bootstrap owner cannot mint actor certificate", "bootstrap-owner", mintCert, codes.PermissionDenied},
 	}
 
+	// SharedVolume permissions must enforce the owning atespace across all RPCs.
+	for _, call := range []struct {
+		method        string
+		req           any
+		write, global bool
+	}{
+		{ateapipb.Control_CreateSharedVolume_FullMethodName, &ateapipb.CreateSharedVolumeRequest{SharedVolume: &ateapipb.SharedVolume{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "data"}}}, true, false},
+		{ateapipb.Control_GetSharedVolume_FullMethodName, &ateapipb.GetSharedVolumeRequest{SharedVolume: actor}, false, false},
+		{ateapipb.Control_UpdateSharedVolume_FullMethodName, &ateapipb.UpdateSharedVolumeRequest{SharedVolume: &ateapipb.SharedVolume{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "data"}}}, true, false},
+		{ateapipb.Control_DeleteSharedVolume_FullMethodName, &ateapipb.DeleteSharedVolumeRequest{SharedVolume: actor}, true, false},
+		{ateapipb.Control_ListSharedVolumes_FullMethodName, &ateapipb.ListSharedVolumesRequest{Atespace: "team-a"}, false, false},
+		{ateapipb.Control_ListSharedVolumes_FullMethodName, &ateapipb.ListSharedVolumesRequest{}, false, true},
+	} {
+		for _, user := range []string{"global-owner", "global-viewer", "editor", "viewer", "outsider"} {
+			t.Run(call.method+"/"+user, func(t *testing.T) {
+				allowed := user == "global-owner" || (!call.write && user == "global-viewer") || (!call.global && (user == "editor" || (!call.write && user == "viewer")))
+				userCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: user, Kind: principal.KindJWT})
+				called := false
+				_, err := UnaryServerInterceptor(authorizer, true)(userCtx, call.req, &grpc.UnaryServerInfo{FullMethod: call.method}, func(context.Context, any) (any, error) { called = true; return nil, nil })
+				if allowed {
+					if err != nil || !called {
+						t.Fatalf("allowed call rejected: %v", err)
+					}
+				} else if apierror.Code(err) != codes.PermissionDenied || called {
+					t.Fatalf("unauthorized call reached handler: %v", err)
+				}
+			})
+		}
+	}
+
 	interceptor := UnaryServerInterceptor(authorizer, true)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

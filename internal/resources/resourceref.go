@@ -107,3 +107,20 @@ func TagRefFromTag(t *ateapipb.Tag) TagRef {
 		Name:     t.GetMetadata().GetName(),
 	}
 }
+
+// SharedVolumeRef identifies a SharedVolume by the (atespace, name).
+type SharedVolumeRef = ResourceRef[*ateapipb.SharedVolume]
+
+// SharedVolumeRefFromObjectRef converts an ObjectRef to a SharedVolumeRef.
+func SharedVolumeRefFromObjectRef(ref *ateapipb.ObjectRef) SharedVolumeRef {
+	return resourceRefFromObjectRef[*ateapipb.SharedVolume](ref)
+}
+
+// SharedVolumeRefFromSharedVolume returns the reference addressing the
+// given volume.
+func SharedVolumeRefFromSharedVolume(v *ateapipb.SharedVolume) SharedVolumeRef {
+	return SharedVolumeRef{
+		Atespace: v.GetMetadata().GetAtespace(),
+		Name:     v.GetMetadata().GetName(),
+	}
+}

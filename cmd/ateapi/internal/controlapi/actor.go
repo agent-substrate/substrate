@@ -90,17 +90,21 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 
 	// Resolve the explicit tag, or freeze the template's current golden default.
 	tagRef := inActor.GetSourceTag()
-	if tagRef == nil {
-		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
-	} else {
-		// NOTE: whether the ExternalVolumes gate is enabled or not, we do not
-		// support cloning from a tag that has external volumes.
+	switch {
+	case tagRef != nil:
 		for _, volume := range template.GetVolumes() {
-			if volume.GetExternalVolumeTemplate() != nil {
+			if volume.GetExternal().GetTemplate() != nil {
 				// TODO: Permit cloning after CSI volume snapshots are supported.
 				return nil, apierror.FailedPrecondition("Tag cloning does not support ActorTemplates with external volumes")
 			}
+			if volume.GetExternal().GetSharedVolume() != nil {
+				return nil, apierror.FailedPrecondition("Tag cloning does not support ActorTemplates that reference a SharedVolume")
+			}
 		}
+	case templateHasSharedVolumeRef(template) && template.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() != ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME:
+		// TODO(shared-volumes): restore from the golden once checkpoint and restore mount options agree for external volume refs; see docs/csi-volumes.md.
+	default:
+		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
 	}
 	var sourceTag *ateapipb.Tag
 	if tagRef != nil {
@@ -119,8 +123,8 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	name := inActor.GetMetadata().GetName()
 
 	// Volume creation is completed asynchronously after the actor is recorded.
-	var initVols []*ateapipb.ExternalVolume
-	if iv, err := initialExternalVolumes(ctx, s.storageClassLister, template); err != nil {
+	var initVols []*ateapipb.ExternalVolumeRef
+	if iv, err := initialActorVolumes(ctx, s.storageClassLister, template); err != nil {
 		return nil, err
 	} else if preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
 		initVols = iv
@@ -130,6 +134,13 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 				"ActorTemplates with external volumes require the ExternalVolumes preview gate to be enabled on the server and the client to opt in to preview features (kubectl ate --preview, or the "+preview.Header+" header)"),
 		}
 		return nil, resources.ToAPIError(errs)
+	}
+	if !isGoldenActor(inActor) {
+		refVols, err := resolveSharedVolumeRefs(ctx, s.store, inActor, template)
+		if err != nil {
+			return nil, err
+		}
+		initVols = append(initVols, refVols...)
 	}
 
 	// Verify that the result is properly valid before storing it.
@@ -164,6 +175,9 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 			return nil, apierror.AlreadyExists("Actor %s already exists", name)
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
+			if templateHasSharedVolumeRef(template) {
+				return nil, apierror.FailedPrecondition("Atespace %s or a referenced SharedVolume is unavailable", atespace)
+			}
 			return nil, apierror.FailedPrecondition("Atespace %s not found", atespace)
 		}
 		return nil, fmt.Errorf("while recording actor: %w", err)
@@ -174,6 +188,10 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	logActorStateChanged(ctx, stored, ateattr.OperationCreate)
 
 	return stored, nil
+}
+
+func isGoldenActor(actor *ateapipb.Actor) bool {
+	return actor.GetMetadata().GetAtespace() == resources.GoldenActorAtespace
 }
 
 // resolveTagSource resolves a CreateActor request's source tag

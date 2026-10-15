@@ -361,21 +361,18 @@ func newInProgressSnapshotURI(actorTemplate *ateapipb.ActorTemplate, actor *atea
 	return uri, nil
 }
 
-// ensureVolumesDetached detaches the actor's mounted external volumes from
-// its worker node. Detachment is idempotent, so a re-entered workflow safely
-// runs it again. spanName distinguishes the suspend and pause steps in
-// traces; op labels the volume metrics.
+// ensureVolumesDetached detaches the actor's mounted external volumes from its
+// worker node and marks its SharedVolume references inactive. Both steps are
+// idempotent; spanName distinguishes suspend from pause and op labels metrics.
 // TODO replace re-execution with a proper check on the volumes' attach state.
 func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, spanName, op string) (err error) {
 	ctx, done := stepSpan(ctx, spanName)
 	defer func() { err = done(err) }()
 
-	// Given that external volumes has been in the codebase for a while and
-	// its preview-ness is solely around the API, and that the impact of
-	// disabling the gate while in use would be an orphaned volume
-	// attachment, we are NOT checking the ExternalVolumes gate in the
-	// delete/suspend path.
-	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, op)
+	if err := detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, op); err != nil {
+		return err
+	}
+	return deactivateSharedVolumes(ctx, w.store, actor)
 }
 
 // ensureSuspendedFinalized releases the actor's worker (only when it is still

@@ -260,7 +260,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				// after ResumeActor). The elapsed warmup is unknowable, so
 				// restart the clock.
 				slog.WarnContext(ctx, "Golden actor running without a snapshot deadline; restarting warmup", slog.String("ActorTemplate", ref.String()))
-				deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl.GetContainers()))
+				deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl))
 				if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
 					snapshotStatus.SnapshotTime = timestamppb.New(deadline)
 				}); err != nil {
@@ -301,7 +301,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				// A crash during resume is observed as CRASHED on the retry.
 				return 0, fmt.Errorf("while resuming golden actor: %w", err)
 			}
-			deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl.GetContainers()))
+			deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl))
 			if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
 				snapshotStatus.SnapshotTime = timestamppb.New(deadline)
 			}); err != nil {
@@ -410,7 +410,11 @@ func goldenSnapshotDone(snapshotStatus *ateapipb.GoldenSnapshotStatus) bool {
 // goldenSnapshotWarmupFor returns 0 when every container has a wakeup probe
 // (ResumeActor already blocked until the workload reported 200), and the
 // default warmup otherwise.
-func goldenSnapshotWarmupFor(containers []*ateapipb.Container) time.Duration {
+func goldenSnapshotWarmupFor(tmpl *ateapipb.ActorTemplate) time.Duration {
+	if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME {
+		return 0
+	}
+	containers := tmpl.GetContainers()
 	if len(containers) == 0 {
 		return goldenSnapshotWarmup
 	}

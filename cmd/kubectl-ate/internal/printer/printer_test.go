@@ -717,6 +717,116 @@ func TestPrintTagTo_YAML(t *testing.T) {
 	}
 }
 
+func TestPrintSharedVolumesTo_Table(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinNow(t, now)
+
+	var buf bytes.Buffer
+	volumes := []*ateapipb.SharedVolume{
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "team-a",
+				Name:       "shared",
+				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
+			},
+			DeleteTrigger: ateapipb.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR,
+			AccessMode:    ateapipb.AccessMode_ACCESS_MODE_READ_WRITE_ONCE,
+			VolumeId:      "projects/p/zones/z/disks/substrate-1",
+			VolumeType:    "pd.csi.storage.gke.io",
+			Status: &ateapipb.SharedVolumeStatus{
+				State: ateapipb.SharedVolumeState_SHARED_VOLUME_STATE_READY,
+				Refs: []*ateapipb.ActorRef{
+					{ActorUid: "uid-1", ActorName: "producer", Active: true},
+					{ActorUid: "uid-2", ActorName: "consumer"},
+				},
+			},
+		},
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "team-a",
+				Name:       "adopted",
+				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
+			},
+			DeleteTrigger: ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL,
+			AccessMode:    ateapipb.AccessMode_ACCESS_MODE_READ_WRITE_ONCE,
+			VolumeId:      "projects/p/zones/z/disks/preexisting",
+			VolumeType:    "pd.csi.storage.gke.io",
+			Status: &ateapipb.SharedVolumeStatus{
+				State: ateapipb.SharedVolumeState_SHARED_VOLUME_STATE_READY,
+			},
+		},
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "team-a",
+				Name:       "stranded",
+				CreateTime: timestamppb.New(now.Add(-30 * time.Second)),
+			},
+			DeleteTrigger: ateapipb.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR,
+			AccessMode:    ateapipb.AccessMode_ACCESS_MODE_READ_WRITE_ONCE,
+			Status: &ateapipb.SharedVolumeStatus{
+				State: ateapipb.SharedVolumeState_SHARED_VOLUME_STATE_PENDING,
+			},
+		},
+	}
+
+	if err := PrintSharedVolumesTo(&buf, volumes, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `ATESPACE   NAME       STATE     VOLUME TYPE             VOLUME ID                              ACCESS MODE   DELETE TRIGGER   REFS   AGE
+team-a     adopted    Ready     pd.csi.storage.gke.io   projects/p/zones/z/disks/preexisting   RWO           Manual           0/0    5h
+team-a     shared     Ready     pd.csi.storage.gke.io   projects/p/zones/z/disks/substrate-1   RWO           LastActor        1/2    5m
+team-a     stranded   Pending   <none>                  <none>                                 RWO           LastActor        0/0    30s
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintSharedVolumesTo_Invalid(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintSharedVolumesTo(&buf, nil, "xml"); err == nil {
+		t.Errorf("expected error for invalid format, got nil")
+	}
+}
+
+func TestPrintSharedVolumeTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	volume := &ateapipb.SharedVolume{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"}}
+
+	if err := PrintSharedVolumeTo(&buf, volume, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{
+  "metadata": {
+    "atespace": "team-a",
+    "name": "shared"
+  }
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintSharedVolumeTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	volume := &ateapipb.SharedVolume{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"}}
+
+	if err := PrintSharedVolumeTo(&buf, volume, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `metadata:
+  atespace: team-a
+  name: shared
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestPrintAtespacesTo_Table(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinNow(t, now)

@@ -31,16 +31,17 @@ import (
 
 func (s *Atelet) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
 	for _, vol := range volumes {
-		// Given that external volumes has been in the codebase for a while and
-		// its preview-ness is solely around the API, and that the impact of
-		// disabling the gate while in use would be an orphaned volume
-		// attachment, we are NOT checking the ExternalVolumes gate in the
-		// mount/unmount logic.
+		hostPath := ateletpath.VolumeHostPath(actorUID, vol.GetName())
+		if vol.GetEmptyDir() != nil {
+			if err := resetEmptyDir(hostPath); err != nil {
+				return err
+			}
+			continue
+		}
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue
 		}
-		hostPath := ateletpath.VolumeHostPath(actorUID, vol.GetName())
 		if err := os.MkdirAll(hostPath, 0o750); err != nil {
 			return fmt.Errorf("failed to create mount point %q: %w", hostPath, err)
 		}
@@ -57,6 +58,16 @@ func (s *Atelet) mountExternalVolumes(ctx context.Context, actorUID string, volu
 		}); err != nil {
 			return fmt.Errorf("failed to mount volume %q to %q: %w", ext.GetStorageVolumeId(), hostPath, err)
 		}
+	}
+	return nil
+}
+
+func resetEmptyDir(hostPath string) error {
+	if err := os.RemoveAll(hostPath); err != nil {
+		return fmt.Errorf("failed to clear empty dir %q: %w", hostPath, err)
+	}
+	if err := os.MkdirAll(hostPath, 0o750); err != nil {
+		return fmt.Errorf("failed to create empty dir %q: %w", hostPath, err)
 	}
 	return nil
 }

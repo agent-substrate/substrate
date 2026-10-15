@@ -468,7 +468,7 @@ func createTemplateWithVolumes(t *testing.T, tc *testContext, ns string, volumes
 // "tmpl1" in testAtespace, backed by a WorkerPool in ns whose labels match the
 // template's worker selector, and seeds its golden snapshot. ns keys the pool
 // labels, so each test's template still selects only its own pool.
-func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns string, containers []*ateapipb.Container, volumes []*ateapipb.Volume) *ateapipb.ActorTemplate {
+func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns string, containers []*ateapipb.Container, volumes []*ateapipb.Volume, mode ...ateapipb.GoldenSnapshotMode) *ateapipb.ActorTemplate {
 	t.Helper()
 
 	// Sandbox binaries live on a (cluster-scoped) SandboxConfig the template
@@ -477,15 +477,17 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 	ensureDefaultGvisorSandboxConfig(t, tc)
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
 
+	snapshotConfig := &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation}
+	if len(mode) > 0 {
+		snapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: mode[0]}
+	}
 	created, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{
 		ActorTemplate: &ateapipb.ActorTemplate{
 			Metadata: &ateapipb.ResourceMetadata{
 				Atespace: testAtespace,
 				Name:     "tmpl1",
 			},
-			SnapshotConfig: &ateapipb.SnapshotConfig{
-				StorageLocation: testStorageLocation,
-			},
+			SnapshotConfig: snapshotConfig,
 			SandboxConfig: &ateapipb.SandboxConfig{
 				SandboxClass: "gvisor",
 				ConfigName:   "gvisor-default",

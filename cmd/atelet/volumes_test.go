@@ -91,14 +91,14 @@ func TestUnmountExternalVolumes(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		External: &ateletpb.ExternalVolumeSource{
+		External: &ateletpb.ExternalVolume{
 			StorageVolumeId: "mock-vol-1",
 			VolumeType:      "mock-driver",
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		External: &ateletpb.ExternalVolumeSource{
+		External: &ateletpb.ExternalVolume{
 			StorageVolumeId: "mock-vol-2",
 			VolumeType:      "mock-driver",
 		},
@@ -171,7 +171,7 @@ func TestMountExternalVolumes(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		External: &ateletpb.ExternalVolumeSource{
+		External: &ateletpb.ExternalVolume{
 			StorageVolumeId: "mock-vol-1",
 			VolumeType:      "mock-driver",
 			VolumeContext:   map[string]string{"key": "val1"},
@@ -179,7 +179,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		External: &ateletpb.ExternalVolumeSource{
+		External: &ateletpb.ExternalVolume{
 			StorageVolumeId: "mock-vol-2",
 			VolumeType:      "mock-driver",
 			VolumeContext:   map[string]string{"key": "val2"},
@@ -263,7 +263,7 @@ func TestMountExternalVolumes(t *testing.T) {
 
 		unknownVol := &ateletpb.Volume{
 			Name: "vol-unknown",
-			External: &ateletpb.ExternalVolumeSource{
+			External: &ateletpb.ExternalVolume{
 				StorageVolumeId: "mock-vol-unknown",
 				VolumeType:      "unknown-driver",
 			},
@@ -380,14 +380,14 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		External: &ateletpb.ExternalVolumeSource{
+		External: &ateletpb.ExternalVolume{
 			StorageVolumeId: "mock-vol-1",
 			VolumeType:      "mock-driver",
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		External: &ateletpb.ExternalVolumeSource{
+		External: &ateletpb.ExternalVolume{
 			StorageVolumeId: "mock-vol-2",
 			VolumeType:      "mock-driver",
 		},
@@ -550,5 +550,25 @@ func TestDirectCSIDriverConfigGetter(t *testing.T) {
 	_, err = getter.Get("missing.csi.k8s.io")
 	if err == nil {
 		t.Fatalf("expected error for missing driver, got nil")
+	}
+}
+
+func TestResetEmptyDirClearsPreviousContents(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "volumes", "shared")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stale"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := resetEmptyDir(dir); err != nil {
+		t.Fatalf("resetEmptyDir: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("dir still has %d entries after reset", len(entries))
 	}
 }

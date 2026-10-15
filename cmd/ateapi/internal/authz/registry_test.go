@@ -64,6 +64,14 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			want:       []check{{RelationCanDelete, "atespace:team-a"}},
 		},
 
+		// Shared-volume permissions are scoped to the owning atespace.
+		{name: "CreateSharedVolume", fullMethod: ateapipb.Control_CreateSharedVolume_FullMethodName, req: &ateapipb.CreateSharedVolumeRequest{SharedVolume: &ateapipb.SharedVolume{Metadata: actorMeta}}, want: []check{{RelationCanCreateSharedVolume, "atespace:team-a"}}},
+		{name: "GetSharedVolume", fullMethod: ateapipb.Control_GetSharedVolume_FullMethodName, req: &ateapipb.GetSharedVolumeRequest{SharedVolume: actorRef}, want: []check{{RelationCanGetSharedVolume, "atespace:team-a"}}},
+		{name: "UpdateSharedVolume", fullMethod: ateapipb.Control_UpdateSharedVolume_FullMethodName, req: &ateapipb.UpdateSharedVolumeRequest{SharedVolume: &ateapipb.SharedVolume{Metadata: actorMeta}}, want: []check{{RelationCanUpdateSharedVolume, "atespace:team-a"}}},
+		{name: "DeleteSharedVolume", fullMethod: ateapipb.Control_DeleteSharedVolume_FullMethodName, req: &ateapipb.DeleteSharedVolumeRequest{SharedVolume: actorRef}, want: []check{{RelationCanDeleteSharedVolume, "atespace:team-a"}}},
+		{name: "ListSharedVolumes atespace:team-a", fullMethod: ateapipb.Control_ListSharedVolumes_FullMethodName, req: &ateapipb.ListSharedVolumesRequest{Atespace: "team-a"}, want: []check{{RelationCanListSharedVolumes, "atespace:team-a"}}},
+		{name: "ListSharedVolumes global:root", fullMethod: ateapipb.Control_ListSharedVolumes_FullMethodName, req: &ateapipb.ListSharedVolumesRequest{Atespace: ""}, want: []check{{RelationCanListSharedVolumes, "global:root"}}},
+
 		// Actor templates.
 		{
 			name:       "CreateActorTemplate",

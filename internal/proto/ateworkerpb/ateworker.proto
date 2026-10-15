@@ -18,7 +18,7 @@ package ateworker;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateworkerpb";
 
-// Worker is the interface to control a single gVisor (or, in the future microVM)
+// Worker is the interface to control a single gVisor or microVM
 // guest inside a worker pod.
 //
 // Each worker has two main states, "available" and "executing".
@@ -179,6 +179,9 @@ message EgressGateway {
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 message WorkloadSpec {
   repeated Container containers = 1;
+  // Boot the runtime without creating a guest sandbox or application processes.
+  // Valid only for a golden actor; supported by gVisor and microVM.
+  bool runtime_golden = 2;
 }
 
 message Container {

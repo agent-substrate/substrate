@@ -45,7 +45,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Worker is the interface to control a single gVisor (or, in the future microVM)
+// Worker is the interface to control a single gVisor or microVM
 // guest inside a worker pod.
 //
 // Each worker has two main states, "available" and "executing".
@@ -199,7 +199,7 @@ func (c *workerClient) TerminateWorkload(ctx context.Context, in *TerminateWorkl
 // All implementations must embed UnimplementedWorkerServer
 // for forward compatibility.
 //
-// Worker is the interface to control a single gVisor (or, in the future microVM)
+// Worker is the interface to control a single gVisor or microVM
 // guest inside a worker pod.
 //
 // Each worker has two main states, "available" and "executing".
