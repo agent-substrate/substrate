@@ -29,8 +29,9 @@ if [[ $# -gt 0 ]]; then
       echo "Creates the kind cluster '${KIND_CLUSTER_NAME}' and a local registry container on port ${reg_port}."
       echo
       echo "Configured through the environment:"
-      echo "  KIND_CLUSTER_NAME  Name of the cluster to create (default: kind)."
-      echo "  IP_FAMILY          Address families for pods and Services: ipv4, ipv6 or dual (default: ipv4)."
+      echo "  KIND_CLUSTER_NAME      Name of the cluster to create (default: kind)."
+      echo "  IP_FAMILY              Address families for pods and Services: ipv4, ipv6 or dual (default: ipv4)."
+      echo "  ATE_KIND_RESERVED_CPU  CPU reserved for the kubelet and the system on each node (default: none)."
       exit 0
       ;;
   esac
@@ -126,13 +127,13 @@ kubeadmConfigPatches:
 EOF
 # Hundreds of sandboxes per node can starve the kubelet's node heartbeat; after
 # the 300 s toleration the taint manager evicts every pod on the node. Opt in to
-# a CPU reservation for the kubelet and the system, e.g. KIND_RESERVED_CPU=2.
-if [[ -n "${KIND_RESERVED_CPU:-}" ]]; then
+# a CPU reservation for the kubelet and the system, e.g. ATE_KIND_RESERVED_CPU=2.
+if [[ -n "${ATE_KIND_RESERVED_CPU:-}" ]]; then
 cat <<EOF >> "${ROOT}/bin/kind-config.yaml"
   systemReserved:
-    cpu: "${KIND_RESERVED_CPU}"
+    cpu: "${ATE_KIND_RESERVED_CPU}"
   kubeReserved:
-    cpu: "${KIND_RESERVED_CPU}"
+    cpu: "${ATE_KIND_RESERVED_CPU}"
 EOF
 fi
 
