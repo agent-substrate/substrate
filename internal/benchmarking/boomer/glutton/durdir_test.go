@@ -298,10 +298,6 @@ func TestDurDirShutdownHibernatesBeforeDelete(t *testing.T) {
 			if got := suspends[0].GetOptions().GetMode(); got != tc.wantMode {
 				t.Errorf("suspend mode = %v, want %v", got, tc.wantMode)
 			}
-			reqs := fakeCtrl.recordedDeleteRequests()
-			if len(reqs) == 0 || !reqs[0].GetAnyState() {
-				t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
-			}
 		})
 	}
 }

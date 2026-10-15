@@ -90,7 +90,7 @@ func TestGoldenSnapshotLifecycle(t *testing.T) {
 			t.Cleanup(func() {
 				cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
-				_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: actorRef, AnyState: true})
+				_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: actorRef})
 			})
 			actor, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: actorRef.Name}, ActorTemplate: templateRef,
@@ -110,7 +110,7 @@ func TestGoldenSnapshotLifecycle(t *testing.T) {
 			}
 			validateCounterResponse(t, response, "golden restore", 1, 1)
 			// Delete the borrower before collecting the template's snapshot.
-			if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef, AnyState: true}); err != nil {
+			if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := clients.SubstrateAPI.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: templateRef}); err != nil {

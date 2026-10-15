@@ -334,8 +334,8 @@ func (r *runtime) pause(ctx context.Context, suffix, name string) error {
 // the ones in flight, and a delete that races one of them loses the actor
 // lease and fails with Aborted. The running ones get half of ctx's remaining
 // time; any still running then are canceled, so a hung RPC cannot spend the
-// time the deletes need. DeleteActor with AnyState removes an actor in any
-// state, so a canceled cycle or setup still leaves nothing behind.
+// time the deletes need. DeleteActor removes an actor in any state, so a
+// canceled cycle or setup still leaves nothing behind.
 func (r *runtime) shutdown(ctx context.Context) {
 	r.stopped.Store(true)
 	r.cycleMu.Lock()
@@ -407,8 +407,7 @@ func (r *runtime) delete(ctx context.Context, name string) error {
 		}
 		err = r.call(ctx, "DeleteActor", func(ctx context.Context) error {
 			_, err := r.cfg.APIStub.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-				Actor:    r.ref(name),
-				AnyState: true,
+				Actor: r.ref(name),
 			})
 			return err
 		})
