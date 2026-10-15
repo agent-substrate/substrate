@@ -2618,7 +2618,7 @@ const file_oci_proto_rawDesc = "" +
 	"\n" +
 	"\bErrnoRet\"5\n" +
 	"\rLinuxIntelRdt\x12$\n" +
-	"\rL3CacheSchema\x18\x01 \x01(\tR\rL3CacheSchemaBfZdgithub.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb;agentpbb\x06proto3"
+	"\rL3CacheSchema\x18\x01 \x01(\tR\rL3CacheSchemaBVZTgo.ate.dev/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb;agentpbb\x06proto3"
 
 var (
 	file_oci_proto_rawDescOnce sync.Once

@@ -50,5 +50,5 @@ ateworker drives a small subset of `AgentService`:
 1. Check out the matching kata-containers tag and copy
    `src/libs/protocols/protos/{agent,oci,types,csi}.proto` into `agentpb/`.
 2. Set each `option go_package` to
-   `github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb;agentpb`.
+   `go.ate.dev/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb;agentpb`.
 3. Regenerate with `protoc --go_out=...` (protoc-gen-go), matching the versions above.
