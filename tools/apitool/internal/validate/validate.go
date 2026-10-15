@@ -90,7 +90,7 @@ func DefaultExemptionsPath() (string, error) {
 	return root + "/tools/apitool/exemptions.json", nil
 }
 
-const rootModule = "module github.com/agent-substrate/substrate"
+const rootModule = "module go.ate.dev/substrate"
 
 // repoRoot walks up from the working directory to find the repo root, i.e.
 // the directory containing the go.mod declaring rootModule.

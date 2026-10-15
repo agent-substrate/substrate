@@ -24,7 +24,7 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
-MARKER="github.com/agent-substrate/substrate/internal/roottest"
+MARKER="go.ate.dev/substrate/internal/roottest"
 
 # Look for the marker in both in-package (TestImports) and external _test
 # package (XTestImports) test files.
