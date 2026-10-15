@@ -18,7 +18,7 @@ package main
 
 import "github.com/agent-substrate/substrate/internal/ateattr"
 
-// The phase names, suffixed onto the ateomphaselog duration keys. Kept out of
+// The phase names, suffixed onto the phaselog duration keys. Kept out of
 // ateattr on purpose: that package's SnapshotPhase* values are the
 // ate.snapshot.phase metric enum, and these are not values of it. "total" is
 // shared so the two layers' records agree on the denominator.

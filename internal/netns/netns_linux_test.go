@@ -46,8 +46,8 @@ func TestNamedNetNSRejectsInvalidNames(t *testing.T) {
 
 func TestRemoveNamedDoesNotFollowSymlinks(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
-	const targetName = "ateomnet-symlink-target-test"
-	const linkName = "ateomnet-symlink-test"
+	const targetName = "actornet-symlink-target-test"
+	const linkName = "actornet-symlink-test"
 	targetPath := "/run/netns/" + targetName
 	linkPath := "/run/netns/" + linkName
 	target, err := CreateNamed(targetName)
@@ -83,7 +83,7 @@ func TestCreateNamedReplacesALeftover(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	for _, state := range []string{"mounted", "unmounted"} {
 		t.Run(state, func(t *testing.T) {
-			name := "ateomnet-leftover-test-" + state
+			name := "actornet-leftover-test-" + state
 			path := "/run/netns/" + name
 			t.Cleanup(func() { _ = RemoveNamed(name) })
 

@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateomstats holds the usage telemetry both worker runtimes share: the
+// Package workerstats holds the usage telemetry both worker runtimes share: the
 // attribution a worker retains for each actor, the per-activation state behind
 // every sample, the sampler, and the ate.actor.usage_sampled records. The
 // per-runtime measurement reads live with their runtimes (the cgroup read is
 // only meaningful inside the gVisor worker's cgroup namespace, the guest-agent
 // read only over the micro-VM's vsock).
-package ateomstats
+package workerstats
 
 import (
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"

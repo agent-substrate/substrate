@@ -26,21 +26,21 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/actorlock"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
-	"github.com/agent-substrate/substrate/internal/ateomstats/ateomstatstest"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"github.com/agent-substrate/substrate/internal/workerstats"
+	"github.com/agent-substrate/substrate/internal/workerstats/workerstatstest"
 )
 
-func withUsageRecorder(s *AteWorkerService) *ateomstatstest.Recorder {
-	e, rec := ateomstatstest.NewEmitter()
+func withUsageRecorder(s *AteWorkerService) *workerstatstest.Recorder {
+	e, rec := workerstatstest.NewEmitter()
 	s.usage = e
 	return rec
 }
 
 // hostWithEpoch hosts testActor; running means its initial reading is done.
 func hostWithEpoch(s *AteWorkerService, epoch time.Time, running bool) *hostedActor {
-	h := &hostedActor{attribution: testActor, usage: ateomstats.NewActivation(epoch, false)}
+	h := &hostedActor{attribution: testActor, usage: workerstats.NewActivation(epoch, false)}
 	if running {
 		h.usage.Initial(nil, nil)
 	}

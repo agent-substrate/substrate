@@ -38,13 +38,12 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/ateom"
-	"github.com/agent-substrate/substrate/internal/ateomcgroup"
-	"github.com/agent-substrate/substrate/internal/ateominit"
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateomphaselog"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
-	"github.com/agent-substrate/substrate/internal/ateomtunnel"
+	"github.com/agent-substrate/substrate/internal/ateworker"
+	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
+	"github.com/agent-substrate/substrate/internal/ateworker/cgroup"
+	"github.com/agent-substrate/substrate/internal/ateworker/phaselog"
+	"github.com/agent-substrate/substrate/internal/ateworker/pid1"
+	"github.com/agent-substrate/substrate/internal/ateworker/tunnel"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
@@ -56,6 +55,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/wakeupprobe"
+	"github.com/agent-substrate/substrate/internal/workerstats"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -75,7 +75,7 @@ func flagsConfigPath() string {
 var (
 	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
 
-	tunnelConfig = ateomtunnel.RegisterFlags(pflag.CommandLine)
+	tunnelConfig = tunnel.RegisterFlags(pflag.CommandLine)
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
@@ -100,7 +100,7 @@ const minUsageSampleInterval = 50 * time.Second
 const workloadGracePeriod = 30 * time.Minute
 
 func main() {
-	ateominit.RunIfPID1()
+	pid1.RunIfPID1()
 	pflag.Parse()
 	if *showVersion {
 		fmt.Println(version.String())
@@ -202,7 +202,7 @@ func do(ctx context.Context) error {
 
 	// Prepare the pod cgroup so runsc can create per-actor-container leaves under
 	// it with real accounting.
-	if _, err := ateomcgroup.Delegate(ctx); err != nil {
+	if _, err := cgroup.Delegate(ctx); err != nil {
 		return fmt.Errorf("while setting up cgroup delegation: %w", err)
 	}
 
@@ -228,20 +228,20 @@ func do(ctx context.Context) error {
 	}
 
 	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
-	tunnel, err := ateomtunnel.Start(ctx, *tunnelConfig, ateomnet.ActorHTTPUpstream)
+	tunnel, err := tunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
 	if err != nil {
 		return err
 	}
 	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags)
 	// The controller sets both from the downward API.
-	pool := ateomstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
+	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
 		slog.WarnContext(ctx, "Worker pool unknown; usage records will name no pool", slog.Any("pool", pool))
 	}
-	usageStdout := ateomstats.NewStdoutHandler(syncedWriter)
+	usageStdout := workerstats.NewStdoutHandler(syncedWriter)
 	defer usageStdout.Close()
-	ateworkerService.usage = ateomstats.NewUsageEmitter(lp, usageStdout, pool)
-	defer ateomstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateworkerService.sweepUsage(ctx) })()
+	ateworkerService.usage = workerstats.NewUsageEmitter(lp, usageStdout, pool)
+	defer workerstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateworkerService.sweepUsage(ctx) })()
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -273,7 +273,7 @@ func do(ctx context.Context) error {
 	// outlast, including the window before the Worker record exists; anything
 	// that reaches here is a misconfiguration no restart-in-place will fix.
 	go func() {
-		err := ateom.Report(ctx, ateom.ReportConfig{
+		err := ateworker.Report(ctx, ateworker.ReportConfig{
 			SocketPath:           nodepath.WorkerSupportSocket,
 			CredentialBundlePath: tunnelConfig.CredentialBundle,
 			TrustBundlePath:      tunnelConfig.TrustBundle,
@@ -327,16 +327,16 @@ type AteWorkerService struct {
 	maxActors int
 
 	actorLogger *actorlog.ActorLogger
-	tunnel      *ateomtunnel.Tunnel
+	tunnel      *tunnel.Tunnel
 	// usage writes the usage records. Nil writes none.
-	usage *ateomstats.UsageEmitter
+	usage *workerstats.UsageEmitter
 
 	// shuttingDown is set once SIGTERM has been received. While true, new
 	// workload RPCs are rejected with codes.Unavailable.
 	shuttingDown atomic.Bool
 
 	// cgroupRoot is where the sandbox's cgroup v2 leaves live: the worker pod's
-	// own cgroup scope, which ateomcgroup.Delegate prepares. A field rather
+	// own cgroup scope, which cgroup.Delegate prepares. A field rather
 	// than a constant so tests can point GetWorkloadStats at a fixture tree.
 	cgroupRoot string
 
@@ -353,7 +353,7 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(tunnel *ateomtunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore) *AteWorkerService {
+func NewService(tunnel *tunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore) *AteWorkerService {
 	return &AteWorkerService{
 		locks:       actorlock.New(),
 		inFlight:    actorlock.NewInFlight(),
@@ -602,11 +602,11 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 
-	if err := s.tunnel.Deactivate(ctx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
+	if err := s.tunnel.Deactivate(ctx, workerstats.ActorAttributionFromRequest(req)); err != nil {
 		return nil, err
 	}
 
-	attribution := ateomstats.ActorAttributionFromRequest(req)
+	attribution := workerstats.ActorAttributionFromRequest(req)
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor starting", attribution)
 
 	// Contract with atelet:
@@ -614,7 +614,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	//   * Correct runsc version is downloaded and placed on disk.
 	//   * All OCI bundles are set up, including for the pause container.
 
-	egress, err := s.tunnel.PrepareEgress(ctx, ateomstats.ActorAttributionFromRequest(req), req.GetEgressGateway())
+	egress, err := s.tunnel.PrepareEgress(ctx, workerstats.ActorAttributionFromRequest(req), req.GetEgressGateway())
 	if err != nil {
 		return nil, err
 	}
@@ -637,7 +637,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		if retErr != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
-			if err := s.tunnel.Deactivate(cleanupCtx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
+			if err := s.tunnel.Deactivate(cleanupCtx, workerstats.ActorAttributionFromRequest(req)); err != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", err))
 			}
 			deleteContainers(cleanupCtx, rcmd, containersToDelete, "Run")
@@ -697,10 +697,10 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
+	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
-	if err := s.tunnel.Activate(ateomstats.ActorAttributionFromRequest(req), s.sandboxDialer(req.GetActorUid()), egress); err != nil {
+	if err := s.tunnel.Activate(workerstats.ActorAttributionFromRequest(req), s.sandboxDialer(req.GetActorUid()), egress); err != nil {
 		return nil, err
 	}
 
@@ -737,14 +737,14 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	// Per-phase timing, recorded on the way out so a failed checkpoint still
 	// reports the phases it completed, and the failing step its elapsed time.
-	attribution := ateomstats.ActorAttributionFromRequest(req)
+	attribution := workerstats.ActorAttributionFromRequest(req)
 	fidelity := req.GetFidelity()
 	var timing checkpointTiming
 	tLast := tStart
 	defer func() {
 		timing.total = time.Since(tStart)
-		ateomphaselog.LogSnapshotPhases(ctx, "Checkpoint timing breakdown", attribution, fidelity,
-			ateomphaselog.CheckpointDurationKey, err, timing.phases())
+		phaselog.LogSnapshotPhases(ctx, "Checkpoint timing breakdown", attribution, fidelity,
+			phaselog.CheckpointDurationKey, err, timing.phases())
 	}()
 
 	if err := s.tunnel.Deactivate(ctx, attribution); err != nil {
@@ -948,14 +948,14 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	// reports the phases it completed, and the failing step its elapsed time.
 	// Registered ahead of the failure cleanup below, so on failure the total
 	// includes that cleanup; the record is marked by error.type either way.
-	attribution := ateomstats.ActorAttributionFromRequest(req)
+	attribution := workerstats.ActorAttributionFromRequest(req)
 	fidelity := req.GetFidelity()
 	containers := req.GetSpec().GetContainers()
 	var timing restoreTiming
 	tLast := tStart
 	defer func() {
 		timing.total = time.Since(tStart)
-		attrs := ateomphaselog.SnapshotPhaseAttrs(attribution, fidelity, ateomphaselog.RestoreDurationKey, retErr, timing.phases())
+		attrs := phaselog.SnapshotPhaseAttrs(attribution, fidelity, phaselog.RestoreDurationKey, retErr, timing.phases())
 		attrs = append(attrs, slog.Int(containerCountKey, len(containers)))
 		slog.LogAttrs(ctx, slog.LevelInfo, "Restore timing breakdown", attrs...)
 	}()
@@ -1109,7 +1109,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	err = wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid())))
+	err = wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid())))
 	timing.wakeupProbe = lap(&tLast)
 	if err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
@@ -1139,7 +1139,7 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
-	attribution := ateomstats.ActorAttributionFromRequest(req)
+	attribution := workerstats.ActorAttributionFromRequest(req)
 
 	hosted := s.lookupActor(attribution.UID)
 	if hosted != nil {

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateomphaselog renders the per-actor "timing breakdown" log record an
+// Package phaselog renders the per-actor "timing breakdown" log record an
 // worker emits for each checkpoint and restore. Every worker binary times its
 // own phases, which are implementation details of that runtime; this package
 // holds the shape they share so the records of all workers carry the same
 // identity, fidelity and key layout, and atelet's own record joins to any of them.
-package ateomphaselog
+package phaselog
 
 import (
 	"context"

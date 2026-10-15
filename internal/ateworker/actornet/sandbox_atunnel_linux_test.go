@@ -14,9 +14,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// These integration tests use an external package so that ateomnet's own test
+// These integration tests use an external package so that actornet's own test
 // binary does not depend on atunnel.
-package ateomnet_test
+package actornet_test
 
 import (
 	"context"
@@ -25,9 +25,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
+	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
 	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/netns"
 	"github.com/agent-substrate/substrate/internal/roottest"
 )
 
@@ -37,13 +37,13 @@ func TestSandboxEgressReachesAtunnelOnAnyPort(t *testing.T) {
 	ctx := context.Background()
 	const egressPort = 15001
 
-	n, err := ateomnet.SetupSandboxNetwork(ctx, ateomnet.SandboxNetworkConfig{
+	n, err := actornet.SetupSandboxNetwork(ctx, actornet.SandboxNetworkConfig{
 		ActorUID: "66666666-6666-6666-6666-666666666666", Veth: true, EgressPort: egressPort,
 	})
 	if err != nil {
 		t.Fatalf("SetupSandboxNetwork: %v", err)
 	}
-	t.Cleanup(func() { ateomnet.CleanupSandboxNetwork(n) })
+	t.Cleanup(func() { actornet.CleanupSandboxNetwork(n) })
 
 	listeners, err := netns.Listen(ctx, n.GatewayNetNS, []uint16{egressPort})
 	if err != nil {
@@ -102,7 +102,7 @@ func TestSandboxLinkLocalDoesNotReachAtunnel(t *testing.T) {
 	ctx := context.Background()
 	const egressPort = 15001
 
-	n, err := ateomnet.SetupSandboxNetwork(ctx, ateomnet.SandboxNetworkConfig{
+	n, err := actornet.SetupSandboxNetwork(ctx, actornet.SandboxNetworkConfig{
 		ActorUID:   "99999999-9999-9999-9999-999999999999",
 		Veth:       true,
 		EgressPort: egressPort,
@@ -110,7 +110,7 @@ func TestSandboxLinkLocalDoesNotReachAtunnel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupSandboxNetwork: %v", err)
 	}
-	t.Cleanup(func() { ateomnet.CleanupSandboxNetwork(n) })
+	t.Cleanup(func() { actornet.CleanupSandboxNetwork(n) })
 
 	listeners, err := netns.Listen(ctx, n.GatewayNetNS, []uint16{egressPort})
 	if err != nil {

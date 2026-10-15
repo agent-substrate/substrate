@@ -30,10 +30,10 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/ateomphaselog"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
+	"github.com/agent-substrate/substrate/internal/ateworker/phaselog"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"github.com/agent-substrate/substrate/internal/workerstats"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -88,11 +88,11 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	// independent observations rather than a partition of the total.
 	tStart := time.Now()
 	var dPrep, dPause, dSnapshot, dDurable, dUpper, dTeardown time.Duration
-	attribution := ateomstats.ActorAttributionFromRequest(req)
+	attribution := workerstats.ActorAttributionFromRequest(req)
 	scope := req.GetFidelity()
 	defer func() {
-		ateomphaselog.LogSnapshotPhases(ctx, "Checkpoint timing breakdown", attribution, scope,
-			ateomphaselog.CheckpointDurationKey, err, []ateomphaselog.Phase{
+		phaselog.LogSnapshotPhases(ctx, "Checkpoint timing breakdown", attribution, scope,
+			phaselog.CheckpointDurationKey, err, []phaselog.Phase{
 				{Name: phasePrep, D: dPrep},
 				{Name: phasePause, D: dPause},
 				{Name: phaseSnapshot, D: dSnapshot},
@@ -415,7 +415,7 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
-	attribution := ateomstats.ActorAttributionFromRequest(req)
+	attribution := workerstats.ActorAttributionFromRequest(req)
 
 	hosted := s.lookupActor(attribution.UID)
 	if hosted != nil {

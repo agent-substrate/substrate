@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet/dns/protocol"
+	"github.com/agent-substrate/substrate/internal/ateworker/actornet/dns/protocol"
 	"golang.org/x/net/dns/dnsmessage"
 )
 

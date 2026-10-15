@@ -14,9 +14,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateomcgroup delegates the worker pod's cgroup to the worker so each
+// Package cgroup delegates the worker pod's cgroup to the worker so each
 // actor can get a leaf of its own.
-package ateomcgroup
+package cgroup
 
 import (
 	"context"

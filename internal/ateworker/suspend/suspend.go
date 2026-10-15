@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateomsuspend asks the control plane, through the node-local atelet,
+// Package suspend asks the control plane, through the node-local atelet,
 // to suspend an actor a worker hosts.
 //
 // This is the upward half of a suspend: the request travels worker -> atelet ->
 // ateapi, and the suspend the control plane decides to run travels back down
 // the ordinary path as a Checkpoint into the worker that asked. A caller must
 // therefore hold no lock that Checkpoint needs while a request is in flight.
-package ateomsuspend
+package suspend
 
 import (
 	"context"

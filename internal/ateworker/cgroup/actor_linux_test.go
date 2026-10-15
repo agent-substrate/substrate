@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ateomcgroup
+package cgroup
 
 import (
 	"context"
@@ -35,7 +35,7 @@ func TestActorLeafStartsProcessesInside(t *testing.T) {
 	root := ownCgroup(t)
 	self := "/" + strings.TrimPrefix(root, Root)
 
-	leaf, err := openActorLeaf(root, "ateomcgroup-test", 500)
+	leaf, err := openActorLeaf(root, "cgroup-test", 500)
 	if err != nil {
 		t.Skipf("cannot create a cgroup here: %v", err)
 	}
@@ -51,10 +51,10 @@ func TestActorLeafStartsProcessesInside(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "0::" + filepath.Join(self, "ateomcgroup-test"); !strings.Contains(string(got), want) {
+	if want := "0::" + filepath.Join(self, "cgroup-test"); !strings.Contains(string(got), want) {
 		t.Errorf("process cgroup = %q, want %q", got, want)
 	}
-	if err := removeActorLeaf(root, "ateomcgroup-test"); err != nil {
+	if err := removeActorLeaf(root, "cgroup-test"); err != nil {
 		t.Errorf("removing the leaf after its process exited: %v", err)
 	}
 }
@@ -63,7 +63,7 @@ func TestActorLeafStartsProcessesInside(t *testing.T) {
 func TestKillActorLeaf(t *testing.T) {
 	roottest.Require(t, "creates cgroups")
 	root := ownCgroup(t)
-	leaf, err := openActorLeaf(root, "ateomcgroup-kill-test", 0)
+	leaf, err := openActorLeaf(root, "cgroup-kill-test", 0)
 	if err != nil {
 		t.Skipf("cannot create a cgroup here: %v", err)
 	}
@@ -76,15 +76,15 @@ func TestKillActorLeaf(t *testing.T) {
 	_ = leaf.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := KillLeafUnder(ctx, root, "ateomcgroup-kill-test"); err != nil {
+	if err := KillLeafUnder(ctx, root, "cgroup-kill-test"); err != nil {
 		t.Fatalf("KillLeafUnder: %v", err)
 	}
 	_ = cmd.Wait()
-	if err := removeActorLeaf(root, "ateomcgroup-kill-test"); err != nil {
+	if err := removeActorLeaf(root, "cgroup-kill-test"); err != nil {
 		t.Errorf("removing the killed leaf: %v", err)
 	}
 	// Already gone: nothing to kill.
-	if err := KillLeafUnder(ctx, root, "ateomcgroup-kill-test"); err != nil {
+	if err := KillLeafUnder(ctx, root, "cgroup-kill-test"); err != nil {
 		t.Errorf("KillLeafUnder on a removed leaf: %v", err)
 	}
 }

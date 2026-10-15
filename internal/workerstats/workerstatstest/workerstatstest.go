@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateomstatstest records the usage records a worker writes, for tests.
-package ateomstatstest
+// Package workerstatstest records the usage records a worker writes, for tests.
+package workerstatstest
 
 import (
 	"context"
@@ -21,7 +21,7 @@ import (
 	"sync"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
+	"github.com/agent-substrate/substrate/internal/workerstats"
 )
 
 // Recorder is a stdout handler that keeps the kind and source of each record.
@@ -32,9 +32,9 @@ type Recorder struct {
 }
 
 // NewEmitter returns an emitter that writes every record to a new Recorder.
-func NewEmitter() (*ateomstats.UsageEmitter, *Recorder) {
+func NewEmitter() (*workerstats.UsageEmitter, *Recorder) {
 	rec := &Recorder{}
-	return ateomstats.NewUsageEmitter(nil, rec, ateomstats.Pool{}), rec
+	return workerstats.NewUsageEmitter(nil, rec, workerstats.Pool{}), rec
 }
 
 // Kinds is the ate.stats.kind of each record, in order.

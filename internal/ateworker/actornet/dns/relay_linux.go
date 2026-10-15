@@ -22,7 +22,7 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
+	"github.com/agent-substrate/substrate/internal/netns"
 )
 
 // Serve serves UDP and TCP DNS in the sandbox's local gateway namespace.

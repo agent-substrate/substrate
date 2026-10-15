@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ateomtunnel
+package tunnel
 
 import (
 	"context"
@@ -460,7 +460,7 @@ func serveAtelet(t *testing.T, ca testCA, ateletID string) *fakeAtelet {
 
 	// t.TempDir() embeds the test name, which can overrun the unix socket
 	// path limit, so the socket gets its own short directory.
-	socketDir, err := os.MkdirTemp("", "ateomtunnel")
+	socketDir, err := os.MkdirTemp("", "tunnel")
 	if err != nil {
 		t.Fatal(err)
 	}

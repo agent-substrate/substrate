@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateomphaselog"
+	"github.com/agent-substrate/substrate/internal/ateworker/phaselog"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -61,8 +61,8 @@ func TestRestoreTimingPhases(t *testing.T) {
 		activate:      2 * time.Millisecond,
 		total:         2 * time.Second,
 	}
-	attrs := ateomphaselog.SnapshotPhaseAttrs(resources.ActorAttribution{UID: "uid-abc"},
-		ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateomphaselog.RestoreDurationKey, nil, timing.phases())
+	attrs := phaselog.SnapshotPhaseAttrs(resources.ActorAttribution{UID: "uid-abc"},
+		ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, phaselog.RestoreDurationKey, nil, timing.phases())
 	attrs = append(attrs, slog.Int(containerCountKey, 2))
 
 	seen := make(map[string]bool, len(attrs))
@@ -115,8 +115,8 @@ func TestCheckpointTimingPhases(t *testing.T) {
 		teardown:   150 * time.Millisecond,
 		total:      500 * time.Millisecond,
 	}
-	rec := renderPhaseRecord(t, ateomphaselog.SnapshotPhaseAttrs(resources.ActorAttribution{UID: "uid-abc"},
-		ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateomphaselog.CheckpointDurationKey, nil, timing.phases()))
+	rec := renderPhaseRecord(t, phaselog.SnapshotPhaseAttrs(resources.ActorAttribution{UID: "uid-abc"},
+		ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, phaselog.CheckpointDurationKey, nil, timing.phases()))
 
 	for k, want := range map[string]float64{
 		"ateworker.actor.checkpoint.duration.prep":        0.02,

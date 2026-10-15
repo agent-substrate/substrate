@@ -14,8 +14,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateomnet provides shared networking configuration logic for Substrate runtime agents.
-package ateomnet
+// Package actornet provides shared networking configuration logic for Substrate runtime agents.
+package actornet
 
 import (
 	"fmt"

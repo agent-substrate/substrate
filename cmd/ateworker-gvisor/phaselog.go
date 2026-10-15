@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateomphaselog"
+	"github.com/agent-substrate/substrate/internal/ateworker/phaselog"
 )
 
-// The phase names, suffixed onto the ateomphaselog duration keys. Kept out of
+// The phase names, suffixed onto the phaselog duration keys. Kept out of
 // ateattr on purpose: that package's SnapshotPhase* values are the
 // ate.snapshot.phase metric enum, and these are not values of it. "total" is
 // shared so the two layers' records agree on the denominator.
@@ -66,8 +66,8 @@ type restoreTiming struct {
 	wakeupProbe, activate, total           time.Duration
 }
 
-func (t restoreTiming) phases() []ateomphaselog.Phase {
-	return []ateomphaselog.Phase{
+func (t restoreTiming) phases() []phaselog.Phase {
+	return []phaselog.Phase{
 		{Name: phasePrep, D: t.prep},
 		{Name: phaseEgressPrepare, D: t.egressPrepare},
 		{Name: phaseNetSetup, D: t.netSetup},
@@ -89,8 +89,8 @@ type checkpointTiming struct {
 	prep, checkpoint, durableDir, teardown, total time.Duration
 }
 
-func (t checkpointTiming) phases() []ateomphaselog.Phase {
-	return []ateomphaselog.Phase{
+func (t checkpointTiming) phases() []phaselog.Phase {
+	return []phaselog.Phase{
 		{Name: phasePrep, D: t.prep},
 		{Name: phaseCheckpoint, D: t.checkpoint},
 		{Name: phaseDurableDir, D: t.durableDir},

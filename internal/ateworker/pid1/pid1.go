@@ -14,13 +14,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateominit runs a minimal init as PID 1 so worker doesn't have to.
+// Package pid1 runs a minimal init as PID 1 so worker doesn't have to.
 //
 // PID 1 inherits every orphan (e.g. the runsc sandbox once `runsc create`
 // exits) and must reap them with wait4(-1), which races os/exec for the exit
 // status of worker's own subprocesses. The init re-executes the binary as its
 // only child, reaps everything, and exits with the child's status.
-package ateominit
+package pid1
 
 import (
 	"fmt"
@@ -43,7 +43,7 @@ func RunIfPID1() {
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ateominit: finding the executable: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pid1: finding the executable: %v\n", err)
 		os.Exit(1)
 	}
 	os.Exit(supervise(exe, os.Args))
@@ -54,7 +54,7 @@ func RunIfPID1() {
 func supervise(path string, argv []string) int {
 	// A no-op as PID 1, but it lets tests run this as an ordinary process.
 	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {
-		fmt.Fprintf(os.Stderr, "ateominit: setting child subreaper: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pid1: setting child subreaper: %v\n", err)
 		return 1
 	}
 
@@ -68,7 +68,7 @@ func supervise(path string, argv []string) int {
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ateominit: starting %s: %v\n", path, err)
+		fmt.Fprintf(os.Stderr, "pid1: starting %s: %v\n", path, err)
 		return 1
 	}
 

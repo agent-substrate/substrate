@@ -25,25 +25,25 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
-	"github.com/agent-substrate/substrate/internal/ateomstats/ateomstatstest"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"github.com/agent-substrate/substrate/internal/workerstats"
+	"github.com/agent-substrate/substrate/internal/workerstats/workerstatstest"
 )
 
-func withUsageRecorder(s *AteWorkerService) *ateomstatstest.Recorder {
-	e, rec := ateomstatstest.NewEmitter()
+func withUsageRecorder(s *AteWorkerService) *workerstatstest.Recorder {
+	e, rec := workerstatstest.NewEmitter()
 	s.usage = e
 	return rec
 }
 
 // running is a after its initial reading, so the sweep samples it.
-func running(a *ateomstats.Activation) *ateomstats.Activation {
+func running(a *workerstats.Activation) *workerstats.Activation {
 	a.Initial(nil, nil)
 	return a
 }
 
 // setActivation replaces the test actor's activation.
-func setActivation(s *AteWorkerService, a *ateomstats.Activation) *hostedActor {
+func setActivation(s *AteWorkerService, a *workerstats.Activation) *hostedActor {
 	h := s.lookupActor(testActor.UID)
 	s.actorsMu.Lock()
 	h.usage = a
@@ -55,7 +55,7 @@ func TestSweepStampsEpochAndDiscoveryServesIt(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
 	s := newStatsService(agent, "app_ovl")
 	epoch := time.Unix(1700, 0)
-	setActivation(s, running(ateomstats.NewActivation(epoch, false)))
+	setActivation(s, running(workerstats.NewActivation(epoch, false)))
 
 	before, err := s.GetActiveWorkloadStats(context.Background(), &ateworkerpb.GetActiveWorkloadStatsRequest{})
 	if err != nil {
@@ -83,7 +83,7 @@ func TestSweepStampsEpochAndDiscoveryServesIt(t *testing.T) {
 func TestResumedGuestCPUIsActivationRelative(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 9_000_000)}}
 	s := newStatsService(agent, "app_ovl")
-	h := setActivation(s, running(ateomstats.NewActivation(time.Now(), true)))
+	h := setActivation(s, running(workerstats.NewActivation(time.Now(), true)))
 
 	s.sweepUsage(context.Background())
 	if got := h.usage.Latest().GetCpuUsageUsec(); got != 0 {
@@ -102,7 +102,7 @@ func TestRecordInitialAndFinal(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
 	s := newStatsService(agent, "app_ovl")
 	rec := withUsageRecorder(s)
-	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	h := setActivation(s, workerstats.NewActivation(time.Now(), false))
 
 	s.recordInitial(context.Background(), h)
 	if h.usage.Latest() == nil {
@@ -125,7 +125,7 @@ func TestRecordInitialAndFinal(t *testing.T) {
 func TestRecordFinalIfEnded(t *testing.T) {
 	s := newStatsService(&fakeAgent{}, "app_ovl")
 	rec := withUsageRecorder(s)
-	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	h := setActivation(s, workerstats.NewActivation(time.Now(), false))
 
 	s.recordFinalIfEnded(context.Background(), h)
 	if got := rec.Kinds(); len(got) != 0 {
@@ -143,7 +143,7 @@ func TestRecordFinalIfEnded(t *testing.T) {
 func TestReadFinal(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
 	s := newStatsService(agent, "app_ovl")
-	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	h := setActivation(s, workerstats.NewActivation(time.Now(), false))
 	s.recordInitial(context.Background(), h)
 
 	agent.stats["app_ovl"] = containerStats(1000, 2000, 100, 9_000_000)
@@ -166,7 +166,7 @@ func TestEndPreviousActivation(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
 	s := newStatsService(agent, "app_ovl")
 	rec := withUsageRecorder(s)
-	old := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	old := setActivation(s, workerstats.NewActivation(time.Now(), false))
 
 	if err := s.endPreviousActivation(context.Background(), testActor.UID, nil); err != nil {
 		t.Fatal(err)
@@ -180,7 +180,7 @@ func TestEndPreviousActivation(t *testing.T) {
 func TestRecordFinalWithNoSampleIsPending(t *testing.T) {
 	s := newStatsService(&fakeAgent{}, "app_ovl")
 	rec := withUsageRecorder(s)
-	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	h := setActivation(s, workerstats.NewActivation(time.Now(), false))
 	s.recordFinal(context.Background(), h)
 	if len(rec.Sources()) != 1 || rec.Sources()[0] != ateattr.StatsSourceUnspecified {
 		t.Errorf("final record sources = %v, want one pending", rec.Sources())
@@ -193,7 +193,7 @@ func TestRecordInitialAfterFinal(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
 	s := newStatsService(agent, "app_ovl")
 	rec := withUsageRecorder(s)
-	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	h := setActivation(s, workerstats.NewActivation(time.Now(), false))
 	agent.onCall = func() { s.recordFinal(context.Background(), h) }
 
 	s.recordInitial(context.Background(), h)
@@ -208,7 +208,7 @@ func TestRecordInitialRecoversFromPanic(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
 	s := newStatsService(agent, "app_ovl")
 	rec := withUsageRecorder(s)
-	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	h := setActivation(s, workerstats.NewActivation(time.Now(), false))
 	agent.onCall = func() { panic("guest read") }
 
 	s.recordInitial(context.Background(), h)
@@ -226,7 +226,7 @@ func TestSweepRecoversFromPanic(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
 	s := newStatsService(agent, "app_ovl")
 	rec := withUsageRecorder(s)
-	setActivation(s, running(ateomstats.NewActivation(time.Now(), false)))
+	setActivation(s, running(workerstats.NewActivation(time.Now(), false)))
 	agent.onCall = func() { panic("guest read") }
 
 	s.sweepUsage(context.Background())
@@ -241,7 +241,7 @@ func TestRecordInitialTakesASlot(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
 	s := newStatsService(agent, "app_ovl")
 	withUsageRecorder(s)
-	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	h := setActivation(s, workerstats.NewActivation(time.Now(), false))
 	for range statsFanOut {
 		s.guestSlots <- struct{}{}
 	}
@@ -260,7 +260,7 @@ func TestRecordInitialAfterRehost(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
 	s := newStatsService(agent, "app_ovl")
 	withUsageRecorder(s)
-	old := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	old := setActivation(s, workerstats.NewActivation(time.Now(), false))
 	target := s.guestOf(old)
 	agent.onCall = func() { hostTestActor(s, testActor, target) }
 
@@ -282,7 +282,7 @@ func TestPartialGuestReadDoesNotDoubleCharge(t *testing.T) {
 		"b_ovl": containerStats(1000, 2000, 100, 400_000_000),
 	}}
 	s := newStatsService(agent, "a_ovl", "b_ovl")
-	h := setActivation(s, running(ateomstats.NewActivation(time.Now(), true)))
+	h := setActivation(s, running(workerstats.NewActivation(time.Now(), true)))
 
 	s.sweepUsage(context.Background())
 	agent.mu.Lock()
@@ -311,7 +311,7 @@ func TestSweepWaitsForInitialAndStopsAtFinal(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
 	s := newStatsService(agent, "app_ovl")
 	rec := withUsageRecorder(s)
-	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	h := setActivation(s, workerstats.NewActivation(time.Now(), false))
 
 	s.sweepUsage(context.Background())
 	if len(agent.calls) != 0 {
@@ -339,9 +339,9 @@ func TestRecordInitialReadsItsOwnGuest(t *testing.T) {
 	newAgent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 9_000_000)}}
 	s := newStatsService(oldAgent, "app_ovl")
 	withUsageRecorder(s)
-	old := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	old := setActivation(s, workerstats.NewActivation(time.Now(), false))
 	fresh := hostTestActor(s, testActor, &guestStatsTarget{actorUID: testActor.UID, agent: newAgent, workloadIDs: []string{"app_ovl"}})
-	fresh.usage = ateomstats.NewActivation(time.Now(), false)
+	fresh.usage = workerstats.NewActivation(time.Now(), false)
 
 	s.recordInitial(context.Background(), old)
 	if got := old.usage.Latest().GetCpuUsageUsec(); got != 5000 {
@@ -362,10 +362,10 @@ func TestLateInitialLeavesNewActivationAlone(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
 	s := newStatsService(agent, "app_ovl")
 	rec := withUsageRecorder(s)
-	old := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	old := setActivation(s, workerstats.NewActivation(time.Now(), false))
 	s.recordFinal(context.Background(), old)
 	fresh := hostTestActor(s, testActor, nil)
-	fresh.usage = ateomstats.NewActivation(time.Now(), false)
+	fresh.usage = workerstats.NewActivation(time.Now(), false)
 
 	s.recordInitial(context.Background(), old)
 	if got := rec.Kinds(); len(got) != 1 || got[0] != ateattr.StatsKindFinal {

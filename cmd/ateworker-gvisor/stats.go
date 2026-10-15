@@ -36,7 +36,7 @@ import (
 // defaultCgroupRoot is the worker pod's own cgroup scope. The worker runs in a
 // private cgroup namespace, so this path is the pod's cgroup rather than the
 // host root, and runsc's per-container leaves are its direct children (see
-// ateomcgroup.Delegate).
+// cgroup.Delegate).
 const defaultCgroupRoot = "/sys/fs/cgroup"
 
 // sandboxCgroupContainer is the container whose cgroup leaf accounts for the
@@ -52,7 +52,7 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // cgroup, because runsc resolves cgroupsPath against the parent of the cgroup
 // it is running in: cgroup v2 forbids a cgroup from holding processes and
 // delegating controllers to children at once, so runsc walks up one level to
-// find a directory it is allowed to create in. ateomcgroup.Delegate moves
+// find a directory it is allowed to create in. cgroup.Delegate moves
 // ateworker into /sys/fs/cgroup/ateworker precisely so that one level up is the
 // delegated scope.
 //

@@ -14,10 +14,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateomtunnel wires atunnel into a worker: its flags, listeners, DNS
+// Package tunnel wires atunnel into a worker: its flags, listeners, DNS
 // relay, and per-actor ingress and egress. Both workers build their tunnel here
 // so they cannot drift.
-package ateomtunnel
+package tunnel
 
 import (
 	"context"
@@ -30,7 +30,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateletdial"
-	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
+	"github.com/agent-substrate/substrate/internal/ateworker/actornet/dns"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/installdefaults"

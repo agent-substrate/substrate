@@ -25,7 +25,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/net/dns/dnsmessage"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet/dns/protocol"
+	"github.com/agent-substrate/substrate/internal/ateworker/actornet/dns/protocol"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
 

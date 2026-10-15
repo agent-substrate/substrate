@@ -619,7 +619,7 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime *ateapipb.SandboxRunti
 		// with a runtime that did not produce it. Resolve the assets for the
 		// matched version once SandboxConfig can name them, or treat a
 		// restorable-only match as incompatible until it can. Latent for now:
-		// worker reports no restorable_runtimes (internal/ateom/register.go).
+		// worker reports no restorable_runtimes (internal/ateworker/register.go).
 		SandboxRuntime: proto.CloneOf(hardware.RuntimeFor(w.GetStatus(), snapRuntime)),
 	}
 }

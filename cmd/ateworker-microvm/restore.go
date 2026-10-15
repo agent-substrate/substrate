@@ -28,10 +28,10 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateomphaselog"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
+	"github.com/agent-substrate/substrate/internal/ateworker/phaselog"
+	"github.com/agent-substrate/substrate/internal/workerstats"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
 
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
@@ -128,7 +128,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 	defer release()
 
-	if err := s.tunnel.Deactivate(ctx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
+	if err := s.tunnel.Deactivate(ctx, workerstats.ActorAttributionFromRequest(req)); err != nil {
 		return nil, err
 	}
 
@@ -196,8 +196,8 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		dTotal := time.Since(tStart)
 		slog.InfoContext(ctx, "Actor restored (rootfs upper + durable-dir volumes, cold boot)",
 			slog.String("id", p.actorUID), slog.Duration("total", dTotal))
-		ateomphaselog.LogSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
-			ateomphaselog.RestoreDurationKey, nil, []ateomphaselog.Phase{{Name: phaseTotal, D: dTotal}})
+		phaselog.LogSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
+			phaselog.RestoreDurationKey, nil, []phaselog.Phase{{Name: phaseTotal, D: dTotal}})
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		// A VOLUMES snapshot holds no guest state, so this is a cold boot that
 		// happens to start with the volumes already populated. wakeup probe gating comes
@@ -210,8 +210,8 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			slog.String("id", p.actorUID), slog.Duration("total", dTotal))
 		// A cold boot has none of the memory-restore phases, so the total is the
 		// only observation on its record.
-		ateomphaselog.LogSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
-			ateomphaselog.RestoreDurationKey, nil, []ateomphaselog.Phase{{Name: phaseTotal, D: dTotal}})
+		phaselog.LogSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
+			phaselog.RestoreDurationKey, nil, []phaselog.Phase{{Name: phaseTotal, D: dTotal}})
 	default:
 		return nil, apierror.InvalidArgument("unsupported snapshot fidelity: %v", scope)
 	}
@@ -451,7 +451,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
+	if err := wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
 		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 
@@ -476,8 +476,8 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// The joinable per-actor record the benchmarking tooling aggregates. The
 	// durable delta is not carried: tDurable is pinned to tLowers today, so it
 	// would always be the zero a record skips.
-	ateomphaselog.LogSnapshotPhases(ctx, "Restore timing breakdown", p.actorAttribution(), scope,
-		ateomphaselog.RestoreDurationKey, nil, []ateomphaselog.Phase{
+	phaselog.LogSnapshotPhases(ctx, "Restore timing breakdown", p.actorAttribution(), scope,
+		phaselog.RestoreDurationKey, nil, []phaselog.Phase{
 			{Name: phasePrep, D: tPrep.Sub(tStart)},
 			{Name: phaseBundles, D: tBundles.Sub(tPrep)},
 			{Name: phaseUpperJoin, D: tUpper.Sub(tBundles)},

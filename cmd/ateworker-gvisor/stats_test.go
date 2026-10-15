@@ -34,10 +34,10 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/workerstats"
 )
 
 // The lifecycle RPCs that host and unhost actors need netlink, runsc, and
@@ -490,8 +490,8 @@ func TestGetActiveWorkloadStatsOneUnreadable(t *testing.T) {
 // so the sweep samples it. It starts at the unix epoch, so a sample's epoch is
 // zero and the expected samples here need not name it; the epoch has tests of
 // its own.
-func testActivation() *ateomstats.Activation {
-	a := ateomstats.NewActivation(time.Unix(0, 0), false)
+func testActivation() *workerstats.Activation {
+	a := workerstats.NewActivation(time.Unix(0, 0), false)
 	a.Initial(nil, nil)
 	return a
 }
