@@ -270,9 +270,9 @@ spec:
         - configMapRef:
             name: ate-otel-config
         ports:
+        # No hostPort: ate-api-server dials atelet's Pod IP.
         - name: grpc
           containerPort: 8085
-          hostPort: 8085
         - name: prometheus
           containerPort: 9090
           protocol: TCP

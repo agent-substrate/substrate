@@ -40,8 +40,8 @@ const (
 
 	// AteletTrustDomain and the ServiceAccount constants are the trust-domain
 	// and service-account segments of the SPIFFE IDs that atelet,
-	// atenet-router, atenet-egress and ate-controller Pod certificates carry,
-	// as minted by the podidentity signer
+	// atenet-router, atenet-egress, ate-controller and ate-api-server Pod
+	// certificates carry, as minted by the podidentity signer
 	// (cmd/podcertcontroller/internal/podidentitysigner).
 	// The namespace segment is the namespace they run in, which callers
 	// resolve themselves rather than assume.
@@ -50,6 +50,7 @@ const (
 	RouterServiceAccount     = "atenet-router"
 	EgressServiceAccount     = "atenet-egress"
 	ControllerServiceAccount = "ate-controller"
+	APIServerServiceAccount  = "ate-api-server"
 
 	// PodNamespaceEnv is the conventional env var name for the namespace
 	// a pod is running in, exposed via Kubernetes' downward API.
@@ -105,4 +106,10 @@ func EgressSPIFFEID(namespace string) string {
 // ControllerSPIFFEID returns the SPIFFE ID ate-controller presents when it runs in namespace.
 func ControllerSPIFFEID(namespace string) string {
 	return SPIFFEID(namespace, ControllerServiceAccount)
+}
+
+// APIServerSPIFFEID returns the SPIFFE ID ate-api-server presents when it runs
+// in namespace. atelet admits only this identity on AteomHerder by default.
+func APIServerSPIFFEID(namespace string) string {
+	return SPIFFEID(namespace, APIServerServiceAccount)
 }

@@ -115,3 +115,11 @@ func TestNamespaceFromPodEnv(t *testing.T) {
 		}
 	})
 }
+
+func TestAPIServerSPIFFEID(t *testing.T) {
+	// Matches the --herder-allowed-spiffe-id default atelet ships with.
+	const want = "spiffe://cluster.local/ns/ate-system/sa/ate-api-server"
+	if got := APIServerSPIFFEID(SystemNamespace); got != want {
+		t.Errorf("APIServerSPIFFEID(%q) = %q, want %q", SystemNamespace, got, want)
+	}
+}
