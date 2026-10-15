@@ -15,17 +15,23 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path"
 	"sort"
 	"strings"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/moby/sys/user"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/errgroup"
@@ -74,7 +80,7 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 	return out
 }
 
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) (*v1.Config, error) {
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) (*imagecache.Image, error) {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -139,7 +145,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		return nil, fmt.Errorf("while writing overlay spec: %w", err)
 	}
 
-	return &img.Config, nil
+	return img, nil
 }
 
 // resolveImageVolumes pulls the image behind every image-typed volume this
@@ -240,4 +246,53 @@ func resolveProcessArgs(imageCfg *v1.Config, command, args []string) ([]string, 
 		return nil, fmt.Errorf("no command specified: image defines neither ENTRYPOINT nor CMD and the container sets neither command nor args")
 	}
 	return argv, nil
+}
+
+// resolveImageUser resolves the image's USER against the image's own
+// /etc/passwd and /etc/group, either of which may be absent. No USER is root,
+// reported as nil.
+func resolveImageUser(img *imagecache.Image) (*ateworkerpb.ProcessUser, error) {
+	if img.Config.User == "" {
+		return nil, nil
+	}
+	passwd, err := readOptionalImageFile(img, "etc/passwd")
+	if err != nil {
+		return nil, err
+	}
+	group, err := readOptionalImageFile(img, "etc/group")
+	if err != nil {
+		return nil, err
+	}
+	return resolveUser(img.Config.User, passwd, group)
+}
+
+// readOptionalImageFile returns a nil reader for a file the image lacks.
+func readOptionalImageFile(img *imagecache.Image, name string) (io.Reader, error) {
+	b, err := img.ReadFile(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(b), nil
+}
+
+// resolveUser follows Docker's rules for USER "user[:group]": numeric ids as
+// is, a bare uid with its login group from passwd (gid 0 without an entry),
+// names looked up or an error, group memberships as supplementary groups.
+// Ids are bounded to int32. A nil reader means the image lacks the file.
+func resolveUser(userSpec string, passwd, group io.Reader) (*ateworkerpb.ProcessUser, error) {
+	if strings.Count(userSpec, ":") > 1 {
+		return nil, fmt.Errorf("image User %q: want user[:group]", userSpec)
+	}
+	u, err := user.GetExecUser(userSpec, nil, passwd, group)
+	if err != nil {
+		return nil, fmt.Errorf("image User %q: %w", userSpec, err)
+	}
+	identity := &ateworkerpb.ProcessUser{Uid: uint32(u.Uid), Gid: uint32(u.Gid)}
+	for _, gid := range u.Sgids {
+		identity.AdditionalGids = append(identity.AdditionalGids, uint32(gid))
+	}
+	return identity, nil
 }
