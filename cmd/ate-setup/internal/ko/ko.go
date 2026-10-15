@@ -117,7 +117,7 @@ func (r *Runner) Resolve(ctx context.Context, path string, stdinManifest []byte)
 
 // Build builds and publishes one Go binary's image and returns its pushed
 // reference (the last line ko prints). Resolve covers everything a manifest
-// references; Build is for the images with no manifest names, such as the ateom
+// references; Build is for the images with no manifest names, such as the worker
 // worker images a WorkerPool points at through workerImage.
 func (r *Runner) Build(ctx context.Context, importPath string) (string, error) {
 	defer log.Elapsed(time.Now(), "ko build "+importPath)
@@ -155,11 +155,6 @@ func (r *Runner) BuildTagged(ctx context.Context, tag string, importPaths ...str
 		return nil, fmt.Errorf("ko build printed %d image references for %d packages", len(refs), len(importPaths))
 	}
 	return refs, nil
-}
-
-// ResolvePath resolves a manifest file or directory.
-func (r *Runner) ResolvePath(ctx context.Context, path string) ([]byte, error) {
-	return r.Resolve(ctx, path, nil)
 }
 
 // ResolveBytes resolves an in-memory manifest, such as kustomize output.

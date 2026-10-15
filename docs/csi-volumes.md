@@ -2,6 +2,14 @@
 
 Substrate integrates with the **Container Storage Interface (CSI)** to provide dynamically provisioned, per-actor external volumes that seamlessly attach and detach as actors transition through their lifecycle.
 
+External volumes are a preview feature. The ate API server accepts them only
+when it runs with `--preview=ExternalVolumes` (ate-setup's `preview` setting)
+and the client opts in to preview features: `kubectl ate --preview`, or the
+`Ate-Preview-Allowed: true` gRPC metadata header. The opt-in is needed to
+create an actor template with external volumes, or an actor from such a
+template. Later operations on that actor, such as resume, suspend and delete,
+do not need it.
+
 ---
 
 ## 1. CSI in Substrate vs. Standard Kubernetes
@@ -51,7 +59,7 @@ spec:
 | :--- | :--- | :--- |
 | `enabled` | `bool` | **Required.** Enables TLS/mTLS for the gRPC connection. |
 | `usePodIdentity` | `bool` | **Optional.** When `true`, reuses Substrate's SPIFFE Pod Identity certificates for mutual TLS (mTLS) with dynamic CA trust bundle verification and rotation. Must be `true` when `enabled` is `true`. |
-| `serverName` | `string` | **Optional.** Server name override for TLS certificate verification. |
+| `serverName` | `string` | **Required.** Expected server name (SAN) for TLS certificate verification when TLS is enabled. |
 
 > [!NOTE]
 > For details on exposing CSI controller endpoints over the network and configuring CSI node DaemonSets with required mount propagations, see the [CSI Driver Deployment Guide](csi-deployment.md).
@@ -154,13 +162,13 @@ metadata:
     workload: stateful-agent
 spec:
   replicas: 5
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateworker-gvisor
   sandboxClasses:
   - name: gvisor
 ```
 
 The `ActorTemplate` is a protojson-shaped `ateapipb.ActorTemplate`, created
-through the ate API with `kubectl ate create actor-template -f -` (the
+through the ate API with `kubectl ate --preview create actor-template -f -` (the
 `ate-demo` atespace must exist):
 
 ```yaml
@@ -181,8 +189,14 @@ containers:
       path: /readyz
       port: 8080
 sandboxConfig:
-  sandboxClass: SANDBOX_CLASS_GVISOR
+  sandboxClass: gvisor
   configName: gvisor-default
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 1Gi
 snapshotConfig:
   storageLocation: gs://my-snapshots-bucket/stateful-agent
 volumes:
@@ -261,10 +275,13 @@ snapshots restore application memory normally.
 
 ### Runtime golden regression coverage
 
-The microVM CI lane requires the runtime golden correctness cases and NFS CSI;
-missing prerequisites fail that lane. Local cluster runs opt in with
+The preview-enabled microVM and gVisor CI lanes require the runtime golden
+correctness cases and NFS CSI; missing prerequisites fail those lanes. Local cluster runs opt in with
 `E2E_RUNTIME_GOLDEN=true`, `E2E_SANDBOX_CLASS=microvm` or `gvisor`, and
-`E2E_RUNTIME_LOG_DIR` pointing to an evidence directory. Run
+`E2E_RUNTIME_LOG_DIR` pointing to an evidence directory. For microVM continuity
+checks, build/deploy the worker with `GOFLAGS=-tags=e2e_runtime_identity`, as the
+CI E2E jobs do. Only those instrumented builds add the eager kernel boot marker;
+production builds do not alter the kernel command line for this test. Run
 `TestRuntimeGoldenVolumes` in `internal/e2e/suites/combinedvolumes` through
 `hack/run-e2e-kind.sh`. This checks distinct volume bindings, guest/process
 identity, and retained state over two own-snapshot generations. The eager guest
@@ -282,3 +299,49 @@ Latency collection is separate: select `TestRuntimeGoldenLatency`, additionally
 set `E2E_RUNTIME_GOLDEN_BENCHMARK=true` and `E2E_LATENCY_OUTPUT` to a JSONL file.
 `E2E_LATENCY_SAMPLES` defaults to 100 positive measured samples per mode, with
 five warmups. It does not disable or replace the correctness test.
+
+### Shared-volume failure recovery
+
+Actor creation and its inactive SharedVolume references commit in one database
+transaction. Concurrent creates cannot silently lose references. Deletion marks
+the volume `DELETING` before contacting CSI; new bindings and claims are refused
+from that point onward. If CSI deletion fails, retry `DeleteSharedVolume` to
+finish the same deletion. Fetch the latest version before retrying a request
+with a version precondition.
+
+A failed resume rolls back newly acquired claims before attachment. Once node
+access may have started, claims are released only after termination and detach
+succeed. Failed cleanup keeps the claim active. A crashed actor can therefore
+retain its claim: crash detection alone does not establish that the old node
+has stopped writing.
+
+To recover while retaining data, first update the SharedVolume's `deleteTrigger`
+to `DELETE_TRIGGER_MANUAL` using its current version, then delete the failed
+actor. Repair node/CSI reachability and retry deletion if termination or detach
+fails. Only after cleanup succeeds should a replacement actor mount the volume.
+Do not clear active references directly in the database. If the original node
+is permanently unreachable, fence its storage access at the infrastructure
+level before attempting operator-assisted recovery; this API does not provide
+a force-release shortcut. With `LAST_ACTOR`, deleting the final actor deletes
+storage after successful node cleanup.
+
+SharedVolume RPC authorization follows atespace roles: viewers can get/list;
+editors can create/update/delete; global viewers can list across atespaces.
+This uses the same authorization enforcement configuration as the other
+resource RPCs.
+
+### Upgrade from the old external-volume template field
+
+This pre-1.0 change replaces `volumes[].externalVolumeTemplate` (protobuf field
+3) with `volumes[].external.template`. It is a breaking stored-template change,
+not an automatic migration. Do not roll this binary into a deployment with old
+stored templates and expect their volume sources to survive decoding.
+
+Before upgrading, export the affected templates and inventory/back up their
+storage using the old binary. Rewrite manifests to the new nested field and
+plan recreation of affected templates and actors in a fresh development
+installation. Reattach retained storage through registered SharedVolumes after
+validating the backups and CSI metadata. Existing actor memory snapshots are
+not an upgrade mechanism. Keep the old installation intact until the replacement
+is validated. The repository's pre-1.0 policy deliberately provides no legacy
+field decoder, deprecated alias, or reserved-field compatibility guarantee.

@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -35,10 +36,11 @@ import (
 type recordingVolumePlugin struct {
 	volume.VolumePluginControlPlane
 
-	createErr  error
-	deleteErr  error
-	createdIDs []string
-	deletedIDs []string
+	createErr    error
+	deleteErr    error
+	beforeDelete func()
+	createdIDs   []string
+	deletedIDs   []string
 }
 
 func (p *recordingVolumePlugin) CreateVolume(_ context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
@@ -50,6 +52,9 @@ func (p *recordingVolumePlugin) CreateVolume(_ context.Context, req volume.Creat
 }
 
 func (p *recordingVolumePlugin) DeleteVolume(_ context.Context, volumeID string) error {
+	if p.beforeDelete != nil {
+		p.beforeDelete()
+	}
 	if p.deleteErr != nil {
 		return p.deleteErr
 	}
@@ -300,5 +305,66 @@ func TestDeleteSharedVolume_NotFound(t *testing.T) {
 	_, err := w.DeleteSharedVolume(ctx, resources.SharedVolumeRef{Atespace: "team-a", Name: "nope"}, store.DeletePreconditions{})
 	if got := apierror.Code(err); got != codes.NotFound {
 		t.Fatalf("DeleteSharedVolume error = %v (code %v), want code %v", err, got, codes.NotFound)
+	}
+}
+
+func TestDeleteSharedVolumeFencesBindingsBeforeStorageDelete(t *testing.T) {
+	ctx := context.Background()
+	w, st, plugin := newTestSharedVolumeWorkflow(t)
+	v := mustStoreReadyVolume(t, ctx, st, "fenced", ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL)
+	ref := resources.SharedVolumeRefFromSharedVolume(v)
+	plugin.beforeDelete = func() {
+		current, err := st.GetSharedVolume(ctx, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.GetStatus().GetState() != ateapipb.SharedVolumeState_SHARED_VOLUME_STATE_DELETING {
+			t.Fatal("CSI called before deletion fence")
+		}
+		if _, err := st.CreateActor(ctx, refTestActor(borrowedMount("fenced"))); err == nil {
+			t.Fatal("bind crossed deletion fence")
+		}
+	}
+	plugin.deleteErr = errors.New("transient CSI failure")
+	if _, err := w.DeleteSharedVolume(ctx, ref, store.DeletePreconditions{}); err == nil {
+		t.Fatal("expected CSI error")
+	}
+	plugin.deleteErr = nil
+	if _, err := w.DeleteSharedVolume(ctx, ref, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+}
+
+type bindDuringDeleteStore struct {
+	store.Interface
+	beforeUpdate func()
+}
+
+func (s *bindDuringDeleteStore) UpdateSharedVolume(ctx context.Context, ref resources.SharedVolumeRef, precondition store.Precondition, mutate func(*ateapipb.SharedVolume) error) (*ateapipb.SharedVolume, error) {
+	if s.beforeUpdate != nil {
+		f := s.beforeUpdate
+		s.beforeUpdate = nil
+		f()
+	}
+	return s.Interface.UpdateSharedVolume(ctx, ref, precondition, mutate)
+}
+
+func TestDeleteSharedVolumeConcurrentBindPreventsStorageDeletion(t *testing.T) {
+	ctx := context.Background()
+	w, st, plugin := newTestSharedVolumeWorkflow(t)
+	v := mustStoreReadyVolume(t, ctx, st, "race", ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL)
+	w.store = &bindDuringDeleteStore{Interface: st, beforeUpdate: func() {
+		if _, err := st.CreateActor(ctx, refTestActor(borrowedMount("race"))); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	if _, err := w.DeleteSharedVolume(ctx, resources.SharedVolumeRefFromSharedVolume(v), store.DeletePreconditions{}); apierror.Code(err) != codes.Aborted {
+		t.Fatalf("got %v, want version conflict", err)
+	}
+	if len(plugin.deletedIDs) != 0 {
+		t.Fatalf("storage deleted after concurrent bind: %v", plugin.deletedIDs)
+	}
+	if refs := mustGetVolume(t, ctx, st, "race").GetStatus().GetRefs(); len(refs) != 1 {
+		t.Fatalf("lost binding: %v", refs)
 	}
 }

@@ -127,6 +127,49 @@ func TestValidateRequestActorSuspendRequest(t *testing.T) {
 	}
 }
 
+func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.GetActorEgressPolicyRequest)) *ateletpb.GetActorEgressPolicyRequest {
+		r := &ateletpb.GetActorEgressPolicyRequest{
+			ActorAtespace: "team-a",
+			ActorName:     "actor-1",
+		}
+		for _, m := range mutate {
+			m(r)
+		}
+		return r
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.GetActorEgressPolicyRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "missing actor_atespace",
+		obj:  valid(func(r *ateletpb.GetActorEgressPolicyRequest) { r.ActorAtespace = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_atespace"), "")},
+	}, {
+		name: "invalid actor_atespace: uppercase",
+		obj:  valid(func(r *ateletpb.GetActorEgressPolicyRequest) { r.ActorAtespace = "Team-A" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_name",
+		obj:  valid(func(r *ateletpb.GetActorEgressPolicyRequest) { r.ActorName = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_name"), "")},
+	}, {
+		name: "invalid actor_name: trailing dash",
+		obj:  valid(func(r *ateletpb.GetActorEgressPolicyRequest) { r.ActorName = "actor-" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateGetActorEgressPolicyRequest(context.Background(), tt.obj), tt.want)
+		})
+	}
+}
+
 func TestValidateMintActorCertificateRequest(t *testing.T) {
 	valid := func(mutate ...func(*ateletpb.MintActorCertificateRequest)) *ateletpb.MintActorCertificateRequest {
 		r := &ateletpb.MintActorCertificateRequest{
@@ -233,7 +276,7 @@ func TestValidateRunRequest(t *testing.T) {
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid worker_pod_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.WorkerPodUid = "ateom-1" }),
+		obj:  valid(func(r *ateletpb.RunRequest) { r.WorkerPodUid = "worker-1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "missing atespace",
@@ -463,20 +506,24 @@ func TestValidateCheckpointRequest(t *testing.T) {
 			ActorTemplateAtespace: "team-a",
 			ActorTemplateName:     "tmpl-1",
 			Spec:                  &ateletpb.WorkloadSpec{},
-			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-			ExternalConfig:        &ateletpb.ExternalCheckpointConfiguration{SnapshotUri: snapshotURI},
-			Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			Snapshot: &ateletpb.Snapshot{
+				SnapshotUuid: "snap-1",
+				Generation:   1,
+				Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				Object:       &ateletpb.ObjectStorage{SnapshotUri: snapshotURI},
+			},
+			UploadConfig: &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE},
 		}
 		for _, m := range mutate {
 			m(r)
 		}
 		return r
 	}
-	local := func(name string) func(*ateletpb.CheckpointRequest) {
+	deferred := func(name string) func(*ateletpb.CheckpointRequest) {
 		return func(r *ateletpb.CheckpointRequest) {
-			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.ExternalConfig = nil
-			r.LocalConfig = &ateletpb.LocalCheckpointConfiguration{SnapshotName: name}
+			r.Snapshot.SnapshotUuid = name
+			r.Snapshot.Object = nil
+			r.UploadConfig = &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED}
 		}
 	}
 
@@ -485,14 +532,21 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		obj  *ateletpb.CheckpointRequest
 		want field.ErrorList
 	}{{
-		name: "valid external",
+		name: "valid immediate",
 		obj:  valid(),
 	}, {
-		name: "valid local",
-		obj:  valid(local("pause-snap-1")),
+		name: "valid deferred local only",
+		obj:  valid(deferred("pause-snap-1")),
+	}, {
+		name: "valid deferred with object storage",
+		obj: valid(func(r *ateletpb.CheckpointRequest) {
+			r.UploadConfig = &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED}
+		}),
 	}, {
 		name: "valid volumes fidelity",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES }),
+		obj: valid(func(r *ateletpb.CheckpointRequest) {
+			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		}),
 	}, {
 		name: "missing worker_pod_uid",
 		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.WorkerPodUid = "" }),
@@ -503,7 +557,7 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid worker_pod_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.WorkerPodUid = "ateom-1" }),
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.WorkerPodUid = "worker-1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid atespace: path escape",
@@ -538,78 +592,75 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		name: "unspecified type",
+		name: "missing snapshot",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Snapshot = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot"), "")},
+	}, {
+		name: "missing upload_config",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.UploadConfig = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("upload_config"), "")},
+	}, {
+		name: "unspecified upload mode",
 		obj: valid(func(r *ateletpb.CheckpointRequest) {
-			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED
+			r.UploadConfig = &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_UNSPECIFIED}
 		}),
-		want: field.ErrorList{field.Required(field.NewPath("type"), "")},
+		want: field.ErrorList{field.Required(field.NewPath("upload_config", "mode"), "")},
 	}, {
-		name: "unknown type",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Type = ateletpb.CheckpointType(3) }),
-		want: field.ErrorList{field.Invalid(field.NewPath("type"), nil, "").WithOrigin("maximum")},
+		name: "unknown upload mode",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.UploadConfig.Mode = ateletpb.UploadMode(3) }),
+		want: field.ErrorList{field.Invalid(field.NewPath("upload_config", "mode"), nil, "").WithOrigin("maximum")},
 	}, {
-		name: "no config",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.ExternalConfig = nil }),
-		want: field.ErrorList{
-			field.Invalid(nil, nil, "").WithOrigin("union"),
-			field.Required(field.NewPath("external_config"), ""),
-		},
+		name: "immediate upload without object storage",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Snapshot.Object = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "object"), "")},
 	}, {
-		name: "both configs",
+		name: "missing snapshot_uuid",
+		obj:  valid(deferred("")),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "snapshot_uuid"), "")},
+	}, {
+		name: "invalid snapshot_uuid: path escape",
+		obj:  valid(deferred("../escape")),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "snapshot_uuid"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing generation",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Snapshot.Generation = 0 }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "generation"), "")},
+	}, {
+		name: "negative generation",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Snapshot.Generation = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "generation"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "missing snapshot_uri",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Snapshot.Object.SnapshotUri = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "object", "snapshot_uri"), "")},
+	}, {
+		name: "invalid snapshot_uri: no bucket",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Snapshot.Object.SnapshotUri = "relative/path" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "object", "snapshot_uri"), nil, "")},
+	}, {
+		name: "snapshot_uri too long",
 		obj: valid(func(r *ateletpb.CheckpointRequest) {
-			r.LocalConfig = &ateletpb.LocalCheckpointConfiguration{SnapshotName: "pause-snap-1"}
-		}),
-		want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
-	}, {
-		name: "local type with external config",
-		obj: valid(func(r *ateletpb.CheckpointRequest) {
-			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-		}),
-		want: field.ErrorList{field.Required(field.NewPath("local_config"), "")},
-	}, {
-		name: "external type with local config",
-		obj: valid(local("pause-snap-1"), func(r *ateletpb.CheckpointRequest) {
-			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL
-		}),
-		want: field.ErrorList{field.Required(field.NewPath("external_config"), "")},
-	}, {
-		name: "missing local snapshot_name",
-		obj:  valid(local("")),
-		want: field.ErrorList{field.Required(field.NewPath("local_config", "snapshot_name"), "")},
-	}, {
-		name: "invalid local snapshot_name: path escape",
-		obj:  valid(local("../escape")),
-		want: field.ErrorList{field.Invalid(field.NewPath("local_config", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
-	}, {
-		name: "missing external snapshot_uri",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.ExternalConfig.SnapshotUri = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("external_config", "snapshot_uri"), "")},
-	}, {
-		name: "invalid external snapshot_uri: no bucket",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.ExternalConfig.SnapshotUri = "relative/path" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("external_config", "snapshot_uri"), nil, "")},
-	}, {
-		name: "external snapshot_uri too long",
-		obj: valid(func(r *ateletpb.CheckpointRequest) {
-			r.ExternalConfig.SnapshotUri = "gs://bucket/" + strings.Repeat("p", 2048)
+			r.Snapshot.Object.SnapshotUri = "gs://bucket/" + strings.Repeat("p", 2048)
 		}),
 		want: field.ErrorList{
-			field.TooLong(field.NewPath("external_config", "snapshot_uri"), nil, 2048).WithOrigin("maxLength"),
-			field.Invalid(field.NewPath("external_config", "snapshot_uri"), nil, ""),
+			field.TooLong(field.NewPath("snapshot", "object", "snapshot_uri"), nil, 2048).WithOrigin("maxLength"),
+			field.Invalid(field.NewPath("snapshot", "object", "snapshot_uri"), nil, ""),
 		},
 	}, {
 		name: "unspecified fidelity",
 		obj: valid(func(r *ateletpb.CheckpointRequest) {
-			r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 		}),
-		want: field.ErrorList{field.Required(field.NewPath("fidelity"), "")},
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "fidelity"), "")},
 	}, {
 		name: "unknown fidelity",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Fidelity = 4 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("fidelity"), nil, "").WithOrigin("maximum")},
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Snapshot.Fidelity = 4 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "fidelity"), nil, "").WithOrigin("maximum")},
 	}, {
 		name: "rootfs fidelity is forwarded for the runtime to judge",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS }),
+		obj: valid(func(r *ateletpb.CheckpointRequest) {
+			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		}),
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -629,10 +680,13 @@ func TestValidateRestoreRequest(t *testing.T) {
 			ActorTemplateAtespace: "team-a",
 			ActorTemplateName:     "tmpl-1",
 			Spec:                  &ateletpb.WorkloadSpec{},
-			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-			ExternalConfig:        &ateletpb.ExternalRestoreConfiguration{SnapshotUri: snapshotURI},
-			Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-			SandboxAssets:         validSandboxAssets(),
+			Snapshot: &ateletpb.Snapshot{
+				SnapshotUuid: "snap-1",
+				Generation:   1,
+				Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				Object:       &ateletpb.ObjectStorage{SnapshotUri: snapshotURI},
+			},
+			SandboxAssets: validSandboxAssets(),
 		}
 		for _, m := range mutate {
 			m(r)
@@ -641,9 +695,8 @@ func TestValidateRestoreRequest(t *testing.T) {
 	}
 	local := func(name string) func(*ateletpb.RestoreRequest) {
 		return func(r *ateletpb.RestoreRequest) {
-			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.ExternalConfig = nil
-			r.LocalConfig = &ateletpb.LocalCheckpointConfiguration{SnapshotName: name}
+			r.Snapshot.SnapshotUuid = name
+			r.Snapshot.Object = nil
 		}
 	}
 
@@ -652,14 +705,16 @@ func TestValidateRestoreRequest(t *testing.T) {
 		obj  *ateletpb.RestoreRequest
 		want field.ErrorList
 	}{{
-		name: "valid external",
+		name: "valid with object storage",
 		obj:  valid(),
 	}, {
-		name: "valid local",
+		name: "valid local only",
 		obj:  valid(local("pause-snap-1")),
 	}, {
 		name: "valid volumes fidelity",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES }),
+		obj: valid(func(r *ateletpb.RestoreRequest) {
+			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		}),
 	}, {
 		name: "valid size and egress",
 		obj: valid(func(r *ateletpb.RestoreRequest) {
@@ -677,7 +732,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid worker_pod_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.WorkerPodUid = "ateom-1" }),
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.WorkerPodUid = "worker-1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid atespace: path escape",
@@ -712,59 +767,48 @@ func TestValidateRestoreRequest(t *testing.T) {
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		name: "unspecified type",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }),
-		want: field.ErrorList{field.Required(field.NewPath("type"), "")},
+		name: "missing snapshot",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot"), "")},
 	}, {
-		name: "unknown type",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType(3) }),
-		want: field.ErrorList{field.Invalid(field.NewPath("type"), nil, "").WithOrigin("maximum")},
+		name: "missing snapshot_uuid",
+		obj:  valid(local("")),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "snapshot_uuid"), "")},
 	}, {
-		name: "no config",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.ExternalConfig = nil }),
-		want: field.ErrorList{
-			field.Invalid(nil, nil, "").WithOrigin("union"),
-			field.Required(field.NewPath("external_config"), ""),
-		},
-	}, {
-		name: "both configs",
-		obj: valid(func(r *ateletpb.RestoreRequest) {
-			r.LocalConfig = &ateletpb.LocalCheckpointConfiguration{SnapshotName: "pause-snap-1"}
-		}),
-		want: field.ErrorList{field.Invalid(nil, nil, "").WithOrigin("union")},
-	}, {
-		name: "local type with external config",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL }),
-		want: field.ErrorList{field.Required(field.NewPath("local_config"), "")},
-	}, {
-		name: "external type with local config",
-		obj: valid(local("pause-snap-1"), func(r *ateletpb.RestoreRequest) {
-			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL
-		}),
-		want: field.ErrorList{field.Required(field.NewPath("external_config"), "")},
-	}, {
-		name: "invalid local snapshot_name: path escape",
+		name: "invalid snapshot_uuid: path escape",
 		obj:  valid(local("../escape")),
-		want: field.ErrorList{field.Invalid(field.NewPath("local_config", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "snapshot_uuid"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		name: "missing external snapshot_uri",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.ExternalConfig.SnapshotUri = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("external_config", "snapshot_uri"), "")},
+		name: "missing generation",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.Generation = 0 }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "generation"), "")},
 	}, {
-		name: "invalid external snapshot_uri: no bucket",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.ExternalConfig.SnapshotUri = "relative/path" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("external_config", "snapshot_uri"), nil, "")},
+		name: "negative generation",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.Generation = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "generation"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "missing snapshot_uri",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.Object.SnapshotUri = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "object", "snapshot_uri"), "")},
+	}, {
+		name: "invalid snapshot_uri: no bucket",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.Object.SnapshotUri = "relative/path" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "object", "snapshot_uri"), nil, "")},
 	}, {
 		name: "unspecified fidelity",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED }),
-		want: field.ErrorList{field.Required(field.NewPath("fidelity"), "")},
+		obj: valid(func(r *ateletpb.RestoreRequest) {
+			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+		}),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "fidelity"), "")},
 	}, {
 		name: "unknown fidelity",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Fidelity = ateletpb.SnapshotFidelity(4) }),
-		want: field.ErrorList{field.Invalid(field.NewPath("fidelity"), nil, "").WithOrigin("maximum")},
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.Fidelity = ateletpb.SnapshotFidelity(4) }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "fidelity"), nil, "").WithOrigin("maximum")},
 	}, {
 		name: "rootfs fidelity is forwarded for the runtime to judge",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS }),
+		obj: valid(func(r *ateletpb.RestoreRequest) {
+			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		}),
 	}, {
 		name: "negative cpu_milli",
 		obj:  valid(func(r *ateletpb.RestoreRequest) { r.CpuMilli = -1 }),
@@ -799,17 +843,22 @@ func TestValidateRestoreRequest(t *testing.T) {
 	}
 }
 
-func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
-	valid := func(mutate ...func(*ateletpb.UploadPausedCheckpointRequest)) *ateletpb.UploadPausedCheckpointRequest {
-		r := &ateletpb.UploadPausedCheckpointRequest{
-			Atespace:               "team-a",
-			ActorName:              "actor-1",
-			ActorUid:               "01234567-89ab-cdef-0123-456789abcdef",
-			ActorTemplateAtespace:  "team-a",
-			ActorTemplateName:      "tmpl-1",
-			LocalSnapshotName:      "pause-snap-1",
-			DestinationSnapshotUri: "gs://bucket/root/atespaces/team-a/actors/01234567-89ab-cdef-0123-456789abcdef/snapshots/snap-1",
-			DesiredFidelity:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+func TestValidatePromoteSnapshotRequest(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.PromoteSnapshotRequest)) *ateletpb.PromoteSnapshotRequest {
+		r := &ateletpb.PromoteSnapshotRequest{
+			Atespace:              "team-a",
+			ActorName:             "actor-1",
+			ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
+			ActorTemplateAtespace: "team-a",
+			ActorTemplateName:     "tmpl-1",
+			Snapshot: &ateletpb.Snapshot{
+				SnapshotUuid: "pause-snap-1",
+				Generation:   1,
+				Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				Object: &ateletpb.ObjectStorage{
+					SnapshotUri: "gs://bucket/root/atespaces/team-a/actors/01234567-89ab-cdef-0123-456789abcdef/snapshots/snap-1",
+				},
+			},
 		}
 		for _, m := range mutate {
 			m(r)
@@ -819,96 +868,112 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 
 	tests := []struct {
 		name string
-		obj  *ateletpb.UploadPausedCheckpointRequest
+		obj  *ateletpb.PromoteSnapshotRequest
 		want field.ErrorList
 	}{{
 		name: "valid",
 		obj:  valid(),
 	}, {
 		name: "valid volumes fidelity",
-		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		obj: valid(func(r *ateletpb.PromoteSnapshotRequest) {
+			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		}),
 	}, {
 		name: "missing atespace",
-		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.Atespace = "" }),
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Atespace = "" }),
 		want: field.ErrorList{field.Required(field.NewPath("atespace"), "")},
 	}, {
 		name: "invalid atespace: path escape",
-		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.Atespace = "../escape" }),
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Atespace = "../escape" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		name: "golden atespace",
-		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.Atespace = resources.GoldenActorAtespace }),
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Atespace = resources.GoldenActorAtespace }),
 		want: field.ErrorList{field.Forbidden(field.NewPath("atespace"), "")},
 	}, {
 		name: "invalid actor_name: uppercase",
-		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorName = "UPPER" }),
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.ActorName = "UPPER" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("actor_name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		name: "missing actor_uid",
-		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorUid = "" }),
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.ActorUid = "" }),
 		want: field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
 	}, {
 		name: "invalid actor_uid: not a UUID",
-		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorUid = "actor-uid-1" }),
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.ActorUid = "actor-uid-1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid actor_template_atespace: slash",
-		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorTemplateAtespace = "no/slashes" }),
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.ActorTemplateAtespace = "no/slashes" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("actor_template_atespace"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		name: "unset template identity is allowed",
-		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
+		obj: valid(func(r *ateletpb.PromoteSnapshotRequest) {
 			r.ActorTemplateAtespace = ""
 			r.ActorTemplateName = ""
 		}),
 	}, {
-		name: "missing local_snapshot_name",
-		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.LocalSnapshotName = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("local_snapshot_name"), "")},
+		name: "missing snapshot",
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Snapshot = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot"), "")},
 	}, {
-		name: "invalid local_snapshot_name: path escape",
-		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.LocalSnapshotName = "../escape" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("local_snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
+		name: "missing snapshot_uuid",
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Snapshot.SnapshotUuid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "snapshot_uuid"), "")},
 	}, {
-		name: "missing destination_snapshot_uri",
-		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.DestinationSnapshotUri = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("destination_snapshot_uri"), "")},
+		name: "invalid snapshot_uuid: path escape",
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Snapshot.SnapshotUuid = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "snapshot_uuid"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		name: "invalid destination_snapshot_uri",
-		obj:  valid(func(r *ateletpb.UploadPausedCheckpointRequest) { r.DestinationSnapshotUri = "not-a-uri" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("destination_snapshot_uri"), nil, "")},
+		name: "missing generation",
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Snapshot.Generation = 0 }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "generation"), "")},
 	}, {
-		name: "destination_snapshot_uri too long",
-		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DestinationSnapshotUri = "gs://bucket/" + strings.Repeat("p", 2048)
+		name: "negative generation",
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Snapshot.Generation = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "generation"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "missing snapshot.object",
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Snapshot.Object = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "object"), "")},
+	}, {
+		name: "missing snapshot_uri",
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Snapshot.Object.SnapshotUri = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "object", "snapshot_uri"), "")},
+	}, {
+		name: "invalid snapshot_uri",
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Snapshot.Object.SnapshotUri = "not-a-uri" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "object", "snapshot_uri"), nil, "")},
+	}, {
+		name: "snapshot_uri too long",
+		obj: valid(func(r *ateletpb.PromoteSnapshotRequest) {
+			r.Snapshot.Object.SnapshotUri = "gs://bucket/" + strings.Repeat("p", 2048)
 		}),
 		want: field.ErrorList{
-			field.TooLong(field.NewPath("destination_snapshot_uri"), nil, 2048).WithOrigin("maxLength"),
-			field.Invalid(field.NewPath("destination_snapshot_uri"), nil, ""),
+			field.TooLong(field.NewPath("snapshot", "object", "snapshot_uri"), nil, 2048).WithOrigin("maxLength"),
+			field.Invalid(field.NewPath("snapshot", "object", "snapshot_uri"), nil, ""),
 		},
 	}, {
-		name: "unspecified desired_fidelity",
-		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+		name: "unspecified fidelity",
+		obj: valid(func(r *ateletpb.PromoteSnapshotRequest) {
+			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 		}),
-		want: field.ErrorList{field.Required(field.NewPath("desired_fidelity"), "")},
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "fidelity"), "")},
 	}, {
-		name: "unknown desired_fidelity",
-		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredFidelity = 4
+		name: "unknown fidelity",
+		obj: valid(func(r *ateletpb.PromoteSnapshotRequest) {
+			r.Snapshot.Fidelity = 4
 		}),
-		want: field.ErrorList{field.Invalid(field.NewPath("desired_fidelity"), nil, "").WithOrigin("maximum")},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "fidelity"), nil, "").WithOrigin("maximum")},
 	}, {
-		name: "rootfs desired_fidelity is forwarded for the runtime to judge",
-		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		name: "rootfs fidelity is forwarded for the runtime to judge",
+		obj: valid(func(r *ateletpb.PromoteSnapshotRequest) {
+			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 		}),
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, ValidateUploadPausedCheckpointRequest(context.Background(), tt.obj), tt.want)
+			assertValidateErr(t, ValidatePromoteSnapshotRequest(context.Background(), tt.obj), tt.want)
 		})
 	}
 }
@@ -946,7 +1011,7 @@ func TestValidateTerminateRequest(t *testing.T) {
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid worker_pod_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.TerminateRequest) { r.WorkerPodUid = "ateom-1" }),
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.WorkerPodUid = "worker-1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "missing atespace",
@@ -1065,7 +1130,20 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 				Version:      testRuntime().Version,
 			},
 		},
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("sandbox_class"), "", 63).WithOrigin("maxLength")},
+		want: field.ErrorList{
+			field.TooLong(defaultRuntimePath.Child("sandbox_class"), "", 63).WithOrigin("maxLength"),
+			field.NotSupported[string](defaultRuntimePath.Child("sandbox_class"), nil, nil),
+		},
+	}, {
+		name: "unsupported default_runtime.sandbox_class",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity: &ateletpb.WorkerResources{},
+			DefaultRuntime: &ateletpb.SandboxRuntime{
+				SandboxClass: "kata",
+				Version:      testRuntime().Version,
+			},
+		},
+		want: field.ErrorList{field.NotSupported[string](defaultRuntimePath.Child("sandbox_class"), nil, nil)},
 	}, {
 		name: "missing default_runtime.version",
 		obj: &ateletpb.RegisterWorkerRequest{
@@ -1205,6 +1283,17 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 			RestorableRuntimes: []*ateletpb.SandboxRuntime{{SandboxClass: "gvisor"}},
 		},
 		want: field.ErrorList{field.Required(restorablePath.Index(0).Child("version"), "")},
+	}, {
+		name: "unsupported restorable_runtimes sandbox_class",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity:       &ateletpb.WorkerResources{},
+			DefaultRuntime: testRuntime(),
+			RestorableRuntimes: []*ateletpb.SandboxRuntime{{
+				SandboxClass: "GVISOR",
+				Version:      testRuntime().Version,
+			}},
+		},
+		want: field.ErrorList{field.NotSupported[string](restorablePath.Index(0).Child("sandbox_class"), nil, nil)},
 	}, {
 		name: "restorable_runtimes at the bound",
 		obj: &ateletpb.RegisterWorkerRequest{

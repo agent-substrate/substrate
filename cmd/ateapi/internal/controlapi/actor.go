@@ -31,6 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -122,9 +123,17 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	name := inActor.GetMetadata().GetName()
 
 	// Volume creation is completed asynchronously after the actor is recorded.
-	initVols, err := initialActorVolumes(ctx, s.storageClassLister, template)
-	if err != nil {
+	var initVols []*ateapipb.ExternalVolumeRef
+	if iv, err := initialActorVolumes(ctx, s.storageClassLister, template); err != nil {
 		return nil, err
+	} else if preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
+		initVols = iv
+	} else if len(iv) > 0 {
+		errs := field.ErrorList{
+			field.Forbidden(field.NewPath("actor", "actor_template"),
+				"ActorTemplates with external volumes require the ExternalVolumes preview gate to be enabled on the server and the client to opt in to preview features (kubectl ate --preview, or the "+preview.Header+" header)"),
+		}
+		return nil, resources.ToAPIError(errs)
 	}
 	if !isGoldenActor(inActor) {
 		refVols, err := resolveSharedVolumeRefs(ctx, s.store, inActor, template)
@@ -166,14 +175,12 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 			return nil, apierror.AlreadyExists("Actor %s already exists", name)
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
+			if templateHasSharedVolumeRef(template) {
+				return nil, apierror.FailedPrecondition("Atespace %s or a referenced SharedVolume is unavailable", atespace)
+			}
 			return nil, apierror.FailedPrecondition("Atespace %s not found", atespace)
 		}
 		return nil, fmt.Errorf("while recording actor: %w", err)
-	}
-
-	// Resume re-takes any reference missed here, so this does not fail the create.
-	if err := bindSharedVolumes(ctx, s.store, stored); err != nil {
-		slog.WarnContext(ctx, "Failed to bind external volumes to new actor", slog.Any("actor", resources.ActorRefFromActor(stored)), slog.Any("err", err))
 	}
 
 	// Without this an actor that is created and never resumed has no record at
@@ -241,7 +248,7 @@ func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsReq
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListActors(ctx, req.GetAtespace(), toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actors in db: %w", err))
 	}
@@ -320,6 +327,12 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				return apierror.FailedPrecondition(
 					"actor must be %s to change its actor template (got: %s)", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, state)
+			}
+			// A paused actor's latest snapshot is node-local and was captured
+			// from the old template's sandbox; suspend or revert it first.
+			if latestSnapshotIsLocalOnly(oldVal.GetStatus()) {
+				return apierror.FailedPrecondition(
+					"actor must hold no node-local snapshot to change its actor template: suspend or revert it first")
 			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
 			if err != nil {
@@ -569,10 +582,8 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 
-	// TODO(authz): Authorization layer needs to check whether the caller has
-	// the mintActorJWT permission/relation with this actor.  This could be an
-	// atelet (via the relationship of the atelet running the actor), or the
-	// egress gateway (via a cluster-level grant?)
+	// With authz enforced, the interceptor requires can_mint_actor_jwt on the
+	// actor, which only the egress gateway holds.
 
 	// Verify that this actor exists in the store.  It doesn't need to be
 	// running, since we may need to issue JWTs during actor boot / resume.
@@ -588,13 +599,14 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 		return nil, fmt.Errorf("at least one audience must be requested")
 	}
 
-	// JWT timestamps have one-second resolution; truncating keeps expires_at
+	// JWT timestamps have one-second resolution; truncating keeps expire_time
 	// equal to the exp claim.
 	now := time.Now().Truncate(time.Second)
 	expiresAt := now.Add(time.Duration(req.GetExpirationSeconds()) * time.Second)
 	actorClaims := &actoridjwt.Claims{
+		Kind:       actoridjwt.KindActor,
 		Issuer:     s.actorJWTIssuer,
-		Subject:    fmt.Sprintf("actor/%s/%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
+		Subject:    fmt.Sprintf("%s/%s/%s", actoridjwt.KindActor.SubjectPrefix(), dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
 		Audiences:  req.GetAudiences(),
 		Expiration: expiresAt,
 		NotBefore:  now.Add(-5 * time.Minute),
@@ -614,8 +626,8 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 	}
 
 	return &ateapipb.MintActorJwtResponse{
-		ActorJwt:  actorJWT,
-		ExpiresAt: timestamppb.New(expiresAt),
+		ActorJwt:   actorJWT,
+		ExpireTime: timestamppb.New(expiresAt),
 	}, nil
 }
 
@@ -624,10 +636,8 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 
-	// TODO(authz): Authorization layer needs to check whether the caller has
-	// the mintActorCertificate permission/relation with this actor.    This
-	// could be an atelet (via the relationship of the atelet running the
-	// actor), or the egress gateway (via a cluster-level grant?)
+	// With authz enforced, the interceptor requires can_mint_actor_certificate
+	// on the actor, which only the egress gateway holds.
 
 	// Check that the caller authenticated with a client certificate --- we
 	// should not allow bootstrapping a proof-of-possession credential from a

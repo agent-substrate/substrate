@@ -20,8 +20,11 @@ import (
 	"os"
 )
 
-func Required() bool { return os.Getenv("CI") == "true" && os.Getenv("E2E_SANDBOX_CLASS") == "microvm" }
-func Enabled() bool  { return Required() || os.Getenv("E2E_RUNTIME_GOLDEN") == "true" }
+// Required is set by the preview-enabled CI lanes for both runtimes.
+func Required() bool {
+	return os.Getenv("CI") == "true" && os.Getenv("E2E_RUNTIME_GOLDEN_REQUIRED") == "true"
+}
+func Enabled() bool { return Required() || os.Getenv("E2E_RUNTIME_GOLDEN") == "true" }
 func Check() error {
 	if !Enabled() {
 		return nil

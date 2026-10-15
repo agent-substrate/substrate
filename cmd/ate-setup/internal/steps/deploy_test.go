@@ -15,8 +15,14 @@
 package steps
 
 import (
+	"errors"
+	"io/fs"
+	"path/filepath"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
@@ -108,5 +114,117 @@ func TestSetPodcertWorkersPerSignerRejectsMissingDeployment(t *testing.T) {
 	}
 	if err := setPodcertWorkersPerSigner(withoutDeployment, 2); err == nil {
 		t.Error("setPodcertWorkersPerSigner succeeded without a Deployment, want an error")
+	}
+}
+
+// Upgrading from a release that predates a signer pool: deploying the
+// controller alone has to create the missing pool before the new pod needs it.
+// The manifest root is empty, so the deploy stops at rendering, after the pools.
+func TestDeployPodCertificateControllerCreatesMissingCAs(t *testing.T) {
+	e := &Env{
+		Cfg:  &config.Config{Root: t.TempDir()},
+		Kube: fakeKube(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespacePodCert}}),
+	}
+	if err := e.CreatePodCertificateControllerCAs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Kube.Typed.CoreV1().Secrets(NamespacePodCert).Delete(t.Context(), SecretPostgresCA, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DeployPodCertificateController(t.Context()); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("DeployPodCertificateController = %v, want the render error for the missing manifest", err)
+	}
+	if _, err := e.Kube.Typed.CoreV1().Secrets(NamespacePodCert).Get(t.Context(), SecretPostgresCA, metav1.GetOptions{}); err != nil {
+		t.Errorf("%s/%s after DeployPodCertificateController: %v", NamespacePodCert, SecretPostgresCA, err)
+	}
+}
+
+// Runs over the real generated manifests: EnsureCRDs and DeployCRDs act on what
+// generatedCRDs returns, so it has to hold every CRD file and no RBAC.
+func TestGeneratedCRDsLeavesOutRBAC(t *testing.T) {
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t)}}
+	crds, err := e.generatedCRDs()
+	if err != nil {
+		t.Fatalf("loading the generated CRDs: %v", err)
+	}
+	for _, crd := range crds {
+		if crd.GetKind() != "CustomResourceDefinition" {
+			t.Errorf("generatedCRDs returned %s/%s", crd.GetKind(), crd.GetName())
+		}
+	}
+	files, err := filepath.Glob(filepath.Join(e.Cfg.Manifest("generated"), "ate.dev_*.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(crds) != len(files) {
+		t.Errorf("generatedCRDs returned %d CRDs, want one per CRD file: %v", len(crds), files)
+	}
+}
+
+// A component redeploy creates only the CRDs the cluster lacks. One that is
+// already there, even at an older schema, is left to DeployCRDs.
+func TestMissingCRDsLeavesPresentOnesAlone(t *testing.T) {
+	crd := func(name string) *unstructured.Unstructured {
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(crdGVK)
+		obj.SetName(name)
+		return obj
+	}
+	crds := []*unstructured.Unstructured{crd("workerpools.ate.dev"), crd("sandboxconfigs.ate.dev"), crd("csidriverconfigs.ate.dev")}
+	present := map[string]bool{"workerpools.ate.dev": true, "sandboxconfigs.ate.dev": true}
+	missing, err := missingCRDs(crds, func(name string) (bool, error) { return present[name], nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 1 || missing[0].GetName() != "csidriverconfigs.ate.dev" {
+		var names []string
+		for _, m := range missing {
+			names = append(names, m.GetName())
+		}
+		t.Errorf("missingCRDs = %v, want only csidriverconfigs.ate.dev", names)
+	}
+}
+
+// A single-component redeploy has to apply what deploy ate-system does. On
+// kind the bundle points the object-store plugins at rustfs, and a redeploy
+// from a base file would fall back to GCS and never start.
+func TestComponentManifestsMatchSystemBundle(t *testing.T) {
+	for _, tc := range []struct {
+		router string
+		kind   bool
+	}{
+		{config.RouterEnvoy, false},
+		{config.RouterEnvoy, true},
+		{config.RouterAgentgateway, false},
+		{config.RouterAgentgateway, true},
+	} {
+		e := &Env{Cfg: &config.Config{Root: repoRoot(t), Router: tc.router, Kind: tc.kind}}
+		render := func(path string) []*unstructured.Unstructured {
+			manifest, err := e.render(path)
+			if err != nil {
+				t.Fatalf("render(%s): %v", path, err)
+			}
+			objs, err := kube.DecodeManifestBytes(manifest)
+			if err != nil {
+				t.Fatalf("decoding %s: %v", path, err)
+			}
+			return objs
+		}
+		bundle := render(e.Cfg.Path(SystemOverlay(e.Cfg)))
+		for _, component := range []struct {
+			kind, name, path string
+		}{
+			{"Deployment", "ate-api-server", e.apiServerManifestPath()},
+			{"DaemonSet", "atelet", e.ateletManifestPath()},
+		} {
+			want := findObject(bundle, component.kind, component.name)
+			got := findObject(render(component.path), component.kind, component.name)
+			if want == nil || got == nil {
+				t.Fatalf("router=%s kind=%v: %s/%s missing from the system bundle or %s", tc.router, tc.kind, component.kind, component.name, component.path)
+			}
+			if diff := cmp.Diff(want.Object, got.Object); diff != "" {
+				t.Errorf("router=%s kind=%v: %s renders a different %s/%s than the system bundle (-bundle +standalone):\n%s", tc.router, tc.kind, component.path, component.kind, component.name, diff)
+			}
+		}
 	}
 }

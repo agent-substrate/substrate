@@ -21,7 +21,7 @@ metadata:
   name: glutton-storage
 workerSelector:
   matchLabels:
-    workload: benchmark-ateom
+    workload: benchmark-worker
 volumes:
 - name: external-storage
   external:
@@ -53,11 +53,13 @@ containers:
       port: 80
 resources:
   limits:
+  - name: cpu
+    quantity: "1"
   - name: memory
     quantity: ${ACTOR_MEMORY}
 snapshotConfig:
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton-storage/
 sandboxConfig:
-  sandboxClass: ${SANDBOX_CLASS_ENUM}
+  sandboxClass: ${SANDBOX_CLASS}
   configName: ${SANDBOX_CONFIG_NAME}

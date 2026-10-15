@@ -41,6 +41,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 	"github.com/agent-substrate/substrate/internal/oidcjwt"
 	"github.com/agent-substrate/substrate/internal/pluginsocket"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
@@ -80,12 +81,17 @@ var (
 	postgresReadWriteRole             = pflag.String("postgres-read-write-role", "", "Required PostgreSQL role assumed by read/write connections.")
 	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Required PostgreSQL role assumed by owner connections.")
 	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
-	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write PostgreSQL pool. Does not affect the owner or watch pools. The DSN or pgx default is used when unset.")
+	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write PostgreSQL pool. Does not affect the owner, watch, or readiness probe pools. The DSN or pgx default is used when unset.")
 	experimentalEnableAuthz           = pflag.Bool("experimental-enable-authz", false, "Enforce OpenFGA authorization checks on all registered RPCs (experimental). AccessPolicy RPCs are always checked.")
 	// TODO: Move the authz settings into the hot-reloadable config proto
 	// (agent-substrate/substrate#2021) once it lands, so bootstrap owner
 	// changes take effect without a restart.
 	authzBootstrapOwners = pflag.StringSlice("authz-bootstrap-owners", nil, "Principal IDs that are always global owners while listed, independent of the stored global AccessPolicy. Removing an ID revokes its access on restart. At least one is required when --experimental-enable-authz is set.")
+	// These SPIFFE IDs hold the matching system component role when they call
+	// over mTLS.
+	controllerSPIFFEID    = pflag.String("controller-spiffe-id", installdefaults.ControllerSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of ate-controller. Holds the controller authz role, which manages workers.")
+	egressGatewaySPIFFEID = pflag.String("egress-gateway-spiffe-id", installdefaults.EgressSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of atenet-egress. Holds the egress_gateway authz role, which reads and lists actors and reads their egress policies.")
+	ingressRouterSPIFFEID = pflag.String("ingress-router-spiffe-id", installdefaults.RouterSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of atenet-router. Holds the ingress_router authz role, which resumes and lists actors.")
 
 	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Required.")
@@ -105,6 +111,7 @@ var (
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 )
 
 func main() {
@@ -120,6 +127,9 @@ func main() {
 	}
 	if err := loadFlagsFromEnv(); err != nil {
 		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
+	}
+	if err := preview.Init(*previewFlags...); err != nil {
+		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
 	if err := rejectStorageEnv(); err != nil {
 		serverboot.Fatal(ctx, "Storage settings moved to the objectstore-plugin sidecar", err)
@@ -206,7 +216,11 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
 	}
 	defer fgaServer.Close()
-	authorizer, policyManager, err := authz.New(shutdownCtx, pool, fgaServer, *authzBootstrapOwners)
+	authorizer, policyManager, err := authz.New(shutdownCtx, pool, fgaServer, *authzBootstrapOwners, authz.SystemPrincipals{
+		ControllerSPIFFEID:    *controllerSPIFFEID,
+		EgressGatewaySPIFFEID: *egressGatewaySPIFFEID,
+		IngressRouterSPIFFEID: *ingressRouterSPIFFEID,
+	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
 	}
@@ -317,7 +331,7 @@ func main() {
 	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
 	templateReconciler.Start(shutdownCtx)
 
-	// Crash the Actors lost when a Worker's ateom restarts.
+	// Crash the Actors lost when a Worker's worker restarts.
 	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(persistence, workerCache)
 	workerAssignmentReconciler.Start(shutdownCtx)
 
@@ -337,6 +351,7 @@ func main() {
 		ateinterceptors.ServerUnaryInterceptor,
 		authz.UnaryServerInterceptor(authorizer, *experimentalEnableAuthz),
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
+		preview.UnaryServerInterceptor,
 	}
 
 	mux := grpc.NewServer(
@@ -352,13 +367,19 @@ func main() {
 		grpc.ChainUnaryInterceptor(unaryInterceptors...),
 		grpc.ChainStreamInterceptor(
 			apiauthn.StreamServerInterceptor(authCfg),
+			preview.StreamServerInterceptor,
 		),
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, controlSrv)
-	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, controlSrv, ateletSPIFFEID, actorIDCAPool))
+	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, controlSrv, ateletSPIFFEID, actorIDCAPool, *actorJWTIssuer, actorIDJWTAuthorityPool))
 
+	// Every RPC needs the store, so a replica that cannot reach it leaves the
+	// Service until it can. Liveness stays green: the pool reconnects on its own.
+	// The check pings over its own connection, so a busy request pool does not
+	// fail it.
 	readiness := &serverboot.Readiness{}
+	readiness.AddCheck("store", persistence.Ping)
 	go serverboot.StartHealthServer(ctx, *healthListenAddr, readiness)
 
 	drainDone := drainOnShutdown(shutdownCtx, mux, readiness)
@@ -464,6 +485,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
+		slog.Any("preview", *previewFlags),
 	)
 }
 

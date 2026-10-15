@@ -29,10 +29,11 @@ func TestRequiredAndEnabled(t *testing.T) {
 		{"local", "", "microvm", "", false, false},
 		{"opt in", "", "microvm", "true", false, true},
 		{"microvm CI", "true", "microvm", "", true, true},
-		{"gvisor CI", "true", "gvisor", "", false, false},
+		{"gvisor CI", "true", "gvisor", "", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CI", tc.ci)
+			t.Setenv("E2E_RUNTIME_GOLDEN_REQUIRED", "true")
 			t.Setenv("E2E_SANDBOX_CLASS", tc.sandbox)
 			t.Setenv("E2E_RUNTIME_GOLDEN", tc.opt)
 			if Required() != tc.required || Enabled() != tc.enabled {
@@ -49,6 +50,7 @@ func TestRequiredMissingEvidenceFails(t *testing.T) {
 		return
 	}
 	t.Setenv("CI", "true")
+	t.Setenv("E2E_RUNTIME_GOLDEN_REQUIRED", "true")
 	t.Setenv("E2E_SANDBOX_CLASS", "microvm")
 	t.Setenv("E2E_RUNTIME_GOLDEN", "")
 	t.Setenv("E2E_RUNTIME_LOG_DIR", "")
@@ -61,6 +63,7 @@ func TestRequiredMissingEvidenceFails(t *testing.T) {
 }
 func TestCheckConfigured(t *testing.T) {
 	t.Setenv("CI", "true")
+	t.Setenv("E2E_RUNTIME_GOLDEN_REQUIRED", "true")
 	t.Setenv("E2E_SANDBOX_CLASS", "microvm")
 	t.Setenv("E2E_RUNTIME_LOG_DIR", t.TempDir())
 	if err := Check(); err != nil {

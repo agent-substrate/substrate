@@ -67,6 +67,28 @@ func findLatestLocalSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
 	})
 }
 
+// latestSnapshotIsLocalOnly reports whether the snapshot at the actor's latest
+// generation is node-local with no durable copy: the shape a pause leaves
+// behind. A paused actor is SUSPENDED with this shape, and resumes only on the
+// node named by Locality; a suspend of such an actor uploads that snapshot
+// instead of checkpointing a workload. A RUNNING actor resumed from pause
+// keeps the local snapshot too, so callers that need "at rest" check the state
+// as well.
+func latestSnapshotIsLocalOnly(status *ateapipb.ActorStatus) bool {
+	snap := snapshotAtLatestGeneration(status)
+	return snap.GetLocality() != "" && snap.GetDurableSnapshot() == nil
+}
+
+// latestSnapshotIsPendingLocal reports whether the snapshot at the actor's
+// latest generation is node-local but not yet captured: it has no locality and
+// no durable copy. This is the shape a pause in progress has, and what tells a
+// SUSPENDING pause from a SUSPENDING suspend, whose latest snapshot has a
+// pending durable copy.
+func latestSnapshotIsPendingLocal(status *ateapipb.ActorStatus) bool {
+	snap := snapshotAtLatestGeneration(status)
+	return snap != nil && snap.GetLocality() == "" && snap.GetDurableSnapshot() == nil
+}
+
 // clearLocalSnapshots clears Locality across all Snapshots in status.Snapshots
 // without dropping PENDING durable snapshots (so DeleteActor can still collect
 // an in-flight durable snapshot after releasing the worker).

@@ -16,10 +16,12 @@ package functionaltest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
@@ -31,11 +33,12 @@ import (
 type sharedVolumePlugin struct {
 	volume.VolumePluginControlPlane
 
-	mu       sync.Mutex
-	created  []string
-	deleted  []string
-	attached []string
-	detached []string
+	mu        sync.Mutex
+	detachErr error
+	created   []string
+	deleted   []string
+	attached  []string
+	detached  []string
 }
 
 func (p *sharedVolumePlugin) CreateVolume(_ context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
@@ -62,6 +65,9 @@ func (p *sharedVolumePlugin) AttachVolume(_ context.Context, req volume.AttachVo
 func (p *sharedVolumePlugin) DetachVolume(_ context.Context, volumeID, node string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.detachErr != nil {
+		return p.detachErr
+	}
 	p.detached = append(p.detached, volumeID+"@"+node)
 	return nil
 }
@@ -74,6 +80,7 @@ func (p *sharedVolumePlugin) snapshot() (created, deleted, attached, detached []
 }
 
 func setupSharedVolumeTest(t *testing.T, ns string) (*testContext, *sharedVolumePlugin) {
+	preview.InitForTest(t, "ExternalVolumes")
 	t.Helper()
 	plugin := &sharedVolumePlugin{}
 	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
@@ -414,8 +421,8 @@ func TestSharedVolume_HeldByAnotherActor(t *testing.T) {
 	if diff := cmp.Diff(map[string]bool{"producer": true, "consumer": false}, refStates(t, tc, "held")); diff != "" {
 		t.Errorf("refs after the refused resume mismatch (-want +got):\n%s", diff)
 	}
-	if got := actorState(t, tc, "consumer"); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Errorf("consumer is in %v, want it left SUSPENDED", got)
+	if got := actorState(t, tc, "consumer"); got != ateapipb.ActorState_ACTOR_STATE_RESUMING {
+		t.Errorf("consumer is in %v, want RESUMING with placement retained for retry", got)
 	}
 	if _, _, attached, _ := plugin.snapshot(); !cmp.Equal([]string{shared.GetVolumeId() + "@node1"}, attached) {
 		t.Errorf("attached volumes = %v, want only the producer's attach", attached)
@@ -493,5 +500,80 @@ func TestCreateActor_SharedVolumeBindings(t *testing.T) {
 	}
 	if diff := cmp.Diff(map[string]bool{"bound": false}, refStates(t, tc, "ctx-42")); diff != "" {
 		t.Errorf("refs mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestSharedVolumeDeleteRetainsReferencesUntilNodeCleanup(t *testing.T) {
+	for _, failure := range []string{"terminate", "detach"} {
+		t.Run(failure, func(t *testing.T) {
+			ctx := context.Background()
+			ns := namespaceForTest("ns-delete-failure-" + failure)
+			tc, plugin := setupSharedVolumeTest(t, ns)
+			defer tc.cleanup()
+			createSharedVolume(t, tc, "data", ateapipb.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR)
+			createTemplateWithVolumes(t, tc, ns, []*ateapipb.Volume{{Name: "work", External: &ateapipb.ExternalVolumeSource{SharedVolume: &ateapipb.SharedVolumeRef{Name: "data"}}}}, []*ateapipb.VolumeMount{{Name: "work", MountPath: "/work"}})
+			worker := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+			createBorrowingActor(t, tc, "consumer", nil)
+			waitForWorkerAvailable(t, tc, worker)
+			ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "consumer"}
+			if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+				t.Fatal(err)
+			}
+			if failure == "terminate" {
+				tc.fakeAtelet.Lock.Lock()
+				tc.fakeAtelet.FailTerminate = errors.New("injected termination failure")
+				tc.fakeAtelet.Lock.Unlock()
+			} else {
+				plugin.mu.Lock()
+				plugin.detachErr = errors.New("injected detach failure")
+				plugin.mu.Unlock()
+			}
+			req := &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}
+			if _, err := tc.client.DeleteActor(ctx, req); err == nil {
+				t.Fatal("expected cleanup failure")
+			}
+			if refs := refStates(t, tc, "data"); !refs["consumer"] {
+				t.Fatalf("lost active reference: %v", refs)
+			}
+			_, deleted, _, _ := plugin.snapshot()
+			if len(deleted) != 0 {
+				t.Fatal("deleted attached storage")
+			}
+			tc.fakeAtelet.Lock.Lock()
+			tc.fakeAtelet.FailTerminate = nil
+			tc.fakeAtelet.Lock.Unlock()
+			plugin.mu.Lock()
+			plugin.detachErr = nil
+			plugin.mu.Unlock()
+			if _, err := tc.client.DeleteActor(ctx, req); err != nil {
+				t.Fatalf("retry: %v", err)
+			}
+			_, deleted, _, _ = plugin.snapshot()
+			if len(deleted) != 1 {
+				t.Fatalf("deleted=%v", deleted)
+			}
+		})
+	}
+}
+
+func TestSharedVolumeFailedResumeReleasesClaimAfterCleanup(t *testing.T) {
+	ctx := context.Background()
+	ns := namespaceForTest("ns-resume-claim-cleanup")
+	tc, _ := setupSharedVolumeTest(t, ns)
+	defer tc.cleanup()
+	createSharedVolume(t, tc, "data", ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL)
+	createTemplateWithVolumes(t, tc, ns, []*ateapipb.Volume{{Name: "work", External: &ateapipb.ExternalVolumeSource{SharedVolume: &ateapipb.SharedVolumeRef{Name: "data"}}}}, []*ateapipb.VolumeMount{{Name: "work", MountPath: "/work"}})
+	worker := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	createBorrowingActor(t, tc, "consumer", nil)
+	waitForWorkerAvailable(t, tc, worker)
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.FailRun = errors.New("injected run failure")
+	tc.fakeAtelet.Lock.Unlock()
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "consumer"}}); err == nil {
+		t.Fatal("expected run failure")
+	}
+	refs := refStates(t, tc, "data")
+	if active, ok := refs["consumer"]; !ok || active {
+		t.Fatalf("want retained inactive reference: %v", refs)
 	}
 }

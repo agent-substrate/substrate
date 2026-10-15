@@ -43,7 +43,7 @@ METER=http://telemetry-meter.benchmarking.svc.cluster.local:4317
 `--otlp-endpoint` patches the `ate-otel-config` ConfigMap and restarts the
 workloads that read it. One patch is sufficient for `ateapi`, `ate-controller`,
 `atelet`, and `atenet-router`, because each one reads the ConfigMap through
-`envFrom`. `ate-controller` also copies the values to the ateom worker pods
+`envFrom`. `ate-controller` also copies the values to the worker pods
 that it creates.
 
 The actor containers are different. Substrate puts no OTLP configuration in

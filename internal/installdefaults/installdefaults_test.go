@@ -47,7 +47,7 @@ func TestAteletSPIFFEID(t *testing.T) {
 }
 
 func TestRouterSPIFFEID(t *testing.T) {
-	// Matches the --atunnel-client-identity default the ateom binaries ship
+	// Matches the --atunnel-client-identity default the worker binaries ship
 	// with, which is what actor ingress authenticates the router against.
 	const want = "spiffe://cluster.local/ns/ate-system/sa/atenet-router"
 	if got := RouterSPIFFEID(SystemNamespace); got != want {
@@ -61,6 +61,13 @@ func TestEgressSPIFFEID(t *testing.T) {
 	const want = "spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
 	if got := EgressSPIFFEID(SystemNamespace); got != want {
 		t.Errorf("EgressSPIFFEID(%q) = %q, want %q", SystemNamespace, got, want)
+	}
+}
+
+func TestControllerSPIFFEID(t *testing.T) {
+	const want = "spiffe://cluster.local/ns/ate-system/sa/ate-controller"
+	if got := ControllerSPIFFEID(SystemNamespace); got != want {
+		t.Errorf("ControllerSPIFFEID(%q) = %q, want %q", SystemNamespace, got, want)
 	}
 }
 

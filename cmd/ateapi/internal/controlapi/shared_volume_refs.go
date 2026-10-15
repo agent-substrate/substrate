@@ -18,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"google.golang.org/protobuf/proto"
 	"slices"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -104,7 +106,6 @@ func sharedVolumeMount(templateVolumeName string, volume *ateapipb.SharedVolume)
 		StorageVolumeId:  volume.GetVolumeId(),
 		VolumeType:       volume.GetVolumeType(),
 		VolumeContext:    volume.GetVolumeContext(),
-		Status:           ateapipb.ExternalVolumeRef_STATUS_CREATED,
 	}
 }
 
@@ -156,41 +157,38 @@ func updateSharedVolumeRefs(ctx context.Context, st sharedVolumeRefStore, volume
 	return st.UpdateSharedVolume(ctx, volumeRef, store.PreconditionFrom(volume), mutate)
 }
 
-// bindSharedVolumes records an inactive reference for every SharedVolume
-// the actor mounts.
-func bindSharedVolumes(ctx context.Context, st sharedVolumeRefStore, actor *ateapipb.Actor) error {
-	var errs []error
-	for _, volumeRef := range borrowedVolumeRefs(actor) {
-		_, err := updateSharedVolumeRefs(ctx, st, volumeRef, func(toUpdate *ateapipb.SharedVolume) error {
-			if findActorRef(toUpdate, actor.GetMetadata().GetUid()) == nil {
-				setActorRef(toUpdate, actorRefOf(actor, false))
-			}
-			return nil
-		})
-		if err != nil {
-			errs = append(errs, fmt.Errorf("while binding shared volume %s: %w", volumeRef, err))
-		}
-	}
-	return errors.Join(errs...)
-}
-
 var errSharedVolumeHeld = errors.New("shared volume is held by another actor")
 
 // claimSharedVolumes marks the actor's references active and refreshes the
 // recorded mounts. A READ_WRITE_ONCE volume another actor holds is refused.
 // TODO: let READ_WRITE_MANY volumes carry several active references.
-func claimSharedVolumes(ctx context.Context, st sharedVolumeRefStore, actor *ateapipb.Actor) ([]*ateapipb.ExternalVolumeRef, error) {
+func claimSharedVolumes(ctx context.Context, st sharedVolumeRefStore, actor *ateapipb.Actor) (_ []*ateapipb.ExternalVolumeRef, retErr error) {
 	volumes := slices.Clone(actor.GetStatus().GetExternalVolumes())
 	actorUID := actor.GetMetadata().GetUid()
+	var acquired []*ateapipb.ExternalVolumeRef
+	defer func() {
+		if retErr == nil || len(acquired) == 0 {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		rollback := proto.CloneOf(actor)
+		rollback.Status.ExternalVolumes = acquired
+		retErr = errors.Join(retErr, deactivateSharedVolumes(cleanupCtx, st, rollback))
+	}()
 	for i, mount := range volumes {
 		if mount.GetSharedVolumeName() == "" {
 			continue
 		}
 		volumeRef := resources.SharedVolumeRef{Atespace: actor.GetMetadata().GetAtespace(), Name: mount.GetSharedVolumeName()}
 		var holder string
+		newlyActive := false
 		claimed, err := updateSharedVolumeRefs(ctx, st, volumeRef, func(toUpdate *ateapipb.SharedVolume) error {
 			if toUpdate.GetStatus().GetState() != ateapipb.SharedVolumeState_SHARED_VOLUME_STATE_READY {
 				return fmt.Errorf("shared volume is not ready (state %s)", toUpdate.GetStatus().GetState())
+			}
+			if findActorRef(toUpdate, actorUID) == nil || toUpdate.GetVolumeId() != mount.GetStorageVolumeId() {
+				return apierror.FailedPrecondition("actor no longer references this volume")
 			}
 			for _, ref := range toUpdate.GetStatus().GetRefs() {
 				if ref.GetActive() && ref.GetActorUid() != actorUID {
@@ -198,6 +196,7 @@ func claimSharedVolumes(ctx context.Context, st sharedVolumeRefStore, actor *ate
 					return errSharedVolumeHeld
 				}
 			}
+			newlyActive = !findActorRef(toUpdate, actorUID).GetActive()
 			setActorRef(toUpdate, actorRefOf(actor, true))
 			return nil
 		})
@@ -211,6 +210,9 @@ func claimSharedVolumes(ctx context.Context, st sharedVolumeRefStore, actor *ate
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		default:
 			return nil, apierror.FailedPrecondition("SharedVolume %s: %v", volumeRef, err)
+		}
+		if newlyActive {
+			acquired = append(acquired, mount)
 		}
 		volumes[i] = sharedVolumeMount(mount.GetName(), claimed)
 	}
@@ -255,7 +257,7 @@ func releaseSharedVolumes(ctx context.Context, st sharedVolumeRefStore, deleter 
 		if released.GetDeleteTrigger() != ateapipb.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR || len(released.GetStatus().GetRefs()) > 0 {
 			continue
 		}
-		_, err = deleter.DeleteSharedVolume(ctx, volumeRef, store.DeletePreconditions{UID: released.GetMetadata().GetUid()})
+		_, err = deleter.DeleteSharedVolume(ctx, volumeRef, store.DeletePreconditions{UID: released.GetMetadata().GetUid(), Version: released.GetMetadata().GetVersion()})
 		if code := status.Code(err); err != nil && code != codes.NotFound && code != codes.FailedPrecondition {
 			errs = append(errs, fmt.Errorf("while deleting shared volume %s: %w", volumeRef, err))
 		}

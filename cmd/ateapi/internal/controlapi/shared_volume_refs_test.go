@@ -56,7 +56,6 @@ func borrowedMount(volumeName string) *ateapipb.ExternalVolumeRef {
 		StorageVolumeId:  "disk/" + volumeName,
 		VolumeType:       "mock",
 		VolumeContext:    map[string]string{"type": "pd-ssd"},
-		Status:           ateapipb.ExternalVolumeRef_STATUS_CREATED,
 	}
 }
 
@@ -132,7 +131,7 @@ func TestResolveSharedVolumeRefs(t *testing.T) {
 			}
 			var got []string
 			for _, mount := range mounts {
-				if mount.GetStorageVolumeId() != "disk/"+mount.GetSharedVolumeName() || mount.GetStatus() != ateapipb.ExternalVolumeRef_STATUS_CREATED {
+				if mount.GetStorageVolumeId() != "disk/"+mount.GetSharedVolumeName() {
 					t.Errorf("mount %v does not carry the volume's handle", mount)
 				}
 				got = append(got, mount.GetSharedVolumeName())
@@ -148,13 +147,11 @@ func TestBindClaimDeactivateRelease(t *testing.T) {
 	ctx := context.Background()
 	st := newTestPersistence(t)
 	mustStoreReadyVolume(t, ctx, st, "shared", ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL)
-	actor := refTestActor(borrowedMount("shared"))
+	actor := storetest.MustCreateActor(t, ctx, st, refTestActor(borrowedMount("shared")))
+	uid := actor.GetMetadata().GetUid()
 	volumeRef := resources.SharedVolumeRef{Atespace: refTestAtespace, Name: "shared"}
 
-	if err := bindSharedVolumes(ctx, st, actor); err != nil {
-		t.Fatalf("bindSharedVolumes: %v", err)
-	}
-	if diff := cmp.Diff(map[string]bool{refTestActorUID: false}, refStates(mustGetVolume(t, ctx, st, "shared"))); diff != "" {
+	if diff := cmp.Diff(map[string]bool{uid: false}, refStates(mustGetVolume(t, ctx, st, "shared"))); diff != "" {
 		t.Errorf("refs after bind mismatch (-want +got):\n%s", diff)
 	}
 
@@ -165,7 +162,7 @@ func TestBindClaimDeactivateRelease(t *testing.T) {
 	if diff := cmp.Diff(actor.GetStatus().GetExternalVolumes(), claimed, protocmp.Transform()); diff != "" {
 		t.Errorf("claimed mounts mismatch (-want +got):\n%s", diff)
 	}
-	if diff := cmp.Diff(map[string]bool{refTestActorUID: true}, refStates(mustGetVolume(t, ctx, st, "shared"))); diff != "" {
+	if diff := cmp.Diff(map[string]bool{uid: true}, refStates(mustGetVolume(t, ctx, st, "shared"))); diff != "" {
 		t.Errorf("refs after claim mismatch (-want +got):\n%s", diff)
 	}
 	if _, err := claimSharedVolumes(ctx, st, actor); err != nil {
@@ -175,7 +172,7 @@ func TestBindClaimDeactivateRelease(t *testing.T) {
 	if err := deactivateSharedVolumes(ctx, st, actor); err != nil {
 		t.Fatalf("deactivateSharedVolumes: %v", err)
 	}
-	if diff := cmp.Diff(map[string]bool{refTestActorUID: false}, refStates(mustGetVolume(t, ctx, st, "shared"))); diff != "" {
+	if diff := cmp.Diff(map[string]bool{uid: false}, refStates(mustGetVolume(t, ctx, st, "shared"))); diff != "" {
 		t.Errorf("refs after deactivate mismatch (-want +got):\n%s", diff)
 	}
 
@@ -204,20 +201,20 @@ func TestClaimSharedVolumes_Exclusion(t *testing.T) {
 	t.Run("active holder blocks", func(t *testing.T) {
 		st := newTestPersistence(t)
 		other := &ateapipb.ActorRef{ActorUid: other.ActorUid, ActorName: other.ActorName, Active: true}
-		mustStoreReadyVolume(t, ctx, st, "shared", ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL, other)
+		mustStoreReadyVolume(t, ctx, st, "shared", ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL, other, &ateapipb.ActorRef{ActorUid: refTestActorUID, ActorName: "consumer"})
 
 		_, err := claimSharedVolumes(ctx, st, refTestActor(borrowedMount("shared")))
 		if apierror.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "producer") {
 			t.Fatalf("claimSharedVolumes() = %v, want FailedPrecondition naming the holder", err)
 		}
-		if diff := cmp.Diff(map[string]bool{refTestOtherUID: true}, refStates(mustGetVolume(t, ctx, st, "shared"))); diff != "" {
+		if diff := cmp.Diff(map[string]bool{refTestOtherUID: true, refTestActorUID: false}, refStates(mustGetVolume(t, ctx, st, "shared"))); diff != "" {
 			t.Errorf("refs after refused claim mismatch (-want +got):\n%s", diff)
 		}
 	})
 
 	t.Run("inactive holder does not block", func(t *testing.T) {
 		st := newTestPersistence(t)
-		mustStoreReadyVolume(t, ctx, st, "shared", ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL, other)
+		mustStoreReadyVolume(t, ctx, st, "shared", ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL, other, &ateapipb.ActorRef{ActorUid: refTestActorUID, ActorName: "consumer"})
 
 		if _, err := claimSharedVolumes(ctx, st, refTestActor(borrowedMount("shared"))); err != nil {
 			t.Fatalf("claimSharedVolumes: %v", err)
@@ -291,4 +288,21 @@ type recordingSharedVolumeDeleter struct {
 func (d *recordingSharedVolumeDeleter) DeleteSharedVolume(_ context.Context, volumeRef resources.SharedVolumeRef, _ store.DeletePreconditions) (*ateapipb.SharedVolume, error) {
 	d.deleted = append(d.deleted, volumeRef.String())
 	return nil, nil
+}
+
+func TestClaimSharedVolumesRollsBackOnlyNewClaims(t *testing.T) {
+	ctx := context.Background()
+	st := newTestPersistence(t)
+	own := &ateapipb.ActorRef{ActorUid: refTestActorUID, ActorName: "consumer"}
+	mustStoreReadyVolume(t, ctx, st, "first", ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL, own)
+	mustStoreReadyVolume(t, ctx, st, "second", ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL, own, &ateapipb.ActorRef{ActorUid: refTestOtherUID, ActorName: "other", Active: true})
+	if _, err := claimSharedVolumes(ctx, st, refTestActor(borrowedMount("first"), borrowedMount("second"))); err == nil {
+		t.Fatal("expected exclusion")
+	}
+	if refStates(mustGetVolume(t, ctx, st, "first"))[refTestActorUID] {
+		t.Fatal("partial claim leaked")
+	}
+	if !refStates(mustGetVolume(t, ctx, st, "second"))[refTestOtherUID] {
+		t.Fatal("other actor's claim released")
+	}
 }

@@ -105,6 +105,7 @@ goals in the near term.
 To quickly set up the complete environment:
 
 1. Make sure you have [Go](https://go.dev/doc/install), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [`docker`](https://www.docker.com/) installed and configured on your dev machine. We will automatically manage other dependencies via Go, including [`kind`](https://kind.sigs.k8s.io/).
+   A Linux host that will run more than about a thousand sandboxes also needs a larger kernel neighbor table (`net.ipv4.neigh.default.gc_thresh1/2/3` = 4096/16384/32768); `hack/create-kind-cluster.sh` warns when the host is at the default of 1024.
 
 2. Run the following steps:
 ```shell
@@ -140,15 +141,6 @@ curl -X POST \
    -H "ate-target-actor: ate-demo-counter/my-counter-1" \
    -i http://localhost:8000/
 ```
-
-Worker capacity is versioned: the dataplane (the atelet DaemonSet and the
-worker pods) schedules only on nodes that carry the
-`ate.dev/substrate-version` label, and the install stamps it on every node
-that exists when it runs. A node added later hosts no workers until you label
-it with the installed version
-(`kubectl label node <node> ate.dev/substrate-version=<build version>`).
-`kubectl get ds -n ate-system -l app=atelet -L ate.dev/substrate-version`
-prints the installed version, off the atelet DaemonSet the install created.
 
 ### GKE Quickstart (Development)
 
@@ -192,11 +184,6 @@ prints the installed version, off the atelet DaemonSet the install created.
    starts with an empty, default-deny one, so it resolves no Secrets until you
    grant each atespace the namespaces it may read; see
    [Enable it](docs/egress-credential-injection.md#enable-it).
-
-   Nodes that GKE adds later (autoscaling, auto-repair, node upgrades) are
-   born with the node pool's labels, so the pool needs
-   `ate.dev/substrate-version` too; see
-   [Node version labels](tools/setup-gcp/README.md).
 
 5. You can then deploy the sample applications. See [demos/counter/README.md](demos/counter/README.md) or [demos/sandbox/README.md](demos/sandbox/README.md) for detailed walkthroughs.
    ```bash
@@ -256,14 +243,14 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Architecture](docs/architecture.md): How the control plane, node supervisor, and networking stack fit together.
 * [API Configuration Guide](docs/api-guide.md): Detailed reference for configuring WorkerPools, ActorTemplates, Secrets, and Volumes.
 * [Full CLI Documentation](cmd/kubectl-ate/README.md): Installation and usage for `kubectl-ate`.
-* [Glossary](docs/glossary.md): Core terms (Actor, Atespace, ActorTemplate, WorkerPool, Worker, ate-api-server, atenet, atelet, ateom) and how they relate.
+* [Glossary](docs/glossary.md): Core terms (Actor, Atespace, ActorTemplate, WorkerPool, Worker, ate-api-server, atenet, atelet, ateworker) and how they relate.
 * [Integration Repositories](docs/integration-repos.md): Where integrations live, how their repositories are named, and how fixes flow back to core.
 * [Observability Guide](docs/observability.md): Guide to actor logging, metrics, and distributed tracing.
 * [Authentication Guide](docs/authentication.md): Configure trusted JWT providers and human credentials.
 * [Egress Traffic](docs/egress-traffic.md): Which protocols an Actor may reach the outside world with and which are blocked.
 * [Enabling man-in-the-middle (MITM) interception for Actor Egress policy](docs/egress-trust-bundle.md): Egress policies such as header injection depend on MITM interception of Actor traffic. This guide explains how an Actor should be configured to enable interception.
 * [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.
-* [Rolling Upgrade Runbook](docs/upgrade.md): Upgrade a running substrate node by node without losing actor state.
+* [Upgrade Runbook](docs/upgrade.md): Upgrade a running install to a newer supported release, and roll back if needed.
 * [Security Guide](docs/security.md): Security overview, security principles, and threat modeling.
 * [Roadmap](docs/roadmap.md): Current limitations and what is planned next.
 * [Benchmarking Guide](benchmarking/README.md): Locust-based load tests, monitoring stack, and the orchestrated benchmark harness.
@@ -276,8 +263,8 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * `cmd/atelet`: A node-level DaemonSet that supervises physical worker pods, coordinates snapshotting, and manages state transfers.
 * `cmd/atecontroller`: A Kubernetes controller that reconciles WorkerPool custom resources.
 * `cmd/atenet`: A combined networking controller providing Envoy routing and proxy sidecars.
-* `cmd/ateom-gvisor`: An interior-pod helper running inside sandboxed worker pods to execute `runsc` checkpoint and restore commands.
-* `cmd/ateom-microvm`: The micro-VM peer of `ateom-gvisor`, running actors as cloud-hypervisor VMs.
+* `cmd/ateworker-gvisor`: An interior-pod helper running inside sandboxed worker pods to execute `runsc` checkpoint and restore commands.
+* `cmd/ateworker-microvm`: The micro-VM peer of `ateworker-gvisor`, running actors as cloud-hypervisor VMs.
 * `cmd/podcertcontroller`: A "polyfill" that provides Pod Certificate signers that
   will eventually ship in upstream Kubernetes (with different names).
 * `cmd/kubectl-ate`: A CLI tool for managing Agent Substrate resources. See its [README](cmd/kubectl-ate/README.md).

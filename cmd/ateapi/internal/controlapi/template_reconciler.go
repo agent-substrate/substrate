@@ -254,15 +254,15 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			return 0, r.fail(ctx, tmpl, reasonGoldenActorCrashed, "golden actor crashed before its snapshot was taken")
 
 		case ateapipb.ActorState_ACTOR_STATE_RUNNING:
-			takeAt := goldenSnapshotStatus.GetTakeGoldenSnapshotAt()
+			takeAt := goldenSnapshotStatus.GetSnapshotTime()
 			if takeAt == nil {
 				// Resumed, but the deadline write was lost (a replica died
 				// after ResumeActor). The elapsed warmup is unknowable, so
 				// restart the clock.
 				slog.WarnContext(ctx, "Golden actor running without a snapshot deadline; restarting warmup", slog.String("ActorTemplate", ref.String()))
-				deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl.GetContainers()))
+				deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl))
 				if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
-					snapshotStatus.TakeGoldenSnapshotAt = timestamppb.New(deadline)
+					snapshotStatus.SnapshotTime = timestamppb.New(deadline)
 				}); err != nil {
 					return 0, err
 				}
@@ -301,14 +301,14 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				// A crash during resume is observed as CRASHED on the retry.
 				return 0, fmt.Errorf("while resuming golden actor: %w", err)
 			}
-			deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl.GetContainers()))
+			deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl))
 			if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
-				snapshotStatus.TakeGoldenSnapshotAt = timestamppb.New(deadline)
+				snapshotStatus.SnapshotTime = timestamppb.New(deadline)
 			}); err != nil {
 				return 0, err
 			}
-		case ateapipb.ActorState_ACTOR_STATE_DELETING, ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_PAUSING, ateapipb.ActorState_ACTOR_STATE_REVERTING:
-			// Nothing in the golden flow deletes, pauses, or reverts the actor before
+		case ateapipb.ActorState_ACTOR_STATE_DELETING, ateapipb.ActorState_ACTOR_STATE_REVERTING:
+			// Nothing in the golden flow deletes or reverts the actor before
 			// the snapshot is taken; someone else interfered.
 			return 0, r.fail(ctx, tmpl, reasonUnexpectedState, fmt.Sprintf("golden actor in unexpected state %v", state))
 
@@ -410,7 +410,11 @@ func goldenSnapshotDone(snapshotStatus *ateapipb.GoldenSnapshotStatus) bool {
 // goldenSnapshotWarmupFor returns 0 when every container has a wakeup probe
 // (ResumeActor already blocked until the workload reported 200), and the
 // default warmup otherwise.
-func goldenSnapshotWarmupFor(containers []*ateapipb.Container) time.Duration {
+func goldenSnapshotWarmupFor(tmpl *ateapipb.ActorTemplate) time.Duration {
+	if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME {
+		return 0
+	}
+	containers := tmpl.GetContainers()
 	if len(containers) == 0 {
 		return goldenSnapshotWarmup
 	}

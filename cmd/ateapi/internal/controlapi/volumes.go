@@ -29,7 +29,8 @@ import (
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
-// initialActorVolumes constructs initial volume objects in PENDING state before volume creation.
+// initialActorVolumes constructs the actor's volume objects before volume
+// creation. A volume has no storage volume ID until it is provisioned.
 func initialActorVolumes(ctx context.Context, scLister storagev1listers.StorageClassLister, template *ateapipb.ActorTemplate) ([]*ateapipb.ExternalVolumeRef, error) {
 	if template == nil {
 		return nil, apierror.InvalidArgument("template is required")
@@ -49,15 +50,14 @@ func initialActorVolumes(ctx context.Context, scLister storagev1listers.StorageC
 			volumes = append(volumes, &ateapipb.ExternalVolumeRef{
 				Name:       vol.GetName(),
 				VolumeType: sc.Provisioner,
-				Status:     ateapipb.ExternalVolumeRef_STATUS_PENDING,
 			})
 		}
 	}
 	return volumes, nil
 }
 
-// createActorVolumes provisions external volumes specified in volumesToCreate using the provided volume plugin.
-// It returns the list of external volumes (with updated status and storage IDs), or an error if any creation fails.
+// createActorVolumes provisions the external volumes in volumesToCreate that have no storage volume ID, using the provided volume plugin.
+// It returns the list of external volumes (with storage IDs), or an error if any creation fails.
 // Any volumes processed before or during a failure are returned alongside the error so they can be persisted on the actor.
 func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLister storagev1listers.StorageClassLister, actorUID string, template *ateapipb.ActorTemplate, volumesToCreate []*ateapipb.ExternalVolumeRef) (resultVolumes []*ateapipb.ExternalVolumeRef, err error) {
 	resultVolumes = make([]*ateapipb.ExternalVolumeRef, 0, len(volumesToCreate))
@@ -91,16 +91,9 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			return resultVolumes, apierror.NotFound("volume %q not found in template", volName)
 		}
 
-		switch vol.GetStatus() {
-		case ateapipb.ExternalVolumeRef_STATUS_PENDING:
-			// proceed with volume creation
-		case ateapipb.ExternalVolumeRef_STATUS_CREATED:
+		if vol.GetStorageVolumeId() != "" {
 			resultVolumes = append(resultVolumes, vol)
 			continue
-		case ateapipb.ExternalVolumeRef_STATUS_DELETING:
-			return resultVolumes, apierror.FailedPrecondition("cannot create volume %q in DELETING status", volName)
-		default:
-			return resultVolumes, apierror.Internal("unexpected status %s for volume %q", vol.GetStatus(), volName)
 		}
 
 		actVolID := actorVolumeID(actorUID, volName)
@@ -132,11 +125,15 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			return resultVolumes, apierror.Internal("failed to create volume %q: %v", specVol.GetName(), volErr)
 		}
 
+		if resp.VolumeID == "" {
+			// An empty ID would read as not yet provisioned and be created again.
+			return resultVolumes, apierror.Internal("volume plugin returned no ID for volume %q", specVol.GetName())
+		}
+
 		resultVolumes = append(resultVolumes, &ateapipb.ExternalVolumeRef{
 			Name:            volName,
 			StorageVolumeId: resp.VolumeID,
 			VolumeType:      sc.Provisioner,
-			Status:          ateapipb.ExternalVolumeRef_STATUS_CREATED,
 			VolumeContext:   resp.VolumeContext,
 		})
 	}
@@ -230,7 +227,7 @@ func detachActorVolumes(ctx context.Context, registry VolumePluginRegistry, acto
 	var errs []error
 	for _, vol := range volumesToDetach {
 		// StorageVolumeId is only populated once the volume is provisioned.
-		// Skip volumes that were never created (e.g. failed during PENDING state).
+		// Skip volumes that were never created (e.g. creation failed).
 		if vol.GetStorageVolumeId() == "" {
 			slog.WarnContext(ctx, "Volume has no storage volume ID, skipping detach", slog.String("volume_name", vol.GetName()), slog.String("actor_id", actor.GetMetadata().GetName()))
 			continue

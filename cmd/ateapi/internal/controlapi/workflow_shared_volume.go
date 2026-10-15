@@ -233,11 +233,25 @@ func (w *SharedVolumeWorkflow) DeleteSharedVolume(ctx context.Context, volumeRef
 	if refs := stored.GetStatus().GetRefs(); len(refs) > 0 {
 		return nil, apierror.FailedPrecondition("SharedVolume %s is still referenced by %d actor(s), starting with %q", volumeRef, len(refs), refs[0].GetActorName())
 	}
+	// Fence every new reference before calling CSI. A version conflict means
+	// a reference or policy changed since the check; no storage was touched.
+	if stored.GetStatus().GetState() != ateapipb.SharedVolumeState_SHARED_VOLUME_STATE_DELETING {
+		stored, err = w.store.UpdateSharedVolume(ctx, volumeRef, store.PreconditionFrom(stored), func(v *ateapipb.SharedVolume) error {
+			v.Status.State = ateapipb.SharedVolumeState_SHARED_VOLUME_STATE_DELETING
+			return nil
+		})
+		if err != nil {
+			if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrUIDConflict) {
+				return nil, apierror.Aborted("SharedVolume %s changed before deletion; retry", volumeRef)
+			}
+			return nil, fmt.Errorf("while marking shared volume deleting: %w", err)
+		}
+	}
 	if err := w.reclaimSharedVolume(ctx, stored); err != nil {
 		return nil, err
 	}
 
-	volume, err := w.store.DeleteSharedVolume(ctx, volumeRef, precondition)
+	volume, err := w.store.DeleteSharedVolume(ctx, volumeRef, store.DeletePreconditions{UID: stored.GetMetadata().GetUid(), Version: stored.GetMetadata().GetVersion()})
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("SharedVolume %s not found", volumeRef)

@@ -23,21 +23,18 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
-// workerImages are the ateom images a WorkerPool points at through
+// workerImages are the worker images a WorkerPool points at through
 // workerImage, one per sandbox class. No manifest references them, so the
 // install never publishes them as a side effect.
-var workerImages = []string{"ateom-gvisor", "ateom-microvm"}
+var workerImages = []string{"ateworker-gvisor", "ateworker-microvm"}
 
-// PublishWorkerImages builds and pushes the ateom images for this build and
+// PublishWorkerImages builds and pushes the worker images for this build and
 // writes their pushed references to w, one "<binary>: <ref>" line per image,
 // after every build has finished so the refs sit together below ko's build
 // output. A WorkerPool moves to this build by pointing its workerImage at
 // the ref.
 func (e *Env) PublishWorkerImages(ctx context.Context, w io.Writer) error {
-	version, _, err := e.SubstrateVersion()
-	if err != nil {
-		return err
-	}
+	version := e.SubstrateVersion()
 	log.Stepf("publish_worker_images (%s)", version)
 	runner, err := e.koRunner()
 	if err != nil {
@@ -71,10 +68,7 @@ func (e *Env) PublishReleaseImages(ctx context.Context, w io.Writer) error {
 	if e.Cfg.KODockerRepo == "" {
 		return fmt.Errorf("publishing release images needs a registry to push to; set KO_DOCKER_REPO or --ko-docker-repo")
 	}
-	tag, _, err := e.SubstrateVersion()
-	if err != nil {
-		return err
-	}
+	tag := e.SubstrateVersion()
 	log.Stepf("publish_release_images (%s)", tag)
 	runner, err := e.koRunner()
 	if err != nil {

@@ -42,7 +42,15 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
 
-	_, err = p.pool.Exec(ctx, `
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // Commit or rollback closes the transaction.
+	if err := bindActorSharedVolumes(ctx, tx, dbActor); err != nil {
+		return nil, err
+	}
+	_, err = tx.Exec(ctx, `
 		INSERT INTO actors (atespace, name, uid, version, proto)
 		VALUES ($1, $2, $3, $4, $5)`,
 		atespace, name, dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion(), protoBytes)
@@ -56,6 +64,9 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 			return nil, store.ErrFailedPrecondition
 		}
 		return nil, fmt.Errorf("inserting actor %s/%s: %w", atespace, name, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return dbActor, nil
 }

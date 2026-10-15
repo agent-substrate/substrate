@@ -15,8 +15,9 @@
 package combinedvolumes
 
 import (
-	"github.com/agent-substrate/substrate/internal/e2e/runtimegoldenenv"
 	"testing"
+
+	"github.com/agent-substrate/substrate/internal/e2e/runtimegoldenenv"
 )
 
 func requireRuntimeGolden(t *testing.T) {

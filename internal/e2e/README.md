@@ -56,11 +56,39 @@ installs the fixtures elsewhere: `E2E_SUBSTRATE_TEMPLATE_ATESPACE` /
 gVisor, 10m on micro-VM, where the golden is a cloud-hypervisor cold boot plus
 a checkpoint).
 
+## Settings
+
+The installer reads this setting in addition to those in
+[docs/operator-install.md](../../docs/operator-install.md#settings), through the same
+flag, environment variable, and configuration document channels. It sets the
+worker thread count (`--concurrency`) of the Envoy container in `atenet-egress`;
+`0` leaves the manifest unchanged. The
+[nighthawk egress benchmark](../../benchmarking/nighthawk-egress/README.md) sets
+it to `1` to measure single-CPU Envoy performance.
+
+| Key                    | Environment variable        | Flag                      | Default | Applies to |
+|------------------------|-----------------------------|---------------------------|---------|------------|
+| `e2e.envoyConcurrency` | `E2E_ATE_ENVOY_CONCURRENCY` | `--e2e-envoy-concurrency` | `0`     | (global)   |
+
+## Preview features
+
+Tests of a preview feature start with `e2e.RequirePreview(t, preview.Gate...)`,
+which skips them unless the `--preview` flag names that gate. It takes the same
+syntax as `ATE_PREVIEW` and should match what the cluster was installed with:
+
+```shell
+$ hack/run-e2e-kind.sh -v -args --no-color --preview=ALL
+```
+
+Unset or empty means no gates. CI must pass it, even if only as empty, so a
+lane that forgets cannot silently skip every preview test; see
+[preview.go](preview.go).
+
 ## After a failure
 
 A suite deletes the namespaces it created only when it passed. A failed run
 keeps them, because the failure is usually explained inside a worker pod (the
-ateom logs, and for a micro-VM worker the guest's console tail), and deleting
+worker logs, and for a micro-VM worker the guest's console tail), and deleting
 the namespace takes those pods with it:
 
 ```shell

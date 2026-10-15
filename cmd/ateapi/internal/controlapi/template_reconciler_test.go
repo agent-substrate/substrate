@@ -33,7 +33,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"k8s.io/apimachinery/pkg/api/operation"
 )
 
 // fakeTemplateStore is an in-memory templateReconcilerStore.
@@ -324,7 +323,7 @@ func testTemplate(opts ...func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate
 	tmpl := &ateapipb.ActorTemplate{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testTemplateName, Uid: testTemplateUID, Version: 1},
 		Containers: []*ateapipb.Container{
-			{Name: "main", Image: "img", WakeupProbe: &ateapipb.ContainerWakeupProbe{}},
+			{Name: "main", Image: "img", WakeupProbe: &ateapipb.WakeupProbe{}},
 		},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
@@ -358,7 +357,7 @@ func seededGoldenStatus(tmpl *ateapipb.ActorTemplate) *ateapipb.GoldenSnapshotSt
 
 func withSnapshotDeadline(at time.Time) func(*ateapipb.ActorTemplate) {
 	return func(tmpl *ateapipb.ActorTemplate) {
-		seededGoldenStatus(tmpl).TakeGoldenSnapshotAt = timestamppb.New(at)
+		seededGoldenStatus(tmpl).SnapshotTime = timestamppb.New(at)
 	}
 }
 
@@ -379,7 +378,7 @@ func newTestTemplateReconciler(persistence templateReconcilerStore, control gold
 }
 
 func TestGoldenSnapshotWarmupFor(t *testing.T) {
-	probe := &ateapipb.ContainerWakeupProbe{}
+	probe := &ateapipb.WakeupProbe{}
 	tests := []struct {
 		name       string
 		containers []*ateapipb.Container
@@ -391,7 +390,7 @@ func TestGoldenSnapshotWarmupFor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := goldenSnapshotWarmupFor(tt.containers); got != tt.want {
+			if got := goldenSnapshotWarmupFor(&ateapipb.ActorTemplate{Containers: tt.containers}); got != tt.want {
 				t.Errorf("goldenSnapshotWarmupFor() = %v, want %v", got, tt.want)
 			}
 		})
@@ -418,7 +417,7 @@ func TestReconcileOne(t *testing.T) {
 		wantMessage      string
 		// wantTag indicates that the golden tag should be recorded.
 		wantTag bool
-		// wantDeadline asserts whether take_golden_snapshot_at is set.
+		// wantDeadline asserts whether snapshot_time is set.
 		wantDeadline  bool
 		wantCreates   int
 		wantResumes   int
@@ -632,8 +631,8 @@ func TestReconcileOne(t *testing.T) {
 			if got := snapshotStatus.GetGoldenTag(); (got != nil) != tt.wantTag {
 				t.Errorf("stored golden tag = %v, want tag %v", got, tt.wantTag)
 			}
-			if tt.wantDeadline && snapshotStatus.GetTakeGoldenSnapshotAt() == nil {
-				t.Error("stored take_golden_snapshot_at is nil, want set")
+			if tt.wantDeadline && snapshotStatus.GetSnapshotTime() == nil {
+				t.Error("stored snapshot_time is nil, want set")
 			}
 		})
 	}
@@ -675,8 +674,8 @@ func TestReconcileOne_GoldenActorRequests(t *testing.T) {
 	if got := control.suspendReqs[0].GetActor().GetName(); got != testTemplateUID {
 		t.Errorf("suspended actor = %q, want %q", got, testTemplateUID)
 	}
-	if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetTakeGoldenSnapshotAt() == nil {
-		t.Error("stored take_golden_snapshot_at is nil, want set")
+	if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetSnapshotTime() == nil {
+		t.Error("stored snapshot_time is nil, want set")
 	}
 }
 
@@ -697,13 +696,13 @@ func TestCheckpoint_TerminalStateErrors(t *testing.T) {
 			// Checkpoint against a template a concurrent writer already
 			// drove to a terminal state.
 			_, err := r.checkpoint(ctx, testTemplate(seed.opt), func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
-				snapshotStatus.TakeGoldenSnapshotAt = timestamppb.New(time.Now())
+				snapshotStatus.SnapshotTime = timestamppb.New(time.Now())
 			})
 			if err == nil {
 				t.Fatal("checkpoint succeeded, want error for terminal template")
 			}
-			if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetTakeGoldenSnapshotAt() != nil {
-				t.Error("take_golden_snapshot_at set, want store unchanged")
+			if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetSnapshotTime() != nil {
+				t.Error("snapshot_time set, want store unchanged")
 			}
 		})
 	}
@@ -786,7 +785,7 @@ func TestFail_TruncatesErrorMessage(t *testing.T) {
 	if !utf8.ValidString(msg) {
 		t.Error("error_message is not valid UTF-8")
 	}
-	op := operation.Operation{Type: operation.Update}
+	op := apivalidation.MakeUpdateOp(ctx)
 	if errs := apivalidation.Validate_GoldenSnapshotStatus(ctx, op, nil, golden, &ateapipb.GoldenSnapshotStatus{}); len(errs) != 0 {
 		t.Errorf("stored status fails validation: %v", errs)
 	}
@@ -806,13 +805,13 @@ func TestCheckpoint_StaleObservationConflicts(t *testing.T) {
 	}
 
 	_, err := r.checkpoint(ctx, testTemplate(), func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
-		snapshotStatus.TakeGoldenSnapshotAt = timestamppb.New(time.Now())
+		snapshotStatus.SnapshotTime = timestamppb.New(time.Now())
 	})
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Fatalf("checkpoint error = %v, want ErrVersionConflict", err)
 	}
-	if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetTakeGoldenSnapshotAt() != nil {
-		t.Error("take_golden_snapshot_at set, want store unchanged")
+	if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetSnapshotTime() != nil {
+		t.Error("snapshot_time set, want store unchanged")
 	}
 }
 
@@ -1010,5 +1009,12 @@ func TestReconcileOne_GoldenTagConflict(t *testing.T) {
 				t.Fatal("resync queued a terminally failed template")
 			}
 		})
+	}
+}
+
+func TestRuntimeGoldenNeedsNoApplicationWarmup(t *testing.T) {
+	tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME}}}
+	if got := goldenSnapshotWarmupFor(tmpl); got != 0 {
+		t.Fatalf("runtime warmup = %s, want zero", got)
 	}
 }

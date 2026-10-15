@@ -153,13 +153,13 @@ func assetsAfterCollateral(prepFailedPhase string, assets time.Duration) time.Du
 	return assets
 }
 
-// restoreSnapshotKind classifies which snapshot a restore reads. A local
-// restore is evident from the wire; golden and latest both arrive as an external
-// URI prefix, so they are told apart by the identity the manifest records for
-// the actor that wrote the snapshot. An empty result means the manifest has not
-// been read yet, so the kind is not knowable.
-func restoreSnapshotKind(req *ateletpb.RestoreRequest, rec *sandboxAssetsRecord) string {
-	if req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
+// restoreSnapshotKind classifies which snapshot a restore reads: local when it
+// is served from the node-local copy, and otherwise golden or latest, told
+// apart by the identity the manifest records for the actor that wrote the
+// snapshot. An empty result means the manifest has not been read yet, so the
+// kind is not knowable.
+func restoreSnapshotKind(directLocal bool, rec *sandboxAssetsRecord) string {
+	if directLocal {
 		return ateattr.SnapshotKindLocal
 	}
 	if rec == nil {
@@ -177,7 +177,7 @@ func restoreSnapshotKind(req *ateletpb.RestoreRequest, rec *sandboxAssetsRecord)
 // writes the node-local one, a suspend the actor's durable latest, and a commit
 // by an actor in the golden atespace the template's golden image.
 func checkpointSnapshotKind(req *ateletpb.CheckpointRequest) string {
-	if req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
+	if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_DEFERRED {
 		return ateattr.SnapshotKindLocal
 	}
 	if req.GetAtespace() == resources.GoldenActorAtespace {

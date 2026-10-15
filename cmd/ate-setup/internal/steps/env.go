@@ -67,7 +67,6 @@ const (
 // into one whose references are pullable. *ko.Runner builds and publishes them
 // from source; *images.Prebuilt maps them onto an already-published release.
 type imageResolver interface {
-	ResolvePath(ctx context.Context, path string) ([]byte, error)
 	ResolveBytes(ctx context.Context, manifest []byte) ([]byte, error)
 }
 
@@ -81,11 +80,6 @@ type Env struct {
 	// work on a machine with no container registry credentials configured, and
 	// the build-from-source resolver fails at construction without them.
 	resolver imageResolver
-
-	// substrateVersion caches the derived build version and its object-name
-	// suffix; see SubstrateVersion.
-	substrateVersion       string
-	substrateVersionSuffix string
 }
 
 // Namespace is the namespace the control plane is installed into. It is
@@ -202,16 +196,26 @@ func (e *Env) ResolveAndApply(ctx context.Context, path string) error {
 // ResolveManifest turns the ko:// references in a manifest path into pullable
 // image references.
 func (e *Env) ResolveManifest(ctx context.Context, path string) ([]byte, error) {
+	manifest, err := kube.ReadPath(path)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := e.ResolveManifestBytes(ctx, manifest)
+	if err != nil {
+		return nil, fmt.Errorf("in %s: %w", path, err)
+	}
+	return resolved, nil
+}
+
+// ResolveManifestBytes resolves an in-memory manifest, such as kustomize output.
+// Every manifest that deploys a substrate component passes through here, so
+// this is also where each component gets its --preview argument.
+func (e *Env) ResolveManifestBytes(ctx context.Context, manifest []byte) ([]byte, error) {
 	resolver, err := e.imageResolver()
 	if err != nil {
 		return nil, err
 	}
-	return resolver.ResolvePath(ctx, path)
-}
-
-// ResolveManifestBytes resolves an in-memory manifest, such as kustomize output.
-func (e *Env) ResolveManifestBytes(ctx context.Context, manifest []byte) ([]byte, error) {
-	resolver, err := e.imageResolver()
+	manifest, err = injectPreviewArg(manifest, e.Cfg.PreviewGates)
 	if err != nil {
 		return nil, err
 	}
@@ -230,16 +234,6 @@ func (e *Env) ResolveAndApplyBytes(ctx context.Context, manifest []byte) error {
 // Kustomize renders an overlay directory under the repository root.
 func (e *Env) Kustomize(overlay string) ([]byte, error) {
 	return kustomize.Build(e.Cfg.Path(overlay))
-}
-
-// KustomizeResolve renders an overlay and resolves its images, the
-// `kubectl kustomize ... | run_ko resolve -f -` pipeline.
-func (e *Env) KustomizeResolve(ctx context.Context, overlay string) ([]byte, error) {
-	built, err := e.Kustomize(overlay)
-	if err != nil {
-		return nil, err
-	}
-	return e.ResolveManifestBytes(ctx, built)
 }
 
 // EnsureAteSystemNamespace creates the control-plane namespace and waits for it

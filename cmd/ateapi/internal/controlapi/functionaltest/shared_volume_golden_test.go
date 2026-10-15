@@ -92,7 +92,7 @@ func TestSharedVolumeRef_ColdBootsThenRestoresOwnSnapshot(t *testing.T) {
 	if run, restore := ateletCalls(tc); run || !restore {
 		t.Fatalf("second resume: Run=%v Restore=%v, want a restore", run, restore)
 	}
-	if got := tc.fakeAtelet.lastRestoreRequest().GetExternalConfig().GetSnapshotUri(); got != own {
+	if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetObject().GetSnapshotUri(); got != own {
 		t.Errorf("second resume restored %q, want the actor's own snapshot %q", got, own)
 	}
 }
@@ -145,7 +145,38 @@ func TestExternalVolumeTemplate_FirstResumeRestoresGolden(t *testing.T) {
 	if run, restore := ateletCalls(tc); run || !restore {
 		t.Fatalf("first resume: Run=%v Restore=%v, want a restore from the golden", run, restore)
 	}
-	if got := tc.fakeAtelet.lastRestoreRequest().GetExternalConfig().GetSnapshotUri(); got != goldenSnapshotURI(t) {
+	if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetObject().GetSnapshotUri(); got != goldenSnapshotURI(t) {
 		t.Errorf("first resume restored %q, want the golden %q", got, goldenSnapshotURI(t))
+	}
+}
+
+func TestSharedVolumeRef_RuntimeGoldenSeedsAndRestores(t *testing.T) {
+	ns := namespaceForTest("ns-runtime-golden-create")
+	tc, _ := setupSharedVolumeTest(t, ns)
+	defer tc.cleanup()
+	createSharedVolume(t, tc, "shared", ateapipb.DeleteTrigger_DELETE_TRIGGER_MANUAL)
+	createTemplateWithContainersAndVolumes(t, tc, ns,
+		[]*ateapipb.Container{{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}, VolumeMounts: []*ateapipb.VolumeMount{{Name: "work", MountPath: "/mnt/work"}}}},
+		[]*ateapipb.Volume{{Name: "work", External: &ateapipb.ExternalVolumeSource{SharedVolume: &ateapipb.SharedVolumeRef{Name: "shared"}}}},
+		ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME)
+	worker := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	createBorrowingActor(t, tc, "borrower", nil)
+	actor := getActor(t, tc, "borrower")
+	if got := durableSnapshotURI(actor.GetStatus()); got != goldenSnapshotURI(t) {
+		t.Fatalf("source = %q, want runtime golden", got)
+	}
+	if actor.GetStatus().GetSnapshots()[0].GetOwner() != ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG {
+		t.Fatal("clone must borrow the golden snapshot")
+	}
+	waitForWorkerAvailable(t, tc, worker)
+	resetAteletCalls(tc)
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "borrower"}}); err != nil {
+		t.Fatal(err)
+	}
+	if run, restore := ateletCalls(tc); run || !restore {
+		t.Fatalf("Run=%v Restore=%v", run, restore)
+	}
+	if tc.fakeAtelet.lastRestoreRequest().GetSpec().GetRuntimeGolden() {
+		t.Fatal("ordinary clone marked for runtime-only capture")
 	}
 }

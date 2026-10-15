@@ -36,7 +36,7 @@ import (
 // requestLogHerder answers Run and fails Restore, so the test covers the
 // request log of a handled and of a failed RPC.
 type requestLogHerder struct {
-	ateletpb.UnimplementedAteomHerderServer
+	ateletpb.UnimplementedAteletServer
 }
 
 func (requestLogHerder) Run(context.Context, *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
@@ -47,11 +47,11 @@ func (requestLogHerder) Restore(context.Context, *ateletpb.RestoreRequest) (*ate
 	return nil, apierror.Unavailable("asset fetch failed")
 }
 
-// TestAteomHerderRequestLogMasksSignedAssetURL sends Run and Restore with a
+// TestAteletRequestLogMasksSignedAssetURL sends Run and Restore with a
 // signed https asset URL through a server built with atelet's own options and
 // logger, and checks the request log carries neither the URL's user info nor
 // its query.
-func TestAteomHerderRequestLogMasksSignedAssetURL(t *testing.T) {
+func TestAteletRequestLogMasksSignedAssetURL(t *testing.T) {
 	const (
 		signedURL = "https://asset-user:userinfo-secret@storage.example.com/bucket/gvisor.tar.zstd?X-Goog-Signature=query-secret&X-Goog-Expires=900"
 		sum       = "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"
@@ -62,8 +62,8 @@ func TestAteomHerderRequestLogMasksSignedAssetURL(t *testing.T) {
 	serverboot.InitLoggerWithWriter(&logBuf)
 
 	lis := bufconn.Listen(1 << 20)
-	srv := grpc.NewServer(ateomHerderServerOptions(insecure.NewCredentials())...)
-	ateletpb.RegisterAteomHerderServer(srv, requestLogHerder{})
+	srv := grpc.NewServer(ateletServerOptions(insecure.NewCredentials())...)
+	ateletpb.RegisterAteletServer(srv, requestLogHerder{})
 	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 	conn, err := grpc.NewClient("passthrough:///bufnet",
@@ -73,7 +73,7 @@ func TestAteomHerderRequestLogMasksSignedAssetURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	client := ateletpb.NewAteomHerderClient(conn)
+	client := ateletpb.NewAteletClient(conn)
 
 	assets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
@@ -96,7 +96,7 @@ func TestAteomHerderRequestLogMasksSignedAssetURL(t *testing.T) {
 			t.Fatalf("request log contains %q from the signed asset URL:\n%s", leak, gotLog)
 		}
 	}
-	for _, method := range []string{ateletpb.AteomHerder_Run_FullMethodName, ateletpb.AteomHerder_Restore_FullMethodName} {
+	for _, method := range []string{ateletpb.Atelet_Run_FullMethodName, ateletpb.Atelet_Restore_FullMethodName} {
 		var line string
 		for l := range strings.Lines(gotLog) {
 			if strings.Contains(l, `"method":"`+method+`"`) {

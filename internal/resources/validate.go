@@ -28,8 +28,9 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/volumepath"
+	"github.com/agent-substrate/substrate/pkg/sandboxclass"
 	"github.com/distribution/reference"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -43,7 +44,7 @@ import (
 // ToGRPCStatusError turns validation errors into the InvalidArgument error an
 // RPC handler responds with. Callers check len(errs) > 0 first.
 //
-// TODO: Delete once atelet's AteomSupport server returns apierrors, and use
+// TODO: Delete once atelet's WorkerSupport server returns apierrors, and use
 // ToAPIError instead.
 func ToGRPCStatusError(errs field.ErrorList) error {
 	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
@@ -95,7 +96,7 @@ func IsValidResourceName(name string) bool {
 }
 
 // ValidateWorkerPodUID rejects a worker pod UID that could escape the host
-// path built from it: the ateom control socket (.../ateoms/<uid>/ateom.sock).
+// path built from it: the worker control socket (.../workers/<uid>/worker.sock).
 // Kubernetes pod UIDs are UUIDs, which are valid DNS-1123 labels, so a label
 // check accepts every legitimate value while rejecting separators and "..".
 func ValidateWorkerPodUID(workerPodUID string) error {
@@ -105,9 +106,9 @@ func ValidateWorkerPodUID(workerPodUID string) error {
 	return nil
 }
 
-// ValidateActorDirs checks that every directory atelet passes to ateom is
+// ValidateActorDirs checks that every directory atelet passes to worker is
 // set, absolute and clean.
-func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.ErrorList {
+func ValidateActorDirs(actorDirs *ateworkerpb.ActorDirs, fldPath *field.Path) field.ErrorList {
 	if actorDirs == nil {
 		return field.ErrorList{field.Required(fldPath, "")}
 	}
@@ -130,8 +131,8 @@ func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.
 // fidelity the calling sandbox runtime cannot serve. Each runtime passes the
 // levels it implements; anything else, including an unset fidelity, is
 // refused before the request touches the guest.
-func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, supported []ateompb.SnapshotFidelity, fldPath *field.Path) field.ErrorList {
-	if fidelity == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+func ValidateSnapshotFidelity(fidelity ateworkerpb.SnapshotFidelity, supported []ateworkerpb.SnapshotFidelity, fldPath *field.Path) field.ErrorList {
+	if fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 		return field.ErrorList{field.Required(fldPath, "")}
 	}
 	names := make([]string, 0, len(supported))
@@ -142,6 +143,15 @@ func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, supported []ate
 		names = append(names, f.String())
 	}
 	return field.ErrorList{field.NotSupported(fldPath, fidelity, names)}
+}
+
+// ValidateSandboxClass requires one of the sandboxclass values. An empty value
+// is left to the required tag.
+func ValidateSandboxClass(fldPath *field.Path, value string) field.ErrorList {
+	if value == "" || sandboxclass.Valid(value) {
+		return nil
+	}
+	return field.ErrorList{field.NotSupported(fldPath, value, sandboxclass.All())}
 }
 
 func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
@@ -155,7 +165,7 @@ func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
 }
 
 // ValidateRuntimeAssetPath ensures p is a regular file under root, with no symlinks
-// ateom runs these as root, so they must be assets atelet fetched into root
+// worker runs these as root, so they must be assets atelet fetched into root
 func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorList {
 	if p == "" {
 		return field.ErrorList{field.Required(fldPath, "")}
@@ -179,19 +189,19 @@ func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorLi
 	return nil
 }
 
-// ValidateRunscHash ensures the runsc SHA-256 hash is exactly 64 hex
-// characters before it is used to build the on-disk binary path
-// (static-files/runsc-<hash>) and, on a cache hit, returned for ateom to
+// ValidateAssetHash ensures a sandbox asset's SHA-256 hash is exactly 64 hex
+// characters before it is used to build the on-disk asset path
+// (static-files/asset-<hash>) and, on a cache hit, returned for worker to
 // execute. Without this, a hash containing path separators or ".." could
 // point the cache-hit early return (and the download target) at an arbitrary
 // binary outside the static-files dir.
-func ValidateRunscHash(sha256Hash string) error {
+func ValidateAssetHash(sha256Hash string) error {
 	if len(sha256Hash) != 64 {
-		return fmt.Errorf("invalid runsc sha256 hash: want 64 hex chars, got %d", len(sha256Hash))
+		return fmt.Errorf("invalid asset sha256 hash: want 64 hex chars, got %d", len(sha256Hash))
 	}
 	// Same decoder atelet's digest comparison uses.
 	if _, err := hex.DecodeString(sha256Hash); err != nil {
-		return fmt.Errorf("invalid runsc sha256 hash %q: must be hex", sha256Hash)
+		return fmt.Errorf("invalid asset sha256 hash %q: must be hex", sha256Hash)
 	}
 	return nil
 }

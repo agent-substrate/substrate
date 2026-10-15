@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package ocispec builds the runtime-neutral OCI spec for actor bundles, which
-// each ateom shapes for its runtime.
+// each worker shapes for its runtime.
 package ocispec
 
 import (
@@ -25,7 +25,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -41,9 +41,9 @@ type Options struct {
 	ActorUID string
 	// ActorDirs are the actor's directories the bind mount sources are joined
 	// from, one subdirectory per volume name.
-	ActorDirs *ateompb.ActorDirs
+	ActorDirs *ateworkerpb.ActorDirs
 	// Container carries the process and its volume mounts.
-	Container *ateompb.Container
+	Container *ateworkerpb.Container
 }
 
 const (
@@ -60,7 +60,7 @@ const (
 // ociResources maps the resolved limits onto the OCI spec's linux.resources.
 // Returns nil when nothing is set, so the spec carries no linux.resources at
 // all for a container that declares no limits.
-func ociResources(r *ateompb.ResourceLimits) *specs.LinuxResources {
+func ociResources(r *ateworkerpb.ResourceLimits) *specs.LinuxResources {
 	if r == nil || (r.GetMemoryBytes() <= 0 && r.GetCpuMillis() <= 0) {
 		return nil
 	}
