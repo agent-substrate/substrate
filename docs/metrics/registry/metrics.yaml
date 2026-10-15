@@ -685,22 +685,22 @@ groups:
           registry.
         examples: ["ResourceExhausted", "404", "_OTHER"]
       - id: file.name
-        stability: stable
+        stability: development
         type: string
         brief: The name of one image in a snapshot.
         examples: [pages.img]
       - id: rpc.method
-        stability: stable
+        stability: release_candidate
         type: string
         brief: The gRPC method of the request.
         examples: ["ateapi.Control/ResumeActor"]
       - id: rpc.response.status_code
-        stability: stable
+        stability: release_candidate
         type: string
         brief: The gRPC status that the server returned.
         examples: ["OK", "RESOURCE_EXHAUSTED"]
       - id: rpc.system.name
-        stability: stable
+        stability: release_candidate
         type: string
         brief: The RPC system. otelgrpc always sets the value grpc.
         examples: ["grpc"]
@@ -1275,7 +1275,7 @@ groups:
     metric_name: rpc.server.call.duration
     instrument: histogram
     unit: s
-    stability: stable
+    stability: release_candidate
     brief: The time, the rate and the errors of each gRPC method on the server.
     note: >
       The otelgrpc interceptor sends this instrument. The code of Substrate does
@@ -1304,7 +1304,7 @@ groups:
     metric_name: rpc.client.call.duration
     instrument: histogram
     unit: s
-    stability: stable
+    stability: release_candidate
     brief: The time, the rate and the errors of each gRPC method that a component calls.
     note: >
       This is the client half of rpc.server.call.duration. Compare the two to
