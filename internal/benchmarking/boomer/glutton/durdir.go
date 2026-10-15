@@ -258,8 +258,7 @@ func (u *durDirUser) hibernateAndDelete(ctx context.Context, dynCfg dynconfig.Co
 func (u *durDirUser) delete(ctx context.Context) {
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
-			Actor:    u.ref(),
-			AnyState: true,
+			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})

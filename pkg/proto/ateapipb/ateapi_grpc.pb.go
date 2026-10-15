@@ -104,8 +104,8 @@ type ControlClient interface {
 	// Revert an actor to SUSPENDED state at its durable snapshot.
 	// Only crashed, running or paused actors can be reverted.
 	RevertActor(ctx context.Context, in *RevertActorRequest, opts ...grpc.CallOption) (*RevertActorResponse, error)
-	// Delete an actor. Only suspended or crashed actors can be deleted unless
-	// any_state is set.
+	// Delete an actor. A running actor's workload is terminated, its volumes
+	// detached, and its worker released before the record is removed.
 	DeleteActor(ctx context.Context, in *DeleteActorRequest, opts ...grpc.CallOption) (*Actor, error)
 	// Get the egress policy resource nested under an Actor.
 	GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
@@ -681,8 +681,8 @@ type ControlServer interface {
 	// Revert an actor to SUSPENDED state at its durable snapshot.
 	// Only crashed, running or paused actors can be reverted.
 	RevertActor(context.Context, *RevertActorRequest) (*RevertActorResponse, error)
-	// Delete an actor. Only suspended or crashed actors can be deleted unless
-	// any_state is set.
+	// Delete an actor. A running actor's workload is terminated, its volumes
+	// detached, and its worker released before the record is removed.
 	DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error)
 	// Get the egress policy resource nested under an Actor.
 	GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*EgressPolicy, error)

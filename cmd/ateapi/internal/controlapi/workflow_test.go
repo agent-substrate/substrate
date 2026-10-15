@@ -88,7 +88,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 			name:      "delete marks the actor deleting",
 			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
-				if _, err := w.ensureMarkedDeleting(context.Background(), ref, actor, false); err != nil {
+				if _, err := w.ensureMarkedDeleting(context.Background(), ref, actor); err != nil {
 					t.Fatalf("ensureMarkedDeleting: %v", err)
 				}
 			},
@@ -301,7 +301,7 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 	}
 
 	w := &ActorWorkflow{store: persistence}
-	if _, err := w.ensureMarkedDeleting(ctx, actorRef, stale, false); err == nil {
+	if _, err := w.ensureMarkedDeleting(ctx, actorRef, stale); err == nil {
 		t.Fatal("ensureMarkedDeleting on a stale actor = nil, want a conflict")
 	}
 	if len(*records) != 0 {

@@ -208,11 +208,8 @@ kubectl ate suspend actor my-actor -a <atespace>
 # Revert an actor to its last external snapshot (discards live, paused, or crashed state and returns to SUSPENDED)
 kubectl ate revert actor my-actor -a <atespace>
 
-# Delete an actor (by default, requires the actor to be SUSPENDED or CRASHED).
+# Delete an actor, terminating workloads and detaching volumes.
 kubectl ate delete actor my-actor -a <atespace>
-
-# Delete an actor from any state (e.g. RUNNING), terminating workloads and detaching volumes.
-kubectl ate delete actor my-actor -a <atespace> --any-state
 ```
 
 ### Actor Snapshots

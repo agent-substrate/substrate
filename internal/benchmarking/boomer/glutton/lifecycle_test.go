@@ -98,13 +98,9 @@ func TestGluttonShutdown_PauseModeRunningActor(t *testing.T) {
 	if len(calls) < 2 || calls[len(calls)-2] != "PauseActor" || calls[len(calls)-1] != "DeleteActor" {
 		t.Errorf("recordedCalls must end with [PauseActor, DeleteActor], got %v", calls)
 	}
-	reqs := fakeCtrl.recordedDeleteRequests()
-	if len(reqs) == 0 || !reqs[0].GetAnyState() {
-		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
-	}
 }
 
-func TestGluttonShutdown_DeleteSetsAnyState(t *testing.T) {
+func TestGluttonShutdown_StoppedActorOnlyDeleted(t *testing.T) {
 	srv := &fake.Server{}
 	fakeCtrl := &fakeControlClient{}
 	cfg := newTestConfig(t, srv, &userclass.Config{
@@ -128,10 +124,6 @@ func TestGluttonShutdown_DeleteSetsAnyState(t *testing.T) {
 	calls := fakeCtrl.recordedCalls()
 	if len(calls) != 1 || calls[0] != "DeleteActor" {
 		t.Errorf("expected only DeleteActor call, got %v", calls)
-	}
-	reqs := fakeCtrl.recordedDeleteRequests()
-	if len(reqs) == 0 || !reqs[0].GetAnyState() {
-		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
 	}
 }
 

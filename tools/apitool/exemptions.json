@@ -1,10 +1,5 @@
 [
   {
-    "rule": "delete-request-shape",
-    "subject": "ateapi.Control.DeleteActor",
-    "message": "request field \"any_state\" is not allowed - want only \"actor\" ateapi.ObjectRef and optional \"options\" ateapi.DeleteOptions"
-  },
-  {
     "rule": "documented",
     "subject": "ateapi.Actor",
     "message": "message has no doc comment"

@@ -1242,33 +1242,89 @@ func TestDeleteActor_MissingSnapshotBucket(t *testing.T) {
 	}
 }
 
-func TestDeleteActor_NotSuspended(t *testing.T) {
-	ns := namespaceForTest("ns-delete-notsuspended")
-	tc := setupTest(t, ns)
+// TestDeleteActor_Running deletes a running actor that owns an external
+// snapshot and an external volume. The delete terminates the workload, detaches
+// and deletes the volume, collects the snapshot, and releases the worker.
+func TestDeleteActor_Running(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+
+	ns := namespaceForTest("ns-delete-running")
+	plugin := &attachFailVolumePlugin{}
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	})
 	defer tc.cleanup()
 
-	createTemplate(t, tc, ns)
+	createTemplateWithVolumes(t, tc, ns, []*ateapipb.Volume{
+		{
+			Name: "vol1",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+				Capacity:         "10Gi",
+			},
+		},
+	}, []*ateapipb.VolumeMount{
+		{Name: "vol1", MountPath: "/mnt/vol1"},
+	})
 	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
-	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+	ctx := context.Background()
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
-	}})
-	if err != nil {
+	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
-	})
-	if err != nil {
+	// Suspend once so the actor owns an external snapshot, then resume it.
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("ResumeActor failed: %v", err)
 	}
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("second ResumeActor failed: %v", err)
+	}
+	running, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := running.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Fatalf("actor state = %v, want ACTOR_STATE_RUNNING", got)
+	}
+	actorUID := running.GetMetadata().GetUid()
+	snapshotURI := durableSnapshotURI(running.GetStatus())
+	if snapshotURI == "" {
+		t.Fatal("running actor has no external snapshot")
+	}
+	assertSnapshotPresent(t, tc, snapshotURI)
 
-	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
-	})
-	assertGrpcError(t, err, codes.FailedPrecondition, "Actor test-atespace/id1 is not in a deletable state (state: ACTOR_STATE_RUNNING)")
+	tc.fakeAtelet.Reset()
+	plugin.mu.Lock()
+	plugin.detachedNodes = nil
+	plugin.deleted = nil
+	plugin.mu.Unlock()
+
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("DeleteActor of a running actor failed: %v", err)
+	}
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Error("expected atelet Terminate on the running actor's node")
+	}
+	if diff := cmp.Diff([]string{"node1"}, plugin.detachedNodes); diff != "" {
+		t.Errorf("detached nodes mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"storage-substrate-" + actorUID + "-vol1"}, plugin.deleted); diff != "" {
+		t.Errorf("deleted volume IDs mismatch (-want +got):\n%s", diff)
+	}
+	assertSnapshotCollected(t, tc, snapshotURI)
+	if worker, err := tc.persistence.FindWorkerHostingActor(ctx, actorUID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("FindWorkerHostingActor after delete = (%q, %v), want ErrNotFound", worker, err)
+	}
+	_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
 
 func TestDeleteActor_Crashed(t *testing.T) {
@@ -1402,10 +1458,9 @@ func TestDeleteActor_StateDeleting(t *testing.T) {
 	}
 }
 
-// TestDeleteActor_Paused deletes a paused actor without any_state: a paused
-// actor is SUSPENDED (holding a node-local snapshot), so it is deletable by
-// default, and the delete terminates it on its assigned node so the local
-// snapshot is removed.
+// TestDeleteActor_Paused deletes a paused actor: a paused actor is SUSPENDED
+// (holding a node-local snapshot), and the delete terminates it on its
+// assigned node so the local snapshot is removed.
 func TestDeleteActor_Paused(t *testing.T) {
 	ns := namespaceForTest("ns-delete-paused")
 	tc := setupTest(t, ns)
@@ -1440,7 +1495,7 @@ func TestDeleteActor_Paused(t *testing.T) {
 	tc.fakeAtelet.Reset()
 
 	if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actorRef}); err != nil {
-		t.Fatalf("DeleteActor of a paused actor without any_state failed: %v", err)
+		t.Fatalf("DeleteActor of a paused actor failed: %v", err)
 	}
 	if !tc.fakeAtelet.TerminateCalled {
 		t.Error("expected atelet Terminate on the paused actor's node to remove its local snapshot")
@@ -1449,32 +1504,6 @@ func TestDeleteActor_Paused(t *testing.T) {
 	}
 	if _, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: actorRef}); status.Code(err) != codes.NotFound {
 		t.Errorf("GetActor after DeleteActor err = %v, want NotFound", err)
-	}
-}
-
-func TestDeleteActor_WrongState(t *testing.T) {
-	ns := namespaceForTest("ns-delete-wrong-status")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-
-	runningActor := &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{
-			Atespace: testAtespace,
-			Name:     "running-actor",
-		},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
-	}
-	if _, err := tc.persistence.CreateActor(context.Background(), runningActor); err != nil {
-		t.Fatalf("CreateActor: %v", err)
-	}
-
-	_, err := tc.service.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "running-actor"},
-	})
-	if err == nil {
-		t.Fatalf("expected DeleteActor on ACTOR_STATE_RUNNING actor to fail, but it succeeded")
 	}
 }
 
@@ -2256,8 +2285,7 @@ func TestResumeActor_VolumeAttachFailureAndRetry(t *testing.T) {
 }
 
 // TestResumeActor_VolumeAttachFailure_DeleteActor tests that when volume attachment fails during ResumeActor,
-// calling DeleteActor without any_state is rejected because the actor is in ACTOR_STATE_RESUMING,
-// but calling DeleteActor with any_state=true succeeds, cleaning up worker assignment and volumes.
+// leaving the actor in ACTOR_STATE_RESUMING, DeleteActor succeeds, cleaning up worker assignment and volumes.
 func TestResumeActor_VolumeAttachFailure_DeleteActor(t *testing.T) {
 	preview.InitForTest(t, "ExternalVolumes")
 
@@ -2314,19 +2342,12 @@ func TestResumeActor_VolumeAttachFailure_DeleteActor(t *testing.T) {
 	}
 	actorUID := getResp.GetMetadata().GetUid()
 
-	// Calling DeleteActor without any_state should fail because RESUMING is not a deletable state
+	// DeleteActor on the RESUMING actor should succeed and cleanly tear down
 	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "attach-fail-actor"},
 	})
-	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, "is not in a deletable state")
-
-	// Calling DeleteActor with any_state=true should succeed and cleanly tear down
-	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "attach-fail-actor"},
-		AnyState: true,
-	})
 	if err != nil {
-		t.Fatalf("DeleteActor with AnyState failed: %v", err)
+		t.Fatalf("DeleteActor failed: %v", err)
 	}
 
 	// Verify volume was detached and deleted
@@ -2686,19 +2707,17 @@ func TestSuspendActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
 	}
 }
 
-// TestSuspendActor_VolumeDetachFailure_DeleteActorAnyState tests scenario C:
-// when volume detachment fails during SuspendActor and leaves the actor in ACTOR_STATE_SUSPENDING:
-// 1. Standard DeleteActor (without AnyState) fails with FailedPrecondition because SUSPENDING is not deletable.
-// 2. DeleteActor with AnyState=true succeeds, tearing down the actor and its volumes.
+// TestSuspendActor_VolumeDetachFailure_DeleteActor tests scenario C:
+// when volume detachment fails during SuspendActor and leaves the actor in ACTOR_STATE_SUSPENDING,
+// DeleteActor succeeds, tearing down the actor and its volumes.
 //
 // Workflow:
 // 1. Creates a template with an external volume and creates a mock worker pod on node1.
 // 2. Creates and resumes an actor to ACTOR_STATE_RUNNING.
 // 3. Calls SuspendActor, which fails due to simulated volume detachment failure, leaving the actor in ACTOR_STATE_SUSPENDING.
-// 4. Calls DeleteActor without AnyState and verifies it is rejected with FailedPrecondition ("is not in a deletable state").
-// 5. Resets the plugin to allow detachment, then calls DeleteActor with AnyState=true.
-// 6. Verifies the actor is deleted and GetActor returns NotFound.
-func TestSuspendActor_VolumeDetachFailure_DeleteActorAnyState(t *testing.T) {
+// 4. Resets the plugin to allow detachment, then calls DeleteActor.
+// 5. Verifies the actor is deleted and GetActor returns NotFound.
+func TestSuspendActor_VolumeDetachFailure_DeleteActor(t *testing.T) {
 	preview.InitForTest(t, "ExternalVolumes")
 
 	ns := namespaceForTest("ns-suspend-vol-detach-del")
@@ -2759,26 +2778,19 @@ func TestSuspendActor_VolumeDetachFailure_DeleteActorAnyState(t *testing.T) {
 		t.Fatalf("actor state = %v, want ACTOR_STATE_SUSPENDING", getResp.GetStatus().GetState())
 	}
 
-	// 4. DeleteActor without AnyState fails with FailedPrecondition.
-	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-del-actor"},
-	})
-	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, "is not in a deletable state")
-
-	// 5. Allow detach to succeed and call DeleteActor with AnyState=true.
+	// 4. Allow detach to succeed and call DeleteActor.
 	plugin.mu.Lock()
 	plugin.failUntil = 0
 	plugin.mu.Unlock()
 
 	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-del-actor"},
-		AnyState: true,
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-del-actor"},
 	})
 	if err != nil {
-		t.Fatalf("DeleteActor with AnyState failed: %v", err)
+		t.Fatalf("DeleteActor failed: %v", err)
 	}
 
-	// 6. Verify actor is NotFound.
+	// 5. Verify actor is NotFound.
 	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-del-actor"},
 	})
@@ -2926,7 +2938,7 @@ func TestPauseActor_VolumeLifecycle_DetachAndResumeAttach(t *testing.T) {
 // 4. Verifies PauseActor returns an error and actor state is left in ACTOR_STATE_SUSPENDING.
 // 5. Calls PauseActor a second time (retry); detachment succeeds.
 // 6. Verifies actor state transitions to ACTOR_STATE_SUSPENDED with a local snapshot.
-// 7. Cleans up by deleting the actor with AnyState=true.
+// 7. Cleans up by deleting the actor.
 func TestPauseActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
 	preview.InitForTest(t, "ExternalVolumes")
 
@@ -3014,10 +3026,9 @@ func TestPauseActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
 		t.Error("expected a local snapshot on the paused actor")
 	}
 
-	// 7. Clean up by deleting the actor with AnyState=true.
+	// 7. Clean up by deleting the actor.
 	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-detach-retry-actor"},
-		AnyState: true,
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-detach-retry-actor"},
 	})
 	if err != nil {
 		t.Fatalf("DeleteActor failed: %v", err)
@@ -5790,7 +5801,7 @@ func TestDeleteActor_TerminateFailureLeavesActorDeleting(t *testing.T) {
 	tc.fakeAtelet.Lock.Lock()
 	tc.fakeAtelet.FailTerminate = status.Error(codes.Internal, "injected terminate failure")
 	tc.fakeAtelet.Lock.Unlock()
-	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}); err == nil {
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err == nil {
 		t.Fatal("DeleteActor succeeded despite failing terminate")
 	}
 
@@ -5812,7 +5823,7 @@ func TestDeleteActor_TerminateFailureLeavesActorDeleting(t *testing.T) {
 	tc.fakeAtelet.FailTerminate = nil
 	tc.fakeAtelet.TerminateCalled = false
 	tc.fakeAtelet.Lock.Unlock()
-	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}); err != nil {
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("second DeleteActor failed: %v", err)
 	}
 	if _, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref}); status.Code(err) != codes.NotFound {
