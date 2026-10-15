@@ -346,4 +346,6 @@ var defaultRPCPermissions = map[string]rpcRule{
 	// TODO(#2570): not served yet; the handler must authenticate atelet on the
 	// node of the Worker hosting the Actor when it lands.
 	ateapipb.WorkerService_ReportActorSnapshotState_FullMethodName: inHandler("ateletauth: caller is atelet on the node of the Worker hosting the Actor"),
+
+	ateapipb.WorkerService_GetActorEgressPolicy_FullMethodName: inHandler("ateletauth: caller is atelet on the node hosting the Actor"),
 }

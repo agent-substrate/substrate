@@ -2601,6 +2601,14 @@ service WorkerService {
   // node. Returns FAILED_PRECONDITION or INVALID_ARGUMENT when the report
   // conflicts with the record; don't retry.
   rpc ReportActorSnapshotState(ReportActorSnapshotStateRequest) returns (ReportActorSnapshotStateResponse);
+
+  // GetActorEgressPolicy returns the egress policy of an Actor hosted on the
+  // caller's node, so that the Worker hosting it can enforce it.
+  //
+  // atelet calls this with its own client certificate. Returns NOT_FOUND if
+  // the Actor has no policy, or if the Actor is gone or not hosted on the
+  // caller's node.
+  rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (EgressPolicy);
 }
 
 message RegisterWorkerRequest {
