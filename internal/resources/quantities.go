@@ -131,19 +131,3 @@ func (q Quantities) Sub(other Quantities) {
 		q[name] = existing
 	}
 }
-
-// Covers reports whether q leaves room for want in every dimension want names.
-//
-// A dimension q does not name is none of it, not any amount of it: a Worker
-// reports everything it has, so silence about GPUs means it has no GPUs and
-// cannot take an Actor asking for one. A dimension want does not name asks for
-// nothing.
-func (q Quantities) Covers(want Quantities) bool {
-	for name, need := range want {
-		have := q[name] // absent reads as the zero quantity
-		if have.Cmp(need) < 0 {
-			return false
-		}
-	}
-	return true
-}
