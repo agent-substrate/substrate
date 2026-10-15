@@ -17,6 +17,7 @@
 package ocispec
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -112,7 +113,7 @@ func Build(o Options) *specs.Spec {
 			User: processUser(containerSpec.GetUser()),
 			Args: containerSpec.GetArgs(),
 			Env:  containerSpec.GetEnv(),
-			Cwd:  "/",
+			Cwd:  cmp.Or(containerSpec.GetCwd(), "/"),
 			Capabilities: &specs.LinuxCapabilities{
 				Bounding:  containerSpec.GetCapabilities(),
 				Effective: containerSpec.GetCapabilities(),

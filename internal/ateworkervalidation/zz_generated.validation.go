@@ -923,6 +923,7 @@ func Validate_ContainerSpec(
 	}
 
 	// field ateworkerpb.ContainerSpec.User has no validation
+	// field ateworkerpb.ContainerSpec.Cwd has no validation
 	return errs
 }
 

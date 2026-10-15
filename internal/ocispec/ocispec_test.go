@@ -149,6 +149,15 @@ func TestBuild_ProcessUser(t *testing.T) {
 	}
 }
 
+func TestBuild_Cwd(t *testing.T) {
+	if got := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}, Cwd: "/work"}}}).Process.Cwd; got != "/work" {
+		t.Errorf("Process.Cwd = %q, want /work", got)
+	}
+	if got := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}}).Process.Cwd; got != "/" {
+		t.Errorf("Process.Cwd = %q, want /", got)
+	}
+}
+
 // A container that declares no capabilities gets none.
 func TestBuild_NoCapabilities(t *testing.T) {
 	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
