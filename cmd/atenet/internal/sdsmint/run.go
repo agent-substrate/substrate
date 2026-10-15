@@ -27,9 +27,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/version"
 	secretservice "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
+	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/version"
 	"google.golang.org/grpc"
 )
 

@@ -22,7 +22,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 func TestDurableFSCheckpointPaths(t *testing.T) {

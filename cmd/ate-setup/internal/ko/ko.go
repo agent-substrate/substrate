@@ -33,11 +33,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 // versionPkg is the package whose Version variable receives the build stamp.
-const versionPkg = "github.com/agent-substrate/substrate/internal/version"
+const versionPkg = "go.ate.dev/substrate/internal/version"
 
 // baseImportPaths publishes each image as the last element of its import path,
 // so cmd/atelet becomes $KO_DOCKER_REPO/atelet.

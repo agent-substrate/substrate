@@ -22,7 +22,7 @@ package apivalidation
 import (
 	context "context"
 
-	ateletpb "github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	ateletpb "go.ate.dev/substrate/internal/proto/ateletpb"
 	operation "k8s.io/apimachinery/pkg/api/operation"
 	safe "k8s.io/apimachinery/pkg/api/safe"
 	validate "k8s.io/apimachinery/pkg/api/validate"

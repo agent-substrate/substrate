@@ -26,7 +26,7 @@ import (
 )
 
 // substrateModule is the module this one is hosted in until it moves out.
-const substrateModule = "github.com/agent-substrate/substrate"
+const substrateModule = "go.ate.dev/substrate"
 
 // This module moves to a repository of its own by being copied, so it may
 // import only substrate's public packages. Go's internal rule goes by import

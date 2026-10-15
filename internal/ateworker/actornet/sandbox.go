@@ -26,9 +26,9 @@ import (
 	"net/netip"
 	"sync"
 
-	"github.com/agent-substrate/substrate/internal/atunnel/dns"
-	"github.com/agent-substrate/substrate/internal/netns"
-	"github.com/agent-substrate/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/atunnel/dns"
+	"go.ate.dev/substrate/internal/netns"
+	"go.ate.dev/substrate/internal/nodepath"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"

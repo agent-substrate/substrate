@@ -23,9 +23,9 @@ import (
 
 	"golang.org/x/oauth2/google/downscope"
 
-	"github.com/agent-substrate/substrate/internal/objectstore"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin/actorscope"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/objectstore"
+	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const (

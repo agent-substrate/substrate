@@ -33,8 +33,8 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
 
-	"github.com/agent-substrate/substrate/internal/ateletdial"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/ateletdial"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // requestTimeout bounds one attempt. It is generous because the control plane

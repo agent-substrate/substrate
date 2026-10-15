@@ -36,7 +36,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/actoridjwt"
+	"go.ate.dev/substrate/internal/actoridjwt"
 )
 
 // KeyAndID wraps a crypto.PublicKey and its JWK key ID.

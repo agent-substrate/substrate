@@ -17,7 +17,7 @@ package dns
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 func TestEvaluator(t *testing.T) {

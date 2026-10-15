@@ -30,8 +30,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/localca"
 )
 
 // The gateway's front door requires a client certificate signed by the

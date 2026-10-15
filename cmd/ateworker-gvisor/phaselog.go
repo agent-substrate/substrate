@@ -19,8 +19,8 @@ package main
 import (
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateworker/phaselog"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateworker/phaselog"
 )
 
 // The phase names, suffixed onto the phaselog duration keys. Kept out of

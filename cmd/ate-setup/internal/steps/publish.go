@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 // workerImages are the worker images a WorkerPool points at through

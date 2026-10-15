@@ -53,9 +53,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/tarutil"
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/tarutil"
 )
 
 // rootfsUpperTarFile is the snapshot file holding the tar of one container's

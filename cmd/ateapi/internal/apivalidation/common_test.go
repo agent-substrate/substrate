@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/preview"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 

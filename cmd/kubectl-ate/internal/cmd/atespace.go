@@ -17,9 +17,9 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 var getAtespacesCmd = &cobra.Command{

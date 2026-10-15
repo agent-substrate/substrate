@@ -25,8 +25,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/net/dns/dnsmessage"
 
-	"github.com/agent-substrate/substrate/internal/atunnel/dns/protocol"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/atunnel/dns/protocol"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // staticPolicy supplies policy, or fails with err.

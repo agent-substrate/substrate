@@ -21,7 +21,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/snapshotcache"
+	"go.ate.dev/substrate/internal/snapshotcache"
 )
 
 const memoryRangesFile = "memory-ranges"

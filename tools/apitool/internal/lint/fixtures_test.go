@@ -19,8 +19,8 @@ package lint_test
 import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 // methodAPI builds an API whose test.Control service has the one method

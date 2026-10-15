@@ -44,9 +44,9 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	informersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/informers/externalversions/api/v1alpha1"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	informersv1alpha1 "go.ate.dev/substrate/pkg/client/informers/externalversions/api/v1alpha1"
 )
 
 // podUIDIndex indexes this node's worker pods by UID, the syncer's queue key.

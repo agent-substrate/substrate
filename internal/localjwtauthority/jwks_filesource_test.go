@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/actoridjwt"
-	"github.com/agent-substrate/substrate/internal/oidcjwt"
+	"go.ate.dev/substrate/internal/actoridjwt"
+	"go.ate.dev/substrate/internal/oidcjwt"
 )
 
 const fileSourceTestIssuer = "https://idp.ate-system.svc"

@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 )
 
 // A vsock socket that has gone missing means cloud-hypervisor stopped the VM

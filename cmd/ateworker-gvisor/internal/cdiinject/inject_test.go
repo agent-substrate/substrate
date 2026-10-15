@@ -25,7 +25,7 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
-	"github.com/agent-substrate/substrate/internal/cdi"
+	"go.ate.dev/substrate/internal/cdi"
 )
 
 // statDev returns a device node's numbers, so the expectation matches whatever

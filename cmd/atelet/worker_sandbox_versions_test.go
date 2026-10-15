@@ -27,9 +27,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
-	"github.com/agent-substrate/substrate/internal/hardware"
-	"github.com/agent-substrate/substrate/internal/sandboxversions"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/sandboxversions"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // pauseDigest is the digest of the pause image of multiVersionConfig's

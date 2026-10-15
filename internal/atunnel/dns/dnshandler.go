@@ -21,7 +21,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/atunnel/dns/protocol"
+	"go.ate.dev/substrate/internal/atunnel/dns/protocol"
 	"golang.org/x/net/dns/dnsmessage"
 )
 

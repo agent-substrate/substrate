@@ -19,7 +19,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 func httpRule(patterns ...string) *ateapipb.EgressRule {

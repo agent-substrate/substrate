@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/ateworker/actornet"
 )
 
 // writeActorResolvConf points the guest resolver at its fixed gateway address.

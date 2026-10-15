@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/netns"
-	"github.com/agent-substrate/substrate/internal/roottest"
+	"go.ate.dev/substrate/internal/netns"
+	"go.ate.dev/substrate/internal/roottest"
 )
 
 func TestClosingSandboxDNSStopsServing(t *testing.T) {
