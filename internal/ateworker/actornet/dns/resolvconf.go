@@ -12,18 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package dns answers an actor's DNS from its sandbox's gateway namespace and
-// writes the resolv.conf that points the actor at it.
+// Package dns answers an actor's DNS from its sandbox's gateway namespace.
 package dns
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
-	"io/fs"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -59,54 +55,4 @@ func resolvConfNameservers(path string) ([]string, error) {
 		return nil, fmt.Errorf("dns: %s names no usable nameserver", path)
 	}
 	return out, nil
-}
-
-// SandboxResolvConf replaces the pod's nameservers with nameserver, the
-// address the sandbox's DNS is served on, while preserving the pod's search
-// domains and options for Kubernetes DNS.
-func SandboxResolvConf(nameserver string, podResolvConf []byte) []byte {
-	var out strings.Builder
-	out.WriteString("nameserver " + nameserver + "\n")
-	for line := range strings.SplitSeq(string(podResolvConf), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "nameserver") {
-			continue
-		}
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		out.WriteString(line + "\n")
-	}
-	return []byte(out.String())
-}
-
-// WriteRootfsResolvConf installs content at /etc/resolv.conf inside rootfs.
-//
-// os.Root confines path traversal; unlinking prevents writes through existing links.
-func WriteRootfsResolvConf(rootfs string, content []byte) error {
-	if len(content) == 0 {
-		return fmt.Errorf("dns: refusing to write an empty resolv.conf")
-	}
-	root, err := os.OpenRoot(rootfs)
-	if err != nil {
-		return fmt.Errorf("opening rootfs %q: %w", rootfs, err)
-	}
-	defer root.Close()
-	if err := root.Mkdir("etc", 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
-		return fmt.Errorf("creating %q: %w", filepath.Join(rootfs, "etc"), err)
-	}
-	if err := root.Remove("etc/resolv.conf"); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("removing existing resolv.conf: %w", err)
-	}
-	f, err := root.OpenFile("etc/resolv.conf", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return fmt.Errorf("creating resolv.conf: %w", err)
-	}
-	_, err = f.Write(content)
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return fmt.Errorf("writing resolv.conf: %w", err)
-	}
-	return nil
 }
