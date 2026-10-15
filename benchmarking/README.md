@@ -167,11 +167,10 @@ is generated into `workloads/manifests/sweperf/generated/` and checked in. To ad
 a task, edit the catalog and regenerate:
 
 ```bash
-cd benchmarking/workloads/manifests/sweperf
-python3 -m venv venv && venv/bin/pip install -r requirements.txt
-venv/bin/python generate_sweperf_templates.py '*'
-venv/bin/python generate_sweperf_templates.py --check   # fail if generated/ is missing or stale
-venv/bin/python test_generate_sweperf_templates.py
+SWEPERF=benchmarking/workloads/manifests/sweperf
+python3 -m venv "${SWEPERF}/venv" && "${SWEPERF}/venv/bin/pip" install -r "${SWEPERF}/requirements.txt"
+"${SWEPERF}/venv/bin/python" "${SWEPERF}/generate_sweperf_templates.py" '*'
+hack/verify/sweperf-templates.sh   # fail if generated/ is missing or stale; runs the unit tests
 ```
 
 Deploy a task and the sweperf user class:

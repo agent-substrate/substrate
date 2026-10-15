@@ -61,6 +61,8 @@ class GenerateTest(unittest.TestCase):
             "missing key": [{"name": "a", "image": PINNED}],
             "zero steps": [{"name": "a", "image": PINNED, "steps": 0}],
             "unpinned image": [{"name": "a", "image": "example.com/sweperf:a", "steps": 1}],
+            "duplicate name": [{"name": "a", "image": PINNED, "steps": 1},
+                               {"name": "a", "image": PINNED, "steps": 2}],
         }
         for label, catalog in cases.items():
             with self.subTest(label), tempfile.NamedTemporaryFile("w", suffix=".json") as f:

@@ -29,6 +29,7 @@ sweperf-images.json must be pinned by digest.
 """
 
 import argparse
+import collections
 import fnmatch
 import json
 import pathlib
@@ -50,6 +51,12 @@ def load_catalog(path: pathlib.Path) -> list[dict]:
             raise ValueError(f"{path}: {t['name']}: steps must be a positive integer")
         if "@sha256:" not in t["image"]:
             raise ValueError(f"{path}: {t['name']}: image must be pinned by digest (repo@sha256:...)")
+    # render() keys its output by file name, so a duplicate would silently
+    # overwrite the earlier entry.
+    names = collections.Counter(t["name"] for t in tasks)
+    duplicates = sorted(n for n, c in names.items() if c > 1)
+    if duplicates:
+        raise ValueError(f"{path}: duplicate task names: {duplicates}")
     return tasks
 
 
