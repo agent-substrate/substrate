@@ -77,7 +77,7 @@ func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, api
 		clientset:       clientset,
 		apiClient:       apiClient,
 		cfg:             cfg,
-		dataplaneClient: &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)},
+		dataplaneClient: &http.Client{Transport: otelhttp.NewTransport(newLoopbackTransport())},
 	}
 }
 
