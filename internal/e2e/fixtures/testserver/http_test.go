@@ -15,10 +15,13 @@
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -299,5 +302,56 @@ func TestHTTPDialRejectsMalformedRequest(t *testing.T) {
 				t.Errorf("GET /dial?%s status = %d, want %d", query, status, http.StatusBadRequest)
 			}
 		})
+	}
+}
+
+// sendConnect opens a connection to originURL's host, sends it a CONNECT for
+// target, and returns the status it answered with.
+func sendConnect(t *testing.T, originURL, target string) int {
+	t.Helper()
+	parsed, err := url.Parse(originURL)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", originURL, err)
+	}
+	conn, err := net.DialTimeout("tcp", parsed.Host, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dialing %s: %v", parsed.Host, err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("setting deadline: %v", err)
+	}
+	if _, err := fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target); err != nil {
+		t.Fatalf("sending CONNECT %s: %v", target, err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		t.Fatalf("reading the answer to CONNECT %s: %v", target, err)
+	}
+	defer response.Body.Close()
+	return response.StatusCode
+}
+
+func TestHTTPAcceptConnectAnswersCONNECT(t *testing.T) {
+	server := startOriginServer(t, acceptingConnect(newHTTPHandler("")), "", "")
+	if status := sendConnect(t, server.httpURL, "example.com:443"); status != http.StatusOK {
+		t.Errorf("CONNECT status = %d, want %d", status, http.StatusOK)
+	}
+	// Anything else is still the origin.
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get(server.httpURL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Errorf("GET /healthz status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+}
+
+func TestHTTPRefusesCONNECTByDefault(t *testing.T) {
+	server := startOriginServer(t, newHTTPHandler(""), "", "")
+	if status := sendConnect(t, server.httpURL, "example.com:443"); status/100 == 2 {
+		t.Errorf("CONNECT status = %d, want the origin not to open a tunnel", status)
 	}
 }
