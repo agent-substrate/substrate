@@ -4370,7 +4370,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\aRestore\x12\x16.atelet.RestoreRequest\x1a\x17.atelet.RestoreResponse\"\x00\x12T\n" +
 	"\x0fPromoteSnapshot\x12\x1e.atelet.PromoteSnapshotRequest\x1a\x1f.atelet.PromoteSnapshotResponse\"\x00\x12H\n" +
 	"\vDetachActor\x12\x1a.atelet.DetachActorRequest\x1a\x1b.atelet.DetachActorResponse\"\x00\x12B\n" +
-	"\tTerminate\x12\x18.atelet.TerminateRequest\x1a\x19.atelet.TerminateResponse\"\x00B>Z<github.com/agent-substrate/substrate/internal/proto/ateletpbb\x06proto3"
+	"\tTerminate\x12\x18.atelet.TerminateRequest\x1a\x19.atelet.TerminateResponse\"\x00B.Z,go.ate.dev/substrate/internal/proto/ateletpbb\x06proto3"
 
 var (
 	file_atelet_proto_rawDescOnce sync.Once
