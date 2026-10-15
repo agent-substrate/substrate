@@ -929,7 +929,7 @@ func TestSuspendActor_PausedSnapshotUploaded_Preconditions(t *testing.T) {
 		ctx := context.Background()
 		persistence := newTestPersistence(t)
 		seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"})
-		w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
+		w := newMarkOnlyWorkflow(persistence)
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
 		storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
@@ -962,7 +962,7 @@ func TestSuspendActor_PausedSnapshotUploaded_Preconditions(t *testing.T) {
 		ctx := context.Background()
 		persistence := newTestPersistence(t)
 		seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"})
-		w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
+		w := newMarkOnlyWorkflow(persistence)
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
 		snap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap", someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-dest"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
@@ -1096,7 +1096,8 @@ var suspendModes = []struct {
 	{"async", (*ActorWorkflow).PauseActor},
 }
 
-// suspendOutcome is what one suspend workflow does to a seeded actor.
+// suspendOutcome is what one suspend workflow does to a seeded actor. Rows
+// omit zero-valued fields, which the matrix still pins.
 type suspendOutcome struct {
 	code         codes.Code
 	atelet       ateletCall
@@ -1153,8 +1154,11 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 	checkpointSync := ateletCall{checkpoints: 1, fidelity: ateletVolumes, uploadMode: immediate, object: true}
 	checkpointAsync := ateletCall{checkpoints: 1, fidelity: ateletVolumes, uploadMode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED}
 	promote := ateletCall{promotes: 1, fidelity: ateletVolumes, object: true}
-	rejected := func(state ateapipb.ActorState, assignedNode string, workerHeld bool, generation int32, snapshots ...snapshotOutcome) suspendOutcome {
-		return suspendOutcome{codes.FailedPrecondition, ateletCall{}, state, assignedNode, workerHeld, generation, snapshots}
+	// rejected is a FailedPrecondition outcome: no atelet call, and the
+	// record left as want describes it.
+	rejected := func(want suspendOutcome) suspendOutcome {
+		want.code = codes.FailedPrecondition
+		return want
 	}
 	suspended := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 
@@ -1168,8 +1172,8 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 		{
 			name:   "RUNNING",
 			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment()},
-			sync:   suspendOutcome{codes.OK, checkpointSync, suspended, "", false, 1, []snapshotOutcome{{1, volumes, "", completed}}},
-			async:  suspendOutcome{codes.OK, checkpointAsync, suspended, node, false, 1, []snapshotOutcome{{1, volumes, node, noDurable}}},
+			sync:   suspendOutcome{code: codes.OK, atelet: checkpointSync, state: suspended, generation: 1, snapshots: []snapshotOutcome{{1, volumes, "", completed}}},
+			async:  suspendOutcome{code: codes.OK, atelet: checkpointAsync, state: suspended, assignedNode: node, generation: 1, snapshots: []snapshotOutcome{{1, volumes, node, noDurable}}},
 		},
 		{
 			name: "RUNNING resumed from pause",
@@ -1177,8 +1181,8 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 				State: ateapipb.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
 				LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{local(1, node)},
 			},
-			sync:  suspendOutcome{codes.OK, checkpointSync, suspended, "", false, 2, []snapshotOutcome{{2, volumes, "", completed}}},
-			async: suspendOutcome{codes.OK, checkpointAsync, suspended, node, false, 2, []snapshotOutcome{{2, volumes, node, noDurable}}},
+			sync:  suspendOutcome{code: codes.OK, atelet: checkpointSync, state: suspended, generation: 2, snapshots: []snapshotOutcome{{2, volumes, "", completed}}},
+			async: suspendOutcome{code: codes.OK, atelet: checkpointAsync, state: suspended, assignedNode: node, generation: 2, snapshots: []snapshotOutcome{{2, volumes, node, noDurable}}},
 		},
 		{
 			name: "RUNNING resumed from a durable snapshot",
@@ -1186,20 +1190,20 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 				State: ateapipb.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
 				LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, completed)},
 			},
-			sync:  suspendOutcome{codes.OK, checkpointSync, suspended, "", false, 2, []snapshotOutcome{{2, volumes, "", completed}}},
-			async: suspendOutcome{codes.OK, checkpointAsync, suspended, node, false, 2, []snapshotOutcome{{1, volumes, "", completed}, {2, volumes, node, noDurable}}},
+			sync:  suspendOutcome{code: codes.OK, atelet: checkpointSync, state: suspended, generation: 2, snapshots: []snapshotOutcome{{2, volumes, "", completed}}},
+			async: suspendOutcome{code: codes.OK, atelet: checkpointAsync, state: suspended, assignedNode: node, generation: 2, snapshots: []snapshotOutcome{{1, volumes, "", completed}, {2, volumes, node, noDurable}}},
 		},
 		{
 			name:   "SUSPENDED with a durable snapshot",
 			status: &ateapipb.ActorStatus{State: suspended, LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, completed)}},
-			sync:   suspendOutcome{codes.OK, ateletCall{}, suspended, "", false, 1, []snapshotOutcome{{1, volumes, "", completed}}},
-			async:  rejected(suspended, "", false, 1, snapshotOutcome{1, volumes, "", completed}),
+			sync:   suspendOutcome{code: codes.OK, state: suspended, generation: 1, snapshots: []snapshotOutcome{{1, volumes, "", completed}}},
+			async:  rejected(suspendOutcome{state: suspended, generation: 1, snapshots: []snapshotOutcome{{1, volumes, "", completed}}}),
 		},
 		{
 			name:   "paused",
 			status: &ateapipb.ActorStatus{State: suspended, AssignedNode: node, LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{local(1, node)}},
-			sync:   suspendOutcome{codes.OK, promote, suspended, "", false, 1, []snapshotOutcome{{1, volumes, "", completed}}},
-			async:  suspendOutcome{codes.OK, ateletCall{}, suspended, node, false, 1, []snapshotOutcome{{1, volumes, node, noDurable}}},
+			sync:   suspendOutcome{code: codes.OK, atelet: promote, state: suspended, generation: 1, snapshots: []snapshotOutcome{{1, volumes, "", completed}}},
+			async:  suspendOutcome{code: codes.OK, state: suspended, assignedNode: node, generation: 1, snapshots: []snapshotOutcome{{1, volumes, node, noDurable}}},
 		},
 		{
 			name: "suspend from RUNNING in progress",
@@ -1207,8 +1211,8 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 				State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
 				LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{durable(1, pending)},
 			},
-			sync:  suspendOutcome{codes.OK, checkpointSync, suspended, "", false, 1, []snapshotOutcome{{1, volumes, "", completed}}},
-			async: rejected(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, node, true, 1, snapshotOutcome{1, volumes, "", pending}),
+			sync:  suspendOutcome{code: codes.OK, atelet: checkpointSync, state: suspended, generation: 1, snapshots: []snapshotOutcome{{1, volumes, "", completed}}},
+			async: rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, assignedNode: node, workerHeld: true, generation: 1, snapshots: []snapshotOutcome{{1, volumes, "", pending}}}),
 		},
 		{
 			name: "suspend from paused in progress",
@@ -1216,8 +1220,8 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 				State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, AssignedNode: node,
 				LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{promoting},
 			},
-			sync:  suspendOutcome{codes.OK, promote, suspended, "", false, 1, []snapshotOutcome{{1, volumes, "", completed}}},
-			async: rejected(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, node, false, 1, snapshotOutcome{1, volumes, node, pending}),
+			sync:  suspendOutcome{code: codes.OK, atelet: promote, state: suspended, generation: 1, snapshots: []snapshotOutcome{{1, volumes, "", completed}}},
+			async: rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, assignedNode: node, generation: 1, snapshots: []snapshotOutcome{{1, volumes, node, pending}}}),
 		},
 		{
 			name: "pause in progress",
@@ -1225,26 +1229,26 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 				State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, AssignedNode: node, WorkerAssignment: wireTestAssignment(),
 				LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{local(1, "")},
 			},
-			sync:  rejected(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, node, true, 1, snapshotOutcome{1, volumes, "", noDurable}),
-			async: suspendOutcome{codes.OK, checkpointAsync, suspended, node, false, 1, []snapshotOutcome{{1, volumes, node, noDurable}}},
+			sync:  rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, assignedNode: node, workerHeld: true, generation: 1, snapshots: []snapshotOutcome{{1, volumes, "", noDurable}}}),
+			async: suspendOutcome{code: codes.OK, atelet: checkpointAsync, state: suspended, assignedNode: node, generation: 1, snapshots: []snapshotOutcome{{1, volumes, node, noDurable}}},
 		},
 		{
 			name:   "RESUMING",
 			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RESUMING},
-			sync:   rejected(ateapipb.ActorState_ACTOR_STATE_RESUMING, "", false, 0),
-			async:  rejected(ateapipb.ActorState_ACTOR_STATE_RESUMING, "", false, 0),
+			sync:   rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_RESUMING}),
+			async:  rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_RESUMING}),
 		},
 		{
 			name:   "CRASHED",
 			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED},
-			sync:   rejected(ateapipb.ActorState_ACTOR_STATE_CRASHED, "", false, 0),
-			async:  rejected(ateapipb.ActorState_ACTOR_STATE_CRASHED, "", false, 0),
+			sync:   rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_CRASHED}),
+			async:  rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_CRASHED}),
 		},
 		{
 			name:   "DELETING",
 			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING},
-			sync:   rejected(ateapipb.ActorState_ACTOR_STATE_DELETING, "", false, 0),
-			async:  rejected(ateapipb.ActorState_ACTOR_STATE_DELETING, "", false, 0),
+			sync:   rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_DELETING}),
+			async:  rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_DELETING}),
 		},
 		{
 			// A golden actor commits MEMORY whatever the template prefers, and
@@ -1252,8 +1256,8 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 			name:     "golden RUNNING",
 			atespace: resources.GoldenActorAtespace,
 			status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment()},
-			sync:     suspendOutcome{codes.OK, ateletCall{checkpoints: 1, fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, uploadMode: immediate, object: true}, suspended, "", false, 1, []snapshotOutcome{{1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", completed}}},
-			async:    rejected(ateapipb.ActorState_ACTOR_STATE_RUNNING, node, true, 0),
+			sync:     suspendOutcome{code: codes.OK, atelet: ateletCall{checkpoints: 1, fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, uploadMode: immediate, object: true}, state: suspended, generation: 1, snapshots: []snapshotOutcome{{1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", completed}}},
+			async:    rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_RUNNING, assignedNode: node, workerHeld: true}),
 		},
 	}
 
@@ -1313,10 +1317,11 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 
 // TestSuspendAndPause_FinalizeWithoutAssignment pins where the two finalize
 // steps differ when the DeleteWorker workflow crashes the actor, clearing its
-// worker assignment, between the atelet call and finalize. The pause keeps
-// the crash and reports success, which is the intended behavior. The suspend
-// commits SUSPENDED over the crash, which is the bug tracked in #2676: fixing
-// it changes the sync pin to CRASHED.
+// worker assignment, between the atelet call and finalize. Both sides pin
+// bugs tracked in #2676: the suspend commits SUSPENDED over the crash, and
+// the pause keeps the crash but returns OK for an actor left CRASHED. The fix
+// changes the sync wantState to CRASHED and both codes to FailedPrecondition,
+// replacing the err != nil fatal below.
 func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 	wantState := map[string]ateapipb.ActorState{
 		"sync":  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
@@ -1344,6 +1349,7 @@ func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 			})
 
 			returned, err := mode.run(w, ctx, actorRef)
+			// #2676: both modes should return FailedPrecondition here.
 			if err != nil {
 				t.Fatalf("%s: %v", mode.name, err)
 			}
