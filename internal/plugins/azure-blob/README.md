@@ -303,8 +303,23 @@ for `gs://` URLs, which this plugin never reads.
   actor snapshot deletion until the operator removes them (`CleanupSnapshot`
   fails with `Internal`, Azure error `SnapshotsPresent`); the plugin never
   deletes them itself.
-- Upload staging uses at most nine 4 MiB buffers per upload. That bound is per
-  RPC, not process-wide, so concurrent uploads multiply the memory use.
+- A file is staged in 4 MiB blocks, or, above 50,000 such blocks (about
+  195 GiB), in blocks of its size divided by 50,000, rounded up to a whole MiB.
+  One file can therefore reach Azure's block blob limit of 50,000 blocks of
+  4,000 MiB (about 190.7 TiB). `UploadSnapshot` refuses a request holding a
+  larger file with `InvalidArgument` before it stages any block.
+- `UploadSnapshot` reads each block of a file twice: once to hash it, through
+  a 1 MiB buffer, and once, from the file, as the SDK sends it. It stages up to
+  eight blocks at once and holds no block in memory, whatever the block size.
+  Azure checks each block against the MD5 of the first read, so a block that
+  changes between the two reads fails the upload.
+- `CopySnapshot` holds each source block in memory until it is staged, at most
+  32 MiB at once, when blocks are up to 32 MiB (blobs up to about 1.5 TiB).
+  Larger blocks are staged from a second, ranged download of the source, like
+  file blocks, so a copy holds no more than 32 MiB of block data at any size.
+- These bounds are per RPC, not process-wide, so concurrent uploads and copies
+  multiply the memory use, and each block in flight also holds the HTTP
+  client's buffers.
 - One plugin process is confined to one storage account and the containers in
   `--containers`. Copying snapshots across accounts is not supported.
 
@@ -327,7 +342,8 @@ script.
 
 The test uploads and restores a 320 MiB file with distinct per-block patterns,
 retries a partial block upload, verifies corrupt data is rejected, exercises
-concurrent uploads, and checks both control RPCs.
+concurrent uploads, and checks both control RPCs. Another uploads and copies
+blocks larger than 32 MiB, which are streamed rather than buffered.
 
 `go.mod` replaces `go.ate.dev/substrate` with this checkout so
 the module tests against the current public API. The import-boundary test

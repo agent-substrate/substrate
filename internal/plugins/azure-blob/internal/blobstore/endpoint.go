@@ -17,6 +17,7 @@ package blobstore
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -28,9 +29,12 @@ import (
 )
 
 // defaultStallTimeout bounds how long a storage request may make no progress.
-// It is long enough for Azure to answer a 4 MiB block upload or a list page,
-// and short enough that a stalled endpoint fails an RPC with Unavailable
-// after the SDK's retries instead of holding its caller indefinitely.
+// It bounds progress, not total time: a request of any size runs as long as
+// its bytes keep moving, and the timeout applies to each wait, such as for
+// Azure's answer after the last byte of a block or for the next bytes of a
+// download. It is short enough that a stalled endpoint fails an RPC with
+// Unavailable after the SDK's retries instead of holding its caller
+// indefinitely.
 const defaultStallTimeout = time.Minute
 
 // endpointTransport sends requests only to the configured storage account
@@ -43,6 +47,10 @@ const defaultStallTimeout = time.Minute
 // the last body read, or during any one read of the response body. Time the
 // caller spends between response body reads does not count, so a slow
 // consumer of a long download is not cut off.
+//
+// Once a request returns, its body reads fail: net/http may still be sending
+// the body of a request the server answered early, while the SDK's retry
+// seeks that same body back to its start to send it again.
 type endpointTransport struct {
 	scheme       string
 	host         string
@@ -71,9 +79,11 @@ func (t *endpointTransport) Do(req *http.Request) (*http.Response, error) {
 	}
 	ctx, cancel := context.WithCancel(req.Context())
 	watch := newStallWatch(t.stallTimeout, cancel)
+	fence := &bodyFence{}
+	defer fence.close()
 	out := req.WithContext(ctx)
 	if req.Body != nil && req.Body != http.NoBody {
-		out.Body = &requestBody{ReadCloser: req.Body, watch: watch}
+		out.Body = &requestBody{ReadCloser: req.Body, watch: watch, fence: fence}
 		if getBody := req.GetBody; getBody != nil {
 			// net/http resends the body from GetBody when it retries on a
 			// new connection; those reads must restart the timer too.
@@ -82,7 +92,7 @@ func (t *endpointTransport) Do(req *http.Request) (*http.Response, error) {
 				if err != nil {
 					return nil, err
 				}
-				return &requestBody{ReadCloser: b, watch: watch}, nil
+				return &requestBody{ReadCloser: b, watch: watch, fence: fence}, nil
 			}
 		}
 	}
@@ -161,14 +171,39 @@ func (w *stallWatch) isStalled() bool {
 	return w.stalled
 }
 
-// requestBody reports each read of the request body to the stall watch.
+// errRequestReturned fails a read of a request body after the request
+// returned.
+var errRequestReturned = errors.New("request body read after the request returned")
+
+// bodyFence stops reads of a request's body once the request returns. close
+// waits for a read in progress to finish.
+type bodyFence struct {
+	mu     sync.Mutex
+	closed bool
+}
+
+func (f *bodyFence) close() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closed = true
+}
+
+// requestBody reports each read of the request body to the stall watch, and
+// fails reads once the request has returned.
 type requestBody struct {
 	io.ReadCloser
 	watch *stallWatch
+	fence *bodyFence
 }
 
 func (b *requestBody) Read(p []byte) (int, error) {
+	b.fence.mu.Lock()
+	if b.fence.closed {
+		b.fence.mu.Unlock()
+		return 0, errRequestReturned
+	}
 	n, err := b.ReadCloser.Read(p)
+	b.fence.mu.Unlock()
 	b.watch.requestProgress()
 	return n, err
 }

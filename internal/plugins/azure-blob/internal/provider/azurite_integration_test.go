@@ -23,11 +23,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,6 +37,7 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service"
 	"go.ate.dev/substrate/internal/plugins/azure-blob/internal/blobstore"
 	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
@@ -52,11 +55,11 @@ type failStageStore struct {
 	calls  atomic.Int64
 }
 
-func (s *failStageStore) StageBlock(ctx context.Context, name, blockID string, data, checksum []byte) error {
+func (s *failStageStore) StageBlock(ctx context.Context, name, blockID string, body io.ReadSeeker, checksum []byte) error {
 	if s.calls.Add(1) == s.failAt {
 		return blobstore.ErrUnavailable
 	}
-	return s.Store.StageBlock(ctx, name, blockID, data, checksum)
+	return s.Store.StageBlock(ctx, name, blockID, body, checksum)
 }
 
 func TestAzuriteGRPCEndToEnd(t *testing.T) {
@@ -116,8 +119,8 @@ func TestAzuriteGRPCEndToEnd(t *testing.T) {
 		file.Close()
 		t.Fatal(err)
 	}
-	for offset := int64(0); offset < largeIntegrationFileSize; offset += blockSize {
-		pattern := sha256.Sum256([]byte(fmt.Sprintf("block-%d", offset/blockSize)))
+	for offset := int64(0); offset < largeIntegrationFileSize; offset += minBlockSize {
+		pattern := sha256.Sum256([]byte(fmt.Sprintf("block-%d", offset/minBlockSize)))
 		if _, err := file.WriteAt(pattern[:], offset); err != nil {
 			file.Close()
 			t.Fatal(err)
@@ -273,7 +276,7 @@ func TestAzuriteGRPCEndToEnd(t *testing.T) {
 	sum := md5.Sum(corruptData)
 	blockID := base64.StdEncoding.EncodeToString([]byte("corrupt-block"))
 	corruptName := "integration/corrupt/file"
-	if err := azure.StageBlock(context.Background(), corruptName, blockID, corruptData, sum[:]); err != nil {
+	if err := azure.StageBlock(context.Background(), corruptName, blockID, bytes.NewReader(corruptData), sum[:]); err != nil {
 		t.Fatal(err)
 	}
 	wrongDigest := hex.EncodeToString(make([]byte, sha256.Size))
@@ -364,7 +367,7 @@ func TestAzuriteKeepsBlobAndFileNames(t *testing.T) {
 	node, control := serveIntegrationPlugin(t, map[string]blobstore.Store{containerName: azure}, root)
 	ctx := context.Background()
 
-	if err := upload(ctx, azure, "integration/src/../victim/file", bytes.NewReader([]byte("payload"))); err != nil {
+	if err := azureLimits.upload(ctx, azure, "integration/src/../victim/file", bytesSource([]byte("payload"), int64(len("payload"))), ""); err != nil {
 		t.Fatal(err)
 	}
 	if names, err := azure.List(ctx, "integration/src/"); err != nil || len(names) != 1 || names[0] != "integration/src/../victim/file" {
@@ -487,5 +490,95 @@ func assertFileHash(t *testing.T, paths ...string) {
 		} else if !bytes.Equal(got, want) {
 			t.Fatalf("%s SHA-256 = %x, want %x", name, got, want)
 		}
+	}
+}
+
+// TestAzuriteStreamsLargeBlocks uploads and copies blocks larger than
+// bufferBudget, which the SDK streams from the file and from ranged downloads
+// of the source, and checks that Azurite commits them whole and that a block
+// staged with the wrong MD5 is a retryable failure.
+func TestAzuriteStreamsLargeBlocks(t *testing.T) {
+	endpoint := os.Getenv("AZURITE_BLOB_ENDPOINT")
+	account := os.Getenv("AZURITE_ACCOUNT_NAME")
+	key := os.Getenv("AZURITE_ACCOUNT_KEY")
+	if endpoint == "" || account == "" || key == "" {
+		t.Fatal("AZURITE_BLOB_ENDPOINT, AZURITE_ACCOUNT_NAME, and AZURITE_ACCOUNT_KEY are required")
+	}
+	credential, err := azblob.NewSharedKeyCredential(account, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceClient, err := service.NewClientWithSharedKeyCredential(endpoint, credential, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	containerName := fmt.Sprintf("stream-%d", time.Now().UnixNano())
+	containerClient := serviceClient.NewContainerClient(containerName)
+	if _, err := containerClient.Create(context.Background(), nil); err != nil {
+		t.Fatalf("creating Azurite container %s: %v", containerName, err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _ = containerClient.Delete(ctx, nil)
+	})
+	azure, err := blobstore.NewAzureWithSharedKey(endpoint, containerName, account, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	server, err := New(map[string]blobstore.Store{containerName: azure}, "integration", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.limits = streamedLimits
+	ctx := context.Background()
+	source := filepath.Join(root, "source")
+	for _, dir := range []string{source, filepath.Join(root, "dest"), filepath.Join(root, "copied")} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(source, "memory.img"), patterned(streamedSize), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	committedBlocks := func(name string) []int64 {
+		t.Helper()
+		list, err := containerClient.NewBlockBlobClient(name).GetBlockList(ctx, blockblob.BlockListTypeCommitted, nil)
+		if err != nil {
+			t.Fatalf("GetBlockList(%s): %v", name, err)
+		}
+		var sizes []int64
+		for _, block := range list.CommittedBlocks {
+			sizes = append(sizes, *block.Size)
+		}
+		return sizes
+	}
+
+	uri := "azblob://" + containerName + "/streamed"
+	if _, err := server.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{SnapshotUri: uri, LocalPath: source, Files: []string{"memory.img"}}); err != nil {
+		t.Fatalf("UploadSnapshot: %v", err)
+	}
+	if got := committedBlocks("integration/streamed/memory.img"); !slices.Equal(got, []int64{streamedBlock, streamedBlock}) {
+		t.Fatalf("uploaded blocks %v, want two of %d bytes", got, streamedBlock)
+	}
+	copied := "azblob://" + containerName + "/copied"
+	if _, err := server.CopySnapshot(ctx, &objectstorev1.CopySnapshotRequest{SrcUri: uri, DstUri: copied}); err != nil {
+		t.Fatalf("CopySnapshot: %v", err)
+	}
+	if got := committedBlocks("integration/copied/memory.img"); !slices.Equal(got, []int64{streamedBlock, streamedBlock}) {
+		t.Fatalf("copied blocks %v, want two of %d bytes", got, streamedBlock)
+	}
+	for snapshot, dir := range map[string]string{uri: "dest", copied: "copied"} {
+		if _, err := server.FetchSnapshot(ctx, &objectstorev1.FetchSnapshotRequest{SnapshotUri: snapshot, WritePath: filepath.Join(root, dir), Files: []string{"memory.img"}}); err != nil {
+			t.Fatalf("FetchSnapshot(%s): %v", snapshot, err)
+		}
+		assertFileHash(t, filepath.Join(source, "memory.img"), filepath.Join(root, dir, "memory.img"))
+	}
+
+	wrong := md5.Sum([]byte("other"))
+	err = azure.StageBlock(ctx, "integration/mismatch/file", base64.StdEncoding.EncodeToString([]byte("block")), strings.NewReader("block"), wrong[:])
+	if !errors.Is(err, blobstore.ErrUnavailable) {
+		t.Fatalf("StageBlock with a mismatched MD5 = %v, want ErrUnavailable", err)
 	}
 }
