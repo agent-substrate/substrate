@@ -39,15 +39,15 @@ type actorCertificateSource interface {
 	MintWorkerCertificate(context.Context) (time.Time, error)
 }
 
-// OriginalDestination returns the address that a transparently intercepted
+// originalDestinationFunc returns the address that a transparently intercepted
 // connection originally targeted.
-type OriginalDestination func(net.Conn) (string, error)
+type originalDestinationFunc func(net.Conn) (string, error)
 
 // Egress proxies actor TCP connections through an egress CONNECT dialer. It is
 // long-lived across actor activations, but only carries traffic while an actor
 // is assigned to its worker.
 type Egress struct {
-	originalDestination OriginalDestination
+	originalDestination originalDestinationFunc
 	// tunnelOpenTimeout bounds the wait for the gateway's CONNECT answer.
 	tunnelOpenTimeout time.Duration
 
@@ -69,7 +69,7 @@ type egressActivation struct {
 }
 
 // NewEgress creates an activation-aware egress proxy.
-func NewEgress(originalDestination OriginalDestination) (*Egress, error) {
+func NewEgress(originalDestination originalDestinationFunc) (*Egress, error) {
 	if originalDestination == nil {
 		return nil, fmt.Errorf("atunnel: original destination resolver is required")
 	}

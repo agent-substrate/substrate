@@ -58,23 +58,23 @@ var ErrGatewayHandshake = errors.New("atunnel: egress gateway TLS handshake")
 // caller can act on.
 type ConnectRejectedError struct {
 	StatusCode int
-	// Status is the full status line, e.g. "403 Forbidden".
-	Status string
-	// Message is the response body, or the status text when the body is empty.
-	Message string
+	// status is the full status line, e.g. "403 Forbidden".
+	status string
+	// message is the response body, or the status text when the body is empty.
+	message string
 }
 
 func (e *ConnectRejectedError) Error() string {
-	return fmt.Sprintf("atunnel: egress gateway rejected CONNECT with %s: %s", e.Status, e.Message)
+	return fmt.Sprintf("atunnel: egress gateway rejected CONNECT with %s: %s", e.status, e.message)
 }
 
-// ClientOption customizes a Client beyond its configuration. Production
+// clientOption customizes a Client beyond its configuration. Production
 // callers need none of these.
-type ClientOption func(*Client)
+type clientOption func(*Client)
 
-// WithDialer overrides how the client reaches the egress gateway. It exists so
+// withDialer overrides how the client reaches the egress gateway. It exists so
 // tests can substitute a transport; by default a net.Dialer is used.
-func WithDialer(dial DialFunc) ClientOption {
+func withDialer(dial DialFunc) clientOption {
 	return func(c *Client) {
 		if dial != nil {
 			c.dialContext = dial
@@ -98,7 +98,7 @@ type Client struct {
 var _ egressDialer = (*Client)(nil)
 
 // NewClient creates an egress CONNECT client and validates its TLS material.
-func NewClient(cfg ClientConfig, opts ...ClientOption) (*Client, error) {
+func NewClient(cfg ClientConfig, opts ...clientOption) (*Client, error) {
 	if _, _, err := net.SplitHostPort(cfg.GatewayAddress); err != nil {
 		return nil, fmt.Errorf("atunnel: invalid egress gateway address %q: %w", cfg.GatewayAddress, err)
 	}
@@ -509,8 +509,8 @@ func newConnectRejectedError(resp *http.Response, body []byte) *ConnectRejectedE
 	}
 	return &ConnectRejectedError{
 		StatusCode: resp.StatusCode,
-		Status:     resp.Status,
-		Message:    message,
+		status:     resp.Status,
+		message:    message,
 	}
 }
 

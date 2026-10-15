@@ -57,7 +57,7 @@ func TestClientDialContext(t *testing.T) {
 			t.Errorf("tunneled payload = %q, want ping", payload)
 		}
 	})
-	client := newTestClient(t, ca, WithDialer(dialFixedAddress(gatewayAddress)))
+	client := newTestClient(t, ca, withDialer(dialFixedAddress(gatewayAddress)))
 
 	conn, err := client.DialContext(context.Background(), "192.0.2.10:443")
 	if err != nil {
@@ -125,7 +125,7 @@ func TestClientDialContextHTTP2(t *testing.T) {
 		}
 		flusher.Flush()
 	}))
-	client := newTestClient(t, ca, WithDialer(dialFixedAddress(gatewayAddress)))
+	client := newTestClient(t, ca, withDialer(dialFixedAddress(gatewayAddress)))
 
 	dialCtx, cancelDial := context.WithCancel(context.Background())
 	conn, err := client.DialContext(dialCtx, "192.0.2.10:443")
@@ -214,7 +214,7 @@ func TestClientDialContextHTTP2MultiplexesStreams(t *testing.T) {
 	}))
 
 	var tcpDials atomic.Int32
-	client := newTestClient(t, ca, WithDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
+	client := newTestClient(t, ca, withDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
 		tcpDials.Add(1)
 		return (&net.Dialer{}).DialContext(ctx, network, gatewayAddress)
 	}))
@@ -272,7 +272,7 @@ func TestClientDialContextHTTP2ReconnectsAfterConnectionClose(t *testing.T) {
 	}))
 
 	var tcpDials atomic.Int32
-	client := newTestClient(t, ca, WithDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
+	client := newTestClient(t, ca, withDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
 		tcpDials.Add(1)
 		return (&net.Dialer{}).DialContext(ctx, network, gatewayAddress)
 	}))
@@ -320,7 +320,7 @@ func TestClientDialContextHTTP2Deadlines(t *testing.T) {
 		<-releaseServerSend
 		_, _ = io.WriteString(w, "delayed")
 	}))
-	client := newTestClient(t, ca, WithDialer(dialFixedAddress(gatewayAddress)))
+	client := newTestClient(t, ca, withDialer(dialFixedAddress(gatewayAddress)))
 
 	conn, err := client.DialContext(context.Background(), "192.0.2.10:443")
 	if err != nil {
@@ -356,7 +356,7 @@ func TestClientDialContextRejected(t *testing.T) {
 			body := "denied by policy"
 			_, _ = fmt.Fprintf(conn, "HTTP/1.1 403 Forbidden\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
 		})
-		client := newTestClient(t, ca, WithDialer(dialFixedAddress(gatewayAddress)))
+		client := newTestClient(t, ca, withDialer(dialFixedAddress(gatewayAddress)))
 
 		_, err := client.DialContext(context.Background(), "192.0.2.10:443")
 		if err == nil || !strings.Contains(err.Error(), "denied by policy") {
@@ -377,7 +377,7 @@ func TestClientDialContextRejected(t *testing.T) {
 			}
 		}))
 		var tcpDials atomic.Int32
-		client := newTestClient(t, ca, WithDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		client := newTestClient(t, ca, withDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
 			tcpDials.Add(1)
 			return (&net.Dialer{}).DialContext(ctx, network, gatewayAddress)
 		}))
@@ -387,7 +387,7 @@ func TestClientDialContextRejected(t *testing.T) {
 		if !errors.As(err, &rejected) {
 			t.Fatalf("DialContext error = %v, want *ConnectRejectedError", err)
 		}
-		if rejected.StatusCode != http.StatusForbidden || rejected.Message != "denied by policy" {
+		if rejected.StatusCode != http.StatusForbidden || rejected.message != "denied by policy" {
 			t.Errorf("ConnectRejectedError = %+v, want 403 denied by policy", rejected)
 		}
 
@@ -431,7 +431,7 @@ func TestClientDialContextGatewayRefusesClientCertificate(t *testing.T) {
 			// client's certificate, which is the shape of an actor presenting a
 			// podidentity credential to a door that only accepts actor identity.
 			gatewayAddress := serveTestRefusingGateway(t, ca, newTestCA(t), tt.maxTLSVersion, tt.nextProtos)
-			client := newTestClient(t, ca, WithDialer(dialFixedAddress(gatewayAddress)))
+			client := newTestClient(t, ca, withDialer(dialFixedAddress(gatewayAddress)))
 
 			_, err := client.DialContext(context.Background(), "192.0.2.10:443")
 			if err == nil {
@@ -461,7 +461,7 @@ func TestClientDialContextGatewayHangsUpBeforeResponding(t *testing.T) {
 		gatewayAddress := serveTestConnectGateway(t, ca, func(conn net.Conn, _ *http.Request) {
 			_ = conn.Close()
 		})
-		client := newTestClient(t, ca, WithDialer(dialFixedAddress(gatewayAddress)))
+		client := newTestClient(t, ca, withDialer(dialFixedAddress(gatewayAddress)))
 
 		_, err := client.DialContext(context.Background(), "192.0.2.10:443")
 		if err == nil {
@@ -500,7 +500,7 @@ func TestClientDialContextGatewayHangsUpBeforeResponding(t *testing.T) {
 			_ = tlsConn.Close()
 		}()
 
-		client := newTestClient(t, ca, WithDialer(dialFixedAddress(listener.Addr().String())))
+		client := newTestClient(t, ca, withDialer(dialFixedAddress(listener.Addr().String())))
 		_, err = client.DialContext(context.Background(), "192.0.2.10:443")
 		if err == nil {
 			t.Fatal("DialContext succeeded against an HTTP/2 gateway that hung up")
@@ -600,7 +600,7 @@ func TestClientClose(t *testing.T) {
 	}))
 
 	connClosed := make(chan struct{})
-	client := newTestClient(t, ca, WithDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
+	client := newTestClient(t, ca, withDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
 		c, err := (&net.Dialer{}).DialContext(ctx, network, gatewayAddr)
 		if err != nil {
 			return nil, err
@@ -634,7 +634,7 @@ func dialFixedAddress(address string) DialFunc {
 	}
 }
 
-func newTestClient(t *testing.T, ca *testCA, opts ...ClientOption) *Client {
+func newTestClient(t *testing.T, ca *testCA, opts ...clientOption) *Client {
 	t.Helper()
 	dir := t.TempDir()
 	trustPath := filepath.Join(dir, "trust.pem")

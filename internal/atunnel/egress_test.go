@@ -409,7 +409,7 @@ func TestEgressEndToEnd(t *testing.T) {
 			t.Errorf("writing gateway payload: %v", err)
 		}
 	})
-	client := newTestClient(t, ca, WithDialer(dialFixedAddress(gatewayAddress)))
+	client := newTestClient(t, ca, withDialer(dialFixedAddress(gatewayAddress)))
 
 	egress, err := NewEgress(func(net.Conn) (string, error) {
 		return "192.0.2.10:443", nil
@@ -492,7 +492,7 @@ func TestEgressBoundsHowLongATunnelWaitsToOpen(t *testing.T) {
 		<-r.Context().Done()
 		withdrawn <- struct{}{}
 	}))
-	client := newTestClient(t, ca, WithDialer(dialFixedAddress(gatewayAddress)))
+	client := newTestClient(t, ca, withDialer(dialFixedAddress(gatewayAddress)))
 
 	egress, err := NewEgress(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
 	if err != nil {
@@ -601,7 +601,7 @@ func TestEgressDeactivateClosesIdleH2Connection(t *testing.T) {
 	}))
 
 	connClosed := make(chan struct{})
-	client := newTestClient(t, ca, WithDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
+	client := newTestClient(t, ca, withDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
 		c, err := (&net.Dialer{}).DialContext(ctx, network, gatewayAddr)
 		if err != nil {
 			return nil, err

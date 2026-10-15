@@ -337,8 +337,8 @@ func TestServeHTTP(t *testing.T) {
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
 			}
-			if tt.wantStatus == http.StatusMisdirectedRequest && rec.Header().Get(StaleAssignmentHeader) != "true" {
-				t.Errorf("missing %s response header", StaleAssignmentHeader)
+			if tt.wantStatus == http.StatusMisdirectedRequest && rec.Header().Get(staleAssignmentHeader) != "true" {
+				t.Errorf("missing %s response header", staleAssignmentHeader)
 			}
 		})
 	}
@@ -411,8 +411,8 @@ func TestServerRejectsDuplicateOrCommaTargetActorHeaders(t *testing.T) {
 			if rec.Code != http.StatusMisdirectedRequest {
 				t.Fatalf("status = %d, want %d", rec.Code, http.StatusMisdirectedRequest)
 			}
-			if rec.Header().Get(StaleAssignmentHeader) != "true" {
-				t.Errorf("missing %s response header", StaleAssignmentHeader)
+			if rec.Header().Get(staleAssignmentHeader) != "true" {
+				t.Errorf("missing %s response header", staleAssignmentHeader)
 			}
 			if upstreamCalled {
 				t.Errorf("upstream was dialed, expected request to be rejected")
@@ -430,7 +430,7 @@ func TestServeHTTPStripsStaleAssignmentHeaderFromActor(t *testing.T) {
 	s := newTestServer(t, upstreamURL)
 	actorTransport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		h := make(http.Header)
-		h.Set(StaleAssignmentHeader, "true")
+		h.Set(staleAssignmentHeader, "true")
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     h,
@@ -450,8 +450,8 @@ func TestServeHTTPStripsStaleAssignmentHeaderFromActor(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if got := rec.Header().Get(StaleAssignmentHeader); got != "" {
-		t.Errorf("expected %s to be stripped from actor response, got %q", StaleAssignmentHeader, got)
+	if got := rec.Header().Get(staleAssignmentHeader); got != "" {
+		t.Errorf("expected %s to be stripped from actor response, got %q", staleAssignmentHeader, got)
 	}
 }
 
@@ -546,7 +546,7 @@ func TestServeConnectHTTPValidatesMethodAndAuthority(t *testing.T) {
 				req.Header.Set(atenet.TargetActorHeader, "team-a/actor-2")
 			}
 			rec := httptest.NewRecorder()
-			s.ServeConnectHTTP(rec, req)
+			s.serveConnectHTTP(rec, req)
 			if rec.Code != tt.want {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
 			}
@@ -1260,7 +1260,7 @@ func TestServeConnectHTTPDialsTheSandbox(t *testing.T) {
 	req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev:9090"
 	req.Header.Set(atenet.TargetActorHeader, "team-a/actor-1")
 	rec := httptest.NewRecorder()
-	s.ServeConnectHTTP(rec, req)
+	s.serveConnectHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d: the tunnel never reached the sandbox", rec.Code, http.StatusOK)

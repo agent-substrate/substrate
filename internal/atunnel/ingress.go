@@ -42,9 +42,9 @@ const (
 	// mTLS CONNECT tunnels from the ingress router.
 	DefaultConnectPort = 8443
 
-	// StaleAssignmentHeader distinguishes an atunnel routing rejection from a
+	// staleAssignmentHeader distinguishes an atunnel routing rejection from a
 	// 421 returned by the actor application itself.
-	StaleAssignmentHeader = "X-Ate-Assignment-Stale"
+	staleAssignmentHeader = "X-Ate-Assignment-Stale"
 	// TargetPortHeader carries the port to reach on the actor: the CONNECT
 	// :authority's port for arbitrary-port ingress, or the default 80
 	// otherwise (see atenet-router's HandleRequestHeaders). cfg.Upstream is
@@ -191,7 +191,7 @@ func newActorProxy(upstream *url.URL, dial DialFunc) *httputil.ReverseProxy {
 		// Prevent untrusted actor responses from spoofing routing rejections
 		// to trigger cache evictions and stream restarts in the ingress router.
 		ModifyResponse: func(resp *http.Response) error {
-			resp.Header.Del(StaleAssignmentHeader)
+			resp.Header.Del(staleAssignmentHeader)
 			return nil
 		},
 		Transport: newProtocolMirrorTransport(dial),
@@ -293,7 +293,7 @@ func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
 // decisions move to the router's route config, leaving atunnel with no
 // request parsing at all.
 func (s *Server) ServeConnect(ctx context.Context, lis net.Listener) error {
-	return s.serve(ctx, lis, http.HandlerFunc(s.ServeConnectHTTP), s.tlsConfig)
+	return s.serve(ctx, lis, http.HandlerFunc(s.serveConnectHTTP), s.tlsConfig)
 }
 
 func (s *Server) serve(ctx context.Context, lis net.Listener, handler http.Handler, tlsConfig *tls.Config) error {
@@ -318,9 +318,9 @@ func (s *Server) serve(ctx context.Context, lis net.Listener, handler http.Handl
 	return err
 }
 
-// ServeConnectHTTP accepts a router-authenticated CONNECT request and relays
+// serveConnectHTTP accepts a router-authenticated CONNECT request and relays
 // its tunnel to the named port on the currently active actor.
-func (s *Server) ServeConnectHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *Server) serveConnectHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodConnect {
 		http.Error(w, "CONNECT required", http.StatusMethodNotAllowed)
 		return
@@ -576,6 +576,6 @@ func (s *Server) authorize(r *http.Request) (*activation, context.Context, func(
 var errActorDeactivated = errors.New("atunnel: actor deactivated")
 
 func (s *Server) reject(w http.ResponseWriter) {
-	w.Header().Set(StaleAssignmentHeader, "true")
+	w.Header().Set(staleAssignmentHeader, "true")
 	http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
 }
