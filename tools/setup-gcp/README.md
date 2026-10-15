@@ -73,24 +73,41 @@ Filestore CSI driver disabled).
 > ClusterTrustBundle discovery prefers `certificates.k8s.io/v1`, falling back
 > to `certificates.k8s.io/v1beta1` only when the stable resource is not served.
 > PodCertificateRequest discovery independently prefers `v1` over `v1beta1`.
-> For GKE deployments, the supported configurations are:
+> GKE 1.37 and higher serve both under `v1` by default. GKE 1.36 serves them
+> only under `v1beta1`, as beta APIs that must be enabled. Versions below 1.36
+> are not supported.
 >
-> * **GKE 1.36 with the beta APIs enabled at cluster creation.** GKE only
->   honors `enableK8sBetaApis` **at creation time**. Enabling the APIs later
->   on an existing cluster is not recoverable in place: the tool's reconcile
->   path issues the update, but the APIs do not become served — the cluster
->   must be **recreated** with them enabled.
-> * **GKE 1.37 or higher**, where the APIs are served by default and no beta
->   enablement is needed.
->
-> Versions below 1.36 are not supported. `create cluster` handles the
-> enablement for you; if you bring your own 1.36 cluster, create it with both
-> APIs enabled from the start, e.g.:
+> `create cluster` enables the beta APIs on every cluster it creates, whatever
+> its version. If you bring your own 1.36 cluster, create it with them:
 >
 > ```bash
 > gcloud container clusters create "${CLUSTER_NAME}" ... \
 >   --enable-kubernetes-unstable-apis=certificates.k8s.io/v1beta1/podcertificaterequests,certificates.k8s.io/v1beta1/clustertrustbundles
 > ```
+>
+> A 1.36 cluster created without them can be fixed in place: `create cluster`
+> and `bootstrap` turn them on for an existing cluster, or run `gcloud
+> container clusters update` with the same flag yourself. The APIs are served
+> once the update finishes. **That is not enough on its own:** pod
+> certificate projection is a kubelet feature, gated through 1.36, and nodes
+> that were already running do not pick it up. Pods scheduled onto them fail
+> with `MountVolume.SetUp failed: unimplemented`. Replace each such pool:
+> create a new one, let workloads move to it, then delete the old one. The
+> tool logs both commands for every pool it finds, with the new pool's
+> machine type, disk, node count and nested virtualization copied from the
+> old one; carry over anything else you customized (taints, service account,
+> autoscaling) yourself:
+>
+> ```bash
+> gcloud container node-pools create "${NODE_POOL}-2" --cluster="${CLUSTER_NAME}" \
+>   --location="${CLUSTER_LOCATION}" --machine-type="${NODE_MACHINE_TYPE}" ...
+> gcloud container node-pools delete "${NODE_POOL}" --cluster="${CLUSTER_NAME}" \
+>   --location="${CLUSTER_LOCATION}"
+> ```
+>
+> Upgrading a pool to the version it already runs does **not** help: GKE
+> skips a same-version upgrade without recreating any nodes. Node pools on
+> 1.37 or higher need nothing further.
 >
 > The symptom of a cluster without the APIs: the install hangs at "Waiting for
 > podcertificate ClusterTrustBundles to be ready" and `kubectl get
