@@ -62,7 +62,7 @@ STORAGE_CLASS_NAME="${STORAGE_CLASS_NAME:-}"
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
 OTLP_ENDPOINT=""
-# The timeout, in whole seconds, for waiting for the ateom worker pods to be
+# The timeout, in whole seconds, for waiting for the worker pods to be
 # ready.
 WAIT_TIMEOUT_SECS=300
 # fake-atelet's tuning on the fake data plane, as FAKE_ATELET_<FLAG>=VALUE
@@ -87,7 +87,7 @@ usage() {
   echo "  --otlp-endpoint URL         The address to which an instrumented actor container"
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
-  echo "  --wait-timeout SECONDS      The timeout in seconds for waiting for the ateom workers to be ready (default: 300)"
+  echo "  --wait-timeout SECONDS      The timeout in seconds for waiting for the workers to be ready (default: 300)"
   echo "  --fake-atelet-env NAME=VALUE"
   echo "                              On a substrate installed with --fake-data-plane, set a fake-atelet flag:"
   echo "                              FAKE_ATELET_DELAY=500ms sets --delay, FAKE_ATELET_DELAY_RESTORE=2s sets"
@@ -257,13 +257,13 @@ deploy() {
     # ready once its capacity is reported, and writes that to the pool's
     # status.
     if ((WORKER_COUNT > 0)); then
-      kubectl wait --for=jsonpath='{.status.readyReplicas}'="${WORKER_COUNT}" workerpool/benchmark-ateom \
+      kubectl wait --for=jsonpath='{.status.readyReplicas}'="${WORKER_COUNT}" workerpool/benchmark-worker \
         --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
     fi
   else
-    kubectl wait --for=create deployment/benchmark-ateom \
+    kubectl wait --for=create deployment/benchmark-worker \
       --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
-    kubectl rollout status deployment/benchmark-ateom \
+    kubectl rollout status deployment/benchmark-worker \
       --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
   fi
 

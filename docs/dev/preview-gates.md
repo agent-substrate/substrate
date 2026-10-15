@@ -18,7 +18,7 @@ feature:
    comma-separated list of gate names, or `ALL` for all of them. Install with
    ate-setup's `preview` setting (`ATE_PREVIEW`, `--preview=<gates>`), which
    passes the same value to every substrate container. atecontroller passes its
-   own gates on to the ateom containers of each WorkerPool.
+   own gates on to the ateworker containers of each WorkerPool.
 2. **Client side:** a gRPC request to ate-api must send the
    `Ate-Preview-Allowed: true` metadata header (`preview.Header`).
    `kubectl ate --preview` sends it. A request without it is treated as if

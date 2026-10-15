@@ -17,7 +17,7 @@ everything under it.
 ## agentpb — kata-agent ttrpc protobufs
 
 A copy of the kata-agent protocol-buffer API, used to drive the kata-agent over ttrpc
-when ateom boots the guest.
+when ateworker boots the guest.
 
 - **Path:** `src/libs/protocols/protos/{agent,oci,types,csi}.proto`
 
@@ -41,7 +41,7 @@ the message types are needed.
 
 ### RPCs actually used
 
-ateom drives a small subset of `AgentService`:
+ateworker drives a small subset of `AgentService`:
 `CreateSandbox`, `CreateContainer`, `StartContainer`, `UpdateInterface`, `UpdateRoutes`,
 `AddARPNeighbors`, `ReadStdout`, `ReadStderr`.
 

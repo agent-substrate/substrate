@@ -24,7 +24,7 @@
 # paste their sha256 sums into the manifest
 # (manifests/microvm/sandboxconfig-microvm.yaml.tmpl).
 #
-# ateom drives the kata-agent directly (the kata containerd shim is NOT an asset). The
+# ateworker drives the kata-agent directly (the kata containerd shim is NOT an asset). The
 # actor rootfs is overlay(virtio-fs RO lower + guest-tmpfs upper), so virtiofsd IS an
 # asset. CH's restore handshake hangs against virtiofsd v1.13.3, which kata bundled up
 # to and including 4.0.0; kata 4.1.0 bundles v1.14.0, the first release carrying the

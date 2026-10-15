@@ -1307,7 +1307,7 @@ func TestRequireNoWorkerPods(t *testing.T) {
 	workerPod := func(name string, terminating bool) *corev1.Pod {
 		p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 			Namespace: "benchmark-workloads", Name: name,
-			Labels: map[string]string{workerPoolLabel: "benchmark-ateom"},
+			Labels: map[string]string{workerPoolLabel: "benchmark-worker"},
 		}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
 		if terminating {
 			now := metav1.Now()
@@ -1342,7 +1342,7 @@ func TestRequireNoWorkerPods(t *testing.T) {
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("requireNoWorkerPods() = %v, want error %v", err, tc.wantErr)
 			}
-			if err != nil && strings.Count(err.Error(), "benchmark-workloads/benchmark-ateom") != 1 {
+			if err != nil && strings.Count(err.Error(), "benchmark-workloads/benchmark-worker") != 1 {
 				t.Errorf("error %q does not name the WorkerPool exactly once", err)
 			}
 		})

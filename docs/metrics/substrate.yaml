@@ -245,7 +245,7 @@ blind_spots:
     brief: >
       ate.actor.stats.cpu.time counts only the samples atelet reads while an
       actor is hosted. It loses the end of each activation, up to one poll
-      interval plus one ateom sample interval. Thus an activation shorter than
+      interval plus one ateworker sample interval. Thus an activation shorter than
       that, as a checkpoint-when-idle agent, can show little or no CPU here.
       Its ate.actor.usage_sampled records keep it. Issue #2362 moves the
-      counter to the ateoms.
+      counter to the ateworkers.

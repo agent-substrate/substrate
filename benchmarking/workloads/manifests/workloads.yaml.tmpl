@@ -27,10 +27,10 @@ metadata:
 apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
 metadata:
-  name: benchmark-ateom
+  name: benchmark-worker
   namespace: benchmark-workloads
   labels:
-    workload: benchmark-ateom
+    workload: benchmark-worker
 spec:
   replicas: ${WORKER_COUNT}
   sandboxClasses:

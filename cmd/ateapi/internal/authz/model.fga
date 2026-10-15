@@ -25,7 +25,7 @@ type user
 # Physical host node running atelet
 type node
 
-# Worker pod running ateom (global-scoped)
+# Worker pod running ateworker (global-scoped)
 type worker
   relations
     define parent_global: [global]
@@ -148,8 +148,8 @@ type actor
     define can_update_egress_policy: editor from parent_atespace
     define can_delete_egress_policy: editor from parent_atespace
 
-    # Node Restriction: Only the node hosting the scheduled worker can mint ateom actor credentials
-    define can_mint_ateom_actor_credential: host_node
+    # Node Restriction: Only the node hosting the scheduled worker can mint ateworker actor credentials
+    define can_mint_worker_actor_credential: host_node
 
     # Credentials asserting the actor's own identity. Only the egress gateway
     # mints them; an editor holding one could impersonate the actor.

@@ -101,5 +101,5 @@ When adding a new Go package, ask:
 3. **Is it a deliberately public API for external users?** → `pkg/<pkg>`
 4. **Is it a protobuf-generated package?**
    - Public gRPC API (control plane) → `pkg/proto/<name>`
-   - Internal gRPC API (atelet, ateom) → `internal/proto/<name>`
+   - Internal gRPC API (atelet, ateworker) → `internal/proto/<name>`
 5. **Is it a script or dev tool?** → `hack/` (shell) or `tools/<name>` (Go)

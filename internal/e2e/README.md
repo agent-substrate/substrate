@@ -88,7 +88,7 @@ lane that forgets cannot silently skip every preview test; see
 
 A suite deletes the namespaces it created only when it passed. A failed run
 keeps them, because the failure is usually explained inside a worker pod (the
-ateom logs, and for a micro-VM worker the guest's console tail), and deleting
+worker logs, and for a micro-VM worker the guest's console tail), and deleting
 the namespace takes those pods with it:
 
 ```shell

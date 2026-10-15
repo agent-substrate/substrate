@@ -135,20 +135,20 @@ Then move the pools, starting with a small pool of each CLASS that you can affor
    CLASS=$(kubectl -n $NS get workerpool $WORKERPOOL -o jsonpath='{.spec.sandboxClasses[0].name}')
    ```
 
-2. Set its new image. From source, take the ref after `ateom-$CLASS: ` in `~/ate-upgrade/worker-images.txt`:
+2. Set its new image. From source, take the ref after `ateworker-$CLASS: ` in `~/ate-upgrade/worker-images.txt`:
 
    ```bash
-   NEW_IMAGE=$(sed -n "s/^ateom-$CLASS: //p" ~/ate-upgrade/worker-images.txt)
+   NEW_IMAGE=$(sed -n "s/^ateworker-$CLASS: //p" ~/ate-upgrade/worker-images.txt)
    ```
 
-   With prebuilt images, take `ateom-$CLASS` from your image repo at the new tag, pinned by digest:
+   With prebuilt images, take `ateworker-$CLASS` from your image repo at the new tag, pinned by digest:
 
    ```bash
-   NEW_IMAGE=$(sed -n 's/^  repo: //p' ~/ate-upgrade/new.yaml)/ateom-$CLASS:$NEW_RELEASE
+   NEW_IMAGE=$(sed -n 's/^  repo: //p' ~/ate-upgrade/new.yaml)/ateworker-$CLASS:$NEW_RELEASE
    NEW_IMAGE=$NEW_IMAGE@$(crane digest $NEW_IMAGE)
    ```
 
-3. Check that `echo "$NS/$WORKERPOOL $CLASS $NEW_IMAGE"` shows `ateom-` plus the pool's CLASS and a full `@sha256:` digest. A bad image still removes the pool's first old worker.
+3. Check that `echo "$NS/$WORKERPOOL $CLASS $NEW_IMAGE"` shows `ateworker-` plus the pool's CLASS and a full `@sha256:` digest. A bad image still removes the pool's first old worker.
 4. Patch the worker pool and wait until ate-controller moves its Deployment to the new image:
 
    ```bash

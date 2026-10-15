@@ -69,8 +69,8 @@ for etcd.
   lifecycle from the sandboxed agent process. It embeds a networking service
   called `atunnel` that handles network traffic for the sandboxed Actor.
   ateworker is Substrate's worker implementation, one binary per sandbox class
-  (`ateworker-gvisor`, `ateworker-microvm`). Internal code still calls it by
-  its former name, ateom.
+  (`ateworker-gvisor`, `ateworker-microvm`). Some internal Go packages still
+  use its former name, ateom.
 
 - **atenet**: the networking stack. Its router resumes suspended Actors on
   demand and routes traffic to the right worker pod.
