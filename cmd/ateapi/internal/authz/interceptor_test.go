@@ -283,8 +283,8 @@ func TestUnaryServerInterceptor_UnregisteredAndHandlerAuthorizedRPCs(t *testing.
 		{"unregistered RPC passes with enforcement off", false, aliceCtx, unregistered, codes.OK},
 		{"RegisterWorker passes with enforcement on", true, context.Background(), ateapipb.WorkerService_RegisterWorker_FullMethodName, codes.OK},
 		{"RequestActorSuspend passes with enforcement on", true, context.Background(), ateapipb.WorkerService_RequestActorSuspend_FullMethodName, codes.OK},
-		{"MintAteomActorCertificate passes with enforcement on", true, context.Background(), ateapipb.WorkerService_MintAteomActorCertificate_FullMethodName, codes.OK},
-		{"MintAteomActorJwt passes with enforcement on", true, context.Background(), ateapipb.WorkerService_MintAteomActorJwt_FullMethodName, codes.OK},
+		{"MintWorkerActorCertificate passes with enforcement on", true, context.Background(), ateapipb.WorkerService_MintWorkerActorCertificate_FullMethodName, codes.OK},
+		{"MintWorkerActorJwt passes with enforcement on", true, context.Background(), ateapipb.WorkerService_MintWorkerActorJwt_FullMethodName, codes.OK},
 		{"RegisterWorker passes with enforcement off", false, context.Background(), ateapipb.WorkerService_RegisterWorker_FullMethodName, codes.OK},
 	}
 	for _, tc := range tests {

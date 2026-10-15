@@ -89,8 +89,8 @@ type fakeWorkerService struct {
 	ateapipb.WorkerServiceClient
 
 	got      []*ateapipb.RegisterWorkerRequest
-	mintGot  []*ateapipb.MintAteomActorCertificateRequest
-	mintResp *ateapipb.MintAteomActorCertificateResponse
+	mintGot  []*ateapipb.MintWorkerActorCertificateRequest
+	mintResp *ateapipb.MintWorkerActorCertificateResponse
 	err      error
 }
 
@@ -102,7 +102,7 @@ func (s *fakeWorkerService) RegisterWorker(_ context.Context, in *ateapipb.Regis
 	return &ateapipb.RegisterWorkerResponse{}, nil
 }
 
-func (s *fakeWorkerService) MintAteomActorCertificate(_ context.Context, in *ateapipb.MintAteomActorCertificateRequest, _ ...grpc.CallOption) (*ateapipb.MintAteomActorCertificateResponse, error) {
+func (s *fakeWorkerService) MintWorkerActorCertificate(_ context.Context, in *ateapipb.MintWorkerActorCertificateRequest, _ ...grpc.CallOption) (*ateapipb.MintWorkerActorCertificateResponse, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -110,7 +110,7 @@ func (s *fakeWorkerService) MintAteomActorCertificate(_ context.Context, in *ate
 	if s.mintResp != nil {
 		return s.mintResp, nil
 	}
-	return &ateapipb.MintAteomActorCertificateResponse{}, nil
+	return &ateapipb.MintWorkerActorCertificateResponse{}, nil
 }
 
 func TestRegisterWorker(t *testing.T) {
@@ -315,7 +315,7 @@ func TestRequestActorSuspendSurfacesRefusal(t *testing.T) {
 func TestMintActorCertificateForwardsToWorkerService(t *testing.T) {
 	wantCerts := [][]byte{[]byte("cert-der-bytes")}
 	workers := &fakeWorkerService{
-		mintResp: &ateapipb.MintAteomActorCertificateResponse{
+		mintResp: &ateapipb.MintWorkerActorCertificateResponse{
 			ActorCertificates: wantCerts,
 		},
 	}
@@ -332,7 +332,7 @@ func TestMintActorCertificateForwardsToWorkerService(t *testing.T) {
 		t.Fatalf("MintActorCertificate() failed: %v", err)
 	}
 
-	want := []*ateapipb.MintAteomActorCertificateRequest{{
+	want := []*ateapipb.MintWorkerActorCertificateRequest{{
 		Actor: &ateapipb.ObjectRef{
 			Atespace: "team-a",
 			Name:     "actor-1",

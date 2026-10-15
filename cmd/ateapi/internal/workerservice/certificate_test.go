@@ -123,7 +123,7 @@ func newTestCAPool(t *testing.T) *localca.ConcretePool {
 	}
 }
 
-func TestMintAteomActorCertificate(t *testing.T) {
+func TestMintWorkerActorCertificate(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	caPool := newTestCAPool(t)
 	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool, "", nil)
@@ -131,7 +131,7 @@ func TestMintAteomActorCertificate(t *testing.T) {
 	csr, key := generateTestCSR(t)
 
 	ctx := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-1"))
-	resp, err := s.MintAteomActorCertificate(ctx, &ateapipb.MintAteomActorCertificateRequest{
+	resp, err := s.MintWorkerActorCertificate(ctx, &ateapipb.MintWorkerActorCertificateRequest{
 		Actor: &ateapipb.ObjectRef{
 			Atespace: "team-a",
 			Name:     "my-actor",
@@ -140,12 +140,12 @@ func TestMintAteomActorCertificate(t *testing.T) {
 		CertificateSigningRequest: csr,
 	})
 	if err != nil {
-		t.Fatalf("MintAteomActorCertificate() failed: %v", err)
+		t.Fatalf("MintWorkerActorCertificate() failed: %v", err)
 	}
 
 	chain := resp.GetActorCertificates()
 	if len(chain) == 0 {
-		t.Fatal("MintAteomActorCertificate() returned empty chain")
+		t.Fatal("MintWorkerActorCertificate() returned empty chain")
 	}
 
 	leaf, err := x509.ParseCertificate(chain[0])
@@ -175,7 +175,7 @@ func TestMintAteomActorCertificate(t *testing.T) {
 	}
 }
 
-func TestMintAteomActorCertificate_Errors(t *testing.T) {
+func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	caPool := newTestCAPool(t)
 	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool, "", nil)
@@ -186,13 +186,13 @@ func TestMintAteomActorCertificate_Errors(t *testing.T) {
 	tests := []struct {
 		name string
 		ctx  context.Context
-		req  *ateapipb.MintAteomActorCertificateRequest
+		req  *ateapipb.MintWorkerActorCertificateRequest
 		want codes.Code
 	}{
 		{
 			name: "unauthenticated",
 			ctx:  ateletauthtest.ContextWith(nil),
-			req: &ateapipb.MintAteomActorCertificateRequest{
+			req: &ateapipb.MintWorkerActorCertificateRequest{
 				Actor:                     &ateapipb.ObjectRef{Atespace: "team-a", Name: "my-actor"},
 				ActorUid:                  actor.GetMetadata().GetUid(),
 				CertificateSigningRequest: csr,
@@ -202,7 +202,7 @@ func TestMintAteomActorCertificate_Errors(t *testing.T) {
 		{
 			name: "missing actor",
 			ctx:  authed,
-			req: &ateapipb.MintAteomActorCertificateRequest{
+			req: &ateapipb.MintWorkerActorCertificateRequest{
 				ActorUid:                  actor.GetMetadata().GetUid(),
 				CertificateSigningRequest: csr,
 			},
@@ -211,7 +211,7 @@ func TestMintAteomActorCertificate_Errors(t *testing.T) {
 		{
 			name: "missing actor uid",
 			ctx:  authed,
-			req: &ateapipb.MintAteomActorCertificateRequest{
+			req: &ateapipb.MintWorkerActorCertificateRequest{
 				Actor:                     &ateapipb.ObjectRef{Atespace: "team-a", Name: "my-actor"},
 				CertificateSigningRequest: csr,
 			},
@@ -220,7 +220,7 @@ func TestMintAteomActorCertificate_Errors(t *testing.T) {
 		{
 			name: "missing csr",
 			ctx:  authed,
-			req: &ateapipb.MintAteomActorCertificateRequest{
+			req: &ateapipb.MintWorkerActorCertificateRequest{
 				Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "my-actor"},
 				ActorUid: actor.GetMetadata().GetUid(),
 			},
@@ -229,7 +229,7 @@ func TestMintAteomActorCertificate_Errors(t *testing.T) {
 		{
 			name: "actor not found",
 			ctx:  authed,
-			req: &ateapipb.MintAteomActorCertificateRequest{
+			req: &ateapipb.MintWorkerActorCertificateRequest{
 				Actor:                     &ateapipb.ObjectRef{Atespace: "team-a", Name: "nonexistent"},
 				ActorUid:                  actor.GetMetadata().GetUid(),
 				CertificateSigningRequest: csr,
@@ -239,7 +239,7 @@ func TestMintAteomActorCertificate_Errors(t *testing.T) {
 		{
 			name: "actor uid mismatch",
 			ctx:  authed,
-			req: &ateapipb.MintAteomActorCertificateRequest{
+			req: &ateapipb.MintWorkerActorCertificateRequest{
 				Actor:                     &ateapipb.ObjectRef{Atespace: "team-a", Name: "my-actor"},
 				ActorUid:                  "00000000-0000-0000-0000-000000000000",
 				CertificateSigningRequest: csr,
@@ -250,7 +250,7 @@ func TestMintAteomActorCertificate_Errors(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := s.MintAteomActorCertificate(tc.ctx, tc.req)
+			_, err := s.MintWorkerActorCertificate(tc.ctx, tc.req)
 			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("code = %v (err %v), want %v", got, err, tc.want)
 			}

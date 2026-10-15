@@ -261,12 +261,12 @@ func TestHerderWarnsOnlyWhenWriteOutlastsANonzeroDelay(t *testing.T) {
 // recordingMinter records every mint, as ate-api-server's WorkerService.
 type recordingMinter struct {
 	mu    sync.Mutex
-	reqs  []*ateapipb.MintAteomActorCertificateRequest
+	reqs  []*ateapipb.MintWorkerActorCertificateRequest
 	err   error
 	delay time.Duration
 }
 
-func (m *recordingMinter) MintAteomActorCertificate(_ context.Context, in *ateapipb.MintAteomActorCertificateRequest, _ ...grpc.CallOption) (*ateapipb.MintAteomActorCertificateResponse, error) {
+func (m *recordingMinter) MintWorkerActorCertificate(_ context.Context, in *ateapipb.MintWorkerActorCertificateRequest, _ ...grpc.CallOption) (*ateapipb.MintWorkerActorCertificateResponse, error) {
 	if m.delay > 0 {
 		time.Sleep(m.delay)
 	}
@@ -276,10 +276,10 @@ func (m *recordingMinter) MintAteomActorCertificate(_ context.Context, in *ateap
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &ateapipb.MintAteomActorCertificateResponse{ActorCertificates: [][]byte{[]byte("leaf")}}, nil
+	return &ateapipb.MintWorkerActorCertificateResponse{ActorCertificates: [][]byte{[]byte("leaf")}}, nil
 }
 
-func (m *recordingMinter) mints() []*ateapipb.MintAteomActorCertificateRequest {
+func (m *recordingMinter) mints() []*ateapipb.MintWorkerActorCertificateRequest {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return slices.Clone(m.reqs)

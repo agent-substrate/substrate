@@ -1929,7 +1929,7 @@ message MintActorJwtResponse {
   //
   // The subject and claim name say the token speaks for the actor itself.
   // A token minted for a Substrate component acting on the actor's behalf
-  // (WorkerService.MintAteomActorJwt) uses `ateom-for-actor` in both places
+  // (WorkerService.MintWorkerActorJwt) uses `ateom-for-actor` in both places
   // instead, so a relying party can grant the two different access.
   string actor_jwt = 1 [ debug_redact = true ];
 
@@ -2531,19 +2531,19 @@ service WorkerService {
   // on behalf of a particular actor.
   //
   // SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
-  rpc MintAteomActorCertificate(MintAteomActorCertificateRequest) returns (MintAteomActorCertificateResponse);
+  rpc MintWorkerActorCertificate(MintWorkerActorCertificateRequest) returns (MintWorkerActorCertificateResponse);
 
-  // MintAteomActorJwt creates a Substrate-issued JWT that asserts an ateom
+  // MintWorkerActorJwt creates a Substrate-issued JWT that asserts an ateom
   // acting on behalf of a particular actor: the JWT counterpart of
-  // MintAteomActorCertificate. atelet calls it with its own client
+  // MintWorkerActorCertificate. atelet calls it with its own client
   // certificate and hands the JWT to node-side plugins, which exchange it for
   // credentials scoped to that actor.
   //
   // The token speaks for the ateom, not the actor: its subject is
   // `ateom-for-actor/<atespace>/<name>` and its claims sit under
-  // `ateom-for-actor.ate.dev`, see MintAteomActorJwtResponse. The lifetime is
+  // `ateom-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
   // fixed at one hour.
-  rpc MintAteomActorJwt(MintAteomActorJwtRequest) returns (MintAteomActorJwtResponse);
+  rpc MintWorkerActorJwt(MintWorkerActorJwtRequest) returns (MintWorkerActorJwtResponse);
 
   // RequestActorSuspend asks the control plane to suspend an Actor that the
   // calling Worker hosts. Only the Worker can observe what makes an Actor
@@ -2617,8 +2617,8 @@ message RegisterWorkerResponse {
   Worker worker = 1;
 }
 
-// Request message for MintAteomActorCertificate.
-message MintAteomActorCertificateRequest {
+// Request message for MintWorkerActorCertificate.
+message MintWorkerActorCertificateRequest {
   // The actor for which the certificate should be issued.
   //
   // Must be a valid actor that currently exists according to the actor store.
@@ -2643,16 +2643,16 @@ message MintAteomActorCertificateRequest {
   bytes certificate_signing_request = 3;
 }
 
-// Response message for MintAteomActorCertificate.
-message MintAteomActorCertificateResponse {
+// Response message for MintWorkerActorCertificate.
+message MintWorkerActorCertificateResponse {
   // Response contains a list of DER encoded certificates. The first entry is the
   // leaf certificate, and any remaining entries are intermediates in
   // leaf-to-root order.
   repeated bytes actor_certificates = 1;
 }
 
-// Request message for MintAteomActorJwt.
-message MintAteomActorJwtRequest {
+// Request message for MintWorkerActorJwt.
+message MintWorkerActorJwtRequest {
   // The actor for which the JWT should be issued.
   //
   // Must be a valid actor that currently exists according to the actor store.
@@ -2679,8 +2679,8 @@ message MintAteomActorJwtRequest {
   repeated string audiences = 3;
 }
 
-// Response message for MintAteomActorJwt.
-message MintAteomActorJwtResponse {
+// Response message for MintWorkerActorJwt.
+message MintWorkerActorJwtResponse {
   // The signed JWT. Its claims are those described on
   // MintActorJwtResponse.actor_jwt, except that it speaks for an ateom
   // acting on behalf of the actor rather than for the actor itself:

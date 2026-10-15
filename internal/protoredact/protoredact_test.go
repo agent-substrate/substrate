@@ -417,7 +417,7 @@ func TestDebugRedactFieldsArePinned(t *testing.T) {
 	want := map[string]bool{
 		"ateapi.EnvVar.value":                            true,
 		"ateapi.MintActorJwtResponse.actor_jwt":          true,
-		"ateapi.MintAteomActorJwtResponse.actor_jwt":     true,
+		"ateapi.MintWorkerActorJwtResponse.actor_jwt":    true,
 		"atelet.AssetFile.url":                           true,
 		"atelet.EnvEntry.value":                          true,
 		"ateworker.ContainerSpec.env":                    true,

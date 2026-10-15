@@ -54,7 +54,7 @@ func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *atel
 	// requested actor?  ate-api-server will further check that we (the atelet)
 	// are allowed to request a certificate for the actor.
 
-	resp, err := b.workers.MintAteomActorCertificate(ctx, &ateapipb.MintAteomActorCertificateRequest{
+	resp, err := b.workers.MintWorkerActorCertificate(ctx, &ateapipb.MintWorkerActorCertificateRequest{
 		Actor: &ateapipb.ObjectRef{
 			Atespace: req.GetActorAtespace(),
 			Name:     req.GetActorName(),

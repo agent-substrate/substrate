@@ -32,10 +32,10 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// MintAteomActorCertificate mints a Substrate-issued SPIFFE certificate that asserts
+// MintWorkerActorCertificate mints a Substrate-issued SPIFFE certificate that asserts
 // an ateom acting on behalf of a particular actor.
-func (s *Server) MintAteomActorCertificate(ctx context.Context, req *ateapipb.MintAteomActorCertificateRequest) (*ateapipb.MintAteomActorCertificateResponse, error) {
-	if errs := apivalidation.ValidateMintAteomActorCertificateRequest(ctx, req); len(errs) > 0 {
+func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapipb.MintWorkerActorCertificateRequest) (*ateapipb.MintWorkerActorCertificateResponse, error) {
+	if errs := apivalidation.ValidateMintWorkerActorCertificateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 
@@ -105,7 +105,7 @@ func (s *Server) MintAteomActorCertificate(ctx context.Context, req *ateapipb.Mi
 		return nil, fmt.Errorf("while signing certificate: %w", err)
 	}
 
-	return &ateapipb.MintAteomActorCertificateResponse{
+	return &ateapipb.MintWorkerActorCertificateResponse{
 		ActorCertificates: chain,
 	}, nil
 }

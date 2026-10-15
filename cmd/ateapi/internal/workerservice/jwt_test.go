@@ -61,19 +61,19 @@ func decodeJWTClaims(t *testing.T, token string) actoridjwt.WireClaims {
 	return claims
 }
 
-func TestMintAteomActorJwt(t *testing.T) {
+func TestMintWorkerActorJwt(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, testActorJWTIssuer, newTestJWTPool(t))
 
 	ctx := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-1"))
 	before := time.Now().Truncate(time.Second)
-	resp, err := s.MintAteomActorJwt(ctx, &ateapipb.MintAteomActorJwtRequest{
+	resp, err := s.MintWorkerActorJwt(ctx, &ateapipb.MintWorkerActorJwtRequest{
 		Actor:     &ateapipb.ObjectRef{Atespace: "team-a", Name: "my-actor"},
 		ActorUid:  actor.GetMetadata().GetUid(),
 		Audiences: []string{"snapshot-plugin"},
 	})
 	if err != nil {
-		t.Fatalf("MintAteomActorJwt() failed: %v", err)
+		t.Fatalf("MintWorkerActorJwt() failed: %v", err)
 	}
 
 	claims := decodeJWTClaims(t, resp.GetActorJwt())
@@ -123,13 +123,13 @@ func pausedStatus(state ateapipb.ActorState, node string) *ateapipb.ActorStatus 
 	}
 }
 
-func TestMintAteomActorJwt_Errors(t *testing.T) {
+func TestMintWorkerActorJwt_Errors(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, testActorJWTIssuer, newTestJWTPool(t))
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-1"))
 
-	valid := func() *ateapipb.MintAteomActorJwtRequest {
-		return &ateapipb.MintAteomActorJwtRequest{
+	valid := func() *ateapipb.MintWorkerActorJwtRequest {
+		return &ateapipb.MintWorkerActorJwtRequest{
 			Actor:     &ateapipb.ObjectRef{Atespace: "team-a", Name: "my-actor"},
 			ActorUid:  actor.GetMetadata().GetUid(),
 			Audiences: []string{"snapshot-plugin"},
@@ -154,7 +154,7 @@ func TestMintAteomActorJwt_Errors(t *testing.T) {
 	tests := []struct {
 		name   string
 		ctx    context.Context
-		mutate func(*ateapipb.MintAteomActorJwtRequest)
+		mutate func(*ateapipb.MintWorkerActorJwtRequest)
 		// status, when set, replaces the actor's status for the case.
 		status *ateapipb.ActorStatus
 		// assignments, when set, replaces the store's worker assignments
@@ -278,25 +278,25 @@ func TestMintAteomActorJwt_Errors(t *testing.T) {
 		{
 			name:   "missing actor",
 			ctx:    authed,
-			mutate: func(r *ateapipb.MintAteomActorJwtRequest) { r.Actor = nil },
+			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.Actor = nil },
 			want:   codes.InvalidArgument,
 		},
 		{
 			name:   "missing actor uid",
 			ctx:    authed,
-			mutate: func(r *ateapipb.MintAteomActorJwtRequest) { r.ActorUid = "" },
+			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.ActorUid = "" },
 			want:   codes.InvalidArgument,
 		},
 		{
 			name:   "missing audiences",
 			ctx:    authed,
-			mutate: func(r *ateapipb.MintAteomActorJwtRequest) { r.Audiences = nil },
+			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.Audiences = nil },
 			want:   codes.InvalidArgument,
 		},
 		{
 			name:   "empty audience",
 			ctx:    authed,
-			mutate: func(r *ateapipb.MintAteomActorJwtRequest) { r.Audiences = []string{""} },
+			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.Audiences = []string{""} },
 			want:   codes.InvalidArgument,
 		},
 		{
@@ -310,7 +310,7 @@ func TestMintAteomActorJwt_Errors(t *testing.T) {
 			// check answering Aborted: the node check runs first.
 			name:   "actor hosted on another node, stale uid",
 			ctx:    ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-2")),
-			mutate: func(r *ateapipb.MintAteomActorJwtRequest) { r.ActorUid = "7d1c0b2a-9e4f-4c3d-8a6b-5f2e1d0c9b8a" },
+			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.ActorUid = "7d1c0b2a-9e4f-4c3d-8a6b-5f2e1d0c9b8a" },
 			want:   codes.NotFound,
 		},
 		{
@@ -373,15 +373,15 @@ func TestMintAteomActorJwt_Errors(t *testing.T) {
 		{
 			name:   "actor not found",
 			ctx:    authed,
-			mutate: func(r *ateapipb.MintAteomActorJwtRequest) { r.Actor.Name = "nonexistent" },
+			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.Actor.Name = "nonexistent" },
 			want:   codes.NotFound,
 		},
 		{
 			// A recreated actor has a new UID, and a token must not be minted
-			// for the old incarnation. Aborted, as MintAteomActorCertificate answers.
+			// for the old incarnation. Aborted, as MintWorkerActorCertificate answers.
 			name:   "stale actor uid",
 			ctx:    authed,
-			mutate: func(r *ateapipb.MintAteomActorJwtRequest) { r.ActorUid = "7d1c0b2a-9e4f-4c3d-8a6b-5f2e1d0c9b8a" },
+			mutate: func(r *ateapipb.MintWorkerActorJwtRequest) { r.ActorUid = "7d1c0b2a-9e4f-4c3d-8a6b-5f2e1d0c9b8a" },
 			want:   codes.Aborted,
 		},
 	}
@@ -402,9 +402,9 @@ func TestMintAteomActorJwt_Errors(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(req)
 			}
-			_, err := s.MintAteomActorJwt(tc.ctx, req)
+			_, err := s.MintWorkerActorJwt(tc.ctx, req)
 			if got := apierror.Code(err); got != tc.want {
-				t.Errorf("MintAteomActorJwt() code = %v, want %v (err: %v)", got, tc.want, err)
+				t.Errorf("MintWorkerActorJwt() code = %v, want %v (err: %v)", got, tc.want, err)
 			}
 		})
 	}

@@ -44,7 +44,7 @@ type objectWriter interface {
 
 // actorCertMinter is the part of ateapipb.WorkerServiceClient the herder uses.
 type actorCertMinter interface {
-	MintAteomActorCertificate(ctx context.Context, in *ateapipb.MintAteomActorCertificateRequest, opts ...grpc.CallOption) (*ateapipb.MintAteomActorCertificateResponse, error)
+	MintWorkerActorCertificate(ctx context.Context, in *ateapipb.MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*ateapipb.MintWorkerActorCertificateResponse, error)
 }
 
 // delays is how long each AteomHerder call takes before it succeeds: the
@@ -99,7 +99,7 @@ func (h *herder) mintActorCertificate(ctx context.Context, atespace, name, uid s
 	if h.minter == nil || gateway == nil {
 		return nil
 	}
-	if _, err := h.minter.MintAteomActorCertificate(ctx, &ateapipb.MintAteomActorCertificateRequest{
+	if _, err := h.minter.MintWorkerActorCertificate(ctx, &ateapipb.MintWorkerActorCertificateRequest{
 		Actor:                     &ateapipb.ObjectRef{Atespace: atespace, Name: name},
 		ActorUid:                  uid,
 		CertificateSigningRequest: h.csr,

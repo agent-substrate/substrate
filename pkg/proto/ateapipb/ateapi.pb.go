@@ -5720,7 +5720,7 @@ type MintActorJwtResponse struct {
 	//
 	// The subject and claim name say the token speaks for the actor itself.
 	// A token minted for a Substrate component acting on the actor's behalf
-	// (WorkerService.MintAteomActorJwt) uses `ateom-for-actor` in both places
+	// (WorkerService.MintWorkerActorJwt) uses `ateom-for-actor` in both places
 	// instead, so a relying party can grant the two different access.
 	ActorJwt string `protobuf:"bytes,1,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
 	// expire_time is when actor_jwt expires. Equal to its exp claim.
@@ -7956,8 +7956,8 @@ func (x *RegisterWorkerResponse) GetWorker() *Worker {
 	return nil
 }
 
-// Request message for MintAteomActorCertificate.
-type MintAteomActorCertificateRequest struct {
+// Request message for MintWorkerActorCertificate.
+type MintWorkerActorCertificateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor for which the certificate should be issued.
 	//
@@ -7983,20 +7983,20 @@ type MintAteomActorCertificateRequest struct {
 	sizeCache                 protoimpl.SizeCache
 }
 
-func (x *MintAteomActorCertificateRequest) Reset() {
-	*x = MintAteomActorCertificateRequest{}
+func (x *MintWorkerActorCertificateRequest) Reset() {
+	*x = MintWorkerActorCertificateRequest{}
 	mi := &file_ateapi_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MintAteomActorCertificateRequest) String() string {
+func (x *MintWorkerActorCertificateRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MintAteomActorCertificateRequest) ProtoMessage() {}
+func (*MintWorkerActorCertificateRequest) ProtoMessage() {}
 
-func (x *MintAteomActorCertificateRequest) ProtoReflect() protoreflect.Message {
+func (x *MintWorkerActorCertificateRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -8008,34 +8008,34 @@ func (x *MintAteomActorCertificateRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MintAteomActorCertificateRequest.ProtoReflect.Descriptor instead.
-func (*MintAteomActorCertificateRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use MintWorkerActorCertificateRequest.ProtoReflect.Descriptor instead.
+func (*MintWorkerActorCertificateRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{111}
 }
 
-func (x *MintAteomActorCertificateRequest) GetActor() *ObjectRef {
+func (x *MintWorkerActorCertificateRequest) GetActor() *ObjectRef {
 	if x != nil {
 		return x.Actor
 	}
 	return nil
 }
 
-func (x *MintAteomActorCertificateRequest) GetActorUid() string {
+func (x *MintWorkerActorCertificateRequest) GetActorUid() string {
 	if x != nil {
 		return x.ActorUid
 	}
 	return ""
 }
 
-func (x *MintAteomActorCertificateRequest) GetCertificateSigningRequest() []byte {
+func (x *MintWorkerActorCertificateRequest) GetCertificateSigningRequest() []byte {
 	if x != nil {
 		return x.CertificateSigningRequest
 	}
 	return nil
 }
 
-// Response message for MintAteomActorCertificate.
-type MintAteomActorCertificateResponse struct {
+// Response message for MintWorkerActorCertificate.
+type MintWorkerActorCertificateResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Response contains a list of DER encoded certificates. The first entry is the
 	// leaf certificate, and any remaining entries are intermediates in
@@ -8045,20 +8045,20 @@ type MintAteomActorCertificateResponse struct {
 	sizeCache         protoimpl.SizeCache
 }
 
-func (x *MintAteomActorCertificateResponse) Reset() {
-	*x = MintAteomActorCertificateResponse{}
+func (x *MintWorkerActorCertificateResponse) Reset() {
+	*x = MintWorkerActorCertificateResponse{}
 	mi := &file_ateapi_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MintAteomActorCertificateResponse) String() string {
+func (x *MintWorkerActorCertificateResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MintAteomActorCertificateResponse) ProtoMessage() {}
+func (*MintWorkerActorCertificateResponse) ProtoMessage() {}
 
-func (x *MintAteomActorCertificateResponse) ProtoReflect() protoreflect.Message {
+func (x *MintWorkerActorCertificateResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -8070,20 +8070,20 @@ func (x *MintAteomActorCertificateResponse) ProtoReflect() protoreflect.Message 
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MintAteomActorCertificateResponse.ProtoReflect.Descriptor instead.
-func (*MintAteomActorCertificateResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use MintWorkerActorCertificateResponse.ProtoReflect.Descriptor instead.
+func (*MintWorkerActorCertificateResponse) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{112}
 }
 
-func (x *MintAteomActorCertificateResponse) GetActorCertificates() [][]byte {
+func (x *MintWorkerActorCertificateResponse) GetActorCertificates() [][]byte {
 	if x != nil {
 		return x.ActorCertificates
 	}
 	return nil
 }
 
-// Request message for MintAteomActorJwt.
-type MintAteomActorJwtRequest struct {
+// Request message for MintWorkerActorJwt.
+type MintWorkerActorJwtRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor for which the JWT should be issued.
 	//
@@ -8111,20 +8111,20 @@ type MintAteomActorJwtRequest struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *MintAteomActorJwtRequest) Reset() {
-	*x = MintAteomActorJwtRequest{}
+func (x *MintWorkerActorJwtRequest) Reset() {
+	*x = MintWorkerActorJwtRequest{}
 	mi := &file_ateapi_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MintAteomActorJwtRequest) String() string {
+func (x *MintWorkerActorJwtRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MintAteomActorJwtRequest) ProtoMessage() {}
+func (*MintWorkerActorJwtRequest) ProtoMessage() {}
 
-func (x *MintAteomActorJwtRequest) ProtoReflect() protoreflect.Message {
+func (x *MintWorkerActorJwtRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -8136,34 +8136,34 @@ func (x *MintAteomActorJwtRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MintAteomActorJwtRequest.ProtoReflect.Descriptor instead.
-func (*MintAteomActorJwtRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use MintWorkerActorJwtRequest.ProtoReflect.Descriptor instead.
+func (*MintWorkerActorJwtRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{113}
 }
 
-func (x *MintAteomActorJwtRequest) GetActor() *ObjectRef {
+func (x *MintWorkerActorJwtRequest) GetActor() *ObjectRef {
 	if x != nil {
 		return x.Actor
 	}
 	return nil
 }
 
-func (x *MintAteomActorJwtRequest) GetActorUid() string {
+func (x *MintWorkerActorJwtRequest) GetActorUid() string {
 	if x != nil {
 		return x.ActorUid
 	}
 	return ""
 }
 
-func (x *MintAteomActorJwtRequest) GetAudiences() []string {
+func (x *MintWorkerActorJwtRequest) GetAudiences() []string {
 	if x != nil {
 		return x.Audiences
 	}
 	return nil
 }
 
-// Response message for MintAteomActorJwt.
-type MintAteomActorJwtResponse struct {
+// Response message for MintWorkerActorJwt.
+type MintWorkerActorJwtResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The signed JWT. Its claims are those described on
 	// MintActorJwtResponse.actor_jwt, except that it speaks for an ateom
@@ -8182,20 +8182,20 @@ type MintAteomActorJwtResponse struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *MintAteomActorJwtResponse) Reset() {
-	*x = MintAteomActorJwtResponse{}
+func (x *MintWorkerActorJwtResponse) Reset() {
+	*x = MintWorkerActorJwtResponse{}
 	mi := &file_ateapi_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MintAteomActorJwtResponse) String() string {
+func (x *MintWorkerActorJwtResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MintAteomActorJwtResponse) ProtoMessage() {}
+func (*MintWorkerActorJwtResponse) ProtoMessage() {}
 
-func (x *MintAteomActorJwtResponse) ProtoReflect() protoreflect.Message {
+func (x *MintWorkerActorJwtResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -8207,19 +8207,19 @@ func (x *MintAteomActorJwtResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MintAteomActorJwtResponse.ProtoReflect.Descriptor instead.
-func (*MintAteomActorJwtResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use MintWorkerActorJwtResponse.ProtoReflect.Descriptor instead.
+func (*MintWorkerActorJwtResponse) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{114}
 }
 
-func (x *MintAteomActorJwtResponse) GetActorJwt() string {
+func (x *MintWorkerActorJwtResponse) GetActorJwt() string {
 	if x != nil {
 		return x.ActorJwt
 	}
 	return ""
 }
 
-func (x *MintAteomActorJwtResponse) GetExpireTime() *timestamppb.Timestamp {
+func (x *MintWorkerActorJwtResponse) GetExpireTime() *timestamppb.Timestamp {
 	if x != nil {
 		return x.ExpireTime
 	}
@@ -9751,18 +9751,18 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0fdefault_runtime\x18\x03 \x01(\v2\x16.ateapi.SandboxRuntimeR\x0edefaultRuntime\x12G\n" +
 	"\x13restorable_runtimes\x18\x04 \x03(\v2\x16.ateapi.SandboxRuntimeR\x12restorableRuntimes\"@\n" +
 	"\x16RegisterWorkerResponse\x12&\n" +
-	"\x06worker\x18\x01 \x01(\v2\x0e.ateapi.WorkerR\x06worker\"\xa8\x01\n" +
-	" MintAteomActorCertificateRequest\x12'\n" +
+	"\x06worker\x18\x01 \x01(\v2\x0e.ateapi.WorkerR\x06worker\"\xa9\x01\n" +
+	"!MintWorkerActorCertificateRequest\x12'\n" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\x02 \x01(\tR\bactorUid\x12>\n" +
-	"\x1bcertificate_signing_request\x18\x03 \x01(\fR\x19certificateSigningRequest\"R\n" +
-	"!MintAteomActorCertificateResponse\x12-\n" +
-	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"~\n" +
-	"\x18MintAteomActorJwtRequest\x12'\n" +
+	"\x1bcertificate_signing_request\x18\x03 \x01(\fR\x19certificateSigningRequest\"S\n" +
+	"\"MintWorkerActorCertificateResponse\x12-\n" +
+	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\x7f\n" +
+	"\x19MintWorkerActorJwtRequest\x12'\n" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\x02 \x01(\tR\bactorUid\x12\x1c\n" +
-	"\taudiences\x18\x03 \x03(\tR\taudiences\"z\n" +
-	"\x19MintAteomActorJwtResponse\x12 \n" +
+	"\taudiences\x18\x03 \x03(\tR\taudiences\"{\n" +
+	"\x1aMintWorkerActorJwtResponse\x12 \n" +
 	"\tactor_jwt\x18\x01 \x01(\tB\x03\x80\x01\x01R\bactorJwt\x12;\n" +
 	"\vexpire_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"expireTime\"\x8d\x01\n" +
@@ -9964,11 +9964,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x1aUpdateAtespaceAccessPolicy\x12).ateapi.UpdateAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x12\x82\xb5\x18\x0e\n" +
 	"\fAccessPolicy\x12q\n" +
 	"\x1aDeleteAtespaceAccessPolicy\x12).ateapi.DeleteAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x12\x82\xb5\x18\x0e\n" +
-	"\fAccessPolicy2\xfb\x03\n" +
+	"\fAccessPolicy2\x81\x04\n" +
 	"\rWorkerService\x12O\n" +
-	"\x0eRegisterWorker\x12\x1d.ateapi.RegisterWorkerRequest\x1a\x1e.ateapi.RegisterWorkerResponse\x12p\n" +
-	"\x19MintAteomActorCertificate\x12(.ateapi.MintAteomActorCertificateRequest\x1a).ateapi.MintAteomActorCertificateResponse\x12X\n" +
-	"\x11MintAteomActorJwt\x12 .ateapi.MintAteomActorJwtRequest\x1a!.ateapi.MintAteomActorJwtResponse\x12^\n" +
+	"\x0eRegisterWorker\x12\x1d.ateapi.RegisterWorkerRequest\x1a\x1e.ateapi.RegisterWorkerResponse\x12s\n" +
+	"\x1aMintWorkerActorCertificate\x12).ateapi.MintWorkerActorCertificateRequest\x1a*.ateapi.MintWorkerActorCertificateResponse\x12[\n" +
+	"\x12MintWorkerActorJwt\x12!.ateapi.MintWorkerActorJwtRequest\x1a\".ateapi.MintWorkerActorJwtResponse\x12^\n" +
 	"\x13RequestActorSuspend\x12\".ateapi.RequestActorSuspendRequest\x1a#.ateapi.RequestActorSuspendResponse\x12m\n" +
 	"\x18ReportActorSnapshotState\x12'.ateapi.ReportActorSnapshotStateRequest\x1a(.ateapi.ReportActorSnapshotStateResponse:Y\n" +
 	"\bresource\x12\x1f.google.protobuf.MessageOptions\x18І\x03 \x01(\v2\x1a.ateapi.ResourceAnnotationR\bresource:R\n" +
@@ -10109,10 +10109,10 @@ var file_ateapi_proto_goTypes = []any{
 	(*ActorAssignment)(nil),                    // 117: ateapi.ActorAssignment
 	(*RegisterWorkerRequest)(nil),              // 118: ateapi.RegisterWorkerRequest
 	(*RegisterWorkerResponse)(nil),             // 119: ateapi.RegisterWorkerResponse
-	(*MintAteomActorCertificateRequest)(nil),   // 120: ateapi.MintAteomActorCertificateRequest
-	(*MintAteomActorCertificateResponse)(nil),  // 121: ateapi.MintAteomActorCertificateResponse
-	(*MintAteomActorJwtRequest)(nil),           // 122: ateapi.MintAteomActorJwtRequest
-	(*MintAteomActorJwtResponse)(nil),          // 123: ateapi.MintAteomActorJwtResponse
+	(*MintWorkerActorCertificateRequest)(nil),  // 120: ateapi.MintWorkerActorCertificateRequest
+	(*MintWorkerActorCertificateResponse)(nil), // 121: ateapi.MintWorkerActorCertificateResponse
+	(*MintWorkerActorJwtRequest)(nil),          // 122: ateapi.MintWorkerActorJwtRequest
+	(*MintWorkerActorJwtResponse)(nil),         // 123: ateapi.MintWorkerActorJwtResponse
 	(*RequestActorSuspendRequest)(nil),         // 124: ateapi.RequestActorSuspendRequest
 	(*RequestActorSuspendResponse)(nil),        // 125: ateapi.RequestActorSuspendResponse
 	(*ReportActorSnapshotStateRequest)(nil),    // 126: ateapi.ReportActorSnapshotStateRequest
@@ -10290,9 +10290,9 @@ var file_ateapi_proto_depIdxs = []int32{
 	113, // 149: ateapi.RegisterWorkerRequest.default_runtime:type_name -> ateapi.SandboxRuntime
 	113, // 150: ateapi.RegisterWorkerRequest.restorable_runtimes:type_name -> ateapi.SandboxRuntime
 	111, // 151: ateapi.RegisterWorkerResponse.worker:type_name -> ateapi.Worker
-	32,  // 152: ateapi.MintAteomActorCertificateRequest.actor:type_name -> ateapi.ObjectRef
-	32,  // 153: ateapi.MintAteomActorJwtRequest.actor:type_name -> ateapi.ObjectRef
-	144, // 154: ateapi.MintAteomActorJwtResponse.expire_time:type_name -> google.protobuf.Timestamp
+	32,  // 152: ateapi.MintWorkerActorCertificateRequest.actor:type_name -> ateapi.ObjectRef
+	32,  // 153: ateapi.MintWorkerActorJwtRequest.actor:type_name -> ateapi.ObjectRef
+	144, // 154: ateapi.MintWorkerActorJwtResponse.expire_time:type_name -> google.protobuf.Timestamp
 	32,  // 155: ateapi.RequestActorSuspendRequest.worker:type_name -> ateapi.ObjectRef
 	32,  // 156: ateapi.RequestActorSuspendRequest.actor:type_name -> ateapi.ObjectRef
 	15,  // 157: ateapi.RequestActorSuspendResponse.actor:type_name -> ateapi.Actor
@@ -10367,8 +10367,8 @@ var file_ateapi_proto_depIdxs = []int32{
 	137, // 226: ateapi.Control.UpdateAtespaceAccessPolicy:input_type -> ateapi.UpdateAtespaceAccessPolicyRequest
 	138, // 227: ateapi.Control.DeleteAtespaceAccessPolicy:input_type -> ateapi.DeleteAtespaceAccessPolicyRequest
 	118, // 228: ateapi.WorkerService.RegisterWorker:input_type -> ateapi.RegisterWorkerRequest
-	120, // 229: ateapi.WorkerService.MintAteomActorCertificate:input_type -> ateapi.MintAteomActorCertificateRequest
-	122, // 230: ateapi.WorkerService.MintAteomActorJwt:input_type -> ateapi.MintAteomActorJwtRequest
+	120, // 229: ateapi.WorkerService.MintWorkerActorCertificate:input_type -> ateapi.MintWorkerActorCertificateRequest
+	122, // 230: ateapi.WorkerService.MintWorkerActorJwt:input_type -> ateapi.MintWorkerActorJwtRequest
 	124, // 231: ateapi.WorkerService.RequestActorSuspend:input_type -> ateapi.RequestActorSuspendRequest
 	126, // 232: ateapi.WorkerService.ReportActorSnapshotState:input_type -> ateapi.ReportActorSnapshotStateRequest
 	15,  // 233: ateapi.Control.GetActor:output_type -> ateapi.Actor
@@ -10416,8 +10416,8 @@ var file_ateapi_proto_depIdxs = []int32{
 	130, // 275: ateapi.Control.UpdateAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
 	130, // 276: ateapi.Control.DeleteAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
 	119, // 277: ateapi.WorkerService.RegisterWorker:output_type -> ateapi.RegisterWorkerResponse
-	121, // 278: ateapi.WorkerService.MintAteomActorCertificate:output_type -> ateapi.MintAteomActorCertificateResponse
-	123, // 279: ateapi.WorkerService.MintAteomActorJwt:output_type -> ateapi.MintAteomActorJwtResponse
+	121, // 278: ateapi.WorkerService.MintWorkerActorCertificate:output_type -> ateapi.MintWorkerActorCertificateResponse
+	123, // 279: ateapi.WorkerService.MintWorkerActorJwt:output_type -> ateapi.MintWorkerActorJwtResponse
 	125, // 280: ateapi.WorkerService.RequestActorSuspend:output_type -> ateapi.RequestActorSuspendResponse
 	127, // 281: ateapi.WorkerService.ReportActorSnapshotState:output_type -> ateapi.ReportActorSnapshotStateResponse
 	233, // [233:282] is the sub-list for method output_type
