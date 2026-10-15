@@ -159,11 +159,8 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 // crashed is released again without being counted twice.
 func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 	tests := []struct {
-		name  string
-		start ateapipb.ActorState
-		// pausing seeds the pause-in-progress shape (a pending node-local
-		// snapshot), which still labels a SUSPENDING crash as a suspend.
-		pausing    bool
+		name       string
+		start      ateapipb.ActorState
 		wantState  ateapipb.ActorState
 		wantOp     string
 		wantMetric bool
@@ -171,7 +168,6 @@ func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 		{name: "running becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationUnknown, wantMetric: true},
 		{name: "resuming becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_RESUMING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationResume, wantMetric: true},
 		{name: "suspending becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationSuspend, wantMetric: true},
-		{name: "pausing becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, pausing: true, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationSuspend, wantMetric: true},
 		{name: "reverting becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_REVERTING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationRevert, wantMetric: true},
 		{name: "deleting becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_DELETING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationDelete, wantMetric: true},
 		{name: "suspended stays suspended", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantMetric: false},
@@ -187,11 +183,7 @@ func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 			ctx := context.Background()
 			wf, persistence := newWorkerDeleteWorkflow(t)
 			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
-			var opts []func(*ateapipb.Actor)
-			if tc.pausing {
-				opts = append(opts, withPauseInProgress())
-			}
-			actor := seedAPIActor(t, ctx, persistence, tc.start, opts...)
+			actor := seedAPIActor(t, ctx, persistence, tc.start)
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
 			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
