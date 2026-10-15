@@ -294,16 +294,22 @@ func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 	}
 	if servePull {
 		registerer := promclient.Registerer(reg)
+		var own *promclient.Registry
 		if push {
-			// own holds the instruments' families too, only so the bridge can
-			// tell which of reg's families are not its to push.
-			own := promclient.NewRegistry()
-			registerer = teeRegisterer{reg, own}
-			bridge = skipFamilies{inner: bridge, skip: own}
+			// own holds only the instruments, so the bridge can tell which of
+			// reg's families are not its to push. reg serves own as well.
+			own = promclient.NewRegistry()
+			registerer = own
 		}
 		promReader, err := prometheus.New(prometheus.WithRegisterer(registerer))
 		if err != nil {
 			return nil, false, fmt.Errorf("create Prometheus metric exporter: %w", err)
+		}
+		if own != nil {
+			if err := reg.Register(own); err != nil {
+				return nil, false, fmt.Errorf("serve the OTel instruments from the registry: %w", err)
+			}
+			bridge = skipFamilies{inner: bridge, skip: own}
 		}
 		readers = append(readers, promReader)
 	}
@@ -320,35 +326,9 @@ func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 	return mp, servePull, nil
 }
 
-// teeRegisterer registers each collector on both registries.
-type teeRegisterer [2]promclient.Registerer
-
-func (t teeRegisterer) Register(c promclient.Collector) error {
-	if err := t[0].Register(c); err != nil {
-		return err
-	}
-	if err := t[1].Register(c); err != nil {
-		t[0].Unregister(c)
-		return err
-	}
-	return nil
-}
-
-func (t teeRegisterer) MustRegister(cs ...promclient.Collector) {
-	for _, c := range cs {
-		if err := t.Register(c); err != nil {
-			panic(err)
-		}
-	}
-}
-
-func (t teeRegisterer) Unregister(c promclient.Collector) bool {
-	a, b := t[0].Unregister(c), t[1].Unregister(c)
-	return a && b
-}
-
 // skipFamilies drops the metrics of inner named like a family skip gathers. A
-// failed gather drops the whole batch rather than risk pushing a metric twice.
+// failed gather drops inner's batch rather than risk pushing a metric twice,
+// and goes to the OTel error handler so the other metrics still push.
 type skipFamilies struct {
 	inner sdkmetric.Producer
 	skip  promclient.Gatherer
@@ -359,7 +339,8 @@ func (p skipFamilies) Produce(ctx context.Context) ([]metricdata.ScopeMetrics, e
 	// Gathered after inner, so skip covers every family inner saw.
 	families, gerr := p.skip.Gather()
 	if gerr != nil {
-		return nil, fmt.Errorf("gather the families to skip: %w", gerr)
+		otel.Handle(fmt.Errorf("gather the families to skip: %w", gerr))
+		return nil, nil
 	}
 	skip := make(map[string]bool, len(families))
 	for _, f := range families {

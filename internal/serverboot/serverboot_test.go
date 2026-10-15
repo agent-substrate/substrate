@@ -647,8 +647,8 @@ func TestInitMetricsBridgedPushesEachMetricOnce(t *testing.T) {
 	}
 }
 
-// A skip list that cannot be gathered drops the batch, so nothing is pushed
-// twice.
+// A skip list that cannot be gathered drops the batch without failing the
+// collection, so nothing is pushed twice and the other metrics still push.
 func TestSkipFamiliesDropsBatchOnGatherError(t *testing.T) {
 	inner := producerFunc(func(context.Context) ([]metricdata.ScopeMetrics, error) {
 		return []metricdata.ScopeMetrics{{Metrics: []metricdata.Metrics{{Name: "kept"}}}}, nil
@@ -656,8 +656,8 @@ func TestSkipFamiliesDropsBatchOnGatherError(t *testing.T) {
 	failing := prometheus.NewRegistry()
 	failing.MustRegister(failingCollector{})
 	scopes, err := skipFamilies{inner: inner, skip: failing}.Produce(t.Context())
-	if err == nil || scopes != nil {
-		t.Errorf("Produce = %v, %v; want no metrics and an error", scopes, err)
+	if err != nil || scopes != nil {
+		t.Errorf("Produce = %v, %v; want no metrics and no error", scopes, err)
 	}
 }
 
