@@ -305,6 +305,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 		Env:          []string{"GREETING=hello", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 		Capabilities: []string{"CAP_AUDIT_WRITE", "CAP_NET_ADMIN", "CAP_NET_BIND_SERVICE"},
 		Resources:    &ateworkerpb.ResourceLimits{MemoryBytes: 1 << 30, CpuMillis: 500},
+		Cwd:          "/",
 	}}
 	if diff := cmp.Diff(want, got.containers, protocmp.Transform()); diff != "" {
 		t.Errorf("prepareOCIBundles container specs mismatch (-want +got):\n%s", diff)
@@ -344,6 +345,32 @@ func TestPrepareOCIBundlesResolvesUsers(t *testing.T) {
 	spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "app", Image: unresolvable}}}
 	if _, err := s.prepareOCIBundles(t.Context(), "actor-uid-2", resources.ActorRef{}, spec, ""); err == nil {
 		t.Error("prepareOCIBundles succeeded with a USER the image has no passwd entry for, want an error")
+	}
+}
+
+// TestPrepareOCIBundlesStartsInTheImageWorkdir pins that a container starts in
+// its image's WORKDIR, created through the overlay when the image lacks it.
+func TestPrepareOCIBundlesStartsInTheImageWorkdir(t *testing.T) {
+	useTempNodeDirs(t)
+	host := imageVolumeTestRegistry(t)
+	image := pushTestImageWithConfig(t, host+"/app:v1", v1.Config{Cmd: []string{"/bin/app"}, WorkingDir: "/home/nonroot"})
+	spec := &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "app", Image: image}}}
+
+	const actorUID = "actor-uid-1"
+	s := &Atelet{imageCache: newImageVolumeStore(t)}
+	got, err := s.prepareOCIBundles(t.Context(), actorUID, resources.ActorRef{}, spec, "")
+	if err != nil {
+		t.Fatalf("prepareOCIBundles: %v", err)
+	}
+	if cwd := got.containers[0].GetCwd(); cwd != "/home/nonroot" {
+		t.Errorf("Cwd = %q, want /home/nonroot", cwd)
+	}
+	overlay, err := imagecache.ReadSpec(ateletpath.OCIBundlePath(actorUID, "app"))
+	if err != nil {
+		t.Fatalf("imagecache.ReadSpec: %v", err)
+	}
+	if !slices.Contains(overlay.ExtraDirs, "/home/nonroot") {
+		t.Errorf("ExtraDirs = %v, want the working directory", overlay.ExtraDirs)
 	}
 }
 
