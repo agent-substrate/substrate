@@ -62,7 +62,40 @@ BUCKET_NAME=your-substrate-bucket \
 
 This creates the `claude-multiplex-demo` namespace and its 2-pod `WorkerPool`, then the `claude-multiplex-demo` atespace and three actor templates in it named `agent-luna`, `agent-mars`, `agent-orion`, and waits for each template's golden snapshot. Under the hood, the deploy function builds the workload image with `docker buildx`, pushes it to `${KO_DOCKER_REPO}/claude-multiplex-demo-workload`, resolves the pushed sha256 digest, and substitutes the digest-pinned reference plus `ANTHROPIC_API_KEY` and `BUCKET_NAME` into the agent templates at apply time.
 
-### 2. Start the dashboard
+### 2. Create the agents, allow their egress, and resume them
+
+The deploy step creates the templates; the agents themselves are actors you create by name. Each agent needs three things, in this order: an actor, an egress policy, and a resume.
+
+```bash
+for a in luna mars orion; do
+  # 1. Create the actor from its template. It starts SUSPENDED and owns no pod.
+  kubectl ate create actor agent-$a -a claude-multiplex-demo --template agent-$a
+
+  # 2. Allow the Anthropic API before resuming. Every actor starts without an
+  #    egress policy, and the egress gateway denies all traffic from an actor
+  #    with no policy — without this, every `claude --print` tick fails with
+  #    `API Error: 403 egress denied`. The gateway also caches a missing policy
+  #    as deny for 10s, so a policy created after the resume can leave the
+  #    first ticks failing; creating it first avoids that window.
+  cat <<'POLICY' | kubectl ate create egress-policy agent-$a -a claude-multiplex-demo -f -
+rules:
+- https:
+    hostnames: ["api.anthropic.com"]
+POLICY
+
+  # 3. Resume the agent. Nothing in this demo resumes it for you: no traffic
+  #    goes through atenet-router (see the note near the top), and the
+  #    dashboard only reads state. A suspended agent stays suspended until
+  #    something resumes it.
+  kubectl ate resume actor agent-$a -a claude-multiplex-demo
+done
+```
+
+The dashboard's "Give a task" button does not create actors, policies, or resumes; it only drives whatever running actors exist, so the step above is needed before the demo can run.
+
+One more thing the step above does not cover: the gateway terminates the TLS to `api.anthropic.com` (an `https` rule means interception), and Claude Code (Node.js) rejects the gateway's certificate unless the actor trusts it. On a cluster where the API is reached through a plain-HTTP proxy instead of TLS, this does not apply. See [`docs/egress-trust-bundle.md`](../../docs/egress-trust-bundle.md) for wiring a `trustBundle` volume and `NODE_EXTRA_CA_CERTS` into the agent templates.
+
+### 3. Start the dashboard
 
 The dashboard is a small Go HTTP server that reads worker and actor state from the substrate **ateapi** gRPC service (mirroring the pattern in `demos/sandbox/client/main.go`) and pod logs from the Kubernetes API via [`client-go`](https://github.com/kubernetes/client-go). No `kubectl` process invocations.
 
@@ -93,7 +126,7 @@ Env vars:
 
 `GET /healthz` reports whether the kube client picked up a cluster context (`logs:true|false`) — useful for quick smoke-tests after starting the server.
 
-### 3. Drive the demo
+### 4. Drive the demo
 
 Click "Give a task". The UI picks a random idle agent and creates a task for it. Watch:
 
