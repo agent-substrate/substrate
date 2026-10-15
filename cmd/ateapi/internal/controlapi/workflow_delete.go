@@ -72,7 +72,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	}
 
 	var atletTerminatedErr, volumesDetachedErr error
-	if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationDelete); err != nil {
+	if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationDelete, anyState); err != nil {
 		atletTerminatedErr = fmt.Errorf("while terminating atelet: %w", err)
 		errs = append(errs, atletTerminatedErr)
 	}
@@ -122,8 +122,21 @@ func (w *ActorWorkflow) loadActorForDelete(ctx context.Context, actorRef resourc
 	return actor, nil
 }
 
+// isWorkerUnavailable reports whether the named worker is known to be unavailable
+// or no longer in the store.
+func (w *ActorWorkflow) isWorkerUnavailable(ctx context.Context, workerName string) bool {
+	if workerName == "" {
+		return false
+	}
+	worker, err := w.store.GetWorker(ctx, workerName)
+	if err != nil {
+		return errors.Is(err, store.ErrNotFound)
+	}
+	return worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE
+}
+
 // ensureAteletTerminated calls atelet to terminate the workload for opName.
-func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, opName string) (err error) {
+func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, opName string, anyState bool) (err error) {
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
@@ -134,9 +147,11 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	}
 
 	workerPodUID := ""
+	workerName := ""
 	if assignment := actor.GetStatus().GetWorkerAssignment(); assignment != nil {
 		workerPodUID = assignment.GetWorkerPodUid()
-		if workerName := assignment.GetWorker().GetName(); workerName != "" {
+		if name := assignment.GetWorker().GetName(); name != "" {
+			workerName = name
 			// Ask whether the worker still HOSTS this actor, not whether its one
 			// assignment happens to be this actor: a worker hosting several is the
 			// ordinary case, and the others are none of this delete's business.
@@ -151,10 +166,27 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 				workerPodUID = ""
 			}
 		}
+	} else if nodeName != "" {
+		if name, err := w.store.FindWorkerHostingActor(ctx, actor.GetMetadata().GetUid()); err == nil {
+			workerName = name
+		}
 	}
 
 	conn, err := w.dialer.DialForAteletOnNode(nodeName)
 	if err != nil {
+		if isWorkerReachabilityError(err) {
+			if workerName != "" {
+				_ = markWorkerUnavailable(ctx, w.store, workerName)
+			}
+			if anyState || w.isWorkerUnavailable(ctx, workerName) {
+				slog.WarnContext(ctx, "skipping atelet termination because worker is unavailable or missing",
+					slog.String("actor", actorRef.String()),
+					slog.String("worker", workerName),
+					slog.String("node", nodeName),
+					slog.Any("error", err))
+				return nil
+			}
+		}
 		return fmt.Errorf("while connecting to atelet on node %q: %w", nodeName, err)
 	}
 
@@ -212,6 +244,19 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		if status.Code(err) == codes.NotFound {
 			slog.InfoContext(ctx, "workload already terminated on atelet", slog.Any("actor", actorRef))
 			return nil
+		}
+		if isWorkerReachabilityError(err) {
+			if workerName != "" {
+				_ = markWorkerUnavailable(ctx, w.store, workerName)
+			}
+			if anyState || w.isWorkerUnavailable(ctx, workerName) {
+				slog.WarnContext(ctx, "ignoring atelet terminate failure because worker is unavailable or missing",
+					slog.String("actor", actorRef.String()),
+					slog.String("worker", workerName),
+					slog.String("node", nodeName),
+					slog.Any("error", err))
+				return nil
+			}
 		}
 		return handleAteletError(ctx, w.store, actorRef, opName, "Terminate", true, err)
 	}
