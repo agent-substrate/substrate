@@ -33,7 +33,6 @@ import (
 	certsv1 "k8s.io/api/certificates/v1"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
 )
 
@@ -41,14 +40,12 @@ const Name = "podidentity.podcert.ate.dev/identity"
 const CTBPrefix = "podidentity.podcert.ate.dev:identity:"
 
 type Impl struct {
-	kc        kubernetes.Interface
 	pcrClient *podcertificate.Client
 	caPool    localca.Pool
 }
 
-func NewImpl(kc kubernetes.Interface, caPool localca.Pool, pcrClient *podcertificate.Client) *Impl {
+func NewImpl(caPool localca.Pool, pcrClient *podcertificate.Client) *Impl {
 	return &Impl{
-		kc:        kc,
 		pcrClient: pcrClient,
 		caPool:    caPool,
 	}
@@ -96,16 +93,11 @@ func (h *Impl) DesiredClusterTrustBundles() ([]*certsv1.ClusterTrustBundle, erro
 }
 
 func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateRequest) error {
-	// Fetch the pod to get its ServiceAccount
-	pod, err := h.kc.CoreV1().Pods(pcr.ObjectMeta.Namespace).Get(ctx, pcr.Spec.PodName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("while getting pod %s/%s: %w", pcr.ObjectMeta.Namespace, pcr.Spec.PodName, err)
-	}
-
-	if pod.ObjectMeta.UID != pcr.Spec.PodUID {
-		return fmt.Errorf("pod UID mismatch: expected %s, got %s", pcr.Spec.PodUID, pod.ObjectMeta.UID)
-	}
-
+	// The identity comes from the PCR spec alone. kube-apiserver attests it
+	// for kubelet-created requests (the pod, ServiceAccount and node exist and
+	// belong together); anyone else needs RBAC permission to create
+	// PodCertificateRequests and may name any identity, which is how
+	// non-kubelet clients such as the e2e suites obtain certificates.
 	subjectPublicKey, err := podcertificate.PublicKey(pcr)
 	if err != nil {
 		return err

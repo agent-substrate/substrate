@@ -27,8 +27,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/sandboxclass"
 )
 
 // Dotted ate.* matches the metric-instrument naming (atenet.*, atelet.*), not the
@@ -106,8 +106,6 @@ const (
 	ActorStateRunning    = "running"
 	ActorStateSuspending = "suspending"
 	ActorStateSuspended  = "suspended"
-	ActorStatePausing    = "pausing"
-	ActorStatePaused     = "paused"
 	ActorStateCrashed    = "crashed"
 	ActorStateDeleting   = "deleting"
 	ActorStateReverting  = "reverting"
@@ -127,10 +125,6 @@ func ActorStateValue(state ateapipb.ActorState) string {
 		return ActorStateSuspending
 	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
 		return ActorStateSuspended
-	case ateapipb.ActorState_ACTOR_STATE_PAUSING:
-		return ActorStatePausing
-	case ateapipb.ActorState_ACTOR_STATE_PAUSED:
-		return ActorStatePaused
 	case ateapipb.ActorState_ACTOR_STATE_CRASHED:
 		return ActorStateCrashed
 	case ateapipb.ActorState_ACTOR_STATE_DELETING:
@@ -192,7 +186,7 @@ const (
 )
 
 // SandboxOOMKillsKey is memory.events' oom_kill for the sandbox cgroup leaf, on
-// the record ateom-gvisor writes when a hosted actor's sandbox has no process
+// the record ateworker-gvisor writes when a hosted actor's sandbox has no process
 // left. Logs only: it is only ever recorded beside actor identity.
 const SandboxOOMKillsKey = attribute.Key("ate.sandbox.oom_kills")
 
@@ -204,7 +198,7 @@ const (
 	StatsKindFinal    = "final"
 )
 
-// Values for StatsSourceKey, mirroring ateompb.StatsSource. The two sources do
+// Values for StatsSourceKey, mirroring ateworkerpb.StatsSource. The two sources do
 // not measure the same thing (the cgroup source charges the sandbox runtime's
 // overhead along with the workload, the guest-agent source sees only the
 // workload's containers), so rollups must group by this key rather than sum
@@ -282,7 +276,6 @@ const (
 	OperationCreate  = "create"
 	OperationResume  = "resume"
 	OperationSuspend = "suspend"
-	OperationPause   = "pause"
 	OperationDelete  = "delete"
 	OperationRevert  = "revert"
 	OperationUnknown = "unknown"
@@ -293,7 +286,6 @@ var AllOperations = []string{
 	OperationCreate,
 	OperationResume,
 	OperationSuspend,
-	OperationPause,
 	OperationDelete,
 	OperationRevert,
 }
@@ -358,13 +350,13 @@ func SnapshotFidelityValue(fidelity ateletpb.SnapshotFidelity) string {
 // with the asset fetch and OCI unpack), so they are independent observations,
 // not a partition of Total: summing across them is meaningless.
 const (
-	SnapshotPhaseVolumeMount     = "volume_mount"
-	SnapshotPhaseManifestFetch   = "manifest_fetch"
-	SnapshotPhaseSandboxAssets   = "sandbox_assets"
-	SnapshotPhaseDownload        = "download"
-	SnapshotPhaseOCIUnpack       = "oci_unpack"
-	SnapshotPhaseAteomRestore    = "ateom_restore"
-	SnapshotPhaseAteomCheckpoint = "ateom_checkpoint"
+	SnapshotPhaseVolumeMount      = "volume_mount"
+	SnapshotPhaseManifestFetch    = "manifest_fetch"
+	SnapshotPhaseSandboxAssets    = "sandbox_assets"
+	SnapshotPhaseDownload         = "download"
+	SnapshotPhaseOCIUnpack        = "oci_unpack"
+	SnapshotPhaseWorkerRestore    = "worker_restore"
+	SnapshotPhaseWorkerCheckpoint = "worker_checkpoint"
 	// Persist is one step with two destinations (upload for external, rename
 	// for local); SnapshotKindKey already says which.
 	SnapshotPhasePersist = "persist"
@@ -379,12 +371,10 @@ const SandboxClassUnknown = "unknown"
 // Empty reports as unknown rather than the gvisor default, so a manifest
 // problem stays visible.
 func NormalizeSandboxClass(class string) string {
-	switch atev1alpha1.SandboxClass(class) {
-	case atev1alpha1.SandboxClassGvisor, atev1alpha1.SandboxClassMicroVM:
+	if sandboxclass.Valid(class) {
 		return class
-	default:
-		return SandboxClassUnknown
 	}
+	return SandboxClassUnknown
 }
 
 // SandboxClassAttribute sets ate.sandbox.class. No source of the class is

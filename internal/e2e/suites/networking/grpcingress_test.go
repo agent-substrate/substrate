@@ -109,14 +109,15 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		// The counter cannot speak h2c. Envoy returns HTTP 502; agentgateway
-		// reports the upstream failure with gRPC's Unavailable status.
+		// The counter cannot speak h2c. Both dataplanes reach atunnel through
+		// a CONNECT tunnel, where the failure is gRPC's Unavailable status. An
+		// HTTP 502 means Envoy went through atunnel's HTTPS listener instead.
 		grpcStatus := resp.Header.Get("Grpc-Status")
 		if grpcStatus == "" {
 			grpcStatus = resp.Trailer.Get("Grpc-Status")
 		}
-		if resp.StatusCode != http.StatusBadGateway && !(resp.StatusCode == http.StatusOK && grpcStatus == "14") {
-			t.Fatalf("gRPC-shaped POST = %d, grpc-status %q (body %q), want HTTP 502 or gRPC Unavailable: gRPC must not be silently downgraded to HTTP/1.1", resp.StatusCode, grpcStatus, body)
+		if resp.StatusCode != http.StatusOK || grpcStatus != "14" {
+			t.Fatalf("gRPC-shaped POST = %d, grpc-status %q (body %q), want gRPC Unavailable: gRPC must not be silently downgraded to HTTP/1.1", resp.StatusCode, grpcStatus, body)
 		}
 	})
 }
@@ -265,7 +266,7 @@ func TestIngressGRPC(t *testing.T) {
 // shared one would be deleted out from under another.
 func deployGRPCEchoTemplate(t *testing.T, ctx context.Context, bucket string) e2e.SubstrateFixture {
 	t.Helper()
-	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, e2e.GetClients(), grpcEchoFixtureManifests, bucket, "networking", false)
+	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, e2e.GetClients(), grpcEchoFixtureManifests, bucket, "networking", nil)
 	return e2e.SubstrateFixture{
 		Atespace:   atespace,
 		Name:       "grpcecho",

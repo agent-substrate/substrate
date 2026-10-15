@@ -15,6 +15,7 @@
 package steps
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -51,6 +52,7 @@ const (
 const caValidity = 365 * 24 * time.Hour
 
 // CreateJWTAuthorityPoolSecret generates the actor-identity JWT signing pool.
+// An existing pool is kept, and its "jwks" key is brought in step with it.
 // This is the make-jwt-pool call create_jwt_authority_pool_secret shelled out
 // to kubectl-ate for.
 func (e *Env) CreateJWTAuthorityPoolSecret(ctx context.Context) error {
@@ -254,13 +256,13 @@ func newCAPoolSecretData(id string, keyType localca.KeyType) (map[string][]byte,
 // with the CA pools, an existing pool is preserved: rotating the signing key
 // would invalidate every token already minted from it.
 func (e *Env) createJWTPool(ctx context.Context, namespace, name string) error {
-	exists, err := e.Kube.SecretExists(ctx, namespace, name)
+	existing, err := e.Kube.GetSecret(ctx, namespace, name)
 	if err != nil {
 		return err
 	}
-	if exists {
+	if existing != nil {
 		log.Infof("  JWT authority pool %s/%s already exists; keeping it", namespace, name)
-		return nil
+		return e.publishJWTPoolKeys(ctx, existing)
 	}
 
 	data, err := newJWTPoolSecretData(e.Cfg.ActorJWTAlgorithm)
@@ -270,14 +272,40 @@ func (e *Env) createJWTPool(ctx context.Context, namespace, name string) error {
 	return e.createPoolSecret(ctx, namespace, name, corev1.SecretTypeOpaque, data)
 }
 
+// publishJWTPoolKeys makes the "jwks" key of a pool Secret match its pool:
+// missing on a Secret from before the key existed, or stale after a tool that
+// did not know it rewrote the pool. A stale set would keep a removed key
+// trusted, so it is recomputed from the pool every run. A matching Secret is
+// left alone.
+func (e *Env) publishJWTPoolKeys(ctx context.Context, secret *corev1.Secret) error {
+	jwks, err := localjwtauthority.PublicJWKS(secret.Data["pool"])
+	if err != nil {
+		return fmt.Errorf("while publishing the public keys of %s/%s: %w", secret.Namespace, secret.Name, err)
+	}
+	if bytes.Equal(secret.Data["jwks"], jwks) {
+		return nil
+	}
+	secret.Data["jwks"] = jwks
+	if _, err := e.Kube.Typed.CoreV1().Secrets(secret.Namespace).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("while writing jwks to %s/%s: %w", secret.Namespace, secret.Name, err)
+	}
+	log.Infof("  published the public keys of %s/%s as jwks", secret.Namespace, secret.Name)
+	return nil
+}
+
 // newJWTPoolSecretData generates a pool with one active authority for
-// algorithm, keyed by its thumbprint.
+// algorithm, keyed by its thumbprint. "jwks" holds the pool's public keys for
+// verifiers that must not see the pool.
 func newJWTPoolSecretData(algorithm string) (map[string][]byte, error) {
 	poolBytes, _, err := localjwtauthority.GeneratePool(algorithm, "")
 	if err != nil {
 		return nil, fmt.Errorf("while generating the JWT pool: %w", err)
 	}
-	return map[string][]byte{"pool": poolBytes}, nil
+	jwks, err := localjwtauthority.PublicJWKS(poolBytes)
+	if err != nil {
+		return nil, fmt.Errorf("while publishing the JWT pool's public keys: %w", err)
+	}
+	return map[string][]byte{"pool": poolBytes, "jwks": jwks}, nil
 }
 
 // createPoolSecret writes pool state.

@@ -98,10 +98,10 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		}
 		for _, w := range ws {
 			state := workerState(w)
-			// CreateWorker does not validate the class, thus a worker can have an
-			// empty one. Report it as unknown, not as the pool's class: the
-			// scheduler puts no actor on a worker that offers no class, thus the
-			// pool's series must not count it as free capacity.
+			// CreateWorker accepts an empty class, as the field is optional.
+			// Report it as unknown, not as the pool's class: the scheduler puts
+			// no actor on a worker that offers no class, thus the pool's series
+			// must not count it as free capacity.
 			class := ateattr.NormalizeSandboxClass(w.GetSandboxClass())
 			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, class}]++
 		}
@@ -161,7 +161,7 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 	lifecycleOpDuration, err := meter.Float64Histogram(
 		lifecycleOpDurationMetric,
 		metric.WithUnit("s"),
-		metric.WithDescription("Duration of an actor lifecycle operation (create, resume, suspend, pause, delete) handled by ateapi."),
+		metric.WithDescription("Duration of an actor lifecycle operation (create, resume, suspend, delete, revert) handled by ateapi."),
 		metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2.5, 5, 10, 30),
 	)
 	if err != nil {
@@ -219,7 +219,7 @@ func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, s
 	ass := actor.GetStatus().GetWorkerAssignment()
 	attrs = append(attrs, ateattr.WorkerPoolAttributes(ass.GetWorkerNamespace(), ass.GetWorkerPool())...)
 	if template != nil {
-		attrs = append(attrs, ateattr.SandboxClassAttribute(sandboxClassString(template.GetSandboxConfig().GetSandboxClass())))
+		attrs = append(attrs, ateattr.SandboxClassAttribute(template.GetSandboxConfig().GetSandboxClass()))
 	}
 	if snapshotKind != "" {
 		attrs = append(attrs, ateattr.SnapshotKindKey.String(snapshotKind))
@@ -245,7 +245,7 @@ func (i *Instruments) recordSchedulerAssignment(ctx context.Context, elapsed tim
 	attrs = append(attrs, ateattr.SchedulerOutcomeKey.String(outcome))
 	attrs = append(attrs, ateattr.WorkerPoolAttributes(poolNamespace, pool)...)
 	if class != "" {
-		attrs = append(attrs, ateattr.SandboxClassKey.String(class))
+		attrs = append(attrs, ateattr.SandboxClassAttribute(class))
 	}
 	if outcome == ateattr.SchedulerOutcomeError && err != nil {
 		attrs = append(attrs, ateattr.ErrorTypeKey.String(apierror.Code(err).String()))

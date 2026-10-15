@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
@@ -33,10 +32,10 @@ var revertActorCmd = &cobra.Command{
 
 The actor's external snapshot is left untouched, so a later resume restores
 from it. Only crashed, running, or paused actors can be reverted.`,
-	Args: cobra.ExactArgs(1),
+	Args: exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		apiClient, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -55,7 +54,6 @@ from it. Only crashed, running, or paused actors can be reverted.`,
 }
 
 func init() {
-	revertActorCmd.Flags().StringVarP(&revertAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
-	_ = revertActorCmd.MarkFlagRequired("atespace")
+	revertActorCmd.Flags().StringVarP(&revertAtespaceFlag, "atespace", "a", "", "the actor's atespace")
 	revertCmd.AddCommand(revertActorCmd)
 }

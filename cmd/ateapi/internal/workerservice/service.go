@@ -21,6 +21,8 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/localjwtauthority"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -41,21 +43,30 @@ type Server struct {
 	ateletSPIFFEID string
 
 	actorIDCAPool localca.Pool
+
+	// actorJWTIssuer is copied verbatim into the iss claim of every
+	// worker-for-actor JWT, and actorIDJWTPool signs them. Both are the ones
+	// Control.MintActorJwt uses.
+	actorJWTIssuer string
+	actorIDJWTPool localjwtauthority.Pool
 }
 
 // actorSuspender is the in-process slice of the Control service this package
 // drives. *controlapi.RPCService satisfies it.
 type actorSuspender interface {
 	SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error)
+	ApplyActorSnapshotState(ctx context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapipb.ActorSnapshotState) error
 }
 
 var _ ateapipb.WorkerServiceServer = (*Server)(nil)
 
-func New(store store.Interface, suspender actorSuspender, ateletSPIFFEID string, actorIDCAPool localca.Pool) *Server {
+func New(store store.Interface, suspender actorSuspender, ateletSPIFFEID string, actorIDCAPool localca.Pool, actorJWTIssuer string, actorIDJWTPool localjwtauthority.Pool) *Server {
 	return &Server{
 		store:          store,
 		suspender:      suspender,
 		ateletSPIFFEID: ateletSPIFFEID,
 		actorIDCAPool:  actorIDCAPool,
+		actorJWTIssuer: actorJWTIssuer,
+		actorIDJWTPool: actorIDJWTPool,
 	}
 }

@@ -40,6 +40,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -171,6 +172,9 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		return fmt.Errorf("building ateapi dial options: %w", err)
 	}
 	dialOpts = append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	// atenet acts for the system, not a user, so it always opts in to the
+	// preview features the server enables.
+	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
 	conn, err := grpc.NewClient(
 		s.cfg.AteapiAddr,
 		dialOpts...,
@@ -257,6 +261,17 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	s.health = newRouterHealth(s.cfg.HealthInterval, s.clientset, s.apiClient, s.cfg)
 
+	// Bound before the background servers below start, so a bad
+	// --status-address fails startup without leaving them running.
+	var statusListener net.Listener
+	if s.cfg.StatusPort > 0 {
+		statusListener, err = s.cfg.listenStatus()
+		if err != nil {
+			return err
+		}
+		defer statusListener.Close()
+	}
+
 	// The ingress control plane — the xDS server — configures the *ingress*
 	// dataplane. The egress gateway is statically configured, so an egress-only
 	// instance does not run it.
@@ -297,12 +312,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	})
 
 	// Start HTTP status endpoint
-	if s.cfg.StatusPort > 0 {
-		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.StatusPort))
-		if err != nil {
-			return fmt.Errorf("failed binding Router HTTP status server port: %w", err)
-		}
-
+	if statusListener != nil {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/statusz", s.handleStatusz)
 
@@ -312,7 +322,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 		g.Go(func() error {
 			go func() {
-				if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				if err := httpServer.Serve(statusListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					slog.ErrorContext(ctx, "status HTTP server exited unexpectedly", slog.Any("err", err))
 				}
 			}()

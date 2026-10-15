@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -387,7 +388,7 @@ func TestEgressEndToEnd(t *testing.T) {
 			t.Errorf("gateway connection has type %T, want *tls.Conn", conn)
 		} else {
 			peer := tlsConn.ConnectionState().PeerCertificates[0]
-			if len(peer.URIs) != 1 || peer.URIs[0].String() != "spiffe://substrate-actor.local/ateom-for-actor/team/actor" {
+			if len(peer.URIs) != 1 || peer.URIs[0].String() != "spiffe://substrate-actor.local/worker-for-actor/team/actor" {
 				t.Errorf("client identity = %v, want actor SPIFFE ID", peer.URIs)
 			}
 		}
@@ -479,10 +480,57 @@ func TestEgressRejectsInactiveConnection(t *testing.T) {
 	}
 }
 
+// A gateway at its connection cap takes the CONNECT and queues it without
+// answering. The open fails at the deadline instead of waiting for as long as
+// the actor is active, the actor's connection closes, and the gateway sees the
+// stream reset, which is what takes the CONNECT out of its queue.
+func TestEgressBoundsHowLongATunnelWaitsToOpen(t *testing.T) {
+	ca := newTestCA(t)
+	// The handler's context ends when the client resets the stream.
+	withdrawn := make(chan struct{}, 1)
+	gatewayAddress, _ := serveTestH2ConnectGateway(t, ca, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+		withdrawn <- struct{}{}
+	}))
+	client := newTestClient(t, ca, WithDialer(dialFixedAddress(gatewayAddress)))
+
+	egress, err := NewEgress(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	egress.tunnelOpenTimeout = 100 * time.Millisecond
+	source := fakeActorCertificateSource{expiresAt: time.Now().Add(time.Hour)}
+	if err := egress.Activate(testActorUID, client, source, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = egress.Deactivate(context.Background(), testActorUID) })
+
+	actor, proxy := net.Pipe()
+	defer actor.Close()
+	// Set before handle runs: once the proxy side closes, the pipe refuses
+	// new deadlines.
+	if err := actor.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	egress.mu.Lock()
+	active := egress.active[testActorUID]
+	egress.mu.Unlock()
+	egress.handle(proxy, active)
+
+	receiveWithin(t, withdrawn, "the gateway to see the CONNECT withdrawn")
+	if _, err := actor.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Errorf("reading the actor's connection = %v, want it closed (EOF) once the tunnel failed to open", err)
+	}
+}
+
 type egressDialerFunc func(context.Context, string) (net.Conn, error)
 
 func (f egressDialerFunc) DialContext(ctx context.Context, destination string) (net.Conn, error) {
 	return f(ctx, destination)
+}
+
+func (f egressDialerFunc) Close() error {
+	return nil
 }
 
 type fakeActorCertificateSource struct {
@@ -493,7 +541,7 @@ type fakeActorCertificateSource struct {
 	release   <-chan struct{}
 }
 
-func (s fakeActorCertificateSource) MintAteomCertificate(context.Context) (time.Time, error) {
+func (s fakeActorCertificateSource) MintWorkerCertificate(context.Context) (time.Time, error) {
 	if s.calls != nil {
 		s.calls.Add(1)
 	}
@@ -540,4 +588,64 @@ func TestEgressIsArmedPerActor(t *testing.T) {
 	if _, ok := egress.active["actor-uid-2"]; !ok {
 		t.Error("actor-uid-2 lost its egress when another actor was torn down")
 	}
+}
+
+func TestEgressDeactivateClosesIdleH2Connection(t *testing.T) {
+	ca := newTestCA(t)
+	gatewayAddr, _ := serveTestH2ConnectGateway(t, ca, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+	}))
+
+	connClosed := make(chan struct{})
+	client := newTestClient(t, ca, WithDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		c, err := (&net.Dialer{}).DialContext(ctx, network, gatewayAddr)
+		if err != nil {
+			return nil, err
+		}
+		return &closeNotifyingConn{Conn: c, closed: connClosed}, nil
+	}))
+
+	egress, err := NewEgress(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := egress.Activate(testActorUID, client, fakeActorCertificateSource{expiresAt: time.Now().Add(time.Hour)}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open and close a stream so the Client retains an idle HTTP/2 connection.
+	stream, err := client.DialContext(context.Background(), "192.0.2.10:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-connClosed:
+		t.Fatal("HTTP/2 connection closed while actor was still active")
+	default:
+	}
+
+	if err := egress.Deactivate(context.Background(), testActorUID); err != nil {
+		t.Fatal(err)
+	}
+	receiveWithin(t, connClosed, "idle HTTP/2 connection closed on Deactivate")
+}
+
+type closeNotifyingConn struct {
+	net.Conn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (c *closeNotifyingConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() { close(c.closed) })
+	return err
 }

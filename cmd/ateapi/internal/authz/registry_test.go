@@ -30,6 +30,7 @@ func TestDefaultRPCPermissions(t *testing.T) {
 	localTemplate := &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl"}
 	sharedTemplate := &ateapipb.ObjectRef{Atespace: "shared", Name: "tmpl"}
 	workerRef := &ateapipb.ObjectRef{Name: "w-1"}
+	tagRef := &ateapipb.ObjectRef{Atespace: "team-a", Name: "v1"}
 
 	tests := []struct {
 		name       string
@@ -102,6 +103,33 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			name:       "CreateActor checks the atespace and the template",
 			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
 			req:        &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{Metadata: actorMeta, ActorTemplate: sharedTemplate}},
+			want: []check{
+				{RelationCanCreateActor, "atespace:team-a"},
+				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
+			},
+		},
+		{
+			name:       "CreateActor from a tag also checks the tag",
+			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
+			req: &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      actorMeta,
+				ActorTemplate: sharedTemplate,
+				SourceTag:     &ateapipb.ObjectRef{Atespace: "team-b", Name: "v1"},
+			}},
+			want: []check{
+				{RelationCanCreateActor, "atespace:team-a"},
+				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
+				{RelationCanUseTag, "tag:team-b/v1"},
+			},
+		},
+		{
+			name:       "CreateActor from a golden tag does not check the tag",
+			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
+			req: &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      actorMeta,
+				ActorTemplate: sharedTemplate,
+				SourceTag:     &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "0b5c7d4e-golden"},
+			}},
 			want: []check{
 				{RelationCanCreateActor, "atespace:team-a"},
 				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
@@ -233,10 +261,79 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			want:       []check{{RelationCanDrain, "worker:w-1"}},
 		},
 		{
+			name:       "MarkWorkerAvailable",
+			fullMethod: ateapipb.Control_MarkWorkerAvailable_FullMethodName,
+			req:        &ateapipb.MarkWorkerAvailableRequest{Worker: workerRef},
+			want:       []check{{RelationCanUpdate, "worker:w-1"}},
+		},
+		{
+			name:       "MarkWorkerUnavailable",
+			fullMethod: ateapipb.Control_MarkWorkerUnavailable_FullMethodName,
+			req:        &ateapipb.MarkWorkerUnavailableRequest{Worker: workerRef},
+			want:       []check{{RelationCanUpdate, "worker:w-1"}},
+		},
+		{
 			name:       "ListWorkerActorAssignments",
 			fullMethod: ateapipb.Control_ListWorkerActorAssignments_FullMethodName,
 			req:        &ateapipb.ListWorkerActorAssignmentsRequest{Worker: workerRef},
 			want:       []check{{RelationCanListActorAssignments, "worker:w-1"}},
+		},
+
+		// Actor identity credentials.
+		{
+			name:       "MintActorJWT",
+			fullMethod: ateapipb.Control_MintActorJwt_FullMethodName,
+			req:        &ateapipb.MintActorJwtRequest{Actor: actorRef},
+			want:       []check{{RelationCanMintActorJWT, "actor:team-a/runner"}},
+		},
+		{
+			name:       "MintActorCertificate",
+			fullMethod: ateapipb.Control_MintActorCertificate_FullMethodName,
+			req:        &ateapipb.MintActorCertificateRequest{Actor: actorRef},
+			want:       []check{{RelationCanMintActorCertificate, "actor:team-a/runner"}},
+		},
+
+		// Tags.
+		{
+			name:       "CreateTag checks its source actor's atespace",
+			fullMethod: ateapipb.Control_CreateTag_FullMethodName,
+			req: &ateapipb.CreateTagRequest{Tag: &ateapipb.Tag{
+				Metadata:    &ateapipb.ResourceMetadata{Atespace: "other", Name: "v1"},
+				SourceActor: actorRef,
+			}},
+			want: []check{{RelationCanCreateTag, "atespace:team-a"}},
+		},
+		{
+			name:       "GetTag",
+			fullMethod: ateapipb.Control_GetTag_FullMethodName,
+			req:        &ateapipb.GetTagRequest{Tag: tagRef},
+			want:       []check{{RelationCanGet, "tag:team-a/v1"}},
+		},
+		{
+			name:       "ListTags in an atespace",
+			fullMethod: ateapipb.Control_ListTags_FullMethodName,
+			req:        &ateapipb.ListTagsRequest{Atespace: "team-a"},
+			want:       []check{{RelationCanListTags, "atespace:team-a"}},
+		},
+		{
+			name:       "ListTags across all atespaces",
+			fullMethod: ateapipb.Control_ListTags_FullMethodName,
+			req:        &ateapipb.ListTagsRequest{},
+			want:       []check{{RelationCanListTags, GlobalRootObject}},
+		},
+		{
+			name:       "UpdateTag",
+			fullMethod: ateapipb.Control_UpdateTag_FullMethodName,
+			req: &ateapipb.UpdateTagRequest{Tag: &ateapipb.Tag{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "v1"},
+			}},
+			want: []check{{RelationCanUpdate, "tag:team-a/v1"}},
+		},
+		{
+			name:       "DeleteTag",
+			fullMethod: ateapipb.Control_DeleteTag_FullMethodName,
+			req:        &ateapipb.DeleteTagRequest{Tag: tagRef},
+			want:       []check{{RelationCanDelete, "tag:team-a/v1"}},
 		},
 	}
 
@@ -346,6 +443,26 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: "shared/x", Name: "tmpl"},
 			}},
 			wantField: "actor.actor_template.atespace",
+		},
+		{
+			name:       "CreateActor with a source tag missing its name",
+			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
+			req: &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      actorMeta,
+				ActorTemplate: template,
+				SourceTag:     &ateapipb.ObjectRef{Atespace: "team-b"},
+			}},
+			wantField: "actor.source_tag.name",
+		},
+		{
+			name:       "CreateActor with a source tag missing its atespace",
+			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
+			req: &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      actorMeta,
+				ActorTemplate: template,
+				SourceTag:     &ateapipb.ObjectRef{Name: "v1"},
+			}},
+			wantField: "actor.source_tag.atespace",
 		},
 		{
 			name:       "GetActor without a name",
@@ -468,10 +585,75 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 			wantField:  "worker.name",
 		},
 		{
+			name:       "MarkWorkerAvailable without a name",
+			fullMethod: ateapipb.Control_MarkWorkerAvailable_FullMethodName,
+			req:        &ateapipb.MarkWorkerAvailableRequest{Worker: &ateapipb.ObjectRef{}},
+			wantField:  "worker.name",
+		},
+		{
+			name:       "MarkWorkerUnavailable with an invalid name",
+			fullMethod: ateapipb.Control_MarkWorkerUnavailable_FullMethodName,
+			req:        &ateapipb.MarkWorkerUnavailableRequest{Worker: &ateapipb.ObjectRef{Name: "w/1"}},
+			wantField:  "worker.name",
+		},
+		{
 			name:       "ListWorkerActorAssignments without a name",
 			fullMethod: ateapipb.Control_ListWorkerActorAssignments_FullMethodName,
 			req:        &ateapipb.ListWorkerActorAssignmentsRequest{Worker: &ateapipb.ObjectRef{}},
 			wantField:  "worker.name",
+		},
+		{
+			name:       "MintActorJWT without an actor",
+			fullMethod: ateapipb.Control_MintActorJwt_FullMethodName,
+			req:        &ateapipb.MintActorJwtRequest{},
+			wantField:  "actor.atespace",
+		},
+		{
+			name:       "MintActorCertificate with an invalid name",
+			fullMethod: ateapipb.Control_MintActorCertificate_FullMethodName,
+			req:        &ateapipb.MintActorCertificateRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-a", Name: "a/b"}},
+			wantField:  "actor.name",
+		},
+		{
+			name:       "CreateTag without a source actor",
+			fullMethod: ateapipb.Control_CreateTag_FullMethodName,
+			req: &ateapipb.CreateTagRequest{Tag: &ateapipb.Tag{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "v1"},
+			}},
+			wantField: "tag.source_actor.atespace",
+		},
+		{
+			name:       "CreateTag with an invalid source actor atespace",
+			fullMethod: ateapipb.Control_CreateTag_FullMethodName,
+			req: &ateapipb.CreateTagRequest{Tag: &ateapipb.Tag{
+				Metadata:    &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "v1"},
+				SourceActor: &ateapipb.ObjectRef{Atespace: "Team-A", Name: "runner"},
+			}},
+			wantField: "tag.source_actor.atespace",
+		},
+		{
+			name:       "GetTag without an atespace",
+			fullMethod: ateapipb.Control_GetTag_FullMethodName,
+			req:        &ateapipb.GetTagRequest{Tag: &ateapipb.ObjectRef{Name: "v1"}},
+			wantField:  "tag.atespace",
+		},
+		{
+			name:       "ListTags with an invalid atespace",
+			fullMethod: ateapipb.Control_ListTags_FullMethodName,
+			req:        &ateapipb.ListTagsRequest{Atespace: "Team-A"},
+			wantField:  "atespace",
+		},
+		{
+			name:       "UpdateTag without metadata",
+			fullMethod: ateapipb.Control_UpdateTag_FullMethodName,
+			req:        &ateapipb.UpdateTagRequest{Tag: &ateapipb.Tag{}},
+			wantField:  "tag.metadata.atespace",
+		},
+		{
+			name:       "DeleteTag without a name",
+			fullMethod: ateapipb.Control_DeleteTag_FullMethodName,
+			req:        &ateapipb.DeleteTagRequest{Tag: &ateapipb.ObjectRef{Atespace: "team-a"}},
+			wantField:  "tag.name",
 		},
 	}
 
@@ -493,8 +675,52 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 
 func TestDefaultRPCPermissions_UnexpectedRequestTypeFailsClosed(t *testing.T) {
 	for fullMethod, r := range defaultRPCPermissions {
+		if r.authorizedInHandler != "" {
+			continue
+		}
 		if _, err := r.extract("wrong-type"); apierror.Code(err) != codes.Internal {
 			t.Errorf("%s: extract(wrong type) error = %v, want code Internal", fullMethod, err)
+		}
+	}
+}
+
+// Every RPC in ateapi.proto has exactly one of a permission rule or a reason
+// its handler authorizes it, and the registry names no RPC that isn't in
+// ateapi.proto.
+func TestDefaultRPCPermissions_CoversEveryServedRPC(t *testing.T) {
+	served := map[string]bool{}
+	services := ateapipb.File_ateapi_proto.Services()
+	for i := range services.Len() {
+		sd := services.Get(i)
+		methods := sd.Methods()
+		for j := range methods.Len() {
+			m := methods.Get(j)
+			fullMethod := "/" + string(sd.FullName()) + "/" + string(m.Name())
+			if m.IsStreamingClient() || m.IsStreamingServer() {
+				// The authz interceptor is unary-only, so a streaming RPC would go
+				// unchecked.
+				t.Errorf("%s is a streaming RPC, which the authz interceptor does not check", fullMethod)
+			}
+			served[fullMethod] = true
+		}
+	}
+
+	for fullMethod := range served {
+		r, ok := defaultRPCPermissions[fullMethod]
+		if !ok {
+			t.Errorf("%s has no entry in defaultRPCPermissions; add a rule, or inHandler if its handler authorizes the caller", fullMethod)
+			continue
+		}
+		if (r.extract == nil) == (r.authorizedInHandler == "") {
+			t.Errorf("%s: want exactly one of a check extractor or authorizedInHandler", fullMethod)
+		}
+		if r.authorizedInHandler != "" && r.alwaysEnforce {
+			t.Errorf("%s: authorizedInHandler and alwaysEnforce are exclusive", fullMethod)
+		}
+	}
+	for fullMethod := range defaultRPCPermissions {
+		if !served[fullMethod] {
+			t.Errorf("defaultRPCPermissions has %s, which no served service has", fullMethod)
 		}
 	}
 }

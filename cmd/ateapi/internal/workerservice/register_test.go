@@ -57,11 +57,11 @@ func setRequest(actors int32) *ateapipb.RegisterWorkerRequest {
 }
 
 // The point of the whole path: a Worker moves from what it reported before to
-// what its ateom reports now.
+// what its worker reports now.
 func TestRegisterWorker(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(2000, 0)})
 
 	got, err := s.RegisterWorker(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)), setRequest(4094))
@@ -85,7 +85,7 @@ func TestRegisterWorker(t *testing.T) {
 func TestRegisterWorker_Runtimes(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
 	gvisorAMD64, gvisorARM64 := testRuntime("gvisor", "amd64"), testRuntime("gvisor", "arm64")
@@ -220,7 +220,7 @@ func TestRegisterWorker_Runtimes(t *testing.T) {
 func TestRegisterWorker_OtherNodeIsNotFound(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 
 	_, err := s.RegisterWorker(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "some-other-node")), setRequest(4094))
@@ -238,13 +238,13 @@ func TestRegisterWorker_OtherNodeIsNotFound(t *testing.T) {
 	}
 }
 
-// Re-sending the same capacity is not an update. An ateom reports once, but it
+// Re-sending the same capacity is not an update. A worker reports once, but it
 // retries until accepted and reports again if it restarts, so a repeat must not
 // churn the Worker's version.
 func TestRegisterWorker_UnchangedDoesNotWrite(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	seeded := seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 4094})
 
 	for range 3 {
@@ -267,7 +267,7 @@ func TestRegisterWorker_UnchangedDoesNotWrite(t *testing.T) {
 func TestRegisterWorker_SortsAttributes(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
@@ -310,7 +310,7 @@ func TestRegisterWorker_SortsAttributes(t *testing.T) {
 func TestRegisterWorker_Errors(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
@@ -355,7 +355,7 @@ func TestRegisterWorker_Errors(t *testing.T) {
 func TestRegisterWorker_RejectsNonsense(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	seeded := seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 4094})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 

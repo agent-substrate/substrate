@@ -67,7 +67,6 @@ const (
 // into one whose references are pullable. *ko.Runner builds and publishes them
 // from source; *images.Prebuilt maps them onto an already-published release.
 type imageResolver interface {
-	ResolvePath(ctx context.Context, path string) ([]byte, error)
 	ResolveBytes(ctx context.Context, manifest []byte) ([]byte, error)
 }
 
@@ -82,10 +81,10 @@ type Env struct {
 	// the build-from-source resolver fails at construction without them.
 	resolver imageResolver
 
-	// substrateVersion caches the derived build version and its object-name
-	// suffix; see SubstrateVersion.
-	substrateVersion       string
-	substrateVersionSuffix string
+	// dockerfileImages caches resolved Dockerfile image references by image
+	// name so a multi-manifest deploy (e.g., router + egress) builds or pins
+	// each Dockerfile image once.
+	dockerfileImages map[string]string
 }
 
 // Namespace is the namespace the control plane is installed into. It is
@@ -169,22 +168,35 @@ func (e *Env) koRunner() (*ko.Runner, error) {
 // That only works if the release published it there, which
 // `ate-setup publish release-images` does.
 func (e *Env) dockerfileImage(ctx context.Context, name, contextDir string) (string, error) {
-	if !e.Cfg.Images.IsPrebuilt() {
-		return images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, name, e.Cfg.Path(contextDir), e.Cfg.KODefaultPlatforms, e.Cfg.DockerBuildFlags)
+	if ref, ok := e.dockerfileImages[name]; ok {
+		return ref, nil
 	}
-	resolver, err := e.imageResolver()
+	var ref string
+	var err error
+	if !e.Cfg.Images.IsPrebuilt() {
+		ref, err = images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, name, e.Cfg.Path(contextDir), e.Cfg.KODefaultPlatforms, e.Cfg.DockerBuildFlags)
+	} else {
+		resolver, rErr := e.imageResolver()
+		if rErr != nil {
+			return "", rErr
+		}
+		prebuilt, ok := resolver.(*images.Prebuilt)
+		if !ok {
+			return "", fmt.Errorf("image resolver is %T, not a pre-built resolver", resolver)
+		}
+		ref, err = prebuilt.Pin(ctx, name)
+		if err != nil {
+			return "", fmt.Errorf("%s is built from a Dockerfile, not with ko, so a release has to publish it "+
+				"alongside the other images (ate-setup publish release-images): %w", name, err)
+		}
+	}
 	if err != nil {
 		return "", err
 	}
-	prebuilt, ok := resolver.(*images.Prebuilt)
-	if !ok {
-		return "", fmt.Errorf("image resolver is %T, not a pre-built resolver", resolver)
+	if e.dockerfileImages == nil {
+		e.dockerfileImages = make(map[string]string)
 	}
-	ref, err := prebuilt.Pin(ctx, name)
-	if err != nil {
-		return "", fmt.Errorf("%s is built from a Dockerfile, not with ko, so a release has to publish it "+
-			"alongside the other images (ate-setup publish release-images): %w", name, err)
-	}
+	e.dockerfileImages[name] = ref
 	return ref, nil
 }
 
@@ -202,16 +214,26 @@ func (e *Env) ResolveAndApply(ctx context.Context, path string) error {
 // ResolveManifest turns the ko:// references in a manifest path into pullable
 // image references.
 func (e *Env) ResolveManifest(ctx context.Context, path string) ([]byte, error) {
+	manifest, err := kube.ReadPath(path)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := e.ResolveManifestBytes(ctx, manifest)
+	if err != nil {
+		return nil, fmt.Errorf("in %s: %w", path, err)
+	}
+	return resolved, nil
+}
+
+// ResolveManifestBytes resolves an in-memory manifest, such as kustomize output.
+// Every manifest that deploys a substrate component passes through here, so
+// this is also where each component gets its --preview argument.
+func (e *Env) ResolveManifestBytes(ctx context.Context, manifest []byte) ([]byte, error) {
 	resolver, err := e.imageResolver()
 	if err != nil {
 		return nil, err
 	}
-	return resolver.ResolvePath(ctx, path)
-}
-
-// ResolveManifestBytes resolves an in-memory manifest, such as kustomize output.
-func (e *Env) ResolveManifestBytes(ctx context.Context, manifest []byte) ([]byte, error) {
-	resolver, err := e.imageResolver()
+	manifest, err = injectPreviewArg(manifest, e.Cfg.PreviewGates)
 	if err != nil {
 		return nil, err
 	}
@@ -230,16 +252,6 @@ func (e *Env) ResolveAndApplyBytes(ctx context.Context, manifest []byte) error {
 // Kustomize renders an overlay directory under the repository root.
 func (e *Env) Kustomize(overlay string) ([]byte, error) {
 	return kustomize.Build(e.Cfg.Path(overlay))
-}
-
-// KustomizeResolve renders an overlay and resolves its images, the
-// `kubectl kustomize ... | run_ko resolve -f -` pipeline.
-func (e *Env) KustomizeResolve(ctx context.Context, overlay string) ([]byte, error) {
-	built, err := e.Kustomize(overlay)
-	if err != nil {
-		return nil, err
-	}
-	return e.ResolveManifestBytes(ctx, built)
 }
 
 // EnsureAteSystemNamespace creates the control-plane namespace and waits for it

@@ -33,13 +33,14 @@ import (
 
 // DeleteAteSystem removes the control plane.
 //
-// PostgreSQL, the agentgateway ConfigMap, the bundled credential provider, and
-// the CRDs are deleted explicitly because they are not part of every rendered
-// bundle: which of them the install created depends on the router and
-// credential provider that were selected, and teardown must not depend on
-// remembering that. The provider goes first so that a later failure cannot
-// leave its ClusterRole and binding behind. The cluster-scoped trust bundles
-// go last, once the controllers that publish them are gone.
+// PostgreSQL, the agentgateway ConfigMap, the bundled credential provider,
+// fake-workersync, and the CRDs are deleted explicitly because they are not
+// part of every rendered bundle: which of them the install created depends on
+// the router, credential provider, and data plane that were selected, and
+// teardown must not depend on remembering that. The provider goes first so
+// that a later failure cannot leave its ClusterRole and binding behind. The
+// cluster-scoped trust bundles go last, once the controllers that publish
+// them are gone.
 func (e *Env) DeleteAteSystem(ctx context.Context) error {
 	log.Step("delete_ate_system")
 
@@ -64,14 +65,9 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 		return err
 	}
 
-	// atelet DaemonSet names carry a version suffix.
-	if err := e.Kube.Typed.AppsV1().DaemonSets(e.Namespace()).DeleteCollection(ctx,
-		metav1.DeleteOptions{}, metav1.ListOptions{LabelSelector: "app=atelet"}); err != nil {
-		return fmt.Errorf("while deleting atelet daemonsets: %w", err)
-	}
-
 	for _, path := range [][]string{
 		{"components", "agentgateway", "configmap.yaml"},
+		{"components", "fake-data-plane", "fake-workersync.yaml"},
 		{"postgres", "postgres.yaml"},
 		{"generated"},
 	} {
@@ -94,10 +90,7 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 	if err := e.Kube.WaitDeleted(ctx, namespace, "", NamespacePodCert, e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
 		return err
 	}
-	if err := e.DeleteTrustBundles(ctx); err != nil {
-		return err
-	}
-	return e.UnlabelNodesSubstrateVersion(ctx)
+	return e.DeleteTrustBundles(ctx)
 }
 
 // releaseSandboxConfigs removes the WorkerPool protection finalizer from

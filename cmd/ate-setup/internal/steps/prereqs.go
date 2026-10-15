@@ -35,7 +35,9 @@ var trustBundleNames = []string{
 func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 	log.Step("ensure_apiserver_prerequisites")
 
-	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDJWTPool, e.CreateJWTAuthorityPoolSecret); err != nil {
+	// Not through ensureSecret: an existing pool Secret may still need its
+	// public keys published, which CreateJWTAuthorityPoolSecret handles.
+	if err := e.CreateJWTAuthorityPoolSecret(ctx); err != nil {
 		return err
 	}
 	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDCAPool, e.CreateActorIDCAPoolSecret); err != nil {
@@ -43,9 +45,6 @@ func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 	}
 	// Derived from actor-id-ca-pool above, so it must come after it.
 	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDCACerts, e.CreateActorIDCACertsSecret); err != nil {
-		return err
-	}
-	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
 		return err
 	}
 	// Always reconcile the PostgreSQL connection settings, so that a changed

@@ -157,7 +157,7 @@ func (h *Handler) providerCredential(ctx context.Context, ref resources.ActorRef
 		}
 	}
 
-	// Atunnel connected to us with an ateom-for-actor SPIFFE ID; translate it
+	// Atunnel connected to us with a worker-for-actor SPIFFE ID; translate it
 	// to a pure actor SPIFFE ID for plugins to make decisions on.
 	resp, err := h.provider.FetchSecret(ctx, &credproviderpb.FetchSecretRequest{
 		Uri:           uri,

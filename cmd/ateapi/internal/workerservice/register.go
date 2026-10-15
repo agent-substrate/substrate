@@ -109,7 +109,7 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 
 // validateRuntimeClasses rejects a runtime of a class other than the Worker's
 // own. The class is fixed when the pool creates the Worker and names the
-// sandbox its ateom runs, so a runtime of another class contradicts the
+// sandbox its worker runs, so a runtime of another class contradicts the
 // recorded Worker state. A Worker recorded without a class has nothing for a
 // report to contradict.
 func validateRuntimeClasses(class string, req *ateapipb.RegisterWorkerRequest) error {

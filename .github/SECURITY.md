@@ -52,7 +52,7 @@ See the [threat model](../docs/threat-model.md) for the trust boundaries and
 assumptions this section is based on.
 
 In scope: the Agent Substrate control plane (`ateapi`), node supervisor
-(`atelet`, `ateom`), networking stack (`atenet`), and CLI (`kubectl-ate`).
+(`atelet`, `ateworker`), networking stack (`atenet`), and CLI (`kubectl-ate`).
 
 Agent Substrate multiplexes many actors onto a smaller pool of shared
 workers, so its most important security boundaries are between actors and
@@ -70,7 +70,7 @@ valuable, listed roughly from most to least severe:
   `ateapi` RPCs without valid credentials (mTLS or JWT auth modes),
   misusing workerpool client certificates, or acting beyond what valid
   credentials are authorized to do.
-- **Actor-to-platform escalation**: an actor compromising `atelet`, `ateom`,
+- **Actor-to-platform escalation**: an actor compromising `atelet`, `ateworker`,
   or the control plane, whether while the actor is still actively running
   or beyond its own lifecycle.
 - **Node lateral movement**: using a compromised worker node to reach other

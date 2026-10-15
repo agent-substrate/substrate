@@ -13,8 +13,8 @@
 // limitations under the License.
 
 // Package serverboot collects the startup boilerplate shared by the
-// long-running substrate server binaries (ateapi, atelet, ateom-gvisor,
-// ateom-microvm): slog wiring, OTel tracer + meter providers, a Prometheus
+// long-running substrate server binaries (ateapi, atelet, ateworker-gvisor,
+// ateworker-microvm): slog wiring, OTel tracer + meter providers, a Prometheus
 // /metrics server, a /readyz and /healthz server for the kubelet probes, and a
 // couple of small helpers for startup fail-fast.
 package serverboot
@@ -27,6 +27,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,12 +38,14 @@ import (
 	promclient "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/instrumentation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -57,7 +61,7 @@ func InitLogger() {
 
 // InitLoggerWithWriter is InitLogger with an explicit destination. Use it to share
 // one synchronized writer between the runtime logger and a separate writer (e.g.
-// ateom's actor-log forwarder) so their lines don't interleave.
+// worker's actor-log forwarder) so their lines don't interleave.
 func InitLoggerWithWriter(w io.Writer) {
 	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: &logLevel}))))
 }
@@ -112,7 +116,7 @@ func newResource(ctx context.Context, serviceName string, extraAttrs ...attribut
 // gets no attribute at all; true means it did, and conn says whether it got it.
 //
 // The distinction matters because a nil conn on a relay-capable component is
-// exactly the degraded case worth alerting on: the ateom asked for the relay,
+// exactly the degraded case worth alerting on: the worker asked for the relay,
 // could not dial it, and is now exporting over the worker pod's own network.
 // Collapsing that into the same "no attribute" bucket as atecontroller would
 // hide it.
@@ -136,7 +140,7 @@ type TracingOptions struct {
 	// default.
 	Sampling TraceSampling
 	// ExporterConn, when non-nil, is the connection the OTLP exporter sends
-	// over, instead of dialing OTEL_EXPORTER_OTLP_ENDPOINT itself. ateom passes
+	// over, instead of dialing OTEL_EXPORTER_OTLP_ENDPOINT itself. worker passes
 	// the unix socket to atelet's relay (internal/otlprelay) so a worker pod
 	// exports without a network path of its own; nil keeps the direct dial.
 	//
@@ -144,9 +148,9 @@ type TracingOptions struct {
 	// connection it did not create.
 	ExporterConn *grpc.ClientConn
 	// RelayCapable marks a component that is meant to export through the relay,
-	// whether or not it managed to (see relayAttrs). Only the ateoms set it. It
+	// whether or not it managed to (see relayAttrs). Only the workers set it. It
 	// is separate from ExporterConn because a nil conn on its own cannot tell
-	// "the ateom tried and fell back" from "this component never had a relay".
+	// "the worker tried and fell back" from "this component never had a relay".
 	RelayCapable bool
 }
 
@@ -301,9 +305,9 @@ func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 }
 
 // InitMetricsPushOnlyVia is InitMetrics without the Prometheus reader, for a
-// binary that runs no metrics HTTP server of its own (ateom): a pull reader
+// binary that runs no metrics HTTP server of its own (worker): a pull reader
 // would collect into a registry nothing serves. conn is the metrics counterpart
-// of TracingOptions.ExporterConn: ateom passes atelet's relay socket
+// of TracingOptions.ExporterConn: worker passes atelet's relay socket
 // (internal/otlprelay) so the worker pod needs no network path of its own; a
 // nil conn keeps the direct dial to OTEL_EXPORTER_OTLP_ENDPOINT.
 //
@@ -327,7 +331,7 @@ func newMeterProvider(ctx context.Context, serviceName string, push, relayCapabl
 	if err != nil {
 		return nil, fmt.Errorf("create metric resource: %w", err)
 	}
-	opts := []sdkmetric.Option{sdkmetric.WithResource(res)}
+	opts := []sdkmetric.Option{sdkmetric.WithResource(res), sdkmetric.WithView(dropRPCServerAddress)}
 	if push {
 		expOpts := []otlpmetricgrpc.Option{
 			// GKE managed metrics doesn't support validating the TLS certs of the collector.
@@ -356,6 +360,16 @@ func newMeterProvider(ctx context.Context, serviceName string, push, relayCapabl
 	return mp, nil
 }
 
+// dropRPCServerAddress removes server.address from the otelgrpc instruments.
+// otelgrpc reads it from the remote address of the client connection: the
+// socket path atelet dials holds the worker pod UID, and a TCP address is the IP
+// of one server pod. Either way the key has one value per pod. server.port stays,
+// because it has one value per service.
+var dropRPCServerAddress = sdkmetric.NewView(
+	sdkmetric.Instrument{Scope: instrumentation.Scope{Name: otelgrpc.ScopeName}},
+	sdkmetric.Stream{AttributeFilter: attribute.NewDenyKeysFilter(semconv.ServerAddressKey)},
+)
+
 // Fatal logs msg + err and exits with status 1. For startup-time
 // fail-fast where there's no recovery path.
 func Fatal(ctx context.Context, msg string, err error, additionalArgs ...any) {
@@ -375,18 +389,71 @@ func ShutdownProvider(name string, shutdown func(context.Context) error) {
 	}
 }
 
+// checkTimeout bounds the dependency checks of one /readyz request. It sits
+// under the kubelet's default 1s probe timeout so a hung dependency gets a 503
+// rather than a timed-out probe.
+const checkTimeout = 500 * time.Millisecond
+
 // Readiness is a predicate for process readiness. The zero value
 // reports ready. Calling MarkNotReady flips it permanently to not ready,
 // which causes /readyz to start returning "Service Unavailable" (503).
+// Checks added with AddCheck make /readyz return 503 only while they fail.
 type Readiness struct {
 	notReady atomic.Bool
+
+	mu     sync.RWMutex
+	checks []*readinessCheck
+}
+
+type readinessCheck struct {
+	name    string
+	fn      func(context.Context) error
+	failing atomic.Bool
 }
 
 // MarkNotReady makes /readyz return 503 from now on.
 func (r *Readiness) MarkNotReady() { r.notReady.Store(true) }
 
-// Ready reports whether /readyz returns 200.
+// Ready reports whether MarkNotReady has not been called. It does not run the
+// checks added with AddCheck.
 func (r *Readiness) Ready() bool { return !r.notReady.Load() }
+
+// AddCheck registers a dependency check that /readyz runs on every request.
+// While it returns an error, or does not return within checkTimeout, /readyz
+// returns 503, and it returns 200 again once the check passes. Liveness is
+// unaffected. Check errors are logged when a check starts and stops failing,
+// and never sent to the client.
+func (r *Readiness) AddCheck(name string, check func(context.Context) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.checks = append(r.checks, &readinessCheck{name: name, fn: check})
+}
+
+// notReadyReason returns why /readyz should answer 503, or "" if it should
+// answer 200. Draining wins over the checks, which are not run.
+func (r *Readiness) notReadyReason(ctx context.Context) string {
+	if !r.Ready() {
+		return "draining"
+	}
+	r.mu.RLock()
+	checks := slices.Clone(r.checks)
+	r.mu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+	for _, c := range checks {
+		if err := c.fn(ctx); err != nil {
+			if !c.failing.Swap(true) {
+				slog.WarnContext(ctx, "Readiness check failing", slog.String("check", c.name), slog.Any("err", err))
+			}
+			return c.name + " check failed"
+		}
+		if c.failing.Swap(false) {
+			slog.InfoContext(ctx, "Readiness check recovered", slog.String("check", c.name))
+		}
+	}
+	return ""
+}
 
 // httpServerReadHeaderTimeout bounds how long a client can take to send the
 // request headers, so a slow client cannot hold a connection open forever.
@@ -407,12 +474,13 @@ func StartMetricsServer(ctx context.Context, addr string) {
 }
 
 // StartHealthServer runs an HTTP server exposing /readyz and /healthz for the
-// kubelet probes. /readyz returns 200 while readiness is Ready and 503 after
-// MarkNotReady. /healthz always returns 200, so liveness keeps succeeding
-// while a draining server fails readiness. Blocks until the server stops;
-// designed to be `go`-launched. A serve failure exits the process: a pod whose
-// probes can never succeed never turns Ready, so dying loudly lets the kubelet
-// restart it instead of leaving a pod that looks alive but never gets work.
+// kubelet probes. /readyz returns 200 while readiness is Ready and every check
+// passes, and 503 after MarkNotReady or while a check fails. /healthz always
+// returns 200, so liveness keeps succeeding while a draining server fails
+// readiness. Blocks until the server stops; designed to be `go`-launched. A
+// serve failure exits the process: a pod whose probes can never succeed never
+// turns Ready, so dying loudly lets the kubelet restart it instead of leaving a
+// pod that looks alive but never gets work.
 func StartHealthServer(ctx context.Context, addr string, readiness *Readiness) {
 	slog.InfoContext(ctx, "Starting health HTTP server", slog.String("addr", addr))
 	if err := listenAndServe(addr, healthMux(readiness)); err != nil {
@@ -455,9 +523,9 @@ func healthMux(readiness *Readiness) *http.ServeMux {
 }
 
 func readinessHandler(readiness *Readiness) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if !readiness.Ready() {
-			http.Error(w, "draining", http.StatusServiceUnavailable)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if reason := readiness.notReadyReason(r.Context()); reason != "" {
+			http.Error(w, reason, http.StatusServiceUnavailable)
 			return
 		}
 		w.WriteHeader(http.StatusOK)

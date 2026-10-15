@@ -171,9 +171,9 @@ func TestInternalServerUnaryInterceptorCodes(t *testing.T) {
 		},
 		{
 			name:       "upstream status becomes Internal without its details",
-			handlerErr: fmt.Errorf("while calling ateom: %w", statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil)),
+			handlerErr: fmt.Errorf("while calling worker: %w", statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil)),
 			wantCode:   codes.Internal,
-			wantMsg:    "while calling ateom: rpc error: code = DataLoss desc = boom",
+			wantMsg:    "while calling worker: rpc error: code = DataLoss desc = boom",
 		},
 		{
 			name:       "wrapped upstream status becomes Internal",
@@ -368,7 +368,7 @@ func TestServerUnaryInterceptorRequestLogMasksEnvValues(t *testing.T) {
 		},
 	}
 
-	_, err := ServerUnaryInterceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: "/atelet.AteomHerder/Run"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	_, err := ServerUnaryInterceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: "/atelet.Atelet/Run"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return &ateletpb.RunResponse{}, nil
 	})
 	if err != nil {

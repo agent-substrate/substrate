@@ -54,6 +54,13 @@ type fakeControl struct {
 	lostReply error
 	// drainErr, when set, fails every DrainWorker.
 	drainErr error
+	// markErr, when set, fails every MarkWorkerAvailable.
+	markErr error
+	// listFailures fails that many ListWorkers calls with listCode before any
+	// succeeds; Unavailable, as while ate-api-server does not serve yet, when
+	// listCode is unset.
+	listFailures int
+	listCode     codes.Code
 }
 
 func newFakeControl() *fakeControl {
@@ -69,12 +76,40 @@ func (f *fakeControl) CreateWorker(_ context.Context, in *ateapipb.CreateWorkerR
 		return nil, status.Errorf(codes.AlreadyExists, "Worker %s already exists", name)
 	}
 	w := proto.CloneOf(in.GetWorker())
-	w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+	// Like ate-api-server: a Worker takes no Actors until it is marked
+	// available.
+	w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE}
 	f.workers[name] = w
 	if f.lostReply != nil {
 		return nil, f.lostReply
 	}
 	return w, nil
+}
+
+func (f *fakeControl) MarkWorkerAvailable(_ context.Context, in *ateapipb.MarkWorkerAvailableRequest, _ ...grpc.CallOption) (*ateapipb.MarkWorkerAvailableResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.markErr != nil {
+		return nil, f.markErr
+	}
+	w, ok := f.workers[in.GetWorker().GetName()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "no such Worker")
+	}
+	if w.Status.State == ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		return nil, status.Error(codes.FailedPrecondition, "Worker is draining")
+	}
+	w.Status.State = ateapipb.WorkerState_WORKER_STATE_ACTIVE
+	return &ateapipb.MarkWorkerAvailableResponse{Worker: proto.CloneOf(w)}, nil
+}
+
+// state returns the state of the Worker registered for pod, as worker picks
+// it.
+func (f *fakeControl) state(pod string) ateapipb.WorkerState {
+	w := f.worker(pod)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return w.GetStatus().GetState()
 }
 
 func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapipb.DeleteWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
@@ -139,6 +174,13 @@ func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapipb.UpdateWorkerR
 func (f *fakeControl) ListWorkers(_ context.Context, _ *ateapipb.ListWorkersRequest, _ ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listFailures > 0 {
+		f.listFailures--
+		if f.listCode != codes.OK {
+			return nil, status.Error(f.listCode, "refused")
+		}
+		return nil, status.Error(codes.Unavailable, "no ready endpoints")
+	}
 	return &ateapipb.ListWorkersResponse{Workers: slices.Collect(maps.Values(f.workers))}, nil
 }
 
@@ -527,7 +569,7 @@ func TestWorkerOnADepartedNodeIsReplaced(t *testing.T) {
 }
 
 // An empty node list replaces nothing: there is nowhere to put a replacement.
-func TestNoBenchmarkNodeLeavesWorkersInPlace(t *testing.T) {
+func TestNoFakeAteletNodeLeavesWorkersInPlace(t *testing.T) {
 	c, ctl, _, cl := newTestController(pool("bench", 2, nil))
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -596,7 +638,7 @@ func TestReconcileIsIdempotent(t *testing.T) {
 }
 
 // A limits edit replaces the pool's Workers, as it rolls a real pool's pods:
-// ateom reads its limits once at startup, so a Worker's capacity never
+// worker reads its limits once at startup, so a Worker's capacity never
 // changes. The old Worker is not reported again.
 func TestPoolLimitsChangeReplacesWorkers(t *testing.T) {
 	limits := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi")}
@@ -636,7 +678,7 @@ func TestPoolLimitsChangeReplacesWorkers(t *testing.T) {
 	}
 }
 
-// ateom's actor count is a flag, so changing it rolls a real pool's pods too.
+// worker's actor count is a flag, so changing it rolls a real pool's pods too.
 func TestMaxActorsAnnotationChangeReplacesWorkers(t *testing.T) {
 	c, ctl, rel, cl := newTestController(pool("bench", 1, nil))
 	if err := reconcile(t, c); err != nil {
@@ -662,7 +704,7 @@ func TestMaxActorsAnnotationChangeReplacesWorkers(t *testing.T) {
 	}
 }
 
-// A node's allocatable reaches ateom once, at startup, so a later change
+// A node's allocatable reaches worker once, at startup, so a later change
 // leaves a pool with no limits as it is: no new Worker and no report.
 func TestAllocatableChangeKeepsWorkerCapacity(t *testing.T) {
 	c, ctl, rel, cl := newTestController(pool("bench", 2, nil))
@@ -716,7 +758,7 @@ func TestScaleDownDrainsThenDeletes(t *testing.T) {
 	}
 }
 
-// Nothing stops a fake Worker's Actors the way ateom stops a terminating
+// Nothing stops a fake Worker's Actors the way worker stops a terminating
 // pod's, so a Worker still held after the drain grace is deleted anyway,
 // which releases its Actors, rather than left draining for good.
 func TestDrainGraceDeletesAWorkerStillHeld(t *testing.T) {
@@ -822,6 +864,49 @@ func TestLostCreateReplyIsRetiredOrConfirmed(t *testing.T) {
 	}
 	if got := cl.statuses["bench"]; got.Replicas != 1 || got.ReadyReplicas != 1 {
 		t.Errorf("status = %+v, want 1 replica, confirmed by the retried create", got)
+	}
+}
+
+// Every registered Worker is marked available, or the scheduler would place
+// nothing on it.
+func TestReconcileMarksWorkersAvailable(t *testing.T) {
+	c, ctl, _, _ := newTestController(pool("bench", 2, nil))
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	for _, name := range poolNames("bench", 2) {
+		if got := ctl.state(name); got != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+			t.Errorf("Worker %s state = %v, want %v", name, got, ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+		}
+	}
+}
+
+// A Worker registered but not marked available, whether the mark failed or
+// the controller restarted before making it, is marked by the next pass.
+func TestUnmarkedWorkerIsMarkedByTheNextPass(t *testing.T) {
+	c, ctl, rel, cl := newTestController(pool("bench", 1, nil))
+	ctl.markErr = status.Error(codes.Unavailable, "connection reset")
+	if err := reconcile(t, c); err == nil {
+		t.Fatal("reconcile succeeded with every mark failing")
+	}
+	name := poolNames("bench", 1)[0]
+	if got := ctl.state(name); got != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Fatalf("Worker %s state = %v after a failed mark, want %v", name, got, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	}
+	ctl.markErr = nil
+
+	restarted := newController(ctl, rel, cl, testRun, 4, testDrainGrace)
+	if err := restarted.adopt(context.Background()); err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if err := reconcile(t, restarted); err != nil {
+		t.Fatalf("reconcile after restart: %v", err)
+	}
+	if got := ctl.state(name); got != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+		t.Errorf("Worker %s state = %v after restart, want %v", name, got, ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+	}
+	if got, want := ctl.names(), poolNames("bench", 1); !slices.Equal(got, want) {
+		t.Errorf("registered %v, want %v: the adopted Worker, not a replacement", got, want)
 	}
 }
 
@@ -996,6 +1081,58 @@ func TestAdoptAfterRestart(t *testing.T) {
 	}
 }
 
+// Installed with ate-api-server, fake-workersync starts before the server
+// serves, and keeps trying to adopt rather than exiting.
+func TestAdoptUntilServedRetries(t *testing.T) {
+	c, ctl, rel, cl := newTestController(pool("bench", 2, nil))
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	ctl.listFailures = 3
+
+	restarted := newController(ctl, rel, cl, testRun, 4, testDrainGrace)
+	if err := restarted.adoptUntilServed(context.Background(), time.Millisecond, 2*time.Millisecond); err != nil {
+		t.Fatalf("adoptUntilServed: %v", err)
+	}
+	if got := len(restarted.workers); got != 2 {
+		t.Errorf("adopted %d Workers, want 2", got)
+	}
+	if ctl.listFailures != 0 {
+		t.Errorf("%d ListWorkers failures left, want every one retried", ctl.listFailures)
+	}
+	// Each adopted Worker's node, so a restart keeps them in the node set.
+	if nodes := restarted.nodes(); len(nodes) == 0 {
+		t.Error("nodes() after adopt is empty, want the adopted Workers' nodes")
+	}
+}
+
+// An error retrying cannot cure, such as a refused identity, ends adopt at
+// once, so the pod fails visibly instead of looking healthy.
+func TestAdoptUntilServedFailsOnAPermanentError(t *testing.T) {
+	c, ctl, _, _ := newTestController()
+	ctl.listFailures, ctl.listCode = 1<<30, codes.PermissionDenied
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := c.adoptUntilServed(ctx, time.Millisecond, 5*time.Millisecond)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("adoptUntilServed() = %v, want PermissionDenied", err)
+	}
+	if ctx.Err() != nil {
+		t.Error("adoptUntilServed retried a permanent error until its context ended")
+	}
+}
+
+// A shutdown during the retries ends them with the last error.
+func TestAdoptUntilServedStopsWithItsContext(t *testing.T) {
+	c, ctl, _, _ := newTestController()
+	ctl.listFailures = 1 << 30
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := c.adoptUntilServed(ctx, time.Millisecond, 5*time.Millisecond); err == nil {
+		t.Error("adoptUntilServed() = nil after its context ended, want the last error")
+	}
+}
+
 // A limits edit made while fake-workersync was down still replaces the
 // pool's Workers: an adopted Worker whose reported capacity is not what the
 // pool now gives is from an older template.
@@ -1031,7 +1168,7 @@ func TestAdoptReplacesWorkersOfAPoolEditedWhileDown(t *testing.T) {
 }
 
 // An adopted Worker whose capacity ate-api-server never accepted is reported
-// after the restart, as ateom keeps retrying its one report.
+// after the restart, as worker keeps retrying its one report.
 func TestAdoptReportsAWorkerNeverAccepted(t *testing.T) {
 	c, ctl, rel, cl := newTestController(pool("bench", 1, nil))
 	const first = "worker-1" // the first name newTestController's controller mints
@@ -1071,7 +1208,7 @@ func TestDeleteAll(t *testing.T) {
 	}
 }
 
-func TestCapacityFormatsLikeAteom(t *testing.T) {
+func TestCapacityFormatsLikeWorker(t *testing.T) {
 	capacity := func(wp *atev1alpha1.WorkerPool) *ateapipb.WorkerResources {
 		t.Helper()
 		tmpl, err := templateOf(wp)
@@ -1081,7 +1218,7 @@ func TestCapacityFormatsLikeAteom(t *testing.T) {
 		return tmpl.capacity(nil)
 	}
 	got := capacity(pool("p", 1, corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("0.5"), corev1.ResourceMemory: resource.MustParse("1G")}))
-	// ateom spells cpu as decimal milli-cores and memory as a binary-SI byte
+	// worker spells cpu as decimal milli-cores and memory as a binary-SI byte
 	// count; 1G is not a power of two, so 1e9.
 	if want := wantCapacity(1000, "500m", "1e9"); !proto.Equal(got, want) {
 		t.Errorf("capacity = %v, want %v", got, want)

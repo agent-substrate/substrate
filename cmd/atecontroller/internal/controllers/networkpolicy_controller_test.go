@@ -27,7 +27,7 @@ import (
 
 func TestWorkerPoolCreatesNetworkPolicy(t *testing.T) {
 	ctx := t.Context()
-	wp := makeWorkerPool("test-netpolicy-create", "default", 2, "ateom:v1")
+	wp := makeWorkerPool("test-netpolicy-create", "default", 2, "worker:v1")
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
 	}
