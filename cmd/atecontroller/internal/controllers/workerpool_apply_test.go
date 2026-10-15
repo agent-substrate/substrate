@@ -448,9 +448,9 @@ func TestMicroVMDeviceRequestsPreserveTemplateResources(t *testing.T) {
 }
 
 // TestWorkerSecurityContextByClass asserts no worker runs privileged: every class
-// drops ALL capabilities and adds back an explicit set. Only the micro-VM class
-// gives up the runtime's default seccomp profile, and only so virtiofsd can keep
-// its own sandbox. An empty class defaults to gVisor.
+// drops ALL capabilities and adds back its fixed runtime-specific set. An empty
+// class defaults to gVisor. The expected sets are independent of the production
+// lists so adding an unnecessary capability fails the test.
 func TestWorkerSecurityContextByClass(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -460,13 +460,20 @@ func TestWorkerSecurityContextByClass(t *testing.T) {
 		// virtiofsd's sandbox pivot_root(), which the default profile denies.
 		wantSeccompUnconfined bool
 	}{
-		{"gvisor default", "", workerGvisorCapabilities, true},
-		{"gvisor explicit", atev1.SandboxClassGvisor, workerGvisorCapabilities, true},
-		{"microvm", atev1.SandboxClassMicroVM, workerMicroVMCapabilities, true},
+		{"gvisor default", "", []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "NET_RAW", "SETFCAP"}, true},
+		{"gvisor explicit", atev1.SandboxClassGvisor, []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "NET_RAW", "SETFCAP"}, true},
+		{"microvm", atev1.SandboxClassMicroVM, []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "MKNOD", "SETFCAP", "FSETID", "DAC_READ_SEARCH", "SETPCAP"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sc := workerSecurityContext(tt.class)
+			wp := testWorkerPoolApplyConfig(nil)
+			if tt.class != "" {
+				wp.Spec.SandboxClasses = []atev1.WorkerPoolSandboxClass{{Name: tt.class}}
+			}
+			sc := buildDeploymentApplyConfig(wp, workerOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount, egresspolicy.DNSEgressPolicyEnforceInAtunnel).Spec.Template.Spec.Containers[0].SecurityContext
+			if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+				t.Errorf("AllowPrivilegeEscalation = %v, want false for every class", sc.AllowPrivilegeEscalation)
+			}
 			if sc.Privileged == nil || *sc.Privileged {
 				t.Errorf("Privileged = %v, want false for every class", sc.Privileged)
 			}
@@ -905,6 +912,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 				WithRunAsUser(0).
 				WithRunAsGroup(0).
 				WithPrivileged(false).
+				WithAllowPrivilegeEscalation(false).
 				WithCapabilities(corev1ac.Capabilities().
 					WithDrop("ALL").
 					WithAdd(workerGvisorCapabilities...)).
