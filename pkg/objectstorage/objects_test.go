@@ -328,8 +328,7 @@ func TestPlainZstdBackwardCompatRoundTrip(t *testing.T) {
 	store := newMemStore()
 	ctx := context.Background()
 	const gsURL = "gs://bucket/snap/config.json.zstd"
-	// SendBytesToGCS is uncompressed; use sendZstd with a non-file reader to
-	// hit the plain-zstd branch (no magic).
+	// Use a non-file reader to hit the plain-zstd branch (no magic).
 	if err := sendZstd(ctx, store, gsURL, bytes.NewReader(want)); err != nil {
 		t.Fatalf("upload: %v", err)
 	}

@@ -129,22 +129,6 @@ func Open(ctx context.Context, client ObjectStorage, gsURL string) (io.ReadClose
 	return rc, nil
 }
 
-// SendBytesToGCS uploads the given bytes (uncompressed) to gsURL. Intended for
-// small objects such as the snapshot manifest.
-func SendBytesToGCS(ctx context.Context, client ObjectStorage, gsURL string, content []byte) error {
-	ctx, span := tracer.Start(ctx, "sendBytesToGCS")
-	defer span.End()
-
-	bucket, object, err := parseGCSURL(gsURL)
-	if err != nil {
-		return fmt.Errorf("while parsing url: %w", err)
-	}
-	if err := client.PutObject(ctx, bucket, object, bytes.NewReader(content)); err != nil {
-		return fmt.Errorf("while putting object bucket=%q object=%q: %w", bucket, object, err)
-	}
-	return nil
-}
-
 func SendLocalFileToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, localFilePath string) (err error) {
 	ctx, span := tracer.Start(ctx, "sendLocalFileToGCSWithZstd")
 	defer span.End()
@@ -167,18 +151,6 @@ func SendLocalFileToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL
 		return fmt.Errorf("in sendZstd: %w", err)
 	}
 
-	return nil
-}
-
-// SendFileToGCSWithZstd compresses and uploads an already-open file. The
-// caller retains ownership of localFile.
-func SendFileToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, localFile *os.File) error {
-	ctx, span := tracer.Start(ctx, "sendFileToGCSWithZstd")
-	defer span.End()
-
-	if err := sendZstd(ctx, client, gsURL, localFile); err != nil {
-		return fmt.Errorf("in sendZstd: %w", err)
-	}
 	return nil
 }
 

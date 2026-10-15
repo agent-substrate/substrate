@@ -62,6 +62,88 @@ func TestUploaderBudgetFitsBothPaths(t *testing.T) {
 	}
 }
 
+func TestUploaderPlansFromPopulatedBytes(t *testing.T) {
+	previous := runtime.GOMAXPROCS(8)
+	defer runtime.GOMAXPROCS(previous)
+	for _, tc := range []struct {
+		name         string
+		populatedMiB int
+		gcs, s3      uploadPlan
+	}{
+		{"all_holes", 0, uploadPlan{1, 1, 384 << 20}, uploadPlan{1, 1, 224 << 20}},
+		{"small", 1, uploadPlan{1, 1, 384 << 20}, uploadPlan{1, 1, 224 << 20}},
+		{"two_chunks", 9, uploadPlan{2, 1, 448 << 20}, uploadPlan{2, 1, 288 << 20}},
+		{"multiple_ranges", 192, uploadPlan{3, 3, 512 << 20}, uploadPlan{5, 3, 480 << 20}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			offsets := make([]int64, tc.populatedMiB)
+			for i := range offsets {
+				offsets[i] = int64(i) << 20
+			}
+			f := sparseFileWith(t, 2<<30, offsets)
+			for _, backend := range []struct {
+				name   string
+				client ObjectStorage
+				want   uploadPlan
+			}{
+				{"gcs", &gcsClient{}, tc.gcs},
+				{"s3", &s3Client{}, tc.s3},
+			} {
+				t.Run(backend.name, func(t *testing.T) {
+					u, err := NewUploader(backend.client, DefaultUploadMemory)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := f.Seek(7, io.SeekStart); err != nil {
+						t.Fatal(err)
+					}
+					got, err := u.plan(f)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got != backend.want {
+						t.Errorf("plan = %+v, want %+v", got, backend.want)
+					}
+					if position, err := f.Seek(0, io.SeekCurrent); err != nil || position != 7 {
+						t.Errorf("planning changed file position: position=%d, err=%v", position, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestUploaderSmallSparseFilesShareBudget(t *testing.T) {
+	previous := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(previous)
+	files := []*os.File{
+		sparseFileWith(t, 2<<30, []int64{1 << 30}),
+		sparseFileWith(t, 2<<30, []int64{1 << 30}),
+	}
+	synctest.Test(t, func(t *testing.T) {
+		gate := make(chan struct{})
+		store := &gatedUploadStore{started: make(chan string, len(files)), release: gate}
+		u, err := NewUploader(store, 2*parallelWorkerMemory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, len(files))
+		for _, f := range files {
+			go func() { done <- u.SendFile(t.Context(), "gs://bucket/"+filepath.Base(f.Name()), f) }()
+		}
+		synctest.Wait()
+		if got := len(store.started); got != len(files) {
+			t.Errorf("started %d uploads, want both small resident sets to fit the budget", got)
+		}
+		close(gate)
+		for range files {
+			if err := <-done; err != nil {
+				t.Error(err)
+			}
+		}
+	})
+}
+
 type gatedUploadStore struct {
 	started chan string
 	release <-chan struct{}

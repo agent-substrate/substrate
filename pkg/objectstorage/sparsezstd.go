@@ -79,8 +79,7 @@ func writeSparseZstd(ctx context.Context, dst io.Writer, src *os.File, workers i
 		return 0, 0, err
 	}
 
-	// Use at most the reserved workers, and no more than the file can fill.
-	zw := newParZstd(dst, min(workers, int(size/parZstdChunk)+1))
+	zw := newParZstd(dst, workers)
 	cw := contextWriter{ctx: ctx, dst: zw}
 	// fail closes the encoder before returning err (Close flushes/frees state).
 	fail := func(e error) (int64, int64, error) {

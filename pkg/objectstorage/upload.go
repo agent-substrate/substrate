@@ -103,8 +103,21 @@ func (u *Uploader) plan(content io.Reader) (uploadPlan, error) {
 		if err != nil {
 			return uploadPlan{}, err
 		}
-		workers = min(workers, info.Size()/parZstdChunk+1)
-		parts = min(sparsePartCount(info.Size()), int(u.budget.capacity/sparseUploadMemory))
+		position, err := f.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return uploadPlan{}, err
+		}
+		_, populated, err := sparseExtents(f, info.Size())
+		_, seekErr := f.Seek(position, io.SeekStart)
+		if err != nil {
+			return uploadPlan{}, err
+		}
+		if seekErr != nil {
+			return uploadPlan{}, seekErr
+		}
+		// Holes never enter the compressor or range uploads.
+		workers = min(workers, populated/parZstdChunk+1)
+		parts = min(sparsePartCount(populated), int(u.budget.capacity/sparseUploadMemory))
 	}
 	memory := buffers + workers*parallelWorkerMemory
 	if _, ok := u.client.(sparseFilePutter); ok {
@@ -126,6 +139,9 @@ func (u *Uploader) SendFile(ctx context.Context, url string, file *os.File) erro
 // Send uploads uncompressed content, using the same budget as SendFile. This is
 // used for snapshot manifests; the reader is streamed without retaining its body.
 func (u *Uploader) Send(ctx context.Context, url string, content io.Reader) error {
+	ctx, span := tracer.Start(ctx, "sendBytesToGCS")
+	defer span.End()
+
 	bucket, object, err := parseGCSURL(url)
 	if err != nil {
 		return err
