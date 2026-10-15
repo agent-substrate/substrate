@@ -26,7 +26,7 @@ import (
 	"net/netip"
 	"sync"
 
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet/dns"
+	"github.com/agent-substrate/substrate/internal/atunnel/dns"
 	"github.com/agent-substrate/substrate/internal/netns"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 
