@@ -136,9 +136,14 @@ func TestUpstreamConnectFlag(t *testing.T) {
 			for _, r := range rc.GetVirtualHosts()[0].GetRoutes() {
 				routed = append(routed, r.GetRoute().GetCluster())
 			}
-			want := []string{OriginalDstClusterName}
+			want := []string{OriginalDstClusterName, OriginalDstClusterName}
 			if tc.wantTunnels {
-				want = []string{ActorTunnelHTTP2ClusterName, ActorTunnelHTTP1ClusterName}
+				want = []string{
+					ActorTunnelHTTP2ClusterName,
+					ActorTunnelHTTP2ClusterName,
+					ActorTunnelHTTP1ClusterName,
+					ActorTunnelHTTP1ClusterName,
+				}
 			}
 			if !slices.Equal(routed, want) {
 				t.Errorf("routes send to %v, want %v", routed, want)
@@ -254,18 +259,27 @@ func TestXdsServer_ActorTunnelRoutes(t *testing.T) {
 	x := NewXdsServer(0)
 	x.SetUpstreamConnect(true)
 	routes := x.buildRoutes().GetVirtualHosts()[0].GetRoutes()
-	if len(routes) != 2 {
-		t.Fatalf("got %d routes, want 2", len(routes))
+	if len(routes) != 4 {
+		t.Fatalf("got %d routes, want 4", len(routes))
 	}
-	grpc, rest := routes[0], routes[1]
+	grpcCached, grpc, restCached, rest := routes[0], routes[1], routes[2], routes[3]
+	if got := grpcCached.GetRoute().GetCluster(); got != ActorTunnelHTTP2ClusterName {
+		t.Errorf("cached gRPC route sends to %q, want %q", got, ActorTunnelHTTP2ClusterName)
+	}
 	if got := grpc.GetRoute().GetCluster(); got != ActorTunnelHTTP2ClusterName {
 		t.Errorf("gRPC route sends to %q, want %q", got, ActorTunnelHTTP2ClusterName)
+	}
+	if got := restCached.GetRoute().GetCluster(); got != ActorTunnelHTTP1ClusterName {
+		t.Errorf("cached fallback route sends to %q, want %q", got, ActorTunnelHTTP1ClusterName)
 	}
 	if got := rest.GetRoute().GetCluster(); got != ActorTunnelHTTP1ClusterName {
 		t.Errorf("fallback route sends to %q, want %q", got, ActorTunnelHTTP1ClusterName)
 	}
 	if got := rest.GetMatch().GetHeaders(); len(got) != 0 {
 		t.Errorf("fallback route matches headers %v, want none", got)
+	}
+	if got := restCached.GetMatch().GetHeaders(); len(got) != 1 || got[0].GetName() != endpointCachedHeader {
+		t.Errorf("cached fallback route matches headers %v, want [%s]", got, endpointCachedHeader)
 	}
 
 	// Matches atunnel's isGRPC, minus the protocol check a route can't do.
