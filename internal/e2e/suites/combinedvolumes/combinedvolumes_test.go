@@ -324,6 +324,32 @@ func requireSharedWrite(ctx context.Context, t *testing.T, router *e2e.RouterCli
 	requireContentAtBoth(ctx, t, router, actorRef, writePath, aliasPath, probeWrittenContent)
 }
 
+// requireAssignedNode fails unless the actor's status records want as its
+// assigned_node. An empty want means no node is recorded.
+func requireAssignedNode(t *testing.T, actor *ateapipb.Actor, want string) {
+	t.Helper()
+
+	if got := actor.GetStatus().GetAssignedNode(); got != want {
+		t.Errorf("actor assigned_node = %q, want %q", got, want)
+	}
+}
+
+// requireAssignedToWorkerNode fails unless the running actor's assigned_node
+// matches the node of its worker assignment.
+func requireAssignedToWorkerNode(ctx context.Context, t *testing.T, clients *e2e.Clients, actorRef resources.ActorRef) {
+	t.Helper()
+
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef.ToObjectRef()})
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	node := actor.GetStatus().GetWorkerAssignment().GetNodeName()
+	if node == "" {
+		t.Fatalf("running actor's worker assignment names no node: %v", actor.GetStatus().GetWorkerAssignment())
+	}
+	requireAssignedNode(t, actor, node)
+}
+
 func TestCombinedVolumes(t *testing.T) {
 	repo := os.Getenv("KO_DOCKER_REPO")
 	if repo == "" {
@@ -356,6 +382,9 @@ func TestCombinedVolumes(t *testing.T) {
 
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
 		t.Fatalf("ResumeActor: %v", err)
+	}
+	if storageClass != "" {
+		requireAssignedToWorkerNode(ctx, t, clients, actorRef)
 	}
 
 	router, err := e2e.NewRouterClient(ctx)
@@ -404,8 +433,12 @@ func TestCombinedVolumes(t *testing.T) {
 	})
 
 	t.Run("SurvivesSuspendResume", func(t *testing.T) {
-		if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+		suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef()})
+		if err != nil {
 			t.Fatalf("SuspendActor: %v", err)
+		}
+		if storageClass != "" {
+			requireAssignedNode(t, suspended.GetActor(), "")
 		}
 
 		// This suite checks volume restore, which can outlast the router's
@@ -424,6 +457,7 @@ func TestCombinedVolumes(t *testing.T) {
 		t.Run("ExternalVolumeReattached", func(t *testing.T) {
 			requireExternalVolume(t)
 			requireContentAtBoth(resumeCtx, t, router, actorRef, extPathA+"/multi.txt", extPathB+"/multi.txt", probeWrittenContent)
+			requireAssignedToWorkerNode(ctx, t, clients, actorRef)
 		})
 	})
 
@@ -442,6 +476,9 @@ func TestCombinedVolumes(t *testing.T) {
 		}
 		if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 			t.Fatalf("state after revert = %v, want SUSPENDED", got)
+		}
+		if storageClass != "" {
+			requireAssignedNode(t, reverted.GetActor(), "")
 		}
 
 		resumeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)

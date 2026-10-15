@@ -527,11 +527,16 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		constraints.RequiredRuntime = nil
 	}
 
+	ref := &ateapipb.ObjectRef{
+		Atespace: actor.GetMetadata().GetAtespace(),
+		Name:     actor.GetMetadata().GetName(),
+	}
+	if assignedWorker.GetNodeName() == "" && len(getMountedActorVolumes(ctx, ref, actor.GetStatus().GetExternalVolumes(), actorTemplate)) > 0 {
+		return nil, nil, apierror.FailedPrecondition("worker %s has no node name to attach the actor's volumes to", assignedWorker.GetMetadata().GetName())
+	}
+
 	assignment := &ateapipb.ActorAssignment{
-		Actor: &ateapipb.ObjectRef{
-			Atespace: actor.GetMetadata().GetAtespace(),
-			Name:     actor.GetMetadata().GetName(),
-		},
+		Actor:    ref,
 		ActorUid: actor.GetMetadata().GetUid(),
 		// Record what this claim reserves so release returns the same amount.
 		Resources: admittedResources(constraints),
@@ -719,8 +724,9 @@ func (w *ActorWorkflow) appliesWithFallback(worker *ateapipb.Worker, constraints
 
 // ensureVolumesAttached attaches the actor's mounted external volumes to the
 // assigned worker's node and returns each driver's attachment metadata by
-// volume name, for the Restore call that follows. Attachment is idempotent, so
-// a re-entered workflow safely runs it again.
+// volume name, for the Restore call that follows. Every volume must be
+// provisioned with a storage volume ID; otherwise nothing is attached.
+// Attachment is idempotent, so a re-entered workflow safely runs it again.
 // TODO replace re-execution with a proper check on the volumes' attach state.
 func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapipb.Actor, worker *ateapipb.Worker, actorTemplate *ateapipb.ActorTemplate) (_ map[string]map[string]string, err error) {
 	ctx, done := stepSpan(ctx, "AttachVolumes")
@@ -736,8 +742,14 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 	}
 
 	ref := &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}
+	volumes := getMountedActorVolumes(ctx, ref, actor.GetStatus().GetExternalVolumes(), actorTemplate)
+	// Check every volume before attaching any, so a bad one cannot leave the
+	// ones before it published.
+	if err := checkVolumesAttachable(volumes); err != nil {
+		return nil, err
+	}
 	volumePublishContexts := make(map[string]map[string]string)
-	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetStatus().GetExternalVolumes(), actorTemplate) {
+	for _, vol := range volumes {
 		slog.InfoContext(ctx, "Attaching volume to node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 		plugin, err := w.pluginRegistry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
@@ -752,6 +764,17 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 		}
 	}
 	return volumePublishContexts, nil
+}
+
+// checkVolumesAttachable returns FailedPrecondition unless every volume has a
+// storage volume ID.
+func checkVolumesAttachable(volumes []*ateapipb.ExternalVolume) error {
+	for _, vol := range volumes {
+		if vol.GetStorageVolumeId() == "" {
+			return apierror.FailedPrecondition("volume %q has no storage volume ID to attach", vol.GetName())
+		}
+	}
+	return nil
 }
 
 // ensureAteletRestored brings the workload up on the assigned worker:
