@@ -16,6 +16,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"crypto/rand"
@@ -42,12 +43,68 @@ import (
 )
 
 const (
-	blockSize         = 4 * 1024 * 1024
-	stageConcurrency  = 8
+	// minBlockSize is the block size for files of up to
+	// blobstore.MaxBlocks*minBlockSize bytes (about 195 GiB). Larger files
+	// use larger blocks; see blockLimits.blockSize.
+	minBlockSize = 4 << 20
+	// blockAlignment is the multiple larger block sizes are rounded up to.
+	blockAlignment = 1 << 20
+	// maxStages is how many blocks one upload stages at once.
+	maxStages = 8
+	// bufferBudget bounds the block data an upload that buffers its blocks
+	// holds at once; see blockSource.buffer.
+	bufferBudget = maxStages * minBlockSize
+	// hashBufferSize is the buffer an upload that does not buffer its
+	// blocks reads its source through to hash it.
+	hashBufferSize    = 1 << 20
 	integrityMetadata = "substrate_sha256"
 )
 
-var errIntegrity = errors.New("blob integrity failure")
+var (
+	errIntegrity = errors.New("blob integrity failure")
+	errTooLarge  = errors.New("too large for one Azure block blob")
+)
+
+// blockLimits are the block blob limits an upload stays within.
+type blockLimits struct {
+	maxBlocks    int64
+	maxBlockSize int64
+}
+
+var azureLimits = blockLimits{maxBlocks: blobstore.MaxBlocks, maxBlockSize: blobstore.MaxBlockSize}
+
+// blockSize returns the size of the blocks an upload of size bytes stages:
+// minBlockSize, or size/maxBlocks rounded up to blockAlignment when that is
+// larger, so the blob never needs more than maxBlocks blocks. It fails if
+// that block is larger than maxBlockSize. A negative size is unknown and gets
+// minBlockSize; upload still refuses such a source once it needs more than
+// maxBlocks blocks.
+func (l blockLimits) blockSize(size int64) (int64, error) {
+	if size < 0 {
+		return minBlockSize, nil
+	}
+	need := ceilDiv(size, l.maxBlocks)
+	if need > l.maxBlockSize {
+		return 0, fmt.Errorf("%w: %d bytes need more than %d blocks of at most %d bytes", errTooLarge, size, l.maxBlocks, l.maxBlockSize)
+	}
+	aligned := min(ceilDiv(need, blockAlignment)*blockAlignment, l.maxBlockSize)
+	return max(minBlockSize, aligned), nil
+}
+
+// ceilDiv returns a/b rounded up, for a >= 0 and b > 0, without overflow.
+func ceilDiv(a, b int64) int64 {
+	q := a / b
+	if a%b != 0 {
+		q++
+	}
+	return q
+}
+
+// bufferSlots returns how many blocks of blockSize bytes, at most
+// bufferBudget, an upload that buffers its blocks holds at once.
+func bufferSlots(blockSize int64) int {
+	return int(bufferBudget / blockSize)
+}
 
 // Server implements both node and control snapshot services.
 type Server struct {
@@ -57,6 +114,7 @@ type Server struct {
 	stores map[string]blobstore.Store
 	prefix string
 	root   string
+	limits blockLimits
 }
 
 // New returns a snapshot provider confined to root, prefix, and the
@@ -80,7 +138,7 @@ func New(stores map[string]blobstore.Store, prefix, root string) (*Server, error
 	if prefix != "" && !validKey(prefix) {
 		return nil, fmt.Errorf("prefix %q is invalid", prefix)
 	}
-	return &Server{stores: maps.Clone(stores), prefix: prefix, root: filepath.Clean(root)}, nil
+	return &Server{stores: maps.Clone(stores), prefix: prefix, root: filepath.Clean(root), limits: azureLimits}, nil
 }
 
 // FetchSnapshot downloads and verifies every requested file before atomically
@@ -117,22 +175,39 @@ func (s *Server) UploadSnapshot(ctx context.Context, req *objectstorev1.UploadSn
 	}
 	defer root.Close()
 
-	for _, name := range req.GetFiles() {
+	// Open and size every file before staging any block, so a request
+	// holding a file too large for one blob fails before it transfers data.
+	files := make([]*os.File, len(req.GetFiles()))
+	sizes := make([]int64, len(files))
+	defer func() {
+		for _, local := range files {
+			if local != nil {
+				local.Close()
+			}
+		}
+	}()
+	for i, name := range req.GetFiles() {
 		local, err := root.Open(name)
 		if err != nil {
 			return nil, toStatus(fmt.Errorf("opening snapshot file %q: %w", name, err))
 		}
-		info, statErr := local.Stat()
-		if statErr != nil {
-			local.Close()
-			return nil, toStatus(fmt.Errorf("inspecting snapshot file %q: %w", name, statErr))
+		files[i] = local
+		info, err := local.Stat()
+		if err != nil {
+			return nil, toStatus(fmt.Errorf("inspecting snapshot file %q: %w", name, err))
 		}
 		if !info.Mode().IsRegular() {
-			local.Close()
 			return nil, status.Errorf(codes.InvalidArgument, "snapshot file %q is not a regular file", name)
 		}
-		uploadErr := upload(ctx, loc.store, path.Join(loc.prefix, name), local)
-		closeErr := local.Close()
+		if _, err := s.limits.blockSize(info.Size()); err != nil {
+			return nil, toStatus(fmt.Errorf("snapshot file %q: %w", name, err))
+		}
+		sizes[i] = info.Size()
+	}
+	for i, name := range req.GetFiles() {
+		uploadErr := s.limits.upload(ctx, loc.store, path.Join(loc.prefix, name), fileSource(files[i], sizes[i]), "")
+		closeErr := files[i].Close()
+		files[i] = nil
 		if err := errors.Join(uploadErr, closeErr); err != nil {
 			return nil, toStatus(fmt.Errorf("uploading snapshot file %q: %w", name, err))
 		}
@@ -197,7 +272,7 @@ func (s *Server) CopySnapshot(ctx context.Context, req *objectstorev1.CopySnapsh
 		// Keep the listed suffix byte for byte. Blob names are flat, so
 		// cleaning a suffix such as "../x" would move it out of dst.prefix.
 		target := dst.prefix + "/" + strings.TrimPrefix(name, src.prefix+"/")
-		uploadErr := uploadVerified(ctx, dst.store, target, download)
+		uploadErr := s.limits.uploadVerified(ctx, dst.store, target, src.store, name, download)
 		if err := errors.Join(uploadErr, download.Body.Close()); err != nil {
 			return nil, toStatus(fmt.Errorf("copying blob %q: %w", name, err))
 		}
@@ -279,17 +354,67 @@ func createTemp(root *os.Root) (string, *os.File, error) {
 	return "", nil, errors.New("could not allocate a temporary restore file")
 }
 
-func upload(ctx context.Context, store blobstore.Store, blobName string, source io.Reader) error {
-	return uploadExpected(ctx, store, blobName, source, "")
+// A blockSource is the data one upload commits as a blob.
+type blockSource struct {
+	// r yields the data, read once and in order.
+	r io.Reader
+	// size is how many bytes r yields, or negative if unknown.
+	size int64
+	// reread returns a body that reads bytes [off, off+n) of the data again,
+	// for StageBlock to send and, to retry, send again.
+	reread func(ctx context.Context, off, n int64) io.ReadSeekCloser
+	// buffer is set for a source whose second read costs a second download.
+	// Blocks of up to bufferBudget bytes are then held in memory from the
+	// read that hashes them until they are staged, instead of read again.
+	buffer bool
 }
 
-func uploadExpected(ctx context.Context, store blobstore.Store, blobName string, source io.Reader, expectedHash string) error {
+// fileSource returns the first size bytes of file as a blockSource that reads
+// each block from the file twice, once to hash it and once to stage it, so an
+// upload holds no file data in memory.
+func fileSource(file *os.File, size int64) blockSource {
+	return blockSource{
+		r:    io.NewSectionReader(file, 0, size),
+		size: size,
+		reread: func(_ context.Context, off, n int64) io.ReadSeekCloser {
+			return nopCloser{io.NewSectionReader(file, off, n)}
+		},
+	}
+}
+
+type nopCloser struct{ io.ReadSeeker }
+
+func (nopCloser) Close() error { return nil }
+
+// upload commits src as blobName in blocks of blockSize(src.size) bytes. It
+// reads src.r once, hashing each block and then staging it, up to maxStages
+// at once, from src.reread, so it holds no block data beyond a
+// hashBufferSize buffer. If src.buffer is set and a block fits in
+// bufferBudget, it instead stages each block from the bytes it hashed,
+// holding at most bufferBudget bytes of blocks at once. A non-empty
+// expectedHash must match the SHA-256 of the bytes read from src.r.
+func (l blockLimits) upload(ctx context.Context, store blobstore.Store, blobName string, src blockSource, expectedHash string) error {
+	blockSize, err := l.blockSize(src.size)
+	if err != nil {
+		return err
+	}
+	buffered := src.buffer && blockSize <= bufferBudget
+	var hashBuf []byte
+	slotCount := maxStages
+	if buffered {
+		slotCount = bufferSlots(blockSize)
+	} else {
+		hashBuf = make([]byte, hashBufferSize)
+	}
 	stageCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	hash := sha256.New()
 	blockIDs := []string{}
-	semaphore := make(chan struct{}, stageConcurrency)
+	// A slot is taken before a block is read and released after it is
+	// staged, so it bounds the blocks in flight and, when buffered, the
+	// buffers alive at once.
+	slots := make(chan struct{}, slotCount)
 	var stages sync.WaitGroup
 	var firstStageErr error
 	var stageErrOnce sync.Once
@@ -301,39 +426,70 @@ func uploadExpected(ctx context.Context, store blobstore.Store, blobName string,
 		}
 		return ctx.Err()
 	}
+	abort := func(err error) error {
+		<-slots
+		cancel()
+		stages.Wait()
+		return err
+	}
 
+	var off int64
 	for index := 0; ; index++ {
-		buf := make([]byte, blockSize)
-		n, err := io.ReadFull(source, buf)
-		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-			cancel()
-			stages.Wait()
-			return err
+		select {
+		case slots <- struct{}{}:
+		case <-stageCtx.Done():
+			return waitForStages()
 		}
-		if n > 0 {
-			block := buf[:n]
-			_, _ = hash.Write(block)
-			sum := md5.Sum(block)
-			blockID := base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "%08d-%x", index, sum))
-			select {
-			case semaphore <- struct{}{}:
-			case <-stageCtx.Done():
-				return waitForStages()
+		var (
+			n    int64
+			sum  [md5.Size]byte
+			body io.ReadSeekCloser
+		)
+		if buffered {
+			buf := make([]byte, blockSize)
+			read, err := io.ReadFull(src.r, buf)
+			if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				return abort(err)
 			}
-			stages.Add(1)
-			go func() {
-				defer stages.Done()
-				defer func() { <-semaphore }()
-				if err := store.StageBlock(stageCtx, blobName, blockID, block, sum[:]); err != nil {
-					stageErrOnce.Do(func() {
-						firstStageErr = err
-						cancel()
-					})
-				}
-			}()
-			blockIDs = append(blockIDs, blockID)
+			n = int64(read)
+			block := buf[:read]
+			_, _ = hash.Write(block)
+			sum = md5.Sum(block)
+			body = nopCloser{bytes.NewReader(block)}
+		} else {
+			blockHash := md5.New()
+			n, err = io.CopyBuffer(io.MultiWriter(hash, blockHash), io.LimitReader(src.r, blockSize), hashBuf)
+			if err != nil {
+				return abort(err)
+			}
+			blockHash.Sum(sum[:0])
 		}
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		if n == 0 {
+			<-slots
+			break
+		}
+		if int64(index) == l.maxBlocks {
+			return abort(fmt.Errorf("%w: source holds more than %d blocks of %d bytes", errTooLarge, l.maxBlocks, blockSize))
+		}
+		if !buffered {
+			body = src.reread(stageCtx, off, n)
+		}
+		blockID := base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "%08d-%x", index, sum))
+		stages.Add(1)
+		go func() {
+			defer stages.Done()
+			defer func() { <-slots }()
+			defer body.Close()
+			if err := store.StageBlock(stageCtx, blobName, blockID, body, sum[:]); err != nil {
+				stageErrOnce.Do(func() {
+					firstStageErr = err
+					cancel()
+				})
+			}
+		}()
+		blockIDs = append(blockIDs, blockID)
+		off += n
+		if n < blockSize {
 			break
 		}
 	}
@@ -347,12 +503,94 @@ func uploadExpected(ctx context.Context, store blobstore.Store, blobName string,
 	return store.CommitBlockList(ctx, blobName, blockIDs, map[string]*string{integrityMetadata: &digest})
 }
 
-func uploadVerified(ctx context.Context, store blobstore.Store, blobName string, download blobstore.Download) error {
+// uploadVerified commits download, the body of blob srcName in srcStore, as
+// blobName in store, and fails unless its bytes match the SHA-256 in the
+// download's metadata. Blocks larger than bufferBudget are staged from
+// ranged downloads of the source, so a copy of any size holds at most
+// bufferBudget bytes of blocks.
+func (l blockLimits) uploadVerified(ctx context.Context, store blobstore.Store, blobName string, srcStore blobstore.Store, srcName string, download blobstore.Download) error {
 	want, err := metadataHash(download.Metadata)
 	if err != nil {
 		return err
 	}
-	return uploadExpected(ctx, store, blobName, download.Body, want)
+	return l.upload(ctx, store, blobName, blockSource{
+		r:      download.Body,
+		size:   download.Size,
+		buffer: true,
+		reread: func(ctx context.Context, off, n int64) io.ReadSeekCloser {
+			return &rangeBody{ctx: ctx, store: srcStore, name: srcName, off: off, n: n}
+		},
+	}, want)
+}
+
+// rangeBody reads bytes [off, off+n) of a blob. It opens a ranged download at
+// its position on the first read after it is created or seeks, so StageBlock
+// can seek it back to the start to retry. The bytes it reads are checked
+// against the MD5 that StageBlock sends, so a blob that changed since the
+// read that hashed them fails the stage.
+type rangeBody struct {
+	ctx    context.Context
+	store  blobstore.Store
+	name   string
+	off, n int64
+
+	pos  int64
+	body io.ReadCloser
+}
+
+func (r *rangeBody) Read(p []byte) (int, error) {
+	if r.pos >= r.n {
+		return 0, io.EOF
+	}
+	if r.body == nil {
+		body, err := r.store.DownloadRange(r.ctx, r.name, r.off+r.pos, r.n-r.pos)
+		if err != nil {
+			return 0, err
+		}
+		r.body = body
+	}
+	if int64(len(p)) > r.n-r.pos {
+		p = p[:r.n-r.pos]
+	}
+	read, err := r.body.Read(p)
+	r.pos += int64(read)
+	if errors.Is(err, io.EOF) && r.pos < r.n {
+		return read, fmt.Errorf("blob %q ended %d bytes into a %d byte range: %w", r.name, r.pos, r.n, io.ErrUnexpectedEOF)
+	}
+	return read, err
+}
+
+func (r *rangeBody) Seek(offset int64, whence int) (int64, error) {
+	pos := offset
+	switch whence {
+	case io.SeekStart:
+	case io.SeekCurrent:
+		pos += r.pos
+	case io.SeekEnd:
+		pos += r.n
+	default:
+		return 0, fmt.Errorf("seek whence %d is invalid", whence)
+	}
+	if pos < 0 {
+		return 0, fmt.Errorf("seek to %d is before the start", pos)
+	}
+	if pos != r.pos {
+		if err := r.Close(); err != nil {
+			return 0, err
+		}
+		r.pos = pos
+	}
+	return pos, nil
+}
+
+// Close closes the open download, if any.
+func (r *rangeBody) Close() error {
+	if r.body == nil {
+		return nil
+	}
+	err := r.body.Close()
+	r.body = nil
+	return err
 }
 
 func verifyHash(metadata map[string]*string, sum []byte) error {
@@ -501,6 +739,8 @@ func toStatus(err error) error {
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, errIntegrity):
 		return status.Error(codes.DataLoss, err.Error())
+	case errors.Is(err, errTooLarge):
+		return status.Error(codes.InvalidArgument, err.Error())
 	default:
 		return status.Error(codes.Internal, err.Error())
 	}

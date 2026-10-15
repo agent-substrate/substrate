@@ -15,7 +15,6 @@
 package blobstore
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -30,8 +29,10 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/streaming"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service"
@@ -134,9 +135,9 @@ func (a *Azure) blob(name string) *blockblob.Client {
 }
 
 // StageBlock stages one deterministic block and asks Azure to verify its MD5
-// in transit.
-func (a *Azure) StageBlock(ctx context.Context, name, blockID string, data []byte, md5 []byte) error {
-	_, err := a.blob(name).StageBlock(ctx, blockID, readSeekCloser{Reader: bytes.NewReader(data)}, &blockblob.StageBlockOptions{
+// in transit. The SDK streams body and seeks it back to its start to retry.
+func (a *Azure) StageBlock(ctx context.Context, name, blockID string, body io.ReadSeeker, md5 []byte) error {
+	_, err := a.blob(name).StageBlock(ctx, blockID, streaming.NopCloser(body), &blockblob.StageBlockOptions{
 		TransactionalValidation: blob.TransferValidationTypeMD5(md5),
 	})
 	return mapError(err)
@@ -165,6 +166,20 @@ func (a *Azure) Download(ctx context.Context, name string) (Download, error) {
 		Size:     size,
 		Metadata: resp.Metadata,
 	}, nil
+}
+
+// DownloadRange opens count bytes of a blob from offset. Like Download, its
+// body resumes after a dropped connection.
+func (a *Azure) DownloadRange(ctx context.Context, name string, offset, count int64) (io.ReadCloser, error) {
+	if count <= 0 {
+		// A zero HTTPRange asks for the whole blob.
+		return nil, fmt.Errorf("download range of %d bytes is invalid", count)
+	}
+	resp, err := a.blob(name).DownloadStream(ctx, &blob.DownloadStreamOptions{Range: blob.HTTPRange{Offset: offset, Count: count}})
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return mappedBody{resp.NewRetryReader(ctx, &blob.RetryReaderOptions{MaxRetries: 3})}, nil
 }
 
 // List returns every blob name under prefix.
@@ -208,12 +223,6 @@ func (b mappedBody) Read(p []byte) (int, error) {
 	return n, mapError(err)
 }
 
-type readSeekCloser struct {
-	*bytes.Reader
-}
-
-func (readSeekCloser) Close() error { return nil }
-
 func mapError(err error) error {
 	if err == nil {
 		return nil
@@ -238,6 +247,12 @@ func mapError(err error) error {
 		// A resumed download found the blob replaced since it was opened.
 		// Retrying the operation reads the new blob from the start.
 		return fmt.Errorf("%w: blob changed while it was read", ErrUnavailable)
+	case string(bloberror.MD5Mismatch):
+		// A block's bytes differ from the MD5 it was named and sent with:
+		// they changed in transit, or the source changed between the read
+		// that hashed them and the read that staged them. Retrying the
+		// operation reads and hashes the source again.
+		return fmt.Errorf("%w: staged block does not match its MD5", ErrUnavailable)
 	}
 	if responseErr.StatusCode == http.StatusUnauthorized || responseErr.StatusCode == http.StatusForbidden {
 		return fmt.Errorf("%w: Azure returned HTTP %d %s", ErrPermission, responseErr.StatusCode, responseErr.ErrorCode)
@@ -295,5 +310,4 @@ func transient(err error) bool {
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EPIPE)
 }
 
-var _ io.ReadSeekCloser = readSeekCloser{}
 var _ Store = (*Azure)(nil)

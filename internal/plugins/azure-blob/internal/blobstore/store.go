@@ -19,6 +19,21 @@ import (
 	"context"
 	"errors"
 	"io"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
+)
+
+// Azure's limits on a committed block blob. The values come from the vendored
+// SDK (azblob v1.8.0 blockblob.MaxBlocks and MaxStageBlockBytes: 50,000
+// blocks of at most 4,000 MiB) and match the service's scale targets for
+// service version 2019-12-12 and later, which the SDK's 2026-06-06 requests
+// use:
+// https://learn.microsoft.com/azure/storage/blobs/scalability-targets
+const (
+	// MaxBlocks is the most blocks one block blob may commit.
+	MaxBlocks = blockblob.MaxBlocks
+	// MaxBlockSize is the most bytes one StageBlock call may send.
+	MaxBlockSize = blockblob.MaxStageBlockBytes
 )
 
 var (
@@ -43,10 +58,15 @@ type Download struct {
 
 // Store is the block blob surface used by the snapshot provider.
 type Store interface {
-	// StageBlock must consume data before returning.
-	StageBlock(ctx context.Context, name, blockID string, data []byte, md5 []byte) error
+	// StageBlock stages the bytes of body, at most MaxBlockSize, as one
+	// block whose MD5 is md5. It may seek body back to its start to resend
+	// it, and is done with body when it returns.
+	StageBlock(ctx context.Context, name, blockID string, body io.ReadSeeker, md5 []byte) error
 	CommitBlockList(ctx context.Context, name string, blockIDs []string, metadata map[string]*string) error
 	Download(ctx context.Context, name string) (Download, error)
+	// DownloadRange opens count bytes of a blob, starting at offset. count
+	// must be positive.
+	DownloadRange(ctx context.Context, name string, offset, count int64) (io.ReadCloser, error)
 	List(ctx context.Context, prefix string) ([]string, error)
 	Delete(ctx context.Context, name string) error
 }
