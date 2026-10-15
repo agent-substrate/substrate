@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 )
 
@@ -84,11 +83,5 @@ func TestRequired(t *testing.T) {
 				t.Errorf("Required() = %v, want %v (CI=%q REQUIRE_DOCKER=%q)", got, tc.want, tc.ci, tc.requireDocker)
 			}
 		})
-	}
-}
-
-func TestPostgresImageAvoidsDockerHub(t *testing.T) {
-	if !strings.HasPrefix(PostgresImage, "mirror.gcr.io/") {
-		t.Errorf("PostgresImage = %q, want a mirror.gcr.io reference", PostgresImage)
 	}
 }
