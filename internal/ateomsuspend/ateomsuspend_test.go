@@ -40,7 +40,7 @@ import (
 // accepts. That is how a control plane that is briefly out of reach and then
 // comes back is spelled here.
 type capturingAtelet struct {
-	ateletpb.UnimplementedAteomSupportServer
+	ateletpb.UnimplementedWorkerSupportServer
 
 	errs []error
 
@@ -77,7 +77,7 @@ func testBackoff() wait.Backoff {
 func dialCapturingAtelet(t *testing.T, atelet *capturingAtelet) *grpc.ClientConn {
 	t.Helper()
 	srv := grpc.NewServer()
-	ateletpb.RegisterAteomSupportServer(srv, atelet)
+	ateletpb.RegisterWorkerSupportServer(srv, atelet)
 	lis := bufconn.Listen(1 << 20)
 	go func() {
 		if err := srv.Serve(lis); err != nil {

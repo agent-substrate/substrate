@@ -18,7 +18,7 @@ package ateworker;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateworkerpb";
 
-// Ateom is the interface to control a single gVisor (or, in the future microVM)
+// Worker is the interface to control a single gVisor (or, in the future microVM)
 // guest inside a worker pod.
 //
 // Each ateom server has two main states, "available" and "executing".
@@ -31,7 +31,7 @@ option go_package = "github.com/agent-substrate/substrate/internal/proto/atework
 // When the ateom is "executing", the substrate control plane can checkpoint the
 // running workload (with CheckpointWorkload).  This moves the ateom back to
 // "free" state.
-service Ateom {
+service Worker {
   // RunWorkload tells ateom to begin running a new workload (one or more
   // containers, potentially with shared filesystems).
   rpc RunWorkload(RunWorkloadRequest) returns (RunWorkloadResponse) {}

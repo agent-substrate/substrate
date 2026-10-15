@@ -32,7 +32,7 @@ import (
 )
 
 type ateomSupportServer struct {
-	ateletpb.UnimplementedAteomSupportServer
+	ateletpb.UnimplementedWorkerSupportServer
 	workers ateapipb.WorkerServiceClient
 	control ateapipb.ControlClient
 }

@@ -15,7 +15,7 @@
 // limitations under the License.
 
 // Command ateworker-microvm is the kata + cloud-hypervisor micro-VM
-// implementation of the ateworkerpb.Ateom service, a peer to cmd/ateworker-gvisor.
+// implementation of the ateworkerpb.Worker service, a peer to cmd/ateworker-gvisor.
 //
 // It runs a substrate actor as a cloud-hypervisor micro-VM (launched via the
 // kata guest model) and supports full suspend/resume by driving CH's native
@@ -248,7 +248,7 @@ func do(ctx context.Context) error {
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
 	)
-	ateworkerpb.RegisterAteomServer(svr, ateomService)
+	ateworkerpb.RegisterWorkerServer(svr, ateomService)
 	reflection.Register(svr)
 	readiness := &serverboot.Readiness{}
 
@@ -334,9 +334,9 @@ const (
 	rpcCheckpointWorkload = "CheckpointWorkload"
 )
 
-// AteomService is the cloud-hypervisor implementation of ateworkerpb.AteomServer.
+// AteomService is the cloud-hypervisor implementation of ateworkerpb.WorkerServer.
 type AteomService struct {
-	ateworkerpb.UnimplementedAteomServer
+	ateworkerpb.UnimplementedWorkerServer
 
 	// Serializes lifecycle RPCs per actor.
 	locks *actorlock.Locks
@@ -383,7 +383,7 @@ type AteomService struct {
 	actorCgroups bool
 }
 
-var _ ateworkerpb.AteomServer = (*AteomService)(nil)
+var _ ateworkerpb.WorkerServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
 func NewService(podUID, chBinary string, guestDebug bool, memReserveMiB, maxActors int, tunnel *ateomtunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteomService {

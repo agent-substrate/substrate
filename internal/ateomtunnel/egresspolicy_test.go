@@ -352,7 +352,7 @@ func TestActorEgressPolicyLogsChanges(t *testing.T) {
 
 // fakeSupportClient answers egress policy requests with resp or err.
 type fakeSupportClient struct {
-	ateletpb.AteomSupportClient
+	ateletpb.WorkerSupportClient
 	resp *ateletpb.GetActorEgressPolicyResponse
 	err  error
 	got  *ateletpb.GetActorEgressPolicyRequest
@@ -405,7 +405,7 @@ func TestGetEgressPolicy(t *testing.T) {
 
 // fakeAtelet serves an egress policy response as the node's atelet would.
 type fakeAtelet struct {
-	ateletpb.UnimplementedAteomSupportServer
+	ateletpb.UnimplementedWorkerSupportServer
 
 	mu   sync.Mutex
 	resp *ateletpb.GetActorEgressPolicyResponse
@@ -481,7 +481,7 @@ func serveAtelet(t *testing.T, ca testCA, ateletID string) *fakeAtelet {
 		ClientCAs:    clientCAs,
 	})))
 	atelet := &fakeAtelet{}
-	ateletpb.RegisterAteomSupportServer(server, atelet)
+	ateletpb.RegisterWorkerSupportServer(server, atelet)
 	go func() { _ = server.Serve(lis) }()
 	t.Cleanup(server.Stop)
 	return atelet

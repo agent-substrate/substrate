@@ -20,11 +20,11 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
 
-// AteomSupport provides callouts for ateom.
+// WorkerSupport provides callouts for ateom.
 //
 // Called by individual ateom pods over a local connection, authenticated with
 // ateom's k8s pod identity mTLS certificate.
-service AteomSupport {
+service WorkerSupport {
   // Request an atunnel certificate for the given actor.
   //
   // TODO(identity): Rename to MintAtunnelCertificate, as distinct from
@@ -307,11 +307,11 @@ message MintActorCertificateResponse {
   repeated bytes actor_certificates = 1;
 }
 
-// AteomHerder allows ate-apiserver to issue control calls to the atelet.
+// Atelet allows ate-apiserver to issue control calls to the atelet.
 //
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
-service AteomHerder {
+service Atelet {
   // Run tells atelet to create a new containerized workload from scratch on an
   // ateom.
   rpc Run(RunRequest) returns (RunResponse) {}

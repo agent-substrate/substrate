@@ -66,7 +66,7 @@ type delays struct {
 // certificate from ate-api-server, so in production every Run and Restore
 // that names an egress gateway costs ate-api-server a mint.
 type herder struct {
-	ateletpb.UnimplementedAteomHerderServer
+	ateletpb.UnimplementedAteletServer
 
 	delays  delays
 	storage objectWriter

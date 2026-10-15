@@ -195,6 +195,6 @@ func reportOnce(ctx context.Context, socketPath string, tlsConfig *tls.Config, r
 	defer conn.Close()
 	callCtx, cancel := context.WithTimeout(ctx, reportTimeout)
 	defer cancel()
-	_, err = ateletpb.NewAteomSupportClient(conn).RegisterWorker(callCtx, req)
+	_, err = ateletpb.NewWorkerSupportClient(conn).RegisterWorker(callCtx, req)
 	return err
 }

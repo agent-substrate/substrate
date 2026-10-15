@@ -80,7 +80,7 @@ func (t *Tunnel) ActorEgressPolicy(actor resources.ActorAttribution) dns.PolicyS
 				return nil, err
 			}
 			defer conn.Close()
-			return getEgressPolicy(ctx, ateletpb.NewAteomSupportClient(conn), actor.Ref)
+			return getEgressPolicy(ctx, ateletpb.NewWorkerSupportClient(conn), actor.Ref)
 		},
 		ttl: egressPolicyTTL,
 		now: time.Now,
@@ -183,7 +183,7 @@ func (p *actorEgressPolicy) record(ctx context.Context, policy *ateletpb.EgressP
 
 // getEgressPolicy asks atelet for actor's egress policy, returning nil if the
 // actor has none.
-func getEgressPolicy(ctx context.Context, client ateletpb.AteomSupportClient, actor resources.ActorRef) (*ateletpb.EgressPolicy, error) {
+func getEgressPolicy(ctx context.Context, client ateletpb.WorkerSupportClient, actor resources.ActorRef) (*ateletpb.EgressPolicy, error) {
 	resp, err := client.GetActorEgressPolicy(ctx, &ateletpb.GetActorEgressPolicyRequest{
 		ActorAtespace: actor.Atespace,
 		ActorName:     actor.Name,

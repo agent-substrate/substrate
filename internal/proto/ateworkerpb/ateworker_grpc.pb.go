@@ -33,19 +33,19 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Ateom_RunWorkload_FullMethodName            = "/ateworker.Ateom/RunWorkload"
-	Ateom_CheckpointWorkload_FullMethodName     = "/ateworker.Ateom/CheckpointWorkload"
-	Ateom_RestoreWorkload_FullMethodName        = "/ateworker.Ateom/RestoreWorkload"
-	Ateom_GetWorkloadStats_FullMethodName       = "/ateworker.Ateom/GetWorkloadStats"
-	Ateom_GetActiveWorkloadStats_FullMethodName = "/ateworker.Ateom/GetActiveWorkloadStats"
-	Ateom_TerminateWorkload_FullMethodName      = "/ateworker.Ateom/TerminateWorkload"
+	Worker_RunWorkload_FullMethodName            = "/ateworker.Worker/RunWorkload"
+	Worker_CheckpointWorkload_FullMethodName     = "/ateworker.Worker/CheckpointWorkload"
+	Worker_RestoreWorkload_FullMethodName        = "/ateworker.Worker/RestoreWorkload"
+	Worker_GetWorkloadStats_FullMethodName       = "/ateworker.Worker/GetWorkloadStats"
+	Worker_GetActiveWorkloadStats_FullMethodName = "/ateworker.Worker/GetActiveWorkloadStats"
+	Worker_TerminateWorkload_FullMethodName      = "/ateworker.Worker/TerminateWorkload"
 )
 
-// AteomClient is the client API for Ateom service.
+// WorkerClient is the client API for Worker service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Ateom is the interface to control a single gVisor (or, in the future microVM)
+// Worker is the interface to control a single gVisor (or, in the future microVM)
 // guest inside a worker pod.
 //
 // Each ateom server has two main states, "available" and "executing".
@@ -58,7 +58,7 @@ const (
 // When the ateom is "executing", the substrate control plane can checkpoint the
 // running workload (with CheckpointWorkload).  This moves the ateom back to
 // "free" state.
-type AteomClient interface {
+type WorkerClient interface {
 	// RunWorkload tells ateom to begin running a new workload (one or more
 	// containers, potentially with shared filesystems).
 	RunWorkload(ctx context.Context, in *RunWorkloadRequest, opts ...grpc.CallOption) (*RunWorkloadResponse, error)
@@ -127,79 +127,79 @@ type AteomClient interface {
 	TerminateWorkload(ctx context.Context, in *TerminateWorkloadRequest, opts ...grpc.CallOption) (*TerminateWorkloadResponse, error)
 }
 
-type ateomClient struct {
+type workerClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewAteomClient(cc grpc.ClientConnInterface) AteomClient {
-	return &ateomClient{cc}
+func NewWorkerClient(cc grpc.ClientConnInterface) WorkerClient {
+	return &workerClient{cc}
 }
 
-func (c *ateomClient) RunWorkload(ctx context.Context, in *RunWorkloadRequest, opts ...grpc.CallOption) (*RunWorkloadResponse, error) {
+func (c *workerClient) RunWorkload(ctx context.Context, in *RunWorkloadRequest, opts ...grpc.CallOption) (*RunWorkloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RunWorkloadResponse)
-	err := c.cc.Invoke(ctx, Ateom_RunWorkload_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, Worker_RunWorkload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *ateomClient) CheckpointWorkload(ctx context.Context, in *CheckpointWorkloadRequest, opts ...grpc.CallOption) (*CheckpointWorkloadResponse, error) {
+func (c *workerClient) CheckpointWorkload(ctx context.Context, in *CheckpointWorkloadRequest, opts ...grpc.CallOption) (*CheckpointWorkloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CheckpointWorkloadResponse)
-	err := c.cc.Invoke(ctx, Ateom_CheckpointWorkload_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, Worker_CheckpointWorkload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *ateomClient) RestoreWorkload(ctx context.Context, in *RestoreWorkloadRequest, opts ...grpc.CallOption) (*RestoreWorkloadResponse, error) {
+func (c *workerClient) RestoreWorkload(ctx context.Context, in *RestoreWorkloadRequest, opts ...grpc.CallOption) (*RestoreWorkloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RestoreWorkloadResponse)
-	err := c.cc.Invoke(ctx, Ateom_RestoreWorkload_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, Worker_RestoreWorkload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *ateomClient) GetWorkloadStats(ctx context.Context, in *GetWorkloadStatsRequest, opts ...grpc.CallOption) (*GetWorkloadStatsResponse, error) {
+func (c *workerClient) GetWorkloadStats(ctx context.Context, in *GetWorkloadStatsRequest, opts ...grpc.CallOption) (*GetWorkloadStatsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetWorkloadStatsResponse)
-	err := c.cc.Invoke(ctx, Ateom_GetWorkloadStats_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, Worker_GetWorkloadStats_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *ateomClient) GetActiveWorkloadStats(ctx context.Context, in *GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*GetActiveWorkloadStatsResponse, error) {
+func (c *workerClient) GetActiveWorkloadStats(ctx context.Context, in *GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*GetActiveWorkloadStatsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetActiveWorkloadStatsResponse)
-	err := c.cc.Invoke(ctx, Ateom_GetActiveWorkloadStats_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, Worker_GetActiveWorkloadStats_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *ateomClient) TerminateWorkload(ctx context.Context, in *TerminateWorkloadRequest, opts ...grpc.CallOption) (*TerminateWorkloadResponse, error) {
+func (c *workerClient) TerminateWorkload(ctx context.Context, in *TerminateWorkloadRequest, opts ...grpc.CallOption) (*TerminateWorkloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TerminateWorkloadResponse)
-	err := c.cc.Invoke(ctx, Ateom_TerminateWorkload_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, Worker_TerminateWorkload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// AteomServer is the server API for Ateom service.
-// All implementations must embed UnimplementedAteomServer
+// WorkerServer is the server API for Worker service.
+// All implementations must embed UnimplementedWorkerServer
 // for forward compatibility.
 //
-// Ateom is the interface to control a single gVisor (or, in the future microVM)
+// Worker is the interface to control a single gVisor (or, in the future microVM)
 // guest inside a worker pod.
 //
 // Each ateom server has two main states, "available" and "executing".
@@ -212,7 +212,7 @@ func (c *ateomClient) TerminateWorkload(ctx context.Context, in *TerminateWorklo
 // When the ateom is "executing", the substrate control plane can checkpoint the
 // running workload (with CheckpointWorkload).  This moves the ateom back to
 // "free" state.
-type AteomServer interface {
+type WorkerServer interface {
 	// RunWorkload tells ateom to begin running a new workload (one or more
 	// containers, potentially with shared filesystems).
 	RunWorkload(context.Context, *RunWorkloadRequest) (*RunWorkloadResponse, error)
@@ -279,193 +279,193 @@ type AteomServer interface {
 	// TerminateWorkload stops and deletes container workloads and cleans up
 	// network and bundle overlays on ateom.
 	TerminateWorkload(context.Context, *TerminateWorkloadRequest) (*TerminateWorkloadResponse, error)
-	mustEmbedUnimplementedAteomServer()
+	mustEmbedUnimplementedWorkerServer()
 }
 
-// UnimplementedAteomServer must be embedded to have
+// UnimplementedWorkerServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedAteomServer struct{}
+type UnimplementedWorkerServer struct{}
 
-func (UnimplementedAteomServer) RunWorkload(context.Context, *RunWorkloadRequest) (*RunWorkloadResponse, error) {
+func (UnimplementedWorkerServer) RunWorkload(context.Context, *RunWorkloadRequest) (*RunWorkloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RunWorkload not implemented")
 }
-func (UnimplementedAteomServer) CheckpointWorkload(context.Context, *CheckpointWorkloadRequest) (*CheckpointWorkloadResponse, error) {
+func (UnimplementedWorkerServer) CheckpointWorkload(context.Context, *CheckpointWorkloadRequest) (*CheckpointWorkloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CheckpointWorkload not implemented")
 }
-func (UnimplementedAteomServer) RestoreWorkload(context.Context, *RestoreWorkloadRequest) (*RestoreWorkloadResponse, error) {
+func (UnimplementedWorkerServer) RestoreWorkload(context.Context, *RestoreWorkloadRequest) (*RestoreWorkloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RestoreWorkload not implemented")
 }
-func (UnimplementedAteomServer) GetWorkloadStats(context.Context, *GetWorkloadStatsRequest) (*GetWorkloadStatsResponse, error) {
+func (UnimplementedWorkerServer) GetWorkloadStats(context.Context, *GetWorkloadStatsRequest) (*GetWorkloadStatsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetWorkloadStats not implemented")
 }
-func (UnimplementedAteomServer) GetActiveWorkloadStats(context.Context, *GetActiveWorkloadStatsRequest) (*GetActiveWorkloadStatsResponse, error) {
+func (UnimplementedWorkerServer) GetActiveWorkloadStats(context.Context, *GetActiveWorkloadStatsRequest) (*GetActiveWorkloadStatsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActiveWorkloadStats not implemented")
 }
-func (UnimplementedAteomServer) TerminateWorkload(context.Context, *TerminateWorkloadRequest) (*TerminateWorkloadResponse, error) {
+func (UnimplementedWorkerServer) TerminateWorkload(context.Context, *TerminateWorkloadRequest) (*TerminateWorkloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TerminateWorkload not implemented")
 }
-func (UnimplementedAteomServer) mustEmbedUnimplementedAteomServer() {}
-func (UnimplementedAteomServer) testEmbeddedByValue()               {}
+func (UnimplementedWorkerServer) mustEmbedUnimplementedWorkerServer() {}
+func (UnimplementedWorkerServer) testEmbeddedByValue()                {}
 
-// UnsafeAteomServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to AteomServer will
+// UnsafeWorkerServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to WorkerServer will
 // result in compilation errors.
-type UnsafeAteomServer interface {
-	mustEmbedUnimplementedAteomServer()
+type UnsafeWorkerServer interface {
+	mustEmbedUnimplementedWorkerServer()
 }
 
-func RegisterAteomServer(s grpc.ServiceRegistrar, srv AteomServer) {
-	// If the following call panics, it indicates UnimplementedAteomServer was
+func RegisterWorkerServer(s grpc.ServiceRegistrar, srv WorkerServer) {
+	// If the following call panics, it indicates UnimplementedWorkerServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&Ateom_ServiceDesc, srv)
+	s.RegisterService(&Worker_ServiceDesc, srv)
 }
 
-func _Ateom_RunWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Worker_RunWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RunWorkloadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AteomServer).RunWorkload(ctx, in)
+		return srv.(WorkerServer).RunWorkload(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Ateom_RunWorkload_FullMethodName,
+		FullMethod: Worker_RunWorkload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AteomServer).RunWorkload(ctx, req.(*RunWorkloadRequest))
+		return srv.(WorkerServer).RunWorkload(ctx, req.(*RunWorkloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Ateom_CheckpointWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Worker_CheckpointWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CheckpointWorkloadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AteomServer).CheckpointWorkload(ctx, in)
+		return srv.(WorkerServer).CheckpointWorkload(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Ateom_CheckpointWorkload_FullMethodName,
+		FullMethod: Worker_CheckpointWorkload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AteomServer).CheckpointWorkload(ctx, req.(*CheckpointWorkloadRequest))
+		return srv.(WorkerServer).CheckpointWorkload(ctx, req.(*CheckpointWorkloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Ateom_RestoreWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Worker_RestoreWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RestoreWorkloadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AteomServer).RestoreWorkload(ctx, in)
+		return srv.(WorkerServer).RestoreWorkload(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Ateom_RestoreWorkload_FullMethodName,
+		FullMethod: Worker_RestoreWorkload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AteomServer).RestoreWorkload(ctx, req.(*RestoreWorkloadRequest))
+		return srv.(WorkerServer).RestoreWorkload(ctx, req.(*RestoreWorkloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Ateom_GetWorkloadStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Worker_GetWorkloadStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetWorkloadStatsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AteomServer).GetWorkloadStats(ctx, in)
+		return srv.(WorkerServer).GetWorkloadStats(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Ateom_GetWorkloadStats_FullMethodName,
+		FullMethod: Worker_GetWorkloadStats_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AteomServer).GetWorkloadStats(ctx, req.(*GetWorkloadStatsRequest))
+		return srv.(WorkerServer).GetWorkloadStats(ctx, req.(*GetWorkloadStatsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Ateom_GetActiveWorkloadStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Worker_GetActiveWorkloadStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetActiveWorkloadStatsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AteomServer).GetActiveWorkloadStats(ctx, in)
+		return srv.(WorkerServer).GetActiveWorkloadStats(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Ateom_GetActiveWorkloadStats_FullMethodName,
+		FullMethod: Worker_GetActiveWorkloadStats_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AteomServer).GetActiveWorkloadStats(ctx, req.(*GetActiveWorkloadStatsRequest))
+		return srv.(WorkerServer).GetActiveWorkloadStats(ctx, req.(*GetActiveWorkloadStatsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Ateom_TerminateWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Worker_TerminateWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TerminateWorkloadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AteomServer).TerminateWorkload(ctx, in)
+		return srv.(WorkerServer).TerminateWorkload(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Ateom_TerminateWorkload_FullMethodName,
+		FullMethod: Worker_TerminateWorkload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AteomServer).TerminateWorkload(ctx, req.(*TerminateWorkloadRequest))
+		return srv.(WorkerServer).TerminateWorkload(ctx, req.(*TerminateWorkloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// Ateom_ServiceDesc is the grpc.ServiceDesc for Ateom service.
+// Worker_ServiceDesc is the grpc.ServiceDesc for Worker service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var Ateom_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "ateworker.Ateom",
-	HandlerType: (*AteomServer)(nil),
+var Worker_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "ateworker.Worker",
+	HandlerType: (*WorkerServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "RunWorkload",
-			Handler:    _Ateom_RunWorkload_Handler,
+			Handler:    _Worker_RunWorkload_Handler,
 		},
 		{
 			MethodName: "CheckpointWorkload",
-			Handler:    _Ateom_CheckpointWorkload_Handler,
+			Handler:    _Worker_CheckpointWorkload_Handler,
 		},
 		{
 			MethodName: "RestoreWorkload",
-			Handler:    _Ateom_RestoreWorkload_Handler,
+			Handler:    _Worker_RestoreWorkload_Handler,
 		},
 		{
 			MethodName: "GetWorkloadStats",
-			Handler:    _Ateom_GetWorkloadStats_Handler,
+			Handler:    _Worker_GetWorkloadStats_Handler,
 		},
 		{
 			MethodName: "GetActiveWorkloadStats",
-			Handler:    _Ateom_GetActiveWorkloadStats_Handler,
+			Handler:    _Worker_GetActiveWorkloadStats_Handler,
 		},
 		{
 			MethodName: "TerminateWorkload",
-			Handler:    _Ateom_TerminateWorkload_Handler,
+			Handler:    _Worker_TerminateWorkload_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

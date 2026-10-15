@@ -4236,13 +4236,13 @@ const file_atelet_proto_rawDesc = "" +
 	"UploadMode\x12\x1b\n" +
 	"\x17UPLOAD_MODE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14UPLOAD_MODE_DEFERRED\x10\x01\x12\x19\n" +
-	"\x15UPLOAD_MODE_IMMEDIATE\x10\x022\x8d\x03\n" +
-	"\fAteomSupport\x12c\n" +
+	"\x15UPLOAD_MODE_IMMEDIATE\x10\x022\x8e\x03\n" +
+	"\rWorkerSupport\x12c\n" +
 	"\x14MintActorCertificate\x12#.atelet.MintActorCertificateRequest\x1a$.atelet.MintActorCertificateResponse\"\x00\x12Q\n" +
 	"\x0eRegisterWorker\x12\x1d.atelet.RegisterWorkerRequest\x1a\x1e.atelet.RegisterWorkerResponse\"\x00\x12`\n" +
 	"\x13RequestActorSuspend\x12\".atelet.RequestActorSuspendRequest\x1a#.atelet.RequestActorSuspendResponse\"\x00\x12c\n" +
-	"\x14GetActorEgressPolicy\x12#.atelet.GetActorEgressPolicyRequest\x1a$.atelet.GetActorEgressPolicyResponse\"\x002\xde\x02\n" +
-	"\vAteomHerder\x120\n" +
+	"\x14GetActorEgressPolicy\x12#.atelet.GetActorEgressPolicyRequest\x1a$.atelet.GetActorEgressPolicyResponse\"\x002\xd9\x02\n" +
+	"\x06Atelet\x120\n" +
 	"\x03Run\x12\x12.atelet.RunRequest\x1a\x13.atelet.RunResponse\"\x00\x12E\n" +
 	"\n" +
 	"Checkpoint\x12\x19.atelet.CheckpointRequest\x1a\x1a.atelet.CheckpointResponse\"\x00\x12<\n" +
@@ -4393,24 +4393,24 @@ var file_atelet_proto_depIdxs = []int32{
 	51, // 59: atelet.PromoteSnapshotResponse.state:type_name -> atelet.ActorSnapshotState
 	26, // 60: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
 	27, // 61: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
-	20, // 62: atelet.AteomSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
-	3,  // 63: atelet.AteomSupport.RegisterWorker:input_type -> atelet.RegisterWorkerRequest
-	11, // 64: atelet.AteomSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
-	13, // 65: atelet.AteomSupport.GetActorEgressPolicy:input_type -> atelet.GetActorEgressPolicyRequest
-	24, // 66: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
-	53, // 67: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
-	55, // 68: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
-	57, // 69: atelet.AteomHerder.PromoteSnapshot:input_type -> atelet.PromoteSnapshotRequest
-	22, // 70: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
-	21, // 71: atelet.AteomSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
-	10, // 72: atelet.AteomSupport.RegisterWorker:output_type -> atelet.RegisterWorkerResponse
-	12, // 73: atelet.AteomSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
-	14, // 74: atelet.AteomSupport.GetActorEgressPolicy:output_type -> atelet.GetActorEgressPolicyResponse
-	47, // 75: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
-	54, // 76: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
-	56, // 77: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
-	58, // 78: atelet.AteomHerder.PromoteSnapshot:output_type -> atelet.PromoteSnapshotResponse
-	23, // 79: atelet.AteomHerder.Terminate:output_type -> atelet.TerminateResponse
+	20, // 62: atelet.WorkerSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
+	3,  // 63: atelet.WorkerSupport.RegisterWorker:input_type -> atelet.RegisterWorkerRequest
+	11, // 64: atelet.WorkerSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
+	13, // 65: atelet.WorkerSupport.GetActorEgressPolicy:input_type -> atelet.GetActorEgressPolicyRequest
+	24, // 66: atelet.Atelet.Run:input_type -> atelet.RunRequest
+	53, // 67: atelet.Atelet.Checkpoint:input_type -> atelet.CheckpointRequest
+	55, // 68: atelet.Atelet.Restore:input_type -> atelet.RestoreRequest
+	57, // 69: atelet.Atelet.PromoteSnapshot:input_type -> atelet.PromoteSnapshotRequest
+	22, // 70: atelet.Atelet.Terminate:input_type -> atelet.TerminateRequest
+	21, // 71: atelet.WorkerSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
+	10, // 72: atelet.WorkerSupport.RegisterWorker:output_type -> atelet.RegisterWorkerResponse
+	12, // 73: atelet.WorkerSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
+	14, // 74: atelet.WorkerSupport.GetActorEgressPolicy:output_type -> atelet.GetActorEgressPolicyResponse
+	47, // 75: atelet.Atelet.Run:output_type -> atelet.RunResponse
+	54, // 76: atelet.Atelet.Checkpoint:output_type -> atelet.CheckpointResponse
+	56, // 77: atelet.Atelet.Restore:output_type -> atelet.RestoreResponse
+	58, // 78: atelet.Atelet.PromoteSnapshot:output_type -> atelet.PromoteSnapshotResponse
+	23, // 79: atelet.Atelet.Terminate:output_type -> atelet.TerminateResponse
 	71, // [71:80] is the sub-list for method output_type
 	62, // [62:71] is the sub-list for method input_type
 	62, // [62:62] is the sub-list for extension type_name

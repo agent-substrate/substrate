@@ -188,7 +188,7 @@ func retryable(err error) bool {
 func requestOnce(ctx context.Context, conn grpc.ClientConnInterface, actor Actor) error {
 	callCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
-	_, err := ateletpb.NewAteomSupportClient(conn).RequestActorSuspend(callCtx, &ateletpb.RequestActorSuspendRequest{
+	_, err := ateletpb.NewWorkerSupportClient(conn).RequestActorSuspend(callCtx, &ateletpb.RequestActorSuspendRequest{
 		ActorAtespace: actor.Atespace,
 		ActorName:     actor.Name,
 		ActorUid:      actor.UID,

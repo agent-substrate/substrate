@@ -368,7 +368,7 @@ func TestServerUnaryInterceptorRequestLogMasksEnvValues(t *testing.T) {
 		},
 	}
 
-	_, err := ServerUnaryInterceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: "/atelet.AteomHerder/Run"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	_, err := ServerUnaryInterceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: "/atelet.Atelet/Run"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return &ateletpb.RunResponse{}, nil
 	})
 	if err != nil {

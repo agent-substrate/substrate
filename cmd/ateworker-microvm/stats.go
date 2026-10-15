@@ -90,7 +90,7 @@ type guestStatsTarget struct {
 	workloadIDs []string
 }
 
-// GetWorkloadStats implements ateworkerpb.Ateom/GetWorkloadStats.
+// GetWorkloadStats implements ateworkerpb.Worker/GetWorkloadStats.
 //
 // The sample comes from inside the guest, not from the host cgroup. On this
 // runtime the host cgroup holds cloud-hypervisor, whose memory is the guest RAM
@@ -140,7 +140,7 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.Ge
 	return &ateworkerpb.GetWorkloadStatsResponse{Sample: sample}, nil
 }
 
-// GetActiveWorkloadStats implements ateworkerpb.Ateom/GetActiveWorkloadStats: the
+// GetActiveWorkloadStats implements ateworkerpb.Worker/GetActiveWorkloadStats: the
 // discovery read. It serves each actor's latest sample from the sampler, so a
 // poll puts no load of its own on the guests; an actor not sampled yet is
 // pending.

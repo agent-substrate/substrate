@@ -184,7 +184,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	if err != nil {
 		return "", fmt.Errorf("while getting atelet conn for node %q: %w", assignment.GetNodeName(), err)
 	}
-	client := ateletpb.NewAteomHerderClient(ateletConn)
+	client := ateletpb.NewAteletClient(ateletConn)
 
 	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 	if err != nil {

@@ -59,7 +59,7 @@ func useTempNodeDirs(t *testing.T) {
 // restore was handed. Like a real ateom it takes every actor directory from
 // the request, never derived from the actor UID.
 type fakeAteom struct {
-	ateworkerpb.UnimplementedAteomServer
+	ateworkerpb.UnimplementedWorkerServer
 	// snapshotFiles are written at checkpoint and reported back to atelet as
 	// the exact set the snapshot consists of.
 	snapshotFiles map[string]string
@@ -146,7 +146,7 @@ func serveFakeAteom(t *testing.T, f *fakeAteom) {
 		t.Fatalf("listening on %q: %v", sock, err)
 	}
 	srv := grpc.NewServer()
-	ateworkerpb.RegisterAteomServer(srv, f)
+	ateworkerpb.RegisterWorkerServer(srv, f)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 

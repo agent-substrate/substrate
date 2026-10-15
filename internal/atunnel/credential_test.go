@@ -84,7 +84,7 @@ func TestBrokerCertificateSourceRejectsExpiredCertificate(t *testing.T) {
 }
 
 type ateomSupportStub struct {
-	ateletpb.UnimplementedAteomSupportServer
+	ateletpb.UnimplementedWorkerSupportServer
 	ca         *testCA
 	lifetime   time.Duration
 	publicKeys chan []byte
@@ -164,7 +164,7 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 		ClientCAs:    clientCAs,
 	})))
 	broker := &ateomSupportStub{ca: ca, lifetime: lifetime, publicKeys: make(chan []byte, 2)}
-	ateletpb.RegisterAteomSupportServer(server, broker)
+	ateletpb.RegisterWorkerSupportServer(server, broker)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() {
 		server.Stop()

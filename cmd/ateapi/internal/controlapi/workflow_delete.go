@@ -158,7 +158,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		return fmt.Errorf("while connecting to atelet on node %q: %w", nodeName, err)
 	}
 
-	client := ateletpb.NewAteomHerderClient(conn)
+	client := ateletpb.NewAteletClient(conn)
 
 	var workloadSpec *ateletpb.WorkloadSpec
 	if actorTemplate != nil {

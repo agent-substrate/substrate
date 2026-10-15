@@ -136,7 +136,7 @@ func main() {
 		h.minter = workers
 	}
 	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(herderTLS)))
-	ateletpb.RegisterAteomHerderServer(srv, h)
+	ateletpb.RegisterAteletServer(srv, h)
 
 	relayTLS, err := relayTLSConfig(*grpcServerCredBundle, *clientCACerts, *relayAllowedID)
 	if err != nil {
