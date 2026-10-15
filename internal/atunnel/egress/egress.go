@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package atunnel
+package egress
 
 import (
 	"context"
@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -29,8 +30,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// egressDialer opens an authenticated tunnel to an original destination.
-type egressDialer interface {
+// tunnelDialer opens an authenticated tunnel to an original destination.
+type tunnelDialer interface {
 	DialContext(context.Context, string) (net.Conn, error)
 	Close() error
 }
@@ -43,21 +44,21 @@ type actorCertificateSource interface {
 // connection originally targeted.
 type originalDestinationFunc func(net.Conn) (string, error)
 
-// Egress proxies actor TCP connections through an egress CONNECT dialer. It is
+// Proxy proxies actor TCP connections through an egress CONNECT dialer. It is
 // long-lived across actor activations, but only carries traffic while an actor
 // is assigned to its worker.
-type Egress struct {
+type Proxy struct {
 	originalDestination originalDestinationFunc
 	// tunnelOpenTimeout bounds the wait for the gateway's CONNECT answer.
 	tunnelOpenTimeout time.Duration
 
 	mu sync.Mutex
 	// Keyed by actor UID, supplied by the namespace-specific listener.
-	active map[string]*egressActivation
+	active map[string]*activation
 }
 
-type egressActivation struct {
-	dialer            egressDialer
+type activation struct {
+	dialer            tunnelDialer
 	certificateSource actorCertificateSource
 	expiresAt         time.Time
 
@@ -68,26 +69,26 @@ type egressActivation struct {
 	wg     sync.WaitGroup
 }
 
-// NewEgress creates an activation-aware egress proxy.
-func NewEgress(originalDestination originalDestinationFunc) (*Egress, error) {
+// NewProxy creates an activation-aware egress proxy.
+func NewProxy(originalDestination originalDestinationFunc) (*Proxy, error) {
 	if originalDestination == nil {
-		return nil, fmt.Errorf("atunnel: original destination resolver is required")
+		return nil, fmt.Errorf("egress: original destination resolver is required")
 	}
 	// The gateway answers within its 5s authorization timeout; a longer wait
 	// means it has queued the CONNECT behind its connection cap, and closing
 	// the connection is what frees that queue slot.
 	const tunnelOpenTimeout = 10 * time.Second
-	return &Egress{
+	return &Proxy{
 		originalDestination: originalDestination,
 		tunnelOpenTimeout:   tunnelOpenTimeout,
-		active:              map[string]*egressActivation{},
+		active:              map[string]*activation{},
 	}, nil
 }
 
 // Bind captures the actor's activation before its listeners start serving.
-func (e *Egress) Bind(actorUID string) (func(context.Context, net.Listener) error, error) {
+func (e *Proxy) Bind(actorUID string) (func(context.Context, net.Listener) error, error) {
 	if actorUID == "" {
-		return nil, fmt.Errorf("atunnel: actor UID is required")
+		return nil, fmt.Errorf("egress: actor UID is required")
 	}
 	e.mu.Lock()
 	active := e.activationLocked(actorUID)
@@ -105,17 +106,17 @@ func (e *Egress) Bind(actorUID string) (func(context.Context, net.Listener) erro
 	}, nil
 }
 
-func (e *Egress) activationLocked(actorUID string) *egressActivation {
+func (e *Proxy) activationLocked(actorUID string) *activation {
 	active := e.active[actorUID]
 	if active == nil {
 		ctx, cancel := context.WithCancel(context.Background())
-		active = &egressActivation{ctx: ctx, cancel: cancel}
+		active = &activation{ctx: ctx, cancel: cancel}
 		e.active[actorUID] = active
 	}
 	return active
 }
 
-func (e *Egress) serve(ctx context.Context, listener net.Listener, active *egressActivation) error {
+func (e *Proxy) serve(ctx context.Context, listener net.Listener, active *activation) error {
 	done := make(chan struct{})
 	go func() {
 		select {
@@ -134,31 +135,31 @@ func (e *Egress) serve(ctx context.Context, listener net.Listener, active *egres
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
-			return fmt.Errorf("atunnel: accepting actor egress connection: %w", err)
+			return fmt.Errorf("egress: accepting actor egress connection: %w", err)
 		}
 		e.handle(conn, active)
 	}
 }
 
 // Activate enables the actor's egress and certificate renewal until deactivation.
-func (e *Egress) Activate(actorUID string, dialer egressDialer, certificateSource actorCertificateSource, expiresAt time.Time) error {
+func (e *Proxy) Activate(actorUID string, dialer tunnelDialer, certificateSource actorCertificateSource, expiresAt time.Time) error {
 	if actorUID == "" {
-		return fmt.Errorf("atunnel: actor UID is required")
+		return fmt.Errorf("egress: actor UID is required")
 	}
 	if dialer == nil {
-		return fmt.Errorf("atunnel: egress dialer is required")
+		return fmt.Errorf("egress: dialer is required")
 	}
 	if certificateSource == nil {
-		return fmt.Errorf("atunnel: actor certificate source is required")
+		return fmt.Errorf("egress: actor certificate source is required")
 	}
 	if !expiresAt.After(time.Now()) {
-		return fmt.Errorf("atunnel: valid actor certificate is required")
+		return fmt.Errorf("egress: valid actor certificate is required")
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	active := e.activationLocked(actorUID)
 	if active.dialer != nil {
-		return fmt.Errorf("atunnel: actor %s already has active egress", actorUID)
+		return fmt.Errorf("egress: actor %s already has active egress", actorUID)
 	}
 	active.dialer = dialer
 	active.certificateSource = certificateSource
@@ -168,7 +169,7 @@ func (e *Egress) Activate(actorUID string, dialer egressDialer, certificateSourc
 	return nil
 }
 
-func (e *Egress) renew(active *egressActivation, expiresAt time.Time) {
+func (e *Proxy) renew(active *activation, expiresAt time.Time) {
 	defer active.wg.Done()
 	// Schedule from the credential's remaining lifetime: renew at 90%, then
 	// keep retrying after expiry so egress can recover without reactivation.
@@ -249,7 +250,7 @@ func waitForRenewal(ctx context.Context, delay time.Duration) bool {
 }
 
 // Deactivate disables the actor's egress and closes and drains its streams.
-func (e *Egress) Deactivate(ctx context.Context, actorUID string) error {
+func (e *Proxy) Deactivate(ctx context.Context, actorUID string) error {
 	e.mu.Lock()
 	active := e.active[actorUID]
 	delete(e.active, actorUID)
@@ -271,7 +272,7 @@ func (e *Egress) Deactivate(ctx context.Context, actorUID string) error {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		err = fmt.Errorf("atunnel: waiting for active egress streams to stop: %w", ctx.Err())
+		err = fmt.Errorf("egress: waiting for active egress streams to stop: %w", ctx.Err())
 	}
 	if active.dialer != nil {
 		err = errors.Join(err, active.dialer.Close())
@@ -279,7 +280,7 @@ func (e *Egress) Deactivate(ctx context.Context, actorUID string) error {
 	return err
 }
 
-func (e *Egress) handle(downstream net.Conn, active *egressActivation) {
+func (e *Proxy) handle(downstream net.Conn, active *activation) {
 	e.mu.Lock()
 	if active == nil || active.ctx.Err() != nil {
 		e.mu.Unlock()
@@ -346,17 +347,27 @@ func closeWrite(conn net.Conn) {
 	}
 }
 
-// EgressPort is the port from a listen address, which each sandbox's redirect
+// Port is the port from a listen address, which each sandbox's redirect
 // aims at. The address itself is never bound: egress is served from inside the
 // sandbox namespaces.
-func EgressPort(listenAddress string) (uint16, error) {
+func Port(listenAddress string) (uint16, error) {
 	_, port, err := net.SplitHostPort(listenAddress)
 	if err != nil {
-		return 0, fmt.Errorf("atunnel: egress listen address %q: %w", listenAddress, err)
+		return 0, fmt.Errorf("egress: listen address %q: %w", listenAddress, err)
 	}
-	p, ok := ParsePort(port)
+	p, ok := parsePort(port)
 	if !ok {
-		return 0, fmt.Errorf("atunnel: egress listen address %q has no usable port", listenAddress)
+		return 0, fmt.Errorf("egress: listen address %q has no usable port", listenAddress)
 	}
 	return uint16(p), nil
+}
+
+// parsePort parses s as a TCP port number, returning ok=false for anything
+// outside the valid 1-65535 range (including non-numeric input).
+func parsePort(s string) (port int, ok bool) {
+	p, err := strconv.Atoi(s)
+	if err != nil || p < 1 || p > 65535 {
+		return 0, false
+	}
+	return p, true
 }

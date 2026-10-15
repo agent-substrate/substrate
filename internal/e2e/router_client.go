@@ -133,7 +133,7 @@ func (c *RouterClient) request(ctx context.Context, method string, actorRef reso
 // travels in the CONNECT authority (e.g. "my-actor.team-a...:9090"), the same
 // way a real client reaches a port other than an actor's primary one. On a
 // non-2xx response the returned error carries the status and body, mirroring
-// atunnel.Client.DialContext's handling of the same failure mode on the
+// egress.Client.DialContext's handling of the same failure mode on the
 // egress side. The caller owns the returned connection and must Close it;
 // the underlying port-forward is torn down by RouterClient.Close.
 func (c *RouterClient) Connect(ctx context.Context, actorRef resources.ActorRef, port int) (net.Conn, error) {
@@ -206,7 +206,7 @@ func (c *RouterClient) ensureConnectPortForward(ctx context.Context) error {
 }
 
 // bufferedConn recovers bytes http.ReadResponse buffered past the header
-// boundary, mirroring internal/atunnel/client.go's identical need on the
+// boundary, mirroring internal/atunnel/egress/client.go's identical need on the
 // egress CONNECT client.
 type bufferedConn struct {
 	net.Conn

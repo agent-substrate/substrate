@@ -14,7 +14,7 @@
 
 //go:build linux
 
-package atunnel
+package egress
 
 import (
 	"encoding/binary"
@@ -35,18 +35,18 @@ const ip6tSOOriginalDst = 80
 func TCPOriginalDestination(conn net.Conn) (string, error) {
 	tcpConn, ok := conn.(*net.TCPConn)
 	if !ok {
-		return "", fmt.Errorf("atunnel: original destination requires a TCP connection, got %T", conn)
+		return "", fmt.Errorf("egress: original destination requires a TCP connection, got %T", conn)
 	}
 	rawConn, err := tcpConn.SyscallConn()
 	if err != nil {
-		return "", fmt.Errorf("atunnel: acquiring TCP syscall connection: %w", err)
+		return "", fmt.Errorf("egress: acquiring TCP syscall connection: %w", err)
 	}
 	// The IPv6 option is only meaningful on an AF_INET6 socket: on AF_INET the
 	// kernel returns EOPNOTSUPP, which would mask the real IPv4 error. A
 	// v4-mapped local address still means an IPv4 flow, so To4 is the test.
 	local, ok := tcpConn.LocalAddr().(*net.TCPAddr)
 	if !ok {
-		return "", fmt.Errorf("atunnel: original destination requires a TCP local address, got %T", tcpConn.LocalAddr())
+		return "", fmt.Errorf("egress: original destination requires a TCP local address, got %T", tcpConn.LocalAddr())
 	}
 	isIPv6 := local.IP.To4() == nil
 
@@ -59,14 +59,14 @@ func TCPOriginalDestination(conn net.Conn) (string, error) {
 		}
 		destination, sockoptErr = originalIPv4Destination(fd)
 	}); err != nil {
-		return "", fmt.Errorf("atunnel: accessing TCP socket: %w", err)
+		return "", fmt.Errorf("egress: accessing TCP socket: %w", err)
 	}
 	if sockoptErr != nil {
 		family := "IPv4"
 		if isIPv6 {
 			family = "IPv6"
 		}
-		return "", fmt.Errorf("atunnel: reading original %s TCP destination: %w", family, sockoptErr)
+		return "", fmt.Errorf("egress: reading original %s TCP destination: %w", family, sockoptErr)
 	}
 	return destination, nil
 }
@@ -108,7 +108,7 @@ func formatOriginalDestination(ip []byte, rawPort uint16) (string, error) {
 	portBytes := (*[2]byte)(unsafe.Pointer(&rawPort))
 	port := binary.BigEndian.Uint16(portBytes[:])
 	if port == 0 {
-		return "", fmt.Errorf("atunnel: original TCP destination has port zero")
+		return "", fmt.Errorf("egress: original TCP destination has port zero")
 	}
 	return net.JoinHostPort(net.IP(ip).String(), strconv.Itoa(int(port))), nil
 }

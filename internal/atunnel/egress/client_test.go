@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package atunnel
+package egress
 
 import (
 	"bufio"
@@ -628,7 +628,7 @@ func TestClientClose(t *testing.T) {
 
 // dialFixedAddress ignores the requested address and connects to address, so
 // tests can point a client at a listener on an ephemeral port.
-func dialFixedAddress(address string) DialFunc {
+func dialFixedAddress(address string) dialFunc {
 	return func(ctx context.Context, network, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, network, address)
 	}

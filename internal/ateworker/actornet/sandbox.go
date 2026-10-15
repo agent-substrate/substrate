@@ -364,7 +364,7 @@ func CleanupSandboxNetwork(network *SandboxNetwork) error {
 }
 
 // egressServer serves one actor's captured connections. Satisfied by
-// atunnel.Egress; an interface so this package does not depend on it.
+// egress.Proxy; an interface so this package does not depend on it.
 type egressServer interface {
 	Bind(actorUID string) (func(context.Context, net.Listener) error, error)
 }

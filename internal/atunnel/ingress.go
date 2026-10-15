@@ -63,6 +63,9 @@ func ParsePort(s string) (port int, ok bool) {
 	return p, true
 }
 
+// DialFunc dials a network address. It matches net.Dialer.DialContext.
+type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
 // Config configures an ingress Server.
 type Config struct {
 	CredentialBundlePath string
@@ -578,4 +581,10 @@ var errActorDeactivated = errors.New("atunnel: actor deactivated")
 func (s *Server) reject(w http.ResponseWriter) {
 	w.Header().Set(staleAssignmentHeader, "true")
 	http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
+}
+
+func closeWrite(conn net.Conn) {
+	if conn, ok := conn.(interface{ CloseWrite() error }); ok {
+		_ = conn.CloseWrite()
+	}
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package atunnel
+package egress
 
 import (
 	"context"
@@ -80,15 +80,15 @@ func NewBrokerCertificateSource(cfg BrokerConfig) (*BrokerCertificateSource, err
 	}
 
 	if cfg.AteletSPIFFEID == "" {
-		return nil, fmt.Errorf("atunnel: expected atelet SPIFFE ID is required")
+		return nil, fmt.Errorf("egress: expected atelet SPIFFE ID is required")
 	}
 	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath, cfg.AteletSPIFFEID)
 	if err != nil {
-		return nil, fmt.Errorf("atunnel: %w", err)
+		return nil, fmt.Errorf("egress: %w", err)
 	}
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("atunnel: generate actor private key: %w", err)
+		return nil, fmt.Errorf("egress: generate actor private key: %w", err)
 	}
 
 	return &BrokerCertificateSource{
@@ -106,7 +106,7 @@ func NewBrokerCertificateSource(cfg BrokerConfig) (*BrokerCertificateSource, err
 func (s *BrokerCertificateSource) MintWorkerCertificate(ctx context.Context) (time.Time, error) {
 	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, s.privateKey)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("atunnel: create actor CSR: %w", err)
+		return time.Time{}, fmt.Errorf("egress: create actor CSR: %w", err)
 	}
 
 	// TODO(identity): We should not be re-establishing a gRPC connection for
@@ -126,7 +126,7 @@ func (s *BrokerCertificateSource) MintWorkerCertificate(ctx context.Context) (ti
 		CertificateSigningRequest: csr,
 	})
 	if err != nil {
-		return time.Time{}, fmt.Errorf("atunnel: mint actor certificate: %w", err)
+		return time.Time{}, fmt.Errorf("egress: mint actor certificate: %w", err)
 	}
 
 	// TODO(identity): I don't think we need to check all this stuff.  We can
@@ -134,21 +134,21 @@ func (s *BrokerCertificateSource) MintWorkerCertificate(ctx context.Context) (ti
 
 	chain := resp.GetActorCertificates()
 	if len(chain) == 0 {
-		return time.Time{}, fmt.Errorf("atunnel: credential broker returned no actor certificate")
+		return time.Time{}, fmt.Errorf("egress: credential broker returned no actor certificate")
 	}
 	leaf, err := x509.ParseCertificate(chain[0])
 	if err != nil {
-		return time.Time{}, fmt.Errorf("atunnel: parse actor certificate: %w", err)
+		return time.Time{}, fmt.Errorf("egress: parse actor certificate: %w", err)
 	}
 	if !s.privateKey.PublicKey.Equal(leaf.PublicKey) {
-		return time.Time{}, fmt.Errorf("atunnel: actor certificate does not match private key")
+		return time.Time{}, fmt.Errorf("egress: actor certificate does not match private key")
 	}
 	now := time.Now()
 	if now.Before(leaf.NotBefore) || !leaf.NotAfter.After(now) {
-		return time.Time{}, fmt.Errorf("atunnel: credential broker returned an invalid actor certificate lifetime")
+		return time.Time{}, fmt.Errorf("egress: credential broker returned an invalid actor certificate lifetime")
 	}
 	if !slices.Contains(leaf.ExtKeyUsage, x509.ExtKeyUsageClientAuth) {
-		return time.Time{}, fmt.Errorf("atunnel: actor certificate cannot authenticate a TLS client")
+		return time.Time{}, fmt.Errorf("egress: actor certificate cannot authenticate a TLS client")
 	}
 	cert := &tls.Certificate{Certificate: chain, PrivateKey: s.privateKey, Leaf: leaf}
 	s.mu.Lock()
@@ -163,7 +163,7 @@ func (s *BrokerCertificateSource) GetClientCertificate(*tls.CertificateRequestIn
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.certificate == nil || !s.certificate.Leaf.NotAfter.After(time.Now()) {
-		return nil, fmt.Errorf("atunnel: no valid actor certificate")
+		return nil, fmt.Errorf("egress: no valid actor certificate")
 	}
 	return s.certificate, nil
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package atunnel
+package egress
 
 import (
 	"bufio"
@@ -43,13 +43,13 @@ type ClientConfig struct {
 	TrustBundlePath      string
 }
 
-// DialFunc dials a network address. It matches net.Dialer.DialContext.
-type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
+// dialFunc dials a network address. It matches net.Dialer.DialContext.
+type dialFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
 // ErrGatewayHandshake reports that the gateway's front door refused the
 // connection at TLS: it rejected the client certificate, or its own
 // certificate did not verify.
-var ErrGatewayHandshake = errors.New("atunnel: egress gateway TLS handshake")
+var ErrGatewayHandshake = errors.New("egress: gateway TLS handshake")
 
 // ConnectRejectedError reports a CONNECT the gateway answered with a non-2xx
 // status. The caller authenticated successfully and the request was declined
@@ -65,7 +65,7 @@ type ConnectRejectedError struct {
 }
 
 func (e *ConnectRejectedError) Error() string {
-	return fmt.Sprintf("atunnel: egress gateway rejected CONNECT with %s: %s", e.status, e.message)
+	return fmt.Sprintf("egress: gateway rejected CONNECT with %s: %s", e.status, e.message)
 }
 
 // clientOption customizes a Client beyond its configuration. Production
@@ -74,7 +74,7 @@ type clientOption func(*Client)
 
 // withDialer overrides how the client reaches the egress gateway. It exists so
 // tests can substitute a transport; by default a net.Dialer is used.
-func withDialer(dial DialFunc) clientOption {
+func withDialer(dial dialFunc) clientOption {
 	return func(c *Client) {
 		if dial != nil {
 			c.dialContext = dial
@@ -86,7 +86,7 @@ func withDialer(dial DialFunc) clientOption {
 type Client struct {
 	gatewayAddress string
 	tlsConfig      *tls.Config
-	dialContext    DialFunc
+	dialContext    dialFunc
 
 	mu      sync.Mutex
 	closed  bool
@@ -94,30 +94,30 @@ type Client struct {
 	dialing *dialCall
 }
 
-// Client implements egressDialer.
-var _ egressDialer = (*Client)(nil)
+// Client implements tunnelDialer.
+var _ tunnelDialer = (*Client)(nil)
 
 // NewClient creates an egress CONNECT client and validates its TLS material.
 func NewClient(cfg ClientConfig, opts ...clientOption) (*Client, error) {
 	if _, _, err := net.SplitHostPort(cfg.GatewayAddress); err != nil {
-		return nil, fmt.Errorf("atunnel: invalid egress gateway address %q: %w", cfg.GatewayAddress, err)
+		return nil, fmt.Errorf("egress: invalid egress gateway address %q: %w", cfg.GatewayAddress, err)
 	}
 	if cfg.ServerName == "" {
-		return nil, fmt.Errorf("atunnel: egress gateway server name is required")
+		return nil, fmt.Errorf("egress: gateway server name is required")
 	}
 	if cfg.GetClientCertificate == nil {
-		return nil, fmt.Errorf("atunnel: client certificate source is required")
+		return nil, fmt.Errorf("egress: client certificate source is required")
 	}
 	if cfg.TrustBundlePath == "" {
-		return nil, fmt.Errorf("atunnel: trust bundle path is required")
+		return nil, fmt.Errorf("egress: trust bundle path is required")
 	}
 	trustPEM, err := os.ReadFile(cfg.TrustBundlePath)
 	if err != nil {
-		return nil, fmt.Errorf("atunnel: reading trust bundle: %w", err)
+		return nil, fmt.Errorf("egress: reading trust bundle: %w", err)
 	}
 	rootCAs := x509.NewCertPool()
 	if !rootCAs.AppendCertsFromPEM(trustPEM) {
-		return nil, fmt.Errorf("atunnel: trust bundle %q contains no certificates", cfg.TrustBundlePath)
+		return nil, fmt.Errorf("egress: trust bundle %q contains no certificates", cfg.TrustBundlePath)
 	}
 
 	client := &Client{
@@ -197,7 +197,7 @@ type dialCall struct {
 func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Conn, error) {
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, false, nil, fmt.Errorf("atunnel: connecting to egress gateway: %w", err)
+			return nil, false, nil, fmt.Errorf("egress: connecting to egress gateway: %w", err)
 		}
 
 		// First check if there is an existing H/2 connection with available stream capacity.
@@ -205,7 +205,7 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 		c.mu.Lock()
 		if c.closed {
 			c.mu.Unlock()
-			return nil, false, nil, fmt.Errorf("atunnel: connecting to egress gateway: %w", net.ErrClosed)
+			return nil, false, nil, fmt.Errorf("egress: connecting to egress gateway: %w", net.ErrClosed)
 		}
 		keep := c.h2Conns[:0]
 		var reserved *h2ClientConn
@@ -275,7 +275,7 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 
 			if err != nil {
 				if ctx.Err() != nil {
-					return nil, false, nil, fmt.Errorf("atunnel: connecting to egress gateway: %w", ctx.Err())
+					return nil, false, nil, fmt.Errorf("egress: connecting to egress gateway: %w", ctx.Err())
 				}
 				return nil, false, nil, err
 			}
@@ -309,7 +309,7 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 			if orphan != nil {
 				_ = orphan.Close()
 			}
-			return nil, false, nil, fmt.Errorf("atunnel: connecting to egress gateway: %w", ctx.Err())
+			return nil, false, nil, fmt.Errorf("egress: connecting to egress gateway: %w", ctx.Err())
 		}
 	}
 }
@@ -325,7 +325,7 @@ func (c *Client) runDial(dialCtx context.Context, call *dialCall) {
 	)
 	rawConn, dialErr := c.dialContext(dialCtx, "tcp", c.gatewayAddress)
 	if dialErr != nil {
-		err = fmt.Errorf("atunnel: connecting to egress gateway: %w", dialErr)
+		err = fmt.Errorf("egress: connecting to egress gateway: %w", dialErr)
 	} else {
 		tlsConn := tls.Client(rawConn, c.tlsConfig.Clone())
 		if hsErr := tlsConn.HandshakeContext(dialCtx); hsErr != nil {
@@ -345,7 +345,7 @@ func (c *Client) runDial(dialCtx context.Context, call *dialCall) {
 	}
 	if c.closed || call.waiters == 0 {
 		if c.closed && err == nil {
-			call.err = fmt.Errorf("atunnel: connecting to egress gateway: %w", net.ErrClosed)
+			call.err = fmt.Errorf("egress: connecting to egress gateway: %w", net.ErrClosed)
 		} else {
 			call.err = err
 		}
@@ -997,7 +997,7 @@ func connectExchangeError(op string, err error) error {
 	if gatewayHungUp(err) {
 		return fmt.Errorf("%w: %s: %w", ErrGatewayHandshake, op, err)
 	}
-	return fmt.Errorf("atunnel: %s: %w", op, err)
+	return fmt.Errorf("egress: %s: %w", op, err)
 }
 
 // gatewayHungUp reports whether err is the peer tearing the connection down,
@@ -1025,16 +1025,16 @@ func gatewayHungUp(err error) bool {
 func validateDestination(destination string) error {
 	host, port, err := net.SplitHostPort(destination)
 	if err != nil {
-		return fmt.Errorf("atunnel: invalid egress destination %q: %w", destination, err)
+		return fmt.Errorf("egress: invalid egress destination %q: %w", destination, err)
 	}
 	if host == "" {
-		return fmt.Errorf("atunnel: invalid egress destination %q: host is empty", destination)
+		return fmt.Errorf("egress: invalid egress destination %q: host is empty", destination)
 	}
 	if net.ParseIP(host) == nil {
-		return fmt.Errorf("atunnel: invalid egress destination %q: host must be an IP address", destination)
+		return fmt.Errorf("egress: invalid egress destination %q: host must be an IP address", destination)
 	}
-	if _, ok := ParsePort(port); !ok {
-		return fmt.Errorf("atunnel: invalid egress destination %q: port must be between 1 and 65535", destination)
+	if _, ok := parsePort(port); !ok {
+		return fmt.Errorf("egress: invalid egress destination %q: port must be between 1 and 65535", destination)
 	}
 	return nil
 }
