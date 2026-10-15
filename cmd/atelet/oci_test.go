@@ -228,6 +228,25 @@ func TestResolveUser(t *testing.T) {
 	}
 }
 
+func TestResolveCwd(t *testing.T) {
+	for _, tc := range []struct {
+		image   *v1.Config
+		want    string
+		wantErr bool
+	}{
+		{image: nil, want: "/"},
+		{image: &v1.Config{}, want: "/"},
+		{image: &v1.Config{WorkingDir: "/home/jovyan"}, want: "/home/jovyan"},
+		{image: &v1.Config{WorkingDir: "/app/"}, want: "/app"},
+		{image: &v1.Config{WorkingDir: "app"}, wantErr: true},
+	} {
+		got, err := resolveCwd(tc.image)
+		if (err != nil) != tc.wantErr || got != tc.want {
+			t.Errorf("resolveCwd(%+v) = %q, %v; want %q, wantErr %v", tc.image, got, err, tc.want, tc.wantErr)
+		}
+	}
+}
+
 func TestResolveCapabilities(t *testing.T) {
 	tests := []struct {
 		name string
