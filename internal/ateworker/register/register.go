@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateworker registers a worker with the control plane through the
+// Package register registers a worker with the control plane through the
 // node-local atelet, reporting its compute capacity and the sandbox runtime
 // its actors start under.
-package ateworker
+package register
 
 import (
 	"context"
