@@ -110,9 +110,9 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 				})
 				return apierror.Code(err)
 			}
-			// mint asks for the actor's certificate as the worker assigned the
-			// actor and returns the actor as the mint saw it and the mint's
-			// code.
+			// mint asks for the actor's certificate as the worker that the
+			// actor is assigned to and returns the actor as the mint saw it
+			// and the mint's code.
 			mint := func(stage string) (*ateapipb.Actor, codes.Code) {
 				t.Helper()
 				code := mintAs(workerName)

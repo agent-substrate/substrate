@@ -1961,11 +1961,11 @@ type WorkerServiceClient interface {
 	//
 	// atelet calls this with its own client certificate, as it does for
 	// RequestActorSuspend, naming the Worker its caller proved itself to be.
-	// The control plane mints only for the Worker assigned the Actor, and only
-	// to an atelet on that Worker's node. A request from any other node or
-	// Worker gets NotFound; one from the assigned Worker with a stale actor_uid
-	// gets Aborted. Unlike MintWorkerActorJwt, a paused Actor gets NotFound,
-	// since it has no Worker to bind the certificate to.
+	// The control plane mints only for the Worker that the Actor is assigned
+	// to, and only to an atelet on that Worker's node. A request from any
+	// other node or Worker gets NotFound; one from the assigned Worker with a
+	// stale actor_uid gets Aborted. Unlike MintWorkerActorJwt, a paused Actor
+	// gets NotFound, since it has no Worker to bind the certificate to.
 	MintWorkerActorCertificate(ctx context.Context, in *MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*MintWorkerActorCertificateResponse, error)
 	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
 	// acting on behalf of a particular actor: the JWT counterpart of
@@ -2098,11 +2098,11 @@ type WorkerServiceServer interface {
 	//
 	// atelet calls this with its own client certificate, as it does for
 	// RequestActorSuspend, naming the Worker its caller proved itself to be.
-	// The control plane mints only for the Worker assigned the Actor, and only
-	// to an atelet on that Worker's node. A request from any other node or
-	// Worker gets NotFound; one from the assigned Worker with a stale actor_uid
-	// gets Aborted. Unlike MintWorkerActorJwt, a paused Actor gets NotFound,
-	// since it has no Worker to bind the certificate to.
+	// The control plane mints only for the Worker that the Actor is assigned
+	// to, and only to an atelet on that Worker's node. A request from any
+	// other node or Worker gets NotFound; one from the assigned Worker with a
+	// stale actor_uid gets Aborted. Unlike MintWorkerActorJwt, a paused Actor
+	// gets NotFound, since it has no Worker to bind the certificate to.
 	MintWorkerActorCertificate(context.Context, *MintWorkerActorCertificateRequest) (*MintWorkerActorCertificateResponse, error)
 	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
 	// acting on behalf of a particular actor: the JWT counterpart of

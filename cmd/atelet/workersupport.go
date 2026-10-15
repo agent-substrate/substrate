@@ -39,8 +39,8 @@ type workerSupportServer struct {
 
 func (b *workerSupportServer) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
 	// Identity comes only from the mTLS certificate, never from the request:
-	// the control plane mints only for the Worker assigned the actor, so a
-	// worker gets certificates for the actor it hosts and no other.
+	// the control plane mints only for the Worker that the actor is assigned
+	// to, so a worker gets certificates for the actor it hosts and no other.
 	workerIdentity, err := authenticatedWorkerIdentity(ctx)
 	if err != nil {
 		return nil, err

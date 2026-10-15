@@ -7981,8 +7981,8 @@ type MintWorkerActorCertificateRequest struct {
 	CertificateSigningRequest []byte `protobuf:"bytes,3,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
 	// The Worker requesting the certificate. atespace is always empty; Workers
 	// are global-scoped. atelet fills this in from its caller's certificate, so
-	// it names the Worker the request provably came from. It must be the
-	// Worker assigned the actor.
+	// it names the Worker that certificate proves the request came from. It
+	// must be the Worker that the actor is assigned to.
 	//
 	// +k8s:required
 	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
@@ -8245,7 +8245,7 @@ type RequestActorSuspendRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker making the request. atespace is always empty; Workers are
 	// global-scoped. atelet fills this in from its caller's certificate, so it
-	// names the Worker the request provably came from.
+	// names the Worker that certificate proves the request came from.
 	//
 	// +k8s:required
 	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
