@@ -279,3 +279,64 @@ func TestCopySparseFileLeavesZeroBlocksAsHoles(t *testing.T) {
 		t.Errorf("dst allocates %d bytes, want the zero runs left as holes", allocated)
 	}
 }
+
+func TestMergeDeltaIntoBaseSurvivesCancelledAttemptAndCheckpointDirWipe(t *testing.T) {
+	const size = 4 << 20 // 4 MiB logical
+	baseRegions := []region{
+		{off: 0, data: fill(1, 4096)},
+		{off: 1 << 20, data: fill(2, 65536)},
+	}
+	deltaRegions := []region{
+		{off: 1 << 20, data: fill(99, 65536)},
+		{off: 2 << 20, data: fill(42, 8192)},
+	}
+	want := make([]byte, size)
+	for _, r := range baseRegions {
+		copy(want[r.off:], r.data)
+	}
+	for _, r := range deltaRegions {
+		copy(want[r.off:], r.data)
+	}
+
+	dir := t.TempDir()
+	restoreDir := filepath.Join(dir, "restore-state")
+	checkpointDir := filepath.Join(dir, "checkpoint-state")
+	if err := os.MkdirAll(restoreDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(restoreDir, "memory-ranges")
+	delta := filepath.Join(checkpointDir, "memory-ranges")
+	writeSparse(t, base, size, baseRegions)
+	writeSparse(t, delta, size, deltaRegions)
+
+	// Attempt 1: context already cancelled when MergeDeltaIntoBase runs.
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := MergeDeltaIntoBase(cancelledCtx, base, delta); err == nil {
+		t.Fatal("expected cancelled MergeDeltaIntoBase to fail, got nil")
+	}
+
+	// Simulate CheckpointWorkload retry wiping checkpoint-state/ and re-snapshotting delta.
+	if err := os.RemoveAll(checkpointDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeSparse(t, delta, size, deltaRegions)
+
+	// Attempt 2: must succeed because base remained in restore-state/.
+	if err := MergeDeltaIntoBase(context.Background(), base, delta); err != nil {
+		t.Fatalf("retry MergeDeltaIntoBase failed: %v", err)
+	}
+	got, err := os.ReadFile(delta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("retry MergeDeltaIntoBase result != expected")
+	}
+}
