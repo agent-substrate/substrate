@@ -113,7 +113,6 @@ var (
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
-	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 )
 
