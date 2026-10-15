@@ -51,7 +51,7 @@ import (
 func newPluginHerder(t *testing.T, store objectstorage.ObjectStorage) *Atelet {
 	t.Helper()
 	// Test directories come from t.TempDir, so admit any absolute path.
-	plugin, err := objectstoreplugin.NewNodePlugin(store, "/")
+	plugin, err := objectstoreplugin.NewNodePlugin(store, "/", objectstorage.DefaultUploadMemory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ type pluginSidecar struct {
 
 func newPluginSidecar(t *testing.T, store objectstorage.ObjectStorage) *pluginSidecar {
 	t.Helper()
-	plugin, err := objectstoreplugin.NewNodePlugin(store, "/")
+	plugin, err := objectstoreplugin.NewNodePlugin(store, "/", objectstorage.DefaultUploadMemory)
 	if err != nil {
 		t.Fatal(err)
 	}
