@@ -77,7 +77,7 @@ func validateImageCacheGCFlags() error {
 		return fmt.Errorf("--image-cache-min-age %v must be >= 0", *imageCacheMinAge)
 	}
 	if imageCacheDirOutsideBasePath(*imageCacheDir) {
-		slog.Warn("Image cache dir is outside the ateom base path; its volume watermarks are measured separately from actor state",
+		slog.Warn("Image cache dir is outside the worker base path; its volume watermarks are measured separately from actor state",
 			slog.String("image_cache_dir", *imageCacheDir),
 			slog.String("actors_dir", nodepath.ActorsDir))
 	}

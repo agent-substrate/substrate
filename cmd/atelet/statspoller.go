@@ -258,7 +258,7 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 	if err != nil {
 		// A node with no ateoms directory yet has no workers to measure; the
 		// first RunWorkload dispatch creates it.
-		slog.DebugContext(ctx, "Actor stats sweep: no ateoms directory", slog.Any("err", err))
+		slog.DebugContext(ctx, "Actor stats sweep: no workers directory", slog.Any("err", err))
 		return nil
 	}
 
@@ -293,14 +293,14 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 
 			client, closer, err := p.dial(callCtx, podUID)
 			if err != nil {
-				slog.DebugContext(ctx, "Actor stats sweep: skipping ateom", slog.String("pod_uid", podUID), slog.Any("err", err))
+				slog.DebugContext(ctx, "Actor stats sweep: skipping worker", slog.String("pod_uid", podUID), slog.Any("err", err))
 				return nil
 			}
 			defer closer.Close()
 
 			resp, err := client.GetActiveWorkloadStats(callCtx, &ateworkerpb.GetActiveWorkloadStatsRequest{})
 			if err != nil {
-				slog.DebugContext(ctx, "Actor stats sweep: skipping ateom", slog.String("pod_uid", podUID), slog.Any("err", err))
+				slog.DebugContext(ctx, "Actor stats sweep: skipping worker", slog.String("pod_uid", podUID), slog.Any("err", err))
 				return nil
 			}
 

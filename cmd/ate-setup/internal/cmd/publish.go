@@ -25,8 +25,8 @@ var publishCmd = &cobra.Command{
 
 var publishWorkerImagesCmd = &cobra.Command{
 	Use:   "worker-images",
-	Short: "Build and push the ateom worker images for this build and print their refs",
-	Long: `Build and push the ateom worker images (one per sandbox class) for the
+	Short: "Build and push the worker images for this build and print their refs",
+	Long: `Build and push the worker images (one per sandbox class) for the
 checked-out build and print their pushed references, one "<binary>: <ref>"
 line per image.
 

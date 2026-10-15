@@ -128,7 +128,7 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("invalid --preview: %w", err)
 	}
 
-	slog.InfoContext(ctx, "ateom booting", slog.String("version", version.Version))
+	slog.InfoContext(ctx, "ateworker booting", slog.String("version", version.Version))
 	if *maxActors < 0 {
 		return fmt.Errorf("--max-actors must not be negative, got %d", *maxActors)
 	}

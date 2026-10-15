@@ -181,13 +181,13 @@ func (g *sourceGate) check(ctx context.Context, r *resourcepb.Resource) error {
 	}
 	if _, seen := g.logged.Get(name); !seen {
 		g.logged.Add(name, struct{}{})
-		slog.WarnContext(ctx, "OTLP relay rejected telemetry from an unrecognized source; it is being dropped, not retried. If this is an ateom, check whether OTEL_SERVICE_NAME or OTEL_RESOURCE_ATTRIBUTES on the worker pod is overriding its service.name",
+		slog.WarnContext(ctx, "OTLP relay rejected telemetry from an unrecognized source; it is being dropped, not retried. If this is a worker, check whether OTEL_SERVICE_NAME or OTEL_RESOURCE_ATTRIBUTES on the worker pod is overriding its service.name",
 			slog.String("service.name", name),
 			slog.Any("allowed", allowedServices()),
 			slog.String("note", "logged once per distinct service.name"))
 	}
 	return status.Errorf(codes.PermissionDenied,
-		"the OTLP relay carries ateom telemetry only, got service.name %q; a source whose identity has to be rewritten (#761) must not be forwarded verbatim. If this is an ateom, an OTEL_SERVICE_NAME or OTEL_RESOURCE_ATTRIBUTES override on the worker pod would produce exactly this",
+		"the OTLP relay carries worker telemetry only, got service.name %q; a source whose identity has to be rewritten (#761) must not be forwarded verbatim. If this is a worker, an OTEL_SERVICE_NAME or OTEL_RESOURCE_ATTRIBUTES override on the worker pod would produce exactly this",
 		name)
 }
 
@@ -362,7 +362,7 @@ func (l *logRelay) Export(ctx context.Context, req *collogspb.ExportLogsServiceR
 // afterwards, which is why this errors rather than falling back.
 func validateSocketPath(sockPath string) error {
 	if !filepath.IsAbs(sockPath) {
-		return fmt.Errorf("the OTLP relay socket path %q is relative; it must be absolute, since atelet and ateom would otherwise resolve it against different working directories", sockPath)
+		return fmt.Errorf("the OTLP relay socket path %q is relative; it must be absolute, since atelet and the worker would otherwise resolve it against different working directories", sockPath)
 	}
 	return nil
 }

@@ -103,7 +103,7 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.Ge
 	// worker-to-actor mapping wants re-resolving.
 	hosted := s.lookupActor(req.GetActorUid())
 	if hosted == nil {
-		return nil, apierror.NotFound("ateom is not executing actor %q", req.GetActorUid())
+		return nil, apierror.NotFound("worker is not executing actor %q", req.GetActorUid())
 	}
 	// The raw reading is dropped: the dead-sandbox check runs in the usage
 	// sweep, which reads every hosted actor.
@@ -127,7 +127,7 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.Ge
 	// can land underneath it. Pointer identity catches that: hostActor stores
 	// a new record every time.
 	if s.lookupActor(req.GetActorUid()) != hosted {
-		return nil, apierror.NotFound("ateom stopped executing actor %q while the sample was being taken", req.GetActorUid())
+		return nil, apierror.NotFound("worker stopped executing actor %q while the sample was being taken", req.GetActorUid())
 	}
 	// The reading advanced the activation's CPU, so the cache keeps up with it.
 	hosted.usage.Store(sample)

@@ -374,7 +374,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 	// new pod, which arrives under a new key.
 	var changed bool
 	if epoch := podEpoch(pod); epoch > w.GetEpoch() {
-		slog.InfoContext(ctx, "Syncer: updating worker (ateom restarted)",
+		slog.InfoContext(ctx, "Syncer: updating worker (worker restarted)",
 			append(key.logAttrs(), slog.Int64("epoch", epoch))...)
 		w.Epoch = epoch
 		changed = true
