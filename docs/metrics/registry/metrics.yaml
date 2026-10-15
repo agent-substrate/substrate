@@ -367,14 +367,14 @@ groups:
               stability: development
               value: oci_unpack
               brief: Restore. atelet unpacks the layers of the OCI image.
-            - id: ateom_restore
+            - id: worker_restore
               stability: development
-              value: ateom_restore
-              brief: Restore. This is the ateom restore call.
-            - id: ateom_checkpoint
+              value: worker_restore
+              brief: Restore. This is the worker restore call.
+            - id: worker_checkpoint
               stability: development
-              value: ateom_checkpoint
-              brief: Checkpoint. This is the ateom checkpoint call.
+              value: worker_checkpoint
+              brief: Checkpoint. This is the worker checkpoint call.
             - id: persist
               stability: development
               value: persist

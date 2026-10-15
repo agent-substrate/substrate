@@ -49,7 +49,7 @@ ATELET_RESTORE = {
     "ate.actor.uid": "uid-1", "ate.template.name": "swebench-astropy-7336",
     "ate.snapshot.scope": "full", "ate.snapshot.kind": "latest",
     "ate.actor.restore.duration.download": 2.4,
-    "ate.actor.restore.duration.ateom_restore": 1.1,
+    "ate.actor.restore.duration.worker_restore": 1.1,
     "ate.actor.restore.duration.total": 3.9,
 }
 
@@ -69,7 +69,7 @@ ATELET_CHECKPOINT = {
     "ate.actor.uid": "uid-1", "ate.template.name": "swebench-astropy-7336",
     "ate.snapshot.scope": "full", "ate.snapshot.kind": "latest",
     "ate.actor.checkpoint.duration.sandbox_assets": 0.01,
-    "ate.actor.checkpoint.duration.ateom_checkpoint": 1.14,
+    "ate.actor.checkpoint.duration.worker_checkpoint": 1.14,
     "ate.actor.checkpoint.duration.persist": 4.48,
     "ate.actor.checkpoint.duration.total": 6.0,
 }
@@ -97,7 +97,7 @@ ATEOM_RESTORE_STALE = dict(ATEOM_RESTORE, time="2026-09-23T09:00:05.400000000Z")
 CLOUD_LOGGING_ENTRY = {
     "insertId": "m9xljnzmzppup1vj",
     "jsonPayload": {
-        "ate.actor.checkpoint.duration.ateom_checkpoint": 1.024788329,
+        "ate.actor.checkpoint.duration.worker_checkpoint": 1.024788329,
         "ate.actor.checkpoint.duration.persist": 4.18451256,
         "ate.actor.checkpoint.duration.sandbox_assets": 2.4358e-05,
         "ate.actor.checkpoint.duration.total": 5.385861508,
@@ -276,7 +276,7 @@ class UnattributedTest(unittest.TestCase):
             self.assertNotIn("unattributed", b.phases)
     def test_negative_residual_is_not_clamped(self):
         # Cannot happen on a well-formed record; if it does, it must show.
-        phases = {"sandbox_assets": 0.01, "ateom_checkpoint": 1.14, "persist": 4.48, "total": 1.0}
+        phases = {"sandbox_assets": 0.01, "worker_checkpoint": 1.14, "persist": 4.48, "total": 1.0}
         self.assertAlmostEqual(phase_report.unattributed("atelet", "checkpoint", "microvm", phases),
                                1.0 - (0.01 + 1.14 + 4.48))
 
@@ -308,7 +308,7 @@ class ReportTest(unittest.TestCase):
         self.assertEqual({r["kind"] for r in rows if r["layer"] == "ateom"}, {"latest"})
 
     def test_checkpoint_pairing_window_ends_where_persist_starts(self):
-        # The ateom record is written when ateom_checkpoint ends, before the
+        # The ateom record is written when worker_checkpoint ends, before the
         # 4.48 s persist; a record from inside the persist window belongs to
         # a later cycle of a rapidly cycling actor.
         during_persist = dict(ATEOM_CHECKPOINT, time="2026-09-23T10:00:59.000000000Z")
@@ -328,7 +328,7 @@ class ReportTest(unittest.TestCase):
     def test_waterfall_ignores_an_ateom_record_from_another_cycle(self):
         out = parse(ATEOM_RESTORE_STALE, ATELET_RESTORE)
         text = render(phase_report.report_waterfalls, out.breakdowns, slowest=1)
-        self.assertIn("atelet ateom_restore", text)
+        self.assertIn("atelet worker_restore", text)
         self.assertNotIn("ateom  vm_restore", text)
         self.assertNotIn("(gap)", text)
 
@@ -349,11 +349,11 @@ class ReportTest(unittest.TestCase):
         out = parse(ATEOM_RESTORE, ATELET_RESTORE)
         text = render(phase_report.report_waterfalls, out.breakdowns, slowest=1)
         lines = [line.strip() for line in text.splitlines()]
-        self.assertTrue(any(line.startswith("atelet ateom_restore") for line in lines), text)
+        self.assertTrue(any(line.startswith("atelet worker_restore") for line in lines), text)
         self.assertTrue(any(line.startswith("ateom  vm_restore") for line in lines), text)
         gap = [line for line in lines if line.startswith("(gap)")]
         self.assertEqual(len(gap), 1, text)
-        self.assertIn("50.0", gap[0])  # 1.1s atelet ateom_restore - 1.05s ateom total
+        self.assertIn("50.0", gap[0])  # 1.1s atelet worker_restore - 1.05s ateom total
 
 
 if __name__ == "__main__":

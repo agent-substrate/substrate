@@ -716,7 +716,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		// excluded from metric labels because of cardinality.
 		phases := []phase{
 			{ateattr.SnapshotPhaseSandboxAssets, dAssets},
-			{ateattr.SnapshotPhaseAteomCheckpoint, dAteom},
+			{ateattr.SnapshotPhaseWorkerCheckpoint, dAteom},
 			{ateattr.SnapshotPhasePersist, dPersist},
 			{ateattr.SnapshotPhaseTotal, time.Since(tStart)},
 		}
@@ -1191,7 +1191,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			{ateattr.SnapshotPhaseSandboxAssets, dAssets},
 			{ateattr.SnapshotPhaseDownload, dDownload},
 			{ateattr.SnapshotPhaseOCIUnpack, dBundles},
-			{ateattr.SnapshotPhaseAteomRestore, dAteom},
+			{ateattr.SnapshotPhaseWorkerRestore, dAteom},
 			{ateattr.SnapshotPhaseTotal, time.Since(tStart)},
 		}
 		s.instruments.recordRestore(ctx, op, phases...)
@@ -1348,7 +1348,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	actorDirs := ateletpath.ActorDirs(actorUID)
 	actorDirs.RestoreDir = checkpointDir
 
-	// The ateom_restore phase is opaque from here; ateom logs its own breakdown of
+	// The worker_restore phase is opaque from here; ateom logs its own breakdown of
 	// this call as "Actor restore phases".
 	tAteom := time.Now()
 	_, err = client.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{

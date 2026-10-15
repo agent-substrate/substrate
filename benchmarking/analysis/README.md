@@ -3,7 +3,7 @@
 This directory turns the node side's developer-facing timing logs into the
 percentiles a benchmark run needs, without making the phases metric API. The
 `ate.actor.{restore,checkpoint}.duration` histograms stop at
-`ateom_restore` / `ateom_checkpoint` / `persist` / `download` on purpose:
+`worker_restore` / `worker_checkpoint` / `persist` / `download` on purpose:
 phases inside those are implementation details of a runtime, and metrics are
 a contract. The finer breakdown is emitted as structured log records instead,
 and this is the consumer that aggregates them.
@@ -75,10 +75,10 @@ A failed atelet operation still writes its record, marked with `error.type`
 scope and phase: count, p50, p90, p95 and max. A `golden` restore downloads
 the golden image and a `latest` one the actor's own, so they are separate
 rows, as are gVisor and micro-VM operations. The atelet rows split a
-checkpoint between `sandbox_assets`, `ateom_checkpoint` and `persist`, and a
+checkpoint between `sandbox_assets`, `worker_checkpoint` and `persist`, and a
 restore between `volume_mount`, `manifest_fetch`, `sandbox_assets`,
-`download`, `oci_unpack` and `ateom_restore`. The ateom rows split the
-`ateom_*` phase further with the runtime's own phases: for micro-VM
+`download`, `oci_unpack` and `worker_restore`. The ateom rows split the
+`worker_*` phase further with the runtime's own phases: for micro-VM
 `prep` / `pause` / `snapshot` / `durable_dir` / `rootfs_upper` / `teardown`
 on a checkpoint and `prep` / … / `vm_restore` / `wakeup_probe` on a restore;
 for gVisor `pause` / `checkpoint` / `durable_dir` / `resume` / `teardown` and
@@ -98,7 +98,7 @@ records carry no snapshot kind of their own; a paired one takes its kind from
 the atelet record, so both layers split into the same rows.
 
 **Waterfalls.** The slowest operations, with the ateom record of the same
-actor nested under the atelet `ateom_*` phase and that phase's gap to the
+actor nested under the atelet `worker_*` phase and that phase's gap to the
 ateom total (RPC and queueing between the layers). The ateom record is the
 one written inside that phase's window (for a checkpoint, before `persist`
 began), and each ateom record pairs with at most one operation, so an

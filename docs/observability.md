@@ -150,7 +150,7 @@ atelet's `Restore timing breakdown` and `Checkpoint timing breakdown` are the un
  "ate.snapshot.fidelity":"memory","ate.snapshot.kind":"latest","ate.sandbox.class":"gvisor",
  "ate.actor.restore.duration.download":0.310,
  "ate.actor.restore.duration.oci_unpack":0.050,
- "ate.actor.restore.duration.ateom_restore":0.060,
+ "ate.actor.restore.duration.worker_restore":0.060,
  "ate.actor.restore.duration.total":0.420,
  "trace_id":"4bf92f…","span_id":"00f067…","trace_flags":"01"}
 ```
@@ -159,7 +159,7 @@ The duration keys are the [`ate.actor.restore.duration`](#the-metric-registry) i
 
 This is the record to use for a per-actor wake-up distribution. The histogram cannot answer that question at all, because actor identity is barred from metric labels; traces can, but the data plane is head-sampled at 1%.
 
-Both ateoms write records with the same two messages from inside the `ateom_restore` and `ateom_checkpoint` phases, under `ateom.actor.restore.duration.<phase>` and `ateom.actor.checkpoint.duration.<phase>`. The phases are each runtime's own and are listed in `cmd/ateworker-gvisor/phaselog.go` and `cmd/ateworker-microvm/phaselog.go`; `internal/ateomphaselog` renders the record. They are not instruments. The same identity keys make the two layers' records joinable per actor, and a failed operation's record carries `error.type`.
+Both ateoms write records with the same two messages from inside the `worker_restore` and `worker_checkpoint` phases, under `ateom.actor.restore.duration.<phase>` and `ateom.actor.checkpoint.duration.<phase>`. The phases are each runtime's own and are listed in `cmd/ateworker-gvisor/phaselog.go` and `cmd/ateworker-microvm/phaselog.go`; `internal/ateomphaselog` renders the record. They are not instruments. The same identity keys make the two layers' records joinable per actor, and a failed operation's record carries `error.type`.
 
 ateapi's `Actor state changed` is written once per committed actor state transition. ateapi owns the state machine, so this is where an actor's state and the time it reached it come from:
 
@@ -307,7 +307,7 @@ For `ate.imagecache.requests`:
 The three snapshot labels are orthogonal and mean the same thing on every histogram that carries them:
 * `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (node-local, written by a pause), `latest` (the actor's own durable snapshot), `golden` (the template's image), or `boot` (from scratch, so it never appears on the atelet histograms).
 * `ate.snapshot.fidelity`: what state it holds. `volumes`, `rootfs`, or `memory`.
-* `ate.snapshot.phase`: which step was timed. `volume_mount`, `manifest_fetch`, `sandbox_assets`, `download`, `oci_unpack`, `ateom_restore` on restore; `sandbox_assets`, `ateom_checkpoint`, `persist` on checkpoint; `total` on both.
+* `ate.snapshot.phase`: which step was timed. `volume_mount`, `manifest_fetch`, `sandbox_assets`, `download`, `oci_unpack`, `worker_restore` on restore; `sandbox_assets`, `worker_checkpoint`, `persist` on checkpoint; `total` on both.
 
 **Phases overlap and do not sum to `total`.** The download runs concurrently with the asset fetch and OCI unpack, so each is an independent observation; use `total` as the denominator. A phase that never started is absent rather than zero.
 

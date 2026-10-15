@@ -90,7 +90,7 @@ UNATTRIBUTED = "unattributed"
 PHASE_ORDER = [
     # atelet restore
     "volume_mount", "manifest_fetch", "sandbox_assets", "download",
-    "oci_unpack", "ateom_restore",
+    "oci_unpack", "worker_restore",
     # ateom restore: micro-VM (cmd/ateworker-microvm/phaselog.go) and gVisor
     # (cmd/ateworker-gvisor/phaselog.go), each in its own sequential order
     "prep", "egress_prepare", "net_setup", "bundles", "upper_join", "lowers",
@@ -99,13 +99,13 @@ PHASE_ORDER = [
     "tap", "vmm_launch", "vm_restore", "resume", "wakeup_probe", "activate",
     # atelet + ateom checkpoint
     "pause", "checkpoint", "snapshot", "durable_dir", "rootfs_upper",
-    "ateom_checkpoint", "teardown", "persist",
+    "worker_checkpoint", "teardown", "persist",
     UNATTRIBUTED, TOTAL,
 ]
 _PHASE_RANK = {name: i for i, name in enumerate(PHASE_ORDER)}
 
 # Which atelet phase wraps the ateom record.
-INNER_PHASE = {"restore": "ateom_restore", "checkpoint": "ateom_checkpoint"}
+INNER_PHASE = {"restore": "worker_restore", "checkpoint": "worker_checkpoint"}
 
 # The micro-VM checkpoint captures that run concurrently on the paused guest:
 # the paused window costs their max, not their sum. gVisor's checkpoint phases
@@ -177,7 +177,7 @@ def unattributed(source: str, op: str, sandbox_class: str, phases: dict[str, flo
     if total is None:
         return None
     if (source, op) == ("atelet", "checkpoint"):
-        spent = sum(phases.get(p, 0.0) for p in ("sandbox_assets", "ateom_checkpoint", "persist"))
+        spent = sum(phases.get(p, 0.0) for p in ("sandbox_assets", "worker_checkpoint", "persist"))
     elif (source, op, sandbox_class) == ("ateom", "checkpoint", MICROVM):
         spent = (phases.get("prep", 0.0) + phases.get("pause", 0.0)
                  + max(phases.get(p, 0.0) for p in CONCURRENT_CAPTURES)
@@ -334,7 +334,7 @@ def report_phases(breakdowns: list[Breakdown], writer) -> list[dict]:
 def ateom_window(op: Breakdown) -> tuple[float, float] | None:
     """When, relative to the atelet record's time, the ateom record of the
     same operation was written. ateom writes it as its RPC returns, i.e. at
-    the end of the atelet ateom_* phase: for a checkpoint that is before
+    the end of the atelet worker_* phase: for a checkpoint that is before
     persist runs, for a restore it is the last phase. An operation that never
     reached the ateom call has no window and nothing to pair with."""
     total = op.phases.get(TOTAL)
@@ -348,7 +348,7 @@ def ateom_window(op: Breakdown) -> tuple[float, float] | None:
 
 def pair_records(breakdowns: list[Breakdown]) -> dict[int, Breakdown]:
     """Match each atelet record to the ateom record of the same operation:
-    same actor and op, written inside the atelet ateom_* phase's window, and
+    same actor and op, written inside the atelet worker_* phase's window, and
     not already claimed by another operation. Returns id(atelet) -> ateom.
 
     One cycle emits exactly one of each. An ateom record outside the window
@@ -404,7 +404,7 @@ def join_layers(breakdowns: list[Breakdown]) -> dict[int, Breakdown]:
 def report_waterfalls(breakdowns: list[Breakdown], writer, slowest: int,
                       pairs: dict[int, Breakdown] | None = None) -> None:
     """The slowest operations: the ateom record nested under the atelet
-    ateom_* phase, and the gap between that phase and the ateom total (RPC
+    worker_* phase, and the gap between that phase and the ateom total (RPC
     and queueing between the layers)."""
     if pairs is None:
         pairs = join_layers(breakdowns)

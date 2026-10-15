@@ -7,8 +7,8 @@ elsewhere; follow the links when a step needs more than the command shown.
 
 The breakdown comes from two developer-facing log records, `Checkpoint timing
 breakdown` and `Restore timing breakdown`, written once per operation by
-atelet (the outer phases: `download`, `persist`, `ateom_*`, …) and by
-ateworker-microvm (the phases inside `ateom_*`: `pause`, `snapshot`, `vm_restore`,
+atelet (the outer phases: `download`, `persist`, `worker_*`, …) and by
+ateworker-microvm (the phases inside `worker_*`: `pause`, `snapshot`, `vm_restore`,
 `wakeup_probe`, …). `benchmarking/analysis/` collects the records from the pod
 logs and aggregates them. See
 [docs/observability.md](../observability.md#actor-attributed-component-logs)
@@ -136,15 +136,15 @@ or the images predate the records.
 ## 5. Read it
 
 * **Phase percentiles** rank the phases. For a suspend, compare atelet's
-  `persist` against `ateom_checkpoint`, then the ateom rows (`snapshot`,
+  `persist` against `worker_checkpoint`, then the ateom rows (`snapshot`,
   `teardown`, `pause`, …) against each other; for a resume, `download` against
-  `ateom_restore`, then `vm_restore` and `wakeup_probe`. The `unattributed`
+  `worker_restore`, then `vm_restore` and `wakeup_probe`. The `unattributed`
   row is the part of a checkpoint no logged phase names.
 * **Waterfalls** show the slowest operations with the ateom record nested
   under the atelet phase it decomposes; a tail that is always the same phase
   is systematic, one that moves between phases is environmental.
 * Two sanity checks on a healthy run: the atelet and ateom rows for one
-  operation have the same `n`, and atelet's `ateom_checkpoint` p50 is a few
+  operation have the same `n`, and atelet's `worker_checkpoint` p50 is a few
   tens of milliseconds above ateom's `total` p50 (the `(gap)` line in a
   waterfall is that RPC overhead).
 
@@ -170,5 +170,5 @@ phases scale with dirty memory.
 * **A record has `error.type`.** That operation failed; the report leaves it
   out of the percentiles and the waterfalls. To see where it died, grep the
   record itself: a `DeadlineExceeded` whose time sits in `download` or
-  `persist` with a normal-looking `ateom_*` phase points at object storage,
+  `persist` with a normal-looking `worker_*` phase points at object storage,
   not the runtime.

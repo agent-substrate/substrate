@@ -40,7 +40,7 @@ ATELET = json.dumps({
     "ate.actor.uid": "uid-1", "ate.template.name": "glutton", "ate.sandbox.class": "microvm",
     "ate.snapshot.scope": "full", "ate.snapshot.kind": "latest",
     "ate.actor.restore.duration.download": 2.4,
-    "ate.actor.restore.duration.ateom_restore": 1.1,
+    "ate.actor.restore.duration.worker_restore": 1.1,
     "ate.actor.restore.duration.total": 3.9,
 })
 ATEOM = json.dumps({
