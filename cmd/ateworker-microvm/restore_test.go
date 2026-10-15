@@ -223,7 +223,7 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 }
 
 func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
-	s := &AteomService{
+	s := &AteWorkerService{
 		locks:    actorlock.New(),
 		inFlight: actorlock.NewInFlight(),
 	}
@@ -408,7 +408,7 @@ func TestNewReseedNonce(t *testing.T) {
 }
 
 func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
-	s := &AteomService{}
+	s := &AteWorkerService{}
 	ctx := context.Background()
 	dirs := &ateworkerpb.ActorDirs{
 		RootDir:                   "/node/actors/actor-a",

@@ -329,7 +329,7 @@ func extractContainerUsage(pm metricsv1beta1.PodMetrics, stderr io.Writer) (stri
 		}
 	}
 	if cpuQuant == nil && len(pm.Containers) > 0 {
-		vlogf(stderr, vFlow, "Container \"ateom\" not found in pod metrics for %s/%s; summing all %d container(s)",
+		vlogf(stderr, vFlow, "Container \"worker\" not found in pod metrics for %s/%s; summing all %d container(s)",
 			pm.Namespace, pm.Name, len(pm.Containers))
 		var totalCPU, totalMem resource.Quantity
 		for _, c := range pm.Containers {

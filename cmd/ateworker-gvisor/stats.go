@@ -48,12 +48,12 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // and gofer spawn in cgroup.RunInCgroup — so the sentry lands in the leaf of
 // the pause container, the first one RunWorkload and RestoreWorkload create.
 //
-// The leaf is a direct child of the delegated scope rather than of ateom's own
+// The leaf is a direct child of the delegated scope rather than of ateworker's own
 // cgroup, because runsc resolves cgroupsPath against the parent of the cgroup
 // it is running in: cgroup v2 forbids a cgroup from holding processes and
 // delegating controllers to children at once, so runsc walks up one level to
 // find a directory it is allowed to create in. ateomcgroup.Delegate moves
-// ateom into /sys/fs/cgroup/ateom precisely so that one level up is the
+// ateworker into /sys/fs/cgroup/ateworker precisely so that one level up is the
 // delegated scope.
 //
 // The actor's own containers get leaves too, since cmdCreate shapes a
@@ -93,7 +93,7 @@ const sandboxCgroupContainer = ocispec.PauseContainer
 // It must not take the actor's lifecycle lock, which is held across whole
 // boots and checkpoints: polls would stall behind runsc, and a checkpoint
 // would wait on telemetry. The cgroup files are read with no lock held.
-func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.GetWorkloadStatsRequest) (*ateworkerpb.GetWorkloadStatsResponse, error) {
+func (s *AteWorkerService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.GetWorkloadStatsRequest) (*ateworkerpb.GetWorkloadStatsResponse, error) {
 	if req.GetActorUid() == "" {
 		return nil, apierror.InvalidArgument("actor_uid is required")
 	}
@@ -110,7 +110,7 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.Ge
 	sample, _, err := s.measure(ctx, hosted)
 	if err != nil {
 		// The requested actor is the active one but its cgroup is not there.
-		// Most often that is a poll landing in the boot: the ateom retains the
+		// Most often that is a poll landing in the boot: the ateworker retains the
 		// attribution from the moment it accepts the actor, before runsc has
 		// created the leaf. The other way in is a sandbox that went away
 		// underneath the read, which the next CheckpointWorkload turns into the
@@ -138,7 +138,7 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.Ge
 // GetActiveWorkloadStats implements ateworkerpb.Worker/GetActiveWorkloadStats: the
 // discovery read. It serves each actor's latest sample from the sampler, so a
 // poll costs no read of its own; an actor not sampled yet is pending.
-func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateworkerpb.GetActiveWorkloadStatsRequest) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
+func (s *AteWorkerService) GetActiveWorkloadStats(ctx context.Context, req *ateworkerpb.GetActiveWorkloadStatsRequest) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
 	hosted := s.hostedActors()
 	samples := make([]*ateworkerpb.WorkloadStatsSample, 0, len(hosted))
 	for _, h := range hosted {
@@ -157,7 +157,7 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateworke
 // sweepUsage samples every hosted actor between its initial reading and its
 // final record, and stores each sample and writes its periodic record. Same
 // lock discipline as GetWorkloadStats, for the same reasons.
-func (s *AteomService) sweepUsage(ctx context.Context) {
+func (s *AteWorkerService) sweepUsage(ctx context.Context) {
 	for _, h := range s.hostedActors() {
 		if !h.usage.Sampling() {
 			continue
@@ -189,7 +189,7 @@ func (s *AteomService) sweepUsage(ctx context.Context) {
 
 // recordInitial samples a new activation once its sandbox is up and writes its
 // initial record.
-func (s *AteomService) recordInitial(ctx context.Context, h *hostedActor) {
+func (s *AteWorkerService) recordInitial(ctx context.Context, h *hostedActor) {
 	sample, _, err := s.measure(ctx, h)
 	if err != nil {
 		slog.WarnContext(ctx, "No initial usage sample", slog.String(string(ateattr.ActorUIDKey), h.attribution.UID), slog.Any("err", err))
@@ -201,7 +201,7 @@ func (s *AteomService) recordInitial(ctx context.Context, h *hostedActor) {
 // readFinal samples an activation while its sandbox still exists, for the final
 // record a successful checkpoint or terminate writes. A failed read leaves the
 // newest measured sample to stand in.
-func (s *AteomService) readFinal(ctx context.Context, h *hostedActor) {
+func (s *AteWorkerService) readFinal(ctx context.Context, h *hostedActor) {
 	if sample, _, err := s.measure(ctx, h); err == nil {
 		h.usage.Store(sample)
 	}
@@ -210,7 +210,7 @@ func (s *AteomService) readFinal(ctx context.Context, h *hostedActor) {
 // recordFinalIfEnded writes h's final record if a checkpoint or terminate tore
 // its activation down, which unhosts the actor even when a later step fails.
 // The caller holds the actor's lock.
-func (s *AteomService) recordFinalIfEnded(ctx context.Context, h *hostedActor) {
+func (s *AteWorkerService) recordFinalIfEnded(ctx context.Context, h *hostedActor) {
 	if h != nil && s.lookupActor(h.attribution.UID) != h {
 		s.recordFinal(ctx, h)
 	}
@@ -218,7 +218,7 @@ func (s *AteomService) recordFinalIfEnded(ctx context.Context, h *hostedActor) {
 
 // recordFinal writes the final record of an activation that a checkpoint or a
 // terminate ended, from its newest measured sample.
-func (s *AteomService) recordFinal(ctx context.Context, h *hostedActor) {
+func (s *AteWorkerService) recordFinal(ctx context.Context, h *hostedActor) {
 	pending := h.usage.WithEpoch(pendingSample(&h.attribution))
 	h.usage.Final(func(measured *ateworkerpb.WorkloadStatsSample) {
 		if measured == nil {
@@ -248,7 +248,7 @@ func pendingSample(active *resources.ActorAttribution) *ateworkerpb.WorkloadStat
 
 // measure reads h's sandbox cgroup as a reading of its activation, returning
 // the raw cgroup reading alongside it for the dead-sandbox check.
-func (s *AteomService) measure(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, cgroupstats.Sample, error) {
+func (s *AteWorkerService) measure(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, cgroupstats.Sample, error) {
 	var raw cgroupstats.Sample
 	sample, err := h.usage.Measure(ctx, func() (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
 		sample, r, err := s.sampleSandbox(&h.attribution)
@@ -265,7 +265,7 @@ func (s *AteomService) measure(ctx context.Context, h *hostedActor) (*ateworkerp
 // pending sample for the sweep.
 // The read holds no lifecycle lock, so the keyed caller re-checks the actor
 // record it loaded after this returns.
-func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateworkerpb.WorkloadStatsSample, cgroupstats.Sample, error) {
+func (s *AteWorkerService) sampleSandbox(active *resources.ActorAttribution) (*ateworkerpb.WorkloadStatsSample, cgroupstats.Sample, error) {
 	read := s.readSandboxCgroup
 	if read == nil {
 		read = cgroupstats.Read
@@ -306,7 +306,7 @@ func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*atewo
 //
 // oom_kill counts over the cgroup's lifetime. A leaf left behind by an earlier
 // activation of the same actor carries its count forward.
-func (s *AteomService) warnDeadSandbox(ctx context.Context, h *hostedActor, raw cgroupstats.Sample) {
+func (s *AteWorkerService) warnDeadSandbox(ctx context.Context, h *hostedActor, raw cgroupstats.Sample) {
 	if h.deadReported.Load() {
 		return
 	}

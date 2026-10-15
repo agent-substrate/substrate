@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package ateletpath is atelet's on-node layout: the per-actor directories
-// it passes to ateom as ActorDirs, and the directories only atelet uses.
+// it passes to worker as ActorDirs, and the directories only atelet uses.
 package ateletpath
 
 import (
@@ -27,7 +27,7 @@ var (
 	// ImageCacheDir is the node-local OCI image layer cache (see
 	// internal/imagecache). It lives under BasePath so the cached layer
 	// directories are visible at the same path in atelet (which writes them)
-	// and in every ateom pod (which mounts them as overlay lowerdirs).
+	// and in every worker pod (which mounts them as overlay lowerdirs).
 	ImageCacheDir = filepath.Join(nodepath.BasePath, "image-cache")
 
 	// SnapshotScratchDir holds short-lived directories for snapshot manifests
@@ -195,7 +195,7 @@ func VolumeHostPath(actorUID, volumeName string) string {
 	)
 }
 
-// ActorDirs is the directory set atelet passes to ateom for an actor. ateom
+// ActorDirs is the directory set atelet passes to worker for an actor. worker
 // takes these from the request rather than deriving them from the actor UID.
 func ActorDirs(actorUID string) *ateworkerpb.ActorDirs {
 	return &ateworkerpb.ActorDirs{

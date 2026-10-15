@@ -425,7 +425,7 @@ func (a *fakeAtelet) respond(resp *ateletpb.GetActorEgressPolicyResponse) {
 	a.resp = resp
 }
 
-// serveAtelet serves a fake atelet on the AteomSupport socket, presenting a
+// serveAtelet serves a fake atelet on the WorkerSupport socket, presenting a
 // certificate issued by ca to the atelet identity ateletID on the test node.
 func serveAtelet(t *testing.T, ca testCA, ateletID string) *fakeAtelet {
 	t.Helper()
@@ -466,9 +466,9 @@ func serveAtelet(t *testing.T, ca testCA, ateletID string) *fakeAtelet {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	socket := filepath.Join(socketDir, "support.sock")
-	old := nodepath.AteomSupportSocket
-	nodepath.AteomSupportSocket = socket
-	t.Cleanup(func() { nodepath.AteomSupportSocket = old })
+	old := nodepath.WorkerSupportSocket
+	nodepath.WorkerSupportSocket = socket
+	t.Cleanup(func() { nodepath.WorkerSupportSocket = old })
 
 	lis, err := net.Listen("unix", socket)
 	if err != nil {

@@ -14,7 +14,7 @@
 
 // Package cgroupstats reads resource usage out of a cgroup v2 directory.
 //
-// The gVisor ateom uses it to answer ateworkerpb.Worker/GetWorkloadStats: the sentry
+// The gVisor ateworker uses it to answer ateworkerpb.Worker/GetWorkloadStats: the sentry
 // hosts the whole sandbox in one host process, so the sandbox's cgroup leaf is
 // where the workload's memory and CPU actually show up.
 //
@@ -39,7 +39,7 @@ import (
 //
 // Fields the kernel does not expose read as zero rather than failing the whole
 // sample: a partial reading is more useful than none, and the alternative is an
-// ateom that reports nothing at all on a kernel missing one file. Read's doc
+// ateworker that reports nothing at all on a kernel missing one file. Read's doc
 // comment says which fields can do this and why.
 type Sample struct {
 	// MemoryCurrentBytes is memory.current: bytes currently charged to the

@@ -85,7 +85,7 @@ func validateImageCacheGCFlags() error {
 }
 
 // imageCacheDirOutsideBasePath reports whether the cache dir is outside
-// the ateom base path — the watermarks then measure a different volume
+// the worker base path — the watermarks then measure a different volume
 // than actor state. Warn-worthy, not an error: a separate cache volume is
 // legitimate (recommended for IOPS).
 func imageCacheDirOutsideBasePath(dir string) bool {

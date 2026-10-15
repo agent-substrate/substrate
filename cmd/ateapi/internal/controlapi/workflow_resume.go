@@ -388,7 +388,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef.String())
 	}
-	// An unavailable worker may come back with its Actors intact. If its ateom
+	// An unavailable worker may come back with its Actors intact. If its worker
 	// restarted instead, the raised epoch has this Actor crashed for it.
 	if worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
 		return nil, apierror.Unavailable("worker %s assigned to actor %s is unavailable", worker.GetMetadata().GetName(), actorRef)
@@ -619,7 +619,7 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime *ateapipb.SandboxRunti
 		// with a runtime that did not produce it. Resolve the assets for the
 		// matched version once SandboxConfig can name them, or treat a
 		// restorable-only match as incompatible until it can. Latent for now:
-		// ateom reports no restorable_runtimes (internal/ateom/register.go).
+		// worker reports no restorable_runtimes (internal/ateom/register.go).
 		SandboxRuntime: proto.CloneOf(hardware.RuntimeFor(w.GetStatus(), snapRuntime)),
 	}
 }

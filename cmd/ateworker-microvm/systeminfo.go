@@ -24,7 +24,7 @@
 // ActorDirs.system_info_volume_roots_dir and wipes/rebuilds them when
 // the actor's directories are reset.
 //
-// ateom exposes that host directory to the guest under the single kataShared
+// ateworker exposes that host directory to the guest under the single kataShared
 // virtio-fs share at SharedDir(actorUID)/system-info, like durable-dir and CSI
 // volumes — no extra virtio-fs device. Read-only is enforced twice: the host bind is
 // remounted read-only (so nothing in the guest can write through the share),
@@ -68,7 +68,7 @@ func hasSystemInfoVolumes(containers []*ateworkerpb.Container) bool {
 // directory, into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/system-info,
 // then remounts the bind read-only: atelet is the only writer, and it writes
 // the host source directly, never through the share.
-func (s *AteomService) stageSystemInfoVolumes(ctx context.Context, actorUID, src string) error {
+func (s *AteWorkerService) stageSystemInfoVolumes(ctx context.Context, actorUID, src string) error {
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("while checking system-info volumes dir %q: %w", src, err)
 	}

@@ -245,8 +245,8 @@ func installEgressRules(ns netns.Handle, egressPort uint16) error {
 		rejectCode  uint8
 		isPrefix    func(netip.Prefix) bool
 	}{
-		{nftables.TableFamilyIPv4, "ateom-actor", 4, 16, icmpDestinationAdministrativelyProhibited, func(prefix netip.Prefix) bool { return prefix.Addr().Is4() }},
-		{nftables.TableFamilyIPv6, "ateom-actor-v6", 16, 24, icmpv6DestinationAdministrativelyProhibited, func(prefix netip.Prefix) bool { return prefix.Addr().Is6() }},
+		{nftables.TableFamilyIPv4, "worker-actor", 4, 16, icmpDestinationAdministrativelyProhibited, func(prefix netip.Prefix) bool { return prefix.Addr().Is4() }},
+		{nftables.TableFamilyIPv6, "worker-actor-v6", 16, 24, icmpv6DestinationAdministrativelyProhibited, func(prefix netip.Prefix) bool { return prefix.Addr().Is6() }},
 	} {
 		table := c.AddTable(&nftables.Table{Family: family.tableFamily, Name: family.name})
 		if family.tableFamily == nftables.TableFamilyIPv4 {
@@ -492,7 +492,7 @@ func (s *SandboxSession) Close(ctx context.Context) error {
 	return errs
 }
 
-// SessionHolder is the one sandbox session a worker is serving, for the ateoms
+// SessionHolder is the one sandbox session a worker is serving, for the workers
 // to share what is otherwise the same locking, replacement and dialing in both.
 type SessionHolder struct {
 	mu      sync.Mutex

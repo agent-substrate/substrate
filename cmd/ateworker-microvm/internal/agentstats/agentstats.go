@@ -13,9 +13,9 @@
 // limitations under the License.
 
 // Package agentstats turns the kata guest agent's per-container cgroup
-// accounting into the resource-usage sample ateom reports.
+// accounting into the resource-usage sample ateworker reports.
 //
-// The micro-VM ateom uses it to answer ateworkerpb.Worker/GetWorkloadStats. The host
+// The micro-VM ateworker uses it to answer ateworkerpb.Worker/GetWorkloadStats. The host
 // cgroup is the wrong place to look on this runtime: the guest's RAM is a fixed
 // allocation cloud-hypervisor takes at boot, so the host cgroup reads roughly
 // the same whether the actor is idle or saturated. The numbers that move with
@@ -24,7 +24,7 @@
 //
 // This package is deliberately pure — it converts an already-fetched
 // agentpb.CgroupStats and never talks to a guest — which keeps it testable
-// without a live micro-VM and, unlike the rest of the micro-VM ateom, without
+// without a live micro-VM and, unlike the rest of the micro-VM ateworker, without
 // the linux build tag.
 package agentstats
 
@@ -33,7 +33,7 @@ import (
 )
 
 // Sample is a point-in-time reading for one container, or the sum of several.
-// It carries the same four numbers as the gVisor ateom's cgroupstats.Sample,
+// It carries the same four numbers as the gVisor ateworker's cgroupstats.Sample,
 // because both feed the same four fields of GetWorkloadStatsResponse.
 //
 // Anything the guest did not report reads as zero rather than failing the whole
@@ -80,7 +80,7 @@ const (
 // may be nil — the agent answers without cgroup stats for a container it has no
 // accounting for, which is a normal state for one that has exited rather than
 // an error. The caller decides what an all-zero container means; see the
-// summing in the micro-VM ateom's GetWorkloadStats.
+// summing in the micro-VM ateworker's GetWorkloadStats.
 func FromCgroupStats(cs *agentpb.CgroupStats) Sample {
 	mem := cs.GetMemoryStats().GetUsage()
 	current := mem.GetUsage()

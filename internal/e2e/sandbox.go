@@ -40,7 +40,7 @@ func IsMicroVM() bool { return SandboxClass() == SandboxClassMicroVM }
 
 // Fixture identifies an installed WorkerPool + ActorTemplate pair (both carry
 // the same name) that suites either create Actors from directly or copy the
-// resolved runtime — sandbox class, ateom image, container images — out of.
+// resolved runtime — sandbox class, worker image, container images — out of.
 type Fixture struct {
 	Namespace string
 	Name      string
@@ -52,7 +52,7 @@ type Fixture struct {
 // SubstrateFixture identifies an installed substrate ActorTemplate (the proto
 // resource created through the ate API, not the CRD) plus the CRD WorkerPool
 // backing it. Suites copy the resolved runtime — container images, sandbox
-// config, sandbox size — out of the template, and the ateom image and sandbox
+// config, sandbox size — out of the template, and the worker image and sandbox
 // class out of the pool.
 type SubstrateFixture struct {
 	// Atespace and Name locate the ActorTemplate for GetActorTemplate.

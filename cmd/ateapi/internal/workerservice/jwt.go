@@ -33,10 +33,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// ateomActorJWTLifetime is the fixed lifetime of a worker-for-actor JWT. It
+// workerActorJWTLifetime is the fixed lifetime of a worker-for-actor JWT. It
 // is not chosen by the caller: the token's only consumers are node-side
 // plugins that exchange it for short-lived credentials.
-const ateomActorJWTLifetime = time.Hour
+const workerActorJWTLifetime = time.Hour
 
 func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapipb.MintWorkerActorJwtRequest) (*ateapipb.MintWorkerActorJwtResponse, error) {
 	if errs := apivalidation.ValidateMintWorkerActorJwtRequest(ctx, req); len(errs) > 0 {
@@ -70,12 +70,12 @@ func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapipb.MintWorke
 	// JWT timestamps have one-second resolution. Truncating keeps expire_time
 	// equal to the exp claim.
 	now := time.Now().Truncate(time.Second)
-	expiresAt := now.Add(ateomActorJWTLifetime)
+	expiresAt := now.Add(workerActorJWTLifetime)
 	meta := dbActor.GetMetadata()
 	claims := &actoridjwt.Claims{
-		Kind:       actoridjwt.KindAteomForActor,
+		Kind:       actoridjwt.KindWorkerForActor,
 		Issuer:     s.actorJWTIssuer,
-		Subject:    fmt.Sprintf("%s/%s/%s", actoridjwt.KindAteomForActor.SubjectPrefix(), meta.GetAtespace(), meta.GetName()),
+		Subject:    fmt.Sprintf("%s/%s/%s", actoridjwt.KindWorkerForActor.SubjectPrefix(), meta.GetAtespace(), meta.GetName()),
 		Audiences:  req.GetAudiences(),
 		Expiration: expiresAt,
 		NotBefore:  now.Add(-5 * time.Minute),

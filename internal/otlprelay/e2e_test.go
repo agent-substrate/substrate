@@ -23,7 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/serverboot"
 )
 
-// TestEndToEndThroughServerboot exercises the whole path an ateom span actually
+// TestEndToEndThroughServerboot exercises the whole path a worker span actually
 // takes, rather than the relay in isolation:
 //
 //	serverboot.InitTracing → OTLP exporter → unix socket → relay → collector
@@ -32,7 +32,7 @@ import (
 // still pass if TracingOptions.ExporterConn were wired up wrong and the exporter
 // quietly kept dialing OTEL_EXPORTER_OTLP_ENDPOINT. This one would not: the
 // endpoint variable points at the fake collector *through* the relay only, and
-// the assertion is that the span arrived carrying ateom's own service.name.
+// the assertion is that the span arrived carrying worker's own service.name.
 //
 // Run it on its own to watch the hop happen:
 //
@@ -108,7 +108,7 @@ func TestEndToEndThroughServerboot(t *testing.T) {
 	}
 	t.Logf("collector received span %q from service %q (relay=%q)", gotSpan, gotService, gotRelay)
 
-	// The point of forwarding the request verbatim: the span is still ateom's,
+	// The point of forwarding the request verbatim: the span is still worker's,
 	// not atelet's.
 	if gotService != serviceName {
 		t.Errorf("span arrived with service.name %q, want %q; the relay must not re-attribute it", gotService, serviceName)
@@ -127,10 +127,10 @@ func TestEndToEndThroughServerboot(t *testing.T) {
 const relayAttrKey = "ate.otlp.relay"
 
 // TestEndToEndFallsBackToDirect is the other half of TestEndToEndThroughServerboot:
-// the ateom asked for the relay, atelet was not serving one, and the exporter
+// the worker asked for the relay, atelet was not serving one, and the exporter
 // must fall back to the network path rather than dropping telemetry.
 //
-// This is the case the ateoms degrade into instead of exiting (see the Dial call
+// This is the case the workers degrade into instead of exiting (see the Dial call
 // in cmd/ateworker-*/main.go), so it needs to be more than a nil check: the span has
 // to reach the collector, and it has to be distinguishable from a relayed one at
 // query time — hence the "direct" attribute.

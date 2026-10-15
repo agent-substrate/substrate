@@ -103,7 +103,7 @@ type fakeWorker struct {
 	// tmpl is the pool template the Worker was made from; nil for a Worker
 	// adopted after a restart until reconcile matches it to its pool.
 	tmpl *template
-	// capacity is fixed when the Worker is made, as ateom reads its limits
+	// capacity is fixed when the Worker is made, as worker reads its limits
 	// once at startup; reported is whether ate-api-server has accepted it.
 	capacity *ateapipb.WorkerResources
 	reported bool
@@ -351,7 +351,7 @@ func (c *controller) reconcile(ctx context.Context) error {
 // ensure registers a Worker for the desired pod if w, its current Worker, is
 // nil, brings the Worker's labels in line with the pool's, then has its
 // capacity reported until ate-api-server accepts it. The capacity is fixed
-// when the Worker is made, as ateom reads its limits once at startup, and is
+// when the Worker is made, as worker reads its limits once at startup, and is
 // reported once. The Worker is tracked before CreateWorker is called and
 // marked created after, so a failed create is retried by the next pass under
 // the same name, and one the server committed anyway is never lost: retire
@@ -493,9 +493,9 @@ func (c *controller) updateLabels(ctx context.Context, name string, w *fakeWorke
 
 // retire removes a Worker no pool wants, the way a real one goes when its pod
 // does: drained first so nothing new lands on it, deleted once no Actor is
-// assigned to it. In production ateom stops the pod's Actors within its
+// assigned to it. In production worker stops the pod's Actors within its
 // termination grace period, and the Worker is deleted when the pod is gone,
-// which releases any Actor still bound. No ateom stops them here, so after
+// which releases any Actor still bound. No worker stops them here, so after
 // drainGrace the Worker is deleted with its Actors still assigned, and
 // DeleteWorker releases them the same way.
 func (c *controller) retire(ctx context.Context, name string) error {
@@ -627,7 +627,7 @@ func templateOf(wp *atev1alpha1.WorkerPool) (template, error) {
 
 // capacity is what a worker made from t reports on a node with allocatable:
 // cpu and memory from its limits, or, with no limit set, the node's
-// allocatable, which is what the downward API projects into ateom for an
+// allocatable, which is what the downward API projects into worker for an
 // unset limit.
 func (t template) capacity(allocatable corev1.ResourceList) *ateapipb.WorkerResources {
 	cpu, memory := t.cpuMilli, t.memoryBytes
@@ -664,7 +664,7 @@ func fits(w *fakeWorker, wp *atev1alpha1.WorkerPool, allocatable map[string]core
 	return proto.Equal(w.capacity, t.capacity(alloc))
 }
 
-// maxActors is the pool's actor capacity per Worker: ateom's default, unless
+// maxActors is the pool's actor capacity per Worker: worker's default, unless
 // the pool's annotation overrides it.
 func maxActors(wp *atev1alpha1.WorkerPool) (int, error) {
 	v, ok := wp.Annotations[fakeworker.MaxActorsAnnotation]

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package sizing right-sizes a sandbox to the actor's declared resource limits.
-// The actor's limits arrive over the ateom RPCs (RunWorkload / RestoreWorkload)
+// The actor's limits arrive over the worker RPCs (RunWorkload / RestoreWorkload)
 // as a SandboxSize. ateworker-gvisor calls ApplyToOCISpec to write them into the
 // sandbox container's OCI spec, which runsc then applies to the host cgroup
 // leaf. ateworker-microvm does not call ApplyToOCISpec: it uses SandboxSize only to
@@ -42,7 +42,7 @@ type SandboxSize struct {
 }
 
 // FromLimits builds a SandboxSize from an actor's declared limits (millicores and
-// bytes) as carried on the ateom RPCs. It is runtime-agnostic; both ateworker-gvisor
+// bytes) as carried on the worker RPCs. It is runtime-agnostic; both ateworker-gvisor
 // and ateworker-microvm call it. Negative values are clamped to zero ("unset").
 func FromLimits(milliCPU, memoryBytes int64) SandboxSize {
 	if milliCPU < 0 {

@@ -131,7 +131,7 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 	}
 
 	// Capacity and runtimes are left unset: a Worker holds nothing and runs no
-	// sandbox until its own ateom says what it has, through
+	// sandbox until its own worker says what it has, through
 	// WorkerService.RegisterWorker. Nothing is placed on it in the meantime,
 	// which is the point -- the alternative is guessing on the Worker's behalf
 	// and placing against the guess.

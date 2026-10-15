@@ -64,13 +64,13 @@ var healthyCgroup = map[string]string{
 // newStatsService builds a service whose cgroup root is a fixture tree. A nil
 // files map leaves the sandbox cgroup directory absent entirely, which is what
 // a torn-down sandbox looks like.
-func newStatsService(t *testing.T, files map[string]string) *AteomService {
+func newStatsService(t *testing.T, files map[string]string) *AteWorkerService {
 	t.Helper()
 	root := t.TempDir()
 	if files != nil {
 		writeCgroupFixture(t, root, ocispec.GVisorCgroupLeaf(testActor.UID, sandboxCgroupContainer), files)
 	}
-	return &AteomService{
+	return &AteWorkerService{
 		locks:      actorlock.New(),
 		actors:     map[string]*hostedActor{},
 		maxActors:  1000,
@@ -92,9 +92,9 @@ func writeCgroupFixture(t *testing.T, root, leaf string, files map[string]string
 	}
 }
 
-// setHostedActor makes the ateom host exactly this actor, the way RunWorkload
+// setHostedActor makes the ateworker host exactly this actor, the way RunWorkload
 // would, or nothing when attribution is nil.
-func setHostedActor(s *AteomService, attribution *resources.ActorAttribution) {
+func setHostedActor(s *AteWorkerService, attribution *resources.ActorAttribution) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	s.actors = map[string]*hostedActor{}
@@ -143,7 +143,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 		name string
 		// files is the fixture sandbox cgroup; nil means the directory is absent.
 		files map[string]string
-		// active is hosted when non-nil; nil leaves the ateom "available".
+		// active is hosted when non-nil; nil leaves the ateworker "available".
 		active   *resources.ActorAttribution
 		actorUID string
 		want     codes.Code
@@ -160,7 +160,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 		{
 			// Not here at all. NOT_FOUND rather than FAILED_PRECONDITION, because
 			// what the caller should do about it is re-resolve, not retry.
-			name:     "ateom is available",
+			name:     "ateworker is available",
 			files:    healthyCgroup,
 			active:   nil,
 			actorUID: "uid-a",
@@ -232,13 +232,13 @@ func TestGetWorkloadStatsDoesNotTakeLock(t *testing.T) {
 	}
 }
 
-// TestAteomServiceStartsAvailable checks that a freshly constructed service
+// TestAteWorkerServiceStartsAvailable checks that a freshly constructed service
 // retains no attribution. GetWorkloadStats's NOT_FOUND-when-available behavior
-// is built on this: a non-nil zero value here would make an idle ateom report
+// is built on this: a non-nil zero value here would make an idle ateworker report
 // an empty actor's usage instead of refusing.
-func TestAteomServiceStartsAvailable(t *testing.T) {
-	if got := (&AteomService{}).hostedActors(); len(got) != 0 {
-		t.Errorf("new AteomService hosts %v, want nothing", got)
+func TestAteWorkerServiceStartsAvailable(t *testing.T) {
+	if got := (&AteWorkerService{}).hostedActors(); len(got) != 0 {
+		t.Errorf("new AteWorkerService hosts %v, want nothing", got)
 	}
 }
 
@@ -270,16 +270,16 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 }
 
 // TestGetActiveWorkloadStatsAvailable pins the contract that makes the
-// discovery read scrapeable: an idle ateom is an empty list, never an error.
+// discovery read scrapeable: an idle ateworker is an empty list, never an error.
 func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
 
 	got, err := sweepAndList(s)
 	if err != nil {
-		t.Fatalf("GetActiveWorkloadStats() on an available ateom: error = %v, want nil", err)
+		t.Fatalf("GetActiveWorkloadStats() on an available ateworker: error = %v, want nil", err)
 	}
 	if n := len(got.GetSamples()); n != 0 {
-		t.Errorf("GetActiveWorkloadStats() on an available ateom = %v, want no samples", got)
+		t.Errorf("GetActiveWorkloadStats() on an available ateworker = %v, want no samples", got)
 	}
 }
 
@@ -497,7 +497,7 @@ func testActivation() *ateomstats.Activation {
 }
 
 // sweepAndList runs one sampler sweep, then the discovery read that serves it.
-func sweepAndList(s *AteomService) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
+func sweepAndList(s *AteWorkerService) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
 	s.sweepUsage(context.Background())
 	return s.GetActiveWorkloadStats(context.Background(), &ateworkerpb.GetActiveWorkloadStatsRequest{})
 }

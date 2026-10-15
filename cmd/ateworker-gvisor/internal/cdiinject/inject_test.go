@@ -44,7 +44,7 @@ func statDev(t *testing.T, path string) (int64, int64) {
 const testHookBinary = "/opt/toolkit/cdi-hook"
 
 // injectFixture reads a spec from disk and applies the "all" device with the
-// options the gVisor ateom uses, so these tests exercise the real combination.
+// options the gVisor ateworker uses, so these tests exercise the real combination.
 func injectFixture(t *testing.T, bundleDir, specDir string) error {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(specDir, "nvidia.json"))
@@ -273,11 +273,11 @@ func TestInjectGPUIntoBundle_Idempotent(t *testing.T) {
 }
 
 // TestStageSonameSymlinks_ConfinedToRootfs covers the two ways the staging writes
-// could escape into ateom's mount namespace, where the shared image cache and other
+// could escape into ateworker's mount namespace, where the shared image cache and other
 // actors' bundles live: a directory the image redirects out of the rootfs, and a
 // SONAME read out of a library that is not a bare filename.
 // TestStageSonameSymlinks_ConfinedToRootfs covers the two ways the staging writes
-// could escape into ateom's mount namespace, where the shared image cache and other
+// could escape into ateworker's mount namespace, where the shared image cache and other
 // actors' bundles live: a directory the image redirects out of the rootfs, and a
 // SONAME read out of a library that is not a bare filename.
 func TestStageSonameSymlinks_ConfinedToRootfs(t *testing.T) {

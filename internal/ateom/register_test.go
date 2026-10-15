@@ -30,7 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
 
-// testActors stands in for the ateom's own ceiling, which is a flag in
+// testActors stands in for the worker's own ceiling, which is a flag in
 // production rather than a constant here.
 const testActors = 7
 
@@ -74,7 +74,7 @@ func TestFromFilesMissing(t *testing.T) {
 
 func TestDefaultRuntime(t *testing.T) {
 	got := defaultRuntime("gvisor")
-	// The class is the ateom's own; the compat identity is the host's, under
+	// The class is the worker's own; the compat identity is the host's, under
 	// the probe's schema version.
 	want := &ateletpb.SandboxRuntime{
 		SandboxClass: "gvisor",
@@ -144,7 +144,7 @@ func TestReportFailsFastOnBadCredentials(t *testing.T) {
 }
 
 // A runtime without a class is refused by the control plane on every attempt,
-// so an ateom that names none must exit rather than retry.
+// so a worker that names none must exit rather than retry.
 func TestReportFailsFastWithoutSandboxClass(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

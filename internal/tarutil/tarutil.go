@@ -534,7 +534,7 @@ func restoreMeta(root *os.Root, name string, hdr *tar.Header) error {
 
 // restoreOverlayXattrs re-applies the xattrs recorded in the entry's PAX
 // records (writeTree's SCHILY.xattr.*) that keepXattr allows. Writing
-// trusted.* requires CAP_SYS_ADMIN; extraction runs as root in ateom, and the
+// trusted.* requires CAP_SYS_ADMIN; extraction runs as root in worker, and the
 // tests gate on it.
 //
 // The target is addressed THROUGH its parent directory opened via root (the
@@ -600,7 +600,7 @@ func keepXattr(attr string) bool {
 // readOverlayXattrs returns the extended attributes of name under root that
 // keepXattr allows. Filesystems without xattr support report none rather than
 // failing: tarutil archives arbitrary workload trees. Reading trusted.*
-// requires root, which archiving in ateom always has.
+// requires root, which archiving in worker always has.
 //
 // name is addressed through its parent directory opened via root, like
 // restoreOverlayXattrs, and the L* calls do not follow a final symlink.

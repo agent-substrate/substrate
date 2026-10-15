@@ -297,7 +297,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 // ensurePausedSnapshotUploaded suspends a paused actor by telling the atelet
 // on the node holding the local pause snapshot to upload it to the actor's
 // persisted in-progress snapshot location; no workload runs, so there is no
-// ateom to checkpoint. Retries re-send the same semantic request: the
+// worker to checkpoint. Retries re-send the same semantic request: the
 // destination is minted once and the upload overwrites deterministic object
 // names, with the remote manifest as the commit marker.
 func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireFidelity string, err error) {

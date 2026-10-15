@@ -49,7 +49,7 @@ type hostedActor struct {
 
 // admitActor reserves capacity before network setup. An actor that is already
 // hosted keeps its slot; its old network is returned for the caller to close.
-func (s *AteomService) admitActor(attribution resources.ActorAttribution) (*hostedActor, *ateomnet.SandboxSession, error) {
+func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution) (*hostedActor, *ateomnet.SandboxSession, error) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	var stale *ateomnet.SandboxSession
@@ -66,7 +66,7 @@ func (s *AteomService) admitActor(attribution resources.ActorAttribution) (*host
 }
 
 // hostActor sets up the actor's network, replacing any stale one.
-func (s *AteomService) hostActor(ctx context.Context, attribution resources.ActorAttribution, actorDirs *ateworkerpb.ActorDirs) (*hostedActor, error) {
+func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, actorDirs *ateworkerpb.ActorDirs) (*hostedActor, error) {
 	uid := attribution.UID
 	if uid == "" {
 		return nil, fmt.Errorf("actor UID is required")
@@ -116,7 +116,7 @@ func (s *AteomService) hostActor(ctx context.Context, attribution resources.Acto
 }
 
 // unhostActor removes an actor and its network. Repeated calls are safe.
-func (s *AteomService) unhostActor(ctx context.Context, actorUID string) error {
+func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) error {
 	s.actorsMu.Lock()
 	hosted, ok := s.actors[actorUID]
 	delete(s.actors, actorUID)
@@ -146,14 +146,14 @@ func (s *AteomService) unhostActor(ctx context.Context, actorUID string) error {
 }
 
 // lookupActor returns the actor or nil without taking its lifecycle lock.
-func (s *AteomService) lookupActor(actorUID string) *hostedActor {
+func (s *AteWorkerService) lookupActor(actorUID string) *hostedActor {
 	s.actorsMu.RLock()
 	defer s.actorsMu.RUnlock()
 	return s.actors[actorUID]
 }
 
 // hostedActors returns a snapshot of the actor map.
-func (s *AteomService) hostedActors() []*hostedActor {
+func (s *AteWorkerService) hostedActors() []*hostedActor {
 	s.actorsMu.RLock()
 	defer s.actorsMu.RUnlock()
 	out := make([]*hostedActor, 0, len(s.actors))
@@ -164,7 +164,7 @@ func (s *AteomService) hostedActors() []*hostedActor {
 }
 
 // hostedSessions returns the runsc sessions for shutdown.
-func (s *AteomService) hostedSessions() []*workloadSession {
+func (s *AteWorkerService) hostedSessions() []*workloadSession {
 	s.actorsMu.RLock()
 	defer s.actorsMu.RUnlock()
 	var out []*workloadSession
@@ -177,7 +177,7 @@ func (s *AteomService) hostedSessions() []*workloadSession {
 }
 
 // setSession records the runsc state for an actor once its containers exist.
-func (s *AteomService) setSession(actorUID string, session *workloadSession) {
+func (s *AteWorkerService) setSession(actorUID string, session *workloadSession) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	if hosted, ok := s.actors[actorUID]; ok {
@@ -186,7 +186,7 @@ func (s *AteomService) setSession(actorUID string, session *workloadSession) {
 }
 
 // sandboxDialer looks up the actor on each dial.
-func (s *AteomService) sandboxDialer(actorUID string) atunnel.DialFunc {
+func (s *AteWorkerService) sandboxDialer(actorUID string) atunnel.DialFunc {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		s.actorsMu.RLock()
 		var session *ateomnet.SandboxSession

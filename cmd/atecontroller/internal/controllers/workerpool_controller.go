@@ -56,19 +56,19 @@ type WorkerPoolReconciler struct {
 	Scheme       *runtime.Scheme
 	OTelEndpoint string
 	// OTelMetricExportInterval is the OTEL_METRIC_EXPORT_INTERVAL propagated to
-	// ateom pods. Empty keeps the SDK's default.
+	// worker pods. Empty keeps the SDK's default.
 	OTelMetricExportInterval string
 	// OTelMetricExportTimeout is the OTEL_METRIC_EXPORT_TIMEOUT propagated to
-	// ateom pods. Empty keeps the SDK's default.
+	// worker pods. Empty keeps the SDK's default.
 	OTelMetricExportTimeout string
-	// OTelTracesSampler is the OTEL_TRACES_SAMPLER propagated to ateom pods.
-	// Empty keeps the ateom binary's default.
+	// OTelTracesSampler is the OTEL_TRACES_SAMPLER propagated to worker pods.
+	// Empty keeps the worker binary's default.
 	OTelTracesSampler string
-	// OTelTracesSamplerArg is the OTEL_TRACES_SAMPLER_ARG propagated to ateom
+	// OTelTracesSamplerArg is the OTEL_TRACES_SAMPLER_ARG propagated to worker
 	// pods. Ignored unless OTelTracesSampler is set.
 	OTelTracesSamplerArg string
-	// OTelLogsExporter is the OTEL_LOGS_EXPORTER propagated to ateom pods.
-	// Empty keeps the ateom binary's default.
+	// OTelLogsExporter is the OTEL_LOGS_EXPORTER propagated to worker pods.
+	// Empty keeps the worker binary's default.
 	OTelLogsExporter string
 	// SystemNamespace is the namespace substrate's control plane runs in, and
 	// AteletServiceAccount / RouterServiceAccount are the ServiceAccounts those
@@ -79,7 +79,7 @@ type WorkerPoolReconciler struct {
 	SystemNamespace      string
 	AteletServiceAccount string
 	RouterServiceAccount string
-	// DNSEgressPolicy is the --dns-egress-policy mode propagated to ateom pods.
+	// DNSEgressPolicy is the --dns-egress-policy mode propagated to worker pods.
 	DNSEgressPolicy string
 	// Recorder emits a Normal event each time a pool's SandboxConfig
 	// changes, and a Warning event when a class stops resolving.
@@ -317,7 +317,7 @@ func (r *WorkerPoolReconciler) recordSandboxConfigEvents(wp *atev1alpha1.WorkerP
 }
 
 func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
-	depAC := buildDeploymentApplyConfig(wp, ateomOTelSettings{
+	depAC := buildDeploymentApplyConfig(wp, workerOTelSettings{
 		Endpoint:             r.OTelEndpoint,
 		MetricExportInterval: r.OTelMetricExportInterval,
 		MetricExportTimeout:  r.OTelMetricExportTimeout,

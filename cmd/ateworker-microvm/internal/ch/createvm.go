@@ -20,7 +20,7 @@ import (
 )
 
 // VmConfig is the body of /api/v1/vm.create — the subset of cloud-hypervisor's
-// VmConfig ateom sets to boot the kata guest. Modeled on kata's clh driver
+// VmConfig ateworker sets to boot the kata guest. Modeled on kata's clh driver
 // (src/runtime/virtcontainers/clh.go). vm.create + vm.boot are issued with PUT.
 type VmConfig struct {
 	Cpus     CpusConfig      `json:"cpus"`
@@ -59,7 +59,7 @@ type CpusConfig struct {
 
 // MemoryConfig sets guest RAM. Shared=true makes CH back RAM with a memfd, which
 // is what lets vm.snapshot write a SPARSE image (the memory-only snapshot the
-// rest of ateom relies on).
+// rest of ateworker relies on).
 type MemoryConfig struct {
 	Size   int64 `json:"size"`
 	Shared bool  `json:"shared"`
@@ -95,7 +95,7 @@ type ConsoleConfig struct {
 
 // VsockConfig is the hybrid-vsock the kata-agent listens on. Cid is the guest
 // CID (kata uses 3); Socket is the host unix socket (kata.VsockSocketPath) that
-// ateom then dials (DialAgent) to drive the agent.
+// ateworker then dials (DialAgent) to drive the agent.
 type VsockConfig struct {
 	Cid    int64  `json:"cid"`
 	Socket string `json:"socket"`

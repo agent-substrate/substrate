@@ -34,7 +34,7 @@ import (
 // memMiB is already net of reserveMiB, while vcpus is not. The asymmetry is
 // deliberate: an unreduced memory limit would push the worker pod past its own
 // and get it OOM-killed, whereas CPU is compressible, so the shortfall only
-// slows the workload down. cloud-hypervisor's vCPU threads, virtiofsd and ateom
+// slows the workload down. cloud-hypervisor's vCPU threads, virtiofsd and ateworker
 // are host processes drawing on the same worker-pod CPU quota, and the
 // scheduler's capacity check sets none of it aside, so a container gets somewhat
 // less CPU than it declared and the in-guest quota is throttled by the host

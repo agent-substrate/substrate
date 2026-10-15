@@ -64,7 +64,7 @@ func TestValidateFidelity(t *testing.T) {
 // or restore fails validation up front, before the actor lock or any file
 // system work, so a misrouted request cannot leave the actor half-handled.
 func TestRPCsRejectRootfsBeforeTouchingTheSandbox(t *testing.T) {
-	s := &AteomService{}
+	s := &AteWorkerService{}
 	dirs := &ateworkerpb.ActorDirs{
 		RootDir:                   "/node/actors/actor-a",
 		OciBundleDir:              "/node/actors/actor-a/bundle",

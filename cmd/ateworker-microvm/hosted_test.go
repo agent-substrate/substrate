@@ -28,7 +28,7 @@ import (
 // Re-admitting an actor that is already hosted keeps its slot, so it succeeds
 // on a full worker and a retry cannot lose its place to another actor.
 func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
-	s := &AteomService{actors: map[string]*hostedActor{}, maxActors: 1}
+	s := &AteWorkerService{actors: map[string]*hostedActor{}, maxActors: 1}
 	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, false)
 	if err != nil {
 		t.Fatal(err)

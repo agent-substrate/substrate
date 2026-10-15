@@ -25,7 +25,7 @@ package main
 // ActorDirs.durable_dir_volume_mounts_dir and wipes them when the actor's
 // directories are reset.
 //
-// ateom exposes that host directory to the guest under the single kataShared
+// ateworker exposes that host directory to the guest under the single kataShared
 // virtio-fs share at SharedDir(actorUID)/durable, where each container's bind
 // is attached.
 //
@@ -90,7 +90,7 @@ func durableVolumeNames(containers []*ateworkerpb.Container) []string {
 
 // stageDurableVolumes bind-mounts src, the actor's host durable-dir directory,
 // into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/durable.
-func (s *AteomService) stageDurableVolumes(ctx context.Context, actorUID, src string) error {
+func (s *AteWorkerService) stageDurableVolumes(ctx context.Context, actorUID, src string) error {
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("while checking durable-dir volumes dir %q: %w", src, err)
 	}

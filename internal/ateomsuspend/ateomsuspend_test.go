@@ -72,7 +72,7 @@ func testBackoff() wait.Backoff {
 	return wait.Backoff{Steps: retrySteps, Duration: time.Millisecond}
 }
 
-// dialCapturingAtelet serves an in-process AteomSupport over bufconn, which
+// dialCapturingAtelet serves an in-process WorkerSupport over bufconn, which
 // exercises the request without a socket or certificates.
 func dialCapturingAtelet(t *testing.T, atelet *capturingAtelet) *grpc.ClientConn {
 	t.Helper()
@@ -107,7 +107,7 @@ func TestRequestSuspendNamesTheActor(t *testing.T) {
 		t.Fatalf("requestWithRetry() failed: %v", err)
 	}
 
-	// The UID pins the request to the incarnation this ateom hosts, so it
+	// The UID pins the request to the incarnation this worker hosts, so it
 	// cannot outlive the actor and suspend whatever took its name.
 	want := []*ateletpb.RequestActorSuspendRequest{{
 		ActorAtespace: "team-a",
@@ -226,7 +226,7 @@ func TestRetryable(t *testing.T) {
 }
 
 // A misconfiguration must surface at startup rather than at the first request:
-// an ateom that cannot reach its atelet can never give a worker slot back, and
+// a worker that cannot reach its atelet can never give a worker slot back, and
 // finding that out only when an actor goes idle hides it for as long as the
 // actor is busy.
 func TestNewRequesterFailsOnBadCredentials(t *testing.T) {

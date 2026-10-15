@@ -297,7 +297,7 @@ func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error
 }
 
 // cmdWait blocks until the given container's process exits. Used during
-// graceful shutdown to confirm the actor has stopped before ateom exits.
+// graceful shutdown to confirm the actor has stopped before ateworker exits.
 func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
 	slog.InfoContext(ctx, "About to run runsc wait", slog.String("container", containerName))
 

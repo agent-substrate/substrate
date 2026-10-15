@@ -130,7 +130,7 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 		t.Run(fixture.manifests.Pool, func(t *testing.T) {
 			pool := renderPool(t, fixture.manifests.Pool)
 			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateworker-gvisor") {
-				t.Errorf("WorkerPool workerImage = %q, want the gVisor ateom", pool.Spec.WorkerImage)
+				t.Errorf("WorkerPool workerImage = %q, want the gVisor worker", pool.Spec.WorkerImage)
 			}
 			if pool.Spec.DefaultSandboxClass() != v1alpha1.SandboxClassGvisor {
 				t.Errorf("WorkerPool runtime = class %q, want gvisor", pool.Spec.DefaultSandboxClass())
@@ -179,7 +179,7 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 		t.Run(fixture.manifests.Pool, func(t *testing.T) {
 			pool := renderPool(t, fixture.manifests.Pool)
 			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateworker-microvm") {
-				t.Errorf("WorkerPool workerImage = %q, want the micro-VM ateom", pool.Spec.WorkerImage)
+				t.Errorf("WorkerPool workerImage = %q, want the micro-VM worker", pool.Spec.WorkerImage)
 			}
 			if pool.Spec.DefaultSandboxClass() != SandboxClassMicroVM {
 				t.Errorf("WorkerPool runtime = class %q, want microvm", pool.Spec.DefaultSandboxClass())

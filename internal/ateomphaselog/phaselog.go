@@ -13,9 +13,9 @@
 // limitations under the License.
 
 // Package ateomphaselog renders the per-actor "timing breakdown" log record an
-// ateom emits for each checkpoint and restore. Every ateom binary times its
+// worker emits for each checkpoint and restore. Every worker binary times its
 // own phases, which are implementation details of that runtime; this package
-// holds the shape they share so the records of all ateoms carry the same
+// holds the shape they share so the records of all workers carry the same
 // identity, fidelity and key layout, and atelet's own record joins to any of them.
 package ateomphaselog
 
@@ -33,7 +33,7 @@ import (
 
 // The keys the per-phase durations are logged under. They are named like
 // instruments but deliberately are not ones: the phases are implementation
-// details of each ateom, so they stay a developer-facing log record rather
+// details of each worker, so they stay a developer-facing log record rather
 // than becoming metric API. They decompose the worker_restore /
 // worker_checkpoint phases of atelet's ate.actor.*.duration histograms, whose
 // names they extend, and are joined per actor by benchmarking tooling.
@@ -45,14 +45,14 @@ const (
 // Phase is one timed step of a snapshot operation. A zero duration means the
 // phase never ran (a VOLUMES checkpoint captures no guest) and is skipped
 // rather than logged as instant. Name is suffixed onto the duration key; each
-// ateom defines its own names, with ateattr.SnapshotPhaseTotal shared so the
+// worker defines its own names, with ateattr.SnapshotPhaseTotal shared so the
 // two layers' records agree on the denominator.
 type Phase struct {
 	Name string
 	D    time.Duration
 }
 
-// FidelityLogValue maps the ateom wire enum onto the shared fidelity label
+// FidelityLogValue maps the worker wire enum onto the shared fidelity label
 // values, the same way ateattr.SnapshotFidelityValue does for the atelet
 // enum. An unrecognized fidelity reports as unknown rather than stringified,
 // so no wire value can widen the value set readers key on.

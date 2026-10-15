@@ -58,7 +58,7 @@ func TestNetworkPolicyLifecycleAndReconciliation(t *testing.T) {
 		},
 		Spec: v1alpha1.WorkerPoolSpec{
 			Replicas:       1,
-			WorkerImage:    "ateom:v1",
+			WorkerImage:    "worker:v1",
 			SandboxClasses: []v1alpha1.WorkerPoolSandboxClass{{Name: v1alpha1.SandboxClassGvisor}},
 		},
 	}
@@ -272,7 +272,7 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 const (
 	// testserverPort is the port the probe and control pods listen on.
 	testserverPort = 8080
-	// workerReadyzPort is the port of ateom's /readyz server.
+	// workerReadyzPort is the port of worker's /readyz server.
 	workerReadyzPort = "8080"
 )
 

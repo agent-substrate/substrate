@@ -30,8 +30,8 @@ type capacityClient interface {
 }
 
 // relay forwards fake-workersync's capacity reports to ate-api-server under
-// this pod's atelet identity. It stands where atelet's AteomSupport stands in
-// production: ateom knows its capacity and atelet relays it, because
+// this pod's atelet identity. It stands where atelet's WorkerSupport stands in
+// production: worker knows its capacity and atelet relays it, because
 // ate-api-server accepts a report only from the atelet on the Worker's node.
 // The relay decides nothing; fake-workersync names the Worker and its
 // capacity, and ate-api-server checks the Worker is on this node.

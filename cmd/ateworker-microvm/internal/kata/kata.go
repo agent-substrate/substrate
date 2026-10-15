@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package kata holds the helpers ateom uses to boot and drive a kata guest in a
-// cloud-hypervisor micro-VM without the kata shim: ateom boots cloud-hypervisor
+// Package kata holds the helpers ateworker uses to boot and drive a kata guest in a
+// cloud-hypervisor micro-VM without the kata shim: ateworker boots cloud-hypervisor
 // itself (see internal/ch), then drives the stock kata-agent over its hybrid-vsock
 // ttrpc API (DialAgent / AgentClient) to create the sandbox and run each container
 // on its host-merged rootfs (overlay_linux.go).
@@ -31,7 +31,7 @@ import (
 const vcVMDir = "/run/vc/vm"
 
 // CLHSocketPath returns the default cloud-hypervisor API socket path for the
-// sandbox with the given id (the per-sandbox runtime dir). ateom records the
+// sandbox with the given id (the per-sandbox runtime dir). ateworker records the
 // actual api-socket it launched the VMM on, but uses this as the fallback.
 func CLHSocketPath(id string) string {
 	return filepath.Join(vcVMDir, id, "clh-api.sock")

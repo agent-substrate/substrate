@@ -38,7 +38,7 @@ func hasCsiVolumes(containers []*ateworkerpb.Container) bool {
 
 // stageCsiVolumes bind-mounts src, the actor's host CSI volumes directory,
 // into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/csi.
-func (s *AteomService) stageCsiVolumes(ctx context.Context, actorUID, src string) error {
+func (s *AteWorkerService) stageCsiVolumes(ctx context.Context, actorUID, src string) error {
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("while checking CSI volumes dir %q: %w", src, err)
 	}

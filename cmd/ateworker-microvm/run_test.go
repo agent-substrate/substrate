@@ -208,14 +208,14 @@ func TestWorkloadIDs(t *testing.T) {
 }
 
 func TestKernelParamsDebugConsole(t *testing.T) {
-	prodParams := (&AteomService{guestDebug: false}).kernelParams()
+	prodParams := (&AteWorkerService{guestDebug: false}).kernelParams()
 	for _, forbidden := range []string{"agent.debug_console", "agent.debug_console_vport", "1026"} {
 		if strings.Contains(prodParams, forbidden) {
 			t.Errorf("expected kernelParams() with guestDebug=false not to contain %q, but got %q", forbidden, prodParams)
 		}
 	}
 
-	dbgParams := (&AteomService{guestDebug: true}).kernelParams()
+	dbgParams := (&AteWorkerService{guestDebug: true}).kernelParams()
 	for _, want := range []string{"agent.log=debug", "agent.debug_console", "agent.debug_console_vport=1026"} {
 		if !strings.Contains(dbgParams, want) {
 			t.Errorf("expected kernelParams() with guestDebug=true to contain %q, but got %q", want, dbgParams)

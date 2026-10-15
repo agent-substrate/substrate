@@ -30,7 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
-func withUsageRecorder(s *AteomService) *ateomstatstest.Recorder {
+func withUsageRecorder(s *AteWorkerService) *ateomstatstest.Recorder {
 	e, rec := ateomstatstest.NewEmitter()
 	s.usage = e
 	return rec
@@ -43,7 +43,7 @@ func running(a *ateomstats.Activation) *ateomstats.Activation {
 }
 
 // setActivation replaces the test actor's activation.
-func setActivation(s *AteomService, a *ateomstats.Activation) *hostedActor {
+func setActivation(s *AteWorkerService, a *ateomstats.Activation) *hostedActor {
 	h := s.lookupActor(testActor.UID)
 	s.actorsMu.Lock()
 	h.usage = a

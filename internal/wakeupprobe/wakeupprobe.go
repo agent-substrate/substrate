@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package wakeupprobe polls a container's HTTP wakeup endpoint from inside an
-// ateom. The intent is to detect the moment a container's HTTP server
+// worker. The intent is to detect the moment a container's HTTP server
 // starts accepting connections with single-millisecond latency: while the
 // server is still booting the kernel returns RST in microseconds, so a
 // sub-millisecond poll loop spends almost no time blocked, and once the

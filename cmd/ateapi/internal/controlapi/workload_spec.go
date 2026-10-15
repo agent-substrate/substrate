@@ -23,7 +23,7 @@ import (
 )
 
 // toAteletResources resolves a container's declared limits into the scalars
-// atelet and the ateoms consume; everything downstream compares numbers.
+// atelet and the workers consume; everything downstream compares numbers.
 // Returns nil when the container declares no limits, so the OCI spec stays
 // untouched for templates that do not use them.
 func toAteletResources(r *ateapipb.Resources) (*ateletpb.ResourceLimits, error) {

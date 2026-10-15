@@ -25,7 +25,7 @@ import (
 )
 
 // Activation is the usage state of one activation of an actor: one Run or
-// Restore. An ateom creates one each time it hosts an actor, so a re-hosted
+// Restore. A worker creates one each time it hosts an actor, so a re-hosted
 // actor starts a new one.
 //
 // It is safe for concurrent use: the stats reads, the sampler, and the

@@ -55,7 +55,7 @@ type hostedActor struct {
 // hosted keeps its slot; its old network is returned for the caller to close.
 // resumesGuest is true when the activation resumes a guest from a snapshot,
 // whose CPU counters come back with it.
-func (s *AteomService) admitActor(attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, *ateomnet.SandboxSession, error) {
+func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, *ateomnet.SandboxSession, error) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	var stale *ateomnet.SandboxSession
@@ -71,7 +71,7 @@ func (s *AteomService) admitActor(attribution resources.ActorAttribution, resume
 
 // hostActor sets up the actor's network, replacing any stale one. resumesGuest
 // is as for admitActor.
-func (s *AteomService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, error) {
+func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, error) {
 	uid := attribution.UID
 	if uid == "" {
 		return nil, fmt.Errorf("actor UID is required")
@@ -110,7 +110,7 @@ func (s *AteomService) hostActor(ctx context.Context, attribution resources.Acto
 }
 
 // actorLeaf opens the actor's cgroup, or returns nil when the worker has none.
-func (s *AteomService) actorLeaf(actorUID string, size sizing.SandboxSize) (*ateomcgroup.ActorLeaf, error) {
+func (s *AteWorkerService) actorLeaf(actorUID string, size sizing.SandboxSize) (*ateomcgroup.ActorLeaf, error) {
 	if !s.actorCgroups {
 		return nil, nil
 	}
@@ -119,7 +119,7 @@ func (s *AteomService) actorLeaf(actorUID string, size sizing.SandboxSize) (*ate
 
 // cleanupSandboxState kills what is left of the actor's host processes and
 // clears its sandbox directories.
-func (s *AteomService) cleanupSandboxState(ctx context.Context, actorUID string) {
+func (s *AteWorkerService) cleanupSandboxState(ctx context.Context, actorUID string) {
 	if s.actorCgroups {
 		killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		if err := ateomcgroup.KillActorLeaf(killCtx, actorUID); err != nil {
@@ -132,7 +132,7 @@ func (s *AteomService) cleanupSandboxState(ctx context.Context, actorUID string)
 
 // unhostActor removes an actor, its network, and its cgroup. Repeated calls are
 // safe. The caller must stop the VM first.
-func (s *AteomService) unhostActor(ctx context.Context, actorUID string) error {
+func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) error {
 	s.actorsMu.Lock()
 	hosted, ok := s.actors[actorUID]
 	delete(s.actors, actorUID)
@@ -166,14 +166,14 @@ func (s *AteomService) unhostActor(ctx context.Context, actorUID string) error {
 }
 
 // lookupActor returns the actor or nil without taking its lifecycle lock.
-func (s *AteomService) lookupActor(actorUID string) *hostedActor {
+func (s *AteWorkerService) lookupActor(actorUID string) *hostedActor {
 	s.actorsMu.RLock()
 	defer s.actorsMu.RUnlock()
 	return s.actors[actorUID]
 }
 
 // hostedActors returns a snapshot of the actor map.
-func (s *AteomService) hostedActors() []*hostedActor {
+func (s *AteWorkerService) hostedActors() []*hostedActor {
 	s.actorsMu.RLock()
 	defer s.actorsMu.RUnlock()
 	out := make([]*hostedActor, 0, len(s.actors))
@@ -184,7 +184,7 @@ func (s *AteomService) hostedActors() []*hostedActor {
 }
 
 // setRunningVM publishes the live micro-VM for an actor.
-func (s *AteomService) setRunningVM(actorUID string, vm *runningActor) {
+func (s *AteWorkerService) setRunningVM(actorUID string, vm *runningActor) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	if hosted, ok := s.actors[actorUID]; ok {
@@ -193,7 +193,7 @@ func (s *AteomService) setRunningVM(actorUID string, vm *runningActor) {
 }
 
 // runningVM is the live micro-VM for an actor, or nil.
-func (s *AteomService) runningVM(actorUID string) *runningActor {
+func (s *AteWorkerService) runningVM(actorUID string) *runningActor {
 	hosted := s.lookupActor(actorUID)
 	if hosted == nil {
 		return nil
@@ -204,7 +204,7 @@ func (s *AteomService) runningVM(actorUID string) *runningActor {
 }
 
 // setGuestStats sets or clears the actor's stats target.
-func (s *AteomService) setGuestStats(actorUID string, guest *guestStatsTarget) {
+func (s *AteWorkerService) setGuestStats(actorUID string, guest *guestStatsTarget) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	if hosted, ok := s.actors[actorUID]; ok {
@@ -213,14 +213,14 @@ func (s *AteomService) setGuestStats(actorUID string, guest *guestStatsTarget) {
 }
 
 // guestOf is h's stats target, or nil.
-func (s *AteomService) guestOf(h *hostedActor) *guestStatsTarget {
+func (s *AteWorkerService) guestOf(h *hostedActor) *guestStatsTarget {
 	s.actorsMu.RLock()
 	defer s.actorsMu.RUnlock()
 	return h.guest
 }
 
 // sandboxNetNS is where an actor's tap and atunnel's sockets live, or -1.
-func (s *AteomService) sandboxNetNS(actorUID string) netns.Handle {
+func (s *AteWorkerService) sandboxNetNS(actorUID string) netns.Handle {
 	hosted := s.lookupActor(actorUID)
 	if hosted == nil {
 		return -1
@@ -234,7 +234,7 @@ func (s *AteomService) sandboxNetNS(actorUID string) netns.Handle {
 }
 
 // sandboxDialer connects through the actor's gateway namespace.
-func (s *AteomService) sandboxDialer(actorUID string) atunnel.DialFunc {
+func (s *AteWorkerService) sandboxDialer(actorUID string) atunnel.DialFunc {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		s.actorsMu.RLock()
 		hosted := s.actors[actorUID]

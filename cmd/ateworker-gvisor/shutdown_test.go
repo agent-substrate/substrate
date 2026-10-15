@@ -170,7 +170,7 @@ func TestKillContainer(t *testing.T) {
 }
 
 // TestKillContainerHonorsParentCancellation asserts that a cancelled shutdown
-// context stops the drain instead of escalating: ateom is going away anyway, and
+// context stops the drain instead of escalating: ateworker is going away anyway, and
 // the containers go down with the pod.
 func TestKillContainerHonorsParentCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

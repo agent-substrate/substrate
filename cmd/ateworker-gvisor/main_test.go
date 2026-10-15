@@ -41,7 +41,7 @@ import (
 
 // Every RPC rejects a request without ActorDirs before touching any state.
 func TestRPCsRejectMissingActorDirs(t *testing.T) {
-	s := &AteomService{}
+	s := &AteWorkerService{}
 	ctx := context.Background()
 	for name, call := range map[string]func() error{
 		"RunWorkload": func() error {
@@ -68,7 +68,7 @@ func TestRPCsRejectMissingActorDirs(t *testing.T) {
 }
 
 func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
-	s := &AteomService{}
+	s := &AteWorkerService{}
 	ctx := context.Background()
 	dirs := &ateworkerpb.ActorDirs{
 		RootDir:                   "/node/actors/actor-a",
@@ -121,7 +121,7 @@ func TestRestoreWorkloadRejectsUnsupportedFidelity(t *testing.T) {
 		VolumesDir:                "/node/actors/actor-a/volumes",
 	}
 	// A zero service cannot acquire locks, configure networking, or open log pipes.
-	s := &AteomService{}
+	s := &AteWorkerService{}
 	for _, fidelity := range []ateworkerpb.SnapshotFidelity{0, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, 99} {
 		t.Run(fidelity.String(), func(t *testing.T) {
 			resp, err := s.RestoreWorkload(context.Background(), &ateworkerpb.RestoreWorkloadRequest{

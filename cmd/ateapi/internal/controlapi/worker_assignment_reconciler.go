@@ -41,7 +41,7 @@ type workerWatcher interface {
 
 // WorkerAssignmentReconciler keeps the Actors assigned to a Worker in line with
 // its epoch. It watches for Workers whose epoch has risen past
-// status.observed_epoch, and crashes the Actors a restarted ateom took with it.
+// status.observed_epoch, and crashes the Actors a restarted worker took with it.
 //
 // TODO: Every ateapi replica runs this reconciler and queues every Worker, with
 // only a per-Worker lease keeping them from releasing the same one at once.

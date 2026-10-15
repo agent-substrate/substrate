@@ -31,7 +31,7 @@ checked-out build and print their pushed references, one "<binary>: <ref>"
 line per image.
 
 A WorkerPool moves to a build by pointing spec.workerImage at that build's
-ateom ref.`,
+worker ref.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return env.PublishWorkerImages(cmd.Context(), cmd.OutOrStdout())

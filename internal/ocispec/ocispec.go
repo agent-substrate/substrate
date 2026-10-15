@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package ocispec builds the runtime-neutral OCI spec for actor bundles, which
-// each ateom shapes for its runtime.
+// each worker shapes for its runtime.
 package ocispec
 
 import (

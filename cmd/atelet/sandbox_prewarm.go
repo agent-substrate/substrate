@@ -63,7 +63,7 @@ const prewarmMaxRetries = 8
 // down what that call writes into.
 var prewarmFinished = func(string, error) {}
 
-// sandboxAssetFetcher is the one slice of AteomHerder the prewarmer needs.
+// sandboxAssetFetcher is the one slice of Atelet the prewarmer needs.
 // Prewarming through the same method as the Run/Restore path keeps the two
 // fetches from ever diverging on cache layout or validation.
 type sandboxAssetFetcher interface {

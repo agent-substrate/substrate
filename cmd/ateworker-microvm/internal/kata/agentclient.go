@@ -84,8 +84,8 @@ func DebugConsoleDump(ctx context.Context, vsockPath, cmd string) string {
 	return out.String()
 }
 
-// AgentClient is a thin ttrpc client for the kata-agent RPCs ateom drives
-// directly. ateom owns the cloud-hypervisor boot (no kata shim) and drives the
+// AgentClient is a thin ttrpc client for the kata-agent RPCs ateworker drives
+// directly. ateworker owns the cloud-hypervisor boot (no kata shim) and drives the
 // kata-agent over ttrpc itself: alongside UpdateInterface/UpdateRoutes for guest
 // networking, it issues CreateContainer/StartContainer to assemble the container
 // rootfs directly, instead of relying on the kata runtime's hooks
@@ -170,7 +170,7 @@ func (a *AgentClient) StartContainer(ctx context.Context, containerID string) er
 
 // CreateSandbox establishes the agent's sandbox context (sandbox id, hostname,
 // sandbox pidns) before any container is created. The kata shim normally issues
-// this once at VM boot; ateom (no shim) must call it itself so the agent has a
+// this once at VM boot; ateworker (no shim) must call it itself so the agent has a
 // sandbox to attach containers to. Storages carries the shared virtio-fs mount
 // (the overlay lowers); each container's rootfs is assembled per-container.
 // Mirrors grpc.AgentService/CreateSandbox (returns google.protobuf.Empty).
@@ -182,7 +182,7 @@ func (a *AgentClient) CreateSandbox(ctx context.Context, req *agentpb.CreateSand
 }
 
 // UpdateInterface configures a guest network interface (the kata shim's job, which
-// ateom does itself). The agent matches the link by HwAddr, then applies the
+// ateworker does itself). The agent matches the link by HwAddr, then applies the
 // name/IP/MTU. Mirrors grpc.AgentService/UpdateInterface (returns the resulting
 // Interface).
 func (a *AgentClient) UpdateInterface(ctx context.Context, iface *agentpb.Interface) error {
@@ -230,7 +230,7 @@ func (a *AgentClient) SignalProcess(ctx context.Context, containerID, execID str
 
 // WaitProcess blocks until the identified guest process exits and returns its
 // exit status (mimics waitpid(2)). Used during graceful shutdown to confirm the
-// actor has stopped before ateom tears the VM down. Mirrors
+// actor has stopped before ateworker tears the VM down. Mirrors
 // grpc.AgentService/WaitProcess.
 func (a *AgentClient) WaitProcess(ctx context.Context, containerID, execID string) (int32, error) {
 	resp := &agentpb.WaitProcessResponse{}
@@ -246,7 +246,7 @@ func (a *AgentClient) WaitProcess(ctx context.Context, containerID, execID strin
 // buffered (up to max), so callers loop until it returns an error — the agent
 // returns an error/EOF-like status once the stream ends (container exit / connection
 // close). Mirrors grpc.AgentService/ReadStdout. The kata-agent keys the stream by
-// ExecId, which ateom sets equal to ContainerId.
+// ExecId, which ateworker sets equal to ContainerId.
 func (a *AgentClient) ReadStdout(ctx context.Context, containerID, execID string, max uint32) ([]byte, error) {
 	resp := &agentpb.ReadStreamResponse{}
 	req := &agentpb.ReadStreamRequest{ContainerId: containerID, ExecId: execID, Len: max}
@@ -274,7 +274,7 @@ func (a *AgentClient) ReadStderr(ctx context.Context, containerID, execID string
 //
 // It returns only the cgroup half of the response; the network counters
 // alongside it are per-guest-interface rather than per-container and are not
-// what ateom reports. A nil return with a nil error means the agent answered
+// what ateworker reports. A nil return with a nil error means the agent answered
 // without cgroup stats for this container — it has no accounting for it, which
 // is a normal state for one that has exited. What that means for the actor is
 // the caller's call: the summing in GetWorkloadStats folds it in as a zero
@@ -308,7 +308,7 @@ type StreamReader struct {
 }
 
 // NewStdioReader returns an io.Reader over the container's stdout (stderr=false)
-// or stderr (stderr=true). execID equals containerID (ateom sets ExecId ==
+// or stderr (stderr=true). execID equals containerID (ateworker sets ExecId ==
 // ContainerId when it creates the container).
 func NewStdioReader(ctx context.Context, ac *AgentClient, containerID, execID string, stderr bool) *StreamReader {
 	return &StreamReader{ctx: ctx, ac: ac, containerID: containerID, execID: execID, stderr: stderr}

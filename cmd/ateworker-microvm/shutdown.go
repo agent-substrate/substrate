@@ -36,11 +36,11 @@ import (
 
 // workloadGracePeriod is the whole budget for draining the worker on shutdown:
 // waiting for an in-flight RPC to release the lock and letting the guest
-// workloads handle SIGTERM both draw on it, and ateom escalates to SIGKILL once
+// workloads handle SIGTERM both draw on it, and ateworker escalates to SIGKILL once
 // it is gone. Matches ateworker-gvisor, and is deliberately shorter than the pod's
 // own termination grace period — 3600s, set by
 // workerTerminationGracePeriodSeconds in cmd/atecontroller — so the escalation
-// happens here rather than as a kubelet SIGKILL of ateom itself.
+// happens here rather than as a kubelet SIGKILL of ateworker itself.
 const workloadGracePeriod = 30 * time.Minute
 
 // workloadKillTimeout bounds the post-SIGKILL wait. The VM teardown that
@@ -65,7 +65,7 @@ const (
 // gracefulShutdown propagates SIGTERM into every running actor's guest and waits
 // for the workloads to exit, so the caller can exit cleanly. It takes no actor's
 // lifecycle lock, so a suspend can still land mid-drain.
-func (s *AteomService) gracefulShutdown(ctx context.Context) {
+func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 	// Set this first so an RPC that arrives while we drain is turned away.
 	s.shuttingDown.Store(true)
 
@@ -231,7 +231,7 @@ func stopGuestWorkload(ctx context.Context, agent guestAgent, id, wid string, de
 	//
 	// Liveness is therefore unknown, so report it rather than claiming the workload
 	// exited. Do not escalate: without a working agent there is no way to reach the
-	// process anyway, and ateom is already on its way out, so the container goes
+	// process anyway, and ateworker is already on its way out, so the container goes
 	// down with the pod.
 	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("while waiting for workload %q to exit: %w", wid, err)
@@ -262,7 +262,7 @@ func stopGuestWorkload(ctx context.Context, agent guestAgent, id, wid string, de
 }
 
 // signalWorkload delivers one signal to a guest workload's init process, bounded
-// by signalDeliveryTimeout. ateom sets ExecId equal to ContainerId, so passing wid
+// by signalDeliveryTimeout. ateworker sets ExecId equal to ContainerId, so passing wid
 // for both targets that init process.
 //
 // The bound is the point: the shutdown context has no deadline of its own, and

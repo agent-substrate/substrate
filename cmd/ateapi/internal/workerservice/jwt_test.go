@@ -91,8 +91,8 @@ func TestMintWorkerActorJwt(t *testing.T) {
 		t.Errorf("aud = %v, want [snapshot-plugin]", audiences)
 	}
 	kind, substrate, ok := claims.Substrate()
-	if !ok || kind != actoridjwt.KindAteomForActor {
-		t.Fatalf("token kind = %v (ok %v), want KindAteomForActor under worker-for-actor.ate.dev", kind, ok)
+	if !ok || kind != actoridjwt.KindWorkerForActor {
+		t.Fatalf("token kind = %v (ok %v), want KindWorkerForActor under worker-for-actor.ate.dev", kind, ok)
 	}
 	if got, want := *substrate, (actoridjwt.WireSubstrateClaims{Atespace: "team-a", ActorName: "my-actor", ActorUID: actor.GetMetadata().GetUid()}); got != want {
 		t.Errorf("worker-for-actor.ate.dev = %+v, want %+v", got, want)
@@ -103,10 +103,10 @@ func TestMintWorkerActorJwt(t *testing.T) {
 		t.Errorf("exp = %v, expire_time = %v; want equal", got, expiresAt)
 	}
 	lifetime := expiresAt.Sub(time.Unix(int64(claims.IssuedAt), 0))
-	if lifetime != ateomActorJWTLifetime {
-		t.Errorf("exp - iat = %v, want %v", lifetime, ateomActorJWTLifetime)
+	if lifetime != workerActorJWTLifetime {
+		t.Errorf("exp - iat = %v, want %v", lifetime, workerActorJWTLifetime)
 	}
-	if expiresAt.Before(before.Add(ateomActorJWTLifetime)) {
+	if expiresAt.Before(before.Add(workerActorJWTLifetime)) {
 		t.Errorf("expire_time = %v is earlier than %v + lifetime", expiresAt, before)
 	}
 }

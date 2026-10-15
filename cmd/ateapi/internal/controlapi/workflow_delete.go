@@ -145,7 +145,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 				return err
 			}
 			if !hosted {
-				slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping ateom workload termination",
+				slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping worker workload termination",
 					slog.String("worker", workerName),
 					slog.Any("actor", actorRef))
 				workerPodUID = ""

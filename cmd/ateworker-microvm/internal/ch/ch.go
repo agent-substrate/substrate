@@ -18,7 +18,7 @@
 // from a snapshot directory for restore.
 //
 // This is the snapshot/restore half of the ateworker-microvm model: kata
-// owns RUN (boot the micro-VM + run the OCI container), and ateom drives the CH
+// owns RUN (boot the micro-VM + run the OCI container), and ateworker drives the CH
 // REST API underneath for suspend (pause+snapshot) and owns the bare-CH
 // relaunch for restore (see LaunchVMM + RestoreWithNetFDs in restorefds.go). The
 // REST wire format is the one cloud-hypervisor documents for snapshot/restore.

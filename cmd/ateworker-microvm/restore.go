@@ -104,7 +104,7 @@ func newReseedNonce() ([]byte, error) {
 //
 // Contract with atelet: the snapshot's files are in ActorDirs.restore_dir,
 // and the durable-dir volume directories re-created (empty).
-func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateworkerpb.RestoreWorkloadRequest) (resp *ateworkerpb.RestoreWorkloadResponse, retErr error) {
+func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb.RestoreWorkloadRequest) (resp *ateworkerpb.RestoreWorkloadResponse, retErr error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
@@ -232,7 +232,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateworkerpb.Res
 // and resume. Guest RAM — the actor's in-memory state and the frozen network config —
 // comes back from the memory snapshot; the durable-dir volumes were restored by the
 // caller from their tar.
-func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootParams, scope ateworkerpb.SnapshotFidelity, restoreDir string, preserveRestoreDir bool, tStart time.Time) (retErr error) {
+func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBootParams, scope ateworkerpb.SnapshotFidelity, restoreDir string, preserveRestoreDir bool, tStart time.Time) (retErr error) {
 	actorUID := p.actorUID
 
 	rr := s.resolveRuntime(p.assetPaths)
@@ -564,7 +564,7 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 			changed = true
 		}
 	}
-	// ateom captures the guest console to a file under the source actor's VMDir
+	// ateworker captures the guest console to a file under the source actor's VMDir
 	// (virtio-console normally, plus the UART in debug mode). On restore those paths
 	// are stale (they point at the golden/source pod's VMDir), so CH's
 	// CreateConsoleDevice fails (No such file or directory). Repoint them at this

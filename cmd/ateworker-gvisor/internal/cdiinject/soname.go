@@ -39,7 +39,7 @@ import (
 // here.
 // Every path component under rootfs comes from the actor image, so the writes go
 // through os.Root: an image that ships a driver-mount's parent directory as a
-// symlink out of the rootfs would otherwise have the kernel resolve it in ateom's
+// symlink out of the rootfs would otherwise have the kernel resolve it in ateworker's
 // mount namespace, where the shared image cache and other actors' bundles are
 // mounted. Same treatment as createExtraDirs in internal/imagecache.
 func StageSonameSymlinks(ctx context.Context, rootfs string, mounts []specs.Mount, allowedHostDirs []string) error {

@@ -32,14 +32,14 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
-func withUsageRecorder(s *AteomService) *ateomstatstest.Recorder {
+func withUsageRecorder(s *AteWorkerService) *ateomstatstest.Recorder {
 	e, rec := ateomstatstest.NewEmitter()
 	s.usage = e
 	return rec
 }
 
 // hostWithEpoch hosts testActor; running means its initial reading is done.
-func hostWithEpoch(s *AteomService, epoch time.Time, running bool) *hostedActor {
+func hostWithEpoch(s *AteWorkerService, epoch time.Time, running bool) *hostedActor {
 	h := &hostedActor{attribution: testActor, usage: ateomstats.NewActivation(epoch, false)}
 	if running {
 		h.usage.Initial(nil, nil)

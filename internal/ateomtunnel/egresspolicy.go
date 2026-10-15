@@ -75,7 +75,7 @@ type actorEgressPolicy struct {
 func (t *Tunnel) ActorEgressPolicy(actor resources.ActorAttribution) dns.PolicySource {
 	return &actorEgressPolicy{
 		fetch: func(ctx context.Context) (*ateletpb.EgressPolicy, error) {
-			conn, err := ateletdial.Dial(nodepath.AteomSupportSocket, t.ateletTLS)
+			conn, err := ateletdial.Dial(nodepath.WorkerSupportSocket, t.ateletTLS)
 			if err != nil {
 				return nil, err
 			}

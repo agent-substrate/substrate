@@ -71,7 +71,7 @@ func VirtiofsdSocketPath(id string) string { return filepath.Join(VMDir(id), "vi
 // <cid>/work. Both properties are load-bearing — the kernel requires upperdir
 // and workdir on the same filesystem and rejects a nested workdir. The
 // snapshot only carries each upperdir's contents (see
-// cmd/ateworker-microvm/rootfsupper.go); ateom creates this layout itself.
+// cmd/ateworker-microvm/rootfsupper.go); ateworker creates this layout itself.
 // Covered by regression tests.
 func UpperWorkDirs(upperBase, containerID string) (upper, work string) {
 	return filepath.Join(upperBase, containerID, "fs"), filepath.Join(upperBase, containerID, "work")

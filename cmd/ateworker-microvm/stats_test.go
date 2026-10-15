@@ -194,14 +194,14 @@ func containerStats(usage, peak, inactiveFile, cpuNanos uint64) *agentpb.CgroupS
 // containers published to GetWorkloadStats. lock is constructed like NewService
 // does, since it is a pointer with no usable zero value and
 // TestGetWorkloadStatsDoesNotTakeLock holds it.
-func newStatsService(agent containerStatsReader, workloadIDs ...string) *AteomService {
-	s := &AteomService{locks: actorlock.New(), actors: map[string]*hostedActor{}, guestSlots: make(chan struct{}, statsFanOut)}
+func newStatsService(agent containerStatsReader, workloadIDs ...string) *AteWorkerService {
+	s := &AteWorkerService{locks: actorlock.New(), actors: map[string]*hostedActor{}, guestSlots: make(chan struct{}, statsFanOut)}
 	hostTestActor(s, testActor, &guestStatsTarget{actorUID: testActor.UID, agent: agent, workloadIDs: workloadIDs})
 	return s
 }
 
 // hostTestActor registers an actor; a nil target represents an actor still booting.
-func hostTestActor(s *AteomService, attribution resources.ActorAttribution, target *guestStatsTarget) *hostedActor {
+func hostTestActor(s *AteWorkerService, attribution resources.ActorAttribution, target *guestStatsTarget) *hostedActor {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	if s.actors == nil {
@@ -213,7 +213,7 @@ func hostTestActor(s *AteomService, attribution resources.ActorAttribution, targ
 }
 
 // unhostTestActor removes one actor, standing in for CheckpointWorkload.
-func unhostTestActor(s *AteomService, actorUID string) {
+func unhostTestActor(s *AteWorkerService, actorUID string) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	delete(s.actors, actorUID)
@@ -345,7 +345,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 		name string
 		// service builds the service under test, so each case can put the two
 		// atomics in exactly the state it means to exercise.
-		service  func() *AteomService
+		service  func() *AteWorkerService
 		actorUID string
 		want     codes.Code
 	}{
@@ -353,15 +353,15 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			// A required field the caller left off: a client bug, distinct from
 			// the races below, so it gets a distinct code.
 			name:     "empty actor_uid",
-			service:  func() *AteomService { return newStatsService(healthy, "app_ovl") },
+			service:  func() *AteWorkerService { return newStatsService(healthy, "app_ovl") },
 			actorUID: "",
 			want:     codes.InvalidArgument,
 		},
 		{
 			// Not here at all. NOT_FOUND rather than FAILED_PRECONDITION, because
 			// what the caller should do about it is re-resolve, not retry.
-			name:     "ateom is available",
-			service:  func() *AteomService { return &AteomService{} },
+			name:     "ateworker is available",
+			service:  func() *AteWorkerService { return &AteWorkerService{} },
 			actorUID: "uid-a",
 			want:     codes.NotFound,
 		},
@@ -370,7 +370,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			// this call. Reporting anyway would file one actor's numbers under
 			// another's name, and it is the same "not here" as the case above.
 			name:     "actor_uid does not match the executing workload",
-			service:  func() *AteomService { return newStatsService(healthy, "app_ovl") },
+			service:  func() *AteWorkerService { return newStatsService(healthy, "app_ovl") },
 			actorUID: "uid-b",
 			want:     codes.NotFound,
 		},
@@ -379,8 +379,8 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			// a poll landing in the boot or the restore, or one landing after
 			// teardownActor cleared the target. The transient case.
 			name: "no guest agent connection yet",
-			service: func() *AteomService {
-				s := &AteomService{}
+			service: func() *AteWorkerService {
+				s := &AteWorkerService{}
 				hostTestActor(s, testActor, nil)
 				return s
 			},
@@ -392,7 +392,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			// lock — so a disagreement is an invariant violation, not a routine
 			// state: Internal, unlike every other way sampleGuest declines.
 			name: "guest agent connection belongs to another actor",
-			service: func() *AteomService {
+			service: func() *AteWorkerService {
 				s := newStatsService(healthy, "app_ovl")
 				hostTestActor(s, testActor, &guestStatsTarget{actorUID: "uid-b", agent: healthy, workloadIDs: []string{"app_ovl"}})
 				return s
@@ -405,9 +405,9 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			// sandbox is going away, which the next CheckpointWorkload turns into
 			// the NOT_FOUND above, or the agent is briefly unreachable. Either way
 			// it is "no numbers right now" rather than Internal — the guest not
-			// answering is a routine state here, not a bug in this ateom.
+			// answering is a routine state here, not a bug in this ateworker.
 			name: "no container answers",
-			service: func() *AteomService {
+			service: func() *AteWorkerService {
 				agent := &fakeAgent{errs: map[string]error{
 					"app_ovl":     errors.New("ttrpc: closed"),
 					"sidecar_ovl": errors.New("ttrpc: closed"),
@@ -421,7 +421,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			// The boot path does not produce an actor with no containers, so a
 			// confident zero would be reporting a state we do not understand.
 			name:     "no containers to measure",
-			service:  func() *AteomService { return newStatsService(healthy) },
+			service:  func() *AteWorkerService { return newStatsService(healthy) },
 			actorUID: "uid-a",
 			want:     codes.FailedPrecondition,
 		},
@@ -456,18 +456,18 @@ func TestGetWorkloadStatsDoesNotTakeLock(t *testing.T) {
 	}
 }
 
-// TestAteomServiceStartsAvailable checks that a freshly constructed service
-// retains no attribution and offers no guest, mirroring the gVisor ateom's test
+// TestAteWorkerServiceStartsAvailable checks that a freshly constructed service
+// retains no attribution and offers no guest, mirroring the gVisor ateworker's test
 // of the same name. GetWorkloadStats's NOT_FOUND-when-available behavior is
-// built on the first: a non-nil zero value would make an idle ateom report an
+// built on the first: a non-nil zero value would make an idle ateworker report an
 // empty actor's usage instead of refusing.
-func TestAteomServiceStartsAvailable(t *testing.T) {
-	s := &AteomService{}
+func TestAteWorkerServiceStartsAvailable(t *testing.T) {
+	s := &AteWorkerService{}
 	if got := s.hostedActors(); len(got) != 0 {
-		t.Errorf("new AteomService hosts %d actors, want none", len(got))
+		t.Errorf("new AteWorkerService hosts %d actors, want none", len(got))
 	}
 	if got := s.lookupActor(testActor.UID); got != nil {
-		t.Errorf("new AteomService.lookupActor(%q) = %v, want nil", testActor.UID, got)
+		t.Errorf("new AteWorkerService.lookupActor(%q) = %v, want nil", testActor.UID, got)
 	}
 }
 
@@ -501,16 +501,16 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 }
 
 // TestGetActiveWorkloadStatsAvailable pins the contract that makes the
-// discovery read scrapeable: an idle ateom is an empty list, never an error.
+// discovery read scrapeable: an idle ateworker is an empty list, never an error.
 func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
-	s := &AteomService{}
+	s := &AteWorkerService{}
 
 	got, err := sweepAndList(s)
 	if err != nil {
-		t.Fatalf("GetActiveWorkloadStats() on an available ateom: error = %v, want nil", err)
+		t.Fatalf("GetActiveWorkloadStats() on an available ateworker: error = %v, want nil", err)
 	}
 	if n := len(got.GetSamples()); n != 0 {
-		t.Errorf("GetActiveWorkloadStats() on an available ateom = %v, want no samples", got)
+		t.Errorf("GetActiveWorkloadStats() on an available ateworker = %v, want no samples", got)
 	}
 }
 
@@ -534,7 +534,7 @@ func pendingFor(attr resources.ActorAttribution) *ateworkerpb.WorkloadStatsSampl
 // routinely as idle workers, and the entry keeps a workload that dies during
 // boot attributable.
 func TestGetActiveWorkloadStatsBooting(t *testing.T) {
-	s := &AteomService{guestSlots: make(chan struct{}, statsFanOut)}
+	s := &AteWorkerService{guestSlots: make(chan struct{}, statsFanOut)}
 	hostTestActor(s, testActor, nil) // attribution retained, target not published
 
 	got, err := sweepAndList(s)
@@ -677,7 +677,7 @@ func TestGetActiveWorkloadStatsSamplesGuestsConcurrently(t *testing.T) {
 			}
 		},
 	}
-	s := &AteomService{locks: actorlock.New(), actors: map[string]*hostedActor{}, guestSlots: make(chan struct{}, statsFanOut)}
+	s := &AteWorkerService{locks: actorlock.New(), actors: map[string]*hostedActor{}, guestSlots: make(chan struct{}, statsFanOut)}
 	for i := range actors {
 		attr := testActor
 		attr.UID = fmt.Sprintf("uid-%d", i)
@@ -708,24 +708,24 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 	tests := []struct {
 		name string
 		// during changes the hosted set inside the guest read.
-		during func(s *AteomService)
+		during func(s *AteWorkerService)
 		want   []*ateworkerpb.WorkloadStatsSample
 	}{
 		{
 			name:   "re-hosted on another template",
-			during: func(s *AteomService) { hostTestActor(s, otherTemplate, nil) },
+			during: func(s *AteWorkerService) { hostTestActor(s, otherTemplate, nil) },
 			want:   []*ateworkerpb.WorkloadStatsSample{pendingFor(otherTemplate)},
 		},
 		{
 			name: "to another actor",
-			during: func(s *AteomService) {
+			during: func(s *AteWorkerService) {
 				unhostTestActor(s, testActor.UID)
 				hostTestActor(s, otherActor, nil)
 			},
 		},
 		{
 			name:   "to available",
-			during: func(s *AteomService) { unhostTestActor(s, testActor.UID) },
+			during: func(s *AteWorkerService) { unhostTestActor(s, testActor.UID) },
 		},
 	}
 	for _, tc := range tests {
@@ -766,7 +766,7 @@ func testActivation() *ateomstats.Activation {
 }
 
 // sweepAndList runs one sampler sweep, then the discovery read that serves it.
-func sweepAndList(s *AteomService) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
+func sweepAndList(s *AteWorkerService) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
 	s.sweepUsage(context.Background())
 	return s.GetActiveWorkloadStats(context.Background(), &ateworkerpb.GetActiveWorkloadStatsRequest{})
 }

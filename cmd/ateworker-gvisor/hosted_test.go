@@ -32,7 +32,7 @@ import (
 
 func TestAdmitActorEnforcesTheCeilingConcurrently(t *testing.T) {
 	const ceiling = 8
-	s := &AteomService{
+	s := &AteWorkerService{
 		locks:     actorlock.New(),
 		actors:    map[string]*hostedActor{},
 		maxActors: ceiling,
@@ -56,7 +56,7 @@ func TestAdmitActorEnforcesTheCeilingConcurrently(t *testing.T) {
 // Re-admitting an actor that is already hosted keeps its slot, so it succeeds
 // on a full worker and a retry cannot lose its place to another actor.
 func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
-	s := &AteomService{actors: map[string]*hostedActor{}, maxActors: 1}
+	s := &AteWorkerService{actors: map[string]*hostedActor{}, maxActors: 1}
 	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"})
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
 
 // TestDrainingActorsStillCountAgainstTheCeiling checks capacity during teardown.
 func TestDrainingActorsStillCountAgainstTheCeiling(t *testing.T) {
-	s := &AteomService{
+	s := &AteWorkerService{
 		locks:     actorlock.New(),
 		actors:    map[string]*hostedActor{},
 		maxActors: 1,
@@ -92,7 +92,7 @@ func TestDrainingActorsStillCountAgainstTheCeiling(t *testing.T) {
 
 // TestGracefulShutdownWaitsForInFlightRPCs verifies checkpoints finish before shutdown.
 func TestGracefulShutdownWaitsForInFlightRPCs(t *testing.T) {
-	s := &AteomService{
+	s := &AteWorkerService{
 		locks:    actorlock.New(),
 		inFlight: actorlock.NewInFlight(),
 		actors:   map[string]*hostedActor{},
@@ -120,7 +120,7 @@ func TestGracefulShutdownWaitsForInFlightRPCs(t *testing.T) {
 }
 
 func TestGracefulShutdownCancelsEveryStartup(t *testing.T) {
-	s := &AteomService{
+	s := &AteWorkerService{
 		locks:    actorlock.New(),
 		inFlight: actorlock.NewInFlight(),
 		actors:   map[string]*hostedActor{},
@@ -145,11 +145,11 @@ func TestGracefulShutdownCancelsEveryStartup(t *testing.T) {
 
 // TestBeginRPCRegistersBeforeCheckingForADrain checks registration and drain rejection.
 func TestBeginRPCRegistersBeforeCheckingForADrain(t *testing.T) {
-	s := &AteomService{locks: actorlock.New(), inFlight: actorlock.NewInFlight()}
+	s := &AteWorkerService{locks: actorlock.New(), inFlight: actorlock.NewInFlight()}
 
 	release, err := s.beginRPC("actor-a", rpcRunWorkload, func() {})
 	if err != nil {
-		t.Fatalf("beginRPC on a live ateom: %v", err)
+		t.Fatalf("beginRPC on a live ateworker: %v", err)
 	}
 	if _, ok := s.inFlight.Names()["actor-a"]; !ok {
 		t.Error("an admitted RPC is not visible to shutdown")

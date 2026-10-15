@@ -91,7 +91,7 @@ func TestBuild_VolumeMounts(t *testing.T) {
 	}
 }
 
-// The container joins the network namespace ateom creates for the actor.
+// The container joins the network namespace worker creates for the actor.
 func TestBuild_JoinsTheActorNetNS(t *testing.T) {
 	spec := Build(Options{ActorUID: "uid-a", Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
 	i := slices.IndexFunc(spec.Linux.Namespaces, func(ns specs.LinuxNamespace) bool { return ns.Type == specs.NetworkNamespace })

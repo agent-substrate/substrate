@@ -40,7 +40,7 @@ var testActorDirs = &ateworkerpb.ActorDirs{
 }
 
 // writeSpec builds a workload container's spec from the request and the pause
-// container's from ateom's own description.
+// container's from ateworker's own description.
 func TestWriteSpec(t *testing.T) {
 	root := t.TempDir()
 	actorDirs := &ateworkerpb.ActorDirs{RootDir: root, OciBundleDir: filepath.Join(root, "bundles")}
@@ -258,7 +258,7 @@ func TestRestoreArgs(t *testing.T) {
 }
 
 func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
-	s := &AteomService{
+	s := &AteWorkerService{
 		locks:    actorlock.New(),
 		inFlight: actorlock.NewInFlight(),
 	}

@@ -561,7 +561,7 @@ func TestHandleRequestHeadersRejectsBadCertificates(t *testing.T) {
 					c.URIs = append(c.URIs, &url.URL{
 						Scheme: "spiffe",
 						Host:   "substrate-actor.local",
-						Path:   path.Join("ateom", "actor", testEgressAtespace, "other-actor"),
+						Path:   path.Join("worker", "actor", testEgressAtespace, "other-actor"),
 					})
 				}}))
 			},
@@ -574,7 +574,7 @@ func TestHandleRequestHeadersRejectsBadCertificates(t *testing.T) {
 					c.URIs = []*url.URL{{
 						Scheme: "https",
 						Host:   "substrate-actor.local",
-						Path:   path.Join("ateom", "actor", testEgressAtespace, testEgressActor),
+						Path:   path.Join("worker", "actor", testEgressAtespace, testEgressActor),
 					}}
 				}}))
 			},
@@ -587,14 +587,14 @@ func TestHandleRequestHeadersRejectsBadCertificates(t *testing.T) {
 					c.URIs = []*url.URL{{
 						Scheme: "spiffe",
 						Host:   "",
-						Path:   "/" + path.Join("ateom", "actor", testEgressAtespace, testEgressActor),
+						Path:   "/" + path.Join("worker", "actor", testEgressAtespace, testEgressActor),
 					}}
 				}}))
 			},
 			want: envoy_type.StatusCode_Forbidden,
 		},
 		{
-			name: "non-ateom actor SPIFFE URI",
+			name: "non-worker actor SPIFFE URI",
 			xfcc: func(t *testing.T) string {
 				return xfccHeader(ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{mutate: func(c *x509.Certificate) {
 					c.URIs = []*url.URL{{
@@ -613,7 +613,7 @@ func TestHandleRequestHeadersRejectsBadCertificates(t *testing.T) {
 					c.URIs = []*url.URL{{
 						Scheme: "spiffe",
 						Host:   "substrate-actor.local",
-						Path:   path.Join("ateom", "actor", testEgressAtespace),
+						Path:   path.Join("worker", "actor", testEgressAtespace),
 					}}
 				}}))
 			},
@@ -626,7 +626,7 @@ func TestHandleRequestHeadersRejectsBadCertificates(t *testing.T) {
 					c.URIs = []*url.URL{{
 						Scheme: "spiffe",
 						Host:   "substrate-actor.local",
-						Path:   path.Join("ateom", "actor", testEgressAtespace, testEgressActor, "extra"),
+						Path:   path.Join("worker", "actor", testEgressAtespace, testEgressActor, "extra"),
 					}}
 				}}))
 			},
@@ -639,7 +639,7 @@ func TestHandleRequestHeadersRejectsBadCertificates(t *testing.T) {
 					c.URIs = []*url.URL{{
 						Scheme: "spiffe",
 						Host:   "substrate-actor.local",
-						Path:   path.Join("ateom", "actor", "INVALID_ATESPACE", testEgressActor),
+						Path:   path.Join("worker", "actor", "INVALID_ATESPACE", testEgressActor),
 					}}
 				}}))
 			},
@@ -652,7 +652,7 @@ func TestHandleRequestHeadersRejectsBadCertificates(t *testing.T) {
 					c.URIs = []*url.URL{{
 						Scheme: "spiffe",
 						Host:   "substrate-actor.local",
-						Path:   path.Join("ateom", "actor", testEgressAtespace, "INVALID_ACTOR"),
+						Path:   path.Join("worker", "actor", testEgressAtespace, "INVALID_ACTOR"),
 					}}
 				}}))
 			},

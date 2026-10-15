@@ -39,7 +39,7 @@ func TestActorRefFromSPIFFEIDRejects(t *testing.T) {
 		"spiffe://substrate-actor.local/atespace/team/actor/agent/",
 		"spiffe://substrate-actor.local/atespace/te%2Fam/actor/agent",
 	} {
-		if ref, err := ActorRefFromAteomForActorSPIFFEID(id); err == nil {
+		if ref, err := ActorRefFromWorkerForActorSPIFFEID(id); err == nil {
 			t.Errorf("ActorRefFromSPIFFEID(%q) = %v, want error", id, ref)
 		}
 	}
@@ -84,7 +84,7 @@ func TestActorRoundtrip(t *testing.T) {
 	}
 }
 
-func TestAteomForActorRoundtrip(t *testing.T) {
+func TestWorkerForActorRoundtrip(t *testing.T) {
 	testCases := []struct {
 		uri     string
 		wantRef ActorRef
@@ -106,7 +106,7 @@ func TestAteomForActorRoundtrip(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.uri, func(t *testing.T) {
-			ref, err := ActorRefFromAteomForActorSPIFFEID(tc.uri)
+			ref, err := ActorRefFromWorkerForActorSPIFFEID(tc.uri)
 			if err != nil {
 				t.Fatalf("Unexpected error parsing uri: %v", err)
 			}
@@ -115,7 +115,7 @@ func TestAteomForActorRoundtrip(t *testing.T) {
 				t.Fatalf("Bad ref; diff (-got +want)\n%s", diff)
 			}
 
-			gotURI := AteomForActorSPIFFEID(ref)
+			gotURI := WorkerForActorSPIFFEID(ref)
 			if diff := cmp.Diff(gotURI.String(), tc.uri); diff != "" {
 				t.Fatalf("URI didn't round-trip; diff (-got +want)\n%s", diff)
 			}

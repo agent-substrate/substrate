@@ -64,7 +64,7 @@ type containerStatsReader interface {
 
 // guestStatsTarget is everything GetWorkloadStats needs to sample a live guest.
 //
-// It exists so the handler never reads AteomService.running, which lock guards:
+// It exists so the handler never reads AteWorkerService.running, which lock guards:
 // the handler must not take lock (see below), and a map read racing a lifecycle
 // RPC's write is a data race whatever the read is for. The fields it holds are
 // the ones RunWorkload and RestoreWorkload already produce.
@@ -101,7 +101,7 @@ type guestStatsTarget struct {
 // It must not take the actor's lifecycle lock, which is held across a whole
 // cold boot, snapshot, or restore; blocking there would silence the poller
 // through the phases whose usage matters most.
-func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.GetWorkloadStatsRequest) (*ateworkerpb.GetWorkloadStatsResponse, error) {
+func (s *AteWorkerService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.GetWorkloadStatsRequest) (*ateworkerpb.GetWorkloadStatsResponse, error) {
 	if req.GetActorUid() == "" {
 		return nil, apierror.InvalidArgument("actor_uid is required")
 	}
@@ -144,7 +144,7 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.Ge
 // discovery read. It serves each actor's latest sample from the sampler, so a
 // poll puts no load of its own on the guests; an actor not sampled yet is
 // pending.
-func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateworkerpb.GetActiveWorkloadStatsRequest) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
+func (s *AteWorkerService) GetActiveWorkloadStats(ctx context.Context, req *ateworkerpb.GetActiveWorkloadStatsRequest) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
 	hosted := s.hostedActors()
 	samples := make([]*ateworkerpb.WorkloadStatsSample, 0, len(hosted))
 	for _, h := range hosted {
@@ -163,7 +163,7 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateworke
 // sweepUsage samples every hosted actor between its initial reading and its
 // final record, and stores each sample and writes its periodic record. Same
 // lock discipline as GetWorkloadStats, for the same reasons.
-func (s *AteomService) sweepUsage(ctx context.Context) {
+func (s *AteWorkerService) sweepUsage(ctx context.Context) {
 	sweepCtx, cancel := context.WithTimeout(ctx, statsSweepBudget)
 	defer cancel()
 
@@ -189,7 +189,7 @@ func (s *AteomService) sweepUsage(ctx context.Context) {
 // writes its periodic record unless the actor is outside its sampling window or
 // no longer hosted. A guest not reached before ctx is done, or that does not
 // answer, is pending, so it stays attributable.
-func (s *AteomService) sampleHostedGuest(ctx context.Context, h *hostedActor) {
+func (s *AteWorkerService) sampleHostedGuest(ctx context.Context, h *hostedActor) {
 	if !h.usage.Sampling() {
 		return
 	}
@@ -215,7 +215,7 @@ func (s *AteomService) sampleHostedGuest(ctx context.Context, h *hostedActor) {
 }
 
 // measureGuest reads h's guest as a reading of its activation.
-func (s *AteomService) measureGuest(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, error) {
+func (s *AteWorkerService) measureGuest(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, error) {
 	return h.usage.Measure(ctx, func() (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
 		return s.sampleGuest(ctx, h)
 	})
@@ -224,7 +224,7 @@ func (s *AteomService) measureGuest(ctx context.Context, h *hostedActor) (*atewo
 // sampleGuestInSlot reads h's guest while holding one of s.guestSlots. The slot
 // is taken inside the reading, so a sweep waiting for another reading of the
 // same actor holds no slot.
-func (s *AteomService) sampleGuestInSlot(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
+func (s *AteWorkerService) sampleGuestInSlot(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
 	select {
 	case s.guestSlots <- struct{}{}:
 	case <-ctx.Done():
@@ -237,9 +237,9 @@ func (s *AteomService) sampleGuestInSlot(ctx context.Context, h *hostedActor) (*
 // recordInitial samples a new activation and writes its initial record. It
 // runs off the resume path, since a guest read can take many seconds, and
 // bounds that read like one sweep's. It recovers from panics, as a sweep does:
-// it runs on its own goroutine, where a panic would take the ateom down. The
+// it runs on its own goroutine, where a panic would take the ateworker down. The
 // activation is then sampled without an initial record.
-func (s *AteomService) recordInitial(ctx context.Context, h *hostedActor) {
+func (s *AteWorkerService) recordInitial(ctx context.Context, h *hostedActor) {
 	actorUID := h.attribution.UID
 	defer func() {
 		if r := recover(); r != nil {
@@ -263,7 +263,7 @@ func (s *AteomService) recordInitial(ctx context.Context, h *hostedActor) {
 // recordFinalIfEnded writes h's final record if a checkpoint or terminate tore
 // its activation down, which unhosts the actor even when a later step fails.
 // The caller holds the actor's lock.
-func (s *AteomService) recordFinalIfEnded(ctx context.Context, h *hostedActor) {
+func (s *AteWorkerService) recordFinalIfEnded(ctx context.Context, h *hostedActor) {
 	if h != nil && s.lookupActor(h.attribution.UID) != h {
 		s.recordFinal(ctx, h)
 	}
@@ -273,7 +273,7 @@ func (s *AteomService) recordFinalIfEnded(ctx context.Context, h *hostedActor) {
 // A failed read leaves the newest measured sample to stand in. If even that
 // bound is too much checkpoint latency, drop the read and the final record
 // uses the newest cached sample instead.
-func (s *AteomService) readFinal(ctx context.Context, h *hostedActor) {
+func (s *AteWorkerService) readFinal(ctx context.Context, h *hostedActor) {
 	readCtx, cancel := context.WithTimeout(ctx, finalReadTimeout)
 	defer cancel()
 	sample, err := s.measureGuest(readCtx, h)
@@ -287,7 +287,7 @@ func (s *AteomService) readFinal(ctx context.Context, h *hostedActor) {
 
 // recordFinal writes the final record of an activation that a checkpoint or a
 // terminate ended, from its newest measured sample.
-func (s *AteomService) recordFinal(ctx context.Context, h *hostedActor) {
+func (s *AteWorkerService) recordFinal(ctx context.Context, h *hostedActor) {
 	pending := h.usage.WithEpoch(pendingSample(&h.attribution))
 	h.usage.Final(func(measured *ateworkerpb.WorkloadStatsSample) {
 		if measured == nil {
@@ -331,10 +331,10 @@ var errStaleGuestTarget = errors.New("guest agent connection belongs to a differ
 // callers express the routine ones differently: an error code for the keyed
 // read, a pending sample for the sweep. The read holds no lifecycle lock, so
 // the keyed caller re-checks the actor record it loaded after this returns.
-func (s *AteomService) sampleGuest(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
+func (s *AteWorkerService) sampleGuest(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
 	active := &h.attribution
 	// The actor is the one here, but there is no guest to ask yet. Usually that
-	// is a poll landing in the boot or the restore: the ateom retains the
+	// is a poll landing in the boot or the restore: the ateworker retains the
 	// attribution from the moment it accepts the actor, and the target is only
 	// published once the containers are up. It is also what a teardown looks
 	// like from here, since teardownActor clears the target before it closes

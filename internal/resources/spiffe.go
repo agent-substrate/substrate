@@ -65,10 +65,10 @@ func ActorRefFromActorSPIFFEURL(u *url.URL) (ActorRef, error) {
 	return ActorRef{Atespace: atespace, Name: name}, nil
 }
 
-// AteomForActorSPIFFEID returns
+// WorkerForActorSPIFFEID returns
 // "spiffe://substrate-actor.local/worker-for-actor/<atespace>/<name>", which
 // ateapi mints into the actor certificate's URI SAN.
-func AteomForActorSPIFFEID(r ActorRef) *url.URL {
+func WorkerForActorSPIFFEID(r ActorRef) *url.URL {
 	return &url.URL{
 		Scheme: "spiffe",
 		Host:   ActorSPIFFETrustDomain,
@@ -79,16 +79,16 @@ func AteomForActorSPIFFEID(r ActorRef) *url.URL {
 	}
 }
 
-// ActorRefFromAteomForActorSPIFFEID parses an ID built by AteomForActorSPIFFEID.
-func ActorRefFromAteomForActorSPIFFEID(id string) (ActorRef, error) {
+// ActorRefFromWorkerForActorSPIFFEID parses an ID built by WorkerForActorSPIFFEID.
+func ActorRefFromWorkerForActorSPIFFEID(id string) (ActorRef, error) {
 	u, err := url.Parse(id)
 	if err != nil {
 		return ActorRef{}, fmt.Errorf("invalid worker-for-actor SPIFFE ID %q: %w", id, err)
 	}
-	return ActorRefFromAteomForActorSPIFFEURL(u)
+	return ActorRefFromWorkerForActorSPIFFEURL(u)
 }
 
-func ActorRefFromAteomForActorSPIFFEURL(u *url.URL) (ActorRef, error) {
+func ActorRefFromWorkerForActorSPIFFEURL(u *url.URL) (ActorRef, error) {
 	if u.Scheme != "spiffe" || u.Host != ActorSPIFFETrustDomain || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return ActorRef{}, fmt.Errorf("%q does not have format spiffe://<trust.domain>/worker-for-actor/<atespace>/<name>", u.String())
 	}

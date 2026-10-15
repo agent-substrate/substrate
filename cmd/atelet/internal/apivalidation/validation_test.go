@@ -276,7 +276,7 @@ func TestValidateRunRequest(t *testing.T) {
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid worker_pod_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.WorkerPodUid = "ateom-1" }),
+		obj:  valid(func(r *ateletpb.RunRequest) { r.WorkerPodUid = "worker-1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "missing atespace",
@@ -556,7 +556,7 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid worker_pod_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.WorkerPodUid = "ateom-1" }),
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.WorkerPodUid = "worker-1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid atespace: path escape",
@@ -722,7 +722,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid worker_pod_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.WorkerPodUid = "ateom-1" }),
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.WorkerPodUid = "worker-1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid atespace: path escape",
@@ -984,7 +984,7 @@ func TestValidateTerminateRequest(t *testing.T) {
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid worker_pod_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.TerminateRequest) { r.WorkerPodUid = "ateom-1" }),
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.WorkerPodUid = "worker-1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "missing atespace",

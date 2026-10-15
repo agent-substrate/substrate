@@ -131,7 +131,7 @@ func TestResumeActor_ConcurrentOntoOneWorker(t *testing.T) {
 
 // setWorkerActorCapacity raises the actors ceiling on every Worker in the pool.
 //
-// The ceiling is the Worker's, reported by its ateom, so a test that wants more
+// The ceiling is the Worker's, reported by its worker, so a test that wants more
 // than the unset default of one writes it where the reporter would. Waits for
 // the scheduler's cache to see it, since placement reads that and not the store.
 func setWorkerActorCapacity(t *testing.T, tc *testContext, pool string, actors int32) {
@@ -153,7 +153,7 @@ func setWorkerActorCapacity(t *testing.T, tc *testContext, pool string, actors i
 	}
 }
 
-// reportWorkerCapacity stands in for the ateom's capacity report, which atelet
+// reportWorkerCapacity stands in for the worker's capacity report, which atelet
 // forwards to WorkerService in a real cluster, with compute for actors of the
 // size test templates declare. It waits for the worker cache, which placement
 // reads, to catch up.

@@ -33,7 +33,7 @@ import (
 // CleanupSandboxState removes leftover host-side state for a sandbox id (the
 // virtio-fs shared sandbox dir and the per-VM runtime dir), lazily unmounting
 // anything still mounted underneath them first, and kills orphaned per-sandbox
-// processes. ateom owns the cloud-hypervisor boot directly (no kata shim, no
+// processes. ateworker owns the cloud-hypervisor boot directly (no kata shim, no
 // containerd), so a failed Create does not fully self-clean; the deterministic
 // sandbox id (= actor name) then collides on the next attempt: "listen unix
 // .../virtiofsd.sock: bind: address already in use", "Could not bind mount

@@ -90,7 +90,7 @@ var (
 
 	workerSyncConcurrency = pflag.Int("worker-sync-concurrency", 2, "Number of concurrent worker goroutines reconciling worker pods into the Worker registry. Defaults to 2.")
 
-	dnsEgressPolicy = pflag.String("dns-egress-policy", "", "DNS egress policy enforcement mode propagated to ateom worker pods (must be "+egresspolicy.DNSEgressPolicyEnforceInAtunnel+").")
+	dnsEgressPolicy = pflag.String("dns-egress-policy", "", "DNS egress policy enforcement mode propagated to worker pods (must be "+egresspolicy.DNSEgressPolicyEnforceInAtunnel+").")
 )
 
 func init() {

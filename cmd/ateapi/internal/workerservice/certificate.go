@@ -33,7 +33,7 @@ import (
 )
 
 // MintWorkerActorCertificate mints a Substrate-issued SPIFFE certificate that asserts
-// an ateom acting on behalf of a particular actor.
+// a worker acting on behalf of a particular actor.
 func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapipb.MintWorkerActorCertificateRequest) (*ateapipb.MintWorkerActorCertificateResponse, error) {
 	if errs := apivalidation.ValidateMintWorkerActorCertificateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)

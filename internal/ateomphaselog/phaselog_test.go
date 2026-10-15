@@ -162,7 +162,7 @@ func TestSnapshotPhaseAttrsFailure(t *testing.T) {
 }
 
 // TestFidelityLogValue pins the mapping onto the shared fidelity values, so the
-// ateom and atelet records of one operation agree on the fidelity they carry.
+// worker and atelet records of one operation agree on the fidelity they carry.
 func TestFidelityLogValue(t *testing.T) {
 	t.Parallel()
 
@@ -184,7 +184,7 @@ func TestFidelityLogValue(t *testing.T) {
 }
 
 // TestLogSnapshotPhases: the record goes out under the caller's message and
-// at Info, through the default logger the ateoms write to.
+// at Info, through the default logger the workers write to.
 func TestLogSnapshotPhases(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()

@@ -79,7 +79,7 @@ var (
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
-	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateom samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
+	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateworker samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -95,8 +95,8 @@ const minUsageSampleInterval = 50 * time.Second
 
 // workloadGracePeriod is the whole budget for draining the worker on shutdown.
 // It needs to stay significantly less than the K8s termination grace period
-// for the ateom, so the escalation to SIGKILL happens here rather than as a
-// kubelet SIGKILL of ateom itself.
+// for the ateworker, so the escalation to SIGKILL happens here rather than as a
+// kubelet SIGKILL of ateworker itself.
 const workloadGracePeriod = 30 * time.Minute
 
 func main() {
@@ -145,7 +145,7 @@ func do(ctx context.Context) error {
 	// ends of the same decision: Dial already treats an absent socket as a
 	// fallback rather than an error, and atelet logs and keeps going when it
 	// cannot serve the relay at all. What is lost here is the node-local export
-	// path, not the ateom's ability to run actors, and failing the worker pod
+	// path, not the ateworker's ability to run actors, and failing the worker pod
 	// over its telemetry route would turn a misconfigured flag into an outage.
 	relayConn, err := otlprelay.Dial(ctx, *otlpRelaySocket)
 	if err != nil {
@@ -161,7 +161,7 @@ func do(ctx context.Context) error {
 		Sampling:     serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 		ExporterConn: relayConn,
 		// So the spans say which path they took, including when relayConn is nil
-		// because the dial above failed and this ateom is exporting directly.
+		// because the dial above failed and this ateworker is exporting directly.
 		RelayCapable: true,
 	})
 	if err != nil {
@@ -189,15 +189,15 @@ func do(ctx context.Context) error {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
 
-	// Create ateom dir
-	ateomDir := nodepath.AteomPath(*podUID)
+	// Create ateworker dir
+	ateworkerDir := nodepath.WorkerPath(*podUID)
 	if err := resources.ValidateWorkerPodUID(*podUID); err != nil {
 		return fmt.Errorf("in resources.ValidateWorkerPodUID: %w", err)
 	}
 	// atelet owns the directory and the sandbox versions file in it; only the
 	// socket below is this process's. Both outlive a container restart.
-	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
-		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
+	if err := os.MkdirAll(ateworkerDir, 0o700); err != nil {
+		return fmt.Errorf("in os.MkdirAll(%q): %w", ateworkerDir, err)
 	}
 
 	// Prepare the pod cgroup so runsc can create per-actor-container leaves under
@@ -207,7 +207,7 @@ func do(ctx context.Context) error {
 	}
 
 	// Clean up any old socket.
-	sockPath := nodepath.AteomSocketPath(*podUID)
+	sockPath := nodepath.WorkerSocketPath(*podUID)
 	if err := os.RemoveAll(sockPath); err != nil {
 		return fmt.Errorf("while removing %q: %w", sockPath, err)
 	}
@@ -218,7 +218,7 @@ func do(ctx context.Context) error {
 	}
 	defer func() {
 		if err := os.Remove(sockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			slog.ErrorContext(ctx, "Failed to remove the ateom socket on shutdown", slog.Any("err", err))
+			slog.ErrorContext(ctx, "Failed to remove the ateworker socket on shutdown", slog.Any("err", err))
 		}
 	}()
 
@@ -232,7 +232,7 @@ func do(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ateomService := NewService(tunnel, actorLogger, *maxActors, flags)
+	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags)
 	// The controller sets both from the downward API.
 	pool := ateomstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
@@ -240,14 +240,14 @@ func do(ctx context.Context) error {
 	}
 	usageStdout := ateomstats.NewStdoutHandler(syncedWriter)
 	defer usageStdout.Close()
-	ateomService.usage = ateomstats.NewUsageEmitter(lp, usageStdout, pool)
-	defer ateomstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateomService.sweepUsage(ctx) })()
+	ateworkerService.usage = ateomstats.NewUsageEmitter(lp, usageStdout, pool)
+	defer ateomstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateworkerService.sweepUsage(ctx) })()
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
 	)
-	ateworkerpb.RegisterWorkerServer(svr, ateomService)
+	ateworkerpb.RegisterWorkerServer(svr, ateworkerService)
 	reflection.Register(svr)
 	readiness := &serverboot.Readiness{}
 
@@ -262,7 +262,7 @@ func do(ctx context.Context) error {
 		readiness.MarkNotReady()
 		// Use a fresh context: the do() context is torn down on return, but the
 		// shutdown must outlive it until the sandbox has stopped.
-		ateomService.gracefulShutdown(context.Background())
+		ateworkerService.gracefulShutdown(context.Background())
 		// Stop the server gracefully. This blocks until all in-flight RPCs have completed.
 		svr.GracefulStop()
 	}()
@@ -274,7 +274,7 @@ func do(ctx context.Context) error {
 	// that reaches here is a misconfiguration no restart-in-place will fix.
 	go func() {
 		err := ateom.Report(ctx, ateom.ReportConfig{
-			SocketPath:           nodepath.AteomSupportSocket,
+			SocketPath:           nodepath.WorkerSupportSocket,
 			CredentialBundlePath: tunnelConfig.CredentialBundle,
 			TrustBundlePath:      tunnelConfig.TrustBundle,
 			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
@@ -309,8 +309,8 @@ type workloadSession struct {
 	containers []string
 }
 
-// AteomService is a service for shepherding single microvm.
-type AteomService struct {
+// AteWorkerService is a service for shepherding single microvm.
+type AteWorkerService struct {
 	ateworkerpb.UnimplementedWorkerServer
 
 	// Serializes lifecycle RPCs per actor.
@@ -350,11 +350,11 @@ type AteomService struct {
 	flags *flagStore
 }
 
-var _ ateworkerpb.WorkerServer = (*AteomService)(nil)
+var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
-// NewService creates a new AteomService.
-func NewService(tunnel *ateomtunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore) *AteomService {
-	return &AteomService{
+// NewService creates a new AteWorkerService.
+func NewService(tunnel *ateomtunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore) *AteWorkerService {
+	return &AteWorkerService{
 		locks:       actorlock.New(),
 		inFlight:    actorlock.NewInFlight(),
 		actors:      map[string]*hostedActor{},
@@ -367,7 +367,7 @@ func NewService(tunnel *ateomtunnel.Tunnel, actorLogger *actorlog.ActorLogger, m
 }
 
 // beginRPC registers before checking the drain flag so shutdown cannot miss it.
-func (s *AteomService) beginRPC(actorUID, name string, cancel context.CancelFunc) (func(), error) {
+func (s *AteWorkerService) beginRPC(actorUID, name string, cancel context.CancelFunc) (func(), error) {
 	release := s.inFlight.Add(actorUID, name, cancel)
 	if err := s.rejectIfDraining(); err != nil {
 		release()
@@ -376,9 +376,9 @@ func (s *AteomService) beginRPC(actorUID, name string, cancel context.CancelFunc
 	return release, nil
 }
 
-// rejectIfDraining returns a codes.Unavailable error if ateom has begun graceful
+// rejectIfDraining returns a codes.Unavailable error if ateworker has begun graceful
 // shutdown, so the control plane reschedules the actor onto a live worker.
-func (s *AteomService) rejectIfDraining() error {
+func (s *AteWorkerService) rejectIfDraining() error {
 	if s.shuttingDown.Load() {
 		return apierror.Unavailable("worker draining: not accepting new workloads")
 	}
@@ -395,7 +395,7 @@ func cancelStartups(ctx context.Context, inFlight *actorlock.InFlight) {
 
 // gracefulShutdown propagates SIGTERM into the sandbox and waits for the application's
 // containers to exit.
-func (s *AteomService) gracefulShutdown(ctx context.Context) {
+func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 	s.shuttingDown.Store(true)
 	// If there is an active run or restore RPC, try to cancel it. This is considered
 	// less disruptive than waiting for it to complete and then immediately sending
@@ -495,7 +495,7 @@ func killContainer(ctx context.Context, rcmd containerRuntime, name string, dead
 	}
 
 	// If the error was not due to context timeout or cancellation, it means the wait command
-	// itself failed, so we return the error and do not escalate to SIGKILL. Ateom shutting down
+	// itself failed, so we return the error and do not escalate to SIGKILL. AteWorker shutting down
 	// will kill the containers.
 	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("wait failed: %w", err)
@@ -580,7 +580,7 @@ func validateFidelity(fidelity ateworkerpb.SnapshotFidelity) error {
 	return nil
 }
 
-func (s *AteomService) RunWorkload(ctx context.Context, req *ateworkerpb.RunWorkloadRequest) (resp *ateworkerpb.RunWorkloadResponse, retErr error) {
+func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.RunWorkloadRequest) (resp *ateworkerpb.RunWorkloadResponse, retErr error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
@@ -656,7 +656,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateworkerpb.RunWork
 	}()
 	// Create and start pause container. The bundle rootfs is composed here —
 	// an overlay of the node's cached image layers plus the bundle's private
-	// upper — because mounting is ateom's job (atelet runs with no
+	// upper — because mounting is ateworker's job (atelet runs with no
 	// capabilities); runsc's gofer resolves the mount in this pod's mount
 	// namespace.
 	if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer)); err != nil {
@@ -713,7 +713,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateworkerpb.RunWork
 
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
-func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (_ *ateworkerpb.CheckpointWorkloadResponse, err error) {
+func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (_ *ateworkerpb.CheckpointWorkloadResponse, err error) {
 	// Taken before the lock, so prep covers the wait for it.
 	tStart := time.Now()
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
@@ -925,7 +925,7 @@ func isContainerAlreadyGone(ctx context.Context, rcmd containerRuntime, name str
 	return !slices.Contains(ids, name), nil
 }
 
-func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateworkerpb.RestoreWorkloadRequest) (resp *ateworkerpb.RestoreWorkloadResponse, retErr error) {
+func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb.RestoreWorkloadRequest) (resp *ateworkerpb.RestoreWorkloadResponse, retErr error) {
 	// Taken before the lock, so prep covers the wait for it.
 	tStart := time.Now()
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
@@ -1127,7 +1127,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateworkerpb.Res
 	return &ateworkerpb.RestoreWorkloadResponse{}, nil
 }
 
-func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
+func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
@@ -1156,7 +1156,7 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateworkerpb.T
 	return &ateworkerpb.TerminateWorkloadResponse{}, nil
 }
 
-func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) error {
+func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) error {
 	var errs []error
 	if err := s.tunnel.Deactivate(ctx, resources.ActorAttribution{Ref: actorRef, UID: actorUID}); err != nil {
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))

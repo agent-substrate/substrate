@@ -266,7 +266,7 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 	if pod.DeletionTimestamp != nil {
 		// The pod has entered Terminating: mark the worker DRAINING so the
 		// scheduler stops routing new actors to it. We deliberately do NOT touch
-		// the bound actor here — inside the pod ateom has received SIGTERM and is
+		// the bound actor here — inside the pod worker has received SIGTERM and is
 		// gracefully shutting the actor down. Actor cleanup happens on the Pod
 		// Deleted event.
 		return s.markWorkerDraining(ctx, key)
@@ -283,7 +283,7 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 // workerContainer is the name of the worker pod's worker container.
 const workerContainer = "worker"
 
-// podEpoch counts the runs of the pod's ateom container: 1 for its first run
+// podEpoch counts the runs of the pod's worker container: 1 for its first run
 // and one more for each restart. 0 until kubelet reports the container.
 func podEpoch(pod *corev1.Pod) int64 {
 	for _, cs := range pod.Status.ContainerStatuses {
@@ -297,7 +297,7 @@ func podEpoch(pod *corev1.Pod) int64 {
 // createOrUpdateWorker registers the pod's Worker, or brings the registered
 // one in line with the pod. A Worker is registered UNAVAILABLE and marked
 // available only while its pod is Ready, and only once its epoch matches the
-// ateom running, so nothing is placed on it under the epoch of an ateom that
+// worker running, so nothing is placed on it under the epoch of a worker that
 // has since restarted.
 func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod) error {
 	poolName := pod.Labels[workerPodLabel]
@@ -337,7 +337,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			Labels:          pool.GetLabels(),
 			Epoch:           podEpoch(pod),
 			// Capacity is the Worker's to report, not the syncer's to infer
-			// from the pod: it is what the ateom can actually supply. Until
+			// from the pod: it is what the worker can actually supply. Until
 			// that report lands, CreateWorker's reified ceiling holds the
 			// Worker to a single Actor.
 		}

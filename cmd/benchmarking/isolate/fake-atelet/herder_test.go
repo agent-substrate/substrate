@@ -69,7 +69,7 @@ func uniformDelays(d time.Duration) delays {
 	return delays{run: d, restore: d, checkpoint: d, promoteSnapshot: d, terminate: d}
 }
 
-// herderCalls invokes every AteomHerder method the herder implements. The
+// herderCalls invokes every Atelet method the herder implements. The
 // Checkpoint and PromoteSnapshot calls upload a snapshot, so each writes a
 // placeholder.
 func herderCalls(h *herder) map[string]func(context.Context) error {
@@ -312,7 +312,7 @@ func newMintingHerder(t *testing.T, m *recordingMinter, d delays) *herder {
 	return &herder{delays: d, storage: &recordingStorage{}, minter: m, csr: csr}
 }
 
-// ateom mints the actor's certificate before starting any workload with
+// worker mints the actor's certificate before starting any workload with
 // tunneled egress, so each Run and Restore that names a gateway costs
 // ate-api-server one mint, for that actor, with a CSR it accepts.
 func TestHerderMintsActorCertificateOnActivation(t *testing.T) {
@@ -342,7 +342,7 @@ func TestHerderMintsActorCertificateOnActivation(t *testing.T) {
 	}
 }
 
-// ateom mints only for tunneled egress, which ate-api-server asks for by
+// worker mints only for tunneled egress, which ate-api-server asks for by
 // naming a gateway; and --mint-actor-certificate=false leaves the mint out.
 func TestHerderSkipsMint(t *testing.T) {
 	m := &recordingMinter{}
@@ -361,7 +361,7 @@ func TestHerderSkipsMint(t *testing.T) {
 	}
 }
 
-// A failed mint fails the activation, as tunneled egress fails closed in ateom.
+// A failed mint fails the activation, as tunneled egress fails closed in worker.
 func TestHerderFailsWhenMintFails(t *testing.T) {
 	m := &recordingMinter{err: errors.New("actor not found")}
 	for name, call := range activations(newMintingHerder(t, m, delays{}), testGateway) {
