@@ -200,7 +200,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					if opVal == "" {
 						crashErrs = append(crashErrs, "ate_actor_operation_name label is missing or empty")
 					} else if ateattr.NormalizeOperationName(opVal) != opVal {
-						crashErrs = append(crashErrs, fmt.Sprintf("ate_actor_operation_name %q is invalid (must be one of {create, resume, suspend, pause, delete, unknown})", opVal))
+						crashErrs = append(crashErrs, fmt.Sprintf("ate_actor_operation_name %q is invalid (must be one of {create, resume, suspend, delete, revert, unknown})", opVal))
 					}
 
 					if tmplAtespaceVal == "" {

@@ -71,7 +71,7 @@ func TestPauseActor_Finalized_WorkerGone(t *testing.T) {
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("state = %v, want CRASHED (node name unknown, cannot resume safely)", got.GetStatus().GetState())
 	}
-	if msg, want := got.GetStatus().GetCrash().GetMessage(), "pause failed: "+crashMessageLocalSnapshotNodeUnknown; msg != want {
+	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageLocalSnapshotNodeUnknown; msg != want {
 		t.Errorf("crash message = %q, want %q", msg, want)
 	}
 	if got.GetStatus().GetAssignedNode() != "" {
@@ -118,7 +118,7 @@ func TestPauseActor_Finalized_AlreadyCrashed(t *testing.T) {
 			},
 		},
 	})
-	originalCrash := newActorCrash(ateattr.OperationPause, "original crash reason")
+	originalCrash := newActorCrash(ateattr.OperationSuspend, "original crash reason")
 	updateDuringCheckpoint(t, atelet, st, actorRef, func(s *ateapipb.ActorStatus) {
 		s.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		s.Crash = originalCrash
@@ -168,7 +168,7 @@ func TestPauseActor_Finalized_KeepsCrashFromWorkerDelete(t *testing.T) {
 
 	w, _ := newWireCaptureWorkflow(t, workerDeletedDuringReleaseStore{Interface: st})
 	_, err := w.PauseActor(ctx, actorRef)
-	assertConcurrentCrashKept(t, ctx, st, actorRef, err, "pause failed: "+crashMessageWorkerPodGone)
+	assertConcurrentCrashKept(t, ctx, st, actorRef, err, "suspend failed: "+crashMessageWorkerPodGone)
 }
 
 // TestPauseActor_Finalized_RecordsFidelity verifies pause records the template's
@@ -291,7 +291,7 @@ func TestPauseActor_Finalized_MissingLocalSnapshotClearsAssignment(t *testing.T)
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
 	}
-	if msg, want := got.GetStatus().GetCrash().GetMessage(), "pause failed: "+crashMessageLocalSnapshotMissing; msg != want {
+	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageLocalSnapshotMissing; msg != want {
 		t.Errorf("crash message = %q, want %q", msg, want)
 	}
 	if got.GetStatus().GetWorkerAssignment() != nil {
@@ -545,7 +545,7 @@ func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
 	}
-	if msg, want := got.GetStatus().GetCrash().GetMessage(), "pause failed: "+crashMessageWorkerAssignmentMissing; msg != want {
+	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageWorkerAssignmentMissing; msg != want {
 		t.Errorf("crash message = %q, want %q", msg, want)
 	}
 }

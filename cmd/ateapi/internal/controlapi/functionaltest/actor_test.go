@@ -5032,7 +5032,7 @@ func TestCheckpointFailureCrashes(t *testing.T) {
 				_, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{Actor: ref})
 				return err
 			},
-			wantMessage: "pause failed: atelet Checkpoint: injected checkpoint failure",
+			wantMessage: "suspend failed: atelet Checkpoint: injected checkpoint failure",
 		},
 		{
 			name: "suspend",
@@ -5214,7 +5214,7 @@ func TestLifecycleOpPoolAttributesOnSuccess(t *testing.T) {
 		},
 		{
 			name: "pause",
-			op:   ateattr.OperationPause,
+			op:   ateattr.OperationSuspend,
 			run: func(t *testing.T, tc *testContext, actor *ateapipb.ObjectRef) {
 				t.Helper()
 				if _, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{Actor: actor}); err != nil {

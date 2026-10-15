@@ -377,7 +377,6 @@ func TestMetricLabelValues(t *testing.T) {
 		{OperationCreate, "create"},
 		{OperationResume, "resume"},
 		{OperationSuspend, "suspend"},
-		{OperationPause, "pause"},
 		{OperationDelete, "delete"},
 		{OperationUnknown, "unknown"},
 
@@ -721,7 +720,7 @@ func TestNormalizeOperationName(t *testing.T) {
 		{OperationCreate, OperationCreate},
 		{OperationResume, OperationResume},
 		{OperationSuspend, OperationSuspend},
-		{OperationPause, OperationPause},
+		{"pause", OperationUnknown},
 		{OperationDelete, OperationDelete},
 		{"", OperationUnknown},
 		{"invalid", OperationUnknown},

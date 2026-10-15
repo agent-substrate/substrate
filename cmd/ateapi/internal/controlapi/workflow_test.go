@@ -60,7 +60,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
 				markOnly(t, w, ref, actor, w.PauseActor)
 			},
-			wantOp:     ateattr.OperationPause,
+			wantOp:     ateattr.OperationSuspend,
 			wantState:  ateattr.ActorStateSuspending,
 			wantStored: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
 		},
