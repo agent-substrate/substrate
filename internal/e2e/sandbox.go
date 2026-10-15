@@ -186,7 +186,6 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 	blocks = map[string]string{
 		"${WORKERPOOL_RUNTIME}":     "  sandboxClasses:\n  - name: gvisor",
 		"${TEMPLATE_SANDBOX_CLASS}": "",
-		"${TEMPLATE_RESOURCES}":     "",
 		// Off unless the caller opts in; see WithTrustBundle.
 		"${TEMPLATE_TRUST_BUNDLE}": "",
 	}
@@ -203,10 +202,5 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 	// Must match the WorkerPool's: a snapshot is not portable across sandbox
 	// classes, so only same-class pools are eligible to run these actors.
 	blocks["${TEMPLATE_SANDBOX_CLASS}"] = "  sandboxClass: microvm"
-	// Only for fixtures that declare no limits of their own. Without them the
-	// guest boots at ateom's default size (2GiB), and several of those do
-	// not fit beside the demo pools on CI's single kind node. These size the VM
-	// itself — see internal/sizing.
-	blocks["${TEMPLATE_RESOURCES}"] = "  resources:\n    limits:\n      cpu: \"1\"\n      memory: 512Mi"
 	return inline, blocks
 }

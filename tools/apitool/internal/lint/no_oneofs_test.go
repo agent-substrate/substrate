@@ -17,31 +17,42 @@ package lint_test
 import (
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/agent-substrate/substrate/tools/apitool/internal/lint"
 	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
 )
 
 func TestNoOneofs(t *testing.T) {
 	tests := []struct {
-		name        string
-		field       model.Field
-		wantFinding bool
+		name string
+		api  *model.API
+		want []lint.Finding
 	}{
-		{"plain field", model.Field{Name: "widget"}, false},
-		{"proto3 optional scalar - not a real oneof", model.Field{Name: "widget", Proto3Optional: true}, false},
-		{"member of a real oneof", model.Field{Name: "widget", OneofName: "reference"}, true},
+		{
+			name: "plain field",
+			api:  messagesAPI(msg("Widget", model.Field{Name: "gadget"})),
+		},
+		{
+			name: "proto3 optional scalar - not a real oneof",
+			api:  messagesAPI(msg("Widget", model.Field{Name: "gadget", Proto3Optional: true})),
+		},
+		{
+			name: "member of a real oneof",
+			api:  messagesAPI(msg("Widget", model.Field{Name: "gadget", OneofName: "reference"})),
+			want: []lint.Finding{
+				{Subject: "test.Widget.gadget", Message: `belongs to oneof "reference" - oneofs are not used in this API`},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			api := &model.API{Messages: []model.Message{
-				{FullName: "test.Foo", Name: "Foo", Fields: []model.Field{tt.field}},
-			}}
-			findings, err := lint.NoOneofs.Check(api)
+			findings, err := lint.NoOneofs.Check(tt.api)
 			if err != nil {
 				t.Fatalf("Check() error = %v", err)
 			}
-			if got := len(findings) > 0; got != tt.wantFinding {
-				t.Errorf("Check() findings = %+v, want a finding: %v", findings, tt.wantFinding)
+			if diff := cmp.Diff(tt.want, findings); diff != "" {
+				t.Errorf("Check() findings mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

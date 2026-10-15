@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -64,11 +65,11 @@ func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
 	var errs field.ErrorList
 	if value.GetSnapshotConfig().GetPreferredFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS &&
-		value.GetSandboxConfig().GetSandboxClass() != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
+		value.GetSandboxConfig().GetSandboxClass() != string(atev1alpha1.SandboxClassMicroVM) {
 		errs = append(errs, field.Invalid(
 			fldPath.Child("snapshot_config", "preferred_fidelity"),
 			value.GetSnapshotConfig().GetPreferredFidelity().String(),
-			"ROOTFS fidelity requires sandbox_config.sandbox_class SANDBOX_CLASS_MICROVM"))
+			"ROOTFS fidelity requires sandbox_config.sandbox_class microvm"))
 	}
 	declared := make(map[string]bool, len(value.GetVolumes()))
 	for _, vol := range value.GetVolumes() {
@@ -85,6 +86,22 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 					fldPath.Child("containers").Index(i).Child("volume_mounts").Index(j).Child("name"),
 					name, "must reference a volume declared in the template"))
 			}
+		}
+	}
+	return errs
+}
+
+// ValidateCustom_ActorTemplate_Resources requires both a cpu and a memory
+// limit, which the scheduler books against worker capacity.
+func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Resources) field.ErrorList {
+	set := sets.New[string]()
+	for _, l := range value.GetLimits() {
+		set.Insert(l.GetName())
+	}
+	var errs field.ErrorList
+	for _, name := range []string{resources.ResourceCPU, resources.ResourceMemory} {
+		if !set.Has(name) {
+			errs = append(errs, field.Required(fldPath.Child("limits"), "must set a "+name+" limit"))
 		}
 	}
 	return errs
@@ -164,6 +181,10 @@ func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operati
 		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
 	}
 	return nil
+}
+
+func ValidateCustom_SandboxConfig_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateSandboxClass(fldPath, *value)
 }
 
 // ValidateCustom_SnapshotConfig_StorageLocation ensures an

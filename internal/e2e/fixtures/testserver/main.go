@@ -18,7 +18,7 @@
 // than a new image to build and push:
 //
 //	testserver grpc  --listen=:50051   a cleartext HTTP/2 gRPC echo origin
-//	testserver http  --listen=:8080    an HTTP(S) origin serving /healthz and /echoheaders
+//	testserver http  --listen=:8080    an HTTP(S) origin serving /healthz, /echoheaders, POST /fetch and /dial
 //	testserver egressprobe --listen=:8080  a client that drives the egress gateway
 //	testserver websocket --listen=:8080  a websocket server that responds to PINGs
 //

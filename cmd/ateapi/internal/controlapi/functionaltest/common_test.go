@@ -451,7 +451,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 				StorageLocation: testStorageLocation,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				SandboxClass: "gvisor",
 				ConfigName:   "gvisor-default",
 			},
 			Containers: containers,
@@ -459,6 +459,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 			WorkerSelector: &ateapipb.Selector{
 				MatchLabels: map[string]string{poolLabelKey: ns},
 			},
+			Resources: resources.CPUMemory(1000, 512<<20),
 		},
 	})
 	if err != nil {
@@ -659,13 +660,14 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 				StorageLocation: testStorageLocation,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				SandboxClass: "gvisor",
 				ConfigName:   "gvisor-default",
 			},
 			Containers: []*ateapipb.Container{
 				{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}},
 			},
 			WorkerSelector: selector,
+			Resources:      resources.CPUMemory(1000, 512<<20),
 		},
 	})
 	if err != nil {
@@ -741,6 +743,12 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 		},
 	}); err != nil {
 		t.Fatalf("failed to register worker: %v", err)
+	}
+	// As the syncer does once the pod is Ready.
+	if _, err := tc.client.MarkWorkerAvailable(context.Background(), &ateapipb.MarkWorkerAvailableRequest{
+		Worker: &ateapipb.ObjectRef{Name: string(createdPod.UID)},
+	}); err != nil {
+		t.Fatalf("failed to mark worker available: %v", err)
 	}
 	reportWorkerCapacity(t, tc, string(createdPod.UID), 1)
 

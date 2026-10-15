@@ -51,6 +51,7 @@ type CSIDriverConfigSpec struct {
 
 // CSIDriverTLSConfig holds TLS and mTLS configuration for CSI driver connections.
 // +kubebuilder:validation:XValidation:rule="!self.enabled || (has(self.usePodIdentity) && self.usePodIdentity)",message="tls.usePodIdentity must be true when tls.enabled is true; manual certificates are not yet supported"
+// +kubebuilder:validation:XValidation:rule="!self.enabled || (has(self.serverName) && size(self.serverName) > 0)",message="tls.serverName is required when tls.enabled is true"
 type CSIDriverTLSConfig struct {
 	// Enabled controls whether TLS is used.
 	// +required
@@ -61,7 +62,8 @@ type CSIDriverTLSConfig struct {
 	// +optional
 	UsePodIdentity bool `json:"usePodIdentity,omitempty"`
 
-	// ServerName override for TLS verification.
+	// ServerName specifies the expected server name (SAN) for TLS certificate verification.
+	// Required when TLS is enabled.
 	// +optional
 	ServerName string `json:"serverName,omitempty"`
 }

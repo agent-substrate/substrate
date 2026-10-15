@@ -373,7 +373,7 @@ func TestFetchAssetAnonymousFallback(t *testing.T) {
 
 	// Pinned here rather than read from anonymousFallbackCodes, so dropping a
 	// code from production fails this test.
-	for _, code := range []codes.Code{codes.NotFound, codes.InvalidArgument, codes.Unimplemented, codes.Unavailable} {
+	for _, code := range []codes.Code{codes.NotFound, codes.InvalidArgument, codes.Unimplemented, codes.Unavailable, codes.Internal} {
 		t.Run(code.String()+" falls back", func(t *testing.T) {
 			logs := captureLogs(t)
 			f := newAssetHerderFixture(t, "s3")
@@ -392,6 +392,21 @@ func TestFetchAssetAnonymousFallback(t *testing.T) {
 			}
 			if !strings.Contains(logs.String(), `"code":"`+code.String()+`"`) || strings.Contains(logs.String(), "SECRET") {
 				t.Errorf("logs do not carry the plugin code %s alone:\n%s", code, logs)
+			}
+			// A plugin that failed, rather than declined the URL, must stay
+			// visible even though the anonymous read succeeded.
+			wantLevel := `"level":"INFO"`
+			if code == codes.Internal || code == codes.Unavailable {
+				wantLevel = `"level":"WARN"`
+			}
+			var fallbackLine string
+			for l := range strings.Lines(logs.String()) {
+				if strings.Contains(l, "downloading it anonymously") {
+					fallbackLine = l
+				}
+			}
+			if !strings.Contains(fallbackLine, wantLevel) {
+				t.Errorf("fallback log line is not at %s:\n%s", wantLevel, fallbackLine)
 			}
 		})
 
@@ -412,6 +427,8 @@ func TestFetchAssetAnonymousFallback(t *testing.T) {
 			wantCode := codes.FailedPrecondition
 			if code == codes.Unavailable {
 				wantCode = codes.Unavailable
+			} else if code == codes.Internal {
+				wantCode = codes.Internal
 			}
 			if st.Code() != wantCode {
 				t.Errorf("code = %s, want %s (%v)", st.Code(), wantCode, err)
@@ -445,7 +462,7 @@ func TestFetchAssetAnonymousFallback(t *testing.T) {
 		}
 	}
 
-	for _, code := range []codes.Code{codes.PermissionDenied, codes.FailedPrecondition, codes.Internal, codes.Unknown, codes.ResourceExhausted, codes.Canceled, codes.DeadlineExceeded} {
+	for _, code := range []codes.Code{codes.PermissionDenied, codes.FailedPrecondition, codes.Unknown, codes.ResourceExhausted, codes.Canceled, codes.DeadlineExceeded} {
 		t.Run(code.String()+" does not fall back", func(t *testing.T) {
 			f := newAssetHerderFixture(t, "s3")
 			f.anon.objects[object] = content

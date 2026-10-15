@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -80,7 +81,7 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		"rootfs fidelity on microvm accepted",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
-			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM, ConfigName: "microvm-default"}
+			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: "microvm", ConfigName: "microvm-default"}
 		})},
 		nil,
 	}, {
@@ -167,9 +168,9 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Required(field.NewPath("actor_template", "sandbox_config"), "")},
 	}, {
-		"unspecified sandbox_config.sandbox_class",
+		"missing sandbox_config.sandbox_class",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SandboxConfig.SandboxClass = ateapipb.SandboxClass_SANDBOX_CLASS_UNSPECIFIED
+			tmpl.SandboxConfig.SandboxClass = ""
 		})},
 		field.ErrorList{field.Required(field.NewPath("actor_template", "sandbox_config", "sandbox_class"), "")},
 	}, {
@@ -178,6 +179,33 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 			tmpl.SandboxConfig.ConfigName = ""
 		})},
 		field.ErrorList{field.Required(field.NewPath("actor_template", "sandbox_config", "config_name"), "")},
+	}, {
+		"missing resources",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Resources = nil
+		})},
+		field.ErrorList{field.Required(field.NewPath("actor_template", "resources"), "")},
+	}, {
+		"missing cpu limit",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Resources = resources.CPUMemory(0, 512<<20)
+		})},
+		field.ErrorList{field.Required(field.NewPath("actor_template", "resources", "limits"), "must set a cpu limit")},
+	}, {
+		"missing memory limit",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Resources = resources.CPUMemory(1000, 0)
+		})},
+		field.ErrorList{field.Required(field.NewPath("actor_template", "resources", "limits"), "must set a memory limit")},
+	}, {
+		"empty limits",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Resources = &ateapipb.Resources{}
+		})},
+		field.ErrorList{
+			field.Required(field.NewPath("actor_template", "resources", "limits"), "must set a cpu limit"),
+			field.Required(field.NewPath("actor_template", "resources", "limits"), "must set a memory limit"),
+		},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -342,19 +370,27 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig = nil },
 		want:   field.ErrorList{field.Required(field.NewPath("sandbox_config"), "")},
 	}, {
-		name: "unspecified sandbox_class",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SandboxConfig.SandboxClass = ateapipb.SandboxClass_SANDBOX_CLASS_UNSPECIFIED
+		name:   "missing sandbox_class",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = "" },
+		want:   field.ErrorList{field.Required(field.NewPath("sandbox_config", "sandbox_class"), "")},
+	}, {
+		name:   "microvm sandbox_class",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = "microvm" },
+	}, {
+		name:   "unsupported sandbox_class",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = "kata" },
+		want:   field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_config", "sandbox_class"), nil, nil)},
+	}, {
+		name:   "sandbox_class is case-sensitive",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = "GVISOR" },
+		want:   field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_config", "sandbox_class"), nil, nil)},
+	}, {
+		name:   "sandbox_class too long",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = strings.Repeat("g", 64) },
+		want: field.ErrorList{
+			field.TooLong(field.NewPath("sandbox_config", "sandbox_class"), nil, 63).WithOrigin("maxLength"),
+			field.NotSupported[string](field.NewPath("sandbox_config", "sandbox_class"), nil, nil),
 		},
-		want: field.ErrorList{field.Required(field.NewPath("sandbox_config", "sandbox_class"), "")},
-	}, {
-		name:   "sandbox_class outside the enum",
-		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = ateapipb.SandboxClass(99) },
-		want:   field.ErrorList{field.Invalid(field.NewPath("sandbox_config", "sandbox_class"), nil, "").WithOrigin("maximum")},
-	}, {
-		name:   "negative sandbox_class",
-		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = ateapipb.SandboxClass(-1) },
-		want:   field.ErrorList{field.Invalid(field.NewPath("sandbox_config", "sandbox_class"), nil, "").WithOrigin("minimum")},
 	}, {
 		name:   "missing config_name",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.ConfigName = "" },
@@ -867,9 +903,12 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "template-level resources validated too",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "gpu", Quantity: "1"}}}
+			tmpl.Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "gpu", Quantity: "1"}}}
 		},
-		want: field.ErrorList{field.NotSupported[string](field.NewPath("resources", "limits").Index(0).Child("name"), nil, nil)},
+		want: field.ErrorList{
+			field.NotSupported[string](field.NewPath("resources", "limits").Index(1).Child("name"), nil, nil),
+			field.Required(field.NewPath("resources", "limits"), "must set a memory limit"),
+		},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -895,7 +934,8 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 			StorageLocation:   "gs://my-bucket/snapshots",
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
+		Resources:     resources.CPUMemory(1000, 512<<20),
 	}
 	for _, m := range mutations {
 		m(template)

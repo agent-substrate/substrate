@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/pflag"
 	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -27,6 +28,17 @@ import (
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
+
+func TestDNSEgressPolicyFlagDefault(t *testing.T) {
+	t.Parallel()
+	f := pflag.Lookup("dns-egress-policy")
+	if f == nil {
+		t.Fatal("no --dns-egress-policy flag registered")
+	}
+	if f.DefValue != "" {
+		t.Errorf("--dns-egress-policy default = %q, want empty", f.DefValue)
+	}
+}
 
 func TestNewControllerRuntimeLoggerVerbosity(t *testing.T) {
 	const probe = "verbosity-probe"

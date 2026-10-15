@@ -394,17 +394,6 @@ message GetWorkloadStatsRequest {
   string actor_uid = 1;
 }
 
-// SandboxClass is the sandbox runtime family that produced a sample. Mirrors
-// the ate.dev/v1alpha1 SandboxClass the WorkerPool and ActorTemplate are
-// configured with; an ateom binary only ever reports its own.
-enum SandboxClass {
-  SANDBOX_CLASS_UNSPECIFIED = 0;
-  // gVisor / runsc (cmd/ateom-gvisor).
-  SANDBOX_CLASS_GVISOR = 1;
-  // Micro-VM (cmd/ateom-microvm).
-  SANDBOX_CLASS_MICROVM = 2;
-}
-
 // StatsSource is how a sample's measurements were obtained. The two are not
 // measured the same way and should not be compared against each other as though
 // they were.
@@ -440,8 +429,10 @@ message WorkloadStatsSample {
   string actor_template_atespace = 4;
   string actor_template_name = 5;
 
-  // The sandbox runtime family that produced this sample.
-  SandboxClass sandbox_class = 6;
+  // The sandbox runtime family that produced this sample, in the
+  // ate.dev/v1alpha1 SandboxClass form: "gvisor" (cmd/ateom-gvisor) or
+  // "microvm" (cmd/ateom-microvm). An ateom binary only ever reports its own.
+  string sandbox_class = 6;
 
   // How the measurements below were obtained.
   StatsSource source = 7;

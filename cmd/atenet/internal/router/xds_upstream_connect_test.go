@@ -16,10 +16,13 @@ package router
 
 import (
 	"regexp"
+	"slices"
+	"strings"
 	"testing"
 
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
+	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	setfilterstatecommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
 	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
@@ -29,6 +32,7 @@ import (
 	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
+	"github.com/spf13/pflag"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/atenet"
@@ -56,6 +60,91 @@ func upstreamConnectSnapshot(t *testing.T) *cachev3.Snapshot {
 		t.Fatalf("Integrity check failed on snapshot: %v", err)
 	}
 	return snap
+}
+
+// Parses real flags so the default and the wiring into the xDS server are
+// tested together.
+func TestUpstreamConnectFlag(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		wantErr     string // substring from validate; empty means valid
+		wantTunnels bool
+	}{
+		{
+			name:        "default tunnels to atunnel",
+			wantTunnels: true,
+		},
+		{
+			name: "false reaches atunnel over HTTPS",
+			args: []string{"--upstream-connect=false"},
+		},
+		{
+			name: "false without upstream mTLS accepted",
+			args: []string{"--upstream-connect=false", "--upstream-credential-bundle="},
+		},
+		{
+			name:    "default without upstream mTLS rejected",
+			args:    []string{"--upstream-credential-bundle="},
+			wantErr: "--upstream-connect=false",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var cfg routerConfig
+			fs := pflag.NewFlagSet("router", pflag.ContinueOnError)
+			bindRouterFlags(fs, &cfg)
+			if err := fs.Parse(append([]string{"--mode=ingress", "--otlp-collector-address="}, tc.args...)); err != nil {
+				t.Fatalf("parsing flags: %v", err)
+			}
+			err := cfg.validate()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("validate() = %v, want an error containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validate() = %v, want valid", err)
+			}
+
+			s := &RouterServer{cfg: cfg}
+			x, err := s.newEnvoyXdsServer(t.Context(), cfg.ParkedRequest.Normalized(), 0)
+			if err != nil {
+				t.Fatalf("newEnvoyXdsServer: %v", err)
+			}
+			res, err := x.snapshot.GetSnapshot(NodeID)
+			if err != nil {
+				t.Fatalf("Failed to get snapshot: %v", err)
+			}
+			snap := res.(*cachev3.Snapshot)
+			if err := snap.Consistent(); err != nil {
+				t.Fatalf("Integrity check failed on snapshot: %v", err)
+			}
+
+			var routed []string
+			rc := snap.GetResources(resourcev3.RouteType)[RouteName].(*routev3.RouteConfiguration)
+			for _, r := range rc.GetVirtualHosts()[0].GetRoutes() {
+				routed = append(routed, r.GetRoute().GetCluster())
+			}
+			want := []string{OriginalDstClusterName}
+			if tc.wantTunnels {
+				want = []string{ActorTunnelHTTP2ClusterName, ActorTunnelHTTP1ClusterName}
+			}
+			if !slices.Equal(routed, want) {
+				t.Errorf("routes send to %v, want %v", routed, want)
+			}
+			clusters := snap.GetResources(resourcev3.ClusterType)
+			for _, name := range routed {
+				if _, ok := clusters[name]; !ok {
+					t.Errorf("a route sends to cluster %q, which the snapshot lacks", name)
+				}
+			}
+			if _, ok := snap.GetResources(resourcev3.ListenerType)[ActorConnectName]; ok != tc.wantTunnels {
+				t.Errorf("listener %q present = %v, want %v", ActorConnectName, ok, tc.wantTunnels)
+			}
+		})
+	}
 }
 
 func TestXdsServer_UpstreamConnectResources(t *testing.T) {

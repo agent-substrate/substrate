@@ -103,6 +103,12 @@ usage() {
   echo "  --fake-data-plane                      Install fake-atelet in place of atelet and fake-workersync in place of"
   echo "                                         ate-controller, for control-plane benchmarks. Actors do not exist; never"
   echo "                                         use it on a cluster that serves real actors"
+  echo "  --ingress-auth-mode=deprecated-insecure|static-mtls"
+  echo "                                         How the ingress router authenticates clients (default: deprecated-insecure)."
+  echo "                                         Both check a client certificate on the TLS ports against the podidentity CA and"
+  echo "                                         the SPIFFE IDs listed in manifests/ate-install/atenet-router.yaml."
+  echo "                                         deprecated-insecure also accepts TLS clients without one and serves plaintext"
+  echo "                                         ports; static-mtls requires the certificate and --atenet-dataplane=envoy."
   echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
   echo ""
@@ -307,6 +313,14 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       ;;
     --cordon-control-plane|--cordon-control-plane=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
     --fake-data-plane|--fake-data-plane=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
+    --ingress-auth-mode=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
+    --ingress-auth-mode)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --ingress-auth-mode requires deprecated-insecure or static-mtls" >&2
+        exit 1
+      fi
+      GLOBAL_FLAGS+=("--ingress-auth-mode=${prescan_args[$((i + 1))]}")
+      ;;
     --rollout-timeout=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
     --rollout-timeout)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -363,13 +377,13 @@ while [[ "$#" -gt 0 ]]; do
     # Captured in the pre-scan above; matched here only so the `*)` branch does
     # not reject them, and so a separated value is consumed with its flag.
     --atenet-dataplane|--podcert-workers-per-signer|--rollout-timeout|--otlp-endpoint) shift ;;
-    --cluster-size) shift ;;
+    --cluster-size|--ingress-auth-mode) shift ;;
     --experimental-additional-egress-extproc-service) shift ;;
     --credential-provider) shift ;;
     --benchmark-worker-count|--benchmark-sandbox-class|--benchmark-actor-memory) shift ;;
     --atenet-dataplane=*|--podcert-workers-per-signer=*|--rollout-timeout=*|--otlp-endpoint=*) ;;
-    --cluster-size=*|--cordon-control-plane|--cordon-control-plane=*) ;;
     --fake-data-plane|--fake-data-plane=*) ;;
+    --cluster-size=*|--cordon-control-plane|--cordon-control-plane=*|--ingress-auth-mode=*) ;;
     --experimental-additional-egress-extproc-service=*) ;;
     --credential-provider=*) ;;
     --benchmark-worker-count=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;

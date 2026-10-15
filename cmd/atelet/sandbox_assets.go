@@ -295,11 +295,11 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 // first, with the plugin's credentials; atelet holds none of its own and does
 // not know which bucket holds snapshots. A gs:// asset is then read
 // anonymously, which serves public buckets such as gs://gvisor, but only when
-// no plugin is configured or the plugin reports it has no such object or
-// cannot serve it, as a plugin on a backend other than GCS does for every
-// gs:// URI (see anonymousFallbackCodes). A refusal on policy or content, and a canceled
-// request, are final. atelet verifies the bytes it caches whichever path
-// fetched them, since it executes them.
+// no plugin is configured or the plugin reports it has no such object, cannot
+// serve it (as a plugin on a backend other than GCS does for every gs:// URI),
+// or failed unexpectedly (see anonymousFallbackCodes). A refusal on policy or
+// content, and a canceled request, are final. atelet verifies the bytes it
+// caches whichever path fetched them, since it executes them.
 func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tmpPrefix string) (string, error) {
 	wantSum, err := hex.DecodeString(entry.SHA256)
 	if err != nil {
@@ -348,7 +348,14 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", fmt.Errorf("sandbox asset %s: %w", shown, ctxErr)
 		}
-		slog.InfoContext(ctx, "Object-store plugin did not serve sandbox asset; downloading it anonymously",
+		// Internal and Unavailable mean the plugin failed rather than declined
+		// the URL, so falling back must not hide them: warn. The plugin logs
+		// why it failed; atelet logs only the code (see fetchFromPlugin).
+		level := slog.LevelInfo
+		if pluginCode == codes.Internal || pluginCode == codes.Unavailable {
+			level = slog.LevelWarn
+		}
+		slog.Log(ctx, level, "Object-store plugin did not serve sandbox asset; downloading it anonymously",
 			slog.String("url", shown), slog.String("code", pluginCode.String()))
 	} else if !anonFallback {
 		return "", apierror.FailedPrecondition("sandbox asset %s: no object-store plugin is configured to fetch it", shown)
@@ -366,10 +373,11 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 
 // anonymousFallbackCodes are the plugin codes after which atelet reads a gs://
 // asset anonymously: the plugin has no such object, cannot serve the URL, does
-// not implement AssetProvider, or cannot be reached. PermissionDenied (the URL
-// is under a snapshot location) and FailedPrecondition (wrong size or sha256)
-// are refusals another source must not override.
-var anonymousFallbackCodes = []codes.Code{codes.NotFound, codes.InvalidArgument, codes.Unimplemented, codes.Unavailable}
+// not implement AssetProvider, cannot be reached, or failed with Internal. The
+// in-tree plugin returns Internal for any error it does not recognize, such as
+// GCS refusing its credentials for a public bucket (see #2613), so this falls
+// back on any unexpected failure of that plugin. Any other code is final.
+var anonymousFallbackCodes = []codes.Code{codes.NotFound, codes.InvalidArgument, codes.Unimplemented, codes.Unavailable, codes.Internal}
 
 // downloadAnonymous streams the gs:// asset entry.URL into the existing file
 // at path with no credentials, replacing anything a failed plugin fetch left

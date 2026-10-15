@@ -48,8 +48,8 @@ WORKER_COUNT=1
 SANDBOX_CLASS="gvisor"
 # Actor memory limit (ActorTemplate resources.limits.memory). The default
 # is the smallest size microvm admits (128Mi VMM reserve + 128Mi guest floor),
-# so benchmark actors do not inherit the 2 GiB kata default and drag its page
-# cache into every memory snapshot. Raise it for RAM-consuming suites.
+# since a bigger guest drags more page cache into every memory snapshot. Raise
+# it for RAM-consuming suites.
 ACTOR_MEMORY="256Mi"
 # Worker pod memory (WorkerPool spec.template.resources), set as both request
 # and limit. Empty leaves the pod unsized. The limit is also the memory the
@@ -139,12 +139,11 @@ substitute() {
   # than defaulted) so a stale config from a dirty teardown fails loudly
   # instead of silently binding these workloads. gvisor-default is applied by
   # hack/install-ate.sh; microvm is applied by hack/install-microvm-deps.sh.
-  # The protojson templates take the sandbox class as its proto enum spelling.
   local manifest="$1"
-  local sandbox_config_name sandbox_class_enum worker_resources=""
+  local sandbox_config_name worker_resources=""
   case "${SANDBOX_CLASS}" in
-    gvisor)  sandbox_config_name="gvisor-default" sandbox_class_enum="SANDBOX_CLASS_GVISOR" ;;
-    microvm) sandbox_config_name="microvm"        sandbox_class_enum="SANDBOX_CLASS_MICROVM" ;;
+    gvisor)  sandbox_config_name="gvisor-default" ;;
+    microvm) sandbox_config_name="microvm" ;;
   esac
   # One flow-style line, so an unset WORKER_MEMORY leaves only a blank line.
   if [[ -n "${WORKER_MEMORY}" ]]; then
@@ -153,7 +152,6 @@ substitute() {
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
-      -e "s|\${SANDBOX_CLASS_ENUM}|${sandbox_class_enum}|g" \
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \

@@ -56,7 +56,12 @@ volumes:
     # Only for suites that pass WithTrustBundle: the bundle is a cluster
     # singleton, so a suite that merely needs a probe must not depend on it.
 ${TEMPLATE_TRUST_BUNDLE}
-${TEMPLATE_RESOURCES}
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
 ${TEMPLATE_SANDBOX_CONFIG}
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-probe${FIXTURE_SUFFIX}/

@@ -62,9 +62,8 @@ volumes:
         names:
         - egress-mitm.ate.dev
         path: trust-bundle.pem
-# Sandbox size: without these the guest boots at ateom's default size
-# (2GiB). ateom applies them to the VM (see internal/sizing). Quantities are
-# strings in the proto.
+# Sandbox size: ateom applies these to the VM (see internal/sizing).
+# Quantities are strings in the proto.
 resources:
   limits:
   - name: cpu
@@ -72,7 +71,7 @@ resources:
   - name: memory
     quantity: 512Mi
 sandboxConfig:
-  sandboxClass: SANDBOX_CLASS_MICROVM
+  sandboxClass: microvm
   # Installed cluster-wide by hack/install-microvm-deps.sh; naming it
   # explicitly makes a missing or stale install fail loudly.
   configName: microvm
