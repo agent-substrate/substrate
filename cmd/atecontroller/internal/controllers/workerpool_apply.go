@@ -161,7 +161,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 	args = append(args, previewArg)
 
 	containerAC := corev1ac.Container().
-		WithName("ateom").
+		WithName("worker").
 		WithImage(wp.Spec.WorkerImage).
 		WithArgs(args...).
 		WithPorts(corev1ac.ContainerPort().
@@ -342,7 +342,7 @@ func resourceFieldRefFile(path, resourceName, divisor string) *corev1ac.Downward
 	return corev1ac.DownwardAPIVolumeFile().
 		WithPath(path).
 		WithResourceFieldRef(corev1ac.ResourceFieldSelector().
-			WithContainerName("ateom").
+			WithContainerName("worker").
 			WithResource(resourceName).
 			WithDivisor(resource.MustParse(divisor)))
 }

@@ -27,7 +27,7 @@ import (
 func withAteomRestarts(pod *corev1.Pod, n int32) *corev1.Pod {
 	pod.Status.ContainerStatuses = []corev1.ContainerStatus{
 		{Name: "sidecar", RestartCount: 7},
-		{Name: ateomContainer, RestartCount: n},
+		{Name: workerContainer, RestartCount: n},
 	}
 	return pod
 }

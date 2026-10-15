@@ -280,14 +280,14 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 	return s.createOrUpdateWorker(ctx, key, pod)
 }
 
-// ateomContainer is the name of the worker pod's ateom container.
-const ateomContainer = "ateom"
+// workerContainer is the name of the worker pod's worker container.
+const workerContainer = "worker"
 
 // podEpoch counts the runs of the pod's ateom container: 1 for its first run
 // and one more for each restart. 0 until kubelet reports the container.
 func podEpoch(pod *corev1.Pod) int64 {
 	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.Name == ateomContainer {
+		if cs.Name == workerContainer {
 			return int64(cs.RestartCount) + 1
 		}
 	}

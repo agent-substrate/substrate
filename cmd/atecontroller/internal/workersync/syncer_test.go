@@ -276,7 +276,7 @@ func TestSyncer_DoesNotInferCapacityFromThePod(t *testing.T) {
 
 	pod := workerPod(ns, podName, poolName, testPodUID, "127.0.0.1")
 	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
-		Name:  "ateom",
+		Name:  "worker",
 		Image: "ateom",
 		Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("4"),

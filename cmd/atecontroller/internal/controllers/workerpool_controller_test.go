@@ -148,7 +148,7 @@ func TestWorkerPoolCreatesDeployment(t *testing.T) {
 			return false, nil
 		}
 		container := dep.Spec.Template.Spec.Containers[0]
-		if container.Image != "ateom:v1" || container.Name != "ateom" {
+		if container.Image != "ateom:v1" || container.Name != "worker" {
 			return false, nil
 		}
 		if dep.Spec.Template.Labels["ate.dev/worker-pool"] != wp.Name {
