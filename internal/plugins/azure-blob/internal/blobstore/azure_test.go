@@ -15,6 +15,7 @@
 package blobstore
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/base64"
@@ -28,6 +29,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -71,7 +73,7 @@ func (m *memoryAzure) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		sum := md5.Sum(data)
 		if got := r.Header.Get("Content-MD5"); got != base64.StdEncoding.EncodeToString(sum[:]) {
-			http.Error(w, "bad MD5", http.StatusBadRequest)
+			writeAzureError(w, http.StatusBadRequest, "Md5Mismatch")
 			return
 		}
 		if m.staged[name] == nil {
@@ -121,9 +123,20 @@ func (m *memoryAzure) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeAzureError(w, http.StatusNotFound, "BlobNotFound")
 			return
 		}
+		statusCode := http.StatusOK
+		if rng := r.Header.Get("x-ms-range"); rng != "" {
+			var first, last int
+			if _, err := fmt.Sscanf(rng, "bytes=%d-%d", &first, &last); err != nil || first > last || last >= len(data) {
+				writeAzureError(w, http.StatusRequestedRangeNotSatisfiable, "InvalidRange")
+				return
+			}
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", first, last, len(data)))
+			data = data[first : last+1]
+			statusCode = http.StatusPartialContent
+		}
 		w.Header().Set("Content-Length", fmt.Sprint(len(data)))
 		w.Header().Set("x-ms-meta-substrate_sha256", m.digests[name])
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(statusCode)
 		_, _ = w.Write(data)
 	case r.Method == http.MethodDelete:
 		if _, ok := m.blobs[name]; !ok {
@@ -159,7 +172,7 @@ func TestAzureStore(t *testing.T) {
 	digest := "abc123"
 	blockID := base64.StdEncoding.EncodeToString([]byte("block-0"))
 
-	if err := store.StageBlock(ctx, "prefix/file", blockID, data, sum[:]); err != nil {
+	if err := store.StageBlock(ctx, "prefix/file", blockID, bytes.NewReader(data), sum[:]); err != nil {
 		t.Fatalf("StageBlock: %v", err)
 	}
 	if err := store.CommitBlockList(ctx, "prefix/file", []string{blockID}, map[string]*string{"substrate_sha256": &digest}); err != nil {
@@ -184,6 +197,26 @@ func TestAzureStore(t *testing.T) {
 	}
 	if value := download.Metadata["Substrate_sha256"]; value == nil || *value != digest {
 		t.Fatalf("metadata = %v, want digest %q", download.Metadata, digest)
+	}
+	ranged, err := store.DownloadRange(ctx, "prefix/file", 2, 4)
+	if err != nil {
+		t.Fatalf("DownloadRange: %v", err)
+	}
+	got, err = io.ReadAll(ranged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ranged.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "apsh" {
+		t.Fatalf("DownloadRange(2, 4) = %q, want %q", got, "apsh")
+	}
+	if _, err := store.DownloadRange(ctx, "prefix/file", 0, 0); err == nil {
+		t.Fatal("DownloadRange accepted an empty range, which Azure reads as the whole blob")
+	}
+	if err := store.StageBlock(ctx, "prefix/file", blockID, strings.NewReader("other"), sum[:]); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("StageBlock with a mismatched MD5 = %v, want ErrUnavailable", err)
 	}
 	names, err := store.List(ctx, "prefix/")
 	if err != nil {
@@ -278,6 +311,7 @@ func TestMapError(t *testing.T) {
 		{name: "timeout", statusCode: http.StatusRequestTimeout, errorCode: "OperationTimedOut", want: ErrUnavailable},
 		{name: "throttled", statusCode: http.StatusTooManyRequests, errorCode: "TooManyRequests", want: ErrUnavailable},
 		{name: "server", statusCode: http.StatusInternalServerError, errorCode: "InternalError", want: ErrUnavailable},
+		{name: "block MD5 mismatch", statusCode: http.StatusBadRequest, errorCode: "Md5Mismatch", want: ErrUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := &azcore.ResponseError{StatusCode: tc.statusCode, ErrorCode: tc.errorCode}
@@ -346,7 +380,7 @@ func TestAzureConnectionFailureIsUnavailable(t *testing.T) {
 	if _, err := store.List(ctx, "prefix/"); !errors.Is(err, ErrUnavailable) {
 		t.Errorf("List = %v, want ErrUnavailable", err)
 	}
-	if err := store.StageBlock(ctx, "prefix/file", "YmxvY2s=", []byte("x"), nil); !errors.Is(err, ErrUnavailable) {
+	if err := store.StageBlock(ctx, "prefix/file", "YmxvY2s=", strings.NewReader("x"), nil); !errors.Is(err, ErrUnavailable) {
 		t.Errorf("StageBlock = %v, want ErrUnavailable", err)
 	}
 }
@@ -373,7 +407,7 @@ func TestAzureRejectedRequestsArePermissionErrors(t *testing.T) {
 			if _, err := store.List(ctx, "prefix/"); !errors.Is(err, ErrPermission) {
 				t.Errorf("List = %v, want ErrPermission", err)
 			}
-			if err := store.StageBlock(ctx, "prefix/file", "YmxvY2s=", []byte("x"), nil); !errors.Is(err, ErrPermission) {
+			if err := store.StageBlock(ctx, "prefix/file", "YmxvY2s=", strings.NewReader("x"), nil); !errors.Is(err, ErrPermission) {
 				t.Errorf("StageBlock = %v, want ErrPermission", err)
 			}
 		})
@@ -559,5 +593,65 @@ func TestAzureTokenFailures(t *testing.T) {
 				t.Fatalf("account endpoint received %d requests without a token, want none", requests)
 			}
 		})
+	}
+}
+
+type zeroReaderAt struct{}
+
+func (zeroReaderAt) ReadAt(p []byte, _ int64) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
+// TestStageBlockStreamsBody checks that StageBlock sends a block from its body
+// without copying the block into memory, and that a retry seeks the body back
+// to its start and sends the whole block again.
+func TestStageBlockStreamsBody(t *testing.T) {
+	const size = 64 << 20
+	var attempts atomic.Int32
+	// Plain HTTP: TLS under the race detector allocates for every record it
+	// encrypts, which would hide what StageBlock itself holds.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			// Fail the first attempt partway through the block.
+			_, _ = io.CopyN(io.Discard, r.Body, size/2)
+			writeAzureError(w, http.StatusInternalServerError, "InternalError")
+			return
+		}
+		hash := md5.New()
+		n, err := io.Copy(hash, r.Body)
+		if err != nil || n != size || r.Header.Get("Content-MD5") != base64.StdEncoding.EncodeToString(hash.Sum(nil)) {
+			writeAzureError(w, http.StatusBadRequest, "Md5Mismatch")
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+	client, err := service.NewClientWithNoCredential(server.URL, clientOptions(mustParseURL(t, server.URL), server.Client().Transport, policy.RetryOptions{MaxRetries: 1, RetryDelay: time.Millisecond}, defaultStallTimeout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newAzure(client, "snapshots")
+	hash := md5.New()
+	if _, err := io.Copy(hash, io.NewSectionReader(zeroReaderAt{}, 0, size)); err != nil {
+		t.Fatal(err)
+	}
+	sum := hash.Sum(nil)
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	err = store.StageBlock(t.Context(), "prefix/file", "YmxvY2s=", io.NewSectionReader(zeroReaderAt{}, 0, size), sum)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatalf("StageBlock: %v", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("server saw %d attempts, want 2", got)
+	}
+	alloc := after.TotalAlloc - before.TotalAlloc
+	t.Logf("StageBlock of %d MiB allocated %.1f MiB", size>>20, float64(alloc)/(1<<20))
+	if alloc > 8<<20 {
+		t.Fatalf("StageBlock of %d MiB allocated %d MiB, want at most 8 MiB", size>>20, alloc>>20)
 	}
 }

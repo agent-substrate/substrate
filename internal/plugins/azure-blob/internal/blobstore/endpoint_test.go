@@ -189,7 +189,7 @@ func TestStalledRequestsAreUnavailable(t *testing.T) {
 		"Delete":     func() error { return store.Delete(ctx, "prefix/file") },
 		"List":       func() error { _, err := store.List(ctx, "prefix/"); return err },
 		"Download":   func() error { _, err := store.Download(ctx, "prefix/file"); return err },
-		"StageBlock": func() error { return store.StageBlock(ctx, "prefix/file", "YmxvY2s=", []byte("data"), nil) },
+		"StageBlock": func() error { return store.StageBlock(ctx, "prefix/file", "YmxvY2s=", strings.NewReader("data"), nil) },
 	} {
 		start := time.Now()
 		err := call()
@@ -358,4 +358,34 @@ func mustParseURL(t *testing.T, raw string) *url.URL {
 		t.Fatal(err)
 	}
 	return parsed
+}
+
+// TestRequestBodyReadsFailAfterReturn checks that a request body cannot be
+// read once Do returns, as net/http may still do for a request the server
+// answered early, so the SDK can seek the body back to retry without a
+// concurrent read.
+func TestRequestBodyReadsFailAfterReturn(t *testing.T) {
+	var sent io.Reader
+	base := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		// Answer before reading the body, as a server may.
+		sent = req.Body
+		return &http.Response{StatusCode: http.StatusInternalServerError, Body: http.NoBody, Request: req}, nil
+	})
+	endpoint := mustParseURL(t, "https://account.blob.core.windows.net")
+	body := strings.NewReader("block data")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, endpoint.String()+"/snapshots/file", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := newEndpointTransport(endpoint, base, testStallTimeout).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if n, err := sent.Read(make([]byte, 4)); n != 0 || !errors.Is(err, errRequestReturned) {
+		t.Fatalf("read after Do returned = %d, %v, want errRequestReturned", n, err)
+	}
+	if body.Len() != len("block data") {
+		t.Fatalf("the late read consumed %d bytes of the body", len("block data")-body.Len())
+	}
 }

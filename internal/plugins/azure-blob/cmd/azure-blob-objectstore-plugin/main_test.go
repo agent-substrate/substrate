@@ -590,7 +590,7 @@ func testSocket(t *testing.T, name string) string {
 
 type testStore struct{}
 
-func (s *testStore) StageBlock(context.Context, string, string, []byte, []byte) error {
+func (s *testStore) StageBlock(context.Context, string, string, io.ReadSeeker, []byte) error {
 	return nil
 }
 
@@ -600,6 +600,10 @@ func (s *testStore) CommitBlockList(context.Context, string, []string, map[strin
 
 func (s *testStore) Download(context.Context, string) (blobstore.Download, error) {
 	return blobstore.Download{Body: io.NopCloser(strings.NewReader("")), Size: 0}, nil
+}
+
+func (s *testStore) DownloadRange(context.Context, string, int64, int64) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
 }
 
 func (s *testStore) List(context.Context, string) ([]string, error) {

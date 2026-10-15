@@ -17,6 +17,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -62,7 +63,16 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{blobs: map[string]fakeBlob{}, staged: map[string]map[string][]byte{}}
 }
 
-func (f *fakeStore) StageBlock(ctx context.Context, name, blockID string, data []byte, _ []byte) error {
+// StageBlock reads body before it takes the store's lock, since a body may
+// read from the store, and checks its MD5 the way Azure does.
+func (f *fakeStore) StageBlock(ctx context.Context, name, blockID string, body io.ReadSeeker, checksum []byte) error {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+	if sum := md5.Sum(data); checksum != nil && !bytes.Equal(sum[:], checksum) {
+		return fmt.Errorf("block %s does not match its MD5", blockID)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -75,7 +85,7 @@ func (f *fakeStore) StageBlock(ctx context.Context, name, blockID string, data [
 	if f.staged[name] == nil {
 		f.staged[name] = map[string][]byte{}
 	}
-	f.staged[name][blockID] = slices.Clone(data)
+	f.staged[name][blockID] = data
 	return nil
 }
 
@@ -113,6 +123,23 @@ func (f *fakeStore) Download(ctx context.Context, name string) (blobstore.Downlo
 		body = io.MultiReader(io.LimitReader(body, 1), &errReader{err: f.readErr})
 	}
 	return blobstore.Download{Body: io.NopCloser(body), Size: int64(len(blob.data)), Metadata: maps.Clone(blob.metadata)}, nil
+}
+
+func (f *fakeStore) DownloadRange(ctx context.Context, name string, offset, count int64) (io.ReadCloser, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	blob, ok := f.blobs[name]
+	if !ok {
+		return nil, blobstore.ErrNotFound
+	}
+	if count <= 0 || offset < 0 || offset > int64(len(blob.data)) {
+		return nil, fmt.Errorf("range %d+%d of a %d byte blob is invalid", offset, count, len(blob.data))
+	}
+	end := min(offset+count, int64(len(blob.data)))
+	return io.NopCloser(bytes.NewReader(slices.Clone(blob.data[offset:end]))), nil
 }
 
 func (f *fakeStore) List(ctx context.Context, prefix string) ([]string, error) {
@@ -171,7 +198,7 @@ func TestUploadAndFetchSnapshot(t *testing.T) {
 	if err := os.MkdirAll(dest, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	want := bytes.Repeat([]byte("snapshot"), blockSize/8+13)
+	want := bytes.Repeat([]byte("snapshot"), minBlockSize/8+13)
 	if err := os.WriteFile(filepath.Join(source, "memory.img"), want, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +306,7 @@ func TestUploadSnapshotPartialRetry(t *testing.T) {
 	if err := os.Mkdir(source, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	want := bytes.Repeat([]byte("x"), blockSize+1)
+	want := bytes.Repeat([]byte("x"), minBlockSize+1)
 	if err := os.WriteFile(filepath.Join(source, "memory.img"), want, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +336,7 @@ type concurrentStageStore struct {
 	started chan<- struct{}
 }
 
-func (s *concurrentStageStore) StageBlock(ctx context.Context, name, blockID string, data, checksum []byte) error {
+func (s *concurrentStageStore) StageBlock(ctx context.Context, name, blockID string, body io.ReadSeeker, checksum []byte) error {
 	current := s.current.Add(1)
 	defer s.current.Add(-1)
 	for {
@@ -324,7 +351,7 @@ func (s *concurrentStageStore) StageBlock(ctx context.Context, name, blockID str
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	return s.fakeStore.StageBlock(ctx, name, blockID, data, checksum)
+	return s.fakeStore.StageBlock(ctx, name, blockID, body, checksum)
 }
 
 func TestUploadSnapshotStagesBlocksConcurrently(t *testing.T) {
@@ -333,7 +360,7 @@ func TestUploadSnapshotStagesBlocksConcurrently(t *testing.T) {
 	if err := os.Mkdir(source, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "memory.img"), make([]byte, 2*blockSize), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "memory.img"), make([]byte, 2*minBlockSize), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	release := make(chan struct{})
@@ -657,7 +684,7 @@ func TestStreamingReadErrorsKeepTheirCode(t *testing.T) {
 
 func TestCopySnapshotPartialRetry(t *testing.T) {
 	store := newFakeStore()
-	data := bytes.Repeat([]byte("copy"), blockSize/4+1)
+	data := bytes.Repeat([]byte("copy"), minBlockSize/4+1)
 	sum := sha256.Sum256(data)
 	digest := hex.EncodeToString(sum[:])
 	store.blobs["tenant/actors/a/snapshots/one/memory.img"] = fakeBlob{
