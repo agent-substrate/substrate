@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/spf13/pflag"
 	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
@@ -268,6 +269,36 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 	}}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("prepareOCIBundles container specs mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestPrepareOCIBundlesResolvesUsers pins that a container runs as its image's
+// USER, resolved against the image's own passwd and group files; a USER the
+// image cannot resolve fails the run.
+func TestPrepareOCIBundlesResolvesUsers(t *testing.T) {
+	useTempNodeDirs(t)
+	host := imageVolumeTestRegistry(t)
+	etc := []v1.Layer{
+		singleFileLayer(t, "etc/passwd", "root:x:0:0:root:/root:/bin/sh\nnonroot:x:65532:65532::/home/nonroot:/sbin/nologin\n"),
+		singleFileLayer(t, "etc/group", "root:x:0:\nnonroot:x:65532:\nvideo:x:44:nonroot\n"),
+	}
+	app := pushTestImageWithConfig(t, host+"/app:v1", v1.Config{User: "nonroot", Cmd: []string{"/bin/app"}}, etc...)
+	s := &Atelet{imageCache: newImageVolumeStore(t)}
+
+	spec := &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "app", Image: app}}}
+	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec)
+	if err != nil {
+		t.Fatalf("prepareOCIBundles: %v", err)
+	}
+	want := &ateworkerpb.ProcessUser{Uid: 65532, Gid: 65532, AdditionalGids: []uint32{44}}
+	if diff := cmp.Diff(want, got[0].GetUser(), protocmp.Transform()); diff != "" {
+		t.Errorf("app user mismatch (-want +got):\n%s", diff)
+	}
+
+	unresolvable := pushTestImageWithConfig(t, host+"/nobody:v1", v1.Config{User: "nobody", Cmd: []string{"/bin/app"}})
+	spec = &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "app", Image: unresolvable}}}
+	if _, err := s.prepareOCIBundles(t.Context(), "actor-uid-2", resources.ActorRef{}, spec); err == nil {
+		t.Error("prepareOCIBundles succeeded with a USER the image has no passwd entry for, want an error")
 	}
 }
 
