@@ -55,7 +55,7 @@ func (listener *delayedEgressListener) Accept() (net.Conn, error) {
 func TestEgressBindingDoesNotOutliveItsActivation(t *testing.T) {
 	for _, lateServe := range []bool{false, true} {
 		t.Run(fmt.Sprintf("lateServe=%t", lateServe), func(t *testing.T) {
-			egress, err := NewProxy(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+			egress, err := New(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -148,7 +148,7 @@ func TestEgressBindingDoesNotOutliveItsActivation(t *testing.T) {
 }
 
 func TestEgressUnactivatedBindingCloses(t *testing.T) {
-	egress, err := NewProxy(func(net.Conn) (string, error) { return "", nil })
+	egress, err := New(func(net.Conn) (string, error) { return "", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestEgressUnactivatedBindingCloses(t *testing.T) {
 }
 
 func TestEgressActivationFailsClosed(t *testing.T) {
-	egress, err := NewProxy(func(net.Conn) (string, error) { return "", nil })
+	egress, err := New(func(net.Conn) (string, error) { return "", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestEgressExpiryRejectsNewButPreservesEstablished(t *testing.T) {
 		dials.Add(1)
 		return upstreamProxy, nil
 	})
-	egress, err := NewProxy(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+	egress, err := New(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestEgressRenewsBeforeExpiry(t *testing.T) {
 	dialer := tunnelDialerFunc(func(context.Context, string) (net.Conn, error) {
 		return upstream, nil
 	})
-	egress, err := NewProxy(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+	egress, err := New(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestEgressStopsAfterTerminalRenewalFailure(t *testing.T) {
 	for _, code := range []codes.Code{codes.Aborted, codes.FailedPrecondition, codes.PermissionDenied} {
 		t.Run(code.String(), func(t *testing.T) {
 			called := make(chan struct{}, 1)
-			egress, err := NewProxy(func(net.Conn) (string, error) { return "", nil })
+			egress, err := New(func(net.Conn) (string, error) { return "", nil })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -343,7 +343,7 @@ func TestEgressStopsAfterTerminalRenewalFailure(t *testing.T) {
 func TestEgressDeactivationDropsConcurrentRenewal(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
-	egress, err := NewProxy(func(net.Conn) (string, error) { return "", nil })
+	egress, err := New(func(net.Conn) (string, error) { return "", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +411,7 @@ func TestEgressEndToEnd(t *testing.T) {
 	})
 	client := newTestClient(t, ca, withDialer(dialFixedAddress(gatewayAddress)))
 
-	egress, err := NewProxy(func(net.Conn) (string, error) {
+	egress, err := New(func(net.Conn) (string, error) {
 		return "192.0.2.10:443", nil
 	})
 	if err != nil {
@@ -462,7 +462,7 @@ func TestEgressEndToEnd(t *testing.T) {
 }
 
 func TestEgressRejectsInactiveConnection(t *testing.T) {
-	egress, err := NewProxy(func(net.Conn) (string, error) {
+	egress, err := New(func(net.Conn) (string, error) {
 		t.Fatal("inactive egress resolved destination")
 		return "", nil
 	})
@@ -494,7 +494,7 @@ func TestEgressBoundsHowLongATunnelWaitsToOpen(t *testing.T) {
 	}))
 	client := newTestClient(t, ca, withDialer(dialFixedAddress(gatewayAddress)))
 
-	egress, err := NewProxy(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+	egress, err := New(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -560,7 +560,7 @@ func (s fakeActorCertificateSource) MintWorkerCertificate(context.Context) (time
 // Each actor's egress is armed and disarmed on its own: one actor's teardown
 // must not cut off another's tunnels.
 func TestEgressIsArmedPerActor(t *testing.T) {
-	egress, err := NewProxy(func(net.Conn) (string, error) { return "example.com:443", nil })
+	egress, err := New(func(net.Conn) (string, error) { return "example.com:443", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -609,7 +609,7 @@ func TestEgressDeactivateClosesIdleH2Connection(t *testing.T) {
 		return &closeNotifyingConn{Conn: c, closed: connClosed}, nil
 	}))
 
-	egress, err := NewProxy(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+	egress, err := New(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
 	if err != nil {
 		t.Fatal(err)
 	}

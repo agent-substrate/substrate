@@ -25,6 +25,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
 	"github.com/agent-substrate/substrate/internal/ateworker/tunnel"
 	"github.com/agent-substrate/substrate/internal/atunnel/egress"
+	"github.com/agent-substrate/substrate/internal/linuxsys"
 	"github.com/agent-substrate/substrate/internal/netns"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -36,7 +37,7 @@ import (
 func TestHostActorReplacesSameActor(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	ctx := context.Background()
-	egressProxy, err := egress.NewProxy(egress.TCPOriginalDestination)
+	egressProxy, err := egress.New(linuxsys.TCPOriginalDestination)
 	if err != nil {
 		t.Fatal(err)
 	}

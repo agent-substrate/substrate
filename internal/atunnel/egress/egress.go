@@ -69,8 +69,8 @@ type activation struct {
 	wg     sync.WaitGroup
 }
 
-// NewProxy creates an activation-aware egress proxy.
-func NewProxy(originalDestination originalDestinationFunc) (*Proxy, error) {
+// New creates an activation-aware egress proxy.
+func New(originalDestination originalDestinationFunc) (*Proxy, error) {
 	if originalDestination == nil {
 		return nil, fmt.Errorf("egress: original destination resolver is required")
 	}
@@ -347,10 +347,10 @@ func closeWrite(conn net.Conn) {
 	}
 }
 
-// Port is the port from a listen address, which each sandbox's redirect
-// aims at. The address itself is never bound: egress is served from inside the
-// sandbox namespaces.
-func Port(listenAddress string) (uint16, error) {
+// PortFromListenAddr is the port from a listen address, which each sandbox's
+// redirect aims at. The address itself is never bound: egress is served from
+// inside the sandbox namespaces.
+func PortFromListenAddr(listenAddress string) (uint16, error) {
 	_, port, err := net.SplitHostPort(listenAddress)
 	if err != nil {
 		return 0, fmt.Errorf("egress: listen address %q: %w", listenAddress, err)

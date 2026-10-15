@@ -35,6 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/atunnel/ingress"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"github.com/agent-substrate/substrate/internal/linuxsys"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -148,11 +149,11 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 	}
 
 	// Egress
-	egressProxy, err := egress.NewProxy(egress.TCPOriginalDestination)
+	egressProxy, err := egress.New(linuxsys.TCPOriginalDestination)
 	if err != nil {
 		return nil, fmt.Errorf("configuring egress: %w", err)
 	}
-	egressPort, err := egress.Port(cfg.EgressListenAddress)
+	egressPort, err := egress.PortFromListenAddr(cfg.EgressListenAddress)
 	if err != nil {
 		return nil, err
 	}
