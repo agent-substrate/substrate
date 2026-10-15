@@ -405,8 +405,8 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// page cache before resuming the VM so guest RAM and snapshot page cache do
 	// not overlap during Resume and wakeup probe gating.
 	//
-	// Dropping ahead of Resume means a failure after this point costs a
-	// re-download of the snapshot on retry.
+	// When the restore dir is not preserved, dropping ahead of Resume means a
+	// failure after this point costs a re-download of the snapshot on retry.
 	maybeDropStagedMemoryImage(ctx, restoreDir, memMode, preserveRestoreDir)
 	dropActorSnapshotCacheAsync(restoreDir, memMode == ch.MemRestoreEager)
 	if err := client.Resume(ctx); err != nil {

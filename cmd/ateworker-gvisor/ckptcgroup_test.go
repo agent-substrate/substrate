@@ -21,12 +21,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"github.com/agent-substrate/substrate/internal/snapshotcache"
 	"golang.org/x/sys/unix"
 )
 
@@ -137,6 +140,21 @@ func TestIsolateCheckpointCacheWithoutPIDFile(t *testing.T) {
 	}
 	if _, err := os.Stat(checkpointCgroupDir(f.root, testActorUID)); !os.IsNotExist(err) {
 		t.Errorf("checkpoint cgroup left behind: stat err = %v", err)
+	}
+}
+
+func TestIsolateCheckpointCacheRejectsPIDOutsidePauseLeaf(t *testing.T) {
+	f := newCkptFixture(t, "101")
+	mustWrite(t, filepath.Join(f.leaf, "cgroup.procs"), "100\n")
+
+	if _, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID); err == nil {
+		t.Fatal("isolateCheckpointCache succeeded with the pid outside the pause leaf")
+	}
+	if _, err := os.Stat(checkpointCgroupDir(f.root, testActorUID)); !os.IsNotExist(err) {
+		t.Errorf("checkpoint cgroup created for a reused pid: stat err = %v", err)
+	}
+	if got := mustRead(t, filepath.Join(f.leaf, "cgroup.procs")); got != "100\n" {
+		t.Errorf("pause leaf cgroup.procs = %q, want unchanged \"100\\n\"", got)
 	}
 }
 
@@ -308,6 +326,30 @@ func TestCheckpointIsolated(t *testing.T) {
 			t.Errorf("checkpoint cgroup left behind: stat err = %v", err)
 		}
 	})
+
+	t.Run("moves the sentry back into its pause leaf when terminate leaves it running", func(t *testing.T) {
+		f := newCkptFixture(t, "101")
+		ckptDir := checkpointCgroupDir(f.root, testActorUID)
+
+		err := checkpointIsolated(
+			context.Background(),
+			true, f.root, testActorUID, f.actorDirs,
+			func(context.Context) error { return nil },
+			func() error {
+				// Non-empty ckptDir emulates a sentry still alive in the cgroup.
+				return errors.New("terminate boom")
+			},
+		)
+		if err != nil {
+			t.Fatalf("checkpointIsolated: %v", err)
+		}
+		if got := mustRead(t, filepath.Join(f.leaf, "cgroup.procs")); got != "101" {
+			t.Errorf("pause leaf cgroup.procs = %q, want the live sentry 101 back under its memory.max", got)
+		}
+		if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
+			t.Errorf("checkpoint cgroup left behind: stat err = %v", err)
+		}
+	})
 }
 
 func TestRemoveStaleCheckpointCgroups(t *testing.T) {
@@ -335,15 +377,31 @@ func TestRemoveStaleCheckpointCgroups(t *testing.T) {
 	}
 }
 
-func TestDropStagedRestoreFiles(t *testing.T) {
+func newRestoreDir(t *testing.T) string {
+	t.Helper()
 	restoreDir := filepath.Join(t.TempDir(), "restore-dir")
 	mustMkdir(t, filepath.Join(restoreDir, "fs"))
 	for _, name := range []string{"checkpoint.img", "pages.img", "fs/pages.img", "fs/fscheckpoint.pb", "manifest.json"} {
 		mustWrite(t, filepath.Join(restoreDir, name), "staged data")
 	}
+	return restoreDir
+}
+
+func captureEviction(t *testing.T) <-chan []snapshotcache.File {
+	t.Helper()
+	evicted := make(chan []snapshotcache.File, 1)
+	orig := evictCheckpointCache
+	t.Cleanup(func() { evictCheckpointCache = orig })
+	evictCheckpointCache = func(targets []snapshotcache.File) { evicted <- targets }
+	return evicted
+}
+
+func TestDropStagedRestoreFiles(t *testing.T) {
+	restoreDir := newRestoreDir(t)
+	evicted := captureEviction(t)
 
 	waitCalled := false
-	dropActorCheckpointCacheAsync(testActorUID, restoreDir, false, func(context.Context) error {
+	dropActorCheckpointCacheAsync(context.Background(), testActorUID, restoreDir, false, func(context.Context) error {
 		waitCalled = true
 		return errors.New("waitRestore should not be called when !preserveRestoreDir")
 	})
@@ -361,4 +419,98 @@ func TestDropStagedRestoreFiles(t *testing.T) {
 			t.Fatalf("%s should be preserved: %v", name, err)
 		}
 	}
+	select {
+	case <-evicted:
+		t.Fatal("dropped files were also evicted")
+	default:
+	}
+}
+
+func TestEvictPreservedRestoreDir(t *testing.T) {
+	t.Run("evicts once the restore wait completes", func(t *testing.T) {
+		restoreDir := newRestoreDir(t)
+		evicted := captureEviction(t)
+		restoreDone := make(chan struct{})
+
+		dropActorCheckpointCacheAsync(context.Background(), testActorUID, restoreDir, true, func(ctx context.Context) error {
+			select {
+			case <-restoreDone:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+
+		select {
+		case <-evicted:
+			t.Fatal("evicted before the restore wait completed")
+		case <-time.After(50 * time.Millisecond):
+		}
+		close(restoreDone)
+		select {
+		case targets := <-evicted:
+			var names []string
+			for _, f := range targets {
+				rel, _ := filepath.Rel(restoreDir, f.Path)
+				names = append(names, rel)
+			}
+			slices.Sort(names)
+			if want := []string{"checkpoint.img", "fs/pages.img", "pages.img"}; !slices.Equal(names, want) {
+				t.Errorf("evicted %v, want %v", names, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("eviction did not run after the restore wait completed")
+		}
+		for _, name := range []string{"checkpoint.img", "pages.img", "fs/pages.img"} {
+			if _, err := os.Stat(filepath.Join(restoreDir, name)); err != nil {
+				t.Errorf("preserved %s was dropped: %v", name, err)
+			}
+		}
+	})
+
+	t.Run("skips eviction when the restore wait fails", func(t *testing.T) {
+		restoreDir := newRestoreDir(t)
+		evicted := captureEviction(t)
+		waited := make(chan struct{})
+
+		dropActorCheckpointCacheAsync(context.Background(), testActorUID, restoreDir, true, func(context.Context) error {
+			defer close(waited)
+			return errors.New("runsc wait boom")
+		})
+
+		<-waited
+		select {
+		case <-evicted:
+			t.Fatal("evicted after the restore wait failed")
+		case <-time.After(50 * time.Millisecond):
+		}
+	})
+
+	t.Run("waits no longer than the actor is hosted", func(t *testing.T) {
+		restoreDir := newRestoreDir(t)
+		evicted := captureEviction(t)
+		actorCtx, unhost := context.WithCancel(context.Background())
+		waited := make(chan error, 1)
+
+		dropActorCheckpointCacheAsync(actorCtx, testActorUID, restoreDir, true, func(ctx context.Context) error {
+			<-ctx.Done()
+			waited <- ctx.Err()
+			return ctx.Err()
+		})
+
+		unhost()
+		select {
+		case err := <-waited:
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("restore wait ended with %v, want context.Canceled", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("restore wait did not end when the actor was unhosted")
+		}
+		select {
+		case <-evicted:
+			t.Fatal("evicted after the actor was unhosted")
+		case <-time.After(50 * time.Millisecond):
+		}
+	})
 }

@@ -27,7 +27,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
@@ -48,7 +47,6 @@ const (
 	// checkpointCgroupSuffix uses a leading underscore like _pause so it cannot
 	// collide with a DNS-label application container leaf (<uid>-<container>).
 	checkpointCgroupSuffix = "-_ckpt"
-	waitRestoreTimeout     = 30 * time.Second
 )
 
 type checkpointCgroup struct {
@@ -71,6 +69,9 @@ func isolateCheckpointCache(root string, actorDirs *ateworkerpb.ActorDirs, actor
 	}
 
 	leaf := filepath.Join(root, ocispec.GVisorCgroupLeaf(actorUID, ocispec.PauseContainer))
+	if !cgroupHasPID(leaf, pid) {
+		return nil, fmt.Errorf("sandbox pid %d is not in cgroup %q", pid, leaf)
+	}
 	dir := checkpointCgroupDir(root, actorUID)
 	if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
 		return nil, fmt.Errorf("while creating cgroup %q: %w", dir, err)
@@ -171,7 +172,17 @@ func checkpointIsolated(
 		if terminateOnExit {
 			_ = terminate()
 		}
-		if err := ckptCgroup.remove(); err != nil {
+		err := ckptCgroup.remove()
+		if err != nil {
+			// If terminate left the sentry alive, move it back to its pause leaf.
+			if rerr := ckptCgroup.restore(); rerr != nil {
+				slog.WarnContext(ctx, "Failed to move the sentry back into its pause leaf",
+					slog.String("actorUID", actorUID), slog.Any("err", rerr))
+			} else {
+				err = ckptCgroup.remove()
+			}
+		}
+		if err != nil {
 			slog.WarnContext(ctx, "Failed to remove the checkpoint cgroup",
 				slog.String("actorUID", actorUID), slog.Any("err", err))
 		}
@@ -207,13 +218,16 @@ func isCheckpointDataFile(name string) bool {
 	return ext == ".img" || ext == ".tar"
 }
 
+// evictCheckpointCache is a var so tests can observe eviction.
+var evictCheckpointCache = snapshotcache.EvictWithRetries
+
 // dropActorCheckpointCacheAsync pins the snapshot data files in restoreDir
 // while the caller holds the actor lock. When the restore dir is not preserved,
 // it unlinks them immediately (the kernel frees pages and blocks once the
 // sentry closes its open FDs). When the restore dir is preserved, it waits in
-// the background for async restore page loading to finish and evicts clean
-// pages from the host page cache.
-func dropActorCheckpointCacheAsync(actorUID, restoreDir string, preserveRestoreDir bool, waitRestore func(context.Context) error) {
+// the background (bounded by actorCtx) for async restore page loading to finish
+// and evicts clean pages from the host page cache.
+func dropActorCheckpointCacheAsync(actorCtx context.Context, actorUID, restoreDir string, preserveRestoreDir bool, waitRestore func(context.Context) error) {
 	targets := snapshotcache.FindFiles(restoreDir, isCheckpointDataFile)
 	if len(targets) == 0 {
 		return
@@ -224,15 +238,12 @@ func dropActorCheckpointCacheAsync(actorUID, restoreDir string, preserveRestoreD
 	}
 	go func() {
 		if waitRestore != nil {
-			waitCtx, cancel := context.WithTimeout(context.Background(), waitRestoreTimeout)
-			err := waitRestore(waitCtx)
-			cancel()
-			if err != nil {
+			if err := waitRestore(actorCtx); err != nil {
 				slog.Warn("Skipping checkpoint page cache eviction after restore wait error",
 					slog.String("actorUID", actorUID), slog.Any("err", err))
 				return
 			}
 		}
-		snapshotcache.EvictWithRetries(targets)
+		evictCheckpointCache(targets)
 	}()
 }

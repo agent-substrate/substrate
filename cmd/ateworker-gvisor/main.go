@@ -1145,7 +1145,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err != nil {
 		return nil, err
 	}
-	dropActorCheckpointCacheAsync(req.GetActorUid(), checkpointDir, req.GetPreserveRestoreDir(), func(waitCtx context.Context) error {
+	dropActorCheckpointCacheAsync(hosted.ctx, req.GetActorUid(), checkpointDir, req.GetPreserveRestoreDir(), func(waitCtx context.Context) error {
 		if fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 			if err := rcmd.cmdWaitRestore(waitCtx, ocispec.PauseContainer); err != nil {
 				return err
