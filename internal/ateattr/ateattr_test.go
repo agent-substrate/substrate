@@ -406,8 +406,8 @@ func TestMetricLabelValues(t *testing.T) {
 		{SnapshotPhaseSandboxAssets, "sandbox_assets"},
 		{SnapshotPhaseDownload, "download"},
 		{SnapshotPhaseOCIUnpack, "oci_unpack"},
-		{SnapshotPhaseAteomRestore, "ateom_restore"},
-		{SnapshotPhaseAteomCheckpoint, "ateom_checkpoint"},
+		{SnapshotPhaseWorkerRestore, "worker_restore"},
+		{SnapshotPhaseWorkerCheckpoint, "worker_checkpoint"},
 		{SnapshotPhasePersist, "persist"},
 		{SnapshotPhaseTotal, "total"},
 

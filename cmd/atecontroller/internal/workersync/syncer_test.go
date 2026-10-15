@@ -70,7 +70,7 @@ func workerPod(ns, name, poolName, uid, ip string) *corev1.Pod {
 			PodIP:  ip,
 			PodIPs: []corev1.PodIP{{IP: ip}},
 			// Availability requires Ready in addition to an IP: readiness is
-			// what says ateom is actually serving, not just that the sandbox
+			// what says worker is actually serving, not just that the sandbox
 			// got an address.
 			Conditions: []corev1.PodCondition{{
 				Type:   corev1.PodReady,
@@ -262,9 +262,9 @@ func TestSyncer_OmittedFields(t *testing.T) {
 }
 
 // Capacity belongs to the Worker, which sets it over WorkerService. The
-// syncer must not infer one from the pod, even when the ateom container spells
-// its limits out: the pod's limits bound the sandbox, but what the ateom can
-// actually supply to Actors is the ateom's to say.
+// syncer must not infer one from the pod, even when the worker container spells
+// its limits out: the pod's limits bound the sandbox, but what the worker can
+// actually supply to Actors is the worker's to say.
 func TestSyncer_DoesNotInferCapacityFromThePod(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -276,8 +276,8 @@ func TestSyncer_DoesNotInferCapacityFromThePod(t *testing.T) {
 
 	pod := workerPod(ns, podName, poolName, testPodUID, "127.0.0.1")
 	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
-		Name:  "ateom",
-		Image: "ateom",
+		Name:  "worker",
+		Image: "worker",
 		Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("4"),
 			corev1.ResourceMemory: resource.MustParse("8Gi"),
@@ -289,7 +289,7 @@ func TestSyncer_DoesNotInferCapacityFromThePod(t *testing.T) {
 
 	// The registry here is a fake, so what it holds is exactly what the syncer
 	// sent. The syncer writes no capacity: it comes from the Worker's own
-	// report, which is the ateom's to make.
+	// report, which is the worker's to make.
 	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w != nil })
 	if got.GetStatus().GetCapacity() != nil {
 		t.Errorf("worker capacity = %v, want none", got.GetStatus().GetCapacity())
@@ -918,7 +918,7 @@ func TestSyncer_DeletePodWithoutIP(t *testing.T) {
 
 // TestSyncer_PodWithIPButNotReadyIsUnavailable pins that an IP alone registers
 // a worker that takes no Actors, because the sandbox having an address says
-// nothing about ateom serving yet. Both not-Ready shapes are covered —
+// nothing about worker serving yet. Both not-Ready shapes are covered —
 // condition absent (kubelet hasn't probed yet) and condition explicitly False
 // (probe failing).
 func TestSyncer_PodWithIPButNotReadyIsUnavailable(t *testing.T) {
@@ -988,10 +988,10 @@ func TestSyncer_RegisteredPodWithoutIPIsUnavailable(t *testing.T) {
 
 	api := newFakeControl()
 	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
-	key := seedPod(t, pods, withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.9"), 0))
+	key := seedPod(t, pods, withWorkerRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.9"), 0))
 	mustReconcile(t, ctx, s, key)
 
-	if err := pods.Update(withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, ""), 1)); err != nil {
+	if err := pods.Update(withWorkerRestarts(workerPod(ns, podName, poolName, testPodUID, ""), 1)); err != nil {
 		t.Fatalf("updating pod: %v", err)
 	}
 	mustReconcile(t, ctx, s, key)

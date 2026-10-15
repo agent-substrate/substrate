@@ -16,6 +16,7 @@ package controllers
 
 import (
 	"slices"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -25,16 +26,17 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
-	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/nodepath"
+	"github.com/agent-substrate/substrate/internal/preview"
+	"github.com/agent-substrate/substrate/internal/workercapacity"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
-// ateomOTelResourceAttributes mirrors atelet.yaml; service.instance.id is the pod
+// workerOTelResourceAttributes mirrors atelet.yaml; service.instance.id is the pod
 // uid so each worker pod is a distinct telemetry source.
-const ateomOTelResourceAttributes = "k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),k8s.node.name=$(NODE_NAME),service.instance.id=$(POD_UID)"
+const workerOTelResourceAttributes = "k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),k8s.node.name=$(NODE_NAME),service.instance.id=$(POD_UID)"
 
 // workerTerminationGracePeriodSeconds is the hardcoded pod termination grace
 // period for worker pods (60 minutes).
@@ -55,17 +57,17 @@ const (
 	workerRolloutProgressDeadlineSeconds = int32(4800)
 )
 
-// ateomOTelSettings is the telemetry configuration propagated to ateom worker
+// workerOTelSettings is the telemetry configuration propagated to worker
 // pods. A zero value leaves the pods without telemetry env.
-type ateomOTelSettings struct {
-	// Endpoint is the OTLP collector address. Empty disables ateom telemetry
+type workerOTelSettings struct {
+	// Endpoint is the OTLP collector address. Empty disables worker telemetry
 	// entirely, so the other fields are ignored.
 	Endpoint string
 	// MetricExportInterval overrides the SDK's 60s PeriodicReader interval. It is
 	// the raw OTEL_METRIC_EXPORT_INTERVAL value, i.e. whole milliseconds; the SDK
 	// falls back to its default when it does not parse. Empty keeps the default.
 	//
-	// ateom registers no instruments of its own, so its only telemetry is
+	// worker registers no instruments of its own, so its only telemetry is
 	// otelgrpc's rpc.server.* and it stays invisible to the collector until the
 	// first export tick fires. Shortening the interval is what keeps that
 	// startup gap inside an e2e budget; production leaves it unset.
@@ -74,13 +76,13 @@ type ateomOTelSettings struct {
 	// whole-millisecond form as MetricExportInterval. Empty keeps the default.
 	MetricExportTimeout string
 	// TracesSampler and TracesSamplerArg are the raw OTEL_TRACES_SAMPLER and
-	// OTEL_TRACES_SAMPLER_ARG values, passed through untouched: ateom's own
+	// OTEL_TRACES_SAMPLER_ARG values, passed through untouched: worker's own
 	// serverboot resolution validates them. Empty sampler keeps the worker's
 	// default and drops the arg, which is dead config on its own.
 	TracesSampler    string
 	TracesSamplerArg string
 	// LogsExporter is the raw OTEL_LOGS_EXPORTER value. otlp sends the usage
-	// records over OTLP instead of stdout; empty keeps ateom's default, none.
+	// records over OTLP instead of stdout; empty keeps worker's default, none.
 	LogsExporter string
 }
 
@@ -92,14 +94,14 @@ const (
 	atunnelIdentityMountPath    = "/run/podidentity.podcert.ate.dev"
 	atunnelEgressTrustVolume    = "atunnel-egress-trust"
 	atunnelEgressTrustMountPath = "/run/servicedns.podcert.ate.dev"
-	ateomCapacityVolume         = "ateom-capacity"
+	workerCapacityVolume        = "worker-capacity"
 )
 
 // buildDeploymentApplyConfig constructs the SSA apply configuration for the
 // Deployment managed by a WorkerPool. Only fields owned by this controller
 // are declared here. otel, when it carries an endpoint, is propagated to the
-// ateom container so it pushes telemetry to that collector.
-func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettings, systemNamespace, ateletServiceAccount, routerServiceAccount, dnsEgressPolicy string) *appsv1ac.DeploymentApplyConfiguration {
+// worker container so it pushes telemetry to that collector.
+func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel workerOTelSettings, systemNamespace, ateletServiceAccount, routerServiceAccount, dnsEgressPolicy string) *appsv1ac.DeploymentApplyConfiguration {
 	labels := map[string]string{}
 	annotations := map[string]string{}
 	if wp.Spec.Template != nil {
@@ -120,15 +122,15 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 		"--atunnel-trust-bundle=" + atunnelIdentityMountPath + "/trust-bundle.pem",
 		// The peers atunnel authenticates live in substrate's namespace, not
 		// the worker's, so the controller passes their identities rather than
-		// letting ateom assume the default install. --atunnel-client-identity
-		// has been accepted by every ateom that carries this controller's
+		// letting worker assume the default install. --atunnel-client-identity
+		// has been accepted by every worker that carries this controller's
 		// contemporaries, so it is always safe to pass.
 		"--atunnel-client-identity=" + installdefaults.SPIFFEID(systemNamespace, routerServiceAccount),
 	}
 
-	// --atunnel-broker-identity is newer than the oldest ateom a WorkerPool
-	// may still pin, and an ateom exits on an unrecognized flag. An ateom
-	// without the flag hardcodes the canonical identity, and an ateom with it
+	// --atunnel-broker-identity is newer than the oldest worker a WorkerPool
+	// may still pin, and a worker exits on an unrecognized flag. A worker
+	// without the flag hardcodes the canonical identity, and a worker with it
 	// defaults to the same, so omitting the flag when it carries that value is
 	// equivalent for both. A relocated or renamed install passes something
 	// else and needs an image new enough to accept it, which it necessarily
@@ -143,8 +145,23 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 		"--dns-egress-policy="+dnsEgressPolicy,
 	)
 
+	// worker gets preview features when the controller has them.
+	enabledGates := func() []string {
+		ret := []string{}
+		for k, v := range preview.AsMap() {
+			if v {
+				ret = append(ret, k)
+			}
+		}
+		// Map order is random; a stable arg avoids needless rollouts.
+		slices.Sort(ret)
+		return ret
+	}
+	previewArg := "--preview=" + strings.Join(enabledGates(), ",")
+	args = append(args, previewArg)
+
 	containerAC := corev1ac.Container().
-		WithName("ateom").
+		WithName("worker").
 		WithImage(wp.Spec.WorkerImage).
 		WithArgs(args...).
 		WithPorts(corev1ac.ContainerPort().
@@ -163,15 +180,15 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 			WithHTTPGet(corev1ac.HTTPGetAction().
 				WithPath("/readyz").
 				WithPort(intstr.FromString("readyz")))).
-		WithSecurityContext(ateomSecurityContext(wp.Spec.DefaultSandboxClass())).
-		WithEnv(ateomContainerEnv(otel)...).
+		WithSecurityContext(workerSecurityContext(wp.Spec.DefaultSandboxClass())).
+		WithEnv(workerContainerEnv(otel)...).
 		WithVolumeMounts(
 			corev1ac.VolumeMount().
-				WithName(ateomCapacityVolume).
-				WithMountPath(ateom.CapacityMountPath).
+				WithName(workerCapacityVolume).
+				WithMountPath(workercapacity.MountPath).
 				WithReadOnly(true),
 			corev1ac.VolumeMount().
-				WithName("run-ateom").
+				WithName("ate-base").
 				WithMountPath(nodepath.BasePath).
 				WithMountPropagation(corev1.MountPropagationHostToContainer),
 			corev1ac.VolumeMount().
@@ -190,14 +207,14 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 			WithRunAsGroup(0)).
 		WithVolumes(
 			corev1ac.Volume().
-				WithName(ateomCapacityVolume).
+				WithName(workerCapacityVolume).
 				WithDownwardAPI(corev1ac.DownwardAPIVolumeSource().
 					WithItems(
-						resourceFieldRefFile(ateom.CPULimitFile, "limits.cpu", milliCores),
-						resourceFieldRefFile(ateom.MemoryLimitFile, "limits.memory", wholeBytes),
+						resourceFieldRefFile(workercapacity.CPULimitFile, "limits.cpu", milliCores),
+						resourceFieldRefFile(workercapacity.MemoryLimitFile, "limits.memory", wholeBytes),
 					)),
 			corev1ac.Volume().
-				WithName("run-ateom").
+				WithName("ate-base").
 				WithHostPath(corev1ac.HostPathVolumeSource().
 					WithPath(nodepath.BasePath).
 					WithType(corev1.HostPathDirectoryOrCreate)),
@@ -264,10 +281,10 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 				WithSpec(podSpecAC)))
 }
 
-// ateomContainerEnv adds the OTLP endpoint and resource identity only when
+// workerContainerEnv adds the OTLP endpoint and resource identity only when
 // telemetry is configured. Every ref precedes OTEL_RESOURCE_ATTRIBUTES so its
 // $(...) substitutions resolve.
-func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfiguration {
+func workerContainerEnv(otel workerOTelSettings) []*corev1ac.EnvVarApplyConfiguration {
 	// The pool pair labels every usage record, telemetry export or not. A
 	// worker pod runs in its WorkerPool's namespace.
 	envs := []*corev1ac.EnvVarApplyConfiguration{
@@ -282,7 +299,7 @@ func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfigurat
 		fieldRefEnv("POD_NAME", "metadata.name"),
 		fieldRefEnv("NODE_NAME", "spec.nodeName"),
 		corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otel.Endpoint),
-		corev1ac.EnvVar().WithName("OTEL_RESOURCE_ATTRIBUTES").WithValue(ateomOTelResourceAttributes),
+		corev1ac.EnvVar().WithName("OTEL_RESOURCE_ATTRIBUTES").WithValue(workerOTelResourceAttributes),
 	)
 	if otel.MetricExportInterval != "" {
 		envs = append(envs, corev1ac.EnvVar().
@@ -325,7 +342,7 @@ func resourceFieldRefFile(path, resourceName, divisor string) *corev1ac.Downward
 	return corev1ac.DownwardAPIVolumeFile().
 		WithPath(path).
 		WithResourceFieldRef(corev1ac.ResourceFieldSelector().
-			WithContainerName("ateom").
+			WithContainerName("worker").
 			WithResource(resourceName).
 			WithDivisor(resource.MustParse(divisor)))
 }
@@ -338,7 +355,7 @@ func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
 				WithFieldPath(fieldPath)))
 }
 
-// ateomGvisorCapabilities is the capability set an unprivileged gVisor worker
+// workerGvisorCapabilities is the capability set an unprivileged gVisor worker
 // needs. runsc's gofer maps a full-range identity in a user namespace
 // (SETUID/SETGID/SETPCAP/SETFCAP), the sandbox pivots root and traces the
 // application (SYS_ADMIN/SYS_CHROOT/SYS_PTRACE), actor networking programs the
@@ -346,14 +363,14 @@ func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
 // and device nodes created as root over image-owned trees
 // (DAC_OVERRIDE/FOWNER/CHOWN/MKNOD). This replaces the former privileged worker;
 // seccomp stays at the runtime default, but AppArmor must be Unconfined (see
-// ateomSecurityContext) since runsc's own mounts trip the default profile.
-var ateomGvisorCapabilities = []corev1.Capability{
+// workerSecurityContext) since runsc's own mounts trip the default profile.
+var workerGvisorCapabilities = []corev1.Capability{
 	"NET_ADMIN", "SYS_ADMIN", "SYS_CHROOT", "SYS_PTRACE",
 	"SETUID", "SETGID", "SETPCAP", "DAC_OVERRIDE",
 	"FOWNER", "CHOWN", "MKNOD", "NET_RAW", "SETFCAP",
 }
 
-// ateomMicroVMCapabilities is the capability set an unprivileged micro-VM worker
+// workerMicroVMCapabilities is the capability set an unprivileged micro-VM worker
 // needs: the gVisor set, which covers the same worker-side work, plus FSETID and
 // DAC_READ_SEARCH for virtiofsd. virtiofsd re-applies a fixed set to its
 // sandboxed child, and the kernel refuses to raise a capability the bounding set
@@ -362,15 +379,15 @@ var ateomGvisorCapabilities = []corev1.Capability{
 //
 // The hypervisor devices are not capabilities: they come from atelet's device
 // plugin (see maybeApplyMicroVMPodShape).
-var ateomMicroVMCapabilities = slices.Concat(ateomGvisorCapabilities, []corev1.Capability{
+var workerMicroVMCapabilities = slices.Concat(workerGvisorCapabilities, []corev1.Capability{
 	"FSETID", "DAC_READ_SEARCH",
 })
 
-// ateomSecurityContext returns the ateom container security context for a sandbox
+// workerSecurityContext returns the worker container security context for a sandbox
 // class. Neither class runs privileged; they differ in their capability set.
 // Both declare seccomp Unconfined because their sandbox child pivot_root()s,
 // which the default profile denies. An empty class defaults to gVisor.
-func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityContextApplyConfiguration {
+func workerSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityContextApplyConfiguration {
 	// Both runtimes mount inside the worker — runsc pivots root and the worker
 	// remounts /sys/fs/cgroup to nest per-actor cgroups; the micro-VM worker
 	// shares /run/kata-containers and remounts /proc/sys — and the default
@@ -390,14 +407,14 @@ func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCont
 		// which pivot_root()s — a syscall the profile denies whatever capabilities
 		// the worker holds. The trade favors containing the guest: virtiofsd parses
 		// requests from it, so its namespaces are part of the guest-to-host
-		// boundary, while the pod-wide profile mostly confines ateom, which we
+		// boundary, while the pod-wide profile mostly confines worker, which we
 		// trust. Both guest-facing processes confine themselves anyway, virtiofsd
 		// with its own seccomp filter and nine capabilities, cloud-hypervisor with
 		// per-thread filters.
 		return sc.
 			WithCapabilities(corev1ac.Capabilities().
 				WithDrop("ALL").
-				WithAdd(ateomMicroVMCapabilities...)).
+				WithAdd(workerMicroVMCapabilities...)).
 			WithSeccompProfile(corev1ac.SeccompProfile().
 				WithType(corev1.SeccompProfileTypeUnconfined))
 	}
@@ -409,7 +426,7 @@ func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCont
 	return sc.
 		WithCapabilities(corev1ac.Capabilities().
 			WithDrop("ALL").
-			WithAdd(ateomGvisorCapabilities...)).
+			WithAdd(workerGvisorCapabilities...)).
 		WithSeccompProfile(corev1ac.SeccompProfile().
 			WithType(corev1.SeccompProfileTypeUnconfined))
 }

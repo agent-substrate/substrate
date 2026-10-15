@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -46,6 +47,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
@@ -1046,15 +1048,23 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	}
 }
 
-// capturingAtelet records the last Restore and Run request it receives, so a
-// test can assert on the exact wire request the resume workflow sends.
+// capturingAtelet records the last request of each RPC it receives, so a test
+// can assert on the exact wire request a workflow sends.
 type capturingAtelet struct {
-	ateletpb.UnimplementedAteomHerderServer
+	ateletpb.UnimplementedAteletServer
 
-	mu         sync.Mutex
-	restore    *ateletpb.RestoreRequest
-	run        *ateletpb.RunRequest
-	checkpoint *ateletpb.CheckpointRequest
+	mu          sync.Mutex
+	restore     *ateletpb.RestoreRequest
+	run         *ateletpb.RunRequest
+	checkpoint  *ateletpb.CheckpointRequest
+	promote     *ateletpb.PromoteSnapshotRequest
+	checkpoints int
+	promotes    int
+
+	// onCheckpoint, when set, runs before Checkpoint returns, standing in for
+	// whatever else happens while the workload checkpoints. Its error fails
+	// the RPC.
+	onCheckpoint func(ctx context.Context) error
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1073,9 +1083,31 @@ func (f *capturingAtelet) Run(ctx context.Context, req *ateletpb.RunRequest) (*a
 
 func (f *capturingAtelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.checkpoint = proto.Clone(req).(*ateletpb.CheckpointRequest)
+	f.checkpoints++
+	hook := f.onCheckpoint
+	f.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx); err != nil {
+			return nil, err
+		}
+	}
 	return &ateletpb.CheckpointResponse{}, nil
+}
+
+func (f *capturingAtelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (*ateletpb.PromoteSnapshotResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.promote = proto.Clone(req).(*ateletpb.PromoteSnapshotRequest)
+	f.promotes++
+	return &ateletpb.PromoteSnapshotResponse{}, nil
+}
+
+// calls returns how many Checkpoint and PromoteSnapshot RPCs were received.
+func (f *capturingAtelet) calls() (checkpoints, promotes int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.checkpoints, f.promotes
 }
 
 func (f *capturingAtelet) checkpointRequest() *ateletpb.CheckpointRequest {
@@ -1085,6 +1117,15 @@ func (f *capturingAtelet) checkpointRequest() *ateletpb.CheckpointRequest {
 		return nil
 	}
 	return proto.Clone(f.checkpoint).(*ateletpb.CheckpointRequest)
+}
+
+func (f *capturingAtelet) promoteRequest() *ateletpb.PromoteSnapshotRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.promote == nil {
+		return nil
+	}
+	return proto.Clone(f.promote).(*ateletpb.PromoteSnapshotRequest)
 }
 
 // requests returns the recorded Restore and Run requests, nil for an RPC that
@@ -1125,7 +1166,7 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 
 	fake := &capturingAtelet{}
 	srv := grpc.NewServer()
-	ateletpb.RegisterAteomHerderServer(srv, fake)
+	ateletpb.RegisterAteletServer(srv, fake)
 	lis := bufconn.Listen(1 << 20)
 	go func() {
 		if err := srv.Serve(lis); err != nil {
@@ -1580,6 +1621,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			// Paused and suspended actors are both SUSPENDED; a pause
 			// checkpoint is what makes the resume local.
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			var extGen, localGen int32
 			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
 				a.SourceTag = tt.actor.sourceTag
 				a.Status.WorkerAssignment = wireTestAssignment()
@@ -1591,6 +1633,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				var gen int32
 				if tt.actor.externalSnapshot != nil {
 					gen++
+					extGen = gen
 					ext := proto.CloneOf(tt.actor.externalSnapshot)
 					ext.Generation = gen
 					if ext.ActorTemplateUid == "" {
@@ -1600,6 +1643,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				}
 				if tt.actor.localSnapshot != nil {
 					gen++
+					localGen = gen
 					a.Status.AssignedNode = "node-1"
 					loc := proto.CloneOf(tt.actor.localSnapshot)
 					loc.Generation = gen
@@ -1651,6 +1695,13 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			if got := restore.GetSnapshot().GetFidelity(); got != tt.want.scope {
 				t.Errorf("restore scope = %v, want %v", got, tt.want.scope)
 			}
+			wantGen := extGen
+			if tt.want.snapshotName == localSnapshotName {
+				wantGen = localGen
+			}
+			if got := restore.GetSnapshot().GetGeneration(); got != wantGen {
+				t.Errorf("Snapshot.Generation = %d, want %d, the restored snapshot's", got, wantGen)
+			}
 		})
 	}
 }
@@ -1669,6 +1720,7 @@ func (p *publishContextVolumePlugin) AttachVolume(ctx context.Context, req volum
 // The attach step hands the publish context to the Restore call in memory and
 // leaves the stored actor untouched.
 func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
@@ -1677,8 +1729,8 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
 			ExternalVolumes: []*ateapipb.ExternalVolume{
-				{Name: "mounted", StorageVolumeId: "storage-mounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
-				{Name: "unmounted", StorageVolumeId: "storage-unmounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
+				{Name: "mounted", StorageVolumeId: "storage-mounted", VolumeType: "mock"},
+				{Name: "unmounted", StorageVolumeId: "storage-unmounted", VolumeType: "mock"},
 			},
 		},
 	})
@@ -1719,6 +1771,78 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 	}
 	if diff := cmp.Diff(actor, stored, protocmp.Transform()); diff != "" {
 		t.Errorf("attach wrote to the stored actor (-before +after):\n%s", diff)
+	}
+}
+
+// createCountingVolumePlugin provisions volumes and counts the calls.
+type createCountingVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	creates int
+}
+
+func (p *createCountingVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	p.creates++
+	return volume.CreateVolumeResponse{VolumeID: "id-" + req.Name}, nil
+}
+
+// An actor being deleted gets no volume provisioned by a resume.
+func TestEnsureVolumesCreated(t *testing.T) {
+	tmpl := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{{
+			Name:                   "data",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"},
+		}},
+	}
+	tests := []struct {
+		name        string
+		state       ateapipb.ActorState
+		wantCode    codes.Code
+		wantCreates int
+	}{
+		{"suspended actor gets its volume", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, codes.OK, 1},
+		{"deleting actor gets no volume", ateapipb.ActorState_ACTOR_STATE_DELETING, codes.FailedPrecondition, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+				Status: &ateapipb.ActorStatus{
+					State:           tt.state,
+					ExternalVolumes: []*ateapipb.ExternalVolume{{Name: "data", VolumeType: "mock"}},
+				},
+			})
+			actor, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+
+			plugin := &createCountingVolumePlugin{}
+			w := &ActorWorkflow{
+				store:          persistence,
+				pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}},
+				storageClassLister: &fakeStorageClassLister{storageClasses: map[string]*storagev1.StorageClass{
+					"sc": {ObjectMeta: metav1.ObjectMeta{Name: "sc"}, Provisioner: "mock"},
+				}},
+			}
+
+			_, err = w.ensureVolumesCreated(ctx, actorRef, actor, tmpl)
+			if code := apierror.Code(err); code != tt.wantCode {
+				t.Fatalf("ensureVolumesCreated code = %v, want %v; error = %v", code, tt.wantCode, err)
+			}
+			if plugin.creates != tt.wantCreates {
+				t.Errorf("CreateVolume calls = %d, want %d", plugin.creates, tt.wantCreates)
+			}
+			stored, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if provisioned := stored.GetStatus().GetExternalVolumes()[0].GetStorageVolumeId() != ""; provisioned != (tt.wantCreates > 0) {
+				t.Errorf("stored volume provisioned = %t, want %t", provisioned, tt.wantCreates > 0)
+			}
+		})
 	}
 }
 

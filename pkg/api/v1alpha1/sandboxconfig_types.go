@@ -16,6 +16,8 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/agent-substrate/substrate/pkg/sandboxclass"
 )
 
 // SandboxClass selects the sandbox runtime family. It is shared by WorkerPool
@@ -23,11 +25,11 @@ import (
 type SandboxClass string
 
 const (
-	// SandboxClassGvisor is the gVisor/runsc runtime (cmd/ateom-gvisor). Default.
-	SandboxClassGvisor SandboxClass = "gvisor"
-	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateom-microvm); needs
+	// SandboxClassGvisor is the gVisor/runsc runtime (cmd/ateworker-gvisor). Default.
+	SandboxClassGvisor SandboxClass = sandboxclass.GVisor
+	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateworker-microvm); needs
 	// /dev/kvm and vhost devices.
-	SandboxClassMicroVM SandboxClass = "microvm"
+	SandboxClassMicroVM SandboxClass = sandboxclass.MicroVM
 )
 
 // AssetFile is one content-addressed file that atelet fetches for a sandbox

@@ -87,7 +87,7 @@ func TestMain(m *testing.M) {
 
 	// Start Fake Atelet Server on port 8085
 	ateletGrpcServer := grpc.NewServer()
-	ateletpb.RegisterAteomHerderServer(ateletGrpcServer, fakeAtelet)
+	ateletpb.RegisterAteletServer(ateletGrpcServer, fakeAtelet)
 	ateletLis, err := net.Listen("tcp", "127.0.0.1:8085")
 	if err != nil {
 		log.Fatalf("listen on 127.0.0.1:8085: %v", err)
@@ -111,7 +111,7 @@ func TestMain(m *testing.M) {
 
 // FakeAteletServer implements ateletpb.WorkersServer
 type FakeAteletServer struct {
-	ateletpb.UnimplementedAteomHerderServer
+	ateletpb.UnimplementedAteletServer
 
 	Lock sync.Mutex
 

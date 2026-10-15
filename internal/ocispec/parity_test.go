@@ -20,14 +20,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 const testActorUID = "actor_uid"
 
-var parityActorDirs = &ateompb.ActorDirs{
+var parityActorDirs = &ateworkerpb.ActorDirs{
 	RootDir:                   "/node/actors/a",
 	OciBundleDir:              "/node/actors/a/bundles",
 	DurableDirVolumeMountsDir: "/node/actors/a/durable-dir",
@@ -39,13 +39,13 @@ var parityActorDirs = &ateompb.ActorDirs{
 var parityOptions = Options{
 	ActorUID:  testActorUID,
 	ActorDirs: parityActorDirs,
-	Container: &ateompb.Container{
+	Container: &ateworkerpb.Container{
 		Name:                   "app",
-		ContainerSpec:          &ateompb.ContainerSpec{Args: []string{"/app"}},
-		DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{{VolumeName: "data", MountPath: "/var/data"}},
-		SystemInfoVolumeMounts: []*ateompb.SystemInfoVolumeMount{{VolumeName: "sysinfo", MountPath: "/run/ate"}},
-		CsiVolumeMounts:        []*ateompb.VolumeMount{{VolumeName: "csi", MountPath: "/mnt/csi"}},
-		ImageVolumeMounts:      []*ateompb.ImageVolumeMount{{VolumeName: "agent", MountPath: "/ate"}},
+		ContainerSpec:          &ateworkerpb.ContainerSpec{Args: []string{"/app"}},
+		DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{{VolumeName: "data", MountPath: "/var/data"}},
+		SystemInfoVolumeMounts: []*ateworkerpb.SystemInfoVolumeMount{{VolumeName: "sysinfo", MountPath: "/run/ate"}},
+		CsiVolumeMounts:        []*ateworkerpb.VolumeMount{{VolumeName: "csi", MountPath: "/mnt/csi"}},
+		ImageVolumeMounts:      []*ateworkerpb.ImageVolumeMount{{VolumeName: "agent", MountPath: "/ate"}},
 	},
 }
 
@@ -131,7 +131,7 @@ func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 
 // ShapeMicroVM errors on a bind that is not staged into the share.
 func TestShapeMicroVM_UnstagedSourceIsAnError(t *testing.T) {
-	spec := Build(Options{Container: &ateompb.Container{ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/app"}}}})
+	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
 	spec.Mounts = append(spec.Mounts, specs.Mount{Destination: "/mnt/new", Type: "bind", Source: "/var/lib/ate/new-kind/x"})
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err == nil {
 		t.Fatal("ShapeMicroVM() = nil, want an error for a bind that is not staged into the share")

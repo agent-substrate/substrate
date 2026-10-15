@@ -1,0 +1,321 @@
+//go:build linux
+
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
+
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"log/slog"
+	"path/filepath"
+	"time"
+
+	"github.com/agent-substrate/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
+	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/ocispec"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+)
+
+// defaultCgroupRoot is the worker pod's own cgroup scope. The worker runs in a
+// private cgroup namespace, so this path is the pod's cgroup rather than the
+// host root, and runsc's per-container leaves are its direct children (see
+// cgroup.Delegate).
+const defaultCgroupRoot = "/sys/fs/cgroup"
+
+// sandboxCgroupContainer is the container whose cgroup leaf accounts for the
+// sandbox as a whole.
+//
+// gVisor runs every container of a sandbox as threads inside one host process,
+// the sentry. runsc starts that process from the root container's create and
+// from inside that container's cgroup — container.createRoot wraps the sandbox
+// and gofer spawn in cgroup.RunInCgroup — so the sentry lands in the leaf of
+// the pause container, the first one RunWorkload and RestoreWorkload create.
+//
+// The leaf is a direct child of the delegated scope rather than of ateworker's own
+// cgroup, because runsc resolves cgroupsPath against the parent of the cgroup
+// it is running in: cgroup v2 forbids a cgroup from holding processes and
+// delegating controllers to children at once, so runsc walks up one level to
+// find a directory it is allowed to create in. cgroup.Delegate moves
+// ateworker into /sys/fs/cgroup/ateworker precisely so that one level up is the
+// delegated scope.
+//
+// The actor's own containers get leaves too, since cmdCreate shapes a
+// cgroupsPath into each of their specs, but those leaves stay empty by
+// design. gVisor's setupCgroupForSubcontainer creates them with empty resources
+// and explains why: "Since subcontainers run exclusively inside the sandbox,
+// subcontainer cgroups on the host have no effect on them. However, some tools
+// (e.g. cAdvisor) uses cgroups paths to discover new containers and report
+// stats for them." They are discovery markers, not accounting.
+//
+// So the actor's memory and CPU are the sentry's and are charged here. That is
+// why a sample is attributed to the actor rather than to a container, and why
+// this reads one leaf instead of summing them — the others have nothing in them
+// to sum.
+//
+// What the leaf holds besides the actor's own work: the sentry's own overhead
+// (its Go heap, page tables, netstack) and the gofers. Process listings taken
+// on a live node in #161 put runsc-sandbox and both gofers — the pause
+// container's and the actor container's — in the pause cgroup. Those runs
+// predate #496, so they establish the leaf name and the fact that everything
+// lands in one leaf, not the absolute path, which #496's delegation moved under
+// the pod scope.
+//
+// So this measures the sandbox, not the actor's processes in isolation, which
+// is what the proto means by "the unit of measurement is the SANDBOX". Sizing
+// and chargeback want that number, since the sentry's overhead is a cost the
+// node pays for running this actor, but it is not comparable to a container
+// figure from a runc-based runtime, and a mostly idle actor reads as a nonzero
+// floor. Splitting the actor's share out would need the sentry's own
+// accounting, which the proto already says is not reported here.
+//
+// ocispec.GVisorCgroupLeaf supplies the leaf name for both shaping and stats.
+const sandboxCgroupContainer = ocispec.PauseContainer
+
+// GetWorkloadStats implements ateworkerpb.Worker/GetWorkloadStats.
+//
+// It must not take the actor's lifecycle lock, which is held across whole
+// boots and checkpoints: polls would stall behind runsc, and a checkpoint
+// would wait on telemetry. The cgroup files are read with no lock held.
+func (s *AteWorkerService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.GetWorkloadStatsRequest) (*ateworkerpb.GetWorkloadStatsResponse, error) {
+	if req.GetActorUid() == "" {
+		return nil, apierror.InvalidArgument("actor_uid is required")
+	}
+
+	// NOT_FOUND rather than FAILED_PRECONDITION: the requested actor is not
+	// here, which no amount of retrying on the same timer will change. Its
+	// worker-to-actor mapping wants re-resolving.
+	hosted := s.lookupActor(req.GetActorUid())
+	if hosted == nil {
+		return nil, apierror.NotFound("worker is not executing actor %q", req.GetActorUid())
+	}
+	// The raw reading is dropped: the dead-sandbox check runs in the usage
+	// sweep, which reads every hosted actor.
+	sample, _, err := s.measure(ctx, hosted)
+	if err != nil {
+		// The requested actor is the active one but its cgroup is not there.
+		// Most often that is a poll landing in the boot: the ateworker retains the
+		// attribution from the moment it accepts the actor, before runsc has
+		// created the leaf. The other way in is a sandbox that went away
+		// underneath the read, which the next CheckpointWorkload turns into the
+		// NOT_FOUND above. Either way it is "no numbers right now" and the
+		// caller should take the next sample, so FAILED_PRECONDITION. Anything
+		// else is a real read failure.
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, apierror.FailedPrecondition("no sandbox cgroup to measure yet")
+		}
+		return nil, apierror.Internal("reading sandbox cgroup: %v", err)
+	}
+
+	// The read above holds no lifecycle lock, so a checkpoint plus a fresh run
+	// can land underneath it. Pointer identity catches that: hostActor stores
+	// a new record every time.
+	if s.lookupActor(req.GetActorUid()) != hosted {
+		return nil, apierror.NotFound("worker stopped executing actor %q while the sample was being taken", req.GetActorUid())
+	}
+	// The reading advanced the activation's CPU, so the cache keeps up with it.
+	hosted.usage.Store(sample)
+
+	return &ateworkerpb.GetWorkloadStatsResponse{Sample: sample}, nil
+}
+
+// GetActiveWorkloadStats implements ateworkerpb.Worker/GetActiveWorkloadStats: the
+// discovery read. It serves each actor's latest sample from the sampler, so a
+// poll costs no read of its own; an actor not sampled yet is pending.
+func (s *AteWorkerService) GetActiveWorkloadStats(ctx context.Context, req *ateworkerpb.GetActiveWorkloadStatsRequest) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
+	hosted := s.hostedActors()
+	samples := make([]*ateworkerpb.WorkloadStatsSample, 0, len(hosted))
+	for _, h := range hosted {
+		sample := h.usage.Latest()
+		if sample == nil {
+			sample = h.usage.WithEpoch(pendingSample(&h.attribution))
+		}
+		samples = append(samples, sample)
+	}
+
+	// An empty list is "available", per the proto: a normal answer for a
+	// scraper to get, not an error.
+	return &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: samples}, nil
+}
+
+// sweepUsage samples every hosted actor between its initial reading and its
+// final record, and stores each sample and writes its periodic record. Same
+// lock discipline as GetWorkloadStats, for the same reasons.
+func (s *AteWorkerService) sweepUsage(ctx context.Context) {
+	for _, h := range s.hostedActors() {
+		if !h.usage.Sampling() {
+			continue
+		}
+		// An actor with no numbers is reported as pending, so a failed read for
+		// one does not lose the others. Past the initial reading, a missing
+		// cgroup means the sandbox is going away.
+		sample, raw, err := s.measure(ctx, h)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				attrs := append(ateattr.ActorLogAttrs(h.attribution), slog.Any("err", err))
+				slog.LogAttrs(ctx, slog.LevelWarn, "Failed to read sandbox cgroup", attrs...)
+			}
+			sample = h.usage.WithEpoch(pendingSample(&h.attribution))
+		}
+		// The read holds no lifecycle lock, and the cgroup is found by UID
+		// alone. If the actor was re-hosted meanwhile, perhaps on another
+		// template, the numbers are the new activation's: drop them, and let
+		// the new activation start with its own initial reading.
+		if s.lookupActor(h.attribution.UID) != h {
+			continue
+		}
+		if raw.Empty { // a failed read returns a zero Sample
+			s.warnDeadSandbox(ctx, h, raw)
+		}
+		h.usage.Periodic(sample, func() { s.usage.Emit(ctx, ateattr.StatsKindPeriodic, sample) })
+	}
+}
+
+// recordInitial samples a new activation once its sandbox is up and writes its
+// initial record.
+func (s *AteWorkerService) recordInitial(ctx context.Context, h *hostedActor) {
+	sample, _, err := s.measure(ctx, h)
+	if err != nil {
+		slog.WarnContext(ctx, "No initial usage sample", slog.String(string(ateattr.ActorUIDKey), h.attribution.UID), slog.Any("err", err))
+		sample = nil
+	}
+	h.usage.Initial(sample, func() { s.usage.Emit(ctx, ateattr.StatsKindInitial, sample) })
+}
+
+// readFinal samples an activation while its sandbox still exists, for the final
+// record a successful checkpoint or terminate writes. A failed read leaves the
+// newest measured sample to stand in.
+func (s *AteWorkerService) readFinal(ctx context.Context, h *hostedActor) {
+	if sample, _, err := s.measure(ctx, h); err == nil {
+		h.usage.Store(sample)
+	}
+}
+
+// recordFinalIfEnded writes h's final record if a checkpoint or terminate tore
+// its activation down, which unhosts the actor even when a later step fails.
+// The caller holds the actor's lock.
+func (s *AteWorkerService) recordFinalIfEnded(ctx context.Context, h *hostedActor) {
+	if h != nil && s.lookupActor(h.attribution.UID) != h {
+		s.recordFinal(ctx, h)
+	}
+}
+
+// recordFinal writes the final record of an activation that a checkpoint or a
+// terminate ended, from its newest measured sample.
+func (s *AteWorkerService) recordFinal(ctx context.Context, h *hostedActor) {
+	pending := h.usage.WithEpoch(pendingSample(&h.attribution))
+	h.usage.Final(func(measured *ateworkerpb.WorkloadStatsSample) {
+		if measured == nil {
+			measured = pending
+		}
+		s.usage.Emit(ctx, ateattr.StatsKindFinal, measured)
+	})
+}
+
+// pendingSample is a workload with no numbers to give yet, as the discovery
+// read reports it: attribution and the runtime family, measurements absent --
+// source stays STATS_SOURCE_UNSPECIFIED, which the sample's contract defines
+// as "not measured" rather than "measured as zero".
+func pendingSample(active *resources.ActorAttribution) *ateworkerpb.WorkloadStatsSample {
+	return &ateworkerpb.WorkloadStatsSample{
+		Atespace:              active.Ref.Atespace,
+		ActorName:             active.Ref.Name,
+		ActorUid:              active.UID,
+		ActorTemplateAtespace: active.TemplateAtespace,
+		ActorTemplateName:     active.TemplateName,
+
+		SandboxClass: string(atev1alpha1.SandboxClassGvisor),
+
+		ObservedAtUnixNano: time.Now().UnixNano(),
+	}
+}
+
+// measure reads h's sandbox cgroup as a reading of its activation, returning
+// the raw cgroup reading alongside it for the dead-sandbox check.
+func (s *AteWorkerService) measure(ctx context.Context, h *hostedActor) (*ateworkerpb.WorkloadStatsSample, cgroupstats.Sample, error) {
+	var raw cgroupstats.Sample
+	sample, err := h.usage.Measure(ctx, func() (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error) {
+		sample, r, err := s.sampleSandbox(&h.attribution)
+		raw = r
+		return sample, nil, err
+	})
+	return sample, raw, err
+}
+
+// sampleSandbox reads the sandbox cgroup and builds the sample attributed to
+// active, returning the raw reading alongside it. Errors come back raw --
+// notably fs.ErrNotExist for a cgroup that is not there yet -- because the
+// callers disagree on what that means: an error code for the keyed read, a
+// pending sample for the sweep.
+// The read holds no lifecycle lock, so the keyed caller re-checks the actor
+// record it loaded after this returns.
+func (s *AteWorkerService) sampleSandbox(active *resources.ActorAttribution) (*ateworkerpb.WorkloadStatsSample, cgroupstats.Sample, error) {
+	read := s.readSandboxCgroup
+	if read == nil {
+		read = cgroupstats.Read
+	}
+	observedAt := time.Now()
+	sample, err := read(filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(active.UID, sandboxCgroupContainer)))
+	if err != nil {
+		return nil, cgroupstats.Sample{}, err
+	}
+
+	return &ateworkerpb.WorkloadStatsSample{
+		Atespace:              active.Ref.Atespace,
+		ActorName:             active.Ref.Name,
+		ActorUid:              active.UID,
+		ActorTemplateAtespace: active.TemplateAtespace,
+		ActorTemplateName:     active.TemplateName,
+
+		SandboxClass: string(atev1alpha1.SandboxClassGvisor),
+		Source:       ateworkerpb.StatsSource_STATS_SOURCE_CGROUP,
+
+		MemoryCurrentBytes:    sample.MemoryCurrentBytes,
+		MemoryPeakBytes:       sample.MemoryPeakBytes,
+		MemoryWorkingSetBytes: sample.MemoryWorkingSetBytes,
+		CpuUsageUsec:          sample.CPUUsageUsec,
+
+		ObservedAtUnixNano: observedAt.UnixNano(),
+	}, sample, nil
+}
+
+// warnDeadSandbox logs, once per activation, that h's sandbox cgroup has no
+// process left. Nothing else notices this today: the actor stays RUNNING and
+// its stats read like an idle actor's (#2211).
+//
+// A lifecycle RPC empties the cgroup on purpose when it tears the sandbox down,
+// and holds the actor's lock while it does, so a busy actor is skipped. The
+// cgroup was read before the lock was checked, and h is looked up again after,
+// so a teardown that starts or finishes in between is never reported.
+//
+// oom_kill counts over the cgroup's lifetime. A leaf left behind by an earlier
+// activation of the same actor carries its count forward.
+func (s *AteWorkerService) warnDeadSandbox(ctx context.Context, h *hostedActor, raw cgroupstats.Sample) {
+	if h.deadReported.Load() {
+		return
+	}
+	if s.locks.Busy(h.attribution.UID) || s.lookupActor(h.attribution.UID) != h {
+		return
+	}
+	if !h.deadReported.CompareAndSwap(false, true) {
+		return
+	}
+	attrs := append(ateattr.ActorLogAttrs(h.attribution), slog.Uint64(string(ateattr.SandboxOOMKillsKey), raw.OOMKills))
+	slog.LogAttrs(ctx, slog.LevelWarn, "Sandbox has no processes left while the actor is hosted", attrs...)
+}

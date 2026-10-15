@@ -442,7 +442,7 @@ func lowerASCII(s string) string {
 }
 
 // DNSEgressPolicyEnforceInAtunnel is the --dns-egress-policy mode that
-// enforces an Actor's EgressPolicy on DNS queries in the ateom DNS relay.
+// enforces an Actor's EgressPolicy on DNS queries in the worker DNS relay.
 const DNSEgressPolicyEnforceInAtunnel = "enforce-in-atunnel"
 
 // ValidateDNSEgressPolicy checks the --dns-egress-policy flag value.

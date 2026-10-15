@@ -1282,11 +1282,16 @@ func Validate_ActorTemplate(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
 				earlyReturn = true
 			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_ActorTemplate_Resources(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			// call the type's validation function
 			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
@@ -3871,40 +3876,6 @@ func Validate_ExternalVolume(
 		errs = append(errs, fn(fldPath.Child("volume_type"), &obj.VolumeType, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.ExternalVolume.Status
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateapipb.ExternalVolume_Status,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 3); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.ExternalVolume) *ateapipb.ExternalVolume_Status {
-				return &oldObj.Status
-			})
-		errs = append(errs, fn(fldPath.Child("status"), &obj.Status, oldVal, oldObj != nil)...)
-	}
-
 	{ // field ateapipb.ExternalVolume.VolumeContext
 		fn := func(
 			fldPath *field.Path,
@@ -5959,13 +5930,13 @@ func Validate_MintActorJwtRequest(
 	return errs
 }
 
-// Validate_MintAteomActorCertificateRequest validates an instance of MintAteomActorCertificateRequest according
+// Validate_MintWorkerActorCertificateRequest validates an instance of MintWorkerActorCertificateRequest according
 // to declarative validation rules in the API schema.
-func Validate_MintAteomActorCertificateRequest(
+func Validate_MintWorkerActorCertificateRequest(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.MintAteomActorCertificateRequest) (errs field.ErrorList) {
+	obj, oldObj *ateapipb.MintWorkerActorCertificateRequest) (errs field.ErrorList) {
 
-	{ // field ateapipb.MintAteomActorCertificateRequest.Actor
+	{ // field ateapipb.MintWorkerActorCertificateRequest.Actor
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateapipb.ObjectRef,
@@ -6005,13 +5976,13 @@ func Validate_MintAteomActorCertificateRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintAteomActorCertificateRequest) *ateapipb.ObjectRef {
+			func(oldObj *ateapipb.MintWorkerActorCertificateRequest) *ateapipb.ObjectRef {
 				return oldObj.Actor
 			})
 		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.MintAteomActorCertificateRequest.ActorUid
+	{ // field ateapipb.MintWorkerActorCertificateRequest.ActorUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -6037,13 +6008,13 @@ func Validate_MintAteomActorCertificateRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintAteomActorCertificateRequest) *string {
+			func(oldObj *ateapipb.MintWorkerActorCertificateRequest) *string {
 				return &oldObj.ActorUid
 			})
 		errs = append(errs, fn(fldPath.Child("actor_uid"), &obj.ActorUid, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.MintAteomActorCertificateRequest.CertificateSigningRequest
+	{ // field ateapipb.MintWorkerActorCertificateRequest.CertificateSigningRequest
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj []byte,
@@ -6069,7 +6040,7 @@ func Validate_MintAteomActorCertificateRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintAteomActorCertificateRequest) []byte {
+			func(oldObj *ateapipb.MintWorkerActorCertificateRequest) []byte {
 				return oldObj.CertificateSigningRequest
 			})
 		errs = append(errs, fn(fldPath.Child("certificate_signing_request"), obj.CertificateSigningRequest, oldVal, oldObj != nil)...)
@@ -6078,13 +6049,13 @@ func Validate_MintAteomActorCertificateRequest(
 	return errs
 }
 
-// Validate_MintAteomActorJwtRequest validates an instance of MintAteomActorJwtRequest according
+// Validate_MintWorkerActorJwtRequest validates an instance of MintWorkerActorJwtRequest according
 // to declarative validation rules in the API schema.
-func Validate_MintAteomActorJwtRequest(
+func Validate_MintWorkerActorJwtRequest(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.MintAteomActorJwtRequest) (errs field.ErrorList) {
+	obj, oldObj *ateapipb.MintWorkerActorJwtRequest) (errs field.ErrorList) {
 
-	{ // field ateapipb.MintAteomActorJwtRequest.Actor
+	{ // field ateapipb.MintWorkerActorJwtRequest.Actor
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateapipb.ObjectRef,
@@ -6124,13 +6095,13 @@ func Validate_MintAteomActorJwtRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintAteomActorJwtRequest) *ateapipb.ObjectRef {
+			func(oldObj *ateapipb.MintWorkerActorJwtRequest) *ateapipb.ObjectRef {
 				return oldObj.Actor
 			})
 		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.MintAteomActorJwtRequest.ActorUid
+	{ // field ateapipb.MintWorkerActorJwtRequest.ActorUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -6156,13 +6127,13 @@ func Validate_MintAteomActorJwtRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintAteomActorJwtRequest) *string {
+			func(oldObj *ateapipb.MintWorkerActorJwtRequest) *string {
 				return &oldObj.ActorUid
 			})
 		errs = append(errs, fn(fldPath.Child("actor_uid"), &obj.ActorUid, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.MintAteomActorJwtRequest.Audiences
+	{ // field ateapipb.MintWorkerActorJwtRequest.Audiences
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj []string,
@@ -6205,7 +6176,7 @@ func Validate_MintAteomActorJwtRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintAteomActorJwtRequest) []string {
+			func(oldObj *ateapipb.MintWorkerActorJwtRequest) []string {
 				return oldObj.Audiences
 			})
 		errs = append(errs, fn(fldPath.Child("audiences"), obj.Audiences, oldVal, oldObj != nil)...)
@@ -7391,6 +7362,10 @@ func Validate_SandboxRuntime(
 			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_SandboxRuntime_SandboxClass(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 63); len(e) != 0 {
 				errs = append(errs, e...)
@@ -9397,6 +9372,13 @@ func Validate_Volume(
 			}
 			// call field-attached validations
 			earlyReturn := false
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "ExternalVolumes", false, validate.ForbiddenPointer).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "ExternalVolumes", false, validate.OptionalPointer).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
 			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
@@ -9932,6 +9914,10 @@ func Validate_Worker(
 			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_Worker_SandboxClass(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 63); len(e) != 0 {
 				errs = append(errs, e...)

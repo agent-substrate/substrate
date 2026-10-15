@@ -16,8 +16,14 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/agent-substrate/substrate/internal/preview"
+	"github.com/google/go-cmp/cmp"
+	"github.com/spf13/cobra"
+	"google.golang.org/grpc/metadata"
 )
 
 func resetRootFlags(t *testing.T) {
@@ -54,19 +60,6 @@ func TestVersionFlag(t *testing.T) {
 	if f := rootCmd.Flags().Lookup("version"); f != nil && f.Shorthand != "" {
 		t.Errorf("--version shorthand = %q, want empty", f.Shorthand)
 	}
-
-	resetRootFlags(t)
-	out.Reset()
-	errOut.Reset()
-	rootCmd.SetOut(&out)
-	rootCmd.SetErr(&errOut)
-	rootCmd.SetArgs([]string{"-v"})
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("Execute(-v) unexpected error: %v", err)
-	}
-	if strings.HasPrefix(out.String(), "kubectl-ate version ") {
-		t.Errorf("Execute(-v) printed version %q, want help output", out.String())
-	}
 }
 
 func TestVerboseFlagCounting(t *testing.T) {
@@ -97,6 +90,42 @@ func TestVerboseFlagCounting(t *testing.T) {
 			}
 			if verbosity != tc.want {
 				t.Errorf("verbosity = %d, want %d", verbosity, tc.want)
+			}
+		})
+	}
+}
+
+func TestPreviewFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{name: "unset", args: nil, want: nil},
+		{name: "set", args: []string{"--preview"}, want: []string{"true"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			probe := &cobra.Command{
+				Use: "probe",
+				RunE: func(cmd *cobra.Command, _ []string) error {
+					md, _ := metadata.FromOutgoingContext(cmd.Context())
+					got = md.Get(preview.Header)
+					return nil
+				},
+			}
+			rootCmd.AddCommand(probe)
+			t.Cleanup(func() {
+				rootCmd.RemoveCommand(probe)
+				usePreview = false
+			})
+
+			rootCmd.SetArgs(append([]string{"probe"}, tc.args...))
+			if err := rootCmd.ExecuteContext(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !cmp.Equal(got, tc.want) {
+				t.Errorf("outgoing %s = %q, want %q", preview.Header, got, tc.want)
 			}
 		})
 	}

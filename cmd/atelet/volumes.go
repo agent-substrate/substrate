@@ -29,8 +29,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
+func (s *Atelet) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
 	for _, vol := range volumes {
+		// Given that external volumes has been in the codebase for a while and
+		// its preview-ness is solely around the API, and that the impact of
+		// disabling the gate while in use would be an orphaned volume
+		// attachment, we are NOT checking the ExternalVolumes gate in the
+		// mount/unmount logic.
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue
@@ -56,9 +61,14 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 	return nil
 }
 
-func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
+func (s *Atelet) unmountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
 	var errs []error
 	for _, vol := range volumes {
+		// Given that external volumes has been in the codebase for a while and
+		// its preview-ness is solely around the API, and that the impact of
+		// disabling the gate while in use would be an orphaned volume
+		// attachment, we are NOT checking the ExternalVolumes gate in the
+		// mount/unmount logic.
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue
@@ -83,7 +93,7 @@ func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID strin
 	return errors.Join(errs...)
 }
 
-func (s *AteomHerder) getPlugin(ctx context.Context, driverName string) (volume.VolumePluginWorkerPlane, error) {
+func (s *Atelet) getPlugin(ctx context.Context, driverName string) (volume.VolumePluginWorkerPlane, error) {
 	s.mu.RLock()
 	plugin, ok := s.volumePlugins[driverName]
 	s.mu.RUnlock()

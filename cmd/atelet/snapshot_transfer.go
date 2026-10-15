@@ -49,7 +49,7 @@ func pluginCallError(op, snapshotURI string, err error) error {
 }
 
 // fetchSnapshotFiles downloads the named snapshot files into dstDir.
-func (s *AteomHerder) fetchSnapshotFiles(ctx context.Context, snapshotURI, dstDir string, files []string) error {
+func (s *Atelet) fetchSnapshotFiles(ctx context.Context, snapshotURI, dstDir string, files []string) error {
 	if len(files) == 0 {
 		return nil
 	}
@@ -66,7 +66,7 @@ func (s *AteomHerder) fetchSnapshotFiles(ctx context.Context, snapshotURI, dstDi
 // message, and leaves the Unavailable mapping to the caller: an upload that can
 // be retried reports it through pluginsocket.CallError, one that cannot
 // does not.
-func (s *AteomHerder) uploadSnapshotFiles(ctx context.Context, snapshotURI, srcDir string, files []string, opts ...grpc.CallOption) error {
+func (s *Atelet) uploadSnapshotFiles(ctx context.Context, snapshotURI, srcDir string, files []string, opts ...grpc.CallOption) error {
 	if len(files) == 0 {
 		return nil
 	}
@@ -80,7 +80,7 @@ func (s *AteomHerder) uploadSnapshotFiles(ctx context.Context, snapshotURI, srcD
 
 // fetchManifest returns a snapshot's manifest. The returned error is the
 // plugin's gRPC status, so a missing manifest reports codes.NotFound.
-func (s *AteomHerder) fetchManifest(ctx context.Context, snapshotURI string) ([]byte, error) {
+func (s *Atelet) fetchManifest(ctx context.Context, snapshotURI string) ([]byte, error) {
 	dir, err := s.snapshotScratch()
 	if err != nil {
 		return nil, err
@@ -94,7 +94,7 @@ func (s *AteomHerder) fetchManifest(ctx context.Context, snapshotURI string) ([]
 
 // uploadManifest uploads manifest as the snapshot's manifest, as
 // uploadSnapshotFiles does.
-func (s *AteomHerder) uploadManifest(ctx context.Context, snapshotURI string, manifest []byte, opts ...grpc.CallOption) error {
+func (s *Atelet) uploadManifest(ctx context.Context, snapshotURI string, manifest []byte, opts ...grpc.CallOption) error {
 	dir, err := s.snapshotScratch()
 	if err != nil {
 		return err
@@ -108,7 +108,7 @@ func (s *AteomHerder) uploadManifest(ctx context.Context, snapshotURI string, ma
 
 // snapshotScratch creates a fresh directory for one manifest transfer. The
 // caller removes it.
-func (s *AteomHerder) snapshotScratch() (string, error) {
+func (s *Atelet) snapshotScratch() (string, error) {
 	if err := os.MkdirAll(s.snapshotScratchDir, 0o700); err != nil {
 		return "", fmt.Errorf("while creating snapshot scratch dir: %w", err)
 	}

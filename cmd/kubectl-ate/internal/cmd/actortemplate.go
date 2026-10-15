@@ -36,29 +36,14 @@ var (
 )
 
 var getActorTemplatesCmd = &cobra.Command{
-	Use:     "actor-template <template-name ...>",
+	Use:     "actor-template [template-name ...]",
 	Aliases: []string{"actor-templates"},
 	Short:   "List all actor templates or get one or more actor templates",
 	Long:    "List or get actor templates.",
+	Args:    cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) > 0 {
-			// A template is addressed by (atespace, name), so the atespace is
-			// mandatory and "all atespaces" is meaningless here.
-			if getActorTemplateAllAtespacesFlag {
-				return fmt.Errorf("-A/--all-atespaces cannot be used when getting actor templates; pass --atespace")
-			}
-			if getActorTemplateAtespaceFlag == "" {
-				return fmt.Errorf("--atespace is required when getting actor templates")
-			}
-		} else {
-			// Listing requires exactly one of --atespace (one atespace) or -A (all
-			// atespaces). There is no default atespace to fall back on.
-			if getActorTemplateAllAtespacesFlag && getActorTemplateAtespaceFlag != "" {
-				return fmt.Errorf("--atespace and -A/--all-atespaces are mutually exclusive")
-			}
-			if !getActorTemplateAllAtespacesFlag && getActorTemplateAtespaceFlag == "" {
-				return fmt.Errorf("specify --atespace <name> to list one atespace, or -A/--all-atespaces for all")
-			}
+		if err := validateAtespaceFlags("actor templates", args, getActorTemplateAtespaceFlag, getActorTemplateAllAtespacesFlag); err != nil {
+			return err
 		}
 
 		ctx := cmd.Context()
@@ -124,7 +109,7 @@ the failures are reported together at the end. A manifest with one record
 prints the template, one with several prints a list.
 
 Actor templates are immutable: there is no update; delete and recreate to change one.`,
-	Args: cobra.NoArgs,
+	Args: noArgs("the template name comes from the manifest passed to -f/--filename", "filename"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		data, err := readFileOrStdin(cmd.InOrStdin(), createActorTemplateFilenameFlag)
 		if err != nil {
@@ -190,7 +175,7 @@ var deleteActorTemplateCmd = &cobra.Command{
 	Long: `Delete an actor template.
 
 The server also deletes the template's golden actor and golden snapshot.`,
-	Args: cobra.ExactArgs(1),
+	Args: exactlyOneArg("<template-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		c, err := newAPIClient(cmd)
@@ -220,15 +205,13 @@ func readFileOrStdin(in io.Reader, path string) ([]byte, error) {
 }
 
 func init() {
-	getActorTemplatesCmd.Flags().StringVarP(&getActorTemplateAtespaceFlag, "atespace", "a", "", "Atespace to list/get actor templates in. Required when getting templates; for listing, use this or -A.")
-	getActorTemplatesCmd.Flags().BoolVarP(&getActorTemplateAllAtespacesFlag, "all-atespaces", "A", false, "List actor templates across all atespaces (listing only; mutually exclusive with --atespace)")
+	getActorTemplatesCmd.Flags().StringVarP(&getActorTemplateAtespaceFlag, "atespace", "a", "", "get actor-templates in a specific atespace (mutually exclusive with --all-atespaces)")
+	getActorTemplatesCmd.Flags().BoolVarP(&getActorTemplateAllAtespacesFlag, "all-atespaces", "A", false, "get actor-templates across all atespaces (mutually exclusive with --atespace)")
 	getCmd.AddCommand(getActorTemplatesCmd)
 
-	createActorTemplateCmd.Flags().StringVarP(&createActorTemplateFilenameFlag, "filename", "f", "", "JSON or YAML manifest of protojson-shaped ActorTemplates (YAML may hold several documents); use - for stdin (required)")
-	_ = createActorTemplateCmd.MarkFlagRequired("filename")
+	createActorTemplateCmd.Flags().StringVarP(&createActorTemplateFilenameFlag, "filename", "f", "", "JSON or YAML manifest of protojson-shaped ActorTemplates (YAML may hold several documents), or - for stdin")
 	createCmd.AddCommand(createActorTemplateCmd)
 
-	deleteActorTemplateCmd.Flags().StringVarP(&deleteActorTemplateAtespaceFlag, "atespace", "a", "", "Atespace the actor template lives in")
-	_ = deleteActorTemplateCmd.MarkFlagRequired("atespace")
+	deleteActorTemplateCmd.Flags().StringVarP(&deleteActorTemplateAtespaceFlag, "atespace", "a", "", "the actor-template's atespace")
 	deleteCmd.AddCommand(deleteActorTemplateCmd)
 }

@@ -53,8 +53,8 @@ Each subdirectory of `cmd/` corresponds to one compiled binary:
 | `cmd/atecontroller`  | Kubernetes controller for WorkerPools (and network/egress resources) |
 | `cmd/atelet`         | Node supervisor (DaemonSet)                           |
 | `cmd/atenet`         | Network proxy / Envoy external-processing server      |
-| `cmd/ateom-gvisor`   | In-pod gVisor container image entry point             |
-| `cmd/ateom-microvm`  | In-pod kata + cloud-hypervisor micro-VM container image entry point |
+| `cmd/ateworker-gvisor`   | In-pod gVisor container image entry point             |
+| `cmd/ateworker-microvm`  | In-pod kata + cloud-hypervisor micro-VM container image entry point |
 | `cmd/kubectl-ate`    | `kubectl` plugin for interacting with Substrate       |
 | `cmd/podcertcontroller` | Controller that issues pod TLS certificates        |
 
@@ -101,5 +101,5 @@ When adding a new Go package, ask:
 3. **Is it a deliberately public API for external users?** → `pkg/<pkg>`
 4. **Is it a protobuf-generated package?**
    - Public gRPC API (control plane) → `pkg/proto/<name>`
-   - Internal gRPC API (atelet, ateom) → `internal/proto/<name>`
+   - Internal gRPC API (atelet, ateworker) → `internal/proto/<name>`
 5. **Is it a script or dev tool?** → `hack/` (shell) or `tools/<name>` (Go)

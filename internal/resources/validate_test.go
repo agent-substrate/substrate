@@ -23,7 +23,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -313,8 +313,8 @@ func TestValidateLimit(t *testing.T) {
 	}
 }
 
-func testActorDirs() *ateompb.ActorDirs {
-	return &ateompb.ActorDirs{
+func testActorDirs() *ateworkerpb.ActorDirs {
+	return &ateworkerpb.ActorDirs{
 		RootDir:                   "/node/actors/a",
 		OciBundleDir:              "/node/actors/a/bundles",
 		CheckpointDir:             "/node/actors/a/checkpoint-state",
@@ -326,23 +326,23 @@ func testActorDirs() *ateompb.ActorDirs {
 }
 
 func TestValidateSnapshotFidelity(t *testing.T) {
-	volumes := ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
-	rootfs := ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
-	memory := ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-	all := []ateompb.SnapshotFidelity{volumes, rootfs, memory}
-	noRootfs := []ateompb.SnapshotFidelity{volumes, memory}
+	volumes := ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	rootfs := ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	memory := ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	all := []ateworkerpb.SnapshotFidelity{volumes, rootfs, memory}
+	noRootfs := []ateworkerpb.SnapshotFidelity{volumes, memory}
 	for _, tc := range []struct {
 		name      string
-		fidelity  ateompb.SnapshotFidelity
-		supported []ateompb.SnapshotFidelity
+		fidelity  ateworkerpb.SnapshotFidelity
+		supported []ateworkerpb.SnapshotFidelity
 		wantErr   bool
 	}{
 		{"volumes", volumes, all, false},
 		{"memory", memory, all, false},
 		{"rootfs where supported", rootfs, all, false},
 		{"rootfs where unsupported", rootfs, noRootfs, true},
-		{"unspecified", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, all, true},
-		{"outside the enum", ateompb.SnapshotFidelity(99), all, true},
+		{"unspecified", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, all, true},
+		{"outside the enum", ateworkerpb.SnapshotFidelity(99), all, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			errs := ValidateSnapshotFidelity(tc.fidelity, tc.supported, field.NewPath("fidelity"))
@@ -361,22 +361,25 @@ func TestValidateSnapshotFidelity(t *testing.T) {
 func TestValidateActorDirs(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		mutate func(*ateompb.ActorDirs) *ateompb.ActorDirs
+		mutate func(*ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs
 		// wantField is the field the one expected error names; empty means valid.
 		wantField string
 	}{
-		{"valid", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs { return actorDirs }, ""},
-		{"nil", func(*ateompb.ActorDirs) *ateompb.ActorDirs { return nil }, "actor_dirs"},
-		{"missing dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs { actorDirs.RestoreDir = ""; return actorDirs }, "actor_dirs.restore_dir"},
-		{"relative dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs {
+		{"valid", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs { return actorDirs }, ""},
+		{"nil", func(*ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs { return nil }, "actor_dirs"},
+		{"missing dir", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs {
+			actorDirs.RestoreDir = ""
+			return actorDirs
+		}, "actor_dirs.restore_dir"},
+		{"relative dir", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs {
 			actorDirs.OciBundleDir = "bundles"
 			return actorDirs
 		}, "actor_dirs.oci_bundle_dir"},
-		{"unclean dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs {
+		{"unclean dir", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs {
 			actorDirs.CheckpointDir = "/node/actors/a/../b/checkpoint-state"
 			return actorDirs
 		}, "actor_dirs.checkpoint_dir"},
-		{"relative root", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs {
+		{"relative root", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs {
 			actorDirs.RootDir = "node/actors/a"
 			return actorDirs
 		}, "actor_dirs.root_dir"},

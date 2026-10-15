@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -34,7 +34,7 @@ const resolvConf = "/etc/resolv.conf"
 // GVisorOptions describes the gVisor-specific context of one actor container.
 type GVisorOptions struct {
 	ActorUID      string
-	ActorDirs     *ateompb.ActorDirs
+	ActorDirs     *ateworkerpb.ActorDirs
 	ContainerName string
 	// DurableVolumes are declared on the sandbox (pause) spec only.
 	DurableVolumes []string

@@ -54,7 +54,7 @@ usage() {
   echo "  --storage-class-name S  Forwarded to workloads/deploy.sh. StorageClass for the glutton-storage"
   echo "                          external volume; setting it deploys glutton-storage."
   echo "  --wait-timeout SECONDS  Forwarded to workloads/deploy.sh. The timeout in seconds for"
-  echo "                          waiting for the ateom workers to be ready (default: 300)"
+  echo "                          waiting for the workers to be ready (default: 300)"
   echo "  --skip-build            Skip locust image build/push (use the existing :latest image)"
   echo "  -h|--help               Show this help message"
   echo ""

@@ -113,7 +113,7 @@ func loadSystemInstall(t *testing.T, cfg *config.Config) systemInstall {
 		objs = append(objs, decoded...)
 	}
 	system := filepath.Join(root, SystemOverlay(cfg))
-	rendered, err := e.renderDataPlane(system)
+	rendered, err := e.render(system)
 	add(system, rendered, err)
 	rendered, err = e.render(e.postgresManifestPath())
 	add(e.postgresManifestPath(), rendered, err)

@@ -22,13 +22,13 @@ under jsonPayload), and aggregates the two joinable record kinds the node
 side emits, each written by both layers:
 
   - "Restore timing breakdown"     atelet (ate.actor.restore.duration.*)
-                                   and ateom (ateom.actor.restore.duration.*)
+                                   and ateworker (ateworker.actor.restore.duration.*)
   - "Checkpoint timing breakdown"  atelet (ate.actor.checkpoint.duration.*)
-                                   and ateom (ateom.actor.checkpoint.duration.*)
+                                   and ateworker (ateworker.actor.checkpoint.duration.*)
 
 The report answers "where does the SuspendActor / ResumeActor time go":
 per-phase percentiles at each layer, and the slowest operations as nested
-waterfalls (the ateom record joined under the atelet record of the same
+waterfalls (the ateworker record joined under the atelet record of the same
 actor).
 
 Usage:
@@ -57,12 +57,12 @@ from pathlib import Path
 
 # The duration-key prefixes. Source of truth: cmd/atelet/metrics.go
 # (restoreDurationMetric, checkpointDurationMetric) and
-# cmd/ateom-microvm/phaselog.go.
+# cmd/ateworker-microvm/phaselog.go.
 BREAKDOWN_PREFIXES = {
     ("atelet", "restore"): "ate.actor.restore.duration.",
     ("atelet", "checkpoint"): "ate.actor.checkpoint.duration.",
-    ("ateom", "restore"): "ateom.actor.restore.duration.",
-    ("ateom", "checkpoint"): "ateom.actor.checkpoint.duration.",
+    ("ateworker", "restore"): "ateworker.actor.restore.duration.",
+    ("ateworker", "checkpoint"): "ateworker.actor.checkpoint.duration.",
 }
 BREAKDOWN_MSGS = {"Restore timing breakdown", "Checkpoint timing breakdown"}
 
@@ -74,8 +74,8 @@ SANDBOX_CLASS_KEY = "ate.sandbox.class"
 TEMPLATE_KEY = "ate.template.name"
 ERROR_TYPE_KEY = "error.type"
 
-# The ateom records carry no sandbox class or snapshot kind of their own;
-# both ateoms write the same two messages, and the atelet record of the same
+# The ateworker records carry no sandbox class or snapshot kind of their own;
+# both ateworkers write the same two messages, and the atelet record of the same
 # operation says which runtime it was. join_layers copies them across.
 MICROVM = "microvm"
 GVISOR = "gvisor"
@@ -90,30 +90,30 @@ UNATTRIBUTED = "unattributed"
 PHASE_ORDER = [
     # atelet restore
     "volume_mount", "manifest_fetch", "sandbox_assets", "download",
-    "oci_unpack", "ateom_restore",
-    # ateom restore: micro-VM (cmd/ateom-microvm/phaselog.go) and gVisor
-    # (cmd/ateom-gvisor/phaselog.go), each in its own sequential order
+    "oci_unpack", "worker_restore",
+    # ateworker restore: micro-VM (cmd/ateworker-microvm/phaselog.go) and gVisor
+    # (cmd/ateworker-gvisor/phaselog.go), each in its own sequential order
     "prep", "egress_prepare", "net_setup", "bundles", "upper_join", "lowers",
     "pause_rootfs", "pause_create", "pause_restore",
     "app_rootfs", "app_create", "app_restore",
     "tap", "vmm_launch", "vm_restore", "resume", "wakeup_probe", "activate",
-    # atelet + ateom checkpoint
+    # atelet + ateworker checkpoint
     "pause", "checkpoint", "snapshot", "durable_dir", "rootfs_upper",
-    "ateom_checkpoint", "teardown", "persist",
+    "worker_checkpoint", "teardown", "persist",
     UNATTRIBUTED, TOTAL,
 ]
 _PHASE_RANK = {name: i for i, name in enumerate(PHASE_ORDER)}
 
-# Which atelet phase wraps the ateom record.
-INNER_PHASE = {"restore": "ateom_restore", "checkpoint": "ateom_checkpoint"}
+# Which atelet phase wraps the ateworker record.
+INNER_PHASE = {"restore": "worker_restore", "checkpoint": "worker_checkpoint"}
 
 # The micro-VM checkpoint captures that run concurrently on the paused guest:
 # the paused window costs their max, not their sum. gVisor's checkpoint phases
 # are sequential.
 CONCURRENT_CAPTURES = ("snapshot", "durable_dir", "rootfs_upper")
 
-# Slack on the window in which the ateom record of an operation must land:
-# atelet does a little work after the ateom call returns before it writes its
+# Slack on the window in which the ateworker record of an operation must land:
+# atelet does a little work after the ateworker call returns before it writes its
 # own record (unmounting, resetting the actor dirs), and the two clocks are
 # the same node's but not the same goroutine's.
 JOIN_SLACK_S = 1.0
@@ -122,7 +122,7 @@ JOIN_SLACK_S = 1.0
 @dataclass
 class Breakdown:
     """One parsed timing-breakdown record."""
-    source: str  # atelet | ateom
+    source: str  # atelet | ateworker
     op: str  # restore | checkpoint
     time: str
     ts: float | None  # epoch seconds parsed from time, None when unparseable
@@ -165,24 +165,24 @@ def parse_time(s: str) -> float | None:
 def unattributed(source: str, op: str, sandbox_class: str, phases: dict[str, float]) -> float | None:
     """The total minus what the logged phases account for, where that is
     well-defined: the atelet checkpoint phases are sequential; the micro-VM
-    ateom checkpoint is prep, pause, the concurrent captures (max), then
-    teardown; the gVisor ateom checkpoint phases are all sequential. The
+    ateworker checkpoint is prep, pause, the concurrent captures (max), then
+    teardown; the gVisor ateworker checkpoint phases are all sequential. The
     atelet restore phases overlap by design (download runs alongside the
-    asset fetch and OCI unpack) and both ateoms' restore phases partition
+    asset fetch and OCI unpack) and both ateworkers' restore phases partition
     their total by construction, so neither gets a residual; nor does an
-    ateom checkpoint whose runtime is unknown (its atelet record is missing).
+    ateworker checkpoint whose runtime is unknown (its atelet record is missing).
     The phases are sub-intervals of the total, so a negative result is a bug
     in the emitter or in this formula; it is not clamped, so that it shows."""
     total = phases.get(TOTAL)
     if total is None:
         return None
     if (source, op) == ("atelet", "checkpoint"):
-        spent = sum(phases.get(p, 0.0) for p in ("sandbox_assets", "ateom_checkpoint", "persist"))
-    elif (source, op, sandbox_class) == ("ateom", "checkpoint", MICROVM):
+        spent = sum(phases.get(p, 0.0) for p in ("sandbox_assets", "worker_checkpoint", "persist"))
+    elif (source, op, sandbox_class) == ("ateworker", "checkpoint", MICROVM):
         spent = (phases.get("prep", 0.0) + phases.get("pause", 0.0)
                  + max(phases.get(p, 0.0) for p in CONCURRENT_CAPTURES)
                  + phases.get("teardown", 0.0))
-    elif (source, op, sandbox_class) == ("ateom", "checkpoint", GVISOR):
+    elif (source, op, sandbox_class) == ("ateworker", "checkpoint", GVISOR):
         spent = sum(v for k, v in phases.items() if k != TOTAL)
     else:
         return None
@@ -331,12 +331,12 @@ def report_phases(breakdowns: list[Breakdown], writer) -> list[dict]:
     return rows
 
 
-def ateom_window(op: Breakdown) -> tuple[float, float] | None:
-    """When, relative to the atelet record's time, the ateom record of the
-    same operation was written. ateom writes it as its RPC returns, i.e. at
-    the end of the atelet ateom_* phase: for a checkpoint that is before
+def ateworker_window(op: Breakdown) -> tuple[float, float] | None:
+    """When, relative to the atelet record's time, the ateworker record of the
+    same operation was written. ateworker writes it as its RPC returns, i.e. at
+    the end of the atelet worker_* phase: for a checkpoint that is before
     persist runs, for a restore it is the last phase. An operation that never
-    reached the ateom call has no window and nothing to pair with."""
+    reached the ateworker call has no window and nothing to pair with."""
     total = op.phases.get(TOTAL)
     if op.ts is None or total is None or INNER_PHASE[op.op] not in op.phases:
         return None
@@ -347,21 +347,21 @@ def ateom_window(op: Breakdown) -> tuple[float, float] | None:
 
 
 def pair_records(breakdowns: list[Breakdown]) -> dict[int, Breakdown]:
-    """Match each atelet record to the ateom record of the same operation:
-    same actor and op, written inside the atelet ateom_* phase's window, and
-    not already claimed by another operation. Returns id(atelet) -> ateom.
+    """Match each atelet record to the ateworker record of the same operation:
+    same actor and op, written inside the atelet worker_* phase's window, and
+    not already claimed by another operation. Returns id(atelet) -> ateworker.
 
-    One cycle emits exactly one of each. An ateom record outside the window
+    One cycle emits exactly one of each. An ateworker record outside the window
     belongs to another cycle whose partner is missing (pod gone, log rotated,
     window cut); claiming it would print a gap that never happened, so an
     operation without a match prints without one. Matching in time order
     with a consumed set keeps rapid cycles of one actor from sharing or
-    swapping records. A paired ateom record also inherits the snapshot kind
+    swapping records. A paired ateworker record also inherits the snapshot kind
     and sandbox class its layer does not log, so the two layers' percentiles
     split alike and the residual knows which runtime's rule applies."""
     by_actor: dict[tuple, list[Breakdown]] = defaultdict(list)
     for b in breakdowns:
-        if b.source == "ateom" and b.ts is not None:
+        if b.source == "ateworker" and b.ts is not None:
             by_actor[(b.actor_uid, b.op)].append(b)
     for v in by_actor.values():
         v.sort(key=lambda b: b.ts)
@@ -371,7 +371,7 @@ def pair_records(breakdowns: list[Breakdown]) -> dict[int, Breakdown]:
     atelet = sorted((b for b in breakdowns if b.source == "atelet" and b.ts is not None),
                     key=lambda b: b.ts)
     for op in atelet:
-        window = ateom_window(op)
+        window = ateworker_window(op)
         if window is None:
             continue
         lo, hi = window
@@ -391,7 +391,7 @@ def pair_records(breakdowns: list[Breakdown]) -> dict[int, Breakdown]:
 
 def join_layers(breakdowns: list[Breakdown]) -> dict[int, Breakdown]:
     """Pair the layers' records, then derive each record's unattributed
-    residual, which for an ateom checkpoint depends on the runtime the pairing
+    residual, which for an ateworker checkpoint depends on the runtime the pairing
     just identified. Returns the pairs, as pair_records does."""
     pairs = pair_records(breakdowns)
     for b in breakdowns:
@@ -403,8 +403,8 @@ def join_layers(breakdowns: list[Breakdown]) -> dict[int, Breakdown]:
 
 def report_waterfalls(breakdowns: list[Breakdown], writer, slowest: int,
                       pairs: dict[int, Breakdown] | None = None) -> None:
-    """The slowest operations: the ateom record nested under the atelet
-    ateom_* phase, and the gap between that phase and the ateom total (RPC
+    """The slowest operations: the ateworker record nested under the atelet
+    worker_* phase, and the gap between that phase and the ateworker total (RPC
     and queueing between the layers)."""
     if pairs is None:
         pairs = join_layers(breakdowns)
@@ -427,7 +427,7 @@ def report_waterfalls(breakdowns: list[Breakdown], writer, slowest: int,
                 for iname in sorted(inner.phases, key=phase_sort_key):
                     if iname == TOTAL:
                         continue
-                    writer(f"    ateom  {iname:13} {fmt_s(inner.phases[iname])}")
+                    writer(f"    ateworker  {iname:13} {fmt_s(inner.phases[iname])}")
                 if TOTAL in inner.phases:
                     gap = b.phases[name] - inner.phases[TOTAL]
                     writer(f"    (gap)  {'rpc/queueing':13} {fmt_s(gap)}")
@@ -489,7 +489,7 @@ def main() -> int:
         print("no matching records; are these the atelet and worker pod logs?", file=sys.stderr)
         return 1
 
-    # Pair before the percentiles: a paired ateom record takes its kind and
+    # Pair before the percentiles: a paired ateworker record takes its kind and
     # sandbox class from the atelet record, so both layers' rows split the
     # same way and each checkpoint's residual uses its runtime's rule.
     pairs = join_layers(parsed.breakdowns)

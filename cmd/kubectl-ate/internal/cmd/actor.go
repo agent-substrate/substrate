@@ -59,28 +59,13 @@ var (
 )
 
 var getActorsCmd = &cobra.Command{
-	Use:     "actor <actor-name ...>",
+	Use:     "actor [actor-name ...]",
 	Aliases: []string{"actors"},
 	Short:   "List all actors or get one or more actors",
+	Args:    cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) > 0 {
-			// An actor is addressed by (atespace, name), so the atespace is
-			// mandatory and "all atespaces" is meaningless here.
-			if getActorAllAtespacesFlag {
-				return fmt.Errorf("-A/--all-atespaces cannot be used when getting actors; pass --atespace")
-			}
-			if getActorAtespaceFlag == "" {
-				return fmt.Errorf("--atespace is required when getting actors")
-			}
-		} else {
-			// Listing requires exactly one of --atespace (one atespace) or -A (all
-			// atespaces). There is no default atespace to fall back on.
-			if getActorAllAtespacesFlag && getActorAtespaceFlag != "" {
-				return fmt.Errorf("--atespace and -A/--all-atespaces are mutually exclusive")
-			}
-			if !getActorAllAtespacesFlag && getActorAtespaceFlag == "" {
-				return fmt.Errorf("specify --atespace <name> to list one atespace, or -A/--all-atespaces for all")
-			}
+		if err := validateAtespaceFlags("actors", args, getActorAtespaceFlag, getActorAllAtespacesFlag); err != nil {
+			return err
 		}
 
 		ctx := cmd.Context()
@@ -131,11 +116,11 @@ var getActorsCmd = &cobra.Command{
 var createActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
 	Short: "Create an actor",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<actor-name>", "atespace", "template"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		request, err := buildCreateActorRequest(args[0], createActorAtespaceFlag, createActorTemplateFlag, createActorTagFlag)
 		if err != nil {
-			return err
+			return wrapUsageError(err)
 		}
 
 		ctx := cmd.Context()
@@ -157,7 +142,7 @@ var createActorCmd = &cobra.Command{
 var deleteActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
 	Short: "Delete an actor",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		c, err := newAPIClient(cmd)
@@ -183,7 +168,7 @@ var deleteActorCmd = &cobra.Command{
 var pauseActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
 	Short: "Pause an actor",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
@@ -207,7 +192,7 @@ var pauseActorCmd = &cobra.Command{
 var resumeActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
 	Short: "Resume an actor",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
@@ -231,7 +216,7 @@ var resumeActorCmd = &cobra.Command{
 var suspendActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
 	Short: "Suspend an actor",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
@@ -255,7 +240,7 @@ var suspendActorCmd = &cobra.Command{
 var logsActorsCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
 	Short: "Stream logs for a specific actor",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<actor-name>", "atespace"),
 	RunE:  runLogsActor,
 }
 
@@ -563,7 +548,7 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 	actorRef := resources.ActorRef{Atespace: logsActorAtespaceFlag, Name: args[0]}
 	filter, err := newLogLineFilter(actorRef, logsActorSourceFlag, logsActorContainerFlag)
 	if err != nil {
-		return err
+		return wrapUsageError(err)
 	}
 
 	apiClient, err := newAPIClient(cmd)
@@ -600,7 +585,7 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 
 // logSource names a class of lines in an actor's log stream, selected with
 // --source. Container output carries the container's name; the lifecycle
-// events ateom emits around a start, checkpoint, restore, or termination
+// events worker emits around a start, checkpoint, restore, or termination
 // carry none, which is what tells the two apart.
 type logSource string
 
@@ -748,38 +733,31 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w, stderr io.Wri
 }
 
 func init() {
-	getActorsCmd.Flags().StringVarP(&getActorAtespaceFlag, "atespace", "a", "", "Atespace to list/get actors in. Required when getting actors; for listing, use this or -A.")
-	getActorsCmd.Flags().BoolVarP(&getActorAllAtespacesFlag, "all-atespaces", "A", false, "List actors across all atespaces (listing only; mutually exclusive with --atespace)")
+	getActorsCmd.Flags().StringVarP(&getActorAtespaceFlag, "atespace", "a", "", "get actors in a specific atespace (mutually exclusive with --all-atespaces)")
+	getActorsCmd.Flags().BoolVarP(&getActorAllAtespacesFlag, "all-atespaces", "A", false, "get actors across all atespaces (mutually exclusive with --atespace)")
 	getCmd.AddCommand(getActorsCmd)
 
-	createActorCmd.Flags().StringVar(&createActorTemplateFlag, "template", "", "The name of the ActorTemplate to derive the actor from, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (--atespace)")
-	_ = createActorCmd.MarkFlagRequired("template")
-	createActorCmd.Flags().StringVarP(&createActorAtespaceFlag, "atespace", "a", "", "Atespace to create the actor in")
-	_ = createActorCmd.MarkFlagRequired("atespace")
-	createActorCmd.Flags().StringVar(&createActorTagFlag, "tag", "", "The name of a Tag to initialize the actor from, as <atespace>/<tag-name>, or just <tag-name> to use the actor's own atespace (--atespace)")
+	createActorCmd.Flags().StringVar(&createActorTemplateFlag, "template", "", "actor-template to derive the actor from, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (see --atespace)")
+	createActorCmd.Flags().StringVarP(&createActorAtespaceFlag, "atespace", "a", "", "atespace to create the actor in")
+	createActorCmd.Flags().StringVar(&createActorTagFlag, "tag", "", "tag to initialize the actor from, as <atespace>/<tag-name>, or just <tag-name> to use the actor's own atespace (see --atespace)")
 	createCmd.AddCommand(createActorCmd)
 
-	deleteActorCmd.Flags().StringVarP(&deleteActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
-	_ = deleteActorCmd.MarkFlagRequired("atespace")
-	deleteActorCmd.Flags().BoolVar(&deleteActorAnyStateFlag, "any-state", false, "Delete the actor from any state")
+	deleteActorCmd.Flags().StringVarP(&deleteActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
+	deleteActorCmd.Flags().BoolVar(&deleteActorAnyStateFlag, "any-state", false, "delete the actor regardless of current state")
 	deleteCmd.AddCommand(deleteActorCmd)
 
-	pauseActorCmd.Flags().StringVarP(&pauseActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
-	_ = pauseActorCmd.MarkFlagRequired("atespace")
+	pauseActorCmd.Flags().StringVarP(&pauseActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
 	pauseCmd.AddCommand(pauseActorCmd)
 
-	resumeActorCmd.Flags().StringVarP(&resumeActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
-	_ = resumeActorCmd.MarkFlagRequired("atespace")
+	resumeActorCmd.Flags().StringVarP(&resumeActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
 	resumeCmd.AddCommand(resumeActorCmd)
 
-	suspendActorCmd.Flags().StringVarP(&suspendActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
-	_ = suspendActorCmd.MarkFlagRequired("atespace")
+	suspendActorCmd.Flags().StringVarP(&suspendActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
 	suspendCmd.AddCommand(suspendActorCmd)
 
-	logsActorsCmd.Flags().BoolVarP(&logsActorFollowFlag, "follow", "f", false, "Specify if the logs should be streamed.")
-	logsActorsCmd.Flags().StringVarP(&logsActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
-	_ = logsActorsCmd.MarkFlagRequired("atespace")
-	logsActorsCmd.Flags().StringVarP(&logsActorContainerFlag, "container", "c", "", "Show only logs from this container; use _pause for runsc diagnostics.")
-	logsActorsCmd.Flags().StringVar(&logsActorSourceFlag, "source", string(logSourceAll), "Which lines to show: all, containers (container output, no lifecycle events), or lifecycle (only the actor's lifecycle events).")
+	logsActorsCmd.Flags().BoolVarP(&logsActorFollowFlag, "follow", "f", false, "stream logs continuously")
+	logsActorsCmd.Flags().StringVarP(&logsActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
+	logsActorsCmd.Flags().StringVarP(&logsActorContainerFlag, "container", "c", "", "show only logs from a named container; use _pause for runsc diagnostics")
+	logsActorsCmd.Flags().StringVar(&logsActorSourceFlag, "source", string(logSourceAll), "which lines to show: all, containers (container output, no lifecycle events), or lifecycle (only the actor's lifecycle events)")
 	logsCmd.AddCommand(logsActorsCmd)
 }

@@ -62,7 +62,7 @@ func checkMethodDocumented(rpc model.Method) []Finding {
 func docText(comment string) string {
 	var kept []string
 	for _, line := range strings.Split(comment, "\n") {
-		if isValidationGenTag(line) {
+		if isValidationGenTag(line) || isAteCommentTag(line) {
 			continue
 		}
 		kept = append(kept, line)
@@ -74,4 +74,10 @@ func docText(comment string) string {
 // Validation tag, e.g. "+k8s:required" or "+k8s:format=k8s-short-name".
 func isValidationGenTag(line string) bool {
 	return strings.HasPrefix(strings.TrimSpace(line), "+k8s:")
+}
+
+// isAteCommentTag reports whether line is one of our own metadata tags,
+// e.g. +ate:preview.
+func isAteCommentTag(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "+ate:")
 }

@@ -21,7 +21,7 @@ metadata:
   name: glutton-storage
 workerSelector:
   matchLabels:
-    workload: benchmark-ateom
+    workload: benchmark-worker
 volumes:
 - name: external-storage
   externalVolumeTemplate:
@@ -52,6 +52,8 @@ containers:
       port: 80
 resources:
   limits:
+  - name: cpu
+    quantity: "1"
   - name: memory
     quantity: ${ACTOR_MEMORY}
 snapshotConfig:

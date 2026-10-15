@@ -35,6 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	"github.com/agent-substrate/substrate/internal/pluginsocket"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
@@ -60,10 +61,14 @@ func main() {
 	assetStagingDir := flags.String("asset-staging-dir", "/var/lib/objectstore-plugin/asset-staging", "node mode: directory sandbox assets are downloaded into and verified before they are copied below --root; must not be below --root or readable by the caller")
 	assetStagingCapacity := flags.String("asset-staging-capacity", "8Gi", "node mode: the most sandbox asset downloads in --asset-staging-dir may hold at once, as a Kubernetes quantity; downloads wait for space, and an asset larger than this is refused")
 	timeout := flags.Duration("timeout", 5*time.Second, "healthcheck mode: how long to wait for the plugin to report that it is serving")
+	previewFlags := flags.StringSlice("preview", nil, "Preview gates to enable.")
 	_ = flags.Parse(os.Args[2:])
 
 	ctx := context.Background()
 	serverboot.InitLogger()
+	if err := preview.Init(*previewFlags...); err != nil {
+		serverboot.Fatal(ctx, "Invalid --preview", err)
+	}
 	if *socket == "" {
 		serverboot.Fatal(ctx, "Missing --socket", fmt.Errorf("--socket is required"))
 	}
