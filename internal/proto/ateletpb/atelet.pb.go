@@ -1309,8 +1309,8 @@ func (x *MintActorCertificateResponse) GetActorCertificates() [][]byte {
 
 type TerminateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The UID of the worker pod whose ateom hosts the actor. If unset, atelet
-	// only cleans up the actor's node resources; it does not reach an ateom.
+	// The UID of the worker pod whose the worker hosts the actor. If unset, atelet
+	// only cleans up the actor's node resources; it does not reach a worker.
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-uuid
@@ -1458,7 +1458,7 @@ func (*TerminateResponse) Descriptor() ([]byte, []int) {
 
 type RunRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The UID of the worker pod whose ateom hosts the actor.
+	// The UID of the worker pod whose the worker hosts the actor.
 	//
 	// +k8s:required
 	// +k8s:format=k8s-uuid
@@ -3428,7 +3428,7 @@ func (x *UploadConfig) GetMode() UploadMode {
 // +k8s:customValidation # immediate upload requires snapshot.object
 type CheckpointRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The UID of the worker pod whose ateom hosts the actor.
+	// The UID of the worker pod whose the worker hosts the actor.
 	//
 	// +k8s:required
 	// +k8s:format=k8s-uuid
@@ -3619,7 +3619,7 @@ func (x *CheckpointResponse) GetState() *ActorSnapshotState {
 
 type RestoreRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The UID of the worker pod whose ateom hosts the actor.
+	// The UID of the worker pod whose the worker hosts the actor.
 	//
 	// +k8s:required
 	// +k8s:format=k8s-uuid

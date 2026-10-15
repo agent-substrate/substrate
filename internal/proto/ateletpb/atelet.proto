@@ -20,10 +20,10 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
 
-// WorkerSupport provides callouts for ateom.
+// WorkerSupport provides callouts for worker implementations.
 //
-// Called by individual ateom pods over a local connection, authenticated with
-// ateom's k8s pod identity mTLS certificate.
+// Called by individual worker pods over a local connection, authenticated with
+// the worker's k8s pod identity mTLS certificate.
 service WorkerSupport {
   // Request an atunnel certificate for the given actor.
   //
@@ -43,7 +43,7 @@ service WorkerSupport {
   // passed through as it was given, so a worker can tell a decision from a
   // failure to ask. Callers must not hold a lock the resulting Checkpoint
   // would need: the control plane answers this by driving a suspend back
-  // through atelet into the calling ateom.
+  // through atelet into the calling worker.
   rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse) {}
 
   // GetActorEgressPolicy returns the egress policy of the actor this
@@ -312,20 +312,20 @@ message MintActorCertificateResponse {
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
 service Atelet {
-  // Run tells atelet to create a new containerized workload from scratch on an
-  // ateom.
+  // Run tells atelet to create a new containerized workload from scratch on a
+  // worker.
   rpc Run(RunRequest) returns (RunResponse) {}
 
   // Checkpoint saves the workload's state as a new snapshot of the actor and
-  // returns the ateom to a blank state. upload_config says when the snapshot
-  // becomes durable. Once ateom has captured the workload, and before the new
+  // returns the worker to a blank state. upload_config says when the snapshot
+  // becomes durable. Once the worker has captured the workload, and before the new
   // snapshot is uploaded or stored locally, atelet deletes the actor's older
   // local snapshots, except one still being uploaded, which it deletes when
   // that upload ends. A Checkpoint that then fails to upload or store the new
   // snapshot leaves the actor with no local snapshot.
   rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
 
-  // Restore restores a workload from a snapshot onto an ateom.
+  // Restore restores a workload from a snapshot onto a worker.
   rpc Restore(RestoreRequest) returns (RestoreResponse) {}
 
   // PromoteSnapshot makes `snapshot` durable in object storage while keeping
@@ -348,8 +348,8 @@ service Atelet {
 }
 
 message TerminateRequest {
-  // The UID of the worker pod whose ateom hosts the actor. If unset, atelet
-  // only cleans up the actor's node resources; it does not reach an ateom.
+  // The UID of the worker pod whose the worker hosts the actor. If unset, atelet
+  // only cleans up the actor's node resources; it does not reach a worker.
   //
   // +k8s:optional
   // +k8s:format=k8s-uuid
@@ -388,7 +388,7 @@ message TerminateResponse {
 }
 
 message RunRequest {
-  // The UID of the worker pod whose ateom hosts the actor.
+  // The UID of the worker pod whose the worker hosts the actor.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
@@ -987,7 +987,7 @@ enum UploadMode {
 
 // +k8s:customValidation # immediate upload requires snapshot.object
 message CheckpointRequest {
-  // The UID of the worker pod whose ateom hosts the actor.
+  // The UID of the worker pod whose the worker hosts the actor.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
@@ -1050,7 +1050,7 @@ message CheckpointResponse {
 }
 
 message RestoreRequest {
-  // The UID of the worker pod whose ateom hosts the actor.
+  // The UID of the worker pod whose the worker hosts the actor.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid

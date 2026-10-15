@@ -43,10 +43,10 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// WorkerSupport provides callouts for ateom.
+// WorkerSupport provides callouts for worker implementations.
 //
-// Called by individual ateom pods over a local connection, authenticated with
-// ateom's k8s pod identity mTLS certificate.
+// Called by individual worker pods over a local connection, authenticated with
+// the worker's k8s pod identity mTLS certificate.
 type WorkerSupportClient interface {
 	// Request an atunnel certificate for the given actor.
 	//
@@ -64,7 +64,7 @@ type WorkerSupportClient interface {
 	// passed through as it was given, so a worker can tell a decision from a
 	// failure to ask. Callers must not hold a lock the resulting Checkpoint
 	// would need: the control plane answers this by driving a suspend back
-	// through atelet into the calling ateom.
+	// through atelet into the calling worker.
 	RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error)
 	// GetActorEgressPolicy returns the egress policy of the actor this
 	// worker hosts, which atelet reads from the control plane's
@@ -125,10 +125,10 @@ func (c *workerSupportClient) GetActorEgressPolicy(ctx context.Context, in *GetA
 // All implementations must embed UnimplementedWorkerSupportServer
 // for forward compatibility.
 //
-// WorkerSupport provides callouts for ateom.
+// WorkerSupport provides callouts for worker implementations.
 //
-// Called by individual ateom pods over a local connection, authenticated with
-// ateom's k8s pod identity mTLS certificate.
+// Called by individual worker pods over a local connection, authenticated with
+// the worker's k8s pod identity mTLS certificate.
 type WorkerSupportServer interface {
 	// Request an atunnel certificate for the given actor.
 	//
@@ -146,7 +146,7 @@ type WorkerSupportServer interface {
 	// passed through as it was given, so a worker can tell a decision from a
 	// failure to ask. Callers must not hold a lock the resulting Checkpoint
 	// would need: the control plane answers this by driving a suspend back
-	// through atelet into the calling ateom.
+	// through atelet into the calling worker.
 	RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error)
 	// GetActorEgressPolicy returns the egress policy of the actor this
 	// worker hosts, which atelet reads from the control plane's
@@ -313,18 +313,18 @@ const (
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
 type AteletClient interface {
-	// Run tells atelet to create a new containerized workload from scratch on an
-	// ateom.
+	// Run tells atelet to create a new containerized workload from scratch on a
+	// worker.
 	Run(ctx context.Context, in *RunRequest, opts ...grpc.CallOption) (*RunResponse, error)
 	// Checkpoint saves the workload's state as a new snapshot of the actor and
-	// returns the ateom to a blank state. upload_config says when the snapshot
-	// becomes durable. Once ateom has captured the workload, and before the new
+	// returns the worker to a blank state. upload_config says when the snapshot
+	// becomes durable. Once the worker has captured the workload, and before the new
 	// snapshot is uploaded or stored locally, atelet deletes the actor's older
 	// local snapshots, except one still being uploaded, which it deletes when
 	// that upload ends. A Checkpoint that then fails to upload or store the new
 	// snapshot leaves the actor with no local snapshot.
 	Checkpoint(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error)
-	// Restore restores a workload from a snapshot onto an ateom.
+	// Restore restores a workload from a snapshot onto a worker.
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
 	// PromoteSnapshot makes `snapshot` durable in object storage while keeping
 	// its local copy on this node. Used when a snapshot needs to be in object
@@ -411,18 +411,18 @@ func (c *ateletClient) Terminate(ctx context.Context, in *TerminateRequest, opts
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
 type AteletServer interface {
-	// Run tells atelet to create a new containerized workload from scratch on an
-	// ateom.
+	// Run tells atelet to create a new containerized workload from scratch on a
+	// worker.
 	Run(context.Context, *RunRequest) (*RunResponse, error)
 	// Checkpoint saves the workload's state as a new snapshot of the actor and
-	// returns the ateom to a blank state. upload_config says when the snapshot
-	// becomes durable. Once ateom has captured the workload, and before the new
+	// returns the worker to a blank state. upload_config says when the snapshot
+	// becomes durable. Once the worker has captured the workload, and before the new
 	// snapshot is uploaded or stored locally, atelet deletes the actor's older
 	// local snapshots, except one still being uploaded, which it deletes when
 	// that upload ends. A Checkpoint that then fails to upload or store the new
 	// snapshot leaves the actor with no local snapshot.
 	Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error)
-	// Restore restores a workload from a snapshot onto an ateom.
+	// Restore restores a workload from a snapshot onto a worker.
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
 	// PromoteSnapshot makes `snapshot` durable in object storage while keeping
 	// its local copy on this node. Used when a snapshot needs to be in object

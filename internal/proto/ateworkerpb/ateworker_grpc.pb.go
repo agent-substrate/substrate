@@ -48,35 +48,35 @@ const (
 // Worker is the interface to control a single gVisor (or, in the future microVM)
 // guest inside a worker pod.
 //
-// Each ateom server has two main states, "available" and "executing".
+// Each worker has two main states, "available" and "executing".
 //
-// When the ateom is "available", the substrate control plane is free to either
+// When the worker is "available", the substrate control plane is free to either
 // boot a new workload (using RunWorkload), or restore an existing workload from
-// a checkpoint (using RestoreWorkload).  These calls move the ateom into
+// a checkpoint (using RestoreWorkload).  These calls move the worker into
 // "executing" state.
 //
-// When the ateom is "executing", the substrate control plane can checkpoint the
-// running workload (with CheckpointWorkload).  This moves the ateom back to
+// When the worker is "executing", the substrate control plane can checkpoint the
+// running workload (with CheckpointWorkload).  This moves the worker back to
 // "free" state.
 type WorkerClient interface {
-	// RunWorkload tells ateom to begin running a new workload (one or more
+	// RunWorkload tells the worker to begin running a new workload (one or more
 	// containers, potentially with shared filesystems).
 	RunWorkload(ctx context.Context, in *RunWorkloadRequest, opts ...grpc.CallOption) (*RunWorkloadResponse, error)
-	// CheckpointWorkload tells ateom to save the current state of the running
+	// CheckpointWorkload tells the worker to save the current state of the running
 	// workload to object storage, and then completely reset itself to a blank
 	// state (back to "available" state.)
 	CheckpointWorkload(ctx context.Context, in *CheckpointWorkloadRequest, opts ...grpc.CallOption) (*CheckpointWorkloadResponse, error)
 	// RestoreWorkload restores a workload from checkpoint that was previously
-	// written by CheckpointWorkload.  Ateom will handle downloading the correct
+	// written by CheckpointWorkload.  The worker will handle downloading the correct
 	// gVisor / runsc version to match the checkpoint.
 	RestoreWorkload(ctx context.Context, in *RestoreWorkloadRequest, opts ...grpc.CallOption) (*RestoreWorkloadResponse, error)
 	// GetWorkloadStats returns a point-in-time resource-usage sample for the
-	// workload this ateom is currently executing.
+	// workload this worker is currently executing.
 	//
-	// It is a pure read: unlike the three calls above it does not move the ateom
+	// It is a pure read: unlike the three calls above it does not move the worker
 	// between "available" and "executing", so it is safe to call on a timer for
 	// the whole lifetime of a workload. It also does not wait on them. Those
-	// three serialize on a mutex an ateom holds for a whole boot, restore, or
+	// three serialize on a mutex a worker holds for a whole boot, restore, or
 	// checkpoint; this call reads its state from outside that mutex, so a poll
 	// landing in the middle of one answers immediately instead of going quiet for
 	// the duration -- which would silence the poller during exactly the phases
@@ -85,30 +85,30 @@ type WorkerClient interface {
 	// Two ways it declines to give a sample, and they ask different things of the
 	// caller:
 	//
-	//   * NOT_FOUND -- this ateom is not executing the actor in the request. It
+	//   * NOT_FOUND -- this worker is not executing the actor in the request. It
 	//     may be "available", or a recycled worker may have moved on to a
 	//     different actor. Retrying on the same timer will not change the answer:
 	//     the caller's worker-to-actor mapping is stale and wants re-resolving.
 	//
-	//   * FAILED_PRECONDITION -- this ateom is executing the requested actor but
+	//   * FAILED_PRECONDITION -- this worker is executing the requested actor but
 	//     has no sample to give yet. It accepts an actor before the sandbox it
 	//     will measure exists, so a poll landing in the boot lands here. Read it
 	//     as "no numbers right now", not as "the actor is gone": it is transient,
 	//     and the caller should skip this sample and take the next one.
 	//
 	// The split is worth the two codes because the identity is retained from the
-	// moment the ateom accepts the actor, on both runtimes. That is what makes
+	// moment the worker accepts the actor, on both runtimes. That is what makes
 	// "booting" distinguishable from "not here" at all, and it means a workload
 	// that dies during boot is attributable rather than anonymous.
 	GetWorkloadStats(ctx context.Context, in *GetWorkloadStatsRequest, opts ...grpc.CallOption) (*GetWorkloadStatsResponse, error)
-	// GetActiveWorkloadStats reports every actor this ateom hosts, without
+	// GetActiveWorkloadStats reports every actor this worker hosts, without
 	// asserting an identity. It is the discovery read for a
-	// scraper that enumerates ateoms and holds no worker-to-actor mapping;
+	// scraper that enumerates workers and holds no worker-to-actor mapping;
 	// GetWorkloadStats above is the verified read for a caller that must be
 	// answered about a specific actor.
 	//
-	// It serves each actor's latest sample from the ateom's own sampling timer,
-	// so a poll reads no sandbox and has no error path: an "available" ateom
+	// It serves each actor's latest sample from the worker's own sampling timer,
+	// so a poll reads no sandbox and has no error path: an "available" worker
 	// answers an empty samples list, and a workload with nothing measured yet
 	// (a boot, a restore, or a guest the last sweep did not reach) appears as a
 	// sample carrying its attribution with source = STATS_SOURCE_UNSPECIFIED --
@@ -123,7 +123,7 @@ type WorkerClient interface {
 	// it is safe on a timer and does not touch the lifecycle mutex.
 	GetActiveWorkloadStats(ctx context.Context, in *GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*GetActiveWorkloadStatsResponse, error)
 	// TerminateWorkload stops and deletes container workloads and cleans up
-	// network and bundle overlays on ateom.
+	// network and bundle overlays on the worker.
 	TerminateWorkload(ctx context.Context, in *TerminateWorkloadRequest, opts ...grpc.CallOption) (*TerminateWorkloadResponse, error)
 }
 
@@ -202,35 +202,35 @@ func (c *workerClient) TerminateWorkload(ctx context.Context, in *TerminateWorkl
 // Worker is the interface to control a single gVisor (or, in the future microVM)
 // guest inside a worker pod.
 //
-// Each ateom server has two main states, "available" and "executing".
+// Each worker has two main states, "available" and "executing".
 //
-// When the ateom is "available", the substrate control plane is free to either
+// When the worker is "available", the substrate control plane is free to either
 // boot a new workload (using RunWorkload), or restore an existing workload from
-// a checkpoint (using RestoreWorkload).  These calls move the ateom into
+// a checkpoint (using RestoreWorkload).  These calls move the worker into
 // "executing" state.
 //
-// When the ateom is "executing", the substrate control plane can checkpoint the
-// running workload (with CheckpointWorkload).  This moves the ateom back to
+// When the worker is "executing", the substrate control plane can checkpoint the
+// running workload (with CheckpointWorkload).  This moves the worker back to
 // "free" state.
 type WorkerServer interface {
-	// RunWorkload tells ateom to begin running a new workload (one or more
+	// RunWorkload tells the worker to begin running a new workload (one or more
 	// containers, potentially with shared filesystems).
 	RunWorkload(context.Context, *RunWorkloadRequest) (*RunWorkloadResponse, error)
-	// CheckpointWorkload tells ateom to save the current state of the running
+	// CheckpointWorkload tells the worker to save the current state of the running
 	// workload to object storage, and then completely reset itself to a blank
 	// state (back to "available" state.)
 	CheckpointWorkload(context.Context, *CheckpointWorkloadRequest) (*CheckpointWorkloadResponse, error)
 	// RestoreWorkload restores a workload from checkpoint that was previously
-	// written by CheckpointWorkload.  Ateom will handle downloading the correct
+	// written by CheckpointWorkload.  The worker will handle downloading the correct
 	// gVisor / runsc version to match the checkpoint.
 	RestoreWorkload(context.Context, *RestoreWorkloadRequest) (*RestoreWorkloadResponse, error)
 	// GetWorkloadStats returns a point-in-time resource-usage sample for the
-	// workload this ateom is currently executing.
+	// workload this worker is currently executing.
 	//
-	// It is a pure read: unlike the three calls above it does not move the ateom
+	// It is a pure read: unlike the three calls above it does not move the worker
 	// between "available" and "executing", so it is safe to call on a timer for
 	// the whole lifetime of a workload. It also does not wait on them. Those
-	// three serialize on a mutex an ateom holds for a whole boot, restore, or
+	// three serialize on a mutex a worker holds for a whole boot, restore, or
 	// checkpoint; this call reads its state from outside that mutex, so a poll
 	// landing in the middle of one answers immediately instead of going quiet for
 	// the duration -- which would silence the poller during exactly the phases
@@ -239,30 +239,30 @@ type WorkerServer interface {
 	// Two ways it declines to give a sample, and they ask different things of the
 	// caller:
 	//
-	//   * NOT_FOUND -- this ateom is not executing the actor in the request. It
+	//   * NOT_FOUND -- this worker is not executing the actor in the request. It
 	//     may be "available", or a recycled worker may have moved on to a
 	//     different actor. Retrying on the same timer will not change the answer:
 	//     the caller's worker-to-actor mapping is stale and wants re-resolving.
 	//
-	//   * FAILED_PRECONDITION -- this ateom is executing the requested actor but
+	//   * FAILED_PRECONDITION -- this worker is executing the requested actor but
 	//     has no sample to give yet. It accepts an actor before the sandbox it
 	//     will measure exists, so a poll landing in the boot lands here. Read it
 	//     as "no numbers right now", not as "the actor is gone": it is transient,
 	//     and the caller should skip this sample and take the next one.
 	//
 	// The split is worth the two codes because the identity is retained from the
-	// moment the ateom accepts the actor, on both runtimes. That is what makes
+	// moment the worker accepts the actor, on both runtimes. That is what makes
 	// "booting" distinguishable from "not here" at all, and it means a workload
 	// that dies during boot is attributable rather than anonymous.
 	GetWorkloadStats(context.Context, *GetWorkloadStatsRequest) (*GetWorkloadStatsResponse, error)
-	// GetActiveWorkloadStats reports every actor this ateom hosts, without
+	// GetActiveWorkloadStats reports every actor this worker hosts, without
 	// asserting an identity. It is the discovery read for a
-	// scraper that enumerates ateoms and holds no worker-to-actor mapping;
+	// scraper that enumerates workers and holds no worker-to-actor mapping;
 	// GetWorkloadStats above is the verified read for a caller that must be
 	// answered about a specific actor.
 	//
-	// It serves each actor's latest sample from the ateom's own sampling timer,
-	// so a poll reads no sandbox and has no error path: an "available" ateom
+	// It serves each actor's latest sample from the worker's own sampling timer,
+	// so a poll reads no sandbox and has no error path: an "available" worker
 	// answers an empty samples list, and a workload with nothing measured yet
 	// (a boot, a restore, or a guest the last sweep did not reach) appears as a
 	// sample carrying its attribution with source = STATS_SOURCE_UNSPECIFIED --
@@ -277,7 +277,7 @@ type WorkerServer interface {
 	// it is safe on a timer and does not touch the lifecycle mutex.
 	GetActiveWorkloadStats(context.Context, *GetActiveWorkloadStatsRequest) (*GetActiveWorkloadStatsResponse, error)
 	// TerminateWorkload stops and deletes container workloads and cleans up
-	// network and bundle overlays on ateom.
+	// network and bundle overlays on the worker.
 	TerminateWorkload(context.Context, *TerminateWorkloadRequest) (*TerminateWorkloadResponse, error)
 	mustEmbedUnimplementedWorkerServer()
 }

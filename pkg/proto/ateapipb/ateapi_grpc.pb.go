@@ -161,7 +161,7 @@ type ControlClient interface {
 	// if another write lands on the Worker first; retry.
 	//
 	// Every Actor placed after this call is stamped with the Worker's epoch as
-	// it stands then, so a caller raises epoch for a restarted ateom first.
+	// it stands then, so a caller raises epoch for a restarted the worker first.
 	MarkWorkerAvailable(ctx context.Context, in *MarkWorkerAvailableRequest, opts ...grpc.CallOption) (*MarkWorkerAvailableResponse, error)
 	// Mark an ACTIVE Worker UNAVAILABLE so the scheduler stops placing Actors on
 	// it, as while its Pod is not Ready. Idempotent. Leaves any bound Actor
@@ -738,7 +738,7 @@ type ControlServer interface {
 	// if another write lands on the Worker first; retry.
 	//
 	// Every Actor placed after this call is stamped with the Worker's epoch as
-	// it stands then, so a caller raises epoch for a restarted ateom first.
+	// it stands then, so a caller raises epoch for a restarted the worker first.
 	MarkWorkerAvailable(context.Context, *MarkWorkerAvailableRequest) (*MarkWorkerAvailableResponse, error)
 	// Mark an ACTIVE Worker UNAVAILABLE so the scheduler stops placing Actors on
 	// it, as while its Pod is not Ready. Idempotent. Leaves any bound Actor
@@ -1954,18 +1954,18 @@ type WorkerServiceClient interface {
 	// MintCert. Idempotent: re-sending the same capacity and runtimes is not a
 	// write.
 	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
-	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
+	// Create a Substrate-issued SPIFFE certificate that asserts a worker acting
 	// on behalf of a particular actor.
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
 	MintWorkerActorCertificate(ctx context.Context, in *MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*MintWorkerActorCertificateResponse, error)
-	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts an ateom
+	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
 	// acting on behalf of a particular actor: the JWT counterpart of
 	// MintWorkerActorCertificate. atelet calls it with its own client
 	// certificate and hands the JWT to node-side plugins, which exchange it for
 	// credentials scoped to that actor.
 	//
-	// The token speaks for the ateom, not the actor: its subject is
+	// The token speaks for the worker, not the actor: its subject is
 	// `worker-for-actor/<atespace>/<name>` and its claims sit under
 	// `worker-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
 	// fixed at one hour.
@@ -2083,18 +2083,18 @@ type WorkerServiceServer interface {
 	// MintCert. Idempotent: re-sending the same capacity and runtimes is not a
 	// write.
 	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
-	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
+	// Create a Substrate-issued SPIFFE certificate that asserts a worker acting
 	// on behalf of a particular actor.
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
 	MintWorkerActorCertificate(context.Context, *MintWorkerActorCertificateRequest) (*MintWorkerActorCertificateResponse, error)
-	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts an ateom
+	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
 	// acting on behalf of a particular actor: the JWT counterpart of
 	// MintWorkerActorCertificate. atelet calls it with its own client
 	// certificate and hands the JWT to node-side plugins, which exchange it for
 	// credentials scoped to that actor.
 	//
-	// The token speaks for the ateom, not the actor: its subject is
+	// The token speaks for the worker, not the actor: its subject is
 	// `worker-for-actor/<atespace>/<name>` and its claims sit under
 	// `worker-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
 	// fixed at one hour.

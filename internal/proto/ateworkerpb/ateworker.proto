@@ -21,38 +21,38 @@ option go_package = "github.com/agent-substrate/substrate/internal/proto/atework
 // Worker is the interface to control a single gVisor (or, in the future microVM)
 // guest inside a worker pod.
 //
-// Each ateom server has two main states, "available" and "executing".
+// Each worker has two main states, "available" and "executing".
 //
-// When the ateom is "available", the substrate control plane is free to either
+// When the worker is "available", the substrate control plane is free to either
 // boot a new workload (using RunWorkload), or restore an existing workload from
-// a checkpoint (using RestoreWorkload).  These calls move the ateom into
+// a checkpoint (using RestoreWorkload).  These calls move the worker into
 // "executing" state.
 //
-// When the ateom is "executing", the substrate control plane can checkpoint the
-// running workload (with CheckpointWorkload).  This moves the ateom back to
+// When the worker is "executing", the substrate control plane can checkpoint the
+// running workload (with CheckpointWorkload).  This moves the worker back to
 // "free" state.
 service Worker {
-  // RunWorkload tells ateom to begin running a new workload (one or more
+  // RunWorkload tells the worker to begin running a new workload (one or more
   // containers, potentially with shared filesystems).
   rpc RunWorkload(RunWorkloadRequest) returns (RunWorkloadResponse) {}
 
-  // CheckpointWorkload tells ateom to save the current state of the running
+  // CheckpointWorkload tells the worker to save the current state of the running
   // workload to object storage, and then completely reset itself to a blank
   // state (back to "available" state.)
   rpc CheckpointWorkload(CheckpointWorkloadRequest) returns (CheckpointWorkloadResponse) {}
 
   // RestoreWorkload restores a workload from checkpoint that was previously
-  // written by CheckpointWorkload.  Ateom will handle downloading the correct
+  // written by CheckpointWorkload.  The worker will handle downloading the correct
   // gVisor / runsc version to match the checkpoint.
   rpc RestoreWorkload(RestoreWorkloadRequest) returns (RestoreWorkloadResponse) {}
 
   // GetWorkloadStats returns a point-in-time resource-usage sample for the
-  // workload this ateom is currently executing.
+  // workload this worker is currently executing.
   //
-  // It is a pure read: unlike the three calls above it does not move the ateom
+  // It is a pure read: unlike the three calls above it does not move the worker
   // between "available" and "executing", so it is safe to call on a timer for
   // the whole lifetime of a workload. It also does not wait on them. Those
-  // three serialize on a mutex an ateom holds for a whole boot, restore, or
+  // three serialize on a mutex a worker holds for a whole boot, restore, or
   // checkpoint; this call reads its state from outside that mutex, so a poll
   // landing in the middle of one answers immediately instead of going quiet for
   // the duration -- which would silence the poller during exactly the phases
@@ -61,31 +61,31 @@ service Worker {
   // Two ways it declines to give a sample, and they ask different things of the
   // caller:
   //
-  //   * NOT_FOUND -- this ateom is not executing the actor in the request. It
+  //   * NOT_FOUND -- this worker is not executing the actor in the request. It
   //     may be "available", or a recycled worker may have moved on to a
   //     different actor. Retrying on the same timer will not change the answer:
   //     the caller's worker-to-actor mapping is stale and wants re-resolving.
   //
-  //   * FAILED_PRECONDITION -- this ateom is executing the requested actor but
+  //   * FAILED_PRECONDITION -- this worker is executing the requested actor but
   //     has no sample to give yet. It accepts an actor before the sandbox it
   //     will measure exists, so a poll landing in the boot lands here. Read it
   //     as "no numbers right now", not as "the actor is gone": it is transient,
   //     and the caller should skip this sample and take the next one.
   //
   // The split is worth the two codes because the identity is retained from the
-  // moment the ateom accepts the actor, on both runtimes. That is what makes
+  // moment the worker accepts the actor, on both runtimes. That is what makes
   // "booting" distinguishable from "not here" at all, and it means a workload
   // that dies during boot is attributable rather than anonymous.
   rpc GetWorkloadStats(GetWorkloadStatsRequest) returns (GetWorkloadStatsResponse) {}
 
-  // GetActiveWorkloadStats reports every actor this ateom hosts, without
+  // GetActiveWorkloadStats reports every actor this worker hosts, without
   // asserting an identity. It is the discovery read for a
-  // scraper that enumerates ateoms and holds no worker-to-actor mapping;
+  // scraper that enumerates workers and holds no worker-to-actor mapping;
   // GetWorkloadStats above is the verified read for a caller that must be
   // answered about a specific actor.
   //
-  // It serves each actor's latest sample from the ateom's own sampling timer,
-  // so a poll reads no sandbox and has no error path: an "available" ateom
+  // It serves each actor's latest sample from the worker's own sampling timer,
+  // so a poll reads no sandbox and has no error path: an "available" worker
   // answers an empty samples list, and a workload with nothing measured yet
   // (a boot, a restore, or a guest the last sweep did not reach) appears as a
   // sample carrying its attribution with source = STATS_SOURCE_UNSPECIFIED --
@@ -101,12 +101,12 @@ service Worker {
   rpc GetActiveWorkloadStats(GetActiveWorkloadStatsRequest) returns (GetActiveWorkloadStatsResponse) {}
 
   // TerminateWorkload stops and deletes container workloads and cleans up
-  // network and bundle overlays on ateom.
+  // network and bundle overlays on the worker.
   rpc TerminateWorkload(TerminateWorkloadRequest) returns (TerminateWorkloadResponse) {}
 }
 
 // ActorDirs is the set of per-actor directories atelet prepares on the volume
-// it shares with ateom. ateom takes them from the RPC instead of deriving
+// it shares with the worker. The worker takes them from the RPC instead of deriving
 // them from the actor UID.
 // Every directory is under root_dir.
 message ActorDirs {
@@ -160,10 +160,10 @@ message RunWorkloadRequest {
   // When absent the actor has no egress: its TCP is captured and refused.
   optional EgressGateway egress_gateway = 10;
 
-  // The actor's declared size, from the ActorTemplate's resource limits. ateom
+  // The actor's declared size, from the ActorTemplate's resource limits. The worker
   // sizes the sandbox to these (cgroup caps via the OCI spec, and for the
   // micro-VM the VM's vCPU count and memory). Zero means "unset": keep the
-  // runtime default (unlimited for gVisor, ateom's own default for the micro-VM).
+  // runtime default (unlimited for gVisor, the worker's own default for the micro-VM).
   int64 cpu_milli = 11;    // CPU limit in millicores (1000 = one core).
   int64 memory_bytes = 12; // Memory limit in bytes.
   ActorDirs actor_dirs = 13;
@@ -200,7 +200,7 @@ message Container {
   // image_volume_mounts are the image volumes this container mounts, if any.
   repeated ImageVolumeMount image_volume_mounts = 6;
 
-  // container_spec is what ateom builds the container's OCI spec from,
+  // container_spec is what the worker builds the container's OCI spec from,
   // besides its volume mounts. Unset on RPCs that start no process.
   ContainerSpec container_spec = 7;
 }
@@ -256,7 +256,7 @@ message SystemInfoVolumeMount {
   string mount_path = 2;
 }
 
-// ImageVolumeMount is one image volume mounted into a container. ateom uses
+// ImageVolumeMount is one image volume mounted into a container. The worker uses
 // these to construct the container's volume mounts — each names the volume
 // and its destination path.
 message ImageVolumeMount {
@@ -335,7 +335,7 @@ message CheckpointWorkloadRequest {
 }
 
 message CheckpointWorkloadResponse {
-  // snapshot_files lists the files ateom wrote into the checkpoint directory
+  // snapshot_files lists the files the worker wrote into the checkpoint directory
   // (relative names) for atelet to ship to object storage. Each runtime reports
   // its own set (gVisor's image files, cloud-hypervisor's snapshot set, ...).
   repeated string snapshot_files = 1;
@@ -379,7 +379,7 @@ message RestoreWorkloadRequest {
   ActorDirs actor_dirs = 16;
 
   // actor_dirs.restore_dir is a preserved local snapshot, not a scratch copy:
-  // ateom must not delete or modify files in it.
+  // the worker must not delete or modify files in it.
   bool preserve_restore_dir = 17;
 }
 
@@ -388,7 +388,7 @@ message RestoreWorkloadResponse {
 
 message GetWorkloadStatsRequest {
   // The actor the caller believes is executing here. A worker can be recycled
-  // between the caller's view of the world and this call, so ateom answers
+  // between the caller's view of the world and this call, so the worker answers
   // NOT_FOUND on a mismatch rather than reporting a different actor's numbers
   // under the requested actor's identity.
   string actor_uid = 1;
@@ -415,11 +415,11 @@ enum StatsSource {
 // shared by both stats reads. The unit of measurement is the SANDBOX, which
 // today equals the actor. Per-container attribution is not reported: the
 // micro-VM source could give it, since the guest keeps a cgroup per container
-// and ateom sums them, but the gVisor source cannot split one at all without
+// and the worker sums them, but the gVisor source cannot split one at all without
 // the sentry's own accounting, and a field only one runtime could ever fill
 // would be worse than none.
 message WorkloadStatsSample {
-  // Identity of the measured actor, retained by ateom from the
+  // Identity of the measured actor, retained by the worker from the
   // RunWorkloadRequest / RestoreWorkloadRequest that started it. Echoed back so
   // the caller can attribute the sample without holding its own mapping from
   // worker to actor.
@@ -431,7 +431,7 @@ message WorkloadStatsSample {
 
   // The sandbox runtime family that produced this sample, in the
   // ate.dev/v1alpha1 SandboxClass form: "gvisor" (cmd/ateworker-gvisor) or
-  // "microvm" (cmd/ateworker-microvm). An ateom binary only ever reports its own.
+  // "microvm" (cmd/ateworker-microvm). A worker binary only ever reports its own.
   string sandbox_class = 6;
 
   // How the measurements below were obtained.
@@ -474,12 +474,12 @@ message GetActiveWorkloadStatsRequest {
 }
 
 message GetActiveWorkloadStatsResponse {
-  // One entry per workload this ateom is executing; empty when it is
+  // One entry per workload this worker is executing; empty when it is
   // "available". Each sample is self-describing (see the attribution rule on
   // the rpc); an entry with source = STATS_SOURCE_UNSPECIFIED is a workload
   // with no numbers to give yet (boot, restore, teardown, or a lifecycle
   // transition underneath the read) -- skip its measurements and take the
-  // next sample. An ateom serves one actor at a time today, so the list holds
+  // next sample. A worker serves one actor at a time today, so the list holds
   // at most one entry until multi-actor workers land; consumers must not
   // assume that.
   repeated WorkloadStatsSample samples = 1;

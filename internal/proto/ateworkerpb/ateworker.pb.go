@@ -158,7 +158,7 @@ func (StatsSource) EnumDescriptor() ([]byte, []int) {
 }
 
 // ActorDirs is the set of per-actor directories atelet prepares on the volume
-// it shares with ateom. ateom takes them from the RPC instead of deriving
+// it shares with the worker. The worker takes them from the RPC instead of deriving
 // them from the actor UID.
 // Every directory is under root_dir.
 type ActorDirs struct {
@@ -412,10 +412,10 @@ type RunWorkloadRequest struct {
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,8,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// When absent the actor has no egress: its TCP is captured and refused.
 	EgressGateway *EgressGateway `protobuf:"bytes,10,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
-	// The actor's declared size, from the ActorTemplate's resource limits. ateom
+	// The actor's declared size, from the ActorTemplate's resource limits. The worker
 	// sizes the sandbox to these (cgroup caps via the OCI spec, and for the
 	// micro-VM the VM's vCPU count and memory). Zero means "unset": keep the
-	// runtime default (unlimited for gVisor, ateom's own default for the micro-VM).
+	// runtime default (unlimited for gVisor, the worker's own default for the micro-VM).
 	CpuMilli      int64      `protobuf:"varint,11,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
 	MemoryBytes   int64      `protobuf:"varint,12,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	ActorDirs     *ActorDirs `protobuf:"bytes,13,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
@@ -644,7 +644,7 @@ type Container struct {
 	SystemInfoVolumeMounts []*SystemInfoVolumeMount `protobuf:"bytes,5,rep,name=system_info_volume_mounts,json=systemInfoVolumeMounts,proto3" json:"system_info_volume_mounts,omitempty"`
 	// image_volume_mounts are the image volumes this container mounts, if any.
 	ImageVolumeMounts []*ImageVolumeMount `protobuf:"bytes,6,rep,name=image_volume_mounts,json=imageVolumeMounts,proto3" json:"image_volume_mounts,omitempty"`
-	// container_spec is what ateom builds the container's OCI spec from,
+	// container_spec is what the worker builds the container's OCI spec from,
 	// besides its volume mounts. Unset on RPCs that start no process.
 	ContainerSpec *ContainerSpec `protobuf:"bytes,7,opt,name=container_spec,json=containerSpec,proto3" json:"container_spec,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1027,7 +1027,7 @@ func (x *SystemInfoVolumeMount) GetMountPath() string {
 	return ""
 }
 
-// ImageVolumeMount is one image volume mounted into a container. ateom uses
+// ImageVolumeMount is one image volume mounted into a container. The worker uses
 // these to construct the container's volume mounts — each names the volume
 // and its destination path.
 type ImageVolumeMount struct {
@@ -1369,7 +1369,7 @@ func (x *CheckpointWorkloadRequest) GetActorDirs() *ActorDirs {
 
 type CheckpointWorkloadResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// snapshot_files lists the files ateom wrote into the checkpoint directory
+	// snapshot_files lists the files the worker wrote into the checkpoint directory
 	// (relative names) for atelet to ship to object storage. Each runtime reports
 	// its own set (gVisor's image files, cloud-hypervisor's snapshot set, ...).
 	SnapshotFiles []string `protobuf:"bytes,1,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
@@ -1451,7 +1451,7 @@ type RestoreWorkloadRequest struct {
 	MemoryBytes int64      `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	ActorDirs   *ActorDirs `protobuf:"bytes,16,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	// actor_dirs.restore_dir is a preserved local snapshot, not a scratch copy:
-	// ateom must not delete or modify files in it.
+	// the worker must not delete or modify files in it.
 	PreserveRestoreDir bool `protobuf:"varint,17,opt,name=preserve_restore_dir,json=preserveRestoreDir,proto3" json:"preserve_restore_dir,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
@@ -1631,7 +1631,7 @@ func (*RestoreWorkloadResponse) Descriptor() ([]byte, []int) {
 type GetWorkloadStatsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor the caller believes is executing here. A worker can be recycled
-	// between the caller's view of the world and this call, so ateom answers
+	// between the caller's view of the world and this call, so the worker answers
 	// NOT_FOUND on a mismatch rather than reporting a different actor's numbers
 	// under the requested actor's identity.
 	ActorUid      string `protobuf:"bytes,1,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
@@ -1680,12 +1680,12 @@ func (x *GetWorkloadStatsRequest) GetActorUid() string {
 // shared by both stats reads. The unit of measurement is the SANDBOX, which
 // today equals the actor. Per-container attribution is not reported: the
 // micro-VM source could give it, since the guest keeps a cgroup per container
-// and ateom sums them, but the gVisor source cannot split one at all without
+// and the worker sums them, but the gVisor source cannot split one at all without
 // the sentry's own accounting, and a field only one runtime could ever fill
 // would be worse than none.
 type WorkloadStatsSample struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Identity of the measured actor, retained by ateom from the
+	// Identity of the measured actor, retained by the worker from the
 	// RunWorkloadRequest / RestoreWorkloadRequest that started it. Echoed back so
 	// the caller can attribute the sample without holding its own mapping from
 	// worker to actor.
@@ -1696,7 +1696,7 @@ type WorkloadStatsSample struct {
 	ActorTemplateName     string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// The sandbox runtime family that produced this sample, in the
 	// ate.dev/v1alpha1 SandboxClass form: "gvisor" (cmd/ateworker-gvisor) or
-	// "microvm" (cmd/ateworker-microvm). An ateom binary only ever reports its own.
+	// "microvm" (cmd/ateworker-microvm). A worker binary only ever reports its own.
 	SandboxClass string `protobuf:"bytes,6,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	// How the measurements below were obtained.
 	Source StatsSource `protobuf:"varint,7,opt,name=source,proto3,enum=ateworker.StatsSource" json:"source,omitempty"`
@@ -1932,12 +1932,12 @@ func (*GetActiveWorkloadStatsRequest) Descriptor() ([]byte, []int) {
 
 type GetActiveWorkloadStatsResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// One entry per workload this ateom is executing; empty when it is
+	// One entry per workload this worker is executing; empty when it is
 	// "available". Each sample is self-describing (see the attribution rule on
 	// the rpc); an entry with source = STATS_SOURCE_UNSPECIFIED is a workload
 	// with no numbers to give yet (boot, restore, teardown, or a lifecycle
 	// transition underneath the read) -- skip its measurements and take the
-	// next sample. An ateom serves one actor at a time today, so the list holds
+	// next sample. A worker serves one actor at a time today, so the list holds
 	// at most one entry until multi-actor workers land; consumers must not
 	// assume that.
 	Samples       []*WorkloadStatsSample `protobuf:"bytes,1,rep,name=samples,proto3" json:"samples,omitempty"`
