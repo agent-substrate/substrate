@@ -33,7 +33,6 @@ import (
 	"go.ate.dev/substrate/internal/actorlog"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
-	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -78,6 +77,7 @@ func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
 		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
 		VolumesDir:                "/node/actors/actor-a/volumes",
+		SandboxAssetsDir:          "/node/actors/actor-a/sandbox-assets",
 	}
 	for name, call := range map[string]func() error{
 		"RunWorkload": func() error {
@@ -104,10 +104,9 @@ func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 }
 
 func TestRestoreWorkloadRejectsUnsupportedFidelity(t *testing.T) {
-	staticFilesDir := nodepath.StaticFilesDir
-	nodepath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { nodepath.StaticFilesDir = staticFilesDir })
-	runscPath := filepath.Join(nodepath.StaticFilesDir, "runsc")
+	// runsc must sit in the actor's own sandbox assets dir.
+	sandboxAssetsDir := t.TempDir()
+	runscPath := filepath.Join(sandboxAssetsDir, "runsc")
 	if err := os.WriteFile(runscPath, nil, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -119,6 +118,7 @@ func TestRestoreWorkloadRejectsUnsupportedFidelity(t *testing.T) {
 		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
 		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
 		VolumesDir:                "/node/actors/actor-a/volumes",
+		SandboxAssetsDir:          sandboxAssetsDir,
 	}
 	// A zero service cannot acquire locks, configure networking, or open log pipes.
 	s := &AteWorkerService{}

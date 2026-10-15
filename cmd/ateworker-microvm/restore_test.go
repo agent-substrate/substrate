@@ -46,6 +46,8 @@ func writeSnapshotConfig(t *testing.T, fsDevices []map[string]any) string {
 		"console": map[string]any{"mode": "File", "file": "/run/vc/vm/golden/console.log"},
 		"serial":  map[string]any{"mode": "File", "file": "/run/vc/vm/golden/serial.log"},
 		"fs":      fsDevices,
+		"payload": map[string]any{"kernel": "/var/lib/ate/actors/golden/sandbox-assets/kata-kernel", "cmdline": "console=hvc0"},
+		"pmem":    []map[string]any{{"id": guestImagePmemID, "file": "/var/lib/ate/actors/golden/sandbox-assets/kata-image", "discard_writes": true}},
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {
@@ -82,15 +84,20 @@ func readFsSockets(t *testing.T, dir string) map[string]string {
 	return got
 }
 
-func TestRewriteSnapshotSocketPaths(t *testing.T) {
+func TestRewriteSnapshotPaths(t *testing.T) {
 	const id = "actor-uid"
+	// The restoring actor's own staged kernel and guest image.
+	const (
+		kernel = "/var/lib/ate/actors/actor-uid/sandbox-assets/kata-kernel"
+		image  = "/var/lib/ate/actors/actor-uid/sandbox-assets/kata-image"
+	)
 
 	t.Run("overlay lower only", func(t *testing.T) {
 		dir := writeSnapshotConfig(t, []map[string]any{
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 		})
-		if err := rewriteSnapshotSocketPaths(dir, id); err != nil {
-			t.Fatalf("rewriteSnapshotSocketPaths: %v", err)
+		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 		if got, want := readFsSockets(t, dir)[kata.FsTag], kata.VirtiofsdSocketPath(id); got != want {
 			t.Errorf("%s socket = %q, want %q", kata.FsTag, got, want)
@@ -105,18 +112,44 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 			dir := writeSnapshotConfig(t, []map[string]any{
 				{"tag": tag, "socket": "/run/vc/vm/golden/other.sock"},
 			})
-			if err := rewriteSnapshotSocketPaths(dir, id); err == nil {
-				t.Fatalf("rewriteSnapshotSocketPaths accepted fs tag %q, want an error", tag)
+			if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
+				t.Fatalf("rewriteSnapshotPaths accepted fs tag %q, want an error", tag)
 			}
 		}
 	})
 
-	t.Run("vsock and console devices are repointed", func(t *testing.T) {
+	t.Run("unknown pmem device is an error", func(t *testing.T) {
 		dir := writeSnapshotConfig(t, []map[string]any{
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 		})
-		if err := rewriteSnapshotSocketPaths(dir, id); err != nil {
-			t.Fatalf("rewriteSnapshotSocketPaths: %v", err)
+		cfgPath := filepath.Join(dir, "config.json")
+		b, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg map[string]any
+		if err := json.Unmarshal(b, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		cfg["pmem"] = []map[string]any{{"id": "scratch-disk", "file": "/somewhere/else"}}
+		b, err = json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
+			t.Fatal("rewriteSnapshotPaths accepted a pmem device it does not know, want an error")
+		}
+	})
+
+	t.Run("vsock, console, kernel and image are repointed", func(t *testing.T) {
+		dir := writeSnapshotConfig(t, []map[string]any{
+			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
+		})
+		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 		b, err := os.ReadFile(filepath.Join(dir, "config.json"))
 		if err != nil {
@@ -126,12 +159,25 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 			Vsock   struct{ Socket string } `json:"vsock"`
 			Console struct{ File string }   `json:"console"`
 			Serial  struct{ File string }   `json:"serial"`
+			Payload struct{ Kernel string } `json:"payload"`
+			Pmem    []struct {
+				ID   string `json:"id"`
+				File string `json:"file"`
+			} `json:"pmem"`
 		}
 		if err := json.Unmarshal(b, &cfg); err != nil {
 			t.Fatalf("parsing rewritten config: %v", err)
 		}
 		if want := kata.VsockSocketPath(id); cfg.Vsock.Socket != want {
 			t.Errorf("vsock socket = %q, want %q", cfg.Vsock.Socket, want)
+		}
+		// The source actor's staged kernel and image may be gone; the
+		// snapshot must boot from this actor's.
+		if cfg.Payload.Kernel != kernel {
+			t.Errorf("payload kernel = %q, want %q", cfg.Payload.Kernel, kernel)
+		}
+		if len(cfg.Pmem) != 1 || cfg.Pmem[0].ID != guestImagePmemID || cfg.Pmem[0].File != image {
+			t.Errorf("pmem = %+v, want the %q device at %q", cfg.Pmem, guestImagePmemID, image)
 		}
 		if want := kata.ConsoleLogPath(id); cfg.Console.File != want {
 			t.Errorf("console file = %q, want %q", cfg.Console.File, want)
@@ -158,8 +204,8 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 			t.Fatalf("linking config.json: %v", err)
 		}
 
-		if err := rewriteSnapshotSocketPaths(dir, id); err != nil {
-			t.Fatalf("rewriteSnapshotSocketPaths: %v", err)
+		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 		if got, want := readFsSockets(t, dir)[kata.FsTag], kata.VirtiofsdSocketPath(id); got != want {
 			t.Errorf("%s socket = %q, want %q", kata.FsTag, got, want)
@@ -193,6 +239,8 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 			"fs": []map[string]any{
 				{"tag": kata.FsTag, "socket": kata.VirtiofsdSocketPath(id)},
 			},
+			"payload": map[string]any{"kernel": kernel, "cmdline": "console=hvc0"},
+			"pmem":    []map[string]any{{"id": guestImagePmemID, "file": image, "discard_writes": true}},
 		}
 		b, err := json.Marshal(cfg)
 		if err != nil {
@@ -207,8 +255,8 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 		}
 		inoBefore := fiBefore.Sys().(*syscall.Stat_t).Ino
 
-		if err := rewriteSnapshotSocketPaths(dir, id); err != nil {
-			t.Fatalf("rewriteSnapshotSocketPaths: %v", err)
+		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 
 		fiAfter, err := os.Stat(cfgPath)
@@ -247,6 +295,7 @@ func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
 					DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
 					SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
 					VolumesDir:                "/node/actors/actor-a/volumes",
+					SandboxAssetsDir:          "/node/actors/actor-a/sandbox-assets",
 				},
 			},
 		},
@@ -418,6 +467,7 @@ func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
 		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
 		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
 		VolumesDir:                "/node/actors/actor-a/volumes",
+		SandboxAssetsDir:          "/node/actors/actor-a/sandbox-assets",
 	}
 	assets := map[string]string{assetCH: "/bin/sh"}
 	for name, call := range map[string]func() error{

@@ -45,6 +45,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/api/v1alpha1"
@@ -96,6 +97,9 @@ type workerSandboxSyncer struct {
 	// pods holds this node's worker pods, indexed by podUIDIndex.
 	pods   cache.Indexer
 	assets sandboxAssetFetcher
+	// scratchDir is where the runsc probe stages the binary it runs, read
+	// from ateletpath once here so a test can point a syncer elsewhere.
+	scratchDir string
 	// queue carries pod UIDs. A workqueue never hands the same key to two
 	// workers at once, so a pod's file is never written and its directory
 	// removed at the same time.
@@ -122,9 +126,10 @@ type workerSandboxSyncer struct {
 
 func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, workersDir string) *workerSandboxSyncer {
 	return &workerSandboxSyncer{
-		resolver: resolver,
-		pods:     pods,
-		assets:   assets,
+		resolver:   resolver,
+		pods:       pods,
+		assets:     assets,
+		scratchDir: ateletpath.SandboxAssetScratchDir,
 		// Backoff doubles from 1s for informer lag and unresolved pools, and
 		// caps at 5m where uncapped retries for transient asset fetch or probe
 		// failures stay until they recover.

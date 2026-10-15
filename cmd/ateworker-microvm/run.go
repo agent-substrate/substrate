@@ -119,6 +119,10 @@ const (
 	assetKernel    = "kata-kernel"
 	assetImage     = "kata-image"
 	assetVirtiofsd = "virtiofsd"
+
+	// guestImagePmemID names the virtio-pmem device that carries the guest
+	// image, in the VM config and so in every snapshot's config.json.
+	guestImagePmemID = "guest-image"
 )
 
 // kataAgentPath is where the kata guest image keeps the agent binary. buildVMConfig
@@ -235,7 +239,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
-	if err := validateRuntimeAssetPaths(req.GetRuntimeAssetPaths()); err != nil {
+	if err := validateRuntimeAssetPaths(req.GetActorDirs(), req.GetRuntimeAssetPaths()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -818,7 +822,7 @@ func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus 
 		Payload: ch.PayloadConfig{Kernel: kernel, Cmdline: cmdline},
 		// The guest image is a virtio-pmem device (/dev/pmem0), mounted read-only
 		// with DAX, so its file data stays in the host page cache instead of being copied into guest RAM.
-		Pmem:     []ch.PmemConfig{{ID: "guest-image", File: image, DiscardWrites: true}},
+		Pmem:     []ch.PmemConfig{{ID: guestImagePmemID, File: image, DiscardWrites: true}},
 		Fs:       buildFsConfigs(id),
 		Platform: &ch.PlatformConfig{NumPciSegments: 2},
 		Rng:      &ch.RngConfig{Src: "/dev/urandom"},

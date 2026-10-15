@@ -25,7 +25,10 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
@@ -47,11 +50,10 @@ import (
 func useTempNodeDirs(t *testing.T) {
 	t.Helper()
 	root := t.TempDir()
-	origActors, origStatic := nodepath.ActorsDir, nodepath.StaticFilesDir
+	origActors := nodepath.ActorsDir
 	nodepath.ActorsDir = filepath.Join(root, "actors")
-	nodepath.StaticFilesDir = filepath.Join(root, "static-files")
 	t.Cleanup(func() {
-		nodepath.ActorsDir, nodepath.StaticFilesDir = origActors, origStatic
+		nodepath.ActorsDir = origActors
 	})
 }
 
@@ -61,6 +63,8 @@ func useTempNodeDirs(t *testing.T) {
 // the request, never derived from the actor UID.
 type fakeWorker struct {
 	ateworkerpb.UnimplementedWorkerServer
+	// mu guards the record maps: concurrent RPCs record at the same time.
+	mu sync.Mutex
 	// snapshotFiles are written at checkpoint and reported back to atelet as
 	// the exact set the snapshot consists of.
 	snapshotFiles map[string]string
@@ -78,6 +82,8 @@ type fakeWorker struct {
 }
 
 func (f *fakeWorker) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFidelity) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.fidelities == nil {
 		f.fidelities = map[string]ateworkerpb.SnapshotFidelity{}
 	}
@@ -85,6 +91,8 @@ func (f *fakeWorker) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFid
 }
 
 func (f *fakeWorker) recordActorDirs(rpc string, actorDirs *ateworkerpb.ActorDirs) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.actorDirs == nil {
 		f.actorDirs = map[string]*ateworkerpb.ActorDirs{}
 	}
@@ -209,6 +217,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 	s := &Atelet{
 		workerDialer:      newWorkerDialer(1),
 		imageCache:        newImageVolumeStore(t),
+		sandboxAssetCache: newTestAssetCache(t),
 		anonGCSClient:     fakeObjectStorage{data: runsc},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), clock.RealClock{}),
@@ -261,6 +270,11 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 	if _, err := os.Stat(snapshotFile); err != nil {
 		t.Fatalf("pause did not write the local snapshot: %v", err)
 	}
+	// A paused actor runs nothing, so it holds no links that would pin its
+	// assets in the cache.
+	if entries, err := os.ReadDir(ateletpath.SandboxAssetsDir(actorUID)); err != nil || len(entries) != 0 {
+		t.Errorf("paused actor still holds %d staged assets (%v), want none", len(entries), err)
+	}
 	st := resp.GetState()
 	if got := st.GetLatestLocal(); got.GetSnapshot().GetSnapshotUuid() != snapshotName || got.GetLocalCommitTime() == nil {
 		t.Errorf("latest_local = %v, want the pause snapshot with its commit time", got)
@@ -289,6 +303,9 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 	}
 	if got := worker.restored["checkpoint.img"]; got != "guest-memory" {
 		t.Fatalf("restore staged %q for worker, want the pause snapshot's %q", got, "guest-memory")
+	}
+	if _, err := os.Stat(filepath.Join(ateletpath.SandboxAssetsDir(actorUID), runscAssetName)); err != nil {
+		t.Errorf("resumed actor has no staged runsc: %v", err)
 	}
 	for _, rpc := range []string{"CheckpointWorkload", "RestoreWorkload"} {
 		if got := worker.fidelities[rpc]; got != toWorkerFidelity(fidelity) {
@@ -401,6 +418,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	s := &Atelet{
 		workerDialer:      newWorkerDialer(1),
 		imageCache:        newImageVolumeStore(t),
+		sandboxAssetCache: newTestAssetCache(t),
 		anonGCSClient:     fakeObjectStorage{data: runsc},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), clock.RealClock{}),
@@ -556,11 +574,21 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			// The live activation's staged binary: a Run that fails before
+			// it swaps its own set in must leave it, and a Run that fails
+			// after must still leave nothing half-staged behind.
+			liveAsset := filepath.Join(ateletpath.SandboxAssetsDir(actorUID), "runsc")
+			if err := os.MkdirAll(filepath.Dir(liveAsset), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(liveAsset, []byte("live runsc"), 0o555); err != nil {
+				t.Fatal(err)
+			}
 			storage := fakeObjectStorage{data: content}
 			if tc.failure == "asset" {
 				storage.err = fmt.Errorf("asset unavailable")
 			}
-			s := &Atelet{anonGCSClient: storage, systemInfoVolumes: refresher, snapshots: snapshottracker.New(t.Context(), clock.RealClock{})}
+			s := &Atelet{anonGCSClient: storage, systemInfoVolumes: refresher, snapshots: snapshottracker.New(t.Context(), clock.RealClock{}), sandboxAssetCache: newTestAssetCache(t)}
 			assets := &ateletpb.SandboxAssets{
 				SandboxClass: "gvisor", PauseImage: testPauseImage,
 				Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
@@ -586,6 +614,9 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("activation error = %v, want %q", err, tc.wantErr)
 			}
+			if _, err := os.Lstat(ateletpath.SandboxAssetsStagingDir(actorUID)); !os.IsNotExist(err) {
+				t.Errorf("failed activation left the staging dir behind (lstat err = %v)", err)
+			}
 
 			// Inspect disk and registry before changing the bundle hash: a later
 			// rotation can hide a stale registration by recreating deleted files.
@@ -596,7 +627,16 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 				if refresher.actors[actorUID] != registered || registered.stale {
 					t.Error("pre-reset failure invalidated the existing registration")
 				}
+				if got, err := os.ReadFile(liveAsset); err != nil || string(got) != "live runsc" {
+					t.Errorf("pre-reset failure lost the live activation's staged asset: %q, %v", got, err)
+				}
 			} else {
+				// Past the reset, the record still describes the previous
+				// activation (or nothing), so no links of this one may
+				// remain for a later Terminate to take for that record's.
+				if entries, err := os.ReadDir(ateletpath.SandboxAssetsDir(actorUID)); err == nil && len(entries) != 0 {
+					t.Errorf("failed activation left %d staged assets behind", len(entries))
+				}
 				if _, err := os.Stat(projectedPath); !os.IsNotExist(err) {
 					t.Fatalf("reset did not delete prior projection: stat error = %v", err)
 				}
@@ -632,6 +672,7 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
 	const actorUID = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a62"
 	s := &Atelet{
+		sandboxAssetCache: newTestAssetCache(t),
 		anonGCSClient:     fakeObjectStorage{data: content},
 		imageCache:        newImageVolumeStore(t),
 		systemInfoVolumes: refresher,
@@ -700,6 +741,7 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		SystemInfo: trustVolumeSpec("ca.pem"),
 	}}}
 	s := &Atelet{
+		sandboxAssetCache: newTestAssetCache(t),
 		anonGCSClient:     fakeObjectStorage{data: content},
 		imageCache:        newImageVolumeStore(t),
 		systemInfoVolumes: refresher,
@@ -997,6 +1039,7 @@ func TestTerminateWithoutWorkerPodUID(t *testing.T) {
 
 	s := &Atelet{
 		workerDialer:      newWorkerDialer(1),
+		sandboxAssetCache: newTestAssetCache(t),
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), clock.RealClock{}),
 	}
@@ -1061,6 +1104,7 @@ func runPluginActor(t *testing.T) *pluginActor {
 	a.s = newPluginHerder(t, a.store)
 	a.s.workerDialer = newWorkerDialer(1)
 	a.s.imageCache = newImageVolumeStore(t)
+	a.s.sandboxAssetCache = newTestAssetCache(t)
 	a.s.anonGCSClient = fakeObjectStorage{data: runsc}
 	a.s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
 	a.assets = &ateletpb.SandboxAssets{
@@ -1231,5 +1275,90 @@ func TestPromoteSnapshotRecordsUpload(t *testing.T) {
 
 	if got := a.promote(t, snap); !proto.Equal(got, st) {
 		t.Errorf("state after a retried promote = %v, want %v", got, st)
+	}
+}
+
+// TestConcurrentRunsShareOneAssetDownload runs two actors that need the same
+// asset at the same time: the asset cache downloads it once, and each actor
+// gets its own hard link to the one cached copy.
+func TestConcurrentRunsShareOneAssetDownload(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := t.Context()
+
+	worker := &fakeWorker{}
+	serveFakeWorker(t, worker)
+
+	host := imageVolumeTestRegistry(t)
+	pinnedImage := pushTestImage(t, host+"/actor:v1", singleFileLayer(t, "bin/app", "app"))
+
+	runsc := []byte("runsc binary")
+	var gets atomic.Int32
+	s := &Atelet{
+		workerDialer:      newWorkerDialer(2),
+		imageCache:        newImageVolumeStore(t),
+		sandboxAssetCache: newTestAssetCache(t),
+		anonGCSClient:     fakeObjectStorage{data: runsc, gets: &gets, delay: 200 * time.Millisecond},
+		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+	}
+	sandboxAssets := &ateletpb.SandboxAssets{
+		SandboxClass: "gvisor",
+		PauseImage:   pinnedImage,
+		Assets: map[string]*ateletpb.ArchAssets{
+			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+				runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc))},
+			}},
+		},
+	}
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
+	}
+
+	actorUIDs := []string{"01234567-89ab-cdef-0123-456789abcde1", "01234567-89ab-cdef-0123-456789abcde2"}
+	var wg sync.WaitGroup
+	errs := make([]error, len(actorUIDs))
+	for i, uid := range actorUIDs {
+		wg.Go(func() {
+			_, errs[i] = s.Run(ctx, &ateletpb.RunRequest{
+				Atespace:              "ate-demo",
+				ActorName:             "counter-" + uid[len(uid)-1:],
+				ActorUid:              uid,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				WorkerPodUid:          "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+				SandboxAssets:         sandboxAssets,
+				Spec:                  spec,
+			})
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("Run %d: %v", i, err)
+		}
+	}
+	if gets.Load() != 1 {
+		t.Errorf("asset downloaded %d times for two concurrent Runs, want 1", gets.Load())
+	}
+
+	var infos []os.FileInfo
+	for _, uid := range actorUIDs {
+		staged := filepath.Join(ateletpath.SandboxAssetsDir(uid), runscAssetName)
+		got, err := os.ReadFile(staged)
+		if err != nil || string(got) != string(runsc) {
+			t.Fatalf("actor %s staged runsc = %q, %v; want the asset bytes", uid, got, err)
+		}
+		fi, err := os.Stat(staged)
+		if err != nil {
+			t.Fatal(err)
+		}
+		infos = append(infos, fi)
+	}
+	if !os.SameFile(infos[0], infos[1]) {
+		t.Error("the two actors' runsc links are not one inode")
+	}
+	for _, uid := range actorUIDs {
+		if _, err := os.Lstat(ateletpath.SandboxAssetsStagingDir(uid)); !os.IsNotExist(err) {
+			t.Errorf("actor %s: staging dir left behind after Run (lstat err = %v)", uid, err)
+		}
 	}
 }

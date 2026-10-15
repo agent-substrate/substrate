@@ -111,7 +111,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return nil, err
 	}
-	if err := validateRuntimeAssetPaths(req.GetRuntimeAssetPaths()); err != nil {
+	if err := validateRuntimeAssetPaths(req.GetActorDirs(), req.GetRuntimeAssetPaths()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -242,10 +242,15 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	}
 	s.cleanupSandboxState(ctx, actorUID)
 
-	// Repoint the snapshot's vsock socket to this actor's VMDir (the disk + kernel
-	// paths are content-addressed/per-actor and already line up on the same node).
-	if err := rewriteSnapshotSocketPaths(restoreDir, actorUID); err != nil {
-		return fmt.Errorf("while rewriting snapshot socket paths: %w", err)
+	// Repoint the snapshot's per-actor paths to this actor's: its VMDir
+	// sockets and files, and the kernel and guest image atelet staged under
+	// this actor's own directory.
+	kernel, image := p.assetPaths[assetKernel], p.assetPaths[assetImage]
+	if kernel == "" || image == "" {
+		return fmt.Errorf("ateworker-microvm requires %q and %q asset paths", assetKernel, assetImage)
+	}
+	if err := rewriteSnapshotPaths(restoreDir, actorUID, kernel, image); err != nil {
+		return fmt.Errorf("while rewriting snapshot paths: %w", err)
 	}
 	srcID := actorUID
 	if b, rerr := os.ReadFile(filepath.Join(restoreDir, baseIDFile)); rerr == nil {
@@ -281,7 +286,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// SharedDir(id)/<cid>/rootfs from the LOCAL OCI bundle (atelet re-unpacked
 	// the golden image) and start the one virtiofsd serving the tree. The fs
 	// sockets in the snapshot config are repointed to this VMDir by
-	// rewriteSnapshotSocketPaths above. Cross-node consistency relies on a
+	// rewriteSnapshotPaths above. Cross-node consistency relies on a
 	// deterministic unpack of the same image at the same <cid>/rootfs path
 	// (plus, for merged rootfs, the upper re-materialized from the tar).
 	containers := p.containers
@@ -538,13 +543,17 @@ func maybeDropStagedMemoryImage(ctx context.Context, restoreDir, memMode string,
 	dropStagedMemoryImage(ctx, restoreDir)
 }
 
-// rewriteSnapshotSocketPaths repoints the snapshot config.json's per-VMDir paths from
-// the source actor's VMDir to the restoring actor's: the hybrid-vsock socket, the
-// File serial console, and each virtio-fs socket, so the sockets/files we create are
-// the ones CH reopens. The kernel and the kata image are content-addressed static
-// files with identical paths on every node, so they need no rewrite, and the overlay
-// has no per-actor disk to repoint.
-func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
+// rewriteSnapshotPaths repoints the snapshot config.json's per-actor paths from
+// the source actor's to the restoring actor's. The file is CH's own: at
+// snapshot time it serializes the config the VM booted with, and at restore
+// it reopens every path in it, so each path must exist on this node for
+// this actor. That covers the hybrid-vsock socket, the File serial console,
+// and each virtio-fs socket under the VMDir, and the kernel and the guest
+// image, which atelet stages under each actor's own directory and removes
+// with the actor, so the source actor's copies may be gone. How atelet
+// identifies the runtime (asset URLs today, a SandboxConfig hash later)
+// changes none of this. The overlay has no per-actor disk to repoint.
+func rewriteSnapshotPaths(snapshotDir, id, kernel, image string) error {
 	cfgPath := filepath.Join(snapshotDir, "config.json")
 	b, err := os.ReadFile(cfgPath)
 	if err != nil {
@@ -599,6 +608,29 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 				}
 			default:
 				return fmt.Errorf("snapshot config %q has fs device with unknown tag %q", cfgPath, tag)
+			}
+		}
+	}
+	if payload, ok := cfg["payload"].(map[string]any); ok {
+		if got, _ := payload["kernel"].(string); got != kernel {
+			payload["kernel"] = kernel
+			changed = true
+		}
+	}
+	if pmems, ok := cfg["pmem"].([]any); ok {
+		for _, pm := range pmems {
+			pmm, ok := pm.(map[string]any)
+			if !ok {
+				return fmt.Errorf("snapshot config %q has a malformed pmem device", cfgPath)
+			}
+			switch pmID, _ := pmm["id"].(string); pmID {
+			case guestImagePmemID:
+				if got, _ := pmm["file"].(string); got != image {
+					pmm["file"] = image
+					changed = true
+				}
+			default:
+				return fmt.Errorf("snapshot config %q has pmem device with unknown id %q", cfgPath, pmID)
 			}
 		}
 	}

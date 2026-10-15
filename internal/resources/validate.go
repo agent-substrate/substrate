@@ -121,6 +121,7 @@ func ValidateActorDirs(actorDirs *ateworkerpb.ActorDirs, fldPath *field.Path) fi
 		{"durable_dir_volume_mounts_dir", actorDirs.GetDurableDirVolumeMountsDir()},
 		{"system_info_volume_roots_dir", actorDirs.GetSystemInfoVolumeRootsDir()},
 		{"volumes_dir", actorDirs.GetVolumesDir()},
+		{"sandbox_assets_dir", actorDirs.GetSandboxAssetsDir()},
 	} {
 		errs = append(errs, validateAbsDir(actorDir.path, fldPath.Child(actorDir.name))...)
 	}
@@ -190,11 +191,8 @@ func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorLi
 }
 
 // ValidateAssetHash ensures a sandbox asset's SHA-256 hash is exactly 64 hex
-// characters before it is used to build the on-disk asset path
-// (static-files/asset-<hash>) and, on a cache hit, returned for worker to
-// execute. Without this, a hash containing path separators or ".." could
-// point the cache-hit early return (and the download target) at an arbitrary
-// binary outside the static-files dir.
+// characters before it becomes the asset's cache key, so a malformed hash is
+// rejected as the request's fault rather than failing deep inside the cache.
 func ValidateAssetHash(sha256Hash string) error {
 	if len(sha256Hash) != 64 {
 		return fmt.Errorf("invalid asset sha256 hash: want 64 hex chars, got %d", len(sha256Hash))

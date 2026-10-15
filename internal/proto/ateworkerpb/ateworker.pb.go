@@ -176,9 +176,13 @@ type ActorDirs struct {
 	// Holds one subdirectory per system-info volume.
 	SystemInfoVolumeRootsDir string `protobuf:"bytes,6,opt,name=system_info_volume_roots_dir,json=systemInfoVolumeRootsDir,proto3" json:"system_info_volume_roots_dir,omitempty"`
 	// Holds one mount point per CSI volume.
-	VolumesDir    string `protobuf:"bytes,7,opt,name=volumes_dir,json=volumesDir,proto3" json:"volumes_dir,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	VolumesDir string `protobuf:"bytes,7,opt,name=volumes_dir,json=volumesDir,proto3" json:"volumes_dir,omitempty"`
+	// Holds the sandbox runtime assets staged for this actor (runsc, or the
+	// micro-VM kernel, VMM and guest image), hard-linked from atelet's asset
+	// cache. The only location a sandbox runtime may run a binary from.
+	SandboxAssetsDir string `protobuf:"bytes,8,opt,name=sandbox_assets_dir,json=sandboxAssetsDir,proto3" json:"sandbox_assets_dir,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ActorDirs) Reset() {
@@ -256,6 +260,13 @@ func (x *ActorDirs) GetSystemInfoVolumeRootsDir() string {
 func (x *ActorDirs) GetVolumesDir() string {
 	if x != nil {
 		return x.VolumesDir
+	}
+	return ""
+}
+
+func (x *ActorDirs) GetSandboxAssetsDir() string {
+	if x != nil {
+		return x.SandboxAssetsDir
 	}
 	return ""
 }
@@ -1986,7 +1997,7 @@ var File_ateworker_proto protoreflect.FileDescriptor
 
 const file_ateworker_proto_rawDesc = "" +
 	"\n" +
-	"\x0fateworker.proto\x12\tateworker\"\xb7\x02\n" +
+	"\x0fateworker.proto\x12\tateworker\"\xe5\x02\n" +
 	"\tActorDirs\x12\x19\n" +
 	"\broot_dir\x18\x01 \x01(\tR\arootDir\x12$\n" +
 	"\x0eoci_bundle_dir\x18\x02 \x01(\tR\fociBundleDir\x12%\n" +
@@ -1996,7 +2007,8 @@ const file_ateworker_proto_rawDesc = "" +
 	"\x1ddurable_dir_volume_mounts_dir\x18\x05 \x01(\tR\x19durableDirVolumeMountsDir\x12>\n" +
 	"\x1csystem_info_volume_roots_dir\x18\x06 \x01(\tR\x18systemInfoVolumeRootsDir\x12\x1f\n" +
 	"\vvolumes_dir\x18\a \x01(\tR\n" +
-	"volumesDir\"\xdb\x02\n" +
+	"volumesDir\x12,\n" +
+	"\x12sandbox_assets_dir\x18\b \x01(\tR\x10sandboxAssetsDir\"\xdb\x02\n" +
 	"\x18TerminateWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +

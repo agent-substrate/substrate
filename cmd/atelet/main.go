@@ -35,6 +35,7 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/credentialprovider"
+	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/cmd/atelet/internal/sparsefile"
 	"go.ate.dev/substrate/cmd/atelet/internal/trustbundle"
@@ -237,6 +238,14 @@ func main() {
 		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
 	}
 
+	if err := validateSandboxAssetCacheFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid sandbox asset cache flags", err)
+	}
+	sandboxAssetCache, err := openSandboxAssetCache(ctx, *sandboxAssetCacheDir, *sandboxAssetCacheMinAge, *sandboxAssetFetchTimeout)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to open sandbox asset cache", err)
+	}
+
 	// Sandbox assets go through the object-store plugin; a gs:// asset it
 	// cannot serve, such as one in the public gs://gvisor bucket, is read
 	// anonymously.
@@ -317,6 +326,7 @@ func main() {
 		objectstorev1.NewAssetProviderClient(objectStorePluginConn),
 		*objectStorePluginSocket,
 		imageCache,
+		sandboxAssetCache,
 		instruments,
 		volPlugins,
 		csiDriverConfigGetter,
@@ -527,6 +537,9 @@ type Atelet struct {
 
 	workerDialer *WorkerDialer
 	imageCache   *imagecache.Store
+	// sandboxAssetCache holds every sandbox asset on the node once; actors get hard
+	// links into their own directories (see ensureSandboxAssets).
+	sandboxAssetCache *filecache.Store
 	// anonGCSClient reads gs:// assets the plugin cannot serve, without credentials.
 	anonGCSClient objectstorage.ObjectStorage
 	// objectStorePlugin moves external snapshot files between the node and storage.
@@ -560,6 +573,7 @@ func NewService(
 	assetPlugin objectstorev1.AssetProviderClient,
 	pluginSocket string,
 	imageCache *imagecache.Store,
+	sandboxAssetCache *filecache.Store,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
 	csiDriverConfigGetter csi.CSIDriverConfigGetter,
@@ -569,6 +583,7 @@ func NewService(
 	wms := &Atelet{
 		workerDialer:          workerDialer,
 		imageCache:            imageCache,
+		sandboxAssetCache:     sandboxAssetCache,
 		anonGCSClient:         anonGCSClient,
 		objectStorePlugin:     objectStorePlugin,
 		assetPlugin:           assetPlugin,
@@ -595,10 +610,30 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	if err != nil {
 		return nil, apierror.InvalidArgument("%v", err)
 	}
-	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
+	// Fetched before the reset below, into a staging dir, so a failed fetch
+	// leaves a live activation as it was. The staged set is swapped in only
+	// after the reset, together with the record that describes it, so the
+	// two never disagree: a failure in between removes the staged set, and
+	// the record keeps describing whatever the reset left.
+	staging := ateletpath.SandboxAssetsStagingDir(actorUID)
+	if err := os.RemoveAll(staging); err != nil {
+		return nil, wrapFileSystemErr("while removing a stale sandbox assets staging dir", err)
+	}
+	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec, staging)
 	if err != nil {
+		_ = os.RemoveAll(staging)
 		return nil, err
 	}
+	committed := false
+	defer func() {
+		if err == nil {
+			return
+		}
+		_ = os.RemoveAll(staging)
+		if committed {
+			_ = os.RemoveAll(ateletpath.SandboxAssetsDir(actorUID))
+		}
+	}()
 
 	s.systemInfoVolumes.Deregister(actorUID)
 	if err := resetActorDirs(actorUID); err != nil {
@@ -612,6 +647,10 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	// Record the sandbox binaries this actor is running so a later Checkpoint
 	// (whose request no longer carries the sandbox config) can re-fetch the same
 	// version and pin it into the snapshot manifest.
+	if err := commitSandboxAssets(actorUID, staging, assetPaths); err != nil {
+		return nil, err
+	}
+	committed = true
 	if err := writeSandboxRecord(actorUID, sandboxRec); err != nil {
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
@@ -754,7 +793,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	op.sandboxClass = sandboxRec.SandboxClass
 
 	tAssets := time.Now()
-	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
+	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec, ateletpath.SandboxAssetsDir(actorUID))
 	dAssets = time.Since(tAssets)
 	if err != nil {
 		return nil, err
@@ -1223,6 +1262,14 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
+	// The record below is written last, so until then it describes the
+	// previous activation; a failed restore must not leave this one's
+	// asset links behind for a later Terminate to take for that record's.
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(ateletpath.SandboxAssetsDir(actorUID))
+		}
+	}()
 
 	tMount := time.Now()
 	mountErr := s.mountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes())
@@ -1322,7 +1369,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	g.Go(func() (err error) {
 		defer func() { prepErr = err }()
 		tAssets := time.Now()
-		assetPaths, err = s.ensureSandboxAssets(gctx, runtimeRec)
+		assetPaths, err = s.ensureSandboxAssets(gctx, runtimeRec, ateletpath.SandboxAssetsDir(actorUID))
 		dAssets = time.Since(tAssets)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseSandboxAssets
@@ -1418,7 +1465,7 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 		if err != nil {
 			return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 		}
-		paths, err := s.ensureSandboxAssets(ctx, sandboxRec)
+		paths, err := s.ensureSandboxAssets(ctx, sandboxRec, ateletpath.SandboxAssetsDir(actorUID))
 		if err != nil {
 			return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 		}
@@ -1856,6 +1903,14 @@ func resetActorDirs(actorUID string) error {
 	if err := resetDir("restore-state dir", ateletpath.RestoreStateDir(actorUID), os.RemoveAll, 0o700); err != nil {
 		return err
 	}
+	// Hard links into the asset cache; removing them never touches the
+	// cached bytes, and an activation that has ended (Checkpoint resets
+	// too) stops pinning them. Not the staging dir beside it: Run fills
+	// that before this reset and swaps it in after. Owner-only, like the
+	// bundle dir: the worker runs the binaries from here as root.
+	if err := resetDir("sandbox assets dir", ateletpath.SandboxAssetsDir(actorUID), os.RemoveAll, 0o700); err != nil {
+		return err
+	}
 	if err := resetDir("durable-dir volumes mount dir", ateletpath.DurableDirVolumeMountsDir(actorUID), os.RemoveAll, 0o755); err != nil {
 		return err
 	}
@@ -1882,6 +1937,27 @@ func resetActorDirs(actorUID string) error {
 		return wrapFileSystemErr("while creating volumes dir", err)
 	}
 
+	return nil
+}
+
+// commitSandboxAssets moves the set Run staged at staging into the actor's
+// sandbox assets dir, which resetActorDirs has just emptied, and rewrites
+// paths, which point under staging, to their final location.
+func commitSandboxAssets(actorUID, staging string, paths map[string]string) error {
+	final := ateletpath.SandboxAssetsDir(actorUID)
+	if err := os.RemoveAll(final); err != nil {
+		return wrapFileSystemErr("while removing previous sandbox assets dir", err)
+	}
+	if err := os.Rename(staging, final); err != nil {
+		return wrapFileSystemErr("while placing sandbox assets dir", err)
+	}
+	for name, p := range paths {
+		rel, err := filepath.Rel(staging, p)
+		if err != nil || !filepath.IsLocal(rel) {
+			return fmt.Errorf("staged asset %q at %q is not under %q", name, p, staging)
+		}
+		paths[name] = filepath.Join(final, rel)
+	}
 	return nil
 }
 

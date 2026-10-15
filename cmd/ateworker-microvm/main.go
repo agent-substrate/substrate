@@ -439,11 +439,13 @@ func validateFidelity(fidelity ateworkerpb.SnapshotFidelity) error {
 	return nil
 }
 
-// validateRuntimeAssetPaths ensures we only run assets from the static files dir
-func validateRuntimeAssetPaths(paths map[string]string) error {
+// validateRuntimeAssetPaths ensures we only run assets from the actor's own
+// sandbox assets dir, where atelet staged them. actorDirs must have passed
+// validateActorDirs.
+func validateRuntimeAssetPaths(actorDirs *ateworkerpb.ActorDirs, paths map[string]string) error {
 	var errs field.ErrorList
 	for name, p := range paths {
-		errs = append(errs, resources.ValidateRuntimeAssetPath(nodepath.StaticFilesDir, p, field.NewPath("runtime_asset_paths").Key(name))...)
+		errs = append(errs, resources.ValidateRuntimeAssetPath(actorDirs.GetSandboxAssetsDir(), p, field.NewPath("runtime_asset_paths").Key(name))...)
 	}
 	if len(errs) > 0 {
 		return resources.ToAPIError(errs)

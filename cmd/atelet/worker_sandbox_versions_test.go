@@ -550,7 +550,7 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 				if url := rec.Assets[gvisorAssetName].URL; strings.HasPrefix(url, "gs://other-bucket/") {
 					return nil, fmt.Errorf("fetched a duplicate runtime from %s", url)
 				}
-				return newTestAssetFetcher().ensureSandboxAssets(ctx, rec)
+				return newTestAssetFetcher().ensureSandboxAssets(ctx, rec, "")
 			},
 		}
 		got, err := planAndBuild(s, workerPod("pod-a", "pool"))

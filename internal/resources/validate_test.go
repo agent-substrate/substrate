@@ -322,6 +322,7 @@ func testActorDirs() *ateworkerpb.ActorDirs {
 		DurableDirVolumeMountsDir: "/node/actors/a/durable-dir",
 		SystemInfoVolumeRootsDir:  "/node/actors/a/system-info",
 		VolumesDir:                "/node/actors/a/volumes",
+		SandboxAssetsDir:          "/node/actors/a/sandbox-assets",
 	}
 }
 

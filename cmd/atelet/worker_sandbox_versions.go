@@ -321,7 +321,14 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 	// the fetch for the same reason it bounds prewarming.
 	ctx, cancel := context.WithTimeout(ctx, prewarmTimeout)
 	defer cancel()
-	paths, err := s.assets.ensureSandboxAssets(ctx, rec)
+	// The probe has no actor to stage the binary for: it links it into a
+	// scratch dir it removes again, and the cache keeps the entry.
+	scratch, err := os.MkdirTemp(s.scratchDir, "cpu-features-")
+	if err != nil {
+		return "", fmt.Errorf("while creating cpu-features scratch dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+	paths, err := s.assets.ensureSandboxAssets(ctx, rec, scratch)
 	if err != nil {
 		return "", err
 	}

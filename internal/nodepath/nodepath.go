@@ -27,9 +27,6 @@ const BasePath = "/var/lib/ate"
 // ActorsDir is the parent of the per-actor directories atelet prepares.
 var ActorsDir = filepath.Join(BasePath, "actors")
 
-// StaticFilesDir holds things like runsc binaries.
-var StaticFilesDir = filepath.Join(BasePath, "static-files")
-
 // WorkerSupportSocket is the node-local atelet socket used by atunnel
 // to request credentials for the worker's current actor assignment.
 var WorkerSupportSocket = filepath.Join(BasePath, "worker-support.sock")

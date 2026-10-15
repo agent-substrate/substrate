@@ -40,7 +40,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/imagecache"
-	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
@@ -168,9 +167,7 @@ func TestPrewarmEnqueueFilters(t *testing.T) {
 // prewarm is requeued with backoff, and a config deleted between enqueue and
 // processing is forgotten without retries.
 func TestPrewarmProcessRetries(t *testing.T) {
-	origDir := nodepath.StaticFilesDir
-	nodepath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { nodepath.StaticFilesDir = origDir })
+	useTempAssetScratch(t)
 
 	ctx := context.Background()
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("runsc"))))
@@ -181,7 +178,7 @@ func TestPrewarmProcessRetries(t *testing.T) {
 	if err := indexer.Add(cfg); err != nil {
 		t.Fatalf("indexer.Add: %v", err)
 	}
-	herder := &Atelet{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
+	herder := &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
 	p := newSandboxPrewarmer(herder, nil, listersv1alpha1.NewSandboxConfigLister(indexer), false)
 
 	p.queue.Add(cfg.Name)
@@ -202,9 +199,7 @@ func TestPrewarmProcessRetries(t *testing.T) {
 // filter as gVisor may be micro-VM by the time the worker resolves it, and a
 // node without KVM must skip it rather than download guest assets.
 func TestPrewarmProcessReappliesClassGate(t *testing.T) {
-	origDir := nodepath.StaticFilesDir
-	nodepath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { nodepath.StaticFilesDir = origDir })
+	useTempAssetScratch(t)
 
 	ctx := context.Background()
 	// Enqueued while gVisor, edited to micro-VM before the worker ran.
@@ -217,7 +212,7 @@ func TestPrewarmProcessReappliesClassGate(t *testing.T) {
 	}
 	// Any fetch would fail and requeue, so NumRequeues distinguishes
 	// "skipped" from "attempted and failed".
-	herder := &Atelet{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
+	herder := &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
 	p := newSandboxPrewarmer(herder, nil, listersv1alpha1.NewSandboxConfigLister(indexer), false)
 
 	p.queue.Add(cfg.Name)
@@ -248,9 +243,7 @@ func TestMicrovmNodeCapable(t *testing.T) {
 // lands in the image cache, and an asset fetch failure does not stop the
 // pull (the two live in different backends).
 func TestPrewarmPauseImage(t *testing.T) {
-	origDir := nodepath.StaticFilesDir
-	nodepath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { nodepath.StaticFilesDir = origDir })
+	useTempAssetScratch(t)
 
 	srv := httptest.NewServer(registry.New(registry.Logger(log.New(io.Discard, "", 0))))
 	defer srv.Close()
@@ -276,20 +269,20 @@ func TestPrewarmPauseImage(t *testing.T) {
 	cfg.Spec.Versions[0].PauseImage = pauseRef
 
 	p := &sandboxPrewarmer{
-		assets: &Atelet{anonGCSClient: fakeObjectStorage{data: content}},
+		assets: &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: fakeObjectStorage{data: content}},
 		images: okStore,
 	}
 	if err := p.prewarm(ctx, cfg); err != nil {
 		t.Fatalf("prewarm: %v", err)
 	}
 
-	// A different asset hash misses the shared static-files cache, so the
-	// failing object storage is actually consulted — and must not keep the
-	// pause image from being pulled.
+	// A different asset hash misses the asset cache, so the failing object
+	// storage is actually consulted — and must not keep the pause image from
+	// being pulled.
 	failCfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("other runsc"))))
 	failCfg.Spec.Versions[0].PauseImage = pauseRef
 	p = &sandboxPrewarmer{
-		assets: &Atelet{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}},
+		assets: &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}},
 		images: failStore,
 	}
 	if err := p.prewarm(ctx, failCfg); err == nil {
@@ -334,14 +327,14 @@ func (hangingObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reade
 // prewarmTimeout: the queue has one worker, so an attempt that never returned
 // would block every other config's prewarm.
 func TestPrewarmTimeout(t *testing.T) {
-	origDir, origTimeout := nodepath.StaticFilesDir, prewarmTimeout
-	nodepath.StaticFilesDir = t.TempDir()
+	useTempAssetScratch(t)
+	origTimeout := prewarmTimeout
 	prewarmTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { nodepath.StaticFilesDir, prewarmTimeout = origDir, origTimeout })
+	t.Cleanup(func() { prewarmTimeout = origTimeout })
 
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("hung runsc"))))
 	cfg.Spec.Versions[0].PauseImage = ""
-	p := &sandboxPrewarmer{assets: &Atelet{anonGCSClient: hangingObjectStorage{}}}
+	p := &sandboxPrewarmer{assets: &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: hangingObjectStorage{}}}
 
 	done := make(chan error, 1)
 	go func() { done <- p.prewarm(context.Background(), cfg) }()
@@ -360,9 +353,7 @@ func TestPrewarmTimeout(t *testing.T) {
 // whose default version is Disabled, is nothing to do rather than a retryable
 // failure.
 func TestPrewarmDefaultVersionOnly(t *testing.T) {
-	origDir := nodepath.StaticFilesDir
-	nodepath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { nodepath.StaticFilesDir = origDir })
+	useTempAssetScratch(t)
 
 	ctx := context.Background()
 	content := []byte("runsc binary bytes")
@@ -376,17 +367,18 @@ func TestPrewarmDefaultVersionOnly(t *testing.T) {
 		Assets: map[string]map[string]v1alpha1.AssetFile{runtime.GOARCH: {runscAssetName: {URL: "gs://bucket/other-runsc", SHA256: otherSHA}}},
 	}}, cfg.Spec.Versions...)
 
-	p := &sandboxPrewarmer{assets: &Atelet{anonGCSClient: fakeObjectStorage{data: content}}}
+	root := t.TempDir()
+	p := &sandboxPrewarmer{assets: &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}}
 	if err := p.prewarm(ctx, cfg); err != nil {
 		t.Fatalf("prewarm: %v", err)
 	}
-	if _, err := os.Stat(ateletpath.AssetPath(otherSHA)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("non-default version asset was prewarmed (stat err = %v)", err)
+	if n := cachedAssets(t, root); n != 1 {
+		t.Errorf("cache holds %d assets after prewarm, want 1 (the default version's only)", n)
 	}
 
 	// Any fetch would fail, so a nil error means nothing was attempted.
 	cfg.Spec.DefaultVersion = "missing"
-	p = &sandboxPrewarmer{assets: &Atelet{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}}
+	p = &sandboxPrewarmer{assets: &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}}
 	if err := p.prewarm(ctx, cfg); err != nil {
 		t.Errorf("prewarm of a config without its default version: %v", err)
 	}
@@ -400,10 +392,10 @@ func TestPrewarmDefaultVersionOnly(t *testing.T) {
 
 // TestSandboxAssetPrewarmDownloads runs the whole path: a SandboxConfig in a
 // fake clientset flows through the informer into the prewarm worker, which
-// lands the asset in the static-files cache without any Run/Restore request.
+// lands the asset in the asset cache without any Run/Restore request.
 func TestSandboxAssetPrewarmDownloads(t *testing.T) {
-	origDir, origJitter, origFinished := nodepath.StaticFilesDir, prewarmMaxJitter, prewarmFinished
-	nodepath.StaticFilesDir = t.TempDir()
+	useTempAssetScratch(t)
+	origJitter, origFinished := prewarmMaxJitter, prewarmFinished
 	prewarmMaxJitter = 0
 	// The worker's own prewarm call returns only when the asset has landed
 	// and the pause-image pull has finished: it waits for the pull on a live
@@ -420,7 +412,7 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() {
-		nodepath.StaticFilesDir, prewarmMaxJitter, prewarmFinished = origDir, origJitter, origFinished
+		prewarmMaxJitter, prewarmFinished = origJitter, origFinished
 	})
 
 	host := imageVolumeTestRegistry(t)
@@ -441,7 +433,8 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("imagecache.New: %v", err)
 	}
-	herder := &Atelet{anonGCSClient: fakeObjectStorage{data: content}}
+	root := t.TempDir()
+	herder := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
 	// Handler first, informer start second, mirroring main: atelet startup
 	// must never wait on this informer's sync, and the initial List replays
 	// the pre-existing config into the handler as an Add.
@@ -467,8 +460,10 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("prewarm never finished")
 	}
-	wantPath := ateletpath.AssetPath(sha)
-	if _, err := os.Stat(wantPath); err != nil {
-		t.Fatalf("asset not prewarmed to %s: %v", wantPath, err)
+	if n := cachedAssets(t, root); n != 1 {
+		t.Fatalf("cache holds %d assets after prewarm, want 1", n)
+	}
+	if left, err := os.ReadDir(ateletpath.SandboxAssetScratchDir); err != nil || len(left) != 0 {
+		t.Errorf("prewarm left %d scratch dirs behind (%v)", len(left), err)
 	}
 }

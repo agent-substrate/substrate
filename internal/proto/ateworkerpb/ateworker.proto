@@ -124,6 +124,10 @@ message ActorDirs {
   string system_info_volume_roots_dir = 6;
   // Holds one mount point per CSI volume.
   string volumes_dir = 7;
+  // Holds the sandbox runtime assets staged for this actor (runsc, or the
+  // micro-VM kernel, VMM and guest image), hard-linked from atelet's asset
+  // cache. The only location a sandbox runtime may run a binary from.
+  string sandbox_assets_dir = 8;
 }
 
 message TerminateWorkloadRequest {

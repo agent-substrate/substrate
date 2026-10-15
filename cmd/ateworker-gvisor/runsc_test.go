@@ -310,6 +310,7 @@ func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
 					DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
 					SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
 					VolumesDir:                "/node/actors/actor-a/volumes",
+					SandboxAssetsDir:          "/node/actors/actor-a/sandbox-assets",
 				},
 			},
 		},
