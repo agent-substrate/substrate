@@ -768,7 +768,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	// Per-phase timing, recorded on the way out so a failed checkpoint still
 	// reports the phases it completed. Phases left at zero never ran.
 	tStart := time.Now()
-	var dAssets, dWorker, dPersist time.Duration
+	var dAssets, dWorker, dPersist, dCleanup time.Duration
 	op := snapshotOp{
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
@@ -789,6 +789,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 			{ateattr.SnapshotPhaseSandboxAssets, dAssets},
 			{ateattr.SnapshotPhaseWorkerCheckpoint, dWorker},
 			{ateattr.SnapshotPhasePersist, dPersist},
+			{ateattr.SnapshotPhaseCleanup, dCleanup},
 			{ateattr.SnapshotPhaseTotal, time.Since(tStart)},
 		}
 		s.instruments.recordCheckpoint(ctx, op, phases...)
@@ -877,6 +878,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	// The snapshot this checkpoint just took is safe: it stays in
 	// CheckpointStateDir until after the prune, and only moveLocalCheckpoint
 	// moves it into LocalCheckpointsDir, the directory the prune empties.
+	tCleanup := time.Now()
 	s.snapshots.ForgetLocal(actorUID)
 
 	// No earlier local snapshot can ever be restored again, so remove them
@@ -894,6 +896,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	if err := snapshottracker.PruneLocalCheckpoints(ctx, actorUID); err != nil {
 		slog.WarnContext(ctx, "failed to prune superseded local checkpoints", slog.Any("actor", actorRef), slog.Any("err", err))
 	}
+	dCleanup += time.Since(tCleanup)
 
 	// Pruning stays outside the persist window: it collects superseded
 	// snapshots on both paths, so timing it as part of an external upload would
@@ -935,14 +938,18 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	}
 	dPersist = time.Since(tPersist)
 
+	tCleanup = time.Now()
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
+		dCleanup += time.Since(tCleanup)
 		return nil, fmt.Errorf("while unmounting external volumes: %w", err)
 	}
 
 	// Note: we do not crash the actor if resetting the directory fails.
 	if err := resetActorDirs(actorUID); err != nil {
+		dCleanup += time.Since(tCleanup)
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
+	dCleanup += time.Since(tCleanup)
 
 	return &ateletpb.CheckpointResponse{State: state}, nil
 }

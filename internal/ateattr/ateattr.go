@@ -360,6 +360,7 @@ const (
 	// Persist is one step with two destinations (upload for external, rename
 	// for local); SnapshotKindKey already says which.
 	SnapshotPhasePersist = "persist"
+	SnapshotPhaseCleanup = "cleanup"
 	SnapshotPhaseTotal   = "total"
 )
 
