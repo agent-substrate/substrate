@@ -1,5 +1,10 @@
 [
   {
+    "rule": "create-request-shape",
+    "subject": "ateapi.Control.CreateActor",
+    "message": "request field \"initial_egress_policy\" is not allowed - want only \"actor\" ateapi.Actor and optional \"options\" ateapi.CreateOptions"
+  },
+  {
     "rule": "delete-request-shape",
     "subject": "ateapi.Control.DeleteActor",
     "message": "request field \"any_state\" is not allowed - want only \"actor\" ateapi.ObjectRef and optional \"options\" ateapi.DeleteOptions"

@@ -136,6 +136,37 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			},
 		},
 		{
+			name:       "CreateActor with an initial policy also checks policy creation on the new actor",
+			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
+			req: &ateapipb.CreateActorRequest{
+				Actor:               &ateapipb.Actor{Metadata: actorMeta, ActorTemplate: sharedTemplate},
+				InitialEgressPolicy: &ateapipb.EgressPolicy{},
+			},
+			want: []check{
+				{RelationCanCreateActor, "atespace:team-a"},
+				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
+				{RelationCanCreateEgressPolicy, "actor:team-a/runner"},
+			},
+		},
+		{
+			name:       "CreateActor from a tag with an initial policy checks both permissions",
+			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
+			req: &ateapipb.CreateActorRequest{
+				Actor: &ateapipb.Actor{
+					Metadata:      actorMeta,
+					ActorTemplate: sharedTemplate,
+					SourceTag:     &ateapipb.ObjectRef{Atespace: "team-b", Name: "v1"},
+				},
+				InitialEgressPolicy: &ateapipb.EgressPolicy{},
+			},
+			want: []check{
+				{RelationCanCreateActor, "atespace:team-a"},
+				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
+				{RelationCanUseTag, "tag:team-b/v1"},
+				{RelationCanCreateEgressPolicy, "actor:team-a/runner"},
+			},
+		},
+		{
 			name:       "GetActor",
 			fullMethod: ateapipb.Control_GetActor_FullMethodName,
 			req:        &ateapipb.GetActorRequest{Actor: actorRef},
@@ -418,6 +449,24 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 			name:       "CreateActor without an actor",
 			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
 			req:        &ateapipb.CreateActorRequest{},
+			wantField:  "actor.metadata.atespace",
+		},
+		{
+			name:       "CreateActor with an initial policy without an actor name",
+			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
+			req: &ateapipb.CreateActorRequest{
+				Actor: &ateapipb.Actor{
+					Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a"},
+					ActorTemplate: &ateapipb.ObjectRef{Atespace: "shared", Name: "tmpl"},
+				},
+				InitialEgressPolicy: &ateapipb.EgressPolicy{},
+			},
+			wantField: "actor.metadata.name",
+		},
+		{
+			name:       "CreateActor with an initial policy without an actor",
+			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
+			req:        &ateapipb.CreateActorRequest{InitialEgressPolicy: &ateapipb.EgressPolicy{}},
 			wantField:  "actor.metadata.atespace",
 		},
 		{

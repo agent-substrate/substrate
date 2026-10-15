@@ -38,7 +38,7 @@ func TestActorEgressPolicy(t *testing.T) {
 	_, err := persistence.CreateActor(t.Context(), &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "egress-actor"},
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

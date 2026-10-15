@@ -1334,6 +1334,43 @@ func Validate_ActorTemplate(
 		errs = append(errs, fn(fldPath.Child("status"), obj.Status, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.ActorTemplate.GoldenEgressPolicy
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.EgressPolicyTemplate,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "GoldenEgressPolicy", false, validate.ForbiddenPointer).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "GoldenEgressPolicy", false, validate.OptionalPointer).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_EgressPolicyTemplate(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorTemplate) *ateapipb.EgressPolicyTemplate {
+				return oldObj.GoldenEgressPolicy
+			})
+		errs = append(errs, fn(fldPath.Child("golden_egress_policy"), obj.GoldenEgressPolicy, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -2121,6 +2158,11 @@ func Validate_CreateActorRequest(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.CreateActorRequest) (errs field.ErrorList) {
 
+	// custom validation
+	if e := ValidateCustom_CreateActorRequest(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
 	{ // field ateapipb.CreateActorRequest.Actor
 		fn := func(
 			fldPath *field.Path,
@@ -2150,6 +2192,36 @@ func Validate_CreateActorRequest(
 				return oldObj.Actor
 			})
 		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.CreateActorRequest.InitialEgressPolicy
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.EgressPolicy,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_EgressPolicy(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.CreateActorRequest) *ateapipb.EgressPolicy {
+				return oldObj.InitialEgressPolicy
+			})
+		errs = append(errs, fn(fldPath.Child("initial_egress_policy"), obj.InitialEgressPolicy, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -3545,6 +3617,60 @@ func Validate_EgressPolicy(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateapipb.EgressPolicy) []*ateapipb.EgressRule {
+				return oldObj.Rules
+			})
+		errs = append(errs, fn(fldPath.Child("rules"), obj.Rules, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_EgressPolicyTemplate validates an instance of EgressPolicyTemplate according
+// to declarative validation rules in the API schema.
+func Validate_EgressPolicyTemplate(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.EgressPolicyTemplate) (errs field.ErrorList) {
+
+	{ // field ateapipb.EgressPolicyTemplate.Rules
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []*ateapipb.EgressRule,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.PtrSliceNoNils[ateapipb.EgressRule](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 256).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_EgressPolicyTemplate_Rules(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// iterate the list and call the type's validation function
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil, Validate_EgressRule); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.EgressPolicyTemplate) []*ateapipb.EgressRule {
 				return oldObj.Rules
 			})
 		errs = append(errs, fn(fldPath.Child("rules"), obj.Rules, oldVal, oldObj != nil)...)

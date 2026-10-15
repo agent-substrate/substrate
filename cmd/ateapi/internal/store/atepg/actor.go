@@ -26,7 +26,30 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
+func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor, policy *ateapipb.EgressPolicy) (*ateapipb.Actor, error) {
+	if policy == nil {
+		return createActor(ctx, p.pool, actor)
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	dbActor, err := createActor(ctx, tx, actor)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := createEgressPolicy(ctx, tx, resources.ActorRefFromActor(dbActor), policy); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return dbActor, nil
+}
+
+func createActor(ctx context.Context, q querier, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
 	atespace := actor.GetMetadata().GetAtespace()
 	name := actor.GetMetadata().GetName()
 
@@ -42,7 +65,7 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
 
-	_, err = p.pool.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		INSERT INTO actors (atespace, name, uid, version, proto)
 		VALUES ($1, $2, $3, $4, $5)`,
 		atespace, name, dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion(), protoBytes)

@@ -1387,7 +1387,7 @@ func TestDeleteActor_StateDeleting(t *testing.T) {
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}
-	if _, err := tc.persistence.CreateActor(context.Background(), deletingActor); err != nil {
+	if _, err := tc.persistence.CreateActor(context.Background(), deletingActor, nil); err != nil {
 		t.Fatalf("CreateActor: %v", err)
 	}
 
@@ -1466,7 +1466,7 @@ func TestDeleteActor_WrongState(t *testing.T) {
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}
-	if _, err := tc.persistence.CreateActor(context.Background(), runningActor); err != nil {
+	if _, err := tc.persistence.CreateActor(context.Background(), runningActor, nil); err != nil {
 		t.Fatalf("CreateActor: %v", err)
 	}
 
@@ -1513,7 +1513,7 @@ func TestDeleteActor_MultipleVolumeDeletionFailures(t *testing.T) {
 			},
 		},
 	}
-	if _, err := tc.persistence.CreateActor(context.Background(), actor); err != nil {
+	if _, err := tc.persistence.CreateActor(context.Background(), actor, nil); err != nil {
 		t.Fatalf("CreateActor: %v", err)
 	}
 
@@ -1590,7 +1590,7 @@ func TestDeleteActor_VolumeDeletionFailure_RetrySuccess(t *testing.T) {
 			},
 		},
 	}
-	if _, err := tc.persistence.CreateActor(context.Background(), actor); err != nil {
+	if _, err := tc.persistence.CreateActor(context.Background(), actor, nil); err != nil {
 		t.Fatalf("CreateActor: %v", err)
 	}
 

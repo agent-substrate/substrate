@@ -52,6 +52,11 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 		inActor.Status = nil
 		defaults.Apply(inActor)
 	}
+	policy := req.GetInitialEgressPolicy()
+	if policy != nil {
+		scrubResourceMetadataForCreate(policy.Metadata)
+		defaults.Apply(policy)
+	}
 
 	// Validate the request, including the object within it.
 	if errs := apivalidation.ValidateCreateActorRequest(ctx, req); len(errs) > 0 {
@@ -71,13 +76,13 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 	setSpanActorRefAttributes(ctx, resources.ActorRefFromActor(inActor))
 
 	// Handle the creation, including validation of the final stored object.
-	stored, err := s.impl.CreateActor(ctx, inActor)
+	stored, err := s.impl.CreateActor(ctx, inActor, policy)
 	setSpanActorAttributes(ctx, stored)
 
 	return stored, err
 }
 
-func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) (*ateapipb.Actor, error) {
+func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor, policy *ateapipb.EgressPolicy) (*ateapipb.Actor, error) {
 	// Check that the referenced ActorTemplate exists.
 	// FIXME: This is not atomic and it is not a guarantee that the template
 	// will still exist later.  Checking it here produces a nice error UX, but
@@ -158,7 +163,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	}
 
 	// Save the data in the storage layer.
-	stored, err := s.store.CreateActor(ctx, outActor)
+	stored, err := s.store.CreateActor(ctx, outActor, policy)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, apierror.AlreadyExists("Actor %s already exists", name)

@@ -43,6 +43,19 @@ func TestValidateCreateActorRequest(t *testing.T) {
 	withActorTemplate := withActorActorTemplate
 	withSourceTag := withActorSourceTag
 	withWorkerSelector := withActorWorkerSelector
+	withInitialPolicy := func(mods ...func(*ateapipb.EgressPolicy)) func(*ateapipb.CreateActorRequest) {
+		return func(r *ateapipb.CreateActorRequest) {
+			r.InitialEgressPolicy = &ateapipb.EgressPolicy{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "default"},
+				Rules: []*ateapipb.EgressRule{{
+					Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}},
+				}},
+			}
+			for _, mod := range mods {
+				mod(r.InitialEgressPolicy)
+			}
+		}
+	}
 
 	tests := []struct {
 		name string
@@ -52,6 +65,50 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		"valid",
 		validReq(validActor()),
 		nil,
+	}, {
+		"valid initial egress policy",
+		validReq(validActor(), withInitialPolicy()),
+		nil,
+	}, {
+		"initial policy without actor",
+		validReq(nil, withInitialPolicy()),
+		field.ErrorList{field.Required(field.NewPath("actor"), "")},
+	}, {
+		"initial policy without actor metadata",
+		validReq(validActor(func(a *ateapipb.Actor) { a.Metadata = nil }), withInitialPolicy()),
+		field.ErrorList{field.Required(field.NewPath("actor", "metadata"), "")},
+	}, {
+		"missing initial policy metadata",
+		validReq(validActor(), withInitialPolicy(func(p *ateapipb.EgressPolicy) { p.Metadata = nil })),
+		field.ErrorList{field.Required(field.NewPath("initial_egress_policy", "metadata"), "")},
+	}, {
+		"missing initial policy atespace",
+		validReq(validActor(), withInitialPolicy(func(p *ateapipb.EgressPolicy) { p.Metadata.Atespace = "" })),
+		field.ErrorList{field.Required(field.NewPath("initial_egress_policy", "metadata", "atespace"), "")},
+	}, {
+		"mismatched initial policy atespace",
+		validReq(validActor(), withInitialPolicy(func(p *ateapipb.EgressPolicy) { p.Metadata.Atespace = "other" })),
+		field.ErrorList{field.Invalid(field.NewPath("initial_egress_policy", "metadata", "atespace"), "other", "")},
+	}, {
+		"missing initial policy name",
+		validReq(validActor(), withInitialPolicy(func(p *ateapipb.EgressPolicy) { p.Metadata.Name = "" })),
+		field.ErrorList{field.Required(field.NewPath("initial_egress_policy", "metadata", "name"), "")},
+	}, {
+		"initial policy name must be default",
+		validReq(validActor(), withInitialPolicy(func(p *ateapipb.EgressPolicy) { p.Metadata.Name = "custom" })),
+		field.ErrorList{field.Invalid(field.NewPath("initial_egress_policy", "metadata", "name"), "custom", "").WithOrigin("custom=default")},
+	}, {
+		"missing initial egress rules",
+		validReq(validActor(), withInitialPolicy(func(p *ateapipb.EgressPolicy) { p.Rules = nil })),
+		field.ErrorList{field.Required(field.NewPath("initial_egress_policy", "rules"), "")},
+	}, {
+		"empty initial egress rules",
+		validReq(validActor(), withInitialPolicy(func(p *ateapipb.EgressPolicy) { p.Rules = []*ateapipb.EgressRule{} })),
+		field.ErrorList{field.Required(field.NewPath("initial_egress_policy", "rules"), "")},
+	}, {
+		"invalid initial egress hostname",
+		validReq(validActor(), withInitialPolicy(func(p *ateapipb.EgressPolicy) { p.Rules[0].Https.Hostnames = []string{"bad/host"} })),
+		field.ErrorList{field.Invalid(field.NewPath("initial_egress_policy", "rules").Index(0).Child("https", "hostnames").Index(0), nil, "")},
 	}, {
 		"valid with status",
 		validReq(validActor(withStatus())),

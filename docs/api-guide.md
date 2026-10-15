@@ -104,10 +104,51 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures (`SNAPSHOT_FIDELITY_ROOTFS` requires `sandboxClass: microvm`), and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
 | `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpu` and `memory` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
+| `goldenEgressPolicy` | `EgressPolicyTemplate` | **Preview.** Optional egress policy for the golden actor during initialization. Requires at least one rule, using the same rule defaults and validation as `EgressPolicy`. See [Golden Egress Policy](#golden-egress-policy-goldenegresspolicy). |
 
 The sandbox itself — the binaries (e.g. the gVisor `runsc` binary) and the `pauseImage` holding the sandbox's namespaces — comes from the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object the template names via `sandboxConfig.configName`. An actor always resolves the config from its current template — repointing the actor at another template requires the same config.
 
 Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is a **hard scheduling gate**: an actor is only ever placed on a `WorkerPool` whose `sandboxClasses` entry matches. It is AND'd with `workerSelector` (and the actor's `worker_selector`), which can only narrow the eligible pools further. It has no default — `sandboxConfig` is required and its `sandboxClass` must be set — and, like the rest of the template, is immutable, so each template's class is fixed at creation.
+
+### Golden Egress Policy (`goldenEgressPolicy`)
+
+`goldenEgressPolicy` is a **preview** feature. Enable
+`--preview=GoldenEgressPolicy` on the server (or through
+ate-setup's `preview` setting), and opt in on the client with `kubectl ate --preview`
+or the `Ate-Preview-Allowed: true` gRPC metadata header. See [Preview gates](dev/preview-gates.md).
+
+Set `goldenEgressPolicy` on an ActorTemplate to give its golden actor network
+access during initialization. For example, this template field
+allows HTTPS to `api.example.com` on the default port, 443:
+
+```yaml
+goldenEgressPolicy:
+  rules:
+    - https:
+        hostnames: [api.example.com]
+```
+
+The template controller turns this field into an `EgressPolicy` with the golden
+actor's atespace and the name `default`, and passes it as
+`CreateActorRequest.initial_egress_policy` when creating the golden actor.
+The actor and its `default` egress policy are
+created atomically, so the policy exists before golden initialization can start.
+The policy receives its own UID, version, and timestamps. The template field
+contains only rules.
+
+Other actors created from the template do not inherit this policy, including
+actors restored from its golden snapshot. Configure their network access using
+`initial_egress_policy` in `CreateActor`, or subsequently with `CreateActorEgressPolicy`.
+
+The golden policy's rules are copied once at creation. Updating or deleting
+that policy does not change the template. Omitting `goldenEgressPolicy`
+creates no golden policy. When set, it must contain at least one rule.
+
+Turning the gate off prevents creating new templates with `goldenEgressPolicy`.
+Existing templates retain their configuration, including when their golden is
+created after the gate is turned off. Existing policies and resource cleanup
+continue to work. `CreateActorRequest.initial_egress_policy` does not require
+this gate or client preview opt-in.
 
 ### Sandbox Right-Sizing (`resources`)
 
@@ -586,6 +627,7 @@ Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
     *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); the `actor_template` ref (atespace + name) selects the `ActorTemplate`.
     *   `actor.source_tag`: (Optional) `ObjectRef` of a `Tag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.snapshots` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
+    *   `initial_egress_policy`: (Optional) `EgressPolicy` containing at least one rule. `metadata.name` must be `default` and `metadata.atespace` must match the actor's atespace, as with `CreateActorEgressPolicy`. Creates the policy atomically with the actor; the server generates the policy's UID, version, and timestamps. Requires permission to create an egress policy on the new actor as well as permission to create the actor and use its template. If omitted, no policy is created or inherited from the template or tag. Manage the resulting policy with the Actor egress policy RPCs.
 *   **Response:** the initialized `Actor`.
 
 #### `UpdateActor`

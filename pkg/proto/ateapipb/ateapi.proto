@@ -614,6 +614,21 @@ message EgressPolicy {
   repeated EgressRule rules = 2;
 }
 
+// EgressPolicyTemplate defines an initial Actor egress policy without resource
+// metadata. Each rule has the same defaults, validation, and semantics as
+// EgressPolicy.rules.
+message EgressPolicyTemplate {
+  // Rules are an unordered set of allows, with the same precedence and effects
+  // as EgressPolicy.rules. At least one rule is required. Traffic is denied
+  // when no rule matches.
+  //
+  // +k8s:required
+  // +k8s:maxItems=256
+  // +k8s:listType=atomic
+  // +k8s:customValidation # no two rules tie on a name and port
+  repeated EgressRule rules = 1;
+}
+
 // EgressRule allows traffic for a given protocol and destination (host name
 // or IP, and port). The protocol fixes what the gateway matches on and when:
 // a request, or a TLS connection at its ClientHello. Traffic that matches no
@@ -1152,6 +1167,18 @@ message ActorTemplate {
 
   // +k8s:optional
   ActorTemplateStatus status = 8;
+
+  // Egress policy for the golden Actor during initialization. The template
+  // controller supplies a policy with these rules and generated metadata
+  // as CreateActorRequest.initial_egress_policy
+  // when creating the golden Actor. Other Actors created from this template
+  // do not inherit this policy, including when using the golden snapshot.
+  // If absent, no policy is created. When set, at least one rule is required.
+  //
+  // +ate:preview=GoldenEgressPolicy
+  // +k8s:ifDisabled(GoldenEgressPolicy)=+k8s:forbidden
+  // +k8s:optional
+  EgressPolicyTemplate golden_egress_policy = 9;
 }
 
 message Resources {
@@ -1719,11 +1746,25 @@ message GetActorRequest {
 }
 
 // Request to create a new Actor.
+//
+// +k8s:customValidation # initial policy must match the actor's atespace and contain rules
 message CreateActorRequest {
   // The actor to create.
   //
   // +k8s:required
   Actor actor = 1;
+
+  // Optional initial egress policy, created atomically with the Actor as its
+  // "default" policy. metadata.name must be "default" and metadata.atespace
+  // must match actor.metadata.atespace. UID, version, and timestamps are
+  // server-managed. When set, at least one rule is required, and the caller
+  // must have permission to create an egress policy on the Actor in addition
+  // to creating the Actor.
+  // If absent, no policy is created or inherited from the template or tag.
+  // The policy can subsequently be managed through the Actor egress policy RPCs.
+  //
+  // +k8s:optional
+  EgressPolicy initial_egress_policy = 2;
 }
 
 // Request to update mutable fields on an existing Actor.

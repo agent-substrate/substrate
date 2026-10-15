@@ -376,6 +376,17 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 	createActor := func(template *ateapipb.ObjectRef) rpcCall {
 		return rpcCall{ateapipb.Control_CreateActor_FullMethodName, &ateapipb.CreateActorRequest{Actor: actorWithTemplate(template)}}
 	}
+	createActorWithPolicy := func(template *ateapipb.ObjectRef) rpcCall {
+		return rpcCall{ateapipb.Control_CreateActor_FullMethodName, &ateapipb.CreateActorRequest{
+			Actor: actorWithTemplate(template),
+			InitialEgressPolicy: &ateapipb.EgressPolicy{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: actor.GetAtespace(), Name: "default"},
+				Rules: []*ateapipb.EgressRule{{
+					Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}},
+				}},
+			},
+		}}
+	}
 	updateActor := func(template *ateapipb.ObjectRef) rpcCall {
 		return rpcCall{ateapipb.Control_UpdateActor_FullMethodName, &ateapipb.UpdateActorRequest{Actor: actorWithTemplate(template)}}
 	}
@@ -409,6 +420,15 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 		{"editor creates actor from shared template they can use", "editor-with-shared", createActor(shared), codes.OK},
 		{"shared viewer cannot create actor without editor on team-a", "shared-viewer", createActor(shared), codes.PermissionDenied},
 		{"global owner creates actor from any template", "global-owner", createActor(shared), codes.OK},
+
+		// No actor row or parent tuple exists yet. Initial policy creation uses
+		// the new actor's contextual parent link to evaluate its permissions.
+		{"editor creates actor with initial policy", "editor", createActorWithPolicy(local), codes.OK},
+		{"editor creates actor with initial policy from shared template", "editor-with-shared", createActorWithPolicy(shared), codes.OK},
+		{"viewer cannot create actor with initial policy", "viewer", createActorWithPolicy(local), codes.PermissionDenied},
+		{"shared viewer cannot set initial policy in another atespace", "shared-viewer", createActorWithPolicy(shared), codes.PermissionDenied},
+		{"initial policy does not grant template access", "editor", createActorWithPolicy(shared), codes.PermissionDenied},
+		{"bootstrap owner creates actor with initial policy", "bootstrap-owner", createActorWithPolicy(shared), codes.OK},
 
 		// UpdateActor needs can_update on the actor and can_use_template on the template.
 		{"editor updates actor on local template", "editor", updateActor(local), codes.OK},

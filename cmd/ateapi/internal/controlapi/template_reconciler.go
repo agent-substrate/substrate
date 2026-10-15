@@ -439,6 +439,13 @@ func (r *ActorTemplateReconciler) ensureActorExists(ctx context.Context, tmpl *a
 	}); err != nil && apierror.Code(err) != codes.AlreadyExists {
 		return nil, fmt.Errorf("while ensuring atespace %q: %w", goldenActorRef.GetAtespace(), err)
 	}
+	var policy *ateapipb.EgressPolicy
+	if initial := tmpl.GetGoldenEgressPolicy(); initial != nil {
+		policy = &ateapipb.EgressPolicy{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: goldenActorRef.GetAtespace(), Name: resources.SingletonName},
+			Rules:    initial.GetRules(),
+		}
+	}
 	actor, err = r.control.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{
@@ -447,6 +454,7 @@ func (r *ActorTemplateReconciler) ensureActorExists(ctx context.Context, tmpl *a
 			},
 			ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
 		},
+		InitialEgressPolicy: policy,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while creating golden actor: %w", err)

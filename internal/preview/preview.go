@@ -41,6 +41,9 @@ type Gate string
 const (
 	// GateExternalVolumes controls whether external volumes are supported.
 	GateExternalVolumes Gate = "ExternalVolumes"
+
+	// GateGoldenEgressPolicy controls configuring a golden actor's egress policy on its template.
+	GateGoldenEgressPolicy Gate = "GoldenEgressPolicy"
 )
 
 // All is the pseudo-gate name that enables every known gate.
@@ -50,6 +53,7 @@ const All = "ALL"
 // default and enabled via the --preview flag.
 var realKnownGates = []Gate{
 	GateExternalVolumes,
+	GateGoldenEgressPolicy,
 }
 
 var globalKnownGates []Gate           // all known gates
