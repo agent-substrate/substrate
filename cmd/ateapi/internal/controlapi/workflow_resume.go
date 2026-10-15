@@ -669,6 +669,10 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 // requiredSnapshotRuntime returns the SandboxRuntime stamped on the snapshot
 // that ResumeActor will restore guest state from, or nil when the resume does
 // not restore guest state (cold boot, VOLUMES fidelity, or replaced template).
+//
+// TODO: Once gVisor can restore ROOTFS snapshots, return nil for ROOTFS as
+// well: a rootfs upper is files tied to the image, not to the runtime, so only
+// MEMORY needs a runtime match. Until then ROOTFS is pinned like MEMORY.
 func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) *ateapipb.SandboxRuntime {
 	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
 		if localSnap.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
@@ -823,6 +827,10 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			if runtimeIncompatible {
 				logRuntimeFallback(ctx, actorRef, assignment, src.RequiredRuntime)
 			}
+			// TODO: Once gVisor can restore ROOTFS snapshots, drop an incompatible
+			// runtime to ROOTFS, not VOLUMES: only the memory layer is invalid. A
+			// replaced template still drops to VOLUMES, as the rootfs upper is
+			// only valid over the image it was written on.
 			scope = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(scope)

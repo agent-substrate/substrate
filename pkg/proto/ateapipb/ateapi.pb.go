@@ -7592,14 +7592,15 @@ type VersionedSandboxCompat struct {
 	// +k8s:maxLength=64
 	SchemaVersion string `protobuf:"bytes,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	// Key-value compatibility attributes defined by this schema version, covering
-	// both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
-	// features after masking (e.g. "architecture", "cpu_features").
+	// both runtime assets (e.g. "sandbox_runtime_hash") and effective guest
+	// hardware features after masking (e.g. "architecture", "cpu_features").
 	// Matched against a snapshot under the same schema_version: every attribute
-	// on the snapshot must be present on the worker with an equal value; keys
-	// only the worker has are ignored, so a worker can gain keys under one
-	// schema_version without invalidating older snapshots. Removing or
-	// recomputing a key is a new schema_version, under which older snapshots
-	// no longer match.
+	// on the snapshot must be present on the worker with an equal value (except
+	// "cpu_features", where the snapshot's hexadecimal bitmask must be a bitwise
+	// subset of the worker's); keys only the worker has are ignored, so a worker
+	// can gain keys under one schema_version without invalidating older
+	// snapshots. Removing or recomputing a key is a new schema_version, under
+	// which older snapshots no longer match.
 	// Order as sent does not matter: ate-api-server sorts attributes by key
 	// before recording them.
 	//
@@ -7659,7 +7660,7 @@ func (x *VersionedSandboxCompat) GetAttributes() []*AttributeEntry {
 // AttributeEntry is a single key-value compatibility attribute.
 type AttributeEntry struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Attribute name (e.g. "architecture", "cpu_features", "gvisor_asset_hash").
+	// Attribute name (e.g. "architecture", "cpu_features", "sandbox_runtime_hash").
 	//
 	// +k8s:required
 	// +k8s:maxLength=128
