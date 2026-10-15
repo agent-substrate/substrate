@@ -197,9 +197,10 @@ func newActorProxy(upstream *url.URL, dial DialFunc) *httputil.ReverseProxy {
 		Transport: newProtocolMirrorTransport(dial),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			slog.WarnContext(r.Context(), "atunnel upstream request failed", slog.Any("err", err))
-			// A request cut off by deactivation is retryable: the actor is
-			// healthy and will be resumed on demand.
-			if errors.Is(context.Cause(r.Context()), errActorDeactivated) {
+			// A cut off idempotent request is safe to retry. Others stay 502,
+			// since the actor may have already acted on them. Prefer the
+			// CONNECT listener over adding more L7 handling here.
+			if errors.Is(context.Cause(r.Context()), errActorDeactivated) && isIdempotent(r.Method) {
 				w.Header().Set("Retry-After", "1")
 				http.Error(w, "actor is suspending, retry", http.StatusServiceUnavailable)
 				return
@@ -207,6 +208,15 @@ func newActorProxy(upstream *url.URL, dial DialFunc) *httputil.ReverseProxy {
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 		},
 	}
+}
+
+// isIdempotent reports whether a request method is safe to retry (RFC 9110).
+func isIdempotent(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace, http.MethodPut, http.MethodDelete:
+		return true
+	}
+	return false
 }
 
 // isGRPC reports whether an incoming HTTP request conforms to the gRPC over

@@ -811,45 +811,56 @@ func TestServeNegotiatesH2(t *testing.T) {
 }
 
 func TestDeactivateCancelsInflightRequest(t *testing.T) {
-	upstream, err := url.Parse("http://actor.internal:80")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := newTestServer(t, upstream)
-	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
-		t.Fatal(err)
-	}
-	started := make(chan struct{})
-	causes := make(chan error, 1)
-	setActorTransport(t, s, "team-a", "actor-1", roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		close(started)
-		<-r.Context().Done()
-		causes <- context.Cause(r.Context())
-		return nil, r.Context().Err()
-	}))
+	for _, tc := range []struct {
+		method     string
+		wantStatus int
+		wantRetry  bool
+	}{
+		{http.MethodGet, http.StatusServiceUnavailable, true},
+		{http.MethodPost, http.StatusBadGateway, false},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			upstream, err := url.Parse("http://actor.internal:80")
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := newTestServer(t, upstream)
+			if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
+				t.Fatal(err)
+			}
+			started := make(chan struct{})
+			causes := make(chan error, 1)
+			setActorTransport(t, s, "team-a", "actor-1", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				close(started)
+				<-r.Context().Done()
+				causes <- context.Cause(r.Context())
+				return nil, r.Context().Err()
+			}))
 
-	rec := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		req := httptest.NewRequest(http.MethodGet, "https://worker/", nil)
-		req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
-		req.Header.Set(atenet.TargetActorHeader, "team-a/actor-1")
-		s.ServeHTTP(rec, req)
-	}()
-	receiveWithin(t, started, "in-flight request")
-	if err := s.Deactivate(context.Background(), "team-a", "actor-1", "uid-actor-1"); err != nil {
-		t.Fatal(err)
-	}
-	receiveWithin(t, done, "canceled in-flight request")
-	if cause := receiveWithin(t, causes, "cancel cause"); !errors.Is(cause, errActorDeactivated) {
-		t.Errorf("in-flight request canceled with %v, want %v", cause, errActorDeactivated)
-	}
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
-	}
-	if got := rec.Header().Get("Retry-After"); got == "" {
-		t.Error("missing Retry-After header")
+			rec := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				req := httptest.NewRequest(tc.method, "https://worker/", nil)
+				req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
+				req.Header.Set(atenet.TargetActorHeader, "team-a/actor-1")
+				s.ServeHTTP(rec, req)
+			}()
+			receiveWithin(t, started, "in-flight request")
+			if err := s.Deactivate(context.Background(), "team-a", "actor-1", "uid-actor-1"); err != nil {
+				t.Fatal(err)
+			}
+			receiveWithin(t, done, "canceled in-flight request")
+			if cause := receiveWithin(t, causes, "cancel cause"); !errors.Is(cause, errActorDeactivated) {
+				t.Errorf("in-flight request canceled with %v, want %v", cause, errActorDeactivated)
+			}
+			if rec.Code != tc.wantStatus {
+				t.Errorf("status = %d, want %d", rec.Code, tc.wantStatus)
+			}
+			if got := rec.Header().Get("Retry-After") != ""; got != tc.wantRetry {
+				t.Errorf("Retry-After set = %v, want %v", got, tc.wantRetry)
+			}
+		})
 	}
 }
 
