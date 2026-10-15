@@ -142,6 +142,51 @@ func TestTrackerDetach(t *testing.T) {
 		}
 	})
 
+	t.Run("already durable, as after an immediate checkpoint", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		tr := newTestTracker(t, store)
+		local := testRef("s1", 1, tr.clock.Now())
+		durable := local
+		durable.UploadTime = local.CommitTime.Add(time.Second)
+		tr.CommitDurable(trackedActorUID, durable)
+		tr.CommitLocal(trackedActorUID, local)
+		detachNow(t, tr)
+		if got := store.uploads(); len(got) != 0 {
+			t.Errorf("uploads = %v, want none for an already durable snapshot", got)
+		}
+		st := tr.State(trackedActorUID)
+		if st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
+			t.Errorf("state = %v, want s1 durable and nothing local", st)
+		}
+		if got := timeOf(st.GetLatestDurable().GetDurableCompleteTime()); !got.Equal(durable.UploadTime) {
+			t.Errorf("durable_complete_time = %v, want %v from the checkpoint", got, durable.UploadTime)
+		}
+	})
+
+	t.Run("already durable, as after a promote", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		tr := newTestTracker(t, store)
+		local := testRef("s1", 1, tr.clock.Now())
+		local.Snapshot.Object = nil
+		tr.CommitLocal(trackedActorUID, local)
+
+		promoted := testRef("s1", 1, time.Time{})
+		promoted.UploadTime = local.CommitTime.Add(time.Minute)
+		tr.CommitPromoted(trackedActorUID, promoted)
+
+		detachNow(t, tr)
+		if got := store.uploads(); len(got) != 0 {
+			t.Errorf("uploads = %v, want none for a promoted snapshot", got)
+		}
+		st := tr.State(trackedActorUID)
+		if st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
+			t.Errorf("state = %v, want s1 durable and nothing local", st)
+		}
+		if got := timeOf(st.GetLatestDurable().GetDurableCompleteTime()); !got.Equal(promoted.UploadTime) {
+			t.Errorf("durable_complete_time = %v, want %v from the promote", got, promoted.UploadTime)
+		}
+	})
+
 	// A refused detach keeps the local snapshot and uploads nothing.
 	for _, tc := range []struct {
 		name     string

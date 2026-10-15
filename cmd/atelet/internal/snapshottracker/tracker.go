@@ -42,9 +42,10 @@ type Store interface {
 // Background work runs off a delaying workqueue of actor UIDs drained by a
 // fixed pool of workers. Each change to an actor's state queues the actor for
 // when its next detach is due:
-//  1. A checkpoint (CommitLocal or CommitDurable) records the new snapshot as
-//     LatestLocal, and schedules the actor's detach detachDelay after the
-//     checkpoint.
+//  1. A checkpoint records the new snapshot as LatestLocal with CommitLocal,
+//     and schedules the actor's detach detachDelay after the checkpoint. An
+//     immediate checkpoint records its upload with CommitDurable first. A
+//     promote of LatestLocal (CommitPromoted) leaves the schedule as it is.
 //  2. A worker that takes the actor from the queue detaches it if the detach
 //     is due then. When it is not due yet, the worker queues the actor again
 //     for when it is: the queue holds an actor until the earliest time it was

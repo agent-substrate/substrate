@@ -339,9 +339,7 @@ service Atelet {
   // Idempotent: once the snapshot is durable, atelet answers from the
   // manifest at `snapshot.object`, and fails if there is none.
   //
-  // TODO: Temporarily, this deletes all of the actor's local snapshots after
-  // the upload and does not check whether the actor is running. Its only
-  // caller, the suspend of a paused actor, relies on the deletion.
+  // TODO: Temporarily, this does not check whether the actor is running.
   rpc PromoteSnapshot(PromoteSnapshotRequest) returns (PromoteSnapshotResponse) {}
 
   // DetachActor makes the actor's latest local snapshot durable, then deletes
@@ -943,10 +941,10 @@ message SnapshotReport {
 // ActorSnapshotState is what atelet holds for one actor on this node.
 // Returned by Checkpoint, PromoteSnapshot, DetachActor.
 message ActorSnapshotState {
-  // The snapshot atelet restores the actor from locally. Unset when the
-  // latest checkpoint kept no local copy, and once a detach has made the
-  // snapshot durable and begun deleting it. Either way, latest_durable is
-  // then the actor's latest snapshot.
+  // The snapshot atelet restores the actor from locally. Unset when an
+  // UPLOAD_MODE_IMMEDIATE checkpoint could not keep a local copy, and once a
+  // detach has made the snapshot durable and begun deleting it. Either way,
+  // latest_durable is then the actor's latest snapshot.
   SnapshotReport latest_local = 1;
 
   // The snapshot an in-flight upload is reading, if any. If it is
@@ -996,9 +994,9 @@ enum UploadMode {
   // detach, only PromoteSnapshot uploads the snapshot.
   UPLOAD_MODE_DEFERRED = 1;
 
-  // Upload the snapshot synchronously before Checkpoint returns, while keeping the local copy.
-  //
-  // TODO: Temporarily this deletes the local snapshot after the upload.
+  // Upload the snapshot synchronously before Checkpoint returns, and keep a
+  // local copy if atelet can: failing to store it does not fail the
+  // Checkpoint.
   UPLOAD_MODE_IMMEDIATE = 2;
   // Keep this in sync with the maximums on fields of this type.
 }
@@ -1061,9 +1059,9 @@ message CheckpointRequest {
 
 message CheckpointResponse {
   // The actor's state once the checkpoint is taken: latest_local is the new
-  // snapshot, unless UPLOAD_MODE_IMMEDIATE kept no local copy. The control
-  // plane can drop its entries for any local-only generation not named here:
-  // atelet has deleted it, and will never upload it.
+  // snapshot, unless UPLOAD_MODE_IMMEDIATE could not keep a local copy. The
+  // control plane can drop its entries for any local-only generation not
+  // named here: atelet has deleted it, and will never upload it.
   ActorSnapshotState state = 1;
 }
 

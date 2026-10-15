@@ -21,9 +21,9 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
-// CommitLocal records snap, just stored locally under UPLOAD_MODE_DEFERRED, as
-// the actor's latest local snapshot, schedules the actor's detach, and
-// returns the actor's state.
+// CommitLocal records snap, just stored in the actor's local checkpoint
+// directory by a Checkpoint in either upload mode, as the actor's latest local
+// snapshot, schedules the actor's detach, and returns the actor's state.
 func (t *Tracker) CommitLocal(actorUID string, snap SnapshotRef) *ateletpb.ActorSnapshotState {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
@@ -37,16 +37,15 @@ func (t *Tracker) CommitLocal(actorUID string, snap SnapshotRef) *ateletpb.Actor
 	return t.stateLocked(a)
 }
 
-// CommitDurable records snap, uploaded during Checkpoint under
-// UPLOAD_MODE_IMMEDIATE, as the actor's latest snapshot. The actor keeps no
-// local snapshot. It returns the actor's state.
+// CommitDurable records snap, just uploaded by a Checkpoint under
+// UPLOAD_MODE_IMMEDIATE, as the actor's latest durable snapshot, and returns
+// the actor's state. The Checkpoint then records its local copy with
+// CommitLocal, if it manages to keep one.
 func (t *Tracker) CommitDurable(actorUID string, snap SnapshotRef) *ateletpb.ActorSnapshotState {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
 	a := t.findOrAddLocked(actorUID)
 	a.LatestDurable = snap.clone()
-	// TODO: change this when we implement DEFERRED.
-	a.clearLatestLocal()
 	t.succeededLocked(a)
 	return t.stateLocked(a)
 }
@@ -67,11 +66,24 @@ func (t *Tracker) ForgetLocal(actorUID string) {
 	t.requeueLocked(a)
 }
 
-// CommitPromoted records snap, the local snapshot PromoteSnapshot just
-// uploaded, as the actor's latest snapshot, keeping the time its checkpoint
-// committed. PromoteSnapshot then deletes the local copy, so the actor keeps
-// no local snapshot. A retried promote of a snapshot already recorded keeps
-// what was recorded. It returns the actor's state.
+// IsDurable reports whether snap is recorded as the actor's latest durable
+// snapshot. It fails with FailedPrecondition when LatestDurable has snap's
+// UUID with a different generation or URI.
+func (t *Tracker) IsDurable(actorUID string, snap SnapshotRef) (bool, error) {
+	t.lock(actorUID)
+	defer t.unlock(actorUID)
+	a := t.findLocked(actorUID)
+	if a == nil {
+		return false, nil
+	}
+	return a.isLatestDurable(snap)
+}
+
+// CommitPromoted records snap, a local snapshot PromoteSnapshot made durable or
+// found durable already, as the actor's latest durable snapshot, keeping its
+// local copy and the time its checkpoint committed. It leaves DetachAt as it
+// is. A retried promote of a snapshot already recorded keeps what was
+// recorded. It returns the actor's state.
 func (t *Tracker) CommitPromoted(actorUID string, snap SnapshotRef) *ateletpb.ActorSnapshotState {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
@@ -80,11 +92,12 @@ func (t *Tracker) CommitPromoted(actorUID string, snap SnapshotRef) *ateletpb.Ac
 	if d := a.LatestDurable; d == nil || d.Snapshot.GetSnapshotUuid() != uuid {
 		if l := a.LatestLocal; l != nil && l.Snapshot.GetSnapshotUuid() == uuid {
 			snap.CommitTime = l.CommitTime
+			// The local copy takes the promoted Snapshot, which names where
+			// it is durable.
+			a.setLatestLocal(snap, a.DetachAt)
 		}
 		a.LatestDurable = snap.clone()
 	}
-	// TODO: change this when PromoteSnapshot keeps the local copy.
-	a.clearLatestLocal()
 	t.succeededLocked(a)
 	return t.stateLocked(a)
 }

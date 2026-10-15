@@ -391,7 +391,7 @@ func TestUploadSnapshotRejectsSymlinkOutsideRoot(t *testing.T) {
 	}
 	store := &recordingObjectStorage{}
 	err = newPluginHerder(t, store).uploadSnapshot(context.Background(), uri, checkpointDir,
-		&sandboxAssetsRecord{SnapshotFiles: []string{"checkpoint.img"}}, "test", "test")
+		&sandboxAssetsRecord{SnapshotFiles: []string{"checkpoint.img"}})
 	if err == nil {
 		t.Fatal("uploadSnapshot() followed a symlink outside the checkpoint directory")
 	}

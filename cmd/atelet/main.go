@@ -874,19 +874,15 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 
 	// Forget the local snapshot before the prune below deletes it, so the
 	// tracker never names a deleted snapshot, even if this checkpoint fails.
-	//
-	// TODO: Revisit this once the durable case can keep its local snapshot too
-	// (see UPLOAD_MODE_IMMEDIATE). Today the prune deletes every local
-	// snapshot, so the tracker forgets the latest one unconditionally. The
-	// snapshot this checkpoint just took is safe: it stays in
+	// The snapshot this checkpoint just took is safe: it stays in
 	// CheckpointStateDir until after the prune, and only moveLocalCheckpoint
 	// moves it into LocalCheckpointsDir, the directory the prune empties.
 	s.snapshots.ForgetLocal(actorUID)
 
-	// No earlier pause snapshot can ever be restored again, so remove them
+	// No earlier local snapshot can ever be restored again, so remove them
 	// all: the actor's current state was just captured by CheckpointWorkload,
-	// and the control plane tracks only a single local snapshot, which this
-	// checkpoint either overwrites (pause) or clears (suspend).
+	// and atelet keeps only the latest local snapshot, which this checkpoint
+	// replaces.
 	//
 	// Do not move this above CheckpointWorkload to keep MergeDeltaIntoBase on its
 	// in-place path: that leaves the whole checkpoint window with no local snapshot
@@ -921,8 +917,19 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 			dPersist = time.Since(tPersist)
 			return nil, fmt.Errorf("while uploading external snapshot: %w", err)
 		}
-		snap.UploadTime = time.Now()
-		state = s.snapshots.CommitDurable(actorUID, snap)
+		durable := snap
+		durable.UploadTime = time.Now()
+		state = s.snapshots.CommitDurable(actorUID, durable)
+		// The snapshot is durable now, so the local copy only saves a
+		// download: failing to keep it must not fail the checkpoint.
+		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
+			slog.WarnContext(ctx, "Failed to keep a local copy of the uploaded snapshot", slog.Any("actor", actorRef), slog.Any("err", err))
+			if err := snapshottracker.PruneLocalCheckpoints(ctx, actorUID); err != nil {
+				slog.WarnContext(ctx, "Failed to prune the partial local copy", slog.Any("actor", actorRef), slog.Any("err", err))
+			}
+		} else {
+			state = s.snapshots.CommitLocal(actorUID, snap)
+		}
 	default:
 		return nil, fmt.Errorf("unexpected upload mode: %v", mode)
 	}
@@ -1048,7 +1055,7 @@ func (s *Atelet) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.Che
 	if err != nil {
 		return err
 	}
-	return s.uploadSnapshot(ctx, uri, checkpointDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName(), grpc.WaitForReady(true))
+	return s.uploadSnapshot(ctx, uri, checkpointDir, rec, grpc.WaitForReady(true))
 }
 
 // uploadSnapshot uploads rec's snapshot files from srcDir to uri through the
@@ -1058,20 +1065,7 @@ func (s *Atelet) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.Che
 // files, never a manifest pointing at files that never landed; retries
 // overwrite the deterministic object names. opts are passed to every plugin
 // call, and plugin errors are returned as uploadSnapshotFiles returns them.
-func (s *Atelet) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, templateAtespace, templateName string, opts ...grpc.CallOption) error {
-	root, err := os.OpenRoot(srcDir)
-	if err != nil {
-		return fmt.Errorf("while opening snapshot directory: %w", err)
-	}
-	defer root.Close()
-
-	for _, fileName := range rec.SnapshotFiles {
-		info, err := root.Lstat(fileName)
-		if err != nil {
-			return fmt.Errorf("while inspecting %s in snapshot directory: %w", fileName, err)
-		}
-		recordSnapshotSize(ctx, fileName, allocatedBytes(info), templateAtespace, templateName)
-	}
+func (s *Atelet) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, opts ...grpc.CallOption) error {
 	if err := s.uploadSnapshotFiles(ctx, uri.String(), srcDir, rec.SnapshotFiles, opts...); err != nil {
 		return fmt.Errorf("while uploading snapshot files: %w", err)
 	}
@@ -1118,24 +1112,34 @@ func (s *Atelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 	}
 	localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetSnapshot().GetSnapshotUuid())
 
-	tPersist := time.Now()
-	sandboxClass, _, err := s.uploadLocalCheckpointDir(ctx, req, localDir, uri)
-	dPersist = time.Since(tPersist)
-	op.sandboxClass = sandboxClass
+	// A detach in progress finishes first, and none starts until the
+	// promote returns, so it cannot delete the local snapshot being uploaded.
+	endCheckpoint, err := s.snapshots.BeginCheckpoint(ctx, req.GetActorUid())
 	if err != nil {
 		return nil, err
 	}
+	defer endCheckpoint()
 
-	// Record the upload before the prune below deletes the local copy, so the
-	// tracker never names a deleted snapshot.
-	state := s.snapshots.CommitPromoted(req.GetActorUid(), snapshottracker.SnapshotRef{Snapshot: req.GetSnapshot(), UploadTime: time.Now()})
-
-	// Best-effort: the snapshot is in object storage now and the actor will
-	// not resume from this node's local copy. Kept outside the persist window
-	// so local disk deletion does not mix into the upload measurement.
-	if err := snapshottracker.PruneLocalCheckpoints(ctx, req.GetActorUid()); err != nil {
-		slog.WarnContext(ctx, "failed to prune uploaded local checkpoints", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
+	snap := snapshottracker.SnapshotRef{Snapshot: req.GetSnapshot()}
+	alreadyDurable, err := s.snapshots.IsDurable(req.GetActorUid(), snap)
+	if err != nil {
+		return nil, err
 	}
+	if !alreadyDurable {
+		tPersist := time.Now()
+		sandboxClass, uploaded, err := s.uploadLocalCheckpointDir(ctx, req, localDir, uri)
+		dPersist = time.Since(tPersist)
+		op.sandboxClass = sandboxClass
+		if err != nil {
+			return nil, err
+		}
+		// The upload time is known only when this call wrote the manifest, not
+		// when it found the snapshot committed already.
+		if uploaded {
+			snap.UploadTime = time.Now()
+		}
+	}
+	state := s.snapshots.CommitPromoted(req.GetActorUid(), snap)
 
 	return &ateletpb.PromoteSnapshotResponse{State: state}, nil
 }
@@ -1148,11 +1152,10 @@ func (s *Atelet) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.Pro
 	localSnapshotName := req.GetSnapshot().GetSnapshotUuid()
 	manifest, err := readSnapshotManifest(localDir)
 	if errors.Is(err, os.ErrNotExist) {
-		// The local snapshot is gone. A previous invocation may have uploaded
-		// and pruned it: the remote manifest is uploaded last, so its presence
-		// means the whole snapshot is committed and this retry already
-		// succeeded. Absent on both sides, the paused actor's state is
-		// unrecoverable.
+		// The local snapshot is gone. A detach may have uploaded and pruned
+		// it: the remote manifest is uploaded last, so its presence means the
+		// whole snapshot is committed. Absent on both sides, the local
+		// snapshot is unrecoverable.
 		_, fetchErr := s.fetchManifest(ctx, uri.String())
 		if fetchErr == nil {
 			slog.InfoContext(ctx, "Local snapshot already uploaded and pruned; nothing to do", slog.String("snapshot_uri", uri.String()))
@@ -1187,7 +1190,7 @@ func (s *Atelet) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.Pro
 
 	// The local snapshot stays until the upload succeeds, so a retry can
 	// upload it again.
-	if err := pluginsocket.CallError(s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName())); err != nil {
+	if err := pluginsocket.CallError(s.uploadSnapshot(ctx, uri, localDir, rec)); err != nil {
 		return rec.SandboxClass, false, err
 	}
 	return rec.SandboxClass, true, nil

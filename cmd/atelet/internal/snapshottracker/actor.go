@@ -192,8 +192,9 @@ func (a *actorSnapshots) recordDurable(d *SnapshotRef) {
 }
 
 // setLatestLocal records snap as the actor's latest local snapshot and
-// schedules a detach at detachAt. LatestLocal keeps snap's Snapshot and
-// CommitTime only: UploadTime is only valid for durable snapshots.
+// schedules its detach at detachAt, or none when detachAt is zero. LatestLocal
+// keeps snap's Snapshot and CommitTime only: UploadTime is only valid for
+// durable snapshots.
 func (a *actorSnapshots) setLatestLocal(snap SnapshotRef, detachAt time.Time) {
 	a.LatestLocal = &SnapshotRef{Snapshot: proto.CloneOf(snap.Snapshot), CommitTime: snap.CommitTime}
 	a.DetachAt = detachAt

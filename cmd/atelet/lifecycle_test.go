@@ -840,7 +840,7 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 	}
 	remoteSrcDir := t.TempDir()
 	writeLocalSnapshot(t, remoteSrcDir, manifestRec, map[string]string{"checkpoint.img": "object-storage-memory"})
-	if err := s.uploadSnapshot(t.Context(), uri, remoteSrcDir, &manifestRec, "default", "counter"); err != nil {
+	if err := s.uploadSnapshot(t.Context(), uri, remoteSrcDir, &manifestRec); err != nil {
 		t.Fatalf("uploadSnapshot: %v", err)
 	}
 
@@ -1205,10 +1205,10 @@ func manifestKey(name string) string {
 	return "test-bucket/atespaces/ate-demo/actors/" + pluginActorUID + "/snapshots/" + name + "/" + sandboxManifestName
 }
 
-// TestImmediateCheckpointKeepsNoLocalCopy suspends a running actor: the
-// checkpoint uploads the snapshot before it returns and leaves none on the
-// node.
-func TestImmediateCheckpointKeepsNoLocalCopy(t *testing.T) {
+// TestImmediateCheckpointKeepsLocalCopy suspends a running actor: the
+// checkpoint uploads the snapshot before it returns and keeps a local copy on
+// the node.
+func TestImmediateCheckpointKeepsLocalCopy(t *testing.T) {
 	a := runPluginActor(t)
 	snap := a.snapshot("suspend-snap-1", 1)
 
@@ -1219,15 +1219,45 @@ func TestImmediateCheckpointKeepsNoLocalCopy(t *testing.T) {
 	if !slices.Contains(a.store.keys(), manifestKey("suspend-snap-1")) {
 		t.Errorf("objects = %v, want the snapshot uploaded", a.store.keys())
 	}
-	if _, err := os.Stat(ateletpath.LocalCheckpointsDir(pluginActorUID)); !os.IsNotExist(err) {
-		t.Errorf("local checkpoints after an immediate checkpoint: stat = %v, want none", err)
+	if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "suspend-snap-1")); err != nil {
+		t.Errorf("local snapshot after an immediate checkpoint: stat = %v, want it kept", err)
+	}
+	st := resp.GetState()
+	if got := st.GetLatestLocal(); !proto.Equal(got.GetSnapshot(), snap) || got.GetLocalCommitTime() == nil || got.GetDurableCompleteTime() != nil {
+		t.Errorf("latest_local = %v, want %v with its commit time and no upload time", got, snap)
+	}
+	if got := st.GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || got.GetLocalCommitTime() == nil || got.GetDurableCompleteTime() == nil {
+		t.Errorf("latest_durable = %v, want %v with its commit and upload times", got, snap)
+	}
+}
+
+// TestImmediateCheckpointWithoutLocalCopy suspends a running actor whose
+// snapshot cannot be stored locally: the snapshot is durable, so the
+// checkpoint still succeeds, and reports no local snapshot.
+func TestImmediateCheckpointWithoutLocalCopy(t *testing.T) {
+	a := runPluginActor(t)
+	snap := a.snapshot("suspend-snap-1", 1)
+	// A file where the local checkpoint directory belongs fails the move.
+	if err := os.WriteFile(ateletpath.LocalCheckpointsDir(pluginActorUID), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+	if err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if !slices.Contains(a.store.keys(), manifestKey("suspend-snap-1")) {
+		t.Errorf("objects = %v, want the snapshot uploaded", a.store.keys())
 	}
 	st := resp.GetState()
 	if st.GetLatestLocal() != nil {
-		t.Errorf("state = %v, want no local snapshot", st)
+		t.Errorf("latest_local = %v, want unset without a local copy", st.GetLatestLocal())
 	}
 	if got := st.GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || got.GetDurableCompleteTime() == nil {
 		t.Errorf("latest_durable = %v, want %v with its upload time", got, snap)
+	}
+	if got := a.s.snapshots.State(pluginActorUID); !proto.Equal(got, st) {
+		t.Errorf("tracked state = %v, want %v, as Checkpoint returned", got, st)
 	}
 }
 
@@ -1255,8 +1285,8 @@ func TestFailedCheckpointForgetsLocalSnapshot(t *testing.T) {
 
 // TestPromoteSnapshotRecordsUpload suspends a paused actor: the promote
 // records the uploaded snapshot as the latest durable one, with the pause's
-// commit time, and the deleted local copy is no longer reported. A retry,
-// which finds the snapshot already uploaded, reports the same state.
+// commit time, and keeps the local copy on the node. A retry reports the same
+// state.
 func TestPromoteSnapshotRecordsUpload(t *testing.T) {
 	a := runPluginActor(t)
 	snap := a.snapshot("pause-snap-1", 1)
@@ -1267,8 +1297,11 @@ func TestPromoteSnapshotRecordsUpload(t *testing.T) {
 	commitTime := resp.GetState().GetLatestLocal().GetLocalCommitTime()
 
 	st := a.promote(t, snap)
-	if st.GetLatestLocal() != nil {
-		t.Errorf("latest_local = %v after the promote deleted it, want unset", st.GetLatestLocal())
+	if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-1")); err != nil {
+		t.Errorf("local snapshot after promote: stat = %v, want it kept", err)
+	}
+	if got := st.GetLatestLocal(); !proto.Equal(got.GetSnapshot(), snap) || !proto.Equal(got.GetLocalCommitTime(), commitTime) || got.GetDurableCompleteTime() != nil {
+		t.Errorf("latest_local = %v, want %v committed at %v, with no upload time", got, snap, commitTime)
 	}
 	if got := st.GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || !proto.Equal(got.GetLocalCommitTime(), commitTime) || got.GetDurableCompleteTime() == nil {
 		t.Errorf("latest_durable = %v, want %v committed at %v, with its upload time", got, snap, commitTime)
@@ -1277,8 +1310,22 @@ func TestPromoteSnapshotRecordsUpload(t *testing.T) {
 		t.Errorf("tracked state = %v, want %v, as PromoteSnapshot returned", got, st)
 	}
 
+	a.store.putErr = errors.New("retried promote should not upload")
 	if got := a.promote(t, snap); !proto.Equal(got, st) {
 		t.Errorf("state after a retried promote = %v, want %v", got, st)
+	}
+
+	mismatch := proto.CloneOf(snap)
+	mismatch.Generation = snap.GetGeneration() + 1
+	if _, err := a.s.PromoteSnapshot(t.Context(), &ateletpb.PromoteSnapshotRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              pluginActorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		Snapshot:              mismatch,
+	}); apierror.Code(err) != codes.FailedPrecondition {
+		t.Errorf("PromoteSnapshot with mismatched generation = %v, want FailedPrecondition", err)
 	}
 }
 
@@ -1592,5 +1639,55 @@ func TestCheckpointRecordsDetachWait(t *testing.T) {
 	}
 	if _, ok := phaseValues(t, collectHistogram(t, reader, checkpointDurationMetric))[ateattr.SnapshotPhaseTotal]; !ok {
 		t.Error("no total duration recorded for the checkpoint")
+	}
+}
+
+// TestPromoteSnapshotRecordsDetachWait gives up a PromoteSnapshot while it
+// waits for the actor's detach in progress: the promote's duration, the wait
+// included, is still recorded.
+func TestPromoteSnapshotRecordsDetachWait(t *testing.T) {
+	a := runPluginActor(t)
+	startBlockedDetach(t, a)
+	inst, reader := newTestInstruments(t)
+	a.s.instruments = inst
+
+	gaveUp, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := a.s.PromoteSnapshot(gaveUp, &ateletpb.PromoteSnapshotRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              pluginActorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		Snapshot:              a.snapshot("pause-snap-1", 1),
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("PromoteSnapshot that gave up waiting for the detach = %v, want %v", err, context.Canceled)
+	}
+	if _, ok := phaseValues(t, collectHistogram(t, reader, checkpointDurationMetric))[ateattr.SnapshotPhaseTotal]; !ok {
+		t.Error("no total duration recorded for the promote")
+	}
+}
+
+// TestPromoteSnapshotFoundAlreadyUploaded promotes a paused actor's snapshot
+// whose upload committed before the promote, unrecorded, and whose local copy
+// is gone since: the promote records the snapshot as durable, without an
+// upload time, since it wrote nothing.
+func TestPromoteSnapshotFoundAlreadyUploaded(t *testing.T) {
+	a := runPluginActor(t)
+	snap := a.snapshot("pause-snap-1", 1)
+	if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if _, err := (&trackerStore{s: a.s}).UploadLocalSnapshot(t.Context(), pluginActorUID, snapshottracker.SnapshotRef{Snapshot: snap}); err != nil {
+		t.Fatalf("UploadLocalSnapshot: %v", err)
+	}
+	a.s.snapshots.ForgetLocal(pluginActorUID)
+	if err := snapshottracker.PruneLocalCheckpoints(t.Context(), pluginActorUID); err != nil {
+		t.Fatalf("PruneLocalCheckpoints: %v", err)
+	}
+
+	if got := a.promote(t, snap).GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || got.GetDurableCompleteTime() != nil {
+		t.Errorf("latest_durable = %v, want %v with no upload time", got, snap)
 	}
 }

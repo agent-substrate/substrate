@@ -25,8 +25,10 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/client-go/util/workqueue"
@@ -253,10 +255,11 @@ func processNext(t *testing.T, tr *Tracker) {
 	}
 }
 
-// State reports the latest local snapshot a deferred checkpoint leaves, and
-// the latest durable one an immediate checkpoint leaves without a local copy.
-// Each update is written to the actor's snapshot state file and evicted from
-// memory; Forget deletes the file and drops any in-memory state.
+// State reports the latest local snapshot CommitLocal records and the latest
+// durable one CommitDurable records, as an immediate checkpoint records its
+// upload before its local copy. Each update is written to the actor's snapshot
+// state file and evicted from memory; Forget deletes the file and drops any
+// in-memory state.
 func TestTrackerState(t *testing.T) {
 	useTempNodeDirs(t)
 	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
@@ -276,16 +279,21 @@ func TestTrackerState(t *testing.T) {
 	}
 
 	s2 := testRef("s2", 2, t0.Add(time.Minute))
-	s2.UploadTime = s2.CommitTime.Add(time.Second)
-	st = tr.CommitDurable(trackedActorUID, s2)
-	if st.GetLatestLocal() != nil {
-		t.Errorf("latest_local = %v after an immediate checkpoint, want unset", st.GetLatestLocal())
+	durable := s2
+	durable.UploadTime = s2.CommitTime.Add(time.Second)
+	st = tr.CommitDurable(trackedActorUID, durable)
+	if uuidOf(st.GetLatestLocal()) != "s1" {
+		t.Errorf("latest_local = %v after CommitDurable, want s1 until CommitLocal", st.GetLatestLocal())
 	}
-	if got := st.GetLatestDurable(); uuidOf(got) != "s2" || !timeOf(got.GetDurableCompleteTime()).Equal(s2.UploadTime) {
-		t.Errorf("latest_durable = %v, want s2 uploaded at %v", got, s2.UploadTime)
+	if got := st.GetLatestDurable(); uuidOf(got) != "s2" || !timeOf(got.GetDurableCompleteTime()).Equal(durable.UploadTime) {
+		t.Errorf("latest_durable = %v, want s2 uploaded at %v", got, durable.UploadTime)
 	}
 	if len(tr.actors) != 0 {
 		t.Errorf("in-memory actors after CommitDurable = %d, want 0 after writing to file", len(tr.actors))
+	}
+	st = tr.CommitLocal(trackedActorUID, s2)
+	if got := st.GetLatestLocal(); uuidOf(got) != "s2" || !timeOf(got.GetLocalCommitTime()).Equal(s2.CommitTime) || got.GetDurableCompleteTime() != nil {
+		t.Errorf("latest_local = %v, want s2 committed at %v, with no upload time", got, s2.CommitTime)
 	}
 
 	st = tr.CommitLocal(trackedActorUID, testRef("s3", 3, t0.Add(2*time.Minute)))
@@ -336,8 +344,8 @@ func TestTrackerForgetLocal(t *testing.T) {
 }
 
 // CommitPromoted makes the promoted local snapshot the latest durable one,
-// keeping the commit time recorded for its local copy, and drops the local
-// one. A retried promote of the same snapshot keeps what was recorded.
+// keeping the local copy and the commit time recorded for it. A retried
+// promote of the same snapshot keeps what was recorded.
 func TestTrackerCommitPromoted(t *testing.T) {
 	useTempNodeDirs(t)
 	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
@@ -350,8 +358,8 @@ func TestTrackerCommitPromoted(t *testing.T) {
 	promoted := testRef("s1", 1, time.Time{})
 	promoted.UploadTime = t0.Add(time.Minute)
 	st := tr.CommitPromoted(trackedActorUID, promoted)
-	if st.GetLatestLocal() != nil {
-		t.Errorf("latest_local = %v after the promote, want unset", st.GetLatestLocal())
+	if got := st.GetLatestLocal(); uuidOf(got) != "s1" || !timeOf(got.GetLocalCommitTime()).Equal(t0) || got.GetDurableCompleteTime() != nil {
+		t.Errorf("latest_local = %v, want s1 committed at %v, with no upload time", got, t0)
 	}
 	if got := st.GetLatestDurable(); uuidOf(got) != "s1" || !timeOf(got.GetLocalCommitTime()).Equal(t0) || !timeOf(got.GetDurableCompleteTime()).Equal(promoted.UploadTime) {
 		t.Errorf("latest_durable = %v, want s1 committed at %v and uploaded at %v", got, t0, promoted.UploadTime)
@@ -366,13 +374,83 @@ func TestTrackerCommitPromoted(t *testing.T) {
 		t.Errorf("state after a retried promote = %v, want %v", got, st)
 	}
 
-	// Promoting a snapshot other than the local one carries no commit time.
+	// Promoting a snapshot other than the local one carries no commit time and
+	// leaves the local snapshot untouched.
 	tr.CommitLocal(trackedActorUID, testRef("s2", 2, t0.Add(2*time.Hour)))
 	other := testRef("s3", 3, time.Time{})
 	other.UploadTime = t0.Add(3 * time.Hour)
 	st = tr.CommitPromoted(trackedActorUID, other)
-	if got := st.GetLatestDurable(); uuidOf(got) != "s3" || got.GetLocalCommitTime() != nil || st.GetLatestLocal() != nil {
-		t.Errorf("state = %v, want s3 durable without a commit time, and no local snapshot", st)
+	if got := st.GetLatestDurable(); uuidOf(got) != "s3" || got.GetLocalCommitTime() != nil || uuidOf(st.GetLatestLocal()) != "s2" {
+		t.Errorf("state = %v, want s3 durable without a commit time, and s2 still local", st)
+	}
+}
+
+// IsDurable reports whether a snapshot is recorded as LatestDurable, and fails
+// with FailedPrecondition when LatestDurable has the same UUID with a
+// different generation or URI.
+func TestTrackerIsDurable(t *testing.T) {
+	useTempNodeDirs(t)
+	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tr := newTracker(t)
+	s1 := testRef("s1", 1, time.Now())
+
+	if ok, err := tr.IsDurable(trackedActorUID, s1); err != nil || ok {
+		t.Errorf("untracked: IsDurable = (%v, %v), want (false, nil)", ok, err)
+	}
+
+	tr.CommitLocal(trackedActorUID, s1)
+	if ok, err := tr.IsDurable(trackedActorUID, s1); err != nil || ok {
+		t.Errorf("local only: IsDurable = (%v, %v), want (false, nil)", ok, err)
+	}
+
+	tr.CommitPromoted(trackedActorUID, s1)
+	if ok, err := tr.IsDurable(trackedActorUID, s1); err != nil || !ok {
+		t.Errorf("matching durable: IsDurable = (%v, %v), want (true, nil)", ok, err)
+	}
+	if ok, err := tr.IsDurable(trackedActorUID, testRef("s2", 2, time.Now())); err != nil || ok {
+		t.Errorf("other UUID: IsDurable = (%v, %v), want (false, nil)", ok, err)
+	}
+
+	wrongGen := testRef("s1", 2, time.Now())
+	if _, err := tr.IsDurable(trackedActorUID, wrongGen); apierror.Code(err) != codes.FailedPrecondition {
+		t.Errorf("mismatched generation: IsDurable = %v, want FailedPrecondition", err)
+	}
+
+	wrongURI := testRef("s1", 1, time.Now())
+	wrongURI.Snapshot.Object.SnapshotUri += "-other"
+	if _, err := tr.IsDurable(trackedActorUID, wrongURI); apierror.Code(err) != codes.FailedPrecondition {
+		t.Errorf("mismatched URI: IsDurable = %v, want FailedPrecondition", err)
+	}
+}
+
+// A promote of a paused actor's local snapshot leaves its detach schedule as
+// it is: the detach its checkpoint scheduled, or none for an actor whose Run
+// or Restore has begun since the snapshot was taken.
+func TestTrackerCommitPromotedKeepsDetachSchedule(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		t.Run(fmt.Sprintf("started=%v", started), func(t *testing.T) {
+			tr := newIdleTestTracker(t, newFakeSnapshotStore())
+			// A pause snapshot names no object storage location.
+			paused := testRef("s1", 1, tr.clock.Now())
+			paused.Snapshot.Object = nil
+			tr.CommitLocal(trackedActorUID, paused)
+			want := tr.clock.Now().Add(testDetachDelay)
+			if started {
+				end, err := tr.BeginStart(t.Context(), trackedActorUID)
+				if err != nil {
+					t.Fatalf("beginStart: %v", err)
+				}
+				end()
+				want = time.Time{}
+			}
+			stepTo(tr, tr.clock.Now().Add(time.Hour))
+			tr.CommitPromoted(trackedActorUID, testRef("s1", 1, time.Time{}))
+			if got := detachDueOf(tr, trackedActorUID); !got.Equal(want) {
+				t.Errorf("detachDue after the promote = %v, want %v", got, want)
+			}
+		})
 	}
 }
 

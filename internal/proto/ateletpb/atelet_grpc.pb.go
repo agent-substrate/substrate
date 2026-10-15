@@ -336,9 +336,7 @@ type AteletClient interface {
 	// Idempotent: once the snapshot is durable, atelet answers from the
 	// manifest at `snapshot.object`, and fails if there is none.
 	//
-	// TODO: Temporarily, this deletes all of the actor's local snapshots after
-	// the upload and does not check whether the actor is running. Its only
-	// caller, the suspend of a paused actor, relies on the deletion.
+	// TODO: Temporarily, this does not check whether the actor is running.
 	PromoteSnapshot(ctx context.Context, in *PromoteSnapshotRequest, opts ...grpc.CallOption) (*PromoteSnapshotResponse, error)
 	// DetachActor makes the actor's latest local snapshot durable, then deletes
 	// the actor's local snapshots on this node, so it can resume on any node.
@@ -456,9 +454,7 @@ type AteletServer interface {
 	// Idempotent: once the snapshot is durable, atelet answers from the
 	// manifest at `snapshot.object`, and fails if there is none.
 	//
-	// TODO: Temporarily, this deletes all of the actor's local snapshots after
-	// the upload and does not check whether the actor is running. Its only
-	// caller, the suspend of a paused actor, relies on the deletion.
+	// TODO: Temporarily, this does not check whether the actor is running.
 	PromoteSnapshot(context.Context, *PromoteSnapshotRequest) (*PromoteSnapshotResponse, error)
 	// DetachActor makes the actor's latest local snapshot durable, then deletes
 	// the actor's local snapshots on this node, so it can resume on any node.

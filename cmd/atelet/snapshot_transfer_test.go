@@ -110,7 +110,7 @@ func TestUploadSnapshotManifestLast(t *testing.T) {
 		}
 	}
 
-	if err := s.uploadSnapshot(context.Background(), uri, dir, &rec, "ate-demo", "counter"); err != nil {
+	if err := s.uploadSnapshot(context.Background(), uri, dir, &rec); err != nil {
 		t.Fatalf("uploadSnapshot: %v", err)
 	}
 	if len(store.puts) != 4 {
