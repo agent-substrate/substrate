@@ -566,12 +566,25 @@ func TestSharedVolumeFailedResumeReleasesClaimAfterCleanup(t *testing.T) {
 	worker := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 	createBorrowingActor(t, tc, "consumer", nil)
 	waitForWorkerAvailable(t, tc, worker)
+	current := getSharedVolume(t, tc, "data")
+	current.VolumeContext = map[string]string{"generation": "new-driver-context"}
+	if _, err := tc.client.UpdateSharedVolume(ctx, &ateapipb.UpdateSharedVolumeRequest{SharedVolume: current}); err != nil {
+		t.Fatal(err)
+	}
+
 	tc.fakeAtelet.Lock.Lock()
 	tc.fakeAtelet.FailRun = errors.New("injected run failure")
 	tc.fakeAtelet.Lock.Unlock()
 	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "consumer"}}); err == nil {
 		t.Fatal("expected run failure")
 	}
+	tc.fakeAtelet.Lock.Lock()
+	mounted := tc.fakeAtelet.RunRequest.GetSpec().GetVolumes()[0].GetExternal().GetVolumeContext()["generation"]
+	tc.fakeAtelet.Lock.Unlock()
+	if mounted != "new-driver-context" {
+		t.Fatalf("mounted stale driver context: %q", mounted)
+	}
+
 	refs := refStates(t, tc, "data")
 	if active, ok := refs["consumer"]; !ok || active {
 		t.Fatalf("want retained inactive reference: %v", refs)
