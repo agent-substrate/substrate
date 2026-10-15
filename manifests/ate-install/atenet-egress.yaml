@@ -879,13 +879,13 @@ data:
         connect_timeout: 1s
         # Each open tunnel holds one connection and one request here, so these
         # cap concurrent tunnels per replica (Envoy's default is 1024); past
-        # them a CONNECT gets a 503.
+        # them a CONNECT gets a 503. Sized for a million tunnels on one replica.
         circuit_breakers:
           thresholds:
           - priority: DEFAULT
-            max_connections: 16384
-            max_requests: 16384
-            max_pending_requests: 16384
+            max_connections: 1048400
+            max_requests: 1048400
+            max_pending_requests: 1048400
         typed_extension_protocol_options:
           envoy.extensions.upstreams.tcp.v3.TcpProtocolOptions:
             "@type": type.googleapis.com/envoy.extensions.upstreams.tcp.v3.TcpProtocolOptions
@@ -982,6 +982,14 @@ data:
       - name: egress_forward_proxy
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
+        # Fits 1000 destinations x 32 worker threads x 2 requests at once per
+        # destination per thread = 64000 connections.
+        circuit_breakers:
+          thresholds:
+          - priority: DEFAULT
+            max_connections: 65536
+            max_pending_requests: 65536
+            max_requests: 65536
         cluster_type:
           name: envoy.clusters.dynamic_forward_proxy
           typed_config:
@@ -1053,6 +1061,13 @@ data:
       - name: egress_forward_proxy_cleartext
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
+        # Sized like egress_forward_proxy, for the same reason.
+        circuit_breakers:
+          thresholds:
+          - priority: DEFAULT
+            max_connections: 65536
+            max_pending_requests: 65536
+            max_requests: 65536
         cluster_type:
           name: envoy.clusters.dynamic_forward_proxy
           typed_config:
