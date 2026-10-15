@@ -251,7 +251,15 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, ValidateCreateActorTemplateRequest(context.Background(), tt.req), tt.want)
+			want := tt.want
+			var wantWithPreview map[string]field.ErrorList
+			if tt.req.GetActorTemplate().GetGoldenEgressPolicy() != nil {
+				want = field.ErrorList{field.Forbidden(field.NewPath("actor_template", "golden_egress_policy"), "")}
+				wantWithPreview = map[string]field.ErrorList{"GoldenEgressPolicy": tt.want, "ALL": tt.want}
+			}
+			assertValidate(t, func() field.ErrorList {
+				return ValidateCreateActorTemplateRequest(context.Background(), tt.req)
+			}, want, wantWithPreview)
 		})
 	}
 }

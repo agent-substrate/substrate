@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
@@ -67,6 +68,9 @@ func createEgressPolicy(t *testing.T, tc *testContext, actor *ateapipb.ObjectRef
 }
 
 func TestCreateActor_InitialEgressPolicy(t *testing.T) {
+	// Explicit initial policies do not require the golden policy preview gate
+	// or a client that opts in to preview features.
+	preview.InitForTest(t)
 	ns := namespaceForTest("ns-initial-egress-policy")
 	tc := setupTest(t, ns)
 	t.Cleanup(tc.cleanup)

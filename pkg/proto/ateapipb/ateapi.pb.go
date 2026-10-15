@@ -2648,6 +2648,8 @@ type ActorTemplate struct {
 	// do not inherit this policy, including when using the golden snapshot.
 	// If absent, no policy is created. When set, at least one rule is required.
 	//
+	// +ate:preview=GoldenEgressPolicy
+	// +k8s:ifDisabled(GoldenEgressPolicy)=+k8s:forbidden
 	// +k8s:optional
 	GoldenEgressPolicy *EgressPolicyTemplate `protobuf:"bytes,9,opt,name=golden_egress_policy,json=goldenEgressPolicy,proto3" json:"golden_egress_policy,omitempty"`
 	unknownFields      protoimpl.UnknownFields

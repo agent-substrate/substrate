@@ -21,6 +21,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -28,6 +29,7 @@ import (
 )
 
 func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
+	preview.InitForTest(t, "GoldenEgressPolicy")
 	for _, tt := range []struct {
 		name   string
 		policy *ateapipb.EgressPolicyTemplate
@@ -53,6 +55,8 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 			tmplRef := resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()
+			// Existing templates remain usable without the preview gate.
+			preview.InitForTest(t)
 			for _, target := range []resources.ActorRef{
 				{Atespace: "actors", Name: "alpha"},
 				{Atespace: "actors", Name: tmpl.GetMetadata().GetUid()},
@@ -96,6 +100,7 @@ func (c *goldenEgressControl) ResumeActor(ctx context.Context, req *ateapipb.Res
 }
 
 func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
+	preview.InitForTest(t, "GoldenEgressPolicy")
 	for _, tt := range []struct {
 		name   string
 		policy *ateapipb.EgressPolicyTemplate
@@ -142,6 +147,8 @@ func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
 			}}
 			r := newTestTemplateReconciler(persistence, control)
 			defer r.queue.ShutDown()
+			// Turning the gate off must not drop an existing template's policy.
+			preview.InitForTest(t)
 			for range 2 {
 				if _, err := r.reconcileOne(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl)); !errors.Is(err, stop) {
 					t.Fatalf("reconcile = %v, want to reach resume with the policy present", err)
