@@ -179,7 +179,6 @@ What to expect:
 - **Pace:** a WorkerPool replaces 10% of its workers per batch, rounded down, at least one. With spare capacity, every batch has its `SIGTERM` within minutes and the old workers drain in parallel. Without it, each batch waits up to 30 minutes for old workers to exit.
 - **Stuck:** rollout status fails with `exceeded its progress deadline` (the roll goes on), or a worker pod stays Terminating for more than 60 minutes, its grace period (a worker normally exits within about 30). Check `kubectl -n $NS get pods -l ate.dev/worker-pool=$WORKERPOOL`. A bad image stops the roll after the first batch: [roll back that pool](#roll-back-step-3).
 - **Actors:** each gets `SIGTERM` and 30 minutes to be suspended. Substrate does not suspend them. An actor that is not suspended by then becomes `CRASHED` and loses its work since its last snapshot. [Eviction](../reference/api-guide.md#eviction) in the API guide says what an actor needs to keep its state.
-- **Snapshots:** the release that starts honoring an image's `USER` and `WORKDIR` restores no gVisor snapshot taken before it: `runsc restore` checks both for every container, and the pause image sets `USER 65535`. Delete gVisor actors before that roll and recreate every gVisor template after it, so each takes a new golden snapshot. Micro-VM snapshots resume as they were; the new identity applies from the next cold boot, and files an earlier run wrote as root into a durable dir stay root-owned, readable but not writable by the new user.
 
 ### Step 4. Upgrade the Substrate control plane
 
