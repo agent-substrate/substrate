@@ -25,6 +25,7 @@ import (
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -43,19 +44,24 @@ const websocketDeniedBody = "WebSocket egress is not supported"
 func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
 	if isWebSocketUpgrade(md) {
 		slog.WarnContext(ctx, "egress denied: WebSocket upgrades are not supported", slog.String("leg", leg), slog.String("host", md.Host))
-		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, websocketDeniedBody)
+		// The actor, when the request carries one, only names the refusal.
+		ref, _ := actorFromFilterState(md)
+		return extproc.Result{}, h.refused(ctx, ref, ateattr.EgressRefusalWebSocket,
+			extproc.NewReqError(envoy_type.StatusCode_Forbidden, websocketDeniedBody))
 	}
 
 	ref, err := actorFromFilterState(md)
 	if err != nil {
 		slog.WarnContext(ctx, "egress denied: request carries no actor identity", slog.String("leg", leg), slog.Any("err", err))
-		return extproc.Result{}, extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err, deniedBody)
+		return extproc.Result{}, h.refused(ctx, resources.ActorRef{}, ateattr.EgressRefusalUnauthenticated,
+			extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err, deniedBody))
 	}
 	dest, err := requestDestination(md)
 	if err != nil {
 		slog.WarnContext(ctx, "egress denied: request names no destination a rule could allow",
 			slog.Any("actor", ref), slog.String("leg", leg), slog.Any("err", err))
-		return extproc.Result{}, extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err, deniedBody)
+		return extproc.Result{}, h.refused(ctx, ref, ateattr.EgressRefusalBadDestination,
+			extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err, deniedBody))
 	}
 	policy, err := h.lookupPolicy(ctx, leg, ref)
 	if err != nil {
@@ -84,7 +90,8 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 		connection := connectionDestination(sni, dest.Port)
 		if decision := policy.EvaluateRequest(connection, true); !decision.Allowed {
 			slog.WarnContext(ctx, "egress denied: no https rule covers the connection's SNI", attrs(decision)...)
-			return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
+			return extproc.Result{}, h.refused(ctx, ref, ateattr.EgressRefusalNotInPolicy,
+				extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody))
 		}
 	}
 	decision := policy.EvaluateRequest(dest, decrypted)
@@ -92,11 +99,16 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 		// TODO(liorlieberman): do we need an audit mode to roll a policy out
 		// against live traffic without denying it first?
 		slog.WarnContext(ctx, "egress denied: no rule allows the destination", attrs(decision)...)
-		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
+		return extproc.Result{}, h.refused(ctx, ref, ateattr.EgressRefusalNotInPolicy,
+			extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody))
 	}
 	injected, err := h.applyEffects(ctx, ref, dest, md.Headers, decision.Effects)
 	if err != nil {
-		return extproc.Result{}, err
+		if ctx.Err() != nil {
+			// The caller gave up mid-fetch: not a decision.
+			return extproc.Result{}, err
+		}
+		return extproc.Result{}, h.refused(ctx, ref, ateattr.EgressRefusalCredential, err)
 	}
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
 		slog.DebugContext(ctx, "egress allowed", append(attrs(decision), slog.Int("injectedHeaders", len(injected)))...)

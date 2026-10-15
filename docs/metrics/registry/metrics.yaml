@@ -176,27 +176,29 @@ groups:
     brief: >
       The identity of an ActorTemplate. The values are not limited to a list.
       But an operator makes each template. No value comes from a request. Thus
-      the number of values stays small. One metric,
-      atenet.router.route.duration, also reports the literal "unknown" when it
-      has no template to name.
+      the number of values stays small. Two metrics,
+      atenet.router.route.duration and atenet.router.egress.refused, also
+      report the literal "unknown" when they have no template to name.
     attributes:
       - id: ate.template.atespace
         stability: development
         type: string
         brief: >
           The atespace of the ActorTemplate of the actor. On
-          atenet.router.route.duration only, the value is "unknown" when the
+          atenet.router.route.duration, the value is "unknown" when the
           direction has no template, or the request failed before the router
-          resolved one.
+          resolved one. On atenet.router.egress.refused, it is "unknown" when
+          the egress gateway does not know the actor.
         examples: [ate-demo-counter, unknown]
       - id: ate.template.name
         stability: development
         type: string
         brief: >
           The name of the ActorTemplate of the actor. On
-          atenet.router.route.duration only, the value is "unknown" when the
+          atenet.router.route.duration, the value is "unknown" when the
           direction has no template, or the request failed before the router
-          resolved one.
+          resolved one. On atenet.router.egress.refused, it is "unknown" when
+          the egress gateway does not know the actor.
         examples: [counter, unknown]
 
   - id: registry.ate.workerpool
@@ -513,6 +515,62 @@ groups:
               brief: >
                 The resume failed for a different reason. The router has a
                 defect. This is not the same as a full fleet.
+
+  - id: registry.ate.egress
+    type: attribute_group
+    brief: The labels of the atenet egress gateway.
+    attributes:
+      - id: ate.egress.refusal.reason
+        stability: development
+        brief: Why the egress gateway refused the request of an actor.
+        type:
+          members:
+            - id: unauthenticated
+              stability: development
+              value: unauthenticated
+              brief: >
+                The request did not prove the identity of an actor. The
+                certificate of the CONNECT was not valid, or a request in the
+                tunnel had no identity.
+            - id: unknown_actor
+              stability: development
+              value: unknown_actor
+              brief: The certificate names an actor that does not exist.
+            - id: actor_not_running
+              stability: development
+              value: actor_not_running
+              brief: The actor exists, but it is not running.
+            - id: no_policy
+              stability: development
+              value: no_policy
+              brief: The actor has no egress policy, or a policy with no rules.
+            - id: not_in_policy
+              stability: development
+              value: not_in_policy
+              brief: >
+                No rule of the egress policy of the actor allows the
+                destination, or the SNI of the connection.
+            - id: bad_destination
+              stability: development
+              value: bad_destination
+              brief: The request names no destination that a rule could allow.
+            - id: websocket
+              stability: development
+              value: websocket
+              brief: The request is a WebSocket upgrade, which egress does not support.
+            - id: credential
+              stability: development
+              value: credential
+              brief: >
+                The rule that allows the request injects a credential, and the
+                gateway could not get it.
+            - id: unavailable
+              stability: development
+              value: unavailable
+              brief: >
+                The control plane did not answer the lookup of the actor or of
+                its policy, or the gateway has no actor-identity CA. This is
+                not a decision about the actor.
 
   - id: registry.ate.imagecache
     type: attribute_group
@@ -1269,6 +1327,35 @@ groups:
   # ---------------------------------------------------------------------------
   # Metrics. Upstream instrumentation
   # ---------------------------------------------------------------------------
+
+  - id: metric.atenet.router.egress.refused
+    type: metric
+    metric_name: atenet.router.egress.refused
+    instrument: counter
+    unit: "{request}"
+    stability: development
+    brief: The number of requests of actors that the egress gateway refused.
+    note: >
+      Each refusal counts once, on the leg that refused it: the CONNECT that
+      opens the tunnel, or a request in it. A request whose caller gave up is
+      not counted. The actor and the destination are not labels; the log line
+      of each refusal names them. A rate of not_in_policy for one template
+      means that its actors try to reach hosts outside their policy: a missing
+      origin in the policy, or an agent that something steers to send data
+      out.
+    annotations:
+      substrate:
+        emitted_by: [atenet-router]
+        golden_signals: [errors]
+        code_anchor: cmd/atenet/internal/router/egress/metrics.go
+        cuj: Which template's actors does the egress gateway refuse, and why?
+    attributes:
+      - ref: ate.template.atespace
+        requirement_level: required
+      - ref: ate.template.name
+        requirement_level: required
+      - ref: ate.egress.refusal.reason
+        requirement_level: required
 
   - id: metric.rpc.server.call.duration
     type: metric

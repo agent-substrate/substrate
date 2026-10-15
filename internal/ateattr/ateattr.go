@@ -164,6 +164,7 @@ const (
 	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
 	RouterResumeKey        = attribute.Key("ate.router.resume")
 	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
+	EgressRefusalReasonKey = attribute.Key("ate.egress.refusal.reason")
 	StatsSourceKey         = attribute.Key("ate.stats.source")
 )
 
@@ -255,6 +256,21 @@ const (
 	RouterOutcomeUnavailable        = "unavailable"
 	RouterOutcomeRateLimited        = "rate_limited"
 	RouterOutcomeResumeError        = "resume_error"
+)
+
+// Values for EgressRefusalReasonKey: why the egress gateway refused a request.
+// EgressRefusalUnavailable is the control plane failing to answer, not a
+// decision about the actor.
+const (
+	EgressRefusalUnauthenticated = "unauthenticated"
+	EgressRefusalUnknownActor    = "unknown_actor"
+	EgressRefusalActorNotRunning = "actor_not_running"
+	EgressRefusalNoPolicy        = "no_policy"
+	EgressRefusalNotInPolicy     = "not_in_policy"
+	EgressRefusalBadDestination  = "bad_destination"
+	EgressRefusalWebSocket       = "websocket"
+	EgressRefusalCredential      = "credential"
+	EgressRefusalUnavailable     = "unavailable"
 )
 
 // ErrorTypeKey is the OTel registry attribute, reused verbatim (not aliased into
