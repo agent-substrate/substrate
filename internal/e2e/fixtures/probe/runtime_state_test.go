@@ -48,3 +48,24 @@ func TestSeedVolumeFixtureRejectsUnsafeRoot(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeBootIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, kernel, cmdline, want string
+		bad                               bool
+	}{
+		{"microvm eager marker", "microvm", "lazy", "quiet ate.boot_id=eager", "eager", false},
+		{"default microvm", "", "lazy", "ate.boot_id=eager", "eager", false},
+		{"microvm must not fall back", "microvm", "lazy", "", "", true},
+		{"gvisor proc identity", "gvisor", "sandbox", "", "sandbox", false},
+		{"missing gvisor identity", "gvisor", "", "", "", true},
+		{"unsupported runtime", "other", "some", "ate.boot_id=some", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := runtimeBootIdentity(tc.kind, tc.kernel, tc.cmdline)
+			if got != tc.want || (err != nil) != tc.bad {
+				t.Fatalf("got %q, %v", got, err)
+			}
+		})
+	}
+}

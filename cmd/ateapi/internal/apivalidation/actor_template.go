@@ -63,9 +63,6 @@ func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 // today is the micro-VM class alone.
 func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
 	var errs field.ErrorList
-	if value.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME && value.GetSandboxConfig().GetSandboxClass() != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
-		errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "golden_snapshot_config", "mode"), "RUNTIME", "runtime golden snapshots require MICROVM"))
-	}
 	if value.GetSnapshotConfig().GetPreferredFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS &&
 		value.GetSandboxConfig().GetSandboxClass() != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
 		errs = append(errs, field.Invalid(

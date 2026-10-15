@@ -539,9 +539,9 @@ const (
 	GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_UNSPECIFIED GoldenSnapshotMode = 0
 	GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED     GoldenSnapshotMode = 1
 	GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED    GoldenSnapshotMode = 2
-	// Capture the microVM before creating the guest sandbox or application
-	// processes. Restore attaches real volumes before starting applications.
-	// Does not preserve application warmup. Requires MICROVM.
+	// Capture the runtime before creating application processes. Supported by
+	// MICROVM and GVISOR. Restore attaches real volumes before starting
+	// applications; application warmup is not preserved.
 	GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME GoldenSnapshotMode = 3
 )
 

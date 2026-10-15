@@ -67,3 +67,20 @@ func TestCheckConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCheckRuntimeSelection(t *testing.T) {
+	for _, tc := range []struct {
+		kind string
+		bad  bool
+	}{{"microvm", false}, {"gvisor", false}, {"other", true}, {"", true}} {
+		t.Run(tc.kind, func(t *testing.T) {
+			t.Setenv("CI", "")
+			t.Setenv("E2E_RUNTIME_GOLDEN", "true")
+			t.Setenv("E2E_SANDBOX_CLASS", tc.kind)
+			t.Setenv("E2E_RUNTIME_LOG_DIR", t.TempDir())
+			if err := Check(); (err != nil) != tc.bad {
+				t.Fatalf("got %v", err)
+			}
+		})
+	}
+}

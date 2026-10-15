@@ -33,6 +33,7 @@ type VolumeStateResponse struct {
 	Cached         string            `json:"cached"`
 	ByPath         VolumeObservation `json:"by_path"`
 	Held           VolumeObservation `json:"held"`
+	Mapped         VolumeObservation `json:"mapped"`
 	Unlinked       VolumeObservation `json:"unlinked"`
 	Negative       VolumeObservation `json:"negative"`
 	Directory      []string          `json:"directory"`
@@ -40,12 +41,12 @@ type VolumeStateResponse struct {
 }
 
 // ValidateRetainedState checks the disposable fixture across an own-snapshot
-// restore. Only the observed second-generation deleted-open EIO is tolerated.
-func ValidateRetainedState(obs VolumeStateResponse, challenge, value string, generation int) error {
+// restore. The microVM-only second-generation EIO exception must be explicit.
+func ValidateRetainedState(obs VolumeStateResponse, challenge, value string, generation int, allowDeletedOpenEIO bool) error {
 	if obs.Challenge != challenge || obs.Cached != value {
 		return fmt.Errorf("application state mismatch: %+v", obs)
 	}
-	for name, got := range map[string]VolumeObservation{"path": obs.ByPath, "held": obs.Held} {
+	for name, got := range map[string]VolumeObservation{"path": obs.ByPath, "held": obs.Held, "mapped": obs.Mapped} {
 		if got.Error != "" || got.ErrorCode != "" || got.NotExist || got.Data != value {
 			return fmt.Errorf("%s observation mismatch: %+v", name, got)
 		}
@@ -57,7 +58,7 @@ func ValidateRetainedState(obs VolumeStateResponse, challenge, value string, gen
 		return fmt.Errorf("negative lookup mismatch: %+v", obs.Negative)
 	}
 	u := obs.Unlinked
-	if generation == 2 && u.ErrorCode == "EIO" && u.Error != "" && u.Data == "" && !u.NotExist {
+	if allowDeletedOpenEIO && generation == 2 && u.ErrorCode == "EIO" && u.Error != "" && u.Data == "" && !u.NotExist {
 		return nil
 	}
 	if u.Error != "" || u.ErrorCode != "" || u.NotExist || u.Data != value {

@@ -17,22 +17,10 @@
 package main
 
 import (
+	"cloud.google.com/go/compute/metadata"
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"net"
-	"os"
-	"os/signal"
-	"path/filepath"
-	"slices"
-	"sort"
-	"sync"
-	"sync/atomic"
-	"syscall"
-	"time"
-
-	"cloud.google.com/go/compute/metadata"
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
 	"github.com/agent-substrate/substrate/internal/actorlock"
 	"github.com/agent-substrate/substrate/internal/actorlog"
@@ -52,15 +40,24 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/version"
-	"github.com/agent-substrate/substrate/internal/wakeupprobe"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"log/slog"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"slices"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
 )
 
 var (
@@ -291,8 +288,9 @@ const (
 // in the sandbox, so the SIGTERM handler knows which containers to signal and
 // wait on during graceful shutdown. The sandbox runs one workload at a time.
 type workloadSession struct {
-	rcmd       *runsc
-	containers []string
+	rcmd          *runsc
+	containers    []string
+	runtimeGolden bool
 }
 
 // AteomService is a service for shepherding single microvm.
@@ -562,133 +560,6 @@ func validateFidelity(fidelity ateompb.SnapshotFidelity) error {
 	return nil
 }
 
-func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
-	if req.GetSpec().GetRuntimeGolden() {
-		return nil, fmt.Errorf("runtime golden snapshots require the microVM runtime")
-	}
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
-		return nil, err
-	}
-	if err := validateRunscPath(req.GetRunscPath()); err != nil {
-		return nil, err
-	}
-	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
-	}
-	defer s.locks.Unlock(req.GetActorUid())
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	release, err := s.beginRPC(req.GetActorUid(), rpcRunWorkload, cancel)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-	if err := resetRunscStateAndPidFileDirs(req.GetActorDirs()); err != nil {
-		return nil, err
-	}
-
-	if err := s.tunnel.Deactivate(ctx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
-		return nil, err
-	}
-
-	attribution := ateomstats.ActorAttributionFromRequest(req)
-	s.actorLogger.EmitLifecycleLog(ctx, "Actor starting", attribution)
-
-	// Contract with atelet:
-	//
-	//   * Correct runsc version is downloaded and placed on disk.
-	//   * All OCI bundles are set up, including for the pause container.
-
-	egress, err := s.tunnel.PrepareEgress(ctx, ateomstats.ActorAttributionFromRequest(req), req.GetEgressGateway())
-	if err != nil {
-		return nil, err
-	}
-	// Publish attribution before boot so stats can include startup usage.
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs())
-	if err != nil {
-		return nil, err
-	}
-	rcmd := &runsc{
-		path:           req.GetRunscPath(),
-		actorUID:       req.GetActorUid(),
-		actorDirs:      req.GetActorDirs(),
-		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
-		durableVolumes: durableVolumeNames(req.GetSpec()),
-		containers:     req.GetSpec().GetContainers(),
-	}
-	var containersToDelete []string
-	defer func() {
-		if retErr != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			if err := s.tunnel.Deactivate(cleanupCtx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
-				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", err))
-			}
-			deleteContainers(cleanupCtx, rcmd, containersToDelete, "Run")
-			// Detach any bundle rootfs overlays a partially-completed setup
-			// mounted, mirroring the post-checkpoint cleanup — otherwise they
-			// linger in this namespace until atelet wipes the bundle dirs.
-			// Run before the network cleanup.
-			if err := imagecache.UnmountAllUnder(req.GetActorDirs().GetOciBundleDir()); err != nil {
-				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure",
-					"actorUID", req.GetActorUid(), "err", err)
-			}
-			if err := s.unhostActor(cleanupCtx, req.GetActorUid()); err != nil {
-				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Run failure", slog.Any("err", err))
-			}
-		}
-	}()
-	// Create and start pause container. The bundle rootfs is composed here —
-	// an overlay of the node's cached image layers plus the bundle's private
-	// upper — because mounting is ateom's job (atelet runs with no
-	// capabilities); runsc's gofer resolves the mount in this pod's mount
-	// namespace.
-	if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer)); err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
-	}
-	containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-	if err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, nil); err != nil {
-		return nil, fmt.Errorf("while creating pause container: %w", err)
-	}
-	if err := rcmd.cmdStart(ctx, os.Stdout, ocispec.PauseContainer); err != nil {
-		return nil, fmt.Errorf("while starting pause container: %w", err)
-	}
-
-	// Create and start each application container, each with its own log pipe so
-	// every line is tagged with the originating container (ate.actor.container.name).
-	for _, ac := range req.GetSpec().GetContainers() {
-		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
-		if err != nil {
-			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
-		}
-		defer pw.Close()
-		if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ac.GetName())); err != nil {
-			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
-		}
-		containersToDelete = append(containersToDelete, ac.GetName())
-		if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
-			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
-		}
-		if err := rcmd.cmdStart(ctx, pw, ac.GetName()); err != nil {
-			return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
-		}
-	}
-
-	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
-		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
-	}
-	if err := s.tunnel.Activate(ateomstats.ActorAttributionFromRequest(req), s.sandboxDialer(req.GetActorUid()), egress); err != nil {
-		return nil, err
-	}
-
-	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
-	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())})
-	s.recordInitial(ctx, hosted)
-
-	return &ateompb.RunWorkloadResponse{}, nil
-}
-
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (_ *ateompb.CheckpointWorkloadResponse, err error) {
@@ -707,6 +578,11 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
+
+	runtimeGolden := s.isRuntimeGolden(req.GetActorUid())
+	if runtimeGolden && req.GetFidelity() != ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		return nil, fmt.Errorf("runtime golden capture requires MEMORY fidelity")
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -758,6 +634,9 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	containers := req.GetSpec().GetContainers()
 	durablePaths := durableFSCheckpointPaths(containers)
+	if runtimeGolden {
+		durablePaths = nil
+	}
 	switch fidelity {
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		if len(durablePaths) == 0 {
@@ -795,6 +674,11 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// Report exactly the files runsc wrote so atelet ships precisely this set
 	// (checkpoint.img plus any pages images and fs/ durable-dir files), rather
 	// than a hardcoded list.
+	if runtimeGolden {
+		if err := os.WriteFile(filepath.Join(checkpointPath, runtimeGoldenFile), []byte(runtimeGoldenFormat), 0o600); err != nil {
+			return nil, fmt.Errorf("writing runtime golden marker: %w", err)
+		}
+	}
 	snapshotFiles, err := listSnapshotFiles(checkpointPath)
 	if err != nil {
 		return nil, fmt.Errorf("while listing checkpoint files: %w", err)
@@ -887,205 +771,6 @@ func isContainerAlreadyGone(ctx context.Context, rcmd containerRuntime, name str
 		return false, err
 	}
 	return !slices.Contains(ids, name), nil
-}
-
-func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
-	// Taken before the lock, so prep covers the wait for it.
-	tStart := time.Now()
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
-		return nil, err
-	}
-	if err := validateFidelity(req.GetFidelity()); err != nil {
-		return nil, err
-	}
-	if err := validateRunscPath(req.GetRunscPath()); err != nil {
-		return nil, err
-	}
-	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
-	}
-	defer s.locks.Unlock(req.GetActorUid())
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// Per-phase timing, recorded on the way out so a failed restore still
-	// reports the phases it completed, and the failing step its elapsed time.
-	// Registered ahead of the failure cleanup below, so on failure the total
-	// includes that cleanup; the record is marked by error.type either way.
-	attribution := ateomstats.ActorAttributionFromRequest(req)
-	fidelity := req.GetFidelity()
-	containers := req.GetSpec().GetContainers()
-	var timing restoreTiming
-	tLast := tStart
-	defer func() {
-		timing.total = time.Since(tStart)
-		attrs := ateomphaselog.SnapshotPhaseAttrs(attribution, fidelity, ateomphaselog.RestoreDurationKey, retErr, timing.phases())
-		attrs = append(attrs, slog.Int(containerCountKey, len(containers)))
-		slog.LogAttrs(ctx, slog.LevelInfo, "Restore timing breakdown", attrs...)
-	}()
-
-	release, err := s.beginRPC(req.GetActorUid(), rpcRestoreWorkload, cancel)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-	if err := resetRunscStateAndPidFileDirs(req.GetActorDirs()); err != nil {
-		return nil, err
-	}
-
-	err = s.tunnel.Deactivate(ctx, attribution)
-	timing.prep = lap(&tLast)
-	if err != nil {
-		return nil, err
-	}
-
-	s.actorLogger.EmitLifecycleLog(ctx, "Actor restoring", attribution)
-
-	// Contract with atelet:
-	//
-	//   * Correct runsc version is downloaded and placed on disk.
-	//   * All OCI bundles are set up, including for the pause container.
-	//   * Checkpoint downloaded and placed on disk
-
-	egress, err := s.tunnel.PrepareEgress(ctx, attribution, req.GetEgressGateway())
-	timing.egressPrepare = lap(&tLast)
-	if err != nil {
-		return nil, err
-	}
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs())
-	timing.netSetup = lap(&tLast)
-	if err != nil {
-		return nil, err
-	}
-	rcmd := &runsc{
-		path:           req.GetRunscPath(),
-		actorUID:       req.GetActorUid(),
-		actorDirs:      req.GetActorDirs(),
-		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
-		durableVolumes: durableVolumeNames(req.GetSpec()),
-		containers:     req.GetSpec().GetContainers(),
-	}
-	var containersToDelete []string
-	defer func() {
-		if retErr != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			if err := s.tunnel.Deactivate(cleanupCtx, attribution); err != nil {
-				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Restore failure", slog.Any("err", err))
-			}
-			deleteContainers(cleanupCtx, rcmd, containersToDelete, "Restore")
-			// Same overlay detach as the Run-failure path above.
-			if err := imagecache.UnmountAllUnder(req.GetActorDirs().GetOciBundleDir()); err != nil {
-				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure",
-					"actorUID", req.GetActorUid(), "err", err)
-			}
-			if err := s.unhostActor(cleanupCtx, req.GetActorUid()); err != nil {
-				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Restore failure", slog.Any("err", err))
-			}
-		}
-	}()
-	checkpointDir := req.GetActorDirs().GetRestoreDir()
-	restoreArgs, err := fsRestoreArgs(checkpointDir)
-	if err != nil {
-		return nil, err
-	}
-
-	// Compose the pause rootfs before create (see RunWorkload). runsc restore
-	// only needs the rootfs to hold the correct content; whether it came from
-	// an untar or an overlay of cached layers is transparent to it.
-	err = imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer))
-	timing.pauseRootfs = lap(&tLast)
-	if err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
-	}
-
-	switch fidelity {
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-		// Create and start pause container (cold boot with durable-dir volumes restored from fs/)
-		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-		err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, restoreArgs)
-		timing.pauseCreate = lap(&tLast)
-		if err != nil {
-			return nil, fmt.Errorf("while creating pause container: %w", err)
-		}
-		err = rcmd.cmdStart(ctx, os.Stdout, ocispec.PauseContainer)
-		timing.pauseRestore = lap(&tLast)
-		if err != nil {
-			return nil, fmt.Errorf("while starting pause container: %w", err)
-		}
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-		// Create and restore pause container (restores both process/rootfs and fs/ durable-dir volumes)
-		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-		err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, restoreArgs)
-		timing.pauseCreate = lap(&tLast)
-		if err != nil {
-			return nil, fmt.Errorf("while creating pause container: %w", err)
-		}
-		err = rcmd.cmdRestore(ctx, os.Stdout, ocispec.PauseContainer, checkpointDir)
-		timing.pauseRestore = lap(&tLast)
-		if err != nil {
-			return nil, fmt.Errorf("while restoring pause container: %w", err)
-		}
-	default:
-		return nil, fmt.Errorf("unexpected snapshot fidelity: %v", fidelity)
-	}
-
-	// Create and restore each application container, each with its own log pipe so
-	// every line is tagged with the originating container (ate.actor.container.name).
-	// app_create includes starting that pipe.
-	for _, ac := range containers {
-		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
-		timing.appCreate += lap(&tLast)
-		if err != nil {
-			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
-		}
-		defer pw.Close()
-		err = imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ac.GetName()))
-		timing.appRootfs += lap(&tLast)
-		if err != nil {
-			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
-		}
-		containersToDelete = append(containersToDelete, ac.GetName())
-		err = rcmd.cmdCreate(ctx, pw, ac.GetName(), nil)
-		timing.appCreate += lap(&tLast)
-		if err != nil {
-			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
-		}
-		switch fidelity {
-		case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-			err = rcmd.cmdStart(ctx, pw, ac.GetName())
-			timing.appRestore += lap(&tLast)
-			if err != nil {
-				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
-			}
-		case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-			err = rcmd.cmdRestore(ctx, pw, ac.GetName(), checkpointDir)
-			timing.appRestore += lap(&tLast)
-			if err != nil {
-				return nil, fmt.Errorf("while restoring %q application container: %w", ac.GetName(), err)
-			}
-		default:
-			return nil, fmt.Errorf("unexpected snapshot fidelity: %v", fidelity)
-		}
-	}
-
-	// Block until every wakeup-probe-enabled container reports 200.
-	err = wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid())))
-	timing.wakeupProbe = lap(&tLast)
-	if err != nil {
-		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
-	}
-	err = s.tunnel.Activate(attribution, s.sandboxDialer(req.GetActorUid()), egress)
-	timing.activate = lap(&tLast)
-	if err != nil {
-		return nil, err
-	}
-
-	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
-	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(containers)})
-	s.recordInitial(ctx, hosted)
-
-	return &ateompb.RestoreWorkloadResponse{}, nil
 }
 
 func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {

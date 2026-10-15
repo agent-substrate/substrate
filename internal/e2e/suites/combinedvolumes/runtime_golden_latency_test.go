@@ -67,7 +67,7 @@ func TestRuntimeGoldenLatency(t *testing.T) {
 	// Identify the template kernel once, outside measured activations.
 	seed := f.create(t, f.golden, "identity-"+f.name, f.volumes[0])
 	f.resume(t, seed)
-	goldenBoot := probeJSON(ctx, t, f.router, resources.ActorRefFromActor(seed), "/runtime-state")["boot_id"]
+	goldenBoot := probeJSON(ctx, t, f.router, resources.ActorRefFromActor(seed), runtimeStatePath())["boot_id"]
 	f.remove(t, seed)
 	rng := rand.New(rand.NewPCG(42, 91))
 	for i := -5; i < samples; i++ {
@@ -84,7 +84,7 @@ func TestRuntimeGoldenLatency(t *testing.T) {
 				var ownNonce string
 				if mode == "own" {
 					f.resume(t, a)
-					ownNonce = probeJSON(ctx, t, f.router, resources.ActorRefFromActor(a), "/runtime-state")["process_nonce"]
+					ownNonce = probeJSON(ctx, t, f.router, resources.ActorRefFromActor(a), runtimeStatePath())["process_nonce"]
 					a = f.suspend(t, a)
 				}
 				snap, _ := json.Marshal(a.GetStatus().GetSnapshots())
@@ -108,13 +108,13 @@ func TestRuntimeGoldenLatency(t *testing.T) {
 				}
 				f.resume(t, a)
 				ref := resources.ActorRefFromActor(a)
-				state := probeJSON(ctx, t, f.router, ref, "/runtime-state")
+				state := probeJSON(ctx, t, f.router, ref, runtimeStatePath())
 				sample.BootID = state["boot_id"]
 				sample.ProcessNonce = state["process_nonce"]
-				if mode == "cold" && sample.BootID == goldenBoot {
+				if usesGuestBootMarker() && mode == "cold" && sample.BootID == goldenBoot {
 					t.Fatal("cold sample restored golden")
 				}
-				if mode != "cold" && sample.BootID != goldenBoot {
+				if usesGuestBootMarker() && mode != "cold" && sample.BootID != goldenBoot {
 					t.Fatal("restore sample cold-booted")
 				}
 				if mode == "own" && sample.ProcessNonce != ownNonce {

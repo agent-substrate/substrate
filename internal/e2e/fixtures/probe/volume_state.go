@@ -38,6 +38,7 @@ type volumeStateProbe struct {
 	root, challenge           string
 	cached                    string
 	held, unlinked, directory *os.File
+	mapped                    []byte
 	reads                     uint64
 }
 
@@ -76,6 +77,10 @@ func volumeReadPath(path string) probeapi.VolumeObservation {
 }
 
 func (p *volumeStateProbe) close() {
+	if p.mapped != nil {
+		_ = syscall.Munmap(p.mapped)
+		p.mapped = nil
+	}
 	for _, f := range []*os.File{p.held, p.unlinked, p.directory} {
 		if f != nil {
 			_ = f.Close()
@@ -103,6 +108,17 @@ func (p *volumeStateProbe) prime(root, challenge string) (err error) {
 	}
 	if p.held, err = os.Open(filepath.Join(root, "held.txt")); err != nil {
 		return err
+	}
+	info, err := p.held.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() < 1 || info.Size() > 4096 {
+		return fmt.Errorf("held.txt must contain 1..4096 bytes for mmap")
+	}
+	p.mapped, err = syscall.Mmap(int(p.held.Fd()), 0, int(info.Size()), syscall.PROT_READ, syscall.MAP_SHARED)
+	if err != nil {
+		return fmt.Errorf("mapping held.txt: %w", err)
 	}
 	if p.directory, err = os.Open(filepath.Join(root, "directory")); err != nil {
 		return err
@@ -133,6 +149,7 @@ func (p *volumeStateProbe) observe() probeapi.VolumeStateResponse {
 		Challenge: p.challenge, Reads: p.reads, Cached: p.cached,
 		ByPath: volumeReadPath(filepath.Join(p.root, "cached.txt")),
 		Held:   volumeRead(p.held), Unlinked: volumeRead(p.unlinked),
+		Mapped:   volumeResult(p.mapped, nil),
 		Negative: volumeReadPath(filepath.Join(p.root, "negative.txt")),
 	}
 	if _, err := p.directory.Seek(0, io.SeekStart); err != nil {

@@ -164,3 +164,11 @@ func (f *runtimeGoldenFixture) post(t *testing.T, a *ateapipb.Actor, path string
 		t.Fatalf("%s status %d", path, resp.StatusCode)
 	}
 }
+
+func runtimeStatePath() string {
+	return "/runtime-state?runtime=" + os.Getenv("E2E_SANDBOX_CLASS")
+}
+
+// gVisor regenerates its procfs boot ID on restore. Its runtime-only boundary
+// is checked with a retained pause-process nonce in the direct runsc test.
+func usesGuestBootMarker() bool { return os.Getenv("E2E_SANDBOX_CLASS") == "microvm" }

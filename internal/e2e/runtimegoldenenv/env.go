@@ -26,8 +26,8 @@ func Check() error {
 	if !Enabled() {
 		return nil
 	}
-	if os.Getenv("E2E_SANDBOX_CLASS") != "microvm" {
-		return fmt.Errorf("runtime golden tests require microvm")
+	if kind := os.Getenv("E2E_SANDBOX_CLASS"); kind != "microvm" && kind != "gvisor" {
+		return fmt.Errorf("runtime golden tests require microvm or gvisor")
 	}
 	if os.Getenv("E2E_RUNTIME_LOG_DIR") == "" {
 		return fmt.Errorf("runtime golden tests require E2E_RUNTIME_LOG_DIR")

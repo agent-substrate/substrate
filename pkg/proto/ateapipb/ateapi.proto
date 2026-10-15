@@ -1330,9 +1330,9 @@ enum GoldenSnapshotMode {
   GOLDEN_SNAPSHOT_MODE_UNSPECIFIED = 0;
   GOLDEN_SNAPSHOT_MODE_ENABLED = 1;
   GOLDEN_SNAPSHOT_MODE_DISABLED = 2;
-  // Capture the microVM before creating the guest sandbox or application
-  // processes. Restore attaches real volumes before starting applications.
-  // Does not preserve application warmup. Requires MICROVM.
+  // Capture the runtime before creating application processes. Supported by
+  // MICROVM and GVISOR. Restore attaches real volumes before starting
+  // applications; application warmup is not preserved.
   GOLDEN_SNAPSHOT_MODE_RUNTIME = 3;
 }
 
@@ -1528,7 +1528,6 @@ message Volume {
   // +k8s:optional
   // +k8s:unionMember
   ExternalVolumeSource external = 7;
-
 
   // +k8s:optional
   // +k8s:unionMember

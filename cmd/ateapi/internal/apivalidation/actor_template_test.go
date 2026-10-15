@@ -35,11 +35,11 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate()},
 		nil,
 	}, {
-		"runtime golden requires microvm",
+		"runtime golden gvisor",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(x *ateapipb.ActorTemplate) {
 			x.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_RUNTIME}
 		})},
-		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "golden_snapshot_config", "mode"), "RUNTIME", "")},
+		nil,
 	}, {
 		"runtime golden microvm",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(x *ateapipb.ActorTemplate) {

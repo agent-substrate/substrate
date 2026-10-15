@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,28 +34,47 @@ var processNonce = func() string {
 	return hex.EncodeToString(b)
 }()
 
-func runtimeState(w http.ResponseWriter, _ *http.Request) {
+func runtimeState(w http.ResponseWriter, r *http.Request) {
 	b, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmdline, err := os.ReadFile("/proc/cmdline")
+	kind := r.URL.Query().Get("runtime")
+	var cmdline []byte
+	if kind == "" || kind == "microvm" {
+		cmdline, err = os.ReadFile("/proc/cmdline")
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+	marker, err := runtimeBootIdentity(kind, strings.TrimSpace(string(b)), string(cmdline))
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	var marker string
-	for _, arg := range strings.Fields(string(cmdline)) {
-		if value, ok := strings.CutPrefix(arg, "ate.boot_id="); ok {
-			marker = value
+	writeJSON(w, map[string]string{"boot_id": marker, "kernel_boot_id": strings.TrimSpace(string(b)), "process_nonce": processNonce})
+}
+
+// gVisor supplies a diagnostic boot ID that changes on restore. MicroVM
+// continuity uses our eager marker because Linux initializes boot_id lazily.
+func runtimeBootIdentity(kind, kernelBoot, cmdline string) (string, error) {
+	if kind == "gvisor" {
+		if kernelBoot == "" {
+			return "", fmt.Errorf("sandbox boot identity missing")
+		}
+		return kernelBoot, nil
+	}
+	if kind != "" && kind != "microvm" {
+		return "", fmt.Errorf("unsupported runtime %q", kind)
+	}
+	for _, arg := range strings.Fields(cmdline) {
+		if marker, ok := strings.CutPrefix(arg, "ate.boot_id="); ok && marker != "" {
+			return marker, nil
 		}
 	}
-	if marker == "" {
-		http.Error(w, "guest boot marker missing", 500)
-		return
-	}
-	writeJSON(w, map[string]string{"boot_id": marker, "kernel_boot_id": strings.TrimSpace(string(b)), "process_nonce": processNonce})
+	return "", fmt.Errorf("guest boot marker missing")
 }
 
 // seedVolumeFixture seeds a disposable fixture before the retained-state probe is

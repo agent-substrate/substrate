@@ -111,6 +111,9 @@ func TestVolumeStateDistinguishesRetainedState(t *testing.T) {
 	if got.Held.Data != "source-held.txt" || got.Held.Error != "" {
 		t.Fatalf("held descriptor: %+v", got.Held)
 	}
+	if got.Mapped.Data != "source-held.txt" || got.Mapped.Error != "" {
+		t.Fatalf("retained mapping: %+v", got.Mapped)
+	}
 	if got.Unlinked.Data != "source-unlinked.txt" || got.Unlinked.Error != "" {
 		t.Fatalf("unlinked descriptor: %+v", got.Unlinked)
 	}
@@ -150,7 +153,7 @@ func TestVolumeStatePrimeFailureClosesDescriptors(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("missing fixture returned %d", w.Code)
 	}
-	if p.held != nil || p.directory != nil || p.unlinked != nil || p.challenge != "" {
+	if p.held != nil || p.directory != nil || p.unlinked != nil || p.challenge != "" || p.mapped != nil {
 		t.Fatal("failed prime retained state")
 	}
 	volumeWrite(t, filepath.Join(root, "unlinked.txt"), "repaired")
@@ -196,5 +199,28 @@ func TestVolumeResultClassifiesWrappedIOError(t *testing.T) {
 	other := volumeResult(nil, os.ErrPermission)
 	if other.ErrorCode != "" {
 		t.Fatalf("unrelated error classified as EIO: %+v", other)
+	}
+}
+
+func TestVolumeStateMappingSeesInPlaceWrites(t *testing.T) {
+	p := &volumeStateProbe{}
+	root := volumeFixture(t)
+	volumePrime(t, p, root)
+	f, err := os.OpenFile(filepath.Join(root, "held.txt"), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	value := "update-held.txt"
+	if _, err := f.WriteAt([]byte(value), 0); err != nil {
+		t.Fatal(err)
+	}
+	got := volumeObserve(t, p)
+	if got.Mapped.Data != value || got.Held.Data != value {
+		t.Fatalf("mapping did not observe backing inode update: %+v", got)
+	}
+	p.close()
+	if p.mapped != nil {
+		t.Fatal("mapping retained after close")
 	}
 }
