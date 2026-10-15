@@ -229,8 +229,8 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 // can never be resumed from local state, so it commits CRASHED instead and
 // fails the step with FailedPrecondition. It re-reads the actor first so an
 // out-of-band transition (e.g. the syncer crashing the actor after its worker
-// died) is not overwritten: with no assignment left there is nothing to
-// finalize.
+// died) is not overwritten: an actor that is no longer SUSPENDING is left as
+// it is and the step fails with FailedPrecondition.
 func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizePaused")
 	defer func() { err = done(err) }()
@@ -238,6 +238,9 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 	latestActor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, err
+	}
+	if state := latestActor.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+		return nil, apierror.FailedPrecondition("FinalizePaused prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, state, ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
 	}
 
 	// 1. Free the worker (if it hasn't been freed yet)

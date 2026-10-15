@@ -122,6 +122,7 @@ func TestPauseActor_Finalized_AlreadyCrashed(t *testing.T) {
 	updateDuringCheckpoint(t, atelet, st, actorRef, func(s *ateapipb.ActorStatus) {
 		s.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		s.Crash = originalCrash
+		s.WorkerAssignment = nil
 	})
 
 	if _, err := w.PauseActor(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
