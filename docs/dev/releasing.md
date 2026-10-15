@@ -31,7 +31,7 @@ To preview the notes before tagging, run the dry run with the tag you plan to pu
 
 Only `agent-substrate/substrate` publishes images. In a fork the `images` job is skipped, since GitHub bills package storage to the fork's owner, and the draft is created without them.
 
-A rerun builds nothing if every image already exists for the tag on both platforms. An incomplete set, left by a failed run, is rebuilt in full. To rebuild and replace a complete set, run the workflow manually with `force` checked. Replacing images changes their digests, so avoid it once a release is published.
+A rerun builds nothing if every image already exists for the tag on both platforms. An incomplete set, left by a failed run, is rebuilt in full. To rebuild and replace a complete set, run the workflow manually with `overwrite` checked. Replacing images changes their digests, so avoid it once a release is published.
 
 To test the image build without publishing anything, for example in a fork, run the workflow manually with `dry_run_images` checked. The images are pushed to a registry that exists only inside the job and are checked there. No draft is created.
 

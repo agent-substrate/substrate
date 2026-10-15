@@ -32,7 +32,7 @@ on:
       tag:
         description: 'Existing tag to draft a release for (e.g. v0.3.0)'
         required: true
-      force:
+      overwrite:
         description: 'Rebuild and replace images that already exist for the tag'
         type: boolean
         default: false
@@ -60,8 +60,8 @@ jobs:
       VERSION: ${{ inputs.tag || github.ref_name }}
       KO_DOCKER_REPO: ghcr.io/agent-substrate/substrate
       KO_DEFAULTPLATFORMS: linux/amd64,linux/arm64
-      # inputs.force is empty on a tag push, and ate-setup rejects an empty bool.
-      ATE_PUBLISH_FORCE: ${{ inputs.force == true }}
+      # inputs.overwrite is empty on a tag push, and ate-setup rejects an empty bool.
+      ATE_PUBLISH_OVERWRITE: ${{ inputs.overwrite == true }}
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -90,7 +90,7 @@ jobs:
       env:
         TOKEN: ${{ github.token }}
       run: docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin <<<"${TOKEN}"
-    # Builds nothing if every image already exists for the tag, unless forced,
+    # Builds nothing if every image already exists for the tag, unless overwrite is set,
     # and checks every image for every platform after pushing.
     - name: Publish images
       run: go run ./cmd/ate-setup publish release-images
@@ -108,7 +108,7 @@ jobs:
       VERSION: ${{ inputs.tag }}
       KO_DOCKER_REPO: localhost:5000/substrate
       KO_DEFAULTPLATFORMS: linux/amd64,linux/arm64
-      ATE_PUBLISH_FORCE: ${{ inputs.force == true }}
+      ATE_PUBLISH_OVERWRITE: ${{ inputs.overwrite == true }}
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
