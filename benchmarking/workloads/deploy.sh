@@ -51,6 +51,10 @@ SANDBOX_CLASS="gvisor"
 # since a bigger guest drags more page cache into every memory snapshot. Raise
 # it for RAM-consuming suites.
 ACTOR_MEMORY="256Mi"
+# Actor CPU limit (ActorTemplate resources.limits.cpu). The scheduler books
+# it against the worker's CPU capacity, so it bounds how many actors a worker
+# hosts at once as much as the memory limit does.
+ACTOR_CPU="1"
 # Worker pod memory (WorkerPool spec.template.resources), set as both request
 # and limit. Empty leaves the pod unsized. The limit is also the memory the
 # worker reports as its actor capacity.
@@ -80,6 +84,7 @@ usage() {
   echo "                              microvm requires hack/install-microvm-deps.sh --install to have run."
   echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
   echo "                              the smallest size microvm admits)"
+  echo "  --actor-cpu CPU             CPU limit for the benchmark ActorTemplates (default: 1)"
   echo "  --worker-memory SIZE        Memory request and limit for each WorkerPool pod"
   echo "                              (default: unset, the pod is unsized)"
   echo "  --storage-class-name NAME   StorageClass for the glutton-storage external volume. Setting it"
@@ -155,6 +160,7 @@ substitute() {
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
+      -e "s|\${ACTOR_CPU}|${ACTOR_CPU}|g" \
       -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
       -e "s|\${SWEPERF_IMAGE}|${SWEPERF_IMAGE:-}|g" \
       -e "s|\${STORAGE_CLASS_NAME}|${STORAGE_CLASS_NAME}|g" \
@@ -249,7 +255,7 @@ deploy() {
     echo "Error: --fake-atelet-env needs substrate installed with --fake-data-plane" >&2
     exit 1
   fi
-  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
+  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, actor_cpu=${ACTOR_CPU}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   if fake_data_plane; then
@@ -345,6 +351,13 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --actor-memory=*)
       ACTOR_MEMORY="${1#*=}"
+      ;;
+    --actor-cpu)
+      shift
+      ACTOR_CPU="$1"
+      ;;
+    --actor-cpu=*)
+      ACTOR_CPU="${1#*=}"
       ;;
     --worker-memory)
       shift
