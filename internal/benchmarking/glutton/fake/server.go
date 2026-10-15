@@ -41,6 +41,7 @@ const (
 	IngestRoute    = glutton.IngestRoute
 	PingRoute      = glutton.PingRoute
 	UseCPURoute    = glutton.UseCPURoute
+	RunScriptRoute = glutton.RunScriptRoute
 )
 
 // Server is an httptest-backed stand-in for a glutton actor holding one file.
@@ -72,6 +73,7 @@ type Server struct {
 	burnMillis    []int64
 	ingestSizes   []int64
 	cpuRequests   []*gluttonpb.UseCPURequest
+	scripts       []*gluttonpb.RunScriptRequest
 }
 
 func (s *Server) reportedDigest() []byte {
@@ -133,6 +135,13 @@ func (s *Server) RecordedRAMReadSizes() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.ramReadSizes...)
+}
+
+// RecordedScripts returns each /runscript request.
+func (s *Server) RecordedScripts() []*gluttonpb.RunScriptRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*gluttonpb.RunScriptRequest(nil), s.scripts...)
 }
 
 // RecordedCPURequests returns each /usecpu request.
@@ -317,6 +326,26 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		resp, _ := proto.Marshal(&gluttonpb.UseCPUResponse{NumCores: req.GetNumCores()})
 		_, _ = w.Write(resp)
 
+	case RunScriptRoute:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var req gluttonpb.RunScriptRequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		s.scripts = append(s.scripts, &req)
+		s.mu.Unlock()
+
+		// The fake does no work, so the script is instant: every node
+		// entered once, every request run.
+		resp, _ := proto.Marshal(&gluttonpb.RunScriptResponse{Result: mirrorBlock(req.GetScript())})
+		_, _ = w.Write(resp)
+
 	default:
 		http.NotFound(w, r)
 	}
@@ -334,4 +363,28 @@ func (s *Server) RecordedIngestSizes() []int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]int64(nil), s.ingestSizes...)
+}
+
+// mirrorBlock builds the result tree the real glutton would return for a
+// script that cost nothing: one pass per node and one request per leaf.
+func mirrorBlock(block *gluttonpb.Block) *gluttonpb.StepResult {
+	result := &gluttonpb.StepResult{Stats: &gluttonpb.Stats{Passes: 1}}
+	for _, step := range block.GetSteps() {
+		var child *gluttonpb.StepResult
+		switch kind := step.GetKind().(type) {
+		case *gluttonpb.Step_Block:
+			child = mirrorBlock(kind.Block)
+		case *gluttonpb.Step_Operation:
+			child = &gluttonpb.StepResult{Stats: &gluttonpb.Stats{Passes: 1}}
+			for range kind.Operation.GetRequests() {
+				child.Children = append(child.Children, &gluttonpb.StepResult{Stats: &gluttonpb.Stats{Passes: 1, RequestsRun: 1}})
+				child.Stats.RequestsRun++
+			}
+		default:
+			child = &gluttonpb.StepResult{Stats: &gluttonpb.Stats{}}
+		}
+		result.Children = append(result.Children, child)
+		result.Stats.RequestsRun += child.GetStats().GetRequestsRun()
+	}
+	return result
 }

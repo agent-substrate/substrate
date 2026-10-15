@@ -1222,6 +1222,676 @@ func (x *UseCPUResponse) GetNumCores() int32 {
 	return 0
 }
 
+// A Block is a list of steps run in order. With loop_duration_ms set, the
+// block cycles through its steps until the budget elapses. A budget is
+// checked between passes: the pass in progress finishes, so a loop
+// overruns its budget by at most one pass and no request is cut short.
+// A nested block stops cycling once any ancestor's budget has elapsed,
+// the same way.
+type Block struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// At least one step is required.
+	Steps []*Step `protobuf:"bytes,1,rep,name=steps,proto3" json:"steps,omitempty"`
+	// Wall-clock budget to cycle through the steps for, in milliseconds;
+	// the pass under way when it elapses finishes. Zero runs the steps once.
+	LoopDurationMs int64 `protobuf:"varint,2,opt,name=loop_duration_ms,json=loopDurationMs,proto3" json:"loop_duration_ms,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *Block) Reset() {
+	*x = Block{}
+	mi := &file_glutton_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Block) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Block) ProtoMessage() {}
+
+func (x *Block) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Block.ProtoReflect.Descriptor instead.
+func (*Block) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *Block) GetSteps() []*Step {
+	if x != nil {
+		return x.Steps
+	}
+	return nil
+}
+
+func (x *Block) GetLoopDurationMs() int64 {
+	if x != nil {
+		return x.LoopDurationMs
+	}
+	return 0
+}
+
+// A Step is either a nested Block or an Operation.
+type Step struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Kind:
+	//
+	//	*Step_Block
+	//	*Step_Operation
+	Kind          isStep_Kind `protobuf_oneof:"kind"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Step) Reset() {
+	*x = Step{}
+	mi := &file_glutton_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Step) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Step) ProtoMessage() {}
+
+func (x *Step) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Step.ProtoReflect.Descriptor instead.
+func (*Step) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *Step) GetKind() isStep_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return nil
+}
+
+func (x *Step) GetBlock() *Block {
+	if x != nil {
+		if x, ok := x.Kind.(*Step_Block); ok {
+			return x.Block
+		}
+	}
+	return nil
+}
+
+func (x *Step) GetOperation() *Operation {
+	if x != nil {
+		if x, ok := x.Kind.(*Step_Operation); ok {
+			return x.Operation
+		}
+	}
+	return nil
+}
+
+type isStep_Kind interface {
+	isStep_Kind()
+}
+
+type Step_Block struct {
+	Block *Block `protobuf:"bytes,1,opt,name=block,proto3,oneof"`
+}
+
+type Step_Operation struct {
+	Operation *Operation `protobuf:"bytes,2,opt,name=operation,proto3,oneof"`
+}
+
+func (*Step_Block) isStep_Kind() {}
+
+func (*Step_Operation) isStep_Kind() {}
+
+// An Operation runs its requests at the same time and waits for all of
+// them. The first request to fail cancels the rest. RAM requests take
+// turns on the glutton's single RAM lock, so only CPU, disk, and sleep
+// requests overlap in practice.
+type Operation struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// At least one request is required.
+	Requests      []*Request `protobuf:"bytes,1,rep,name=requests,proto3" json:"requests,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Operation) Reset() {
+	*x = Operation{}
+	mi := &file_glutton_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Operation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Operation) ProtoMessage() {}
+
+func (x *Operation) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Operation.ProtoReflect.Descriptor instead.
+func (*Operation) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *Operation) GetRequests() []*Request {
+	if x != nil {
+		return x.Requests
+	}
+	return nil
+}
+
+// A Request is one of the service's work requests. UseCPU and OpenFD are
+// left out because they set a background load that outlives the script
+// (BurnCPU is the CPU spike), and Gossip because it starts a loop.
+type Request struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Kind:
+	//
+	//	*Request_WriteRam
+	//	*Request_ReadRam
+	//	*Request_WriteDisk
+	//	*Request_ReadDisk
+	//	*Request_BurnCpu
+	//	*Request_Ingest
+	//	*Request_Sleep
+	Kind          isRequest_Kind `protobuf_oneof:"kind"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Request) Reset() {
+	*x = Request{}
+	mi := &file_glutton_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Request) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Request) ProtoMessage() {}
+
+func (x *Request) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Request.ProtoReflect.Descriptor instead.
+func (*Request) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *Request) GetKind() isRequest_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return nil
+}
+
+func (x *Request) GetWriteRam() *WriteRAMRequest {
+	if x != nil {
+		if x, ok := x.Kind.(*Request_WriteRam); ok {
+			return x.WriteRam
+		}
+	}
+	return nil
+}
+
+func (x *Request) GetReadRam() *ReadRAMRequest {
+	if x != nil {
+		if x, ok := x.Kind.(*Request_ReadRam); ok {
+			return x.ReadRam
+		}
+	}
+	return nil
+}
+
+func (x *Request) GetWriteDisk() *WriteDiskRequest {
+	if x != nil {
+		if x, ok := x.Kind.(*Request_WriteDisk); ok {
+			return x.WriteDisk
+		}
+	}
+	return nil
+}
+
+func (x *Request) GetReadDisk() *ReadDiskRequest {
+	if x != nil {
+		if x, ok := x.Kind.(*Request_ReadDisk); ok {
+			return x.ReadDisk
+		}
+	}
+	return nil
+}
+
+func (x *Request) GetBurnCpu() *BurnCPURequest {
+	if x != nil {
+		if x, ok := x.Kind.(*Request_BurnCpu); ok {
+			return x.BurnCpu
+		}
+	}
+	return nil
+}
+
+func (x *Request) GetIngest() *IngestRequest {
+	if x != nil {
+		if x, ok := x.Kind.(*Request_Ingest); ok {
+			return x.Ingest
+		}
+	}
+	return nil
+}
+
+func (x *Request) GetSleep() *SleepRequest {
+	if x != nil {
+		if x, ok := x.Kind.(*Request_Sleep); ok {
+			return x.Sleep
+		}
+	}
+	return nil
+}
+
+type isRequest_Kind interface {
+	isRequest_Kind()
+}
+
+type Request_WriteRam struct {
+	WriteRam *WriteRAMRequest `protobuf:"bytes,1,opt,name=write_ram,json=writeRam,proto3,oneof"`
+}
+
+type Request_ReadRam struct {
+	ReadRam *ReadRAMRequest `protobuf:"bytes,2,opt,name=read_ram,json=readRam,proto3,oneof"`
+}
+
+type Request_WriteDisk struct {
+	WriteDisk *WriteDiskRequest `protobuf:"bytes,3,opt,name=write_disk,json=writeDisk,proto3,oneof"`
+}
+
+type Request_ReadDisk struct {
+	ReadDisk *ReadDiskRequest `protobuf:"bytes,4,opt,name=read_disk,json=readDisk,proto3,oneof"`
+}
+
+type Request_BurnCpu struct {
+	BurnCpu *BurnCPURequest `protobuf:"bytes,5,opt,name=burn_cpu,json=burnCpu,proto3,oneof"`
+}
+
+type Request_Ingest struct {
+	Ingest *IngestRequest `protobuf:"bytes,6,opt,name=ingest,proto3,oneof"`
+}
+
+type Request_Sleep struct {
+	Sleep *SleepRequest `protobuf:"bytes,7,opt,name=sleep,proto3,oneof"`
+}
+
+func (*Request_WriteRam) isRequest_Kind() {}
+
+func (*Request_ReadRam) isRequest_Kind() {}
+
+func (*Request_WriteDisk) isRequest_Kind() {}
+
+func (*Request_ReadDisk) isRequest_Kind() {}
+
+func (*Request_BurnCpu) isRequest_Kind() {}
+
+func (*Request_Ingest) isRequest_Kind() {}
+
+func (*Request_Sleep) isRequest_Kind() {}
+
+type SleepRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Wall-clock time to idle, in milliseconds. The glutton stays awake and
+	// does nothing, which paces the requests around it.
+	DurationMs    int64 `protobuf:"varint,1,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SleepRequest) Reset() {
+	*x = SleepRequest{}
+	mi := &file_glutton_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SleepRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SleepRequest) ProtoMessage() {}
+
+func (x *SleepRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SleepRequest.ProtoReflect.Descriptor instead.
+func (*SleepRequest) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *SleepRequest) GetDurationMs() int64 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
+type RunScriptRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Script        *Block                 `protobuf:"bytes,1,opt,name=script,proto3" json:"script,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RunScriptRequest) Reset() {
+	*x = RunScriptRequest{}
+	mi := &file_glutton_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunScriptRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunScriptRequest) ProtoMessage() {}
+
+func (x *RunScriptRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunScriptRequest.ProtoReflect.Descriptor instead.
+func (*RunScriptRequest) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *RunScriptRequest) GetScript() *Block {
+	if x != nil {
+		return x.Script
+	}
+	return nil
+}
+
+type RunScriptResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The script's root block.
+	Result        *StepResult `protobuf:"bytes,1,opt,name=result,proto3" json:"result,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RunScriptResponse) Reset() {
+	*x = RunScriptResponse{}
+	mi := &file_glutton_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunScriptResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunScriptResponse) ProtoMessage() {}
+
+func (x *RunScriptResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunScriptResponse.ProtoReflect.Descriptor instead.
+func (*RunScriptResponse) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *RunScriptResponse) GetResult() *StepResult {
+	if x != nil {
+		return x.Result
+	}
+	return nil
+}
+
+// A StepResult mirrors one node of the script: a block, an operation, or
+// a request. Its children are in the request's order: a block's steps or
+// an operation's requests; a request has none. A node inside a looped
+// block is entered once per pass, and its stats sum over every entry, so
+// the response is the size of the script however long it ran.
+type StepResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Stats         *Stats                 `protobuf:"bytes,1,opt,name=stats,proto3" json:"stats,omitempty"`
+	Children      []*StepResult          `protobuf:"bytes,2,rep,name=children,proto3" json:"children,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StepResult) Reset() {
+	*x = StepResult{}
+	mi := &file_glutton_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StepResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StepResult) ProtoMessage() {}
+
+func (x *StepResult) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StepResult.ProtoReflect.Descriptor instead.
+func (*StepResult) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *StepResult) GetStats() *Stats {
+	if x != nil {
+		return x.Stats
+	}
+	return nil
+}
+
+func (x *StepResult) GetChildren() []*StepResult {
+	if x != nil {
+		return x.Children
+	}
+	return nil
+}
+
+// Stats are a node's vital signs. Every field but elapsed_ms is the sum
+// over the node's children and entries, so the root carries the totals.
+type Stats struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Wall clock spent in this node, summed over its entries. A block's is
+	// the sum of its steps'; an operation's is its longest request's, since
+	// they overlap; so a parent's elapsed is not the sum of its children's.
+	ElapsedMs int64 `protobuf:"varint,1,opt,name=elapsed_ms,json=elapsedMs,proto3" json:"elapsed_ms,omitempty"`
+	// Times this node was entered: a looped block's pass count, and for
+	// every other node the entries its enclosing loops gave it.
+	Passes int64 `protobuf:"varint,2,opt,name=passes,proto3" json:"passes,omitempty"`
+	// Requests run beneath this node.
+	RequestsRun int64 `protobuf:"varint,3,opt,name=requests_run,json=requestsRun,proto3" json:"requests_run,omitempty"`
+	// Bytes WriteDisk generated and Ingest received, and bytes ReadDisk read.
+	DiskBytesWritten int64 `protobuf:"varint,4,opt,name=disk_bytes_written,json=diskBytesWritten,proto3" json:"disk_bytes_written,omitempty"`
+	DiskBytesRead    int64 `protobuf:"varint,5,opt,name=disk_bytes_read,json=diskBytesRead,proto3" json:"disk_bytes_read,omitempty"`
+	// Bytes WriteRAM was asked to write, and bytes ReadRAM walked.
+	RamBytesWritten int64 `protobuf:"varint,6,opt,name=ram_bytes_written,json=ramBytesWritten,proto3" json:"ram_bytes_written,omitempty"`
+	RamBytesRead    int64 `protobuf:"varint,7,opt,name=ram_bytes_read,json=ramBytesRead,proto3" json:"ram_bytes_read,omitempty"`
+	// Hash iterations BurnCPU completed.
+	BurnIterations int64 `protobuf:"varint,8,opt,name=burn_iterations,json=burnIterations,proto3" json:"burn_iterations,omitempty"`
+	// Milliseconds slept.
+	SleptMs       int64 `protobuf:"varint,9,opt,name=slept_ms,json=sleptMs,proto3" json:"slept_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Stats) Reset() {
+	*x = Stats{}
+	mi := &file_glutton_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Stats) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Stats) ProtoMessage() {}
+
+func (x *Stats) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Stats.ProtoReflect.Descriptor instead.
+func (*Stats) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *Stats) GetElapsedMs() int64 {
+	if x != nil {
+		return x.ElapsedMs
+	}
+	return 0
+}
+
+func (x *Stats) GetPasses() int64 {
+	if x != nil {
+		return x.Passes
+	}
+	return 0
+}
+
+func (x *Stats) GetRequestsRun() int64 {
+	if x != nil {
+		return x.RequestsRun
+	}
+	return 0
+}
+
+func (x *Stats) GetDiskBytesWritten() int64 {
+	if x != nil {
+		return x.DiskBytesWritten
+	}
+	return 0
+}
+
+func (x *Stats) GetDiskBytesRead() int64 {
+	if x != nil {
+		return x.DiskBytesRead
+	}
+	return 0
+}
+
+func (x *Stats) GetRamBytesWritten() int64 {
+	if x != nil {
+		return x.RamBytesWritten
+	}
+	return 0
+}
+
+func (x *Stats) GetRamBytesRead() int64 {
+	if x != nil {
+		return x.RamBytesRead
+	}
+	return 0
+}
+
+func (x *Stats) GetBurnIterations() int64 {
+	if x != nil {
+		return x.BurnIterations
+	}
+	return 0
+}
+
+func (x *Stats) GetSleptMs() int64 {
+	if x != nil {
+		return x.SleptMs
+	}
+	return 0
+}
+
 var File_glutton_proto protoreflect.FileDescriptor
 
 const file_glutton_proto_rawDesc = "" +
@@ -1290,14 +1960,55 @@ const file_glutton_proto_rawDesc = "" +
 	"\x11cap_at_gomaxprocs\x18\x04 \x01(\bH\x00R\x0fcapAtGomaxprocs\x88\x01\x01B\x14\n" +
 	"\x12_cap_at_gomaxprocs\"-\n" +
 	"\x0eUseCPUResponse\x12\x1b\n" +
-	"\tnum_cores\x18\x01 \x01(\x05R\bnumCores*_\n" +
+	"\tnum_cores\x18\x01 \x01(\x05R\bnumCores\"V\n" +
+	"\x05Block\x12#\n" +
+	"\x05steps\x18\x01 \x03(\v2\r.glutton.StepR\x05steps\x12(\n" +
+	"\x10loop_duration_ms\x18\x02 \x01(\x03R\x0eloopDurationMs\"j\n" +
+	"\x04Step\x12&\n" +
+	"\x05block\x18\x01 \x01(\v2\x0e.glutton.BlockH\x00R\x05block\x122\n" +
+	"\toperation\x18\x02 \x01(\v2\x12.glutton.OperationH\x00R\toperationB\x06\n" +
+	"\x04kind\"9\n" +
+	"\tOperation\x12,\n" +
+	"\brequests\x18\x01 \x03(\v2\x10.glutton.RequestR\brequests\"\x8c\x03\n" +
+	"\aRequest\x127\n" +
+	"\twrite_ram\x18\x01 \x01(\v2\x18.glutton.WriteRAMRequestH\x00R\bwriteRam\x124\n" +
+	"\bread_ram\x18\x02 \x01(\v2\x17.glutton.ReadRAMRequestH\x00R\areadRam\x12:\n" +
+	"\n" +
+	"write_disk\x18\x03 \x01(\v2\x19.glutton.WriteDiskRequestH\x00R\twriteDisk\x127\n" +
+	"\tread_disk\x18\x04 \x01(\v2\x18.glutton.ReadDiskRequestH\x00R\breadDisk\x124\n" +
+	"\bburn_cpu\x18\x05 \x01(\v2\x17.glutton.BurnCPURequestH\x00R\aburnCpu\x120\n" +
+	"\x06ingest\x18\x06 \x01(\v2\x16.glutton.IngestRequestH\x00R\x06ingest\x12-\n" +
+	"\x05sleep\x18\a \x01(\v2\x15.glutton.SleepRequestH\x00R\x05sleepB\x06\n" +
+	"\x04kind\"/\n" +
+	"\fSleepRequest\x12\x1f\n" +
+	"\vduration_ms\x18\x01 \x01(\x03R\n" +
+	"durationMs\":\n" +
+	"\x10RunScriptRequest\x12&\n" +
+	"\x06script\x18\x01 \x01(\v2\x0e.glutton.BlockR\x06script\"@\n" +
+	"\x11RunScriptResponse\x12+\n" +
+	"\x06result\x18\x01 \x01(\v2\x13.glutton.StepResultR\x06result\"c\n" +
+	"\n" +
+	"StepResult\x12$\n" +
+	"\x05stats\x18\x01 \x01(\v2\x0e.glutton.StatsR\x05stats\x12/\n" +
+	"\bchildren\x18\x02 \x03(\v2\x13.glutton.StepResultR\bchildren\"\xcd\x02\n" +
+	"\x05Stats\x12\x1d\n" +
+	"\n" +
+	"elapsed_ms\x18\x01 \x01(\x03R\telapsedMs\x12\x16\n" +
+	"\x06passes\x18\x02 \x01(\x03R\x06passes\x12!\n" +
+	"\frequests_run\x18\x03 \x01(\x03R\vrequestsRun\x12,\n" +
+	"\x12disk_bytes_written\x18\x04 \x01(\x03R\x10diskBytesWritten\x12&\n" +
+	"\x0fdisk_bytes_read\x18\x05 \x01(\x03R\rdiskBytesRead\x12*\n" +
+	"\x11ram_bytes_written\x18\x06 \x01(\x03R\x0framBytesWritten\x12$\n" +
+	"\x0eram_bytes_read\x18\a \x01(\x03R\framBytesRead\x12'\n" +
+	"\x0fburn_iterations\x18\b \x01(\x03R\x0eburnIterations\x12\x19\n" +
+	"\bslept_ms\x18\t \x01(\x03R\asleptMs*_\n" +
 	"\tWriteMode\x12\x17\n" +
 	"\x13WRITE_MODE_TRUNCATE\x10\x00\x12\x18\n" +
 	"\x14WRITE_MODE_OVERWRITE\x10\x01\x12\x1f\n" +
 	"\x1bWRITE_MODE_OVERWRITE_ROTATE\x10\x02*9\n" +
 	"\bReadMode\x12\x12\n" +
 	"\x0eREAD_MODE_DATA\x10\x00\x12\x19\n" +
-	"\x15READ_MODE_DIGEST_ONLY\x10\x012\x80\x05\n" +
+	"\x15READ_MODE_DIGEST_ONLY\x10\x012\xc6\x05\n" +
 	"\aGlutton\x12A\n" +
 	"\bWriteRAM\x12\x18.glutton.WriteRAMRequest\x1a\x19.glutton.WriteRAMResponse\"\x00\x12>\n" +
 	"\aReadRAM\x12\x17.glutton.ReadRAMRequest\x1a\x18.glutton.ReadRAMResponse\"\x00\x12D\n" +
@@ -1308,7 +2019,8 @@ const file_glutton_proto_rawDesc = "" +
 	"\x06Gossip\x12\x16.glutton.GossipRequest\x1a\x17.glutton.GossipResponse\"\x00\x12>\n" +
 	"\aBurnCPU\x12\x17.glutton.BurnCPURequest\x1a\x18.glutton.BurnCPUResponse\"\x00\x12;\n" +
 	"\x06Ingest\x12\x16.glutton.IngestRequest\x1a\x17.glutton.IngestResponse\"\x00\x12;\n" +
-	"\x06UseCPU\x12\x16.glutton.UseCPURequest\x1a\x17.glutton.UseCPUResponse\"\x00B=Z;github.com/agent-substrate/substrate/internal/proto/gluttonb\x06proto3"
+	"\x06UseCPU\x12\x16.glutton.UseCPURequest\x1a\x17.glutton.UseCPUResponse\"\x00\x12D\n" +
+	"\tRunScript\x12\x19.glutton.RunScriptRequest\x1a\x1a.glutton.RunScriptResponse\"\x00B=Z;github.com/agent-substrate/substrate/internal/proto/gluttonb\x06proto3"
 
 var (
 	file_glutton_proto_rawDescOnce sync.Once
@@ -1323,7 +2035,7 @@ func file_glutton_proto_rawDescGZIP() []byte {
 }
 
 var file_glutton_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_glutton_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_glutton_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_glutton_proto_goTypes = []any{
 	(WriteMode)(0),            // 0: glutton.WriteMode
 	(ReadMode)(0),             // 1: glutton.ReadMode
@@ -1348,37 +2060,63 @@ var file_glutton_proto_goTypes = []any{
 	(*IngestResponse)(nil),    // 20: glutton.IngestResponse
 	(*UseCPURequest)(nil),     // 21: glutton.UseCPURequest
 	(*UseCPUResponse)(nil),    // 22: glutton.UseCPUResponse
+	(*Block)(nil),             // 23: glutton.Block
+	(*Step)(nil),              // 24: glutton.Step
+	(*Operation)(nil),         // 25: glutton.Operation
+	(*Request)(nil),           // 26: glutton.Request
+	(*SleepRequest)(nil),      // 27: glutton.SleepRequest
+	(*RunScriptRequest)(nil),  // 28: glutton.RunScriptRequest
+	(*RunScriptResponse)(nil), // 29: glutton.RunScriptResponse
+	(*StepResult)(nil),        // 30: glutton.StepResult
+	(*Stats)(nil),             // 31: glutton.Stats
 }
 var file_glutton_proto_depIdxs = []int32{
 	0,  // 0: glutton.WriteRAMRequest.write_mode:type_name -> glutton.WriteMode
 	0,  // 1: glutton.WriteDiskRequest.write_mode:type_name -> glutton.WriteMode
 	1,  // 2: glutton.ReadDiskRequest.read_mode:type_name -> glutton.ReadMode
 	16, // 3: glutton.GossipRequest.peers:type_name -> glutton.Peer
-	2,  // 4: glutton.Glutton.WriteRAM:input_type -> glutton.WriteRAMRequest
-	4,  // 5: glutton.Glutton.ReadRAM:input_type -> glutton.ReadRAMRequest
-	6,  // 6: glutton.Glutton.WriteDisk:input_type -> glutton.WriteDiskRequest
-	8,  // 7: glutton.Glutton.ReadDisk:input_type -> glutton.ReadDiskRequest
-	10, // 8: glutton.Glutton.OpenFD:input_type -> glutton.OpenFDRequest
-	12, // 9: glutton.Glutton.Ping:input_type -> glutton.PingRequest
-	14, // 10: glutton.Glutton.Gossip:input_type -> glutton.GossipRequest
-	17, // 11: glutton.Glutton.BurnCPU:input_type -> glutton.BurnCPURequest
-	19, // 12: glutton.Glutton.Ingest:input_type -> glutton.IngestRequest
-	21, // 13: glutton.Glutton.UseCPU:input_type -> glutton.UseCPURequest
-	3,  // 14: glutton.Glutton.WriteRAM:output_type -> glutton.WriteRAMResponse
-	5,  // 15: glutton.Glutton.ReadRAM:output_type -> glutton.ReadRAMResponse
-	7,  // 16: glutton.Glutton.WriteDisk:output_type -> glutton.WriteDiskResponse
-	9,  // 17: glutton.Glutton.ReadDisk:output_type -> glutton.ReadDiskResponse
-	11, // 18: glutton.Glutton.OpenFD:output_type -> glutton.OpenFDResponse
-	13, // 19: glutton.Glutton.Ping:output_type -> glutton.PingResponse
-	15, // 20: glutton.Glutton.Gossip:output_type -> glutton.GossipResponse
-	18, // 21: glutton.Glutton.BurnCPU:output_type -> glutton.BurnCPUResponse
-	20, // 22: glutton.Glutton.Ingest:output_type -> glutton.IngestResponse
-	22, // 23: glutton.Glutton.UseCPU:output_type -> glutton.UseCPUResponse
-	14, // [14:24] is the sub-list for method output_type
-	4,  // [4:14] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	24, // 4: glutton.Block.steps:type_name -> glutton.Step
+	23, // 5: glutton.Step.block:type_name -> glutton.Block
+	25, // 6: glutton.Step.operation:type_name -> glutton.Operation
+	26, // 7: glutton.Operation.requests:type_name -> glutton.Request
+	2,  // 8: glutton.Request.write_ram:type_name -> glutton.WriteRAMRequest
+	4,  // 9: glutton.Request.read_ram:type_name -> glutton.ReadRAMRequest
+	6,  // 10: glutton.Request.write_disk:type_name -> glutton.WriteDiskRequest
+	8,  // 11: glutton.Request.read_disk:type_name -> glutton.ReadDiskRequest
+	17, // 12: glutton.Request.burn_cpu:type_name -> glutton.BurnCPURequest
+	19, // 13: glutton.Request.ingest:type_name -> glutton.IngestRequest
+	27, // 14: glutton.Request.sleep:type_name -> glutton.SleepRequest
+	23, // 15: glutton.RunScriptRequest.script:type_name -> glutton.Block
+	30, // 16: glutton.RunScriptResponse.result:type_name -> glutton.StepResult
+	31, // 17: glutton.StepResult.stats:type_name -> glutton.Stats
+	30, // 18: glutton.StepResult.children:type_name -> glutton.StepResult
+	2,  // 19: glutton.Glutton.WriteRAM:input_type -> glutton.WriteRAMRequest
+	4,  // 20: glutton.Glutton.ReadRAM:input_type -> glutton.ReadRAMRequest
+	6,  // 21: glutton.Glutton.WriteDisk:input_type -> glutton.WriteDiskRequest
+	8,  // 22: glutton.Glutton.ReadDisk:input_type -> glutton.ReadDiskRequest
+	10, // 23: glutton.Glutton.OpenFD:input_type -> glutton.OpenFDRequest
+	12, // 24: glutton.Glutton.Ping:input_type -> glutton.PingRequest
+	14, // 25: glutton.Glutton.Gossip:input_type -> glutton.GossipRequest
+	17, // 26: glutton.Glutton.BurnCPU:input_type -> glutton.BurnCPURequest
+	19, // 27: glutton.Glutton.Ingest:input_type -> glutton.IngestRequest
+	21, // 28: glutton.Glutton.UseCPU:input_type -> glutton.UseCPURequest
+	28, // 29: glutton.Glutton.RunScript:input_type -> glutton.RunScriptRequest
+	3,  // 30: glutton.Glutton.WriteRAM:output_type -> glutton.WriteRAMResponse
+	5,  // 31: glutton.Glutton.ReadRAM:output_type -> glutton.ReadRAMResponse
+	7,  // 32: glutton.Glutton.WriteDisk:output_type -> glutton.WriteDiskResponse
+	9,  // 33: glutton.Glutton.ReadDisk:output_type -> glutton.ReadDiskResponse
+	11, // 34: glutton.Glutton.OpenFD:output_type -> glutton.OpenFDResponse
+	13, // 35: glutton.Glutton.Ping:output_type -> glutton.PingResponse
+	15, // 36: glutton.Glutton.Gossip:output_type -> glutton.GossipResponse
+	18, // 37: glutton.Glutton.BurnCPU:output_type -> glutton.BurnCPUResponse
+	20, // 38: glutton.Glutton.Ingest:output_type -> glutton.IngestResponse
+	22, // 39: glutton.Glutton.UseCPU:output_type -> glutton.UseCPUResponse
+	29, // 40: glutton.Glutton.RunScript:output_type -> glutton.RunScriptResponse
+	30, // [30:41] is the sub-list for method output_type
+	19, // [19:30] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_glutton_proto_init() }
@@ -1387,13 +2125,26 @@ func file_glutton_proto_init() {
 		return
 	}
 	file_glutton_proto_msgTypes[19].OneofWrappers = []any{}
+	file_glutton_proto_msgTypes[22].OneofWrappers = []any{
+		(*Step_Block)(nil),
+		(*Step_Operation)(nil),
+	}
+	file_glutton_proto_msgTypes[24].OneofWrappers = []any{
+		(*Request_WriteRam)(nil),
+		(*Request_ReadRam)(nil),
+		(*Request_WriteDisk)(nil),
+		(*Request_ReadDisk)(nil),
+		(*Request_BurnCpu)(nil),
+		(*Request_Ingest)(nil),
+		(*Request_Sleep)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_glutton_proto_rawDesc), len(file_glutton_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   21,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
