@@ -407,6 +407,7 @@ func TestMetricLabelValues(t *testing.T) {
 		{SnapshotPhaseDownload, "download"},
 		{SnapshotPhaseOCIUnpack, "oci_unpack"},
 		{SnapshotPhaseAteomRestore, "ateom_restore"},
+		{SnapshotPhaseSandboxRecord, "sandbox_record"},
 		{SnapshotPhaseAteomCheckpoint, "ateom_checkpoint"},
 		{SnapshotPhasePersist, "persist"},
 		{SnapshotPhaseTotal, "total"},
