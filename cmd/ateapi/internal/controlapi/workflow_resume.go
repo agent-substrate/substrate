@@ -127,8 +127,9 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	}
 	actor = assigned
 	if len(borrowedVolumeRefs(actor)) > 0 {
-		if _, err = claimSharedVolumes(leaseCtx, w.store, actor); err != nil {
-			return nil, false, err
+		mounts, claimErr := claimSharedVolumes(leaseCtx, w.store, actor)
+		if claimErr != nil {
+			return nil, false, claimErr
 		}
 
 		// After claiming, never release ownership until node access is gone.
@@ -138,6 +139,12 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 			}
 			err = errors.Join(err, w.releaseFailedResumeClaims(leaseCtx, actorRef, actor, actorTemplate))
 		}()
+		// Attachment uses the current driver context, not metadata frozen at create.
+		updated, updateErr := w.store.UpdateActor(leaseCtx, actorRef, store.PreconditionFrom(actor), func(a *ateapipb.Actor) error { a.Status.ExternalVolumes = mounts; return nil })
+		if updateErr != nil {
+			return nil, false, updateErr
+		}
+		actor = updated
 	}
 	volumePublishContexts, err := w.ensureVolumesAttached(leaseCtx, actor, worker, actorTemplate)
 	if err != nil {

@@ -513,7 +513,6 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
 		return err
 	}
-	maybeDropStagedMemoryImage(ctx, restoreDir, memMode, preserveRestoreDir)
 	s.publishActorApplication(ctx, p, ra, ctrs)
 
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",

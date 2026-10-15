@@ -80,7 +80,7 @@ func (s *ServiceImpl) ListSharedVolumes(ctx context.Context, atespace string, op
 	return s.store.ListSharedVolumes(ctx, atespace, opts)
 }
 
-var errSharedVolumePending = errors.New("shared volume is still being created")
+var errSharedVolumeNotReady = errors.New("shared volume is not ready for updates")
 
 func (s *RPCService) UpdateSharedVolume(ctx context.Context, req *ateapipb.UpdateSharedVolumeRequest) (*ateapipb.SharedVolume, error) {
 	inVolume := req.SharedVolume
@@ -96,7 +96,7 @@ func (s *RPCService) UpdateSharedVolume(ctx context.Context, req *ateapipb.Updat
 
 	stored, err := s.impl.UpdateSharedVolume(ctx, volumeRef, store.PreconditionFrom(in), func(toUpdate *ateapipb.SharedVolume) error {
 		if toUpdate.GetStatus().GetState() != ateapipb.SharedVolumeState_SHARED_VOLUME_STATE_READY {
-			return errSharedVolumePending
+			return errSharedVolumeNotReady
 		}
 		metadata, volumeStatus := toUpdate.GetMetadata(), toUpdate.GetStatus()
 		proto.Reset(toUpdate)
@@ -106,8 +106,8 @@ func (s *RPCService) UpdateSharedVolume(ctx context.Context, req *ateapipb.Updat
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, errSharedVolumePending) {
-			return nil, apierror.FailedPrecondition("SharedVolume %s is still being created", volumeRef)
+		if errors.Is(err, errSharedVolumeNotReady) {
+			return nil, apierror.FailedPrecondition("SharedVolume %s is not ready for updates", volumeRef)
 		}
 		if errors.Is(err, store.ErrImmutableField) || errors.Is(err, store.ErrPreconditionRequired) {
 			return nil, apierror.InvalidArgument("while updating shared volume %s: %v", volumeRef, err)

@@ -146,7 +146,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	hosted := s.lookupActor(actorUID)
 
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
-	// either way ateom owns it and tracks its api-socket.
+	// either way ateworker owns it and tracks its api-socket.
 	chSocket := kata.CLHSocketPath(actorUID)
 	if ra != nil && ra.apiSocket != "" {
 		chSocket = ra.apiSocket
