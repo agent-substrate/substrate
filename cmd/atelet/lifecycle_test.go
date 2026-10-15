@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -27,11 +28,13 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -244,7 +247,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 		t.Fatalf("pause did not write the local snapshot: %v", err)
 	}
 
-	// Resume: restores from that local snapshot.
+	// Resume: no Snapshot.Object; atelet must find that local snapshot.
 	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
@@ -454,7 +457,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 		{name: "Run partial reset removes registration", failure: "reset", wantErr: "while removing volume dir"},
 		{name: "Run record failure removes registration", failure: "record", wantErr: "while recording sandbox assets"},
 		{name: "Restore partial reset removes registration", restore: true, failure: "reset", wantErr: "while removing volume dir"},
-		{name: "Restore manifest failure removes registration", restore: true, failure: "manifest", wantErr: "while reading local snapshot manifest"},
+		{name: "Restore manifest failure removes registration", restore: true, failure: "manifest", wantErr: "no snapshot.object to fall back to"},
 		{name: "Restore asset failure removes registration", restore: true, failure: "asset", wantErr: "asset unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -674,6 +677,234 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	}
 	if got := refresher.actors[actorUID]; got != nil {
 		t.Fatalf("failed Restore left its owned registration live: %p", got)
+	}
+}
+
+// TestRestorePrefersLocalAndFallsBackToObjectStorage checks that Restore reads
+// a usable node-local checkpoint in place even when snapshot.object is also
+// populated, and falls back to staging from snapshot.object when the local copy
+// is absent or unusable (corrupt manifest, missing listed file, or non-regular
+// file).
+func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
+	const (
+		atespace     = "ate-demo"
+		actorName    = "counter"
+		actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
+		workerPodUID = "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
+		snapshotName = "pause-snap-1"
+	)
+
+	ateom := &fakeAteom{snapshotFiles: map[string]string{"checkpoint.img": ""}}
+	serveFakeAteom(t, ateom)
+
+	host := imageVolumeTestRegistry(t)
+	pinnedImage := pushTestImage(t, host+"/actor:v1", singleFileLayer(t, "bin/app", "app"))
+
+	runsc := []byte("runsc binary")
+	assetHash := fmt.Sprintf("%x", sha256.Sum256(runsc))
+	sandboxAssets := &ateletpb.SandboxAssets{
+		SandboxClass: "gvisor",
+		PauseImage:   pinnedImage,
+		Assets: map[string]*ateletpb.ArchAssets{
+			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+				runscAssetName: {
+					Url:    "gs://test-bucket/runsc",
+					Sha256: assetHash,
+				},
+			}},
+		},
+	}
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
+	}
+	manifestRec := sandboxAssetsRecord{
+		SandboxClass:  "gvisor",
+		PauseImage:    pinnedImage,
+		Assets:        map[string]assetEntry{runscAssetName: {URL: "gs://test-bucket/runsc", SHA256: assetHash}},
+		SnapshotFiles: []string{"checkpoint.img"},
+	}
+
+	// Upload a committed copy to object storage once; every subtest restores
+	// with snapshot.object pointing at it.
+	objStore := &recordingObjectStorage{}
+	s := newPluginHerder(t, objStore)
+	s.ateomDialer = newAteomDialer(1)
+	s.imageCache = newImageVolumeStore(t)
+	s.anonGCSClient = fakeObjectStorage{data: runsc}
+	s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
+
+	uri, err := resources.ParseSnapshotURI(pausedSnapshotURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteSrcDir := t.TempDir()
+	writeLocalSnapshot(t, remoteSrcDir, manifestRec, map[string]string{"checkpoint.img": "object-storage-memory"})
+	if err := s.uploadSnapshot(t.Context(), uri, remoteSrcDir, &manifestRec, "default", "counter"); err != nil {
+		t.Fatalf("uploadSnapshot: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		prepLocal func(t *testing.T, localDir string)
+		wantLocal bool
+	}{{
+		name: "usable local copy is preferred over object storage",
+		prepLocal: func(t *testing.T, localDir string) {
+			writeLocalSnapshot(t, localDir, manifestRec, map[string]string{"checkpoint.img": "local-memory"})
+		},
+		wantLocal: true,
+	}, {
+		name:      "absent local copy falls back to object storage",
+		prepLocal: func(*testing.T, string) {},
+		wantLocal: false,
+	}, {
+		name: "local copy with missing listed file falls back to object storage",
+		prepLocal: func(t *testing.T, localDir string) {
+			writeLocalSnapshot(t, localDir, manifestRec, nil)
+		},
+		wantLocal: false,
+	}, {
+		name: "local copy with corrupt manifest falls back to object storage",
+		prepLocal: func(t *testing.T, localDir string) {
+			if err := os.MkdirAll(localDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(localDir, sandboxManifestName), []byte("{not-json"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		wantLocal: false,
+	}, {
+		name: "local copy with symlinked snapshot file falls back to object storage",
+		prepLocal: func(t *testing.T, localDir string) {
+			writeLocalSnapshot(t, localDir, manifestRec, nil)
+			target := filepath.Join(t.TempDir(), "outside.img")
+			if err := os.WriteFile(target, []byte("outside"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, filepath.Join(localDir, "checkpoint.img")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		wantLocal: false,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			localDir := ateletpath.LocalSnapshotDir(actorUID, snapshotName)
+			tc.prepLocal(t, localDir)
+
+			if _, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				WorkerPodUid:          workerPodUID,
+				SandboxAssets:         sandboxAssets,
+				Spec:                  spec,
+				Snapshot: &ateletpb.Snapshot{
+					SnapshotUuid: snapshotName,
+					Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					Object:       &ateletpb.ObjectStorage{SnapshotUri: pausedSnapshotURI},
+				},
+			}); err != nil {
+				t.Fatalf("Restore: %v", err)
+			}
+
+			wantContent := "object-storage-memory"
+			wantRestoreDir := ateletpath.RestoreStateDir(actorUID)
+			if tc.wantLocal {
+				wantContent = "local-memory"
+				wantRestoreDir = localDir
+			}
+			if got := ateom.restored["checkpoint.img"]; got != wantContent {
+				t.Errorf("restored checkpoint.img = %q, want %q", got, wantContent)
+			}
+			if ateom.preserveRestoreDir != tc.wantLocal {
+				t.Errorf("RestoreWorkload preserve_restore_dir = %v, want %v", ateom.preserveRestoreDir, tc.wantLocal)
+			}
+			if got := ateom.actorDirs["RestoreWorkload"].GetRestoreDir(); got != wantRestoreDir {
+				t.Errorf("RestoreWorkload restore_dir = %q, want %q", got, wantRestoreDir)
+			}
+			if tc.wantLocal {
+				if entries, err := os.ReadDir(ateletpath.RestoreStateDir(actorUID)); err != nil || len(entries) != 0 {
+					t.Errorf("RestoreStateDir entries = %v, err = %v; want empty on local restore", entries, err)
+				}
+			}
+		})
+	}
+}
+
+// TestRestoreWithoutUsableLocalCopy checks that a Restore with no usable local
+// copy and nothing to fall back to fails as NotFound and wraps the local
+// copy's problem, whether the request has no snapshot.object or names one that
+// was never uploaded.
+func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
+	const (
+		actorUID     = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a65"
+		snapshotName = "pause-snap-1"
+	)
+	assetHash := fmt.Sprintf("%x", sha256.Sum256([]byte("runsc binary")))
+	assets := &ateletpb.SandboxAssets{
+		SandboxClass: "gvisor", PauseImage: testPauseImage,
+		Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+			runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
+		}}},
+	}
+	for _, tc := range []struct {
+		name string
+		// unusableLocal writes a manifest that lists a file that is not there.
+		unusableLocal bool
+		object        *ateletpb.ObjectStorage
+		wantErr       string
+		wantCause     error
+	}{{
+		name:      "no local copy and no object",
+		wantErr:   "no snapshot.object to fall back to",
+		wantCause: os.ErrNotExist,
+	}, {
+		name:          "unusable local copy and no object",
+		unusableLocal: true,
+		wantErr:       "no snapshot.object to fall back to",
+		wantCause:     errUnusableLocalSnapshot,
+	}, {
+		name:          "unusable local copy and an object never uploaded",
+		unusableLocal: true,
+		object:        &ateletpb.ObjectStorage{SnapshotUri: pausedSnapshotURI},
+		wantErr:       "no uploaded copy",
+		wantCause:     errUnusableLocalSnapshot,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			if tc.unusableLocal {
+				writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
+					SandboxClass: "gvisor", PauseImage: testPauseImage, SnapshotFiles: []string{"checkpoint.img"},
+				}, nil)
+			}
+			// The object store is empty: nothing was ever uploaded.
+			s := newPluginHerder(t, &recordingObjectStorage{})
+			s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
+			_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
+				Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID,
+				WorkerPodUid:  "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+				SandboxAssets: assets,
+				Spec:          &ateletpb.WorkloadSpec{},
+				Snapshot: &ateletpb.Snapshot{
+					SnapshotUuid: snapshotName,
+					Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					Object:       tc.object,
+				},
+			})
+			if code := apierror.Code(err); code != codes.NotFound {
+				t.Fatalf("Restore error = %v (code %v), want NotFound", err, code)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("Restore error = %v, want it to say %q", err, tc.wantErr)
+			}
+			if !errors.Is(err, tc.wantCause) {
+				t.Errorf("Restore error = %v, want it to wrap %v", err, tc.wantCause)
+			}
+		})
 	}
 }
 

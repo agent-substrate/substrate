@@ -553,10 +553,8 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 
-	// TODO(authz): Authorization layer needs to check whether the caller has
-	// the mintActorJWT permission/relation with this actor.  This could be an
-	// atelet (via the relationship of the atelet running the actor), or the
-	// egress gateway (via a cluster-level grant?)
+	// With authz enforced, the interceptor requires can_mint_actor_jwt on the
+	// actor, which only the egress gateway holds.
 
 	// Verify that this actor exists in the store.  It doesn't need to be
 	// running, since we may need to issue JWTs during actor boot / resume.
@@ -577,8 +575,9 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 	now := time.Now().Truncate(time.Second)
 	expiresAt := now.Add(time.Duration(req.GetExpirationSeconds()) * time.Second)
 	actorClaims := &actoridjwt.Claims{
+		Kind:       actoridjwt.KindActor,
 		Issuer:     s.actorJWTIssuer,
-		Subject:    fmt.Sprintf("actor/%s/%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
+		Subject:    fmt.Sprintf("%s/%s/%s", actoridjwt.KindActor.SubjectPrefix(), dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
 		Audiences:  req.GetAudiences(),
 		Expiration: expiresAt,
 		NotBefore:  now.Add(-5 * time.Minute),
@@ -608,10 +607,8 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 
-	// TODO(authz): Authorization layer needs to check whether the caller has
-	// the mintActorCertificate permission/relation with this actor.    This
-	// could be an atelet (via the relationship of the atelet running the
-	// actor), or the egress gateway (via a cluster-level grant?)
+	// With authz enforced, the interceptor requires can_mint_actor_certificate
+	// on the actor, which only the egress gateway holds.
 
 	// Check that the caller authenticated with a client certificate --- we
 	// should not allow bootstrapping a proof-of-possession credential from a

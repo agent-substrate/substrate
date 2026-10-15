@@ -126,8 +126,10 @@ message CopySnapshotResponse {}
 // every node, next to NodeProvider, to serve sandbox runtime assets (the files
 // a SandboxConfig names, such as a micro-VM kernel and guest image). atelet
 // calls it for every asset. It reads a gs:// asset anonymously only if the
-// plugin returns NOT_FOUND, INVALID_ARGUMENT, UNIMPLEMENTED or UNAVAILABLE for
-// it; any other failure is final.
+// plugin returns NOT_FOUND, INVALID_ARGUMENT, UNIMPLEMENTED, UNAVAILABLE or
+// INTERNAL for it; any other failure is final. A plugin should return INTERNAL
+// only for failures it does not recognize, since atelet then tries the asset
+// anonymously.
 //
 // An asset is pinned by its sha256, so the plugin hands back an object only if
 // the caller already knows its content. The plugin must also refuse to read

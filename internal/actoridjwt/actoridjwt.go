@@ -20,7 +20,53 @@ import (
 	"time"
 )
 
+// Kind is who a token speaks for. The two kinds carry the same fields but
+// under different subjects and claim names, so a relying party can tell an
+// actor's own code from a Substrate component acting on the actor's behalf
+// and grant them different access.
+type Kind int
+
+const (
+	// KindUnspecified is the zero value. ClaimsToWire rejects it, so a Claims
+	// that forgets to set Kind cannot mint a token of either kind.
+	KindUnspecified Kind = iota
+	// KindActor is the actor itself. Subject "actor/<atespace>/<name>",
+	// claims under "actor.ate.dev".
+	KindActor
+	// KindAteomForActor is an ateom, or another Substrate component, acting
+	// on behalf of the actor. Subject "ateom-for-actor/<atespace>/<name>",
+	// claims under "ateom-for-actor.ate.dev".
+	KindAteomForActor
+)
+
+// SubjectPrefix is the first segment of the sub claim for this kind.
+func (k Kind) SubjectPrefix() string {
+	switch k {
+	case KindActor:
+		return "actor"
+	case KindAteomForActor:
+		return "ateom-for-actor"
+	}
+	return ""
+}
+
+// ClaimName is the JWT claim the Substrate fields are stored under for this
+// kind.
+func (k Kind) ClaimName() string {
+	switch k {
+	case KindActor:
+		return "actor.ate.dev"
+	case KindAteomForActor:
+		return "ateom-for-actor.ate.dev"
+	}
+	return ""
+}
+
 type Claims struct {
+	// Kind selects the subject prefix and the claim name the Substrate
+	// fields are stored under.
+	Kind Kind
+
 	// Claims from RFC7519
 	Issuer     string
 	Subject    string
@@ -50,8 +96,22 @@ type WireClaims struct {
 	IssuedAt   float64         `json:"iat,omitempty"`
 	JTI        string          `json:"jti,omitempty"`
 
-	// Claims from ADK's session model.
-	Substrate WireSubstrateClaims `json:"ate.dev,omitempty"`
+	// Substrate claims, under the claim name for the token's kind. Exactly
+	// one is set.
+	Actor         *WireSubstrateClaims `json:"actor.ate.dev,omitempty"`
+	AteomForActor *WireSubstrateClaims `json:"ateom-for-actor.ate.dev,omitempty"`
+}
+
+// Substrate returns the token's kind and its Substrate claims, or ok false if
+// the token carries neither claim or both.
+func (w *WireClaims) Substrate() (kind Kind, claims *WireSubstrateClaims, ok bool) {
+	switch {
+	case w.Actor != nil && w.AteomForActor == nil:
+		return KindActor, w.Actor, true
+	case w.AteomForActor != nil && w.Actor == nil:
+		return KindAteomForActor, w.AteomForActor, true
+	}
+	return 0, nil, false
 }
 
 type WireSubstrateClaims struct {
@@ -74,11 +134,19 @@ func ClaimsToWire(claims *Claims) (*WireClaims, error) {
 		NotBefore:  float64(claims.NotBefore.Unix()),
 		IssuedAt:   float64(claims.IssuedAt.Unix()),
 		JTI:        claims.JTI,
-		Substrate: WireSubstrateClaims{
-			Atespace:  claims.Substrate.Atespace,
-			ActorName: claims.Substrate.ActorName,
-			ActorUID:  claims.Substrate.ActorUID,
-		},
+	}
+	substrate := &WireSubstrateClaims{
+		Atespace:  claims.Substrate.Atespace,
+		ActorName: claims.Substrate.ActorName,
+		ActorUID:  claims.Substrate.ActorUID,
+	}
+	switch claims.Kind {
+	case KindActor:
+		wire.Actor = substrate
+	case KindAteomForActor:
+		wire.AteomForActor = substrate
+	default:
+		return nil, fmt.Errorf("token kind %d is not one of KindActor or KindAteomForActor", claims.Kind)
 	}
 
 	return wire, nil

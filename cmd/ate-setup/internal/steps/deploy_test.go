@@ -15,9 +15,13 @@
 package steps
 
 import (
+	"errors"
+	"io/fs"
 	"path/filepath"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
@@ -164,6 +168,28 @@ func TestRouterMonitoringManifest(t *testing.T) {
 	}
 	if len(objs) != 1 || objs[0].GetKind() != "PodMonitoring" || objs[0].GetNamespace() != "ate-system" {
 		t.Errorf("manifest holds %v, want one PodMonitoring in ate-system", objs)
+	}
+}
+
+// Upgrading from a release that predates a signer pool: deploying the
+// controller alone has to create the missing pool before the new pod needs it.
+// The manifest root is empty, so the deploy stops at rendering, after the pools.
+func TestDeployPodCertificateControllerCreatesMissingCAs(t *testing.T) {
+	e := &Env{
+		Cfg:  &config.Config{Root: t.TempDir()},
+		Kube: fakeKube(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespacePodCert}}),
+	}
+	if err := e.CreatePodCertificateControllerCAs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Kube.Typed.CoreV1().Secrets(NamespacePodCert).Delete(t.Context(), SecretPostgresCA, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DeployPodCertificateController(t.Context()); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("DeployPodCertificateController = %v, want the render error for the missing manifest", err)
+	}
+	if _, err := e.Kube.Typed.CoreV1().Secrets(NamespacePodCert).Get(t.Context(), SecretPostgresCA, metav1.GetOptions{}); err != nil {
+		t.Errorf("%s/%s after DeployPodCertificateController: %v", NamespacePodCert, SecretPostgresCA, err)
 	}
 }
 

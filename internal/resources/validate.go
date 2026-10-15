@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/volumepath"
+	"github.com/agent-substrate/substrate/pkg/sandboxclass"
 	"github.com/distribution/reference"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -142,6 +143,15 @@ func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, supported []ate
 		names = append(names, f.String())
 	}
 	return field.ErrorList{field.NotSupported(fldPath, fidelity, names)}
+}
+
+// ValidateSandboxClass requires one of the sandboxclass values. An empty value
+// is left to the required tag.
+func ValidateSandboxClass(fldPath *field.Path, value string) field.ErrorList {
+	if value == "" || sandboxclass.Valid(value) {
+		return nil
+	}
+	return field.ErrorList{field.NotSupported(fldPath, value, sandboxclass.All())}
 }
 
 func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {

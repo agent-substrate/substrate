@@ -52,7 +52,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 			StorageLocation: "gs://snapshots",
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			SandboxClass: "gvisor",
 			ConfigName:   "gvisor",
 		},
 	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {

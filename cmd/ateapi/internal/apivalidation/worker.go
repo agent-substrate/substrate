@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
@@ -81,6 +82,18 @@ func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateapipb.Reque
 	return Validate_RequestActorSuspendRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateMarkWorkerAvailableRequest(ctx context.Context, req *ateapipb.MarkWorkerAvailableRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_MarkWorkerAvailableRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateMarkWorkerUnavailableRequest(ctx context.Context, req *ateapipb.MarkWorkerUnavailableRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_MarkWorkerUnavailableRequest(ctx, op, nil, req, nil)
+}
+
 func ValidateReportActorSnapshotStateRequest(ctx context.Context, req *ateapipb.ReportActorSnapshotStateRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
 	return Validate_ReportActorSnapshotStateRequest(ctx, op, nil, req, nil)
@@ -100,6 +113,14 @@ func ValidateWorkerUpdate(ctx context.Context, fldPath *field.Path, newVal, oldV
 		errs = append(errs, validate.RequiredPointer(ctx, op, fldPath.Child("status"), newVal.GetStatus(), nil)...)
 	}
 	return errs
+}
+
+func ValidateCustom_Worker_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateSandboxClass(fldPath, *value)
+}
+
+func ValidateCustom_SandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateSandboxClass(fldPath, *value)
 }
 
 // This is needed because DV doesn't have a standard format for IP addresses yet.

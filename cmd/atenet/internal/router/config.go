@@ -323,8 +323,9 @@ func (c routerConfig) validate() error {
 		return fmt.Errorf("--extproc-max-requests (%d) must be >= --parked-request-max (%d): a circuit breaker below the parking lot silently truncates it with Envoy-generated 503s",
 			c.ExtProcMaxRequests, c.ParkedRequest.Max)
 	}
-	if c.UpstreamConnect && c.UpstreamCredentialBundlePath == "" {
-		return fmt.Errorf("--upstream-connect requires --upstream-credential-bundle: atunnel's CONNECT listener accepts only mTLS")
+	// Only the Envoy ingress router uses this flag; agentgateway always uses CONNECT.
+	if c.UpstreamConnect && c.UpstreamCredentialBundlePath == "" && c.Mode.ServesIngress() && c.atenetRouter() == atenetRouterEnvoy {
+		return fmt.Errorf("--upstream-connect (on by default) requires --upstream-credential-bundle: atunnel's CONNECT listener accepts only mTLS. Set --upstream-connect=false to dial atunnel without it")
 	}
 	if c.EgressPolicyCacheTTL < 0 {
 		return fmt.Errorf("--egress-policy-cache-ttl must not be negative, got %s (0 disables the cache)", c.EgressPolicyCacheTTL)

@@ -45,6 +45,12 @@ service AteomSupport {
   // would need: the control plane answers this by driving a suspend back
   // through atelet into the calling ateom.
   rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse) {}
+
+  // GetActorEgressPolicy returns the egress policy of the actor this
+  // worker hosts, which atelet reads from the control plane's
+  // Control.GetActorEgressPolicy. An error is the control plane's, passed
+  // through as it was given.
+  rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (GetActorEgressPolicyResponse) {}
 }
 
 message RegisterWorkerRequest {
@@ -78,6 +84,7 @@ message SandboxRuntime {
   //
   // +k8s:required
   // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
   string sandbox_class = 1;
 
   // Primary compatibility version stamped onto an actor's snapshot when a
@@ -203,6 +210,71 @@ message RequestActorSuspendRequest {
 
 message RequestActorSuspendResponse {
 }
+
+message GetActorEgressPolicyRequest {
+  // The actor the calling worker is hosting. atelet reads its policy from the
+  // control plane by name.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_atespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_name = 2;
+}
+
+message GetActorEgressPolicyResponse {
+  // The actor's policy, copied from the control plane's. Unset if the actor
+  // has no policy, which denies all of its egress, DNS included.
+  EgressPolicy egress_policy = 1;
+}
+
+// EgressPolicy is the part of the control plane's EgressPolicy that a worker
+// enforces itself: which destinations each rule allows. The resource metadata
+// and the rules' effects are left out; only the egress gateway applies them,
+// so the credentials they refer to never reach the worker.
+message EgressPolicy {
+  // Rules are an unordered set of allows, as in the control plane's policy.
+  repeated EgressRule rules = 1;
+}
+
+// EgressRule mirrors the control plane's EgressRule: exactly one field is set,
+// naming the rule's protocol. A rule with none set has a protocol this copy
+// does not carry yet, and allows nothing.
+message EgressRule {
+  // Cleartext HTTP to the named hosts.
+  EgressDestinations http = 1;
+
+  // HTTPS to the named hosts, intercepted by the egress gateway.
+  EgressDestinations https = 2;
+
+  // TLS to the named servers, forwarded without decryption.
+  EgressDestinations tls_passthrough = 3;
+}
+
+// EgressDestinations is the hostnames and ports a rule allows, copied from the
+// control plane's HTTPRule, HTTPSRule, or TLSPassthroughRule.
+message EgressDestinations {
+  // Hostnames as the control plane's rule has them, wildcards included.
+  repeated string hostnames = 1;
+
+  // The ports the rule allows, with the control plane's defaults applied.
+  EgressPorts ports = 2;
+}
+
+// EgressPorts mirrors the control plane's Ports: either all ports, or the
+// listed numbers.
+message EgressPorts {
+  // Set if the rule allows every port.
+  EgressAllPorts all = 1;
+
+  // The port numbers the rule allows, when all is unset.
+  repeated int32 numbers = 2;
+}
+
+// EgressAllPorts marks a rule as allowing every port.
+message EgressAllPorts {}
 
 message MintActorCertificateRequest {
   // The actor for which the certificate should be issued.
@@ -420,9 +492,6 @@ message ArchAssets {
 // atelet's backend code interprets the asset names (gVisor expects "gvisor",
 // the release tarball; legacy "runsc", a bare binary, is still accepted).
 message SandboxAssets {
-  // TODO: send this as an enum, like ateapi's and ateom's SandboxClass, so
-  // the tags can bound it and the custom validation goes away.
-  //
   // +k8s:required
   // +k8s:maxLength=63 # guardrail; the class names are a few characters
   // +k8s:customValidation # gvisor or microvm
@@ -837,8 +906,7 @@ message Snapshot {
   // usable local copy.
   //
   // TODO: Temporarily, this is optional while we haven't implemented deferred
-  // uploads. Restore also uses its presence to choose between the local copy
-  // and object storage; see RestoreRequest.snapshot.
+  // uploads.
   //
   // +k8s:optional
   ObjectStorage object = 4;
@@ -1022,9 +1090,9 @@ message RestoreRequest {
   // detaching the actor, it waits for the detach to finish and then reads
   // `snapshot.object`. Fails if neither copy exists: that generation is lost.
   //
-  // TODO: Temporarily, whether `snapshot.object` is set chooses the copy:
-  // atelet reads only the local copy when it is unset, and only
-  // `snapshot.object` when it is set, with no fallback either way.
+  // TODO: Temporarily, the control plane does not set `snapshot.object` when
+  // it restores a paused actor, so atelet has nothing to fall back to if that
+  // actor's local copy is missing or unusable.
   //
   // +k8s:required
   Snapshot snapshot = 8;
