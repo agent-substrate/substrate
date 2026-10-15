@@ -366,16 +366,18 @@ func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 		{
 			// MintWorkerActorJwt serves a paused actor's checkpoint node. No
 			// worker runs a paused actor, so no worker gets its certificate.
-			name:   "paused actor on this node",
-			ctx:    authed,
-			status: pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"),
-			want:   codes.NotFound,
+			name:        "paused actor on this node",
+			ctx:         authed,
+			status:      pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"),
+			assignments: released,
+			want:        codes.NotFound,
 		},
 		{
-			name:   "paused actor being suspended on this node",
-			ctx:    authed,
-			status: pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "node-1"),
-			want:   codes.NotFound,
+			name:        "paused actor being suspended on this node",
+			ctx:         authed,
+			status:      pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "node-1"),
+			assignments: released,
+			want:        codes.NotFound,
 		},
 		{
 			// Resume binds the worker in the store before it writes the
@@ -390,19 +392,21 @@ func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 			want:        codes.NotFound,
 		},
 		{
-			name:   "paused actor on another node",
-			ctx:    authed,
-			status: pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-2"),
-			want:   codes.NotFound,
+			name:        "paused actor on another node",
+			ctx:         authed,
+			status:      pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-2"),
+			assignments: released,
+			want:        codes.NotFound,
 		},
 		{
 			// An empty worker name must not match a paused actor's empty
 			// assignment.
-			name:   "paused actor, empty worker name",
-			ctx:    authed,
-			status: pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"),
-			mutate: func(r *ateapipb.MintWorkerActorCertificateRequest) { r.Worker.Name = "" },
-			want:   codes.InvalidArgument,
+			name:        "paused actor, empty worker name",
+			ctx:         authed,
+			status:      pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"),
+			assignments: released,
+			mutate:      func(r *ateapipb.MintWorkerActorCertificateRequest) { r.Worker.Name = "" },
+			want:        codes.InvalidArgument,
 		},
 		{
 			// A crash clears the worker but leaves assigned_node on the last
