@@ -170,7 +170,8 @@ a task, edit the catalog and regenerate:
 SWEPERF=benchmarking/workloads/manifests/sweperf
 python3 -m venv "${SWEPERF}/venv" && "${SWEPERF}/venv/bin/pip" install -r "${SWEPERF}/requirements.txt"
 "${SWEPERF}/venv/bin/python" "${SWEPERF}/generate_sweperf_templates.py" '*'
-hack/verify/sweperf-templates.sh   # fail if generated/ is missing or stale; runs the unit tests
+"${SWEPERF}/venv/bin/python" "${SWEPERF}/generate_sweperf_templates.py" --check   # fail if generated/ is missing or stale
+hack/verify/benchmarking-python.sh   # unit tests, as CI runs them
 ```
 
 Deploy a task and the sweperf user class:
