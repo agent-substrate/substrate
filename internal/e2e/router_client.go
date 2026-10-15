@@ -137,6 +137,14 @@ func (c *RouterClient) request(ctx context.Context, method string, actorRef reso
 // egress side. The caller owns the returned connection and must Close it;
 // the underlying port-forward is torn down by RouterClient.Close.
 func (c *RouterClient) Connect(ctx context.Context, actorRef resources.ActorRef, port int) (net.Conn, error) {
+	return c.ConnectWithHeaders(ctx, actorRef, port, http.Header{
+		atenet.TargetActorHeader: []string{actorRef.String()},
+	})
+}
+
+// ConnectWithHeaders is like Connect but allows specifying custom headers on
+// the outer CONNECT request (e.g. testing repeated or missing headers).
+func (c *RouterClient) ConnectWithHeaders(ctx context.Context, actorRef resources.ActorRef, port int, header http.Header) (net.Conn, error) {
 	if err := c.ensureConnectPortForward(ctx); err != nil {
 		return nil, err
 	}
@@ -151,9 +159,7 @@ func (c *RouterClient) Connect(ctx context.Context, actorRef resources.ActorRef,
 		Method: http.MethodConnect,
 		URL:    &url.URL{Host: destination},
 		Host:   destination,
-		Header: http.Header{
-			atenet.TargetActorHeader: []string{actorRef.String()},
-		},
+		Header: header,
 	}
 	if err := req.Write(rawConn); err != nil {
 		_ = rawConn.Close()

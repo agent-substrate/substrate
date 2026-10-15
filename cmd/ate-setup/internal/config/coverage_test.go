@@ -90,6 +90,8 @@ func valueFor(key string) string {
 		return RouterEnvoy
 	case "clusterSize":
 		return ClusterSizeSize0
+	case "ingressAuthMode":
+		return IngressAuthStaticMTLS
 	case "ateapi.postgres.cloudsql.ipType":
 		return CloudSQLIPTypePSC
 	case "atenet.egress.additionalExtprocService":
@@ -98,8 +100,12 @@ func valueFor(key string) string {
 		return `{"name":"k8s.io"}`
 	case "actorJWT.algorithm":
 		return "ES256"
+	case "actorJWT.issuer":
+		return "https://idp.example.com"
 	case "csi.setup":
 		return "none"
+	case "preview":
+		return "ALL"
 	}
 	return "set"
 }

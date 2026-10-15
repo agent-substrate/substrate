@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +42,34 @@ const (
 // control plane workload to its own node, layered over every control plane
 // apply under --cordon-control-plane.
 const cordonControlPlaneComponent = installDir + "/components/cordon-control-plane"
+
+// fakeDataPlaneComponent is the kustomize component that puts fake-atelet in
+// atelet's DaemonSet and fake-workersync in place of ate-controller, layered
+// over the atelet and ate-controller applies under --fake-data-plane.
+const fakeDataPlaneComponent = installDir + "/components/fake-data-plane"
+
+// routerStaticMTLSComponent is the kustomize component that switches the
+// ingress router to --ingress-auth-mode=static-mtls, layered over every
+// control plane apply under --ingress-auth-mode=static-mtls.
+const routerStaticMTLSComponent = installDir + "/components/router-static-mtls"
+
+// components lists the kustomize components every control plane apply is
+// composed with. Each patch targets its workloads by name, and kustomize leaves
+// a stream alone when nothing in it matches, so composing a manifest that
+// carries none of them is harmless.
+func (e *Env) components() []string {
+	var components []string
+	if e.Cfg.FakeDataPlane {
+		components = append(components, e.Cfg.Path(fakeDataPlaneComponent))
+	}
+	if e.Cfg.IngressAuthMode == config.IngressAuthStaticMTLS {
+		components = append(components, e.Cfg.Path(routerStaticMTLSComponent))
+	}
+	if e.Cfg.CordonControlPlane {
+		components = append(components, e.Cfg.Path(cordonControlPlaneComponent))
+	}
+	return components
+}
 
 // SystemOverlay picks the kustomization for a full control plane install.
 //
@@ -63,16 +93,12 @@ func SystemOverlay(cfg *config.Config) string {
 	}
 }
 
-// render emits the manifests at path, an absolute manifest file or
-// kustomization directory, before image resolution. Under
-// --cordon-control-plane it composes path with the cordon-control-plane
-// component, so the same node pinning reaches every control plane workload
-// whichever apply path delivers it. The component's patch has a name-regex
-// target and kustomize leaves a stream alone when nothing in it matches, so
-// wrapping a manifest that carries none of those workloads is harmless.
+// kustomization directory, before image resolution. It composes path with the
+// selected components (see components), so the same patches reach every
+// control plane workload whichever apply path delivers it.
 func (e *Env) render(path string) ([]byte, error) {
-	if e.Cfg.CordonControlPlane {
-		return kustomize.Compose(path, e.Cfg.Path(cordonControlPlaneComponent))
+	if components := e.components(); len(components) > 0 {
+		return kustomize.Compose(path, components...)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -90,8 +116,8 @@ func (e *Env) render(path string) ([]byte, error) {
 
 // renderBytes is render for a manifest already held in memory.
 func (e *Env) renderBytes(manifest []byte) ([]byte, error) {
-	if e.Cfg.CordonControlPlane {
-		return kustomize.ComposeBytes(manifest, e.Cfg.Path(cordonControlPlaneComponent))
+	if components := e.components(); len(components) > 0 {
+		return kustomize.ComposeBytes(manifest, components...)
 	}
 	return manifest, nil
 }
@@ -117,7 +143,11 @@ func (e *Env) renderResolveApply(ctx context.Context, path string) error {
 // renderSystemManifests produces the full control plane manifest with all
 // image references resolved.
 func (e *Env) renderSystemManifests(ctx context.Context) ([]byte, error) {
-	return e.renderResolve(ctx, e.Cfg.Path(SystemOverlay(e.Cfg)))
+	manifest, err := e.render(e.Cfg.Path(SystemOverlay(e.Cfg)))
+	if err != nil {
+		return nil, err
+	}
+	return e.ResolveManifestBytes(ctx, manifest)
 }
 
 // renderAtenetRouterManifest produces the atenet router manifest for the
@@ -179,11 +209,58 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.Cr
 		return nil, err
 	}
 	raw = e.patchEnvoyDataplaneImage(raw, imageReference)
+	if e.Cfg.EnvoyConcurrency > 0 {
+		raw, err = patchAtenetEgressEnvoyConcurrency(raw, e.Cfg.EnvoyConcurrency)
+		if err != nil {
+			return nil, err
+		}
+	}
 	rendered, err := e.renderBytes(raw)
 	if err != nil {
 		return nil, err
 	}
 	return e.ResolveManifestBytes(ctx, rendered)
+}
+
+// patchAtenetEgressEnvoyConcurrency uses a kustomize JSON6902 patch to append
+// --concurrency <concurrency> to the envoy container's args in the
+// atenet-egress Deployment.
+func patchAtenetEgressEnvoyConcurrency(raw []byte, concurrency int) ([]byte, error) {
+	dir, err := os.MkdirTemp("", "ate-setup-kustomize-")
+	if err != nil {
+		return nil, fmt.Errorf("while creating a scratch kustomization: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), raw, 0o600); err != nil {
+		return nil, fmt.Errorf("while staging a manifest for kustomize: %w", err)
+	}
+	kustomization := fmt.Sprintf(`apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - manifest.yaml
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: atenet-egress
+      namespace: ate-system
+    patch: |-
+      - op: test
+        path: /spec/template/spec/containers/0/name
+        value: envoy
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --concurrency
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: %q
+`, strconv.Itoa(concurrency))
+	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(kustomization), 0o600); err != nil {
+		return nil, fmt.Errorf("while writing a scratch kustomization: %w", err)
+	}
+	return kustomize.Build(dir)
 }
 
 // patchEnvoyDataplaneImage replaces the ${ENVOY_DATAPLANE_IMAGE} placeholder in
@@ -438,7 +515,7 @@ const otelEndpointKey = "OTEL_EXPORTER_OTLP_ENDPOINT"
 
 // otelOverrideDeployments are the control plane Deployments that read
 // ate-otel-config. ate-controller additionally copies the values onto the
-// ateom worker pods it creates, so one patch reaches the whole system.
+// worker pods it creates, so one patch reaches the whole system.
 var otelOverrideDeployments = []string{"ate-api-server", "ate-controller", "atenet-router"}
 
 // applyOtelEndpointOverride points all control plane telemetry at a different
@@ -480,16 +557,5 @@ func (e *Env) applyOtelEndpointOverride(ctx context.Context) error {
 			return err
 		}
 	}
-	// atelet DaemonSet names carry a version suffix; restart whichever
-	// versions are installed.
-	daemonSets, err := e.Kube.DaemonSetNames(ctx, e.Namespace(), "app=atelet")
-	if err != nil {
-		return err
-	}
-	for _, name := range daemonSets {
-		if err := e.Kube.RolloutRestart(ctx, e.Namespace(), name, now); err != nil {
-			return err
-		}
-	}
-	return nil
+	return e.Kube.RolloutRestart(ctx, e.Namespace(), "atelet", now)
 }

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package actorlog provides structured JSON logging for actor sandboxes shared
-// by the gVisor and micro-VM ateom runtimes. It forwards an actor container's
+// by the gVisor and micro-VM worker runtimes. It forwards an actor container's
 // stdout/stderr to the worker pod's stdout, annotated with the ate.* identity
 // labels from internal/ateattr, and emits synthetic actor lifecycle events.
 //
@@ -73,12 +73,9 @@ const (
 	labelsKeyGCE   = "logging.googleapis.com/labels"
 )
 
-// LabelsKey returns the label group's spelling for this environment. Every
-// emitter of the actor-identity label group (container logs, lifecycle
-// events, usage events) must pick its key here, so they all promote into
-// Cloud Logging the same way -- and so going vendor-neutral later means
-// changing one function.
-func LabelsKey(isOnGCE bool) string {
+// labelsKeyFor returns the label group's spelling for this environment, so
+// going vendor-neutral later means changing one function.
+func labelsKeyFor(isOnGCE bool) string {
 	if isOnGCE {
 		return labelsKeyGCE
 	}
@@ -89,7 +86,7 @@ func LabelsKey(isOnGCE bool) string {
 func NewActorLogger(w io.Writer, isOnGCE bool) *ActorLogger {
 	return &ActorLogger{
 		writer:    w,
-		labelsKey: LabelsKey(isOnGCE),
+		labelsKey: labelsKeyFor(isOnGCE),
 	}
 }
 

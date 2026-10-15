@@ -19,14 +19,14 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 // ControlPlugin serves ControlProvider on an object store.
 type ControlPlugin struct {
-	objectstoresnapshotv1.UnimplementedControlProviderServer
+	objectstorev1.UnimplementedControlProviderServer
 
 	store objectstore.Store
 }
@@ -37,7 +37,7 @@ func NewControlPlugin(store objectstore.Store) *ControlPlugin {
 }
 
 // CleanupSnapshot deletes every object under the given prefix.
-func (p *ControlPlugin) CleanupSnapshot(ctx context.Context, req *objectstoresnapshotv1.CleanupSnapshotRequest) (*objectstoresnapshotv1.CleanupSnapshotResponse, error) {
+func (p *ControlPlugin) CleanupSnapshot(ctx context.Context, req *objectstorev1.CleanupSnapshotRequest) (*objectstorev1.CleanupSnapshotResponse, error) {
 	prefix, err := resources.ParseStoragePrefix(req.GetSnapshotUri())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -45,11 +45,11 @@ func (p *ControlPlugin) CleanupSnapshot(ctx context.Context, req *objectstoresna
 	if err := objectstore.DeletePrefix(ctx, p.store, prefix); err != nil {
 		return nil, toStatus(err)
 	}
-	return &objectstoresnapshotv1.CleanupSnapshotResponse{}, nil
+	return &objectstorev1.CleanupSnapshotResponse{}, nil
 }
 
 // CopySnapshot copies every object of src_uri to dst_uri.
-func (p *ControlPlugin) CopySnapshot(ctx context.Context, req *objectstoresnapshotv1.CopySnapshotRequest) (*objectstoresnapshotv1.CopySnapshotResponse, error) {
+func (p *ControlPlugin) CopySnapshot(ctx context.Context, req *objectstorev1.CopySnapshotRequest) (*objectstorev1.CopySnapshotResponse, error) {
 	src, err := resources.ParseStoragePrefix(req.GetSrcUri())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -61,5 +61,5 @@ func (p *ControlPlugin) CopySnapshot(ctx context.Context, req *objectstoresnapsh
 	if err := objectstore.CopyPrefix(ctx, p.store, src, dst); err != nil {
 		return nil, toStatus(err)
 	}
-	return &objectstoresnapshotv1.CopySnapshotResponse{}, nil
+	return &objectstorev1.CopySnapshotResponse{}, nil
 }

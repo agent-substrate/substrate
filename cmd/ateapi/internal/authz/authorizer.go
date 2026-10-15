@@ -37,12 +37,25 @@ type Authorizer struct {
 	// AccessPolicy, cannot be revoked through the API, and lose access once
 	// the server runs without them in its configuration.
 	bootstrapOwners map[string]struct{}
+
+	// systemPrincipals maps the OpenFGA user strings of Substrate's own
+	// components to the system roles they hold on global:root. Like
+	// bootstrapOwners they are contextual tuples, but they only apply to
+	// principals authenticated over mTLS.
+	//
+	// TODO: consider storing system grants as tuples, written from the
+	// configuration at startup, so they are visible through the API. That
+	// needs principal IDs qualified by authentication method, so a stored
+	// tuple can't match a JWT subject, and AccessPolicy reconciliation
+	// limited to its own relations, so it doesn't delete them.
+	systemPrincipals map[string][]string
 }
 
 // Check verifies that the principal in ctx has relation on object.
-// Structural hierarchy links (global:root as parent_global of every atespace,
-// and each atespace as parent_atespace of its actors and actor templates) and
-// the caller's bootstrap owner grant, if any, are injected as OpenFGA
+// Structural hierarchy links (global:root as parent_global of every atespace
+// and worker, and each atespace as parent_atespace of its actors, actor
+// templates and tags) and
+// the caller's bootstrap owner and system role grants, if any, are injected as OpenFGA
 // ContextualTuples at evaluation time rather than persisted in the tuple table.
 func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 	if IsBypassed(ctx) {
@@ -56,7 +69,17 @@ func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 		return apierror.Unauthenticated("unauthenticated: missing principal in context")
 	}
 	user := formatUser(p.ID)
-	allowed, err := a.checkRaw(ctx, user, relation, object)
+	var grants []*openfgav1.TupleKey
+	if p.Kind == principal.KindMTLS {
+		for _, role := range a.systemPrincipals[user] {
+			grants = append(grants, &openfgav1.TupleKey{
+				User:     user,
+				Relation: role,
+				Object:   GlobalRootObject,
+			})
+		}
+	}
+	allowed, err := a.checkRaw(ctx, user, relation, object, grants...)
 	if err != nil {
 		return err
 	}
@@ -66,8 +89,11 @@ func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 	return nil
 }
 
-func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string) (bool, error) {
-	tuples := contextualTuples(object)
+// checkRaw reports whether user has relation on object. Besides the stored
+// tuples, OpenFGA evaluates these as contextual tuples: object's structural
+// parent links, user's bootstrap owner grant if configured, and grants.
+func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string, grants ...*openfgav1.TupleKey) (bool, error) {
+	tuples := append(contextualTuples(object), grants...)
 	// A Check only evaluates the caller, so only the caller's own bootstrap
 	// grant can affect the result.
 	if _, ok := a.bootstrapOwners[user]; ok {
@@ -103,21 +129,22 @@ func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string
 // tuples in PostgreSQL.
 //
 // Why contextual tuples are used instead of storing parent links in the database:
-//  1. Deterministic structure: Every `atespace:<name>` unconditionally has
-//     `global:root` as its `parent_global`, and every `actor:<atespace>/<name>`
-//     and `actor_template:<atespace>/<name>` has `atespace:<atespace>` as its
-//     `parent_atespace`. Because these relationships are derived purely from the
-//     object type/ID, storing a row per resource in the OpenFGA `tuple` table
-//     would be redundant.
-//  2. No write amplification on create: `CreateAtespace`, `CreateActorTemplate`,
-//     and `CreateActor` can insert their rows without opening an OpenFGA write
-//     transaction just to link the parent.
+//  1. Deterministic structure: Every `atespace:<name>` and `worker:<name>`
+//     unconditionally has `global:root` as its `parent_global`, and every
+//     `actor:<atespace>/<name>`, `actor_template:<atespace>/<name>` and
+//     `tag:<atespace>/<name>` has `atespace:<atespace>` as its
+//     `parent_atespace`. Because these
+//     relationships are derived purely from the object type/ID, storing a row
+//     per resource in the OpenFGA `tuple` table would be redundant.
+//  2. No write amplification on create: `CreateAtespace`, `CreateWorker`,
+//     `CreateActorTemplate`, `CreateActor` and `CreateTag` can insert their rows without
+//     opening an OpenFGA write transaction just to link the parent.
 func contextualTuples(object string) []*openfgav1.TupleKey {
 	objectType, id, _ := strings.Cut(object, ":")
 	switch objectType {
-	case "atespace":
+	case "atespace", "worker":
 		return []*openfgav1.TupleKey{parentGlobalTuple(object)}
-	case "actor", "actor_template":
+	case "actor", "actor_template", "tag":
 		atespace, _, ok := strings.Cut(id, "/")
 		if !ok {
 			return nil
@@ -132,11 +159,12 @@ func contextualTuples(object string) []*openfgav1.TupleKey {
 	return nil
 }
 
-// parentGlobalTuple links an atespace object to global:root.
-func parentGlobalTuple(atespaceObject string) *openfgav1.TupleKey {
+// parentGlobalTuple links a global-scoped object (an atespace or a worker) to
+// global:root.
+func parentGlobalTuple(object string) *openfgav1.TupleKey {
 	return &openfgav1.TupleKey{
 		User:     GlobalRootObject,
 		Relation: "parent_global",
-		Object:   atespaceObject,
+		Object:   object,
 	}
 }

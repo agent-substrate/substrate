@@ -46,9 +46,16 @@ func TestUpdateTemplateLifecycle(t *testing.T) {
 			name:     "preferredFidelity:MEMORY",
 			fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
+		{
+			name:     "preferredFidelity:ROOTFS",
+			fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			if test.fidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS && !e2e.IsMicroVM() {
+				t.Skipf("Skipping %s: only the micro-VM runtime serves this fidelity", test.name)
+			}
 			t.Parallel()
 			runUpdateTemplateTestCase(t, test.fidelity)
 		})
@@ -118,6 +125,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 			t.Fatalf("failed to call actor (call %d): %v", i, err)
 		}
 		validateCounterResponse(t, resp, "under template A", i, i)
+		validateRootfsCounter(t, resp, "under template A", i)
 	}
 
 	//
@@ -138,10 +146,10 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	if err != nil {
 		t.Fatalf("failed to get suspended Actor: %v", err)
 	}
-	if got, want := suspended.GetStatus().GetExternalSnapshot().GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
+	if got, want := durableSnapshot(suspended.GetStatus()).GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
 		t.Errorf("suspended Actor external_snapshot.actor_template_uid = %q, want template A's %q", got, want)
 	}
-	if suspended.GetStatus().GetExternalSnapshot().GetSnapshotUri() == "" {
+	if durableSnapshotURI(suspended.GetStatus()) == "" {
 		t.Error("suspended Actor has no external snapshot")
 	}
 	if wa := suspended.GetStatus().GetWorkerAssignment(); wa != nil {
@@ -184,22 +192,25 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 		t.Fatalf("failed to call actor after template update: %v", err)
 	}
 	validateCounterResponse(t, resp, "after template update", 1, 3)
+	// The repoint drops the restore to VOLUMES whatever the snapshot holds:
+	// a rootfs upper is only valid over the image it was written on.
+	validateRootfsCounter(t, resp, "after template update", 1)
 	if want := "file content: 3"; !strings.Contains(resp, want) {
 		t.Errorf("[after template update] expected %q (template B validating the preserved file), got response: %s", want, resp)
 	}
 
-	// Pause under template B while status.external_snapshot still holds the last
-	// committed snapshot from template A. Resuming from PAUSED restores the
+	// Pause under template B while status.snapshots still holds the last
+	// committed snapshot from template A. Resuming from pause restores the
 	// local checkpoint (which was captured under template B, since templates
 	// can only be updated while SUSPENDED) and preserves the in-memory counter
-	// when preferredFidelity is FULL.
+	// when preferredFidelity is MEMORY.
 	t.Logf("Pausing Actor %q under template B...", actorID)
 	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("failed to pause Actor under template B: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorPaused(ctx, t, clients, actorID)
 
 	paused, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
@@ -207,7 +218,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	if err != nil {
 		t.Fatalf("failed to get paused Actor: %v", err)
 	}
-	if got, want := paused.GetStatus().GetExternalSnapshot().GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
+	if got, want := durableSnapshot(paused.GetStatus()).GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
 		t.Errorf("paused Actor external_snapshot.actor_template_uid = %q, want template A's %q", got, want)
 	}
 
@@ -223,11 +234,18 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	if err != nil {
 		t.Fatalf("failed to call actor after pause/resume under template B: %v", err)
 	}
-	wantMemAfterPause := 2
-	if fidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+	// The pause snapshot was captured under B, so it restores at its own
+	// fidelity: MEMORY keeps both counters, ROOTFS keeps the rootfs one, and
+	// VOLUMES neither.
+	wantMemAfterPause, wantRootfsAfterPause := 2, 2
+	switch fidelity {
+	case ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		wantMemAfterPause, wantRootfsAfterPause = 1, 1
+	case ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 		wantMemAfterPause = 1
 	}
 	validateCounterResponse(t, resp, "after pause/resume under template B", wantMemAfterPause, 4)
+	validateRootfsCounter(t, resp, "after pause/resume under template B", wantRootfsAfterPause)
 
 	// Revert while running under template B: the actor goes back to SUSPENDED
 	// at the external snapshot it still holds, which is template A's. The spec
@@ -248,15 +266,15 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	}
 	// Resume prefers a local checkpoint over the external snapshot, so one
 	// surviving here would hide the repoint the next resume has to detect.
-	if got := revertedStatus.GetLocalSnapshot(); got != nil {
-		t.Errorf("reverted Actor local_snapshot = %v, want cleared", got)
+	if hasLocalSnapshot(revertedStatus) {
+		t.Errorf("reverted Actor local_snapshot present in %v, want cleared", revertedStatus.GetSnapshots())
 	}
 	// The two halves of the mismatch the next resume has to spot: the spec
 	// names B, the snapshot it would restore was captured under A.
 	if got := reverted.GetActor().GetActorTemplate().GetName(); got != nameB {
 		t.Errorf("reverted Actor actor_template = %q, want %q", got, nameB)
 	}
-	if got, want := revertedStatus.GetExternalSnapshot().GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
+	if got, want := durableSnapshot(revertedStatus).GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
 		t.Errorf("reverted Actor external_snapshot.actor_template_uid = %q, want template A's %q", got, want)
 	}
 
@@ -278,6 +296,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	// and this call takes it to 3 -- the same value the first resume under B
 	// produced, now reached a second time from the same snapshot.
 	validateCounterResponse(t, resp, "after revert under template B", 1, 3)
+	validateRootfsCounter(t, resp, "after revert under template B", 1)
 	if want := "file content: 3"; !strings.Contains(resp, want) {
 		t.Errorf("[after revert under template B] expected %q (template B reading the rewound file), got response: %s", want, resp)
 	}
@@ -298,7 +317,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	if err != nil {
 		t.Fatalf("failed to get re-suspended Actor: %v", err)
 	}
-	if got, want := suspended.GetStatus().GetExternalSnapshot().GetActorTemplateUid(), createdB.GetMetadata().GetUid(); got != want {
+	if got, want := durableSnapshot(suspended.GetStatus()).GetActorTemplateUid(), createdB.GetMetadata().GetUid(); got != want {
 		t.Errorf("re-suspended Actor external_snapshot.actor_template_uid = %q, want template B's %q", got, want)
 	}
 }

@@ -32,7 +32,7 @@ To enable validation of reading from an external volume (e.g.
 `/external-data/test.txt`), run:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-counter-with-external-volume
+./hack/install-ate.sh --deploy-demo-counter-with-external-volume --preview=ExternalVolumes
 ```
 
 This command will:
@@ -140,8 +140,12 @@ prioritizing it, not a fundamental limitation of the design.
 ## Micro-VM variant
 
 The same in-RAM-counter suspend/resume-continuity demo also runs on the micro-VM
-sandbox class (`ateom-microvm`: a Kata guest on Cloud Hypervisor), proving that
+sandbox class (`ateworker-microvm`: a Kata guest on Cloud Hypervisor), proving that
 the guest-memory snapshot round-trips just as gVisor's process snapshot does.
+The micro-VM class is also the one that serves `SNAPSHOT_FIDELITY_ROOTFS`, a
+snapshot of the volumes and each container's rootfs writes without guest
+memory; this template keeps `MEMORY` because the in-RAM counter is the point of
+the demo.
 
 - [`demos/counter/counter-microvm.yaml.tmpl`](counter-microvm.yaml.tmpl) —
   the `WorkerPool` for the micro-VM sandbox class.
@@ -175,6 +179,17 @@ Then create an actor (`--template counter-microvm`, in the
 it, resume it (even on a different worker), and confirm the count continues —
 the actor's counter lives in guest RAM, so a continuing count proves the
 guest-memory snapshot survived the round trip.
+
+## Settings
+
+The installer reads these settings in addition to those in
+[docs/operator-install.md](../../docs/operator-install.md#settings), through the same
+flag, environment variable, and configuration document channels.
+
+| Key                               | Environment variable                    | Flag                     | Default    | Applies to            |
+|-----------------------------------|-----------------------------------------|--------------------------|------------|-----------------------|
+| `demo.counter.storageClass`       | `STORAGE_CLASS`                         | `--storage-class`        | `standard` | `deploy demo counter` |
+| `demo.counter.withExternalVolume` | `ATE_DEMO_COUNTER_WITH_EXTERNAL_VOLUME` | `--with-external-volume` | `false`    | `deploy demo counter` |
 
 ## How to Uninstall
 

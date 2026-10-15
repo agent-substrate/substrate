@@ -46,7 +46,7 @@ func TestBrokerCertificateSourceMintsAndReusesKey(t *testing.T) {
 	defer cancel()
 
 	for range 2 {
-		if _, err := source.MintAteomCertificate(ctx); err != nil {
+		if _, err := source.MintWorkerCertificate(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -59,7 +59,7 @@ func TestBrokerCertificateSourceMintsAndReusesKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantURI := "spiffe://substrate-actor.local/ateom/actor/actor-atespace/actor-name"
+	wantURI := "spiffe://substrate-actor.local/worker/actor/actor-atespace/actor-name"
 	if len(cert.Leaf.URIs) != 1 || cert.Leaf.URIs[0].String() != wantURI {
 		t.Fatalf("cert.Leaf.URIs = %v, want [%s]", cert.Leaf.URIs, wantURI)
 	}
@@ -69,7 +69,7 @@ func TestBrokerCertificateSourceRejectsAteletOnDifferentNode(t *testing.T) {
 	source, _ := newTestBrokerCertificateSource(t, testAteletIdentity("node-b"), time.Hour)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := source.MintAteomCertificate(ctx); err == nil || !strings.Contains(err.Error(), "not on worker node") {
+	if _, err := source.MintWorkerCertificate(ctx); err == nil || !strings.Contains(err.Error(), "not on worker node") {
 		t.Fatalf("Mint() error = %v, want node identity rejection", err)
 	}
 }
@@ -78,19 +78,19 @@ func TestBrokerCertificateSourceRejectsExpiredCertificate(t *testing.T) {
 	source, _ := newTestBrokerCertificateSource(t, testAteletIdentity("node-a"), -time.Minute)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := source.MintAteomCertificate(ctx); err == nil || !strings.Contains(err.Error(), "invalid actor certificate lifetime") {
+	if _, err := source.MintWorkerCertificate(ctx); err == nil || !strings.Contains(err.Error(), "invalid actor certificate lifetime") {
 		t.Fatalf("Mint() error = %v, want expired certificate rejection", err)
 	}
 }
 
-type ateomSupportStub struct {
-	ateletpb.UnimplementedAteomSupportServer
+type workerSupportStub struct {
+	ateletpb.UnimplementedWorkerSupportServer
 	ca         *testCA
 	lifetime   time.Duration
 	publicKeys chan []byte
 }
 
-func (s *ateomSupportStub) MintActorCertificate(_ context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
+func (s *workerSupportStub) MintActorCertificate(_ context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
 	if req.GetActorUid() != "actor-uid" {
 		return nil, status.Error(codes.FailedPrecondition, "unexpected actor UID")
 	}
@@ -105,7 +105,7 @@ func (s *ateomSupportStub) MintActorCertificate(_ context.Context, req *ateletpb
 		URIs: []*url.URL{{
 			Scheme: "spiffe",
 			Host:   "substrate-actor.local",
-			Path:   path.Join("ateom", "actor", req.GetActorAtespace(), req.GetActorName()),
+			Path:   path.Join("worker", "actor", req.GetActorAtespace(), req.GetActorName()),
 		}},
 		NotBefore:   now.Add(-time.Minute),
 		NotAfter:    now.Add(s.lifetime),
@@ -120,18 +120,18 @@ func (s *ateomSupportStub) MintActorCertificate(_ context.Context, req *ateletpb
 	return &ateletpb.MintActorCertificateResponse{ActorCertificates: [][]byte{der}}, nil
 }
 
-func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.PodIdentity, lifetime time.Duration) (*BrokerCertificateSource, *ateomSupportStub) {
+func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.PodIdentity, lifetime time.Duration) (*BrokerCertificateSource, *workerSupportStub) {
 	t.Helper()
 	ca := newTestCA(t)
 	workerCert := issueTestPodCertificate(t, ca, &substratex509.PodIdentity{
 		Namespace:          "ate-demo",
-		ServiceAccountName: "ateom",
-		ServiceAccountUID:  "ateom-sa-uid",
+		ServiceAccountName: "worker",
+		ServiceAccountUID:  "worker-sa-uid",
 		PodName:            "worker",
 		PodUID:             "worker-uid",
 		NodeName:           "node-a",
 		NodeUID:            "node-uid",
-	}, "spiffe://cluster.local/ns/ate-demo/sa/ateom", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
+	}, "spiffe://cluster.local/ns/ate-demo/sa/worker", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
 	ateletCert := issueTestPodCertificate(t, ca, ateletIdentity,
 		"spiffe://cluster.local/ns/ate-system/sa/atelet", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
 
@@ -163,8 +163,8 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    clientCAs,
 	})))
-	broker := &ateomSupportStub{ca: ca, lifetime: lifetime, publicKeys: make(chan []byte, 2)}
-	ateletpb.RegisterAteomSupportServer(server, broker)
+	broker := &workerSupportStub{ca: ca, lifetime: lifetime, publicKeys: make(chan []byte, 2)}
+	ateletpb.RegisterWorkerSupportServer(server, broker)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() {
 		server.Stop()

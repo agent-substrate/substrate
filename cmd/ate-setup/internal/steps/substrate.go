@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -26,13 +27,19 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// AteClient connects to the ate-api-server, port-forwarding if needed.
+// AteClient connects to the ate-api-server, port-forwarding if needed. It
+// opts in to preview features if the install enables any.
 func (e *Env) AteClient(ctx context.Context) (*ateclient.Client, error) {
-	return ateclient.NewClient(ctx, e.Cfg.Kubeconfig, e.Cfg.Context, "", "", false)
+	var opts []grpc.DialOption
+	if len(e.Cfg.PreviewGates) > 0 {
+		opts = preview.DialOptionsWithOptIn()
+	}
+	return ateclient.NewClient(ctx, e.Cfg.Kubeconfig, e.Cfg.Context, "", "", false, opts...)
 }
 
 // EnsureAtespace creates the atespace if it does not already exist. The store
@@ -85,7 +92,8 @@ func CreateActorTemplate(ctx context.Context, client *ateclient.Client, template
 }
 
 // WaitActorTemplateGolden blocks until the template's golden snapshot is
-// built. It fails fast when the template reconciler reports an error.
+// built. It fails fast when the template reconciler reports an error, and
+// returns immediately for a template that opted out of the golden snapshot.
 func WaitActorTemplateGolden(ctx context.Context, client *ateclient.Client, ref resources.ActorTemplateRef, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	// The last Get error rides along in the timeout error: a wait that spent
@@ -96,6 +104,11 @@ func WaitActorTemplateGolden(ctx context.Context, client *ateclient.Client, ref 
 		template, err := client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: ref.ToObjectRef()})
 		lastErr = err
 		if err == nil {
+			if template.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+				// The template opted out: no golden snapshot will ever appear,
+				// and none is needed.
+				return nil
+			}
 			goldenStatus := template.GetStatus().GetGoldenSnapshotStatus()
 			if goldenStatus.GetGoldenTag().GetName() != "" {
 				return nil

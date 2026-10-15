@@ -177,11 +177,11 @@ func TestRecordPhasesSkipsZeroPhases(t *testing.T) {
 		snapshotOp{fidelity: ateattr.SnapshotFidelityMemory},
 		phase{ateattr.SnapshotPhaseManifestFetch, 50 * time.Millisecond},
 		phase{ateattr.SnapshotPhaseDownload, 2 * time.Second},
-		phase{ateattr.SnapshotPhaseAteomRestore, 0},
+		phase{ateattr.SnapshotPhaseWorkerRestore, 0},
 		phase{ateattr.SnapshotPhaseTotal, 2 * time.Second})
 
 	byPhase := phaseValues(t, collectHistogram(t, reader, restoreDurationMetric))
-	if _, ok := byPhase[ateattr.SnapshotPhaseAteomRestore]; ok {
+	if _, ok := byPhase[ateattr.SnapshotPhaseWorkerRestore]; ok {
 		t.Error("a phase that never started was recorded as a zero observation")
 	}
 	if len(byPhase) != 3 {
@@ -281,51 +281,47 @@ func TestAssetsAfterCollateral(t *testing.T) {
 
 func TestRestoreSnapshotKind(t *testing.T) {
 	tests := []struct {
-		name string
-		req  *ateletpb.RestoreRequest
-		rec  *sandboxAssetsRecord
-		want string
+		name        string
+		directLocal bool
+		rec         *sandboxAssetsRecord
+		want        string
 	}{
 		{
-			name: "local pause snapshot",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL},
-			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
-			want: ateattr.SnapshotKindLocal,
+			name:        "restored from the local copy",
+			directLocal: true,
+			rec:         &sandboxAssetsRecord{Atespace: "team-a"},
+			want:        ateattr.SnapshotKindLocal,
 		},
 		{
-			name: "local restore is classifiable before the manifest is read",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL},
-			rec:  nil,
-			want: ateattr.SnapshotKindLocal,
+			name:        "a golden actor's snapshot served locally is still local",
+			directLocal: true,
+			rec:         &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
+			want:        ateattr.SnapshotKindLocal,
 		},
 		{
 			name: "external snapshot written by a golden actor",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
 			rec:  &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
 			want: ateattr.SnapshotKindGolden,
 		},
 		{
 			name: "external snapshot written by a tenant actor",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
 			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
 			want: ateattr.SnapshotKindLatest,
 		},
 		{
 			name: "manifest predating the identity fields",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
 			rec:  &sandboxAssetsRecord{},
 			want: ateattr.SnapshotKindLatest,
 		},
 		{
 			name: "external kind is unknowable until the manifest is read",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
 			rec:  nil,
 			want: "",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := restoreSnapshotKind(tt.req, tt.rec); got != tt.want {
+			if got := restoreSnapshotKind(tt.directLocal, tt.rec); got != tt.want {
 				t.Errorf("restoreSnapshotKind() = %q, want %q", got, tt.want)
 			}
 		})
@@ -333,6 +329,8 @@ func TestRestoreSnapshotKind(t *testing.T) {
 }
 
 func TestCheckpointSnapshotKind(t *testing.T) {
+	deferred := &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED}
+	immediate := &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE}
 	tests := []struct {
 		name string
 		req  *ateletpb.CheckpointRequest
@@ -340,22 +338,22 @@ func TestCheckpointSnapshotKind(t *testing.T) {
 	}{
 		{
 			name: "pause writes the node-local snapshot",
-			req:  &ateletpb.CheckpointRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL, Atespace: "team-a"},
+			req:  &ateletpb.CheckpointRequest{UploadConfig: deferred, Atespace: "team-a"},
 			want: ateattr.SnapshotKindLocal,
 		},
 		{
 			name: "suspend writes the actor's durable snapshot",
-			req:  &ateletpb.CheckpointRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL, Atespace: "team-a"},
+			req:  &ateletpb.CheckpointRequest{UploadConfig: immediate, Atespace: "team-a"},
 			want: ateattr.SnapshotKindLatest,
 		},
 		{
 			name: "a golden actor's commit writes the template's golden",
-			req:  &ateletpb.CheckpointRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL, Atespace: resources.GoldenActorAtespace},
+			req:  &ateletpb.CheckpointRequest{UploadConfig: immediate, Atespace: resources.GoldenActorAtespace},
 			want: ateattr.SnapshotKindGolden,
 		},
 		{
 			name: "a local checkpoint in the golden atespace is still local",
-			req:  &ateletpb.CheckpointRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL, Atespace: resources.GoldenActorAtespace},
+			req:  &ateletpb.CheckpointRequest{UploadConfig: deferred, Atespace: resources.GoldenActorAtespace},
 			want: ateattr.SnapshotKindLocal,
 		},
 	}

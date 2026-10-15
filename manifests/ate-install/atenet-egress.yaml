@@ -74,6 +74,8 @@ data:
           # ipv4_compat rather than a second socket: IPv4 peers arrive as
           # ::ffff: and nothing here reads the peer -- identity is the cert.
           socket_address: { address: "::", ipv4_compat: true, port_value: 443 }
+        # Limit single I/O read to 64 Kb to prevent overly active actors from starving other actors.
+        per_connection_buffer_limit_bytes: 65535
         filter_chains:
         # Named so ext_proc can read it back as xds.filter_chain_name. Must
         # match EgressFilterChainName in
@@ -85,6 +87,7 @@ data:
               "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
               require_client_certificate: true
               common_tls_context:
+                alpn_protocols: ["h2", "http/1.1"]
                 # Gateway server identity (servicedns signer), via filesystem
                 # SDS: watched_directory only works on SDS-delivered secrets,
                 # so an inline cert would never pick up kubelet's rotation.
@@ -106,9 +109,15 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: egress_connect
-              # mitm_internal's pool per downstream connection is a pool per
-              # tunnel only while each connection carries one CONNECT.
-              codec_type: HTTP1
+              common_http_protocol_options:
+                # Set low idle timeout for connections, as atunnel does close tunnels from deleted actors.
+                idle_timeout: 30s
+              http2_protocol_options:
+                # 100 streams per connection provides good balance between connection sharing and worker load.
+                max_concurrent_streams: 100
+                # Set windows sizes to values that balance throughput and memory usage.
+                initial_stream_window_size: 1048576
+                initial_connection_window_size: 1048576
               upgrade_configs:
               - upgrade_type: CONNECT
               # TODO(liorlieberman): Can we make this cleaner?
@@ -161,7 +170,7 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
                   on_request_headers:
                   - object_key: dev.ate.actor.identity
-                    factory_key: envoy.string
+                    factory_key: envoy.hashable_string
                     shared_with_upstream: ONCE
                     skip_if_empty: true
                     format_string:
@@ -173,7 +182,7 @@ data:
                   # The IP:port the actor dialed, for the request legs to match a
                   # rule's ports against: a port in a request's Host is not it.
                   - object_key: dev.ate.connect.authority
-                    factory_key: envoy.string
+                    factory_key: envoy.hashable_string
                     shared_with_upstream: ONCE
                     skip_if_empty: true
                     format_string:
@@ -225,6 +234,12 @@ data:
                       untyped:
                       - dev.ate.egress
                       - dev.ate.policy.egress
+              - name: envoy.filters.http.dynamic_modules
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter
+                  dynamic_module_config:
+                    name: envoy_substrate_egress_policy
+                  filter_name: envoy_substrate_egress_policy_store
               # The CONNECT leg's answers, copied into filter state shared with
               # the inner listener. Must stay after ext_proc.
               - name: envoy.filters.http.set_filter_state
@@ -242,15 +257,15 @@ data:
                       text_format_source:
                         inline_string: "%DYNAMIC_METADATA(dev.ate.egress:dialed_port)%"
                       omit_empty_values: true
-                  # SNI rules for the egress-policy module. If absent, all TLS
-                  # is denied.
-                  - object_key: dev.ate.policy.egress
-                    factory_key: envoy.string
+                  # Workaround for dynamic module inability to store filter state that is shared with the upstream.
+                  # TODO(yanavlasov): Remove after Envoy v1.40 is released.
+                  - object_key: dev.ate.policy.egress.hash
+                    factory_key: envoy.hashable_string
                     skip_if_empty: true
                     shared_with_upstream: ONCE
                     format_string:
                       text_format_source:
-                        inline_string: "%DYNAMIC_METADATA(dev.ate.policy.egress)%"
+                        inline_string: "%FILTER_STATE(dev.ate.policy.egress.hash.not_shared:PLAIN)%"
                       omit_empty_values: true
               - name: envoy.filters.http.router
                 typed_config:
@@ -377,13 +392,12 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: mitm_http
-              # Absent this, Envoy answers an Upgrade request itself instead of
-              # proxying it, so every WebSocket through this leg fails at the
-              # handshake. Note it covers the HTTP/1.1 path only; WebSockets over
-              # h2 are RFC 8441 extended CONNECT and would additionally need
-              # http2_protocol_options.allow_connect.
+              # The egress request filter returns the explanatory 403. Keep
+              # the HCM default disabled as a defense if a request ever gets
+              # past that decision.
               upgrade_configs:
               - upgrade_type: websocket
+                enabled: false
               # Disable stream_idle_timeout as there is already an overall timeout in the outer tunnel in the HCM.
               stream_idle_timeout: 0s
               # This is the leg that knows where the traffic actually went.
@@ -420,32 +434,15 @@ data:
                 - name: all
                   domains: ["*"]
                   routes:
-                  # Upgrade is what cannot cross an h2 upstream: forwarding one
-                  # needs RFC 8441 extended CONNECT, which almost no origin
-                  # advertises. So the default route below stays pinned to
-                  # HTTP/1.1, which every origin accepts, rather than letting
-                  # upstream ALPN choose -- ALPN takes h2 against nearly
-                  # everything today, and every WebSocket then fails with a 502.
-                  #
-                  # gRPC is the one thing that default cannot serve: its status
-                  # rides in trailers, which HTTP/1.1 cannot express.
-                  # content-type is how it opts out. The prefix also catches
-                  # application/grpc-web, which is deliberate --
-                  # egress_forward_proxy_grpc reads its protocol from upstream
-                  # ALPN, so a grpc-web endpoint that only speaks HTTP/1.1 still
-                  # gets HTTP/1.1.
-                  #
-                  # The cost of the pinned default is that non-gRPC h2 traffic
-                  # is downgraded and its trailers dropped silently. Nothing
-                  # sends those today. If that changes, invert this: match on
-                  # the `upgrade` header, pin that route to HTTP/1.1, and let
-                  # everything else negotiate.
-                  #
-                  # Each of the two exists once per dial the sidecar answers
-                  # with (dev.ate.egress:dial), and there is no default: a
-                  # request it did not answer for has no route. A by-name
+                  # There is no default route: the initial route lookup cannot
+                  # match before ext_proc supplies dev.ate.egress:dial. This
+                  # lets the request filter return the unsupported-upgrade
+                  # response before route-level upgrade rejection. A by-name
                   # route also needs the answered name (dev.ate.egress:host);
                   # without it the forward proxy would dial the Host's port.
+                  # Native gRPC uses upstream ALPN to negotiate h2 and carry
+                  # status in trailers. Other requests stay on HTTP/1.1; the
+                  # content-type match keeps those protocol choices separate.
                   - match:
                       prefix: "/"
                       headers:
@@ -461,6 +458,9 @@ data:
                         value: { present_match: true }
                     route:
                       cluster: egress_forward_proxy_grpc
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
                   - match:
                       prefix: "/"
@@ -474,6 +474,9 @@ data:
                         value: { string_match: { exact: address } }
                     route:
                       cluster: egress_original_dst_tls_grpc
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
                   - match:
                       prefix: "/"
@@ -486,6 +489,9 @@ data:
                         value: { present_match: true }
                     route:
                       cluster: egress_forward_proxy
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       # The route timeout runs until the response completes, which
                       # for SSE or long-poll is never, so 0.
                       timeout: 0s
@@ -497,6 +503,9 @@ data:
                         value: { string_match: { exact: address } }
                     route:
                       cluster: egress_original_dst_tls
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
               http_filters:
               # Every request on this chain is authorized against the actor's
@@ -623,8 +632,12 @@ data:
               # answers it 426 before any filter runs.
               http_protocol_options:
                 accept_http_10: true
+              # The egress request filter returns the explanatory 403. Keep
+              # the HCM default disabled as a defense if a request ever gets
+              # past that decision.
               upgrade_configs:
               - upgrade_type: websocket
+                enabled: false
               stream_idle_timeout: 0s
               access_log:
               - name: envoy.access_loggers.file
@@ -670,6 +683,9 @@ data:
                         value: { present_match: true }
                     route:
                       cluster: egress_forward_proxy_cleartext
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
                   - match:
                       prefix: "/"
@@ -679,6 +695,9 @@ data:
                         value: { string_match: { exact: address } }
                     route:
                       cluster: egress_original_dst_cleartext
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
               http_filters:
               # Every request on this chain is authorized against the actor's
@@ -850,6 +869,13 @@ data:
       # The only way into mitm_listener. An internal address, not a socket, so
       # the MITM leg has no listening port anywhere in the pod's netns.
       - name: mitm_internal
+        # Create one pool per unique tuple, containing the following filter state objects:
+        # actor ID from "dev.ate.actor.identity"
+        # CONNECT authority from "dev.ate.connect.authority"
+        # Egress policy hash from "dev.ate.policy.egress.hash"
+        # TODO(yanavlasov): use just the port from CONNECT athority to minimize number of pools.
+        # Pools are create using hashes of filter state, which includes filter state objects that use
+        # envoy.hashable_string factory.
         connect_timeout: 1s
         # Each open tunnel holds one connection and one request here, so these
         # cap concurrent tunnels per replica (Envoy's default is 1024); past
@@ -860,12 +886,6 @@ data:
             max_connections: 16384
             max_requests: 16384
             max_pending_requests: 16384
-        # One pool per tunnel. A pool gives every connection it opens the
-        # filter state of the tunnel that created it, so a pool shared by two
-        # tunnels would hand the second one the first one's actor, authority
-        # and rules. The egress listener speaks HTTP/1, which carries one
-        # CONNECT per downstream connection.
-        connection_pool_per_downstream_connection: true
         typed_extension_protocol_options:
           envoy.extensions.upstreams.tcp.v3.TcpProtocolOptions:
             "@type": type.googleapis.com/envoy.extensions.upstreams.tcp.v3.TcpProtocolOptions
@@ -875,7 +895,7 @@ data:
             idle_timeout: 30s
         # Copies every filter state object shared with the upstream onto the
         # internal listener's downstream connection: dev.ate.actor.identity,
-        # dev.ate.connect.authority, dev.ate.policy.egress, and
+        # dev.ate.connect.authority, dev.ate.policy.egress.hash, and
         # envoy.upstream.dynamic_port, all set on the CONNECT leg above.
         #
         # Without this none of them reaches mitm_listener, and nothing reports it:
@@ -1375,10 +1395,6 @@ spec:
       # ext_proc handler (no xDS server, no Kubernetes access). The egress
       # Envoy calls it over localhost to
       # authenticate actor identity against the ate API on every CONNECT.
-      #
-      # Ingress and egress are separate Deployments because they scale
-      # independently, not because they need separate binaries: one instance can
-      # serve both directions with --mode=all.
       - name: ext-proc
         image: ko://github.com/agent-substrate/substrate/cmd/atenet
         args:
@@ -1437,14 +1453,16 @@ spec:
           containerPort: 50051
         - name: metrics
           containerPort: 9090
-        # Probed on the metrics port, not the ext_proc port: the ext_proc server
+        - name: health
+          containerPort: 9091
+        # Probed on the health port, not the ext_proc port: the ext_proc server
         # binds loopback (--extproc-address 127.0.0.1) so it is unreachable from
         # other pods, which a pod-IP tcpSocket probe on 50051 could not reach. The
-        # metrics server binds all interfaces and /readyz reflects the process.
+        # health server binds all interfaces and /readyz reflects the process.
         readinessProbe:
           httpGet:
             path: /readyz
-            port: 9090
+            port: health
           initialDelaySeconds: 5
           periodSeconds: 2
           failureThreshold: 3

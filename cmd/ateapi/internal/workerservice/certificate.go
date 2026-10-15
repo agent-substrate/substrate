@@ -28,13 +28,14 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// MintAteomActorCertificate mints a Substrate-issued SPIFFE certificate that asserts
-// an ateom acting on behalf of a particular actor.
-func (s *Server) MintAteomActorCertificate(ctx context.Context, req *ateapipb.MintAteomActorCertificateRequest) (*ateapipb.MintAteomActorCertificateResponse, error) {
-	if errs := apivalidation.ValidateMintAteomActorCertificateRequest(ctx, req); len(errs) > 0 {
+// MintWorkerActorCertificate mints a Substrate-issued SPIFFE certificate that asserts
+// a worker acting on behalf of a particular actor.
+func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapipb.MintWorkerActorCertificateRequest) (*ateapipb.MintWorkerActorCertificateResponse, error) {
+	if errs := apivalidation.ValidateMintWorkerActorCertificateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 
@@ -75,7 +76,7 @@ func (s *Server) MintAteomActorCertificate(ctx context.Context, req *ateapipb.Mi
 				Scheme: "spiffe",
 				// TODO(identity): Must be configurable per-install, so that each install can set it to a unique value.
 				Host: "substrate-actor.local",
-				Path: path.Join("ateom-for-actor", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
+				Path: path.Join("worker-for-actor", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
 			},
 		},
 		NotBefore:             time.Now().Add(-5 * time.Minute),
@@ -86,13 +87,25 @@ func (s *Server) MintAteomActorCertificate(ctx context.Context, req *ateapipb.Mi
 		IsCA:                  false,
 	}
 
+	err = substratex509.AddActorIdentityToCertificate(
+		&substratex509.ActorIdentity{
+			Atespace:  dbActor.GetMetadata().GetAtespace(),
+			ActorName: dbActor.GetMetadata().GetName(),
+			ActorUid:  dbActor.GetMetadata().GetUid(),
+		},
+		template,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("while adding Substrate extension: %w", err)
+	}
+
 	// Sign and return the actor cert.
 	chain, err := s.actorIDCAPool.CreateCertificate(template, csr.PublicKey)
 	if err != nil {
 		return nil, fmt.Errorf("while signing certificate: %w", err)
 	}
 
-	return &ateapipb.MintAteomActorCertificateResponse{
+	return &ateapipb.MintWorkerActorCertificateResponse{
 		ActorCertificates: chain,
 	}, nil
 }

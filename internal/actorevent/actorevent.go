@@ -89,7 +89,7 @@ var identityKeys = []string{
 
 // Three names. A crash is its own because it has a different severity; there
 // is no name per state, because ate.actor.state already says which transition
-// happened. UsageSampled is the ateoms' measurement record.
+// happened. UsageSampled is the workers' measurement record.
 var (
 	StateChanged = Event{
 		Name:     "ate.actor.state_changed",

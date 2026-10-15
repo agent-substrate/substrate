@@ -32,7 +32,8 @@ import (
 // fixtureSubstitutions, whose block fragments are CRD-shaped and now serve
 // only the pool manifests. The inline placeholders match the pool manifests'
 // values so one (bucket, name) pair renders both halves of a fixture.
-func substrateTemplateSubstitutions(bucket, name string, trustBundle bool) (inline, blocks map[string]string) {
+// trustBundles names the trust bundles projected into one trust-bundle.pem.
+func substrateTemplateSubstitutions(bucket, name string, trustBundles []string) (inline, blocks map[string]string) {
 	inline = map[string]string{
 		"${BUCKET_NAME}":    bucket,
 		"${FIXTURE_SUFFIX}": "-" + name,
@@ -41,15 +42,18 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundle bool) (inli
 		// gvisor-default is the cluster-wide SandboxConfig
 		// manifests/ate-install ships; config_name is required, so the
 		// fixtures name it explicitly.
-		"${TEMPLATE_SANDBOX_CONFIG}": "sandboxConfig:\n  sandboxClass: SANDBOX_CLASS_GVISOR\n  configName: gvisor-default",
-		"${TEMPLATE_RESOURCES}":      "",
+		"${TEMPLATE_SANDBOX_CONFIG}": "sandboxConfig:\n  sandboxClass: gvisor\n  configName: gvisor-default",
 		// Off unless the caller opts in; see WithTrustBundle.
 		"${TEMPLATE_TRUST_BUNDLE}": "",
 	}
-	if trustBundle {
-		// Indented to sit in a template's systemInfo dataSources list. The
+	if len(trustBundles) > 0 {
+		// Indented to sit in a template's systemInfo dataSources list. Each
 		// name must be on atelet's supported-bundle allowlist.
-		blocks["${TEMPLATE_TRUST_BUNDLE}"] = "    - trustBundle:\n        names:\n        - egress-mitm.ate.dev\n        path: trust-bundle.pem"
+		block := "    - trustBundle:\n        names:\n"
+		for _, bundle := range trustBundles {
+			block += "        - " + bundle + "\n"
+		}
+		blocks["${TEMPLATE_TRUST_BUNDLE}"] = block + "        path: trust-bundle.pem"
 	}
 	if !IsMicroVM() {
 		return inline, blocks
@@ -58,12 +62,7 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundle bool) (inli
 	inline["${FIXTURE_SUFFIX}"] = "-" + SandboxClassMicroVM + "-" + name
 	// The cluster-wide SandboxConfig hack/install-microvm-deps.sh installs;
 	// a missing or stale one fails loudly at template creation.
-	blocks["${TEMPLATE_SANDBOX_CONFIG}"] = "sandboxConfig:\n  sandboxClass: SANDBOX_CLASS_MICROVM\n  configName: microvm"
-	// Only for fixtures that declare no limits of their own. Without them the
-	// guest boots at ateom's default size (2GiB), and several of those
-	// do not fit beside the demo pools on CI's single kind node. These size
-	// the VM itself — see internal/sizing. Quantities are strings.
-	blocks["${TEMPLATE_RESOURCES}"] = "resources:\n  limits:\n  - name: cpu\n    quantity: \"1\"\n  - name: memory\n    quantity: 512Mi"
+	blocks["${TEMPLATE_SANDBOX_CONFIG}"] = "sandboxConfig:\n  sandboxClass: microvm\n  configName: microvm"
 	return inline, blocks
 }
 
@@ -118,9 +117,12 @@ type SubstrateFixtureManifests struct {
 // the k8s namespace GC — and a template leaked by an interrupted earlier run
 // is cleared before creating its replacement, since templates are immutable.
 //
+// trustBundles names the trust bundles a template with a
+// ${TEMPLATE_TRUST_BUNDLE} placeholder projects; nil projects none.
+//
 // Returns the fixture's atespace (the same string that names the k8s
 // namespace holding the pool) and the created templates.
-func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients, manifests SubstrateFixtureManifests, bucket, name string, trustBundle bool) (string, []*ateapipb.ActorTemplate) {
+func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients, manifests SubstrateFixtureManifests, bucket, name string, trustBundles []string) (string, []*ateapipb.ActorTemplate) {
 	t.Helper()
 
 	// The pool manifest also carries the namespace. Its cleanup is registered
@@ -137,7 +139,7 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 		RunCmd(t, "kubectl", delArgs...)
 	})
 
-	tmplInline, tmplBlocks := substrateTemplateSubstitutions(bucket, name, trustBundle)
+	tmplInline, tmplBlocks := substrateTemplateSubstitutions(bucket, name, trustBundles)
 	rendered := koResolve(t, renderManifest(t, manifests.Template, tmplInline, tmplBlocks))
 	templates := decodeSubstrateTemplates(t, rendered)
 

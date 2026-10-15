@@ -66,11 +66,12 @@ func (s *recordingStorage) objects() []string {
 }
 
 func uniformDelays(d time.Duration) delays {
-	return delays{run: d, restore: d, checkpoint: d, uploadPausedCheckpoint: d, terminate: d}
+	return delays{run: d, restore: d, checkpoint: d, promoteSnapshot: d, terminate: d}
 }
 
-// herderCalls invokes every AteomHerder method the herder implements. The
-// checkpoint calls ask for an external snapshot, so each writes a placeholder.
+// herderCalls invokes every Atelet method the herder implements. The
+// Checkpoint and PromoteSnapshot calls upload a snapshot, so each writes a
+// placeholder.
 func herderCalls(h *herder) map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
 		"Run": func(ctx context.Context) error {
@@ -85,8 +86,12 @@ func herderCalls(h *herder) map[string]func(context.Context) error {
 			_, err := h.Checkpoint(ctx, externalCheckpoint(testSnapshotURI))
 			return err
 		},
-		"UploadPausedCheckpoint": func(ctx context.Context) error {
-			_, err := h.UploadPausedCheckpoint(ctx, &ateletpb.UploadPausedCheckpointRequest{DestinationSnapshotUri: testSnapshotURI})
+		"PromoteSnapshot": func(ctx context.Context) error {
+			_, err := h.PromoteSnapshot(ctx, &ateletpb.PromoteSnapshotRequest{
+				Snapshot: &ateletpb.Snapshot{
+					Object: &ateletpb.ObjectStorage{SnapshotUri: testSnapshotURI},
+				},
+			})
 			return err
 		},
 		"Terminate": func(ctx context.Context) error {
@@ -96,10 +101,17 @@ func herderCalls(h *herder) map[string]func(context.Context) error {
 	}
 }
 
+// externalCheckpoint is a Checkpoint that uploads to uri before it returns.
 func externalCheckpoint(uri string) *ateletpb.CheckpointRequest {
+	return checkpointWithMode(uri, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+}
+
+func checkpointWithMode(uri string, mode ateletpb.UploadMode) *ateletpb.CheckpointRequest {
 	return &ateletpb.CheckpointRequest{
-		Type:   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-		Config: &ateletpb.CheckpointRequest_ExternalConfig{ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{SnapshotUri: uri}},
+		Snapshot: &ateletpb.Snapshot{
+			Object: &ateletpb.ObjectStorage{SnapshotUri: uri},
+		},
+		UploadConfig: &ateletpb.UploadConfig{Mode: mode},
 	}
 }
 
@@ -151,11 +163,11 @@ func TestHerderUsesEachCallsOwnDelay(t *testing.T) {
 }
 
 // ate-api-server copies an actor's snapshot when it creates a tag and refuses
-// to copy an empty one, so both calls that would upload a snapshot must leave
-// an object under its URI.
+// to copy an empty one, so calls that upload a snapshot before they return
+// must leave an object under its URI.
 func TestHerderWritesPlaceholderUnderSnapshotURI(t *testing.T) {
 	const want = "bench-bucket/benchmark-workloads/sleep/atespaces/team-a/actors/0f9c1d2e-3b4a-4c5d-8e6f-7a8b9c0d1e2f/snapshots/snap-1/" + placeholderObject
-	for _, name := range []string{"Checkpoint", "UploadPausedCheckpoint"} {
+	for _, name := range []string{"Checkpoint", "PromoteSnapshot"} {
 		t.Run(name, func(t *testing.T) {
 			storage := &recordingStorage{}
 			if err := herderCalls(&herder{storage: storage})[name](context.Background()); err != nil {
@@ -168,14 +180,19 @@ func TestHerderWritesPlaceholderUnderSnapshotURI(t *testing.T) {
 	}
 }
 
+// A deferred upload happens after Checkpoint returns, which the fake does not
+// model, so only an immediate one writes a placeholder.
 func TestHerderWritesNothingForLocalCheckpoint(t *testing.T) {
 	storage := &recordingStorage{}
 	h := &herder{storage: storage}
-	if _, err := h.Checkpoint(context.Background(), &ateletpb.CheckpointRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL}); err != nil {
+	if _, err := h.Checkpoint(context.Background(), &ateletpb.CheckpointRequest{}); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
+	if _, err := h.Checkpoint(context.Background(), checkpointWithMode(testSnapshotURI, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)); err != nil {
+		t.Fatalf("Checkpoint with a deferred upload: %v", err)
+	}
 	for name, call := range herderCalls(h) {
-		if name == "Checkpoint" || name == "UploadPausedCheckpoint" {
+		if name == "Checkpoint" || name == "PromoteSnapshot" {
 			continue
 		}
 		if err := call(context.Background()); err != nil {
@@ -183,7 +200,7 @@ func TestHerderWritesNothingForLocalCheckpoint(t *testing.T) {
 		}
 	}
 	if got := storage.objects(); len(got) != 0 {
-		t.Errorf("wrote %v, want nothing outside external checkpoints", got)
+		t.Errorf("wrote %v, want nothing outside immediate uploads and promotions", got)
 	}
 }
 
@@ -194,6 +211,9 @@ func TestHerderFailsWhenPlaceholderCannotBeWritten(t *testing.T) {
 	}
 	if _, err := h.Checkpoint(context.Background(), externalCheckpoint("not a snapshot uri")); err == nil {
 		t.Error("Checkpoint succeeded with an unparseable snapshot URI")
+	}
+	if err := herderCalls(h)["PromoteSnapshot"](context.Background()); err == nil {
+		t.Error("PromoteSnapshot succeeded with no placeholder written; a later tag of this snapshot would fail")
 	}
 }
 
@@ -241,12 +261,12 @@ func TestHerderWarnsOnlyWhenWriteOutlastsANonzeroDelay(t *testing.T) {
 // recordingMinter records every mint, as ate-api-server's WorkerService.
 type recordingMinter struct {
 	mu    sync.Mutex
-	reqs  []*ateapipb.MintAteomActorCertificateRequest
+	reqs  []*ateapipb.MintWorkerActorCertificateRequest
 	err   error
 	delay time.Duration
 }
 
-func (m *recordingMinter) MintAteomActorCertificate(_ context.Context, in *ateapipb.MintAteomActorCertificateRequest, _ ...grpc.CallOption) (*ateapipb.MintAteomActorCertificateResponse, error) {
+func (m *recordingMinter) MintWorkerActorCertificate(_ context.Context, in *ateapipb.MintWorkerActorCertificateRequest, _ ...grpc.CallOption) (*ateapipb.MintWorkerActorCertificateResponse, error) {
 	if m.delay > 0 {
 		time.Sleep(m.delay)
 	}
@@ -256,10 +276,10 @@ func (m *recordingMinter) MintAteomActorCertificate(_ context.Context, in *ateap
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &ateapipb.MintAteomActorCertificateResponse{ActorCertificates: [][]byte{[]byte("leaf")}}, nil
+	return &ateapipb.MintWorkerActorCertificateResponse{ActorCertificates: [][]byte{[]byte("leaf")}}, nil
 }
 
-func (m *recordingMinter) mints() []*ateapipb.MintAteomActorCertificateRequest {
+func (m *recordingMinter) mints() []*ateapipb.MintWorkerActorCertificateRequest {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return slices.Clone(m.reqs)
@@ -292,7 +312,7 @@ func newMintingHerder(t *testing.T, m *recordingMinter, d delays) *herder {
 	return &herder{delays: d, storage: &recordingStorage{}, minter: m, csr: csr}
 }
 
-// ateom mints the actor's certificate before starting any workload with
+// worker mints the actor's certificate before starting any workload with
 // tunneled egress, so each Run and Restore that names a gateway costs
 // ate-api-server one mint, for that actor, with a CSR it accepts.
 func TestHerderMintsActorCertificateOnActivation(t *testing.T) {
@@ -322,7 +342,7 @@ func TestHerderMintsActorCertificateOnActivation(t *testing.T) {
 	}
 }
 
-// ateom mints only for tunneled egress, which ate-api-server asks for by
+// worker mints only for tunneled egress, which ate-api-server asks for by
 // naming a gateway; and --mint-actor-certificate=false leaves the mint out.
 func TestHerderSkipsMint(t *testing.T) {
 	m := &recordingMinter{}
@@ -341,7 +361,7 @@ func TestHerderSkipsMint(t *testing.T) {
 	}
 }
 
-// A failed mint fails the activation, as tunneled egress fails closed in ateom.
+// A failed mint fails the activation, as tunneled egress fails closed in worker.
 func TestHerderFailsWhenMintFails(t *testing.T) {
 	m := &recordingMinter{err: errors.New("actor not found")}
 	for name, call := range activations(newMintingHerder(t, m, delays{}), testGateway) {

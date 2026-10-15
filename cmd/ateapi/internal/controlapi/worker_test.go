@@ -232,10 +232,9 @@ func TestCreateWorker(t *testing.T) {
 	if got.GetMetadata().GetUid() == "" {
 		t.Error("created worker has no uid; the store is meant to assign one")
 	}
-	// A Worker is registered only once its pod is Ready and has an IP, which
-	// makes ACTIVE the only state it can be born in.
-	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
-		t.Errorf("created worker state = %v, want %v", got.GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+	// A Worker takes no Actors until it is marked available.
+	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Errorf("created worker state = %v, want %v", got.GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
 	}
 
 	stored, err := persistence.GetWorker(ctx, apiWorkerName)
@@ -260,7 +259,7 @@ func TestCreateWorker_IgnoresRequestStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorker() failed: %v", err)
 	}
-	want := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+	want := &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE}
 	if diff := cmp.Diff(want, got.GetStatus(), protocmp.Transform()); diff != "" {
 		t.Errorf("created worker status mismatch (-want +got):\n%s", diff)
 	}
@@ -497,7 +496,7 @@ func TestUpdateWorker_DrainingWorkerKeepsLabelsMutable(t *testing.T) {
 	}
 
 	got, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
-		Worker: updateFrom(drained, func(w *ateapipb.Worker) { w.Labels = map[string]string{"tier": "batch"} }),
+		Worker: updateFrom(drained.GetWorker(), func(w *ateapipb.Worker) { w.Labels = map[string]string{"tier": "batch"} }),
 	})
 	if err != nil {
 		t.Fatalf("UpdateWorker() failed: %v", err)
@@ -616,11 +615,11 @@ func TestDrainWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DrainWorker() failed: %v", err)
 	}
-	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
-		t.Errorf("state = %v, want %v", got.GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_DRAINING)
+	if got.GetWorker().GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("state = %v, want %v", got.GetWorker().GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_DRAINING)
 	}
-	if got.GetMetadata().GetVersion() != 2 {
-		t.Errorf("version = %d, want 2", got.GetMetadata().GetVersion())
+	if got.GetWorker().GetMetadata().GetVersion() != 2 {
+		t.Errorf("version = %d, want 2", got.GetWorker().GetMetadata().GetVersion())
 	}
 
 	// Draining again is a no-op, and specifically must not bump the version:
@@ -646,7 +645,7 @@ func TestDrainWorker_KeepsAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DrainWorker() failed: %v", err)
 	}
-	if n := got.GetStatus().GetAllocated().GetActors(); n != 1 {
+	if n := got.GetWorker().GetStatus().GetAllocated().GetActors(); n != 1 {
 		t.Errorf("drained worker hosts %d actors, want the 1 left in place", n)
 	}
 }
@@ -670,6 +669,127 @@ func TestDrainWorker_Errors(t *testing.T) {
 			_, err := svc.DrainWorker(ctx, tc.req)
 			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("DrainWorker() code = %v (err %v), want %v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// A created Worker is marked available, back unavailable, and available again.
+// A repeated mark is a no-op and must not bump the version: the syncer re-drives
+// it on every pod event.
+func TestMarkWorkerAvailability(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newWorkerAPIService(t)
+	created, err := svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: validWorker(apiWorkerName)})
+	if err != nil {
+		t.Fatalf("CreateWorker() failed: %v", err)
+	}
+
+	markAvailable := func() (*ateapipb.Worker, error) {
+		resp, err := svc.MarkWorkerAvailable(ctx, &ateapipb.MarkWorkerAvailableRequest{Worker: workerRef(apiWorkerName)})
+		return resp.GetWorker(), err
+	}
+	markUnavailable := func() (*ateapipb.Worker, error) {
+		resp, err := svc.MarkWorkerUnavailable(ctx, &ateapipb.MarkWorkerUnavailableRequest{Worker: workerRef(apiWorkerName)})
+		return resp.GetWorker(), err
+	}
+	version := created.GetMetadata().GetVersion()
+	for i, step := range []struct {
+		name    string
+		mark    func() (*ateapipb.Worker, error)
+		want    ateapipb.WorkerState
+		changed bool
+	}{
+		{"available", markAvailable, ateapipb.WorkerState_WORKER_STATE_ACTIVE, true},
+		{"available again", markAvailable, ateapipb.WorkerState_WORKER_STATE_ACTIVE, false},
+		{"unavailable", markUnavailable, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE, true},
+		{"unavailable again", markUnavailable, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE, false},
+		{"available once more", markAvailable, ateapipb.WorkerState_WORKER_STATE_ACTIVE, true},
+	} {
+		got, err := step.mark()
+		if err != nil {
+			t.Fatalf("step %d (%s): failed: %v", i, step.name, err)
+		}
+		if state := got.GetStatus().GetState(); state != step.want {
+			t.Errorf("step %d (%s): state = %v, want %v", i, step.name, state, step.want)
+		}
+		if step.changed {
+			version++
+		}
+		if v := got.GetMetadata().GetVersion(); v != version {
+			t.Errorf("step %d (%s): version = %d, want %d", i, step.name, v, version)
+		}
+	}
+}
+
+// Marking leaves the bound Actor alone, as draining does.
+func TestMarkWorkerUnavailable_KeepsAssignment(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	assignAPIWorker(t, ctx, persistence, apiWorkerName, "actor-uid-1")
+
+	got, err := svc.MarkWorkerUnavailable(ctx, &ateapipb.MarkWorkerUnavailableRequest{Worker: workerRef(apiWorkerName)})
+	if err != nil {
+		t.Fatalf("MarkWorkerUnavailable() failed: %v", err)
+	}
+	if n := got.GetWorker().GetStatus().GetAllocated().GetActors(); n != 1 {
+		t.Errorf("unavailable worker hosts %d actors, want the 1 left in place", n)
+	}
+}
+
+// DRAINING is final: marking a draining Worker either way is refused and
+// leaves it as it is.
+func TestMarkWorker_Draining(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	drained, err := svc.DrainWorker(ctx, &ateapipb.DrainWorkerRequest{Worker: workerRef(apiWorkerName)})
+	if err != nil {
+		t.Fatalf("DrainWorker() failed: %v", err)
+	}
+
+	_, err = svc.MarkWorkerUnavailable(ctx, &ateapipb.MarkWorkerUnavailableRequest{Worker: workerRef(apiWorkerName)})
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
+		t.Errorf("MarkWorkerUnavailable() on a draining worker code = %v (err %v), want %v", got, err, codes.FailedPrecondition)
+	}
+	_, err = svc.MarkWorkerAvailable(ctx, &ateapipb.MarkWorkerAvailableRequest{Worker: workerRef(apiWorkerName)})
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
+		t.Errorf("MarkWorkerAvailable() on a draining worker code = %v (err %v), want %v", got, err, codes.FailedPrecondition)
+	}
+
+	stored, err := persistence.GetWorker(ctx, apiWorkerName)
+	if err != nil {
+		t.Fatalf("GetWorker() failed: %v", err)
+	}
+	if diff := cmp.Diff(drained.GetWorker(), stored, protocmp.Transform()); diff != "" {
+		t.Errorf("refused marks changed a draining worker (-drained +stored):\n%s", diff)
+	}
+}
+
+func TestMarkWorker_Errors(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newWorkerAPIService(t)
+
+	refs := []struct {
+		name string
+		ref  *ateapipb.ObjectRef
+		want codes.Code
+	}{
+		{"absent", workerRef(apiWorkerName), codes.NotFound},
+		{"no ref", nil, codes.InvalidArgument},
+		{"no name", &ateapipb.ObjectRef{}, codes.InvalidArgument},
+		{"atespace set", &ateapipb.ObjectRef{Atespace: "team-a", Name: apiWorkerName}, codes.InvalidArgument},
+	}
+	for _, tc := range refs {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.MarkWorkerAvailable(ctx, &ateapipb.MarkWorkerAvailableRequest{Worker: tc.ref})
+			if got := apierror.Code(err); got != tc.want {
+				t.Errorf("MarkWorkerAvailable() code = %v (err %v), want %v", got, err, tc.want)
+			}
+			_, err = svc.MarkWorkerUnavailable(ctx, &ateapipb.MarkWorkerUnavailableRequest{Worker: tc.ref})
+			if got := apierror.Code(err); got != tc.want {
+				t.Errorf("MarkWorkerUnavailable() code = %v (err %v), want %v", got, err, tc.want)
 			}
 		})
 	}
@@ -760,7 +880,7 @@ func TestCreateWorker_HoldsNoCapacityUntilReported(t *testing.T) {
 		t.Fatalf("CreateWorker() failed: %v", err)
 	}
 	if capacity := got.GetStatus().GetCapacity(); capacity != nil {
-		t.Errorf("created worker capacity = %v, want none until its ateom reports", capacity)
+		t.Errorf("created worker capacity = %v, want none until its worker reports", capacity)
 	}
 
 	// Capacity is status, so a request cannot bring its own: a Worker only

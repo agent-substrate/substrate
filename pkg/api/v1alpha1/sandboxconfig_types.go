@@ -16,6 +16,8 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/agent-substrate/substrate/pkg/sandboxclass"
 )
 
 // SandboxClass selects the sandbox runtime family. It is shared by WorkerPool
@@ -23,22 +25,27 @@ import (
 type SandboxClass string
 
 const (
-	// SandboxClassGvisor is the gVisor/runsc runtime (cmd/ateom-gvisor). Default.
-	SandboxClassGvisor SandboxClass = "gvisor"
-	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateom-microvm); needs
+	// SandboxClassGvisor is the gVisor/runsc runtime (cmd/ateworker-gvisor). Default.
+	SandboxClassGvisor SandboxClass = sandboxclass.GVisor
+	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateworker-microvm); needs
 	// /dev/kvm and vhost devices.
-	SandboxClassMicroVM SandboxClass = "microvm"
+	SandboxClassMicroVM SandboxClass = sandboxclass.MicroVM
 )
 
 // AssetFile is one content-addressed file that atelet fetches for a sandbox
 // runtime (e.g. the gVisor runsc binary, or a micro-VM kernel/firmware/config).
 type AssetFile struct {
-	// URL is where to download the asset from (e.g. a gs:// URL). It may be
-	// fetched anonymously or with credentials depending on atelet's
-	// configuration.
+	// URL is where to download the asset from (e.g. a gs:// URL). atelet
+	// fetches every URL through the node's object-store plugin, with the
+	// plugin's credentials. The plugin refuses URLs under a snapshot location.
+	// The in-tree plugin serves only its storage backend's scheme: gs:// on
+	// GCS, s3:// on S3. A gs:// URL the plugin has no object for or cannot
+	// serve is then read anonymously, which serves public buckets such as
+	// gs://gvisor.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=2048
 	URL string `json:"url"`
 
 	// SHA256 is the lower-case hex SHA256 of the asset. It both names the cached
@@ -53,6 +60,28 @@ type AssetFile struct {
 // sandboxClass when set to "true". More than one SandboxConfig of the same
 // class may carry it; the newest one wins.
 const SandboxConfigClassDefaultAnnotation = "sandboxconfig.ate.dev/is-class-default"
+
+// SandboxConfigWorkerPoolProtectionFinalizer is put on a SandboxConfig by
+// atecontroller before any WorkerPool's status records it. It stays until the
+// config is deleted. Deleting a config that carries it goes in three steps:
+//
+//  1. The delete only sets deletionTimestamp, because the finalizer list is
+//     not empty. The config stays, Terminating.
+//  2. atecontroller checks whether any WorkerPool's status.sandboxClasses
+//     names the config, in configRef or pendingConfigRef. If one does, it
+//     leaves the finalizer and checks again whenever a WorkerPool changes.
+//     Once none does, it removes the finalizer.
+//  3. With the finalizer list empty, the API server deletes the config.
+//
+// Without atecontroller, step 2 never happens and the config stays
+// Terminating until someone clears the finalizer by hand. A config no pool
+// has ever used carries no finalizer and deletes at once.
+//
+// A pool that switches to a config names it in pendingConfigRef first. Then
+// atecontroller reads the config from the API server, and moves configRef to
+// it only if that read finds it is not being deleted. So a config is never
+// released while a pool's configRef names it.
+const SandboxConfigWorkerPoolProtectionFinalizer = "sandboxconfig.ate.dev/workerpool-protection"
 
 // SandboxVersionState is whether a SandboxConfig version may be used.
 //

@@ -18,18 +18,18 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 )
 
 var getAtespacesCmd = &cobra.Command{
-	Use:     "atespaces [name ...]",
-	Aliases: []string{"atespace"},
+	Use:     "atespace [atespace-name ...]",
+	Aliases: []string{"atespaces"},
 	Short:   "List all atespaces or get one or more atespaces",
+	Args:    cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		apiClient, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -54,8 +54,7 @@ var getAtespacesCmd = &cobra.Command{
 		pageToken := ""
 		for {
 			resp, err := apiClient.ListAtespaces(ctx, &ateapipb.ListAtespacesRequest{
-				PageSize:  1000,
-				PageToken: pageToken,
+				Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
 			})
 			if err != nil {
 				return fmt.Errorf("failed to list atespaces: %w", err)
@@ -72,12 +71,12 @@ var getAtespacesCmd = &cobra.Command{
 }
 
 var createAtespaceCmd = &cobra.Command{
-	Use:   "atespace [name]",
+	Use:   "atespace <atespace-name>",
 	Short: "Create an atespace",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<atespace-name>"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		apiClient, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -99,12 +98,12 @@ var createAtespaceCmd = &cobra.Command{
 }
 
 var deleteAtespaceCmd = &cobra.Command{
-	Use:   "atespace [name]",
+	Use:   "atespace <atespace-name>",
 	Short: "Delete an empty atespace (fails if any actors remain)",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<atespace-name>"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		apiClient, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}

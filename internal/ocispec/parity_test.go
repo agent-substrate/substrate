@@ -20,14 +20,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 const testActorUID = "actor_uid"
 
-var parityActorDirs = &ateompb.ActorDirs{
+var parityActorDirs = &ateworkerpb.ActorDirs{
 	RootDir:                   "/node/actors/a",
 	OciBundleDir:              "/node/actors/a/bundles",
 	DurableDirVolumeMountsDir: "/node/actors/a/durable-dir",
@@ -39,13 +39,13 @@ var parityActorDirs = &ateompb.ActorDirs{
 var parityOptions = Options{
 	ActorUID:  testActorUID,
 	ActorDirs: parityActorDirs,
-	Container: &ateompb.Container{
+	Container: &ateworkerpb.Container{
 		Name:                   "app",
-		ContainerSpec:          &ateompb.ContainerSpec{Args: []string{"/app"}},
-		DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{{VolumeName: "data", MountPath: "/var/data"}},
-		SystemInfoVolumeMounts: []*ateompb.SystemInfoVolumeMount{{VolumeName: "sysinfo", MountPath: "/run/ate"}},
-		CsiVolumeMounts:        []*ateompb.VolumeMount{{VolumeName: "csi", MountPath: "/mnt/csi"}},
-		ImageVolumeMounts:      []*ateompb.ImageVolumeMount{{VolumeName: "agent", MountPath: "/ate"}},
+		ContainerSpec:          &ateworkerpb.ContainerSpec{Args: []string{"/app"}},
+		DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{{VolumeName: "data", MountPath: "/var/data"}},
+		SystemInfoVolumeMounts: []*ateworkerpb.SystemInfoVolumeMount{{VolumeName: "sysinfo", MountPath: "/run/ate"}},
+		CsiVolumeMounts:        []*ateworkerpb.VolumeMount{{VolumeName: "csi", MountPath: "/mnt/csi"}},
+		ImageVolumeMounts:      []*ateworkerpb.ImageVolumeMount{{VolumeName: "agent", MountPath: "/ate"}},
 	},
 }
 
@@ -131,7 +131,7 @@ func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 
 // ShapeMicroVM errors on a bind that is not staged into the share.
 func TestShapeMicroVM_UnstagedSourceIsAnError(t *testing.T) {
-	spec := Build(Options{Container: &ateompb.Container{ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/app"}}}})
+	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
 	spec.Mounts = append(spec.Mounts, specs.Mount{Destination: "/mnt/new", Type: "bind", Source: "/var/lib/ate/new-kind/x"})
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err == nil {
 		t.Fatal("ShapeMicroVM() = nil, want an error for a bind that is not staged into the share")
@@ -153,7 +153,7 @@ func TestShapeGVisor_ResolvConfPrecedesVolumes(t *testing.T) {
 // Shaping a spec twice does not accumulate mounts.
 func TestShapeGVisor_Idempotent(t *testing.T) {
 	spec := Build(parityOptions)
-	o := GVisorOptions{ActorUID: testActorUID, ContainerName: PauseContainer, DurableVolumes: []string{"data"}, Size: paritySize}
+	o := GVisorOptions{ActorUID: testActorUID, ActorDirs: parityActorDirs, ContainerName: PauseContainer, DurableVolumes: []string{"data"}, Size: paritySize}
 	ShapeGVisor(spec, o)
 	first := len(spec.Mounts)
 	ShapeGVisor(spec, o)
@@ -162,6 +162,15 @@ func TestShapeGVisor_Idempotent(t *testing.T) {
 	}
 	if got := spec.Annotations["io.kubernetes.cri.container-type"]; got != "sandbox" {
 		t.Errorf("pause container-type = %q, want sandbox", got)
+	}
+	if got := spec.Annotations["dev.gvisor.spec.mount.data.type"]; got != "tmpfs" {
+		t.Errorf("durable-dir mount type annotation = %q, want tmpfs", got)
+	}
+	if got := spec.Annotations["dev.gvisor.spec.mount.data.share"]; got != "container" {
+		t.Errorf("durable-dir mount share annotation = %q, want container", got)
+	}
+	if got, want := spec.Annotations["dev.gvisor.spec.mount.data.source"], "/node/actors/a/durable-dir/data"; got != want {
+		t.Errorf("durable-dir mount source annotation = %q, want %q", got, want)
 	}
 }
 

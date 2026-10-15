@@ -352,7 +352,7 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 			},
 			Containers: []metricsv1beta1.ContainerMetrics{
 				{
-					Name: "ateom",
+					Name: "worker",
 					Usage: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("342m"),
 						corev1.ResourceMemory: resource.MustParse("412Mi"),
@@ -367,7 +367,7 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 			},
 			Containers: []metricsv1beta1.ContainerMetrics{
 				{
-					Name: "ateom",
+					Name: "worker",
 					Usage: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("2m"),
 						corev1.ResourceMemory: resource.MustParse("64Mi"),

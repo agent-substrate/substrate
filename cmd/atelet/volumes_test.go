@@ -91,32 +91,26 @@ func TestUnmountExternalVolumes(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-1",
-				VolumeType:      "mock-driver",
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-1",
+			VolumeType:      "mock-driver",
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-2",
-				VolumeType:      "mock-driver",
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-2",
+			VolumeType:      "mock-driver",
 		},
 	}
 	durableVol := &ateletpb.Volume{
-		Name: "durable-1",
-		Source: &ateletpb.Volume_DurableDir{
-			DurableDir: &ateletpb.DurableDirVolume{},
-		},
+		Name:       "durable-1",
+		DurableDir: &ateletpb.DurableDirVolume{},
 	}
 
 	t.Run("success", func(t *testing.T) {
 		fake := &fakeWorkerPlugin{}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -135,7 +129,7 @@ func TestUnmountExternalVolumes(t *testing.T) {
 		fake := &fakeWorkerPlugin{
 			unmountErr: errors.New("device or resource busy"),
 		}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -154,7 +148,7 @@ func TestUnmountExternalVolumes(t *testing.T) {
 		fake := &fakeWorkerPlugin{
 			unmountErr: fmt.Errorf("unmount failed"),
 		}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -177,36 +171,30 @@ func TestMountExternalVolumes(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-1",
-				VolumeType:      "mock-driver",
-				VolumeContext:   map[string]string{"key": "val1"},
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-1",
+			VolumeType:      "mock-driver",
+			VolumeContext:   map[string]string{"key": "val1"},
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-2",
-				VolumeType:      "mock-driver",
-				VolumeContext:   map[string]string{"key": "val2"},
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-2",
+			VolumeType:      "mock-driver",
+			VolumeContext:   map[string]string{"key": "val2"},
 		},
 	}
 	durableVol := &ateletpb.Volume{
-		Name: "durable-1",
-		Source: &ateletpb.Volume_DurableDir{
-			DurableDir: &ateletpb.DurableDirVolume{},
-		},
+		Name:       "durable-1",
+		DurableDir: &ateletpb.DurableDirVolume{},
 	}
 
 	t.Run("success mounts external volumes and creates mount directory", func(t *testing.T) {
 		withTempActorsDir(t)
 
 		fake := &fakeWorkerPlugin{}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -255,7 +243,7 @@ func TestMountExternalVolumes(t *testing.T) {
 		}
 
 		fake := &fakeWorkerPlugin{}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -275,15 +263,13 @@ func TestMountExternalVolumes(t *testing.T) {
 
 		unknownVol := &ateletpb.Volume{
 			Name: "vol-unknown",
-			Source: &ateletpb.Volume_External{
-				External: &ateletpb.ExternalVolumeSource{
-					StorageVolumeId: "mock-vol-unknown",
-					VolumeType:      "unknown-driver",
-				},
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: "mock-vol-unknown",
+				VolumeType:      "unknown-driver",
 			},
 		}
 
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{},
 		}
 
@@ -302,7 +288,7 @@ func TestMountExternalVolumes(t *testing.T) {
 		fake := &fakeWorkerPlugin{
 			mountErr: errors.New("mount operation failed: device or resource busy"),
 		}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -323,7 +309,7 @@ func TestMountExternalVolumes(t *testing.T) {
 		fake := &fakeWorkerPlugin{
 			mountErr: errors.New("cannot mount volume"),
 		}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -349,7 +335,7 @@ func TestMountExternalVolumes(t *testing.T) {
 				"mock-vol-2": errors.New("simulated mount error on vol-2"),
 			},
 		}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -394,20 +380,16 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-1",
-				VolumeType:      "mock-driver",
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-1",
+			VolumeType:      "mock-driver",
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-2",
-				VolumeType:      "mock-driver",
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-2",
+			VolumeType:      "mock-driver",
 		},
 	}
 
@@ -415,7 +397,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		withTempActorsDir(t)
 
 		fake := &fakeWorkerPlugin{}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -449,7 +431,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		withTempActorsDir(t)
 
 		fake := &fakeWorkerPlugin{}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -497,7 +479,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		withTempActorsDir(t)
 
 		fake := &fakeWorkerPlugin{}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},

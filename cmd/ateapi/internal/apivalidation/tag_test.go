@@ -54,9 +54,8 @@ func TestValidateCreateTagRequest(t *testing.T) {
 			req: &ateapipb.CreateTagRequest{
 				Tag: validTag(func(tag *ateapipb.Tag) {
 					tag.Status = &ateapipb.TagStatus{
-						Snapshot:         validExternalSnapshot(),
+						Snapshot:         validSnapshot(),
 						ActorTemplateUid: someActorUID,
-						StorageLocation:  testStorageLocation,
 					}
 				}),
 			},
@@ -438,23 +437,23 @@ func TestValidateListTagsRequest(t *testing.T) {
 		},
 		{
 			name:      "valid, positive page_size",
-			req:       &ateapipb.ListTagsRequest{Atespace: "ns1", PageSize: 10},
+			req:       &ateapipb.ListTagsRequest{Atespace: "ns1", Options: &ateapipb.ListOptions{PageSize: 10}},
 			wantError: nil,
 		},
 		{
 			name:      "negative page_size",
-			req:       &ateapipb.ListTagsRequest{Atespace: "ns1", PageSize: -1},
-			wantError: field.ErrorList{field.Invalid(field.NewPath("page_size"), nil, "").WithOrigin("minimum")},
+			req:       &ateapipb.ListTagsRequest{Atespace: "ns1", Options: &ateapipb.ListOptions{PageSize: -1}},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("options", "page_size"), nil, "").WithOrigin("minimum")},
 		},
 		{
 			name:      "valid page_token",
-			req:       &ateapipb.ListTagsRequest{Atespace: "ns1", PageToken: strings.Repeat("x", 256)},
+			req:       &ateapipb.ListTagsRequest{Atespace: "ns1", Options: &ateapipb.ListOptions{PageToken: strings.Repeat("x", 256)}},
 			wantError: nil,
 		},
 		{
 			name:      "too-large page_token",
-			req:       &ateapipb.ListTagsRequest{Atespace: "ns1", PageToken: strings.Repeat("x", 257)},
-			wantError: field.ErrorList{field.TooLongCharacters(field.NewPath("page_token"), "", 256).WithOrigin("maxLength")},
+			req:       &ateapipb.ListTagsRequest{Atespace: "ns1", Options: &ateapipb.ListOptions{PageToken: strings.Repeat("x", 257)}},
+			wantError: field.ErrorList{field.TooLongCharacters(field.NewPath("options", "page_token"), "", 256).WithOrigin("maxLength")},
 		},
 	}
 	for _, tt := range tests {

@@ -16,30 +16,29 @@ package apivalidation
 
 import (
 	"context"
-	"strings"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func ValidateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_CreateActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetActorRequest(ctx context.Context, req *ateapipb.GetActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_GetActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateListActorsRequest(ctx context.Context, req *ateapipb.ListActorsRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_ListActorsRequest(ctx, op, nil, req, nil)
 }
 
@@ -49,60 +48,65 @@ func ValidateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRe
 	// the existence of a "current" value, which we do not have yet.  This is
 	// validating the request itself. The result will be validated later, after
 	// we have a current value to compare against.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_UpdateActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDeleteActorRequest(ctx context.Context, req *ateapipb.DeleteActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_DeleteActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidatePauseActorRequest(ctx context.Context, req *ateapipb.PauseActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_PauseActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateResumeActorRequest(ctx context.Context, req *ateapipb.ResumeActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_ResumeActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateSuspendActorRequest(ctx context.Context, req *ateapipb.SuspendActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_SuspendActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateRevertActorRequest(ctx context.Context, req *ateapipb.RevertActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_RevertActorRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateMintActorJWTRequest(ctx context.Context, req *ateapipb.MintActorJWTRequest) field.ErrorList {
+func ValidateMintActorJWTRequest(ctx context.Context, req *ateapipb.MintActorJwtRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_MintActorJWTRequest(ctx, op, nil, req, nil)
+	op := MakeCreateOp(ctx)
+	return Validate_MintActorJwtRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateMintActorCertificateRequest(ctx context.Context, req *ateapipb.MintActorCertificateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_MintActorCertificateRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateMintAteomActorCertificateRequest(ctx context.Context, req *ateapipb.MintAteomActorCertificateRequest) field.ErrorList {
+func ValidateMintWorkerActorCertificateRequest(ctx context.Context, req *ateapipb.MintWorkerActorCertificateRequest) field.ErrorList {
+	op := MakeCreateOp(ctx)
+	return Validate_MintWorkerActorCertificateRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateMintWorkerActorJwtRequest(ctx context.Context, req *ateapipb.MintWorkerActorJwtRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
-	return Validate_MintAteomActorCertificateRequest(ctx, op, nil, req, nil)
+	return Validate_MintWorkerActorJwtRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, requireStatus bool) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Update}
+	op := MakeUpdateOp(ctx)
 	errs := Validate_Actor(ctx, op, fldPath, newVal, oldVal)
 	if requireStatus {
 		// Status is optional in the schema, but is actually required to be set
@@ -134,34 +138,14 @@ func ValidateCustom_WorkerAssignment_WorkerPodIps(_ context.Context, _ operation
 	return validateDualStackIPs(fldPath, value)
 }
 
-// ValidateCustom_ExternalVolume_VolumeType checks that a volume type string is well-formed.
-// It allows an optional "substrate.io/" prefix, followed by a valid DNS-1123 subdomain.
 func ValidateCustom_ExternalVolume_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if value == nil || *value == "" {
-		return nil
-	}
-	var errs field.ErrorList
-	valToValidate := strings.TrimPrefix(*value, "substrate.io/")
-	for _, msg := range validation.IsDNS1123Subdomain(valToValidate) {
-		errs = append(errs, field.Invalid(fldPath, *value, msg))
-	}
-	return errs
+	return resources.ValidateVolumeType(fldPath, *value)
 }
 
-// ValidateCustom_ExternalVolume_StorageVolumeId checks that an external volume's storage ID does not
-// contain control characters (U+0000-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F-U+009F).
 func ValidateCustom_ExternalVolume_StorageVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if value == nil || *value == "" {
-		return nil
-	}
-	for _, r := range *value {
-		if (r >= 0x0000 && r <= 0x0008) ||
-			r == 0x000B ||
-			r == 0x000C ||
-			(r >= 0x000E && r <= 0x001F) ||
-			(r >= 0x007F && r <= 0x009F) {
-			return field.ErrorList{field.Invalid(fldPath, *value, "must not contain control characters (U+0000-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F-U+009F)")}
-		}
-	}
-	return nil
+	return resources.ValidateStorageVolumeID(fldPath, *value)
+}
+
+func ValidateCustom_ExternalVolume_VolumeContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
+	return resources.ValidateCSIMap(fldPath, value)
 }

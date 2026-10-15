@@ -181,7 +181,7 @@ func TestPrewarmProcessRetries(t *testing.T) {
 	if err := indexer.Add(cfg); err != nil {
 		t.Fatalf("indexer.Add: %v", err)
 	}
-	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
+	herder := &Atelet{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
 	p := newSandboxPrewarmer(herder, nil, listersv1alpha1.NewSandboxConfigLister(indexer), false)
 
 	p.queue.Add(cfg.Name)
@@ -217,7 +217,7 @@ func TestPrewarmProcessReappliesClassGate(t *testing.T) {
 	}
 	// Any fetch would fail and requeue, so NumRequeues distinguishes
 	// "skipped" from "attempted and failed".
-	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
+	herder := &Atelet{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
 	p := newSandboxPrewarmer(herder, nil, listersv1alpha1.NewSandboxConfigLister(indexer), false)
 
 	p.queue.Add(cfg.Name)
@@ -276,7 +276,7 @@ func TestPrewarmPauseImage(t *testing.T) {
 	cfg.Spec.Versions[0].PauseImage = pauseRef
 
 	p := &sandboxPrewarmer{
-		assets: &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}},
+		assets: &Atelet{anonGCSClient: fakeObjectStorage{data: content}},
 		images: okStore,
 	}
 	if err := p.prewarm(ctx, cfg); err != nil {
@@ -289,7 +289,7 @@ func TestPrewarmPauseImage(t *testing.T) {
 	failCfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("other runsc"))))
 	failCfg.Spec.Versions[0].PauseImage = pauseRef
 	p = &sandboxPrewarmer{
-		assets: &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}},
+		assets: &Atelet{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}},
 		images: failStore,
 	}
 	if err := p.prewarm(ctx, failCfg); err == nil {
@@ -341,7 +341,7 @@ func TestPrewarmTimeout(t *testing.T) {
 
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("hung runsc"))))
 	cfg.Spec.Versions[0].PauseImage = ""
-	p := &sandboxPrewarmer{assets: &AteomHerder{anonGCSClient: hangingObjectStorage{}}}
+	p := &sandboxPrewarmer{assets: &Atelet{anonGCSClient: hangingObjectStorage{}}}
 
 	done := make(chan error, 1)
 	go func() { done <- p.prewarm(context.Background(), cfg) }()
@@ -376,17 +376,17 @@ func TestPrewarmDefaultVersionOnly(t *testing.T) {
 		Assets: map[string]map[string]v1alpha1.AssetFile{runtime.GOARCH: {runscAssetName: {URL: "gs://bucket/other-runsc", SHA256: otherSHA}}},
 	}}, cfg.Spec.Versions...)
 
-	p := &sandboxPrewarmer{assets: &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}}
+	p := &sandboxPrewarmer{assets: &Atelet{anonGCSClient: fakeObjectStorage{data: content}}}
 	if err := p.prewarm(ctx, cfg); err != nil {
 		t.Fatalf("prewarm: %v", err)
 	}
-	if _, err := os.Stat(ateletpath.RunSCBinaryPath(otherSHA)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(ateletpath.AssetPath(otherSHA)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("non-default version asset was prewarmed (stat err = %v)", err)
 	}
 
 	// Any fetch would fail, so a nil error means nothing was attempted.
 	cfg.Spec.DefaultVersion = "missing"
-	p = &sandboxPrewarmer{assets: &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}}
+	p = &sandboxPrewarmer{assets: &Atelet{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}}
 	if err := p.prewarm(ctx, cfg); err != nil {
 		t.Errorf("prewarm of a config without its default version: %v", err)
 	}
@@ -402,10 +402,26 @@ func TestPrewarmDefaultVersionOnly(t *testing.T) {
 // fake clientset flows through the informer into the prewarm worker, which
 // lands the asset in the static-files cache without any Run/Restore request.
 func TestSandboxAssetPrewarmDownloads(t *testing.T) {
-	origDir, origJitter := nodepath.StaticFilesDir, prewarmMaxJitter
+	origDir, origJitter, origFinished := nodepath.StaticFilesDir, prewarmMaxJitter, prewarmFinished
 	nodepath.StaticFilesDir = t.TempDir()
 	prewarmMaxJitter = 0
-	t.Cleanup(func() { nodepath.StaticFilesDir, prewarmMaxJitter = origDir, origJitter })
+	// The worker's own prewarm call returns only when the asset has landed
+	// and the pause-image pull has finished: it waits for the pull on a live
+	// context, while the pull runs detached from that context (see
+	// imagecache.Store.EnsureImage). Waiting for the call keeps the pull's
+	// last writes from racing the TempDir cleanup.
+	prewarmed := make(chan error, 1)
+	prewarmFinished = func(_ string, err error) {
+		// Non-blocking: a failed attempt is retried, and the worker must not
+		// block on a result nobody reads.
+		select {
+		case prewarmed <- err:
+		default:
+		}
+	}
+	t.Cleanup(func() {
+		nodepath.StaticFilesDir, prewarmMaxJitter, prewarmFinished = origDir, origJitter, origFinished
+	})
 
 	host := imageVolumeTestRegistry(t)
 	pauseRef := host + "/pause:3.10"
@@ -425,7 +441,7 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("imagecache.New: %v", err)
 	}
-	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+	herder := &Atelet{anonGCSClient: fakeObjectStorage{data: content}}
 	// Handler first, informer start second, mirroring main: atelet startup
 	// must never wait on this informer's sync, and the initial List replays
 	// the pre-existing config into the handler as an Add.
@@ -443,17 +459,16 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	defer close(stopCh)
 	factory.Start(stopCh)
 
-	wantPath := ateletpath.RunSCBinaryPath(sha)
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if _, err := os.Stat(wantPath); err == nil {
-			return
-		} else if !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("stat %s: %v", wantPath, err)
+	select {
+	case err := <-prewarmed:
+		if err != nil {
+			t.Fatalf("prewarm: %v", err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("asset never prewarmed to %s", wantPath)
-		}
-		time.Sleep(10 * time.Millisecond)
+	case <-time.After(30 * time.Second):
+		t.Fatal("prewarm never finished")
+	}
+	wantPath := ateletpath.AssetPath(sha)
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Fatalf("asset not prewarmed to %s: %v", wantPath, err)
 	}
 }

@@ -39,6 +39,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -46,7 +47,8 @@ import (
 type workerClient interface {
 	CreateWorker(ctx context.Context, in *ateapipb.CreateWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
 	DeleteWorker(ctx context.Context, in *ateapipb.DeleteWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
-	DrainWorker(ctx context.Context, in *ateapipb.DrainWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
+	DrainWorker(ctx context.Context, in *ateapipb.DrainWorkerRequest, opts ...grpc.CallOption) (*ateapipb.DrainWorkerResponse, error)
+	MarkWorkerAvailable(ctx context.Context, in *ateapipb.MarkWorkerAvailableRequest, opts ...grpc.CallOption) (*ateapipb.MarkWorkerAvailableResponse, error)
 	GetWorker(ctx context.Context, in *ateapipb.GetWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
 	UpdateWorker(ctx context.Context, in *ateapipb.UpdateWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
 	ListWorkers(ctx context.Context, in *ateapipb.ListWorkersRequest, opts ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error)
@@ -60,7 +62,7 @@ type capacityRelay interface {
 	Prune(live map[string]string)
 }
 
-// node is a benchmark node and what it can allocate.
+// node is a fake-atelet node and what it can allocate.
 type node struct {
 	name        string
 	allocatable corev1.ResourceList
@@ -70,7 +72,7 @@ type node struct {
 type cluster interface {
 	// Pools returns every WorkerPool.
 	Pools() ([]*atev1alpha1.WorkerPool, error)
-	// Nodes returns the benchmark nodes, sorted by name.
+	// Nodes returns the nodes that run a fake-atelet pod, sorted by name.
 	Nodes(ctx context.Context) ([]node, error)
 	// Relays returns the fake-atelet relay address on each node that has one.
 	Relays(ctx context.Context) (map[string]string, error)
@@ -93,7 +95,7 @@ type fakeWorker struct {
 	node            string
 	// created is set once ate-api-server has the Worker. A Worker is tracked
 	// from before its create, so a create the server commits but the caller
-	// sees fail is still retired, or deleted at shutdown.
+	// sees fail is still retired, or deleted by --cleanup.
 	created bool
 	// labels and sandboxClass are what the Worker is registered with.
 	labels       map[string]string
@@ -101,7 +103,7 @@ type fakeWorker struct {
 	// tmpl is the pool template the Worker was made from; nil for a Worker
 	// adopted after a restart until reconcile matches it to its pool.
 	tmpl *template
-	// capacity is fixed when the Worker is made, as ateom reads its limits
+	// capacity is fixed when the Worker is made, as worker reads its limits
 	// once at startup; reported is whether ate-api-server has accepted it.
 	capacity *ateapipb.WorkerResources
 	reported bool
@@ -140,13 +142,52 @@ func newController(client workerClient, relay capacityRelay, cl cluster, run str
 	return &controller{client: client, relay: relay, cluster: cl, run: run, concurrency: concurrency, drainGrace: drainGrace, now: time.Now, newUID: uuid.NewString, workers: map[string]*fakeWorker{}}
 }
 
+// adoptUntilServed runs adopt until it succeeds, waiting between tries from
+// initial up to maxBackoff. fake-workersync is installed in the same apply as
+// ate-api-server, so it retries the errors of a server that does not serve
+// yet; any other error, or the end of ctx, ends it with that error.
+func (c *controller) adoptUntilServed(ctx context.Context, initial, maxBackoff time.Duration) error {
+	backoff := initial
+	for {
+		err := c.adopt(ctx)
+		if err == nil || ctx.Err() != nil {
+			return err
+		}
+		switch status.Code(err) {
+		case codes.Unavailable, codes.DeadlineExceeded:
+		default:
+			return err
+		}
+		slog.WarnContext(ctx, "Failed to load registered fake Workers; retrying", slog.Any("err", err), slog.Duration("backoff", backoff))
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(backoff):
+		}
+		backoff = min(2*backoff, maxBackoff)
+	}
+}
+
+// nodes returns the nodes the tracked Workers are on.
+func (c *controller) nodes() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for _, w := range c.workers {
+		if w.node != "" && !slices.Contains(out, w.node) {
+			out = append(out, w.node)
+		}
+	}
+	return out
+}
+
 // adopt loads the fake Workers of this run that are already registered, as
 // after a restart, so they are reconciled rather than created again.
 func (c *controller) adopt(ctx context.Context) error {
 	prefix := fakeworker.Prefix(c.run)
 	var token string
 	for {
-		page, err := c.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{PageSize: 1000, PageToken: token})
+		page, err := c.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: token}})
 		if err != nil {
 			return fmt.Errorf("while listing Workers: %w", err)
 		}
@@ -171,8 +212,10 @@ func (c *controller) adopt(ctx context.Context) error {
 				sandboxClass: w.GetSandboxClass(),
 				capacity:     w.GetStatus().GetCapacity(),
 				reported:     w.GetStatus().GetCapacity() != nil,
-				created:      true,
-				draining:     w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING,
+				// One never marked available goes back through create, which
+				// marks it.
+				created:  w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE,
+				draining: w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING,
 			}
 			if c.workers[name].draining {
 				// When it was drained is not recorded, so its grace restarts.
@@ -247,12 +290,12 @@ func (c *controller) reconcile(ctx context.Context) error {
 	// A real pool replaces every worker pod when its sandbox class, limits or
 	// actor count change, and each new pod reports its capacity once, so its
 	// fake Workers are replaced (see fits). So is a Worker whose node has left
-	// the benchmark set, as a pod is when its node goes away; with no
-	// benchmark node listed, Workers are left where they are, since nothing
+	// the fake-atelet set, as a pod is when its node goes away; with no
+	// fake-atelet node listed, Workers are left where they are, since nothing
 	// could replace them. A replaced pod gets a new Worker
 	// in the same pass, while the old one drains, as a Deployment creates a
 	// replacement pod without waiting for the old one to terminate.
-	onBenchmarkNode := func(w *fakeWorker) bool {
+	onFakeAteletNode := func(w *fakeWorker) bool {
 		_, ok := allocatable[w.node]
 		return ok || len(nodes) == 0
 	}
@@ -265,7 +308,7 @@ func (c *controller) reconcile(ctx context.Context) error {
 			continue
 		}
 		d, ok := desired[w.pod]
-		if ok && !w.draining && onBenchmarkNode(w) && fits(w, d.pool, allocatable) && current[w.pod] == nil {
+		if ok && !w.draining && onFakeAteletNode(w) && fits(w, d.pool, allocatable) && current[w.pod] == nil {
 			current[w.pod] = w
 			continue
 		}
@@ -298,7 +341,7 @@ func (c *controller) reconcile(ctx context.Context) error {
 	_ = g.Wait()
 
 	for _, wp := range pools {
-		if err := c.syncStatus(ctx, wp, onBenchmarkNode, allocatable); err != nil {
+		if err := c.syncStatus(ctx, wp, onFakeAteletNode, allocatable); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -308,7 +351,7 @@ func (c *controller) reconcile(ctx context.Context) error {
 // ensure registers a Worker for the desired pod if w, its current Worker, is
 // nil, brings the Worker's labels in line with the pool's, then has its
 // capacity reported until ate-api-server accepts it. The capacity is fixed
-// when the Worker is made, as ateom reads its limits once at startup, and is
+// when the Worker is made, as worker reads its limits once at startup, and is
 // reported once. The Worker is tracked before CreateWorker is called and
 // marked created after, so a failed create is retried by the next pass under
 // the same name, and one the server committed anyway is never lost: retire
@@ -316,7 +359,7 @@ func (c *controller) reconcile(ctx context.Context) error {
 func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w *fakeWorker, nodes []string, allocatable map[string]corev1.ResourceList, relays map[string]string) error {
 	if w == nil {
 		if len(nodes) == 0 {
-			return errors.New("no benchmark node to place fake Workers on")
+			return errors.New("no fake-atelet node to place fake Workers on")
 		}
 		w = &fakeWorker{
 			name:         c.newUID(),
@@ -347,7 +390,7 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 		if fixed == nil {
 			alloc, ok := allocatable[w.node]
 			if !ok {
-				return fmt.Errorf("node %s of Worker %s is not a benchmark node", w.node, name)
+				return fmt.Errorf("node %s of Worker %s is not a fake-atelet node", w.node, name)
 			}
 			fixed = t.capacity(alloc)
 		}
@@ -378,7 +421,10 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	if err := c.relay.Report(ctx, addr, &ateapipb.RegisterWorkerRequest{
 		Worker:   &ateapipb.ObjectRef{Name: name},
 		Capacity: fixed,
-		Hardware: hardware.ProbeHost(),
+		DefaultRuntime: &ateapipb.SandboxRuntime{
+			SandboxClass: string(d.pool.Spec.DefaultSandboxClass()),
+			Version:      hostCompat(),
+		},
 	}); err != nil {
 		return fmt.Errorf("while reporting capacity for Worker %s: %w", name, err)
 	}
@@ -388,9 +434,19 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	return nil
 }
 
+func hostCompat() *ateapipb.VersionedSandboxCompat {
+	in := hardware.ProbeHost()
+	out := &ateapipb.VersionedSandboxCompat{SchemaVersion: in.GetSchemaVersion()}
+	for _, a := range in.GetAttributes() {
+		out.Attributes = append(out.Attributes, &ateapipb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
+	}
+	return out
+}
+
 // create registers the Worker with the fields the worker syncer would copy
-// from the pool and its pod. Epoch stays 0: a rising epoch makes
-// ate-api-server crash every Actor on the Worker.
+// from the pool and its pod, then marks it available as the syncer does once
+// the pod is Ready. Epoch stays 0: a rising epoch makes ate-api-server crash
+// every Actor on the Worker.
 func (c *controller) create(ctx context.Context, w *fakeWorker, wp *atev1alpha1.WorkerPool) error {
 	name := w.name
 	_, err := c.client.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: &ateapipb.Worker{
@@ -406,6 +462,9 @@ func (c *controller) create(ctx context.Context, w *fakeWorker, wp *atev1alpha1.
 	}})
 	if err != nil && status.Code(err) != codes.AlreadyExists {
 		return fmt.Errorf("while creating Worker %s: %w", name, err)
+	}
+	if _, err := c.client.MarkWorkerAvailable(ctx, &ateapipb.MarkWorkerAvailableRequest{Worker: &ateapipb.ObjectRef{Name: name}}); err != nil {
+		return fmt.Errorf("while marking Worker %s available: %w", name, err)
 	}
 	return nil
 }
@@ -434,9 +493,9 @@ func (c *controller) updateLabels(ctx context.Context, name string, w *fakeWorke
 
 // retire removes a Worker no pool wants, the way a real one goes when its pod
 // does: drained first so nothing new lands on it, deleted once no Actor is
-// assigned to it. In production ateom stops the pod's Actors within its
+// assigned to it. In production worker stops the pod's Actors within its
 // termination grace period, and the Worker is deleted when the pod is gone,
-// which releases any Actor still bound. No ateom stops them here, so after
+// which releases any Actor still bound. No worker stops them here, so after
 // drainGrace the Worker is deleted with its Actors still assigned, and
 // DeleteWorker releases them the same way.
 func (c *controller) retire(ctx context.Context, name string) error {
@@ -457,7 +516,7 @@ func (c *controller) retire(ctx context.Context, name string) error {
 		w.drainedAt = c.now()
 		c.mu.Unlock()
 	}
-	assigned, err := c.client.ListWorkerActorAssignments(ctx, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: ref, PageSize: 1})
+	assigned, err := c.client.ListWorkerActorAssignments(ctx, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: ref, Options: &ateapipb.ListOptions{PageSize: 1}})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			c.forget(name)
@@ -484,16 +543,16 @@ func (c *controller) forget(name string) {
 // syncStatus writes the pool's status as the WorkerPool controller does from
 // its Deployment: a replica is a registered Worker, ready once its capacity
 // is reported, and the selector is the one worker pods would carry.
-func (c *controller) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool, onBenchmarkNode func(*fakeWorker) bool, allocatable map[string]corev1.ResourceList) error {
+func (c *controller) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool, onFakeAteletNode func(*fakeWorker) bool, allocatable map[string]corev1.ResourceList) error {
 	want := atev1alpha1.WorkerPoolStatus{
 		Selector: labels.SelectorFromSet(labels.Set{fakeworker.WorkerPoolLabel: wp.Name}).String(),
 	}
 	c.mu.Lock()
 	for _, w := range c.workers {
 		// A Worker its pool no longer wants, made from an older template, or
-		// off the benchmark nodes is no replica even before its drain lands.
+		// off the fake-atelet nodes is no replica even before its drain lands.
 		if w.namespace != wp.Namespace || w.pool != wp.Name || !w.created || w.draining ||
-			w.index >= int(wp.Spec.Replicas) || !onBenchmarkNode(w) || !fits(w, wp, allocatable) {
+			w.index >= int(wp.Spec.Replicas) || !onFakeAteletNode(w) || !fits(w, wp, allocatable) {
 			continue
 		}
 		want.Replicas++
@@ -502,7 +561,7 @@ func (c *controller) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool,
 		}
 	}
 	c.mu.Unlock()
-	if wp.Status == want {
+	if equality.Semantic.DeepEqual(wp.Status, want) {
 		return nil
 	}
 	updated := wp.DeepCopy()
@@ -513,9 +572,8 @@ func (c *controller) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool,
 	return nil
 }
 
-// deleteAll deletes every fake Worker this run registered, as at shutdown,
-// after the benchmark has deleted its actors. It keeps going past a failure
-// and reports every one.
+// deleteAll deletes every fake Worker this run registered, for --cleanup. It
+// keeps going past a failure and reports every one.
 func (c *controller) deleteAll(ctx context.Context) error {
 	c.mu.Lock()
 	names := slices.Sorted(maps.Keys(c.workers))
@@ -569,7 +627,7 @@ func templateOf(wp *atev1alpha1.WorkerPool) (template, error) {
 
 // capacity is what a worker made from t reports on a node with allocatable:
 // cpu and memory from its limits, or, with no limit set, the node's
-// allocatable, which is what the downward API projects into ateom for an
+// allocatable, which is what the downward API projects into worker for an
 // unset limit.
 func (t template) capacity(allocatable corev1.ResourceList) *ateapipb.WorkerResources {
 	cpu, memory := t.cpuMilli, t.memoryBytes
@@ -606,7 +664,7 @@ func fits(w *fakeWorker, wp *atev1alpha1.WorkerPool, allocatable map[string]core
 	return proto.Equal(w.capacity, t.capacity(alloc))
 }
 
-// maxActors is the pool's actor capacity per Worker: ateom's default, unless
+// maxActors is the pool's actor capacity per Worker: worker's default, unless
 // the pool's annotation overrides it.
 func maxActors(wp *atev1alpha1.WorkerPool) (int, error) {
 	v, ok := wp.Annotations[fakeworker.MaxActorsAnnotation]

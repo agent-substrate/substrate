@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -38,22 +37,17 @@ var (
 )
 
 var getTagsCmd = &cobra.Command{
-	Use:     "tags [tag-name ...]",
-	Aliases: []string{"tag"},
+	Use:     "tag [tag-name ...]",
+	Aliases: []string{"tags"},
 	Short:   "List or get tags",
+	Args:    cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if getTagAllAtespacesFlag && getTagAtespaceFlag != "" {
-			return fmt.Errorf("--atespace and -A/--all-atespaces are mutually exclusive")
-		}
-		if len(args) > 0 && getTagAtespaceFlag == "" {
-			return fmt.Errorf("--atespace is required when getting tags")
-		}
-		if len(args) == 0 && !getTagAllAtespacesFlag && getTagAtespaceFlag == "" {
-			return fmt.Errorf("specify --atespace <name>, or -A/--all-atespaces")
+		if err := validateAtespaceFlags("tags", args, getTagAtespaceFlag, getTagAllAtespacesFlag); err != nil {
+			return err
 		}
 
 		ctx := cmd.Context()
-		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		client, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -79,7 +73,7 @@ var getTagsCmd = &cobra.Command{
 		var tags []*ateapipb.Tag
 		pageToken := ""
 		for {
-			resp, err := client.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: getTagAtespaceFlag, PageSize: 1000, PageToken: pageToken})
+			resp, err := client.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: getTagAtespaceFlag, Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken}})
 			if err != nil {
 				return fmt.Errorf("failed to list tags: %w", err)
 			}
@@ -94,20 +88,19 @@ var getTagsCmd = &cobra.Command{
 }
 
 var createTagCmd = &cobra.Command{
-	Use:     "tag <tag-name>",
-	Aliases: []string{"tags"},
-	Short:   "Tag the external snapshot a suspended actor holds",
+	Use:   "tag <tag-name>",
+	Short: "Tag the external snapshot a suspended actor holds",
 	Long: "Tag the external snapshot a suspended actor holds.\n\n" +
 		"The tag gets its own copy of that snapshot, so suspending the actor\n" +
 		"again or deleting it cannot collect what the tag names.",
-	Args: cobra.ExactArgs(1),
+	Args: exactlyOneArg("<tag-name>", "atespace", "actor"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		scope, err := parseTagScope(createTagScopeFlag)
 		if err != nil {
-			return err
+			return wrapUsageError(err)
 		}
 		ctx := cmd.Context()
-		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		client, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -128,17 +121,16 @@ var createTagCmd = &cobra.Command{
 }
 
 var updateTagCmd = &cobra.Command{
-	Use:     "tag <tag-name>",
-	Aliases: []string{"tags"},
-	Short:   "Publish or unpublish a tag",
-	Args:    cobra.ExactArgs(1),
+	Use:   "tag <tag-name>",
+	Short: "Publish or unpublish a tag",
+	Args:  exactlyOneArg("<tag-name>", "atespace", "scope"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		scope, err := parseTagScope(updateTagScopeFlag)
 		if err != nil {
-			return err
+			return wrapUsageError(err)
 		}
 		ctx := cmd.Context()
-		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		client, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -154,13 +146,12 @@ var updateTagCmd = &cobra.Command{
 }
 
 var deleteTagCmd = &cobra.Command{
-	Use:     "tag <tag-name>",
-	Aliases: []string{"tags"},
-	Short:   "Delete a tag",
-	Args:    cobra.ExactArgs(1),
+	Use:   "tag <tag-name>",
+	Short: "Delete a tag",
+	Args:  exactlyOneArg("<tag-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		client, err := newAPIClient(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -206,24 +197,19 @@ func parseTagScope(value string) (ateapipb.TagScope, error) {
 }
 
 func init() {
-	getTagsCmd.Flags().StringVarP(&getTagAtespaceFlag, "atespace", "a", "", "Atespace to list/get tags in")
-	getTagsCmd.Flags().BoolVarP(&getTagAllAtespacesFlag, "all-atespaces", "A", false, "List tags across all atespaces")
+	getTagsCmd.Flags().StringVarP(&getTagAtespaceFlag, "atespace", "a", "", "get tags in a specific atespace (mutually exclusive with --all-atespaces)")
+	getTagsCmd.Flags().BoolVarP(&getTagAllAtespacesFlag, "all-atespaces", "A", false, "get tags across all atespaces (mutually exclusive with --atespace)")
 	getCmd.AddCommand(getTagsCmd)
 
-	createTagCmd.Flags().StringVarP(&createTagAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in; the tag is created here (required)")
-	_ = createTagCmd.MarkFlagRequired("atespace")
-	createTagCmd.Flags().StringVar(&createTagActorFlag, "actor", "", "Name of the suspended actor whose external snapshot to tag (required)")
-	_ = createTagCmd.MarkFlagRequired("actor")
-	createTagCmd.Flags().StringVar(&createTagScopeFlag, "scope", "atespace", "Tag scope: atespace or published")
+	createTagCmd.Flags().StringVarP(&createTagAtespaceFlag, "atespace", "a", "", "the actor's atespace; the tag is created here")
+	createTagCmd.Flags().StringVar(&createTagActorFlag, "actor", "", "suspended actor whose external snapshot to tag")
+	createTagCmd.Flags().StringVar(&createTagScopeFlag, "scope", "atespace", "tag scope: atespace or published")
 	createCmd.AddCommand(createTagCmd)
 
-	updateTagCmd.Flags().StringVarP(&updateTagAtespaceFlag, "atespace", "a", "", "Atespace owning the tag (required)")
-	updateTagCmd.Flags().StringVar(&updateTagScopeFlag, "scope", "", "Tag scope: atespace or published (required)")
-	_ = updateTagCmd.MarkFlagRequired("atespace")
-	_ = updateTagCmd.MarkFlagRequired("scope")
+	updateTagCmd.Flags().StringVarP(&updateTagAtespaceFlag, "atespace", "a", "", "the tag's atespace")
+	updateTagCmd.Flags().StringVar(&updateTagScopeFlag, "scope", "", "tag scope: atespace or published")
 	updateCmd.AddCommand(updateTagCmd)
 
-	deleteTagCmd.Flags().StringVarP(&deleteTagAtespaceFlag, "atespace", "a", "", "Atespace owning the tag (required)")
-	_ = deleteTagCmd.MarkFlagRequired("atespace")
+	deleteTagCmd.Flags().StringVarP(&deleteTagAtespaceFlag, "atespace", "a", "", "the tag's atespace")
 	deleteCmd.AddCommand(deleteTagCmd)
 }

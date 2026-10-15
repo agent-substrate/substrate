@@ -264,9 +264,16 @@ changes it.
 Defaults are also shown by `ate-setup --help` and by `--help` on the owning
 command. A setting with no default is unset unless something supplies it.
 
+Settings for the demos, benchmarks, and e2e tests are listed with them: the
+[counter](../demos/counter/README.md#settings) and
+[claude-code-multiplex](../demos/claude-code-multiplex/README.md#settings)
+demos, the [benchmarks](../benchmarking/README.md#settings), and the
+[e2e tests](../internal/e2e/README.md#settings).
+
 | Key                                          | Environment variable                            | Flag                                               | Default               | Applies to                               |
 |----------------------------------------------|-------------------------------------------------|----------------------------------------------------|-----------------------|------------------------------------------|
 | `actorJWT.algorithm`                         | `ACTOR_JWT_ALGORITHM`                           | `--actor-jwt-algorithm`                            | `ES256`               | (global)                                 |
+| `actorJWT.issuer`                            | `ACTOR_JWT_ISSUER`                              | `--actor-jwt-issuer`                               | —                     | (global)                                 |
 | `ateapi.expectedJWTIssuer`                   | `EXPECTED_JWT_ISSUER`                           | `--ateapi-expected-jwt-issuer`                     | —                     | (global)                                 |
 | `ateapi.postgres.cloudsql.gsa`               | `ATE_API_POSTGRES_CLOUDSQL_GSA`                 | `--ateapi-postgres-cloudsql-gsa`                   | —                     | (global)                                 |
 | `ateapi.postgres.cloudsql.iamAuth`           | `ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH`            | `--ateapi-postgres-cloudsql-iam-auth`              | —                     | (global)                                 |
@@ -283,22 +290,18 @@ command. A setting with no default is unset unless something supplies it.
 | `atenet.dataplane`                           | `ATE_ATENET_DATAPLANE`                          | `--atenet-dataplane`                               | `envoy`               | (global)                                 |
 | `atenet.egress.additionalExtprocService`     | `ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE`         | `--experimental-additional-egress-extproc-service` | —                     | (global)                                 |
 | `atenet.egress.credentialProvider`           | `ATE_CREDENTIAL_PROVIDER`                       | `--credential-provider`                            | —                     | (global)                                 |
-| `benchmark.actorMemory`                      | `BENCHMARK_ACTOR_MEMORY`                        | `--benchmark-actor-memory`                         | —                     | (global)                                 |
-| `benchmark.sandboxClass`                     | `ATE_BENCHMARK_SANDBOX_CLASS`                   | `--sandbox-class`                                  | `gvisor`              | `deploy benchmarks`, `delete benchmarks` |
-| `benchmark.workerCount`                      | `ATE_BENCHMARK_WORKER_COUNT`                    | `--worker-count`                                   | `1`                   | `deploy benchmarks`, `delete benchmarks` |
 | `clusterSize`                                | `ATE_INSTALL_CLUSTER_SIZE`                      | `--cluster-size`                                   | `size0`               | (global)                                 |
 | `context`                                    | `KUBECTL_CONTEXT`                               | `--context`                                        | —                     | (global)                                 |
 | `cordonControlPlane`                         | `ATE_INSTALL_CORDON_CONTROL_PLANE`              | `--cordon-control-plane`                           | `false`               | (global)                                 |
 | `csi.setup`                                  | `SETUP_CSI`                                     | `--setup-csi`                                      | `none`                | `deploy ate-system`                      |
-| `demo.anthropicAPIKey`                       | `ANTHROPIC_API_KEY`                             | — (no flag)                                        | — (secret)            | (global)                                 |
-| `demo.counter.storageClass`                  | `STORAGE_CLASS`                                 | `--storage-class`                                  | `standard`            | `deploy demo counter`                    |
-| `demo.counter.withExternalVolume`            | `ATE_DEMO_COUNTER_WITH_EXTERNAL_VOLUME`         | `--with-external-volume`                           | `false`               | `deploy demo counter`                    |
 | `docker.buildFlags`                          | `DOCKER_BUILD_FLAGS`                            | `--docker-build-flags`                             | —                     | (global)                                 |
+| `fakeDataPlane.enabled`                      | `ATE_INSTALL_FAKE_DATA_PLANE`                   | `--fake-data-plane`                                | `false`               | (global)                                 |
 | `gcp.clusterLocation`                        | `CLUSTER_LOCATION`                              | `--gcp-cluster-location`                           | —                     | (global)                                 |
 | `gcp.clusterName`                            | `CLUSTER_NAME`                                  | `--gcp-cluster-name`                               | —                     | (global)                                 |
 | `gcp.projectID`                              | `PROJECT_ID`                                    | `--gcp-project-id`                                 | —                     | (global)                                 |
 | `images.repo`                                | `ATE_IMAGE_REPO`                                | `--image-repo`                                     | —                     | (global)                                 |
 | `images.tag`                                 | `ATE_IMAGE_TAG`                                 | `--image-tag`                                      | —                     | (global)                                 |
+| `ingressAuthMode`                            | `ATE_INGRESS_AUTH_MODE`                         | `--ingress-auth-mode`                              | `deprecated-insecure` | (global)                                 |
 | `kindCluster.enabled`                        | `ATE_INSTALL_KIND`                              | `--kind`                                           | `false`               | (global)                                 |
 | `kindCluster.name`                           | `KIND_CLUSTER_NAME`                             | `--kind-cluster-name`                              | `kind`                | (global)                                 |
 | `ko.defaultPlatforms`                        | `KO_DEFAULTPLATFORMS`                           | `--ko-default-platforms`                           | —                     | (global)                                 |
@@ -307,6 +310,7 @@ command. A setting with no default is unset unless something supplies it.
 | `namespace`                                  | `ATE_NAMESPACE`                                 | `--namespace`                                      | `ate-system`          | (global)                                 |
 | `otlpEndpoint`                               | `ATE_OTLP_ENDPOINT`                             | `--otlp-endpoint`                                  | —                     | (global)                                 |
 | `podcert.workersPerSigner`                   | `ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER`        | `--podcert-workers-per-signer`                     | `0`                   | (global)                                 |
+| `preview`                                    | `ATE_PREVIEW`                                   | `--preview`                                        | —                     | (global)                                 |
 | `record.dir`                                 | `ATE_RECORD_DIR`                                | `--record-dir`                                     | —                     | (global)                                 |
 | `rolloutTimeout`                             | `ATE_INSTALL_ROLLOUT_TIMEOUT`                   | `--rollout-timeout`                                | `1m0s`                | (global)                                 |
 | `storage.bucketName`                         | `BUCKET_NAME`                                   | `--storage-bucket-name`                            | —                     | (global)                                 |

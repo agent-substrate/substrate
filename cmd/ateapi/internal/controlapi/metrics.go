@@ -98,10 +98,10 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		}
 		for _, w := range ws {
 			state := workerState(w)
-			// CreateWorker does not validate the class, thus a worker can have an
-			// empty one. Report it as unknown, not as the pool's class: the
-			// scheduler puts no actor on a worker that offers no class, thus the
-			// pool's series must not count it as free capacity.
+			// CreateWorker accepts an empty class, as the field is optional.
+			// Report it as unknown, not as the pool's class: the scheduler puts
+			// no actor on a worker that offers no class, thus the pool's series
+			// must not count it as free capacity.
 			class := ateattr.NormalizeSandboxClass(w.GetSandboxClass())
 			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, class}]++
 		}
@@ -201,22 +201,25 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 	i.lifecycleOpDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
 }
 
-// lifecycleOpAttrs builds the resume/suspend/pause dimensions from workflow
-// state. Nil-safe, and omits the pool, snapshot-kind and snapshot-fidelity labels
-// until they are known so a failure before the assign/restore steps never emits
-// an empty-string series. snapshotKind is empty for suspend/pause, which do not
+// lifecycleOpAttrs builds the resume/suspend/pause/revert dimensions from
+// workflow state. Nil-safe, and omits the template, pool, snapshot-kind and
+// snapshot-fidelity labels until they are known so a failure before the
+// load/assign/restore steps never emits an empty-string series. snapshotKind is empty for suspend/pause, which do not
 // restore; snapshotScope applies to all three and separates a full restore
 // from a data-only one of the same kind.
 // The pool keys are set together or not at all; see ateattr.WorkerPoolAttributes.
 func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, snapshotKind, snapshotScope string) []attribute.KeyValue {
-	attrs := []attribute.KeyValue{
-		ateattr.TemplateNameKey.String(actor.GetActorTemplate().GetName()),
-		ateattr.TemplateAtespaceKey.String(actor.GetActorTemplate().GetAtespace()),
+	var attrs []attribute.KeyValue
+	if actor != nil {
+		attrs = append(attrs,
+			ateattr.TemplateNameKey.String(actor.GetActorTemplate().GetName()),
+			ateattr.TemplateAtespaceKey.String(actor.GetActorTemplate().GetAtespace()),
+		)
 	}
 	ass := actor.GetStatus().GetWorkerAssignment()
 	attrs = append(attrs, ateattr.WorkerPoolAttributes(ass.GetWorkerNamespace(), ass.GetWorkerPool())...)
 	if template != nil {
-		attrs = append(attrs, ateattr.SandboxClassAttribute(sandboxClassString(template.GetSandboxConfig().GetSandboxClass())))
+		attrs = append(attrs, ateattr.SandboxClassAttribute(template.GetSandboxConfig().GetSandboxClass()))
 	}
 	if snapshotKind != "" {
 		attrs = append(attrs, ateattr.SnapshotKindKey.String(snapshotKind))
@@ -242,7 +245,7 @@ func (i *Instruments) recordSchedulerAssignment(ctx context.Context, elapsed tim
 	attrs = append(attrs, ateattr.SchedulerOutcomeKey.String(outcome))
 	attrs = append(attrs, ateattr.WorkerPoolAttributes(poolNamespace, pool)...)
 	if class != "" {
-		attrs = append(attrs, ateattr.SandboxClassKey.String(class))
+		attrs = append(attrs, ateattr.SandboxClassAttribute(class))
 	}
 	if outcome == ateattr.SchedulerOutcomeError && err != nil {
 		attrs = append(attrs, ateattr.ErrorTypeKey.String(apierror.Code(err).String()))
