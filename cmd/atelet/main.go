@@ -1596,9 +1596,8 @@ func (s *Atelet) downloadExternalCheckpoint(ctx context.Context, snapshotURI str
 
 // prepareDurableDirVolume creates a durable-dir volume's host directory as
 // 0777, as Kubernetes creates an emptyDir: one actor's containers can run as
-// different users. Chmod, because MkdirAll applies the umask and skips an
-// existing directory. A restore then re-applies the mode the snapshot
-// recorded.
+// different users. Chmod, because MkdirAll applies the umask. A restore then
+// re-applies the mode the snapshot recorded.
 func prepareDurableDirVolume(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return fmt.Errorf("while creating %q: %w", path, err)

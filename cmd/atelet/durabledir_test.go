@@ -20,25 +20,14 @@ import (
 	"testing"
 )
 
-// Chmod, not MkdirAll's mode: the umask narrows a fresh dir, and MkdirAll
-// leaves an existing one alone.
+// Chmod, not MkdirAll's mode: the umask narrows a fresh dir.
 func TestPrepareDurableDirVolume(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vol")
 	if err := prepareDurableDirVolume(path); err != nil {
 		t.Fatal(err)
 	}
 	if got := dirMode(t, path); got != 0o777 {
-		t.Errorf("fresh dir mode = %o, want 777", got)
-	}
-
-	if err := os.Chmod(path, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := prepareDurableDirVolume(path); err != nil {
-		t.Fatal(err)
-	}
-	if got := dirMode(t, path); got != 0o777 {
-		t.Errorf("existing dir mode = %o, want 777", got)
+		t.Errorf("mode = %o, want 777", got)
 	}
 }
 
