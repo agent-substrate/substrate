@@ -197,7 +197,7 @@ func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *a
 		return nil
 	}
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		if err := w.crashBoundActor(ctx, worker, actorRef, actor, "Releasing actor from a worker whose ateom restarted", crashMessageAteomRestarted); err != nil {
+		if err := w.crashBoundActor(ctx, worker, actorRef, actor, "Releasing actor from a restarted worker", crashMessageAteomRestarted); err != nil {
 			return err
 		}
 	}

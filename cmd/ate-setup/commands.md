@@ -122,9 +122,9 @@ a running cluster.
 | `publish worker-images` | (no shell equivalent) |
 | `publish release-images` | (no shell equivalent) |
 
-`publish worker-images` builds and pushes the ateom worker images for the
+`publish worker-images` builds and pushes the worker images for the
 checked-out build and prints their refs; a WorkerPool points `spec.workerImage`
-to a build to use the ateom.
+to a build to use the ateworker.
 
 `publish release-images` builds and pushes every image a pre-built install
 needs, all tagged with the build version; see [Installing a
