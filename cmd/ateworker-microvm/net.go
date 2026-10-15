@@ -24,8 +24,8 @@ import (
 
 	"github.com/vishvananda/netlink"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
+	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
+	"github.com/agent-substrate/substrate/internal/netns"
 )
 
 const (
@@ -47,7 +47,7 @@ const (
 	actorTapMTU = 1500
 )
 
-var gatewayHWAddr = ateomnet.MustParseMAC(gatewayMAC)
+var gatewayHWAddr = actornet.MustParseMAC(gatewayMAC)
 
 // setupActorTap creates the guest's tap with a fixed gateway address and MAC.
 // Returns the FDs cloud-hypervisor adopts on boot or restore.
@@ -80,7 +80,7 @@ func setupActorTap(ctx context.Context, actorNetNS netns.Handle, name string, qu
 		if err := netlink.LinkSetHardwareAddr(link, gatewayHWAddr); err != nil {
 			return fmt.Errorf("setting the gateway MAC on tap %q: %w", name, err)
 		}
-		if err := netlink.AddrReplace(link, ateomnet.HostVethAddr); err != nil {
+		if err := netlink.AddrReplace(link, actornet.HostVethAddr); err != nil {
 			return fmt.Errorf("assigning the gateway address to tap %q: %w", name, err)
 		}
 		if err := netlink.LinkSetUp(link); err != nil {

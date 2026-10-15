@@ -37,9 +37,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"github.com/agent-substrate/substrate/internal/workerstats"
 )
 
 // workerPoolLabel is the label the pool controller stamps on every worker pod
@@ -326,7 +326,7 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 					templateNamespace: sample.GetActorTemplateAtespace(),
 					templateName:      sample.GetActorTemplateName(),
 					sandboxClass:      ateattr.NormalizeSandboxClass(sample.GetSandboxClass()),
-					source:            ateomstats.StatsSourceLabel(sample.GetSource()),
+					source:            workerstats.StatsSourceLabel(sample.GetSource()),
 					workerPool:        pools[podUID],
 				}
 				mu.Lock()

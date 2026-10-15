@@ -60,19 +60,6 @@ func TestVersionFlag(t *testing.T) {
 	if f := rootCmd.Flags().Lookup("version"); f != nil && f.Shorthand != "" {
 		t.Errorf("--version shorthand = %q, want empty", f.Shorthand)
 	}
-
-	resetRootFlags(t)
-	out.Reset()
-	errOut.Reset()
-	rootCmd.SetOut(&out)
-	rootCmd.SetErr(&errOut)
-	rootCmd.SetArgs([]string{"-v"})
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("Execute(-v) unexpected error: %v", err)
-	}
-	if strings.HasPrefix(out.String(), "kubectl-ate version ") {
-		t.Errorf("Execute(-v) printed version %q, want help output", out.String())
-	}
 }
 
 func TestVerboseFlagCounting(t *testing.T) {

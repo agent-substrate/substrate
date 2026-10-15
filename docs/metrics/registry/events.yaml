@@ -137,7 +137,7 @@ groups:
     annotations:
       substrate:
         emitted_by: [ateworker-gvisor, ateworker-microvm]
-        code_anchor: internal/ateomstats/usage.go
+        code_anchor: internal/workerstats/usage.go
         cuj: How much CPU and memory does this actor use, and since when?
     attributes:
       - ref: ate.atespace

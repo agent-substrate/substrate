@@ -103,7 +103,7 @@ func TestRead(t *testing.T) {
 			},
 		},
 		{
-			// ateomcgroup.Delegate enables controllers one at a time and carries on
+			// cgroup.Delegate enables controllers one at a time and carries on
 			// when one cannot be enabled, so a cgroup with memory but no cpu is a
 			// state this actually reaches.
 			name: "no cpu.stat (cpu controller not delegated)",

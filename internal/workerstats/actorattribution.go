@@ -1,0 +1,58 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package workerstats holds the usage telemetry both worker runtimes share: the
+// attribution a worker retains for each actor, the per-activation state behind
+// every sample, the sampler, and the ate.actor.usage_sampled records. The
+// per-runtime measurement reads live with their runtimes (the cgroup read is
+// only meaningful inside the gVisor worker's cgroup namespace, the guest-agent
+// read only over the micro-VM's vsock).
+package workerstats
+
+import (
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"github.com/agent-substrate/substrate/internal/resources"
+)
+
+// attributionSource is the attribution-bearing subset of the worker requests
+// that name the actor they act on.
+type attributionSource interface {
+	GetAtespace() string
+	GetActorName() string
+	GetActorUid() string
+	GetActorTemplateAtespace() string
+	GetActorTemplateName() string
+}
+
+var (
+	_ attributionSource = (*ateworkerpb.RunWorkloadRequest)(nil)
+	_ attributionSource = (*ateworkerpb.RestoreWorkloadRequest)(nil)
+	_ attributionSource = (*ateworkerpb.CheckpointWorkloadRequest)(nil)
+	_ attributionSource = (*ateworkerpb.TerminateWorkloadRequest)(nil)
+)
+
+// ActorAttributionFromRequest extracts the attribution a worker should retain
+// for the workload req starts: nothing later in the run, checkpoint, or restore
+// paths carries it, and GetWorkloadStats needs it.
+func ActorAttributionFromRequest(req attributionSource) resources.ActorAttribution {
+	return resources.ActorAttribution{
+		Ref: resources.ActorRef{
+			Atespace: req.GetAtespace(),
+			Name:     req.GetActorName(),
+		},
+		UID:              req.GetActorUid(),
+		TemplateAtespace: req.GetActorTemplateAtespace(),
+		TemplateName:     req.GetActorTemplateName(),
+	}
+}

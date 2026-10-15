@@ -41,12 +41,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/ateom"
-	"github.com/agent-substrate/substrate/internal/ateomcgroup"
-	"github.com/agent-substrate/substrate/internal/ateominit"
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
-	"github.com/agent-substrate/substrate/internal/ateomtunnel"
+	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
+	"github.com/agent-substrate/substrate/internal/ateworker/cgroup"
+	"github.com/agent-substrate/substrate/internal/ateworker/pid1"
+	"github.com/agent-substrate/substrate/internal/ateworker/register"
+	"github.com/agent-substrate/substrate/internal/ateworker/tunnel"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/preview"
@@ -54,6 +53,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
+	"github.com/agent-substrate/substrate/internal/workerstats"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -75,7 +75,7 @@ var (
 	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
-	tunnelConfig = ateomtunnel.RegisterFlags(pflag.CommandLine)
+	tunnelConfig = tunnel.RegisterFlags(pflag.CommandLine)
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
@@ -87,7 +87,7 @@ var (
 const minUsageSampleInterval = 50 * time.Second
 
 func main() {
-	ateominit.RunIfPID1()
+	pid1.RunIfPID1()
 	pflag.Parse()
 	if *showVersion {
 		fmt.Println(version.String())
@@ -223,26 +223,26 @@ func do(ctx context.Context) error {
 	actorLogger := actorlog.NewActorLogger(logWriter, metadata.OnGCE())
 	// Give each actor's VMM and virtiofsd a cgroup of their own, so one busy
 	// guest cannot starve the rest.
-	actorCgroups, err := ateomcgroup.Delegate(ctx)
+	actorCgroups, err := cgroup.Delegate(ctx)
 	if err != nil {
 		return fmt.Errorf("while delegating the worker cgroup: %w", err)
 	}
 
-	tunnel, err := ateomtunnel.Start(ctx, *tunnelConfig, ateomnet.ActorHTTPUpstream)
+	tunnel, err := tunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
 	if err != nil {
 		return err
 	}
 	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *vmmMemReserve, *maxActors, tunnel, actorLogger)
 	ateworkerService.actorCgroups = actorCgroups
 	// The controller sets both from the downward API.
-	pool := ateomstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
+	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
 		slog.WarnContext(ctx, "Worker pool unknown; usage records will name no pool", slog.Any("pool", pool))
 	}
-	usageStdout := ateomstats.NewStdoutHandler(logWriter)
+	usageStdout := workerstats.NewStdoutHandler(logWriter)
 	defer usageStdout.Close()
-	ateworkerService.usage = ateomstats.NewUsageEmitter(lp, usageStdout, pool)
-	defer ateomstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateworkerService.sweepUsage(ctx) })()
+	ateworkerService.usage = workerstats.NewUsageEmitter(lp, usageStdout, pool)
+	defer workerstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateworkerService.sweepUsage(ctx) })()
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -279,7 +279,7 @@ func do(ctx context.Context) error {
 	// the Worker record exists; anything that reaches here is a misconfiguration
 	// no restart-in-place will fix.
 	go func() {
-		err := ateom.Report(ctx, ateom.ReportConfig{
+		err := register.Report(ctx, register.ReportConfig{
 			SocketPath:           nodepath.WorkerSupportSocket,
 			CredentialBundlePath: tunnelConfig.CredentialBundle,
 			TrustBundlePath:      tunnelConfig.TrustBundle,
@@ -366,9 +366,9 @@ type AteWorkerService struct {
 	// stdout as ate.dev/*-labeled JSON and emits actor lifecycle events (parity
 	// with ateworker-gvisor).
 	actorLogger *actorlog.ActorLogger
-	tunnel      *ateomtunnel.Tunnel
+	tunnel      *tunnel.Tunnel
 	// usage writes the usage records. Nil writes none.
-	usage *ateomstats.UsageEmitter
+	usage *workerstats.UsageEmitter
 
 	// Guards actors, draining, and mutable hostedActor fields.
 	actorsMu sync.RWMutex
@@ -388,7 +388,7 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(podUID, chBinary string, guestDebug bool, memReserveMiB, maxActors int, tunnel *ateomtunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteWorkerService {
+func NewService(podUID, chBinary string, guestDebug bool, memReserveMiB, maxActors int, tunnel *tunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteWorkerService {
 	return &AteWorkerService{
 		locks:         actorlock.New(),
 		inFlight:      actorlock.NewInFlight(),

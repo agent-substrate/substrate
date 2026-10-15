@@ -26,11 +26,11 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
-	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/preview"
+	"github.com/agent-substrate/substrate/internal/workercapacity"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -185,7 +185,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel workerOTelSetti
 		WithVolumeMounts(
 			corev1ac.VolumeMount().
 				WithName(workerCapacityVolume).
-				WithMountPath(ateom.CapacityMountPath).
+				WithMountPath(workercapacity.MountPath).
 				WithReadOnly(true),
 			corev1ac.VolumeMount().
 				WithName("ate-base").
@@ -210,8 +210,8 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel workerOTelSetti
 				WithName(workerCapacityVolume).
 				WithDownwardAPI(corev1ac.DownwardAPIVolumeSource().
 					WithItems(
-						resourceFieldRefFile(ateom.CPULimitFile, "limits.cpu", milliCores),
-						resourceFieldRefFile(ateom.MemoryLimitFile, "limits.memory", wholeBytes),
+						resourceFieldRefFile(workercapacity.CPULimitFile, "limits.cpu", milliCores),
+						resourceFieldRefFile(workercapacity.MemoryLimitFile, "limits.memory", wholeBytes),
 					)),
 			corev1ac.Volume().
 				WithName("ate-base").

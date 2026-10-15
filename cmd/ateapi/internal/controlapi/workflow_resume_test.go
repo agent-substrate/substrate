@@ -1053,11 +1053,18 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 type capturingAtelet struct {
 	ateletpb.UnimplementedAteletServer
 
-	mu         sync.Mutex
-	restore    *ateletpb.RestoreRequest
-	run        *ateletpb.RunRequest
-	checkpoint *ateletpb.CheckpointRequest
-	promote    *ateletpb.PromoteSnapshotRequest
+	mu          sync.Mutex
+	restore     *ateletpb.RestoreRequest
+	run         *ateletpb.RunRequest
+	checkpoint  *ateletpb.CheckpointRequest
+	promote     *ateletpb.PromoteSnapshotRequest
+	checkpoints int
+	promotes    int
+
+	// onCheckpoint, when set, runs before Checkpoint returns, standing in for
+	// whatever else happens while the workload checkpoints. Its error fails
+	// the RPC.
+	onCheckpoint func(ctx context.Context) error
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1076,8 +1083,15 @@ func (f *capturingAtelet) Run(ctx context.Context, req *ateletpb.RunRequest) (*a
 
 func (f *capturingAtelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.checkpoint = proto.Clone(req).(*ateletpb.CheckpointRequest)
+	f.checkpoints++
+	hook := f.onCheckpoint
+	f.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx); err != nil {
+			return nil, err
+		}
+	}
 	return &ateletpb.CheckpointResponse{}, nil
 }
 
@@ -1085,7 +1099,15 @@ func (f *capturingAtelet) PromoteSnapshot(ctx context.Context, req *ateletpb.Pro
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.promote = proto.Clone(req).(*ateletpb.PromoteSnapshotRequest)
+	f.promotes++
 	return &ateletpb.PromoteSnapshotResponse{}, nil
+}
+
+// calls returns how many Checkpoint and PromoteSnapshot RPCs were received.
+func (f *capturingAtelet) calls() (checkpoints, promotes int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.checkpoints, f.promotes
 }
 
 func (f *capturingAtelet) checkpointRequest() *ateletpb.CheckpointRequest {

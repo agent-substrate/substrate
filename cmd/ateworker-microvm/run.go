@@ -30,9 +30,9 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
+	"github.com/agent-substrate/substrate/internal/workerstats"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
 
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
@@ -251,7 +251,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 	defer release()
 
-	if err := s.tunnel.Deactivate(ctx, ateomstats.ActorAttributionFromRequest(req)); err != nil {
+	if err := s.tunnel.Deactivate(ctx, workerstats.ActorAttributionFromRequest(req)); err != nil {
 		return nil, err
 	}
 
@@ -594,7 +594,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	tContainers := time.Now()
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
+	if err := wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
 		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 
@@ -1039,25 +1039,25 @@ func tailString(s string, n int) string {
 // neighbor entry stays valid).
 func (s *AteWorkerService) configureGuestNetwork(ctx context.Context, ac *kata.AgentClient, mtu uint64) error {
 	if err := ac.UpdateInterface(ctx, &agentpb.Interface{
-		Device: ateomnet.ActorVethName,
-		Name:   ateomnet.ActorVethName,
+		Device: actornet.ActorVethName,
+		Name:   actornet.ActorVethName,
 		HwAddr: actorGuestMAC,
 		Mtu:    mtu,
 		IPAddresses: []*agentpb.IPAddress{
-			{Family: agentpb.IPFamily_v4, Address: ateomnet.ActorVethIP, Mask: "30"},
+			{Family: agentpb.IPFamily_v4, Address: actornet.ActorVethIP, Mask: "30"},
 		},
 	}); err != nil {
 		return err
 	}
 	if err := ac.UpdateRoutes(ctx, []*agentpb.Route{
-		{Dest: ateomnet.ActorVethSubnet, Device: ateomnet.ActorVethName, Scope: uint32(unix.RT_SCOPE_LINK), Family: agentpb.IPFamily_v4},
-		{Dest: "", Gateway: ateomnet.ActorVethGateway, Device: ateomnet.ActorVethName, Family: agentpb.IPFamily_v4},
+		{Dest: actornet.ActorVethSubnet, Device: actornet.ActorVethName, Scope: uint32(unix.RT_SCOPE_LINK), Family: agentpb.IPFamily_v4},
+		{Dest: "", Gateway: actornet.ActorVethGateway, Device: actornet.ActorVethName, Family: agentpb.IPFamily_v4},
 	}); err != nil {
 		return err
 	}
 	return ac.AddARPNeighbors(ctx, []*agentpb.ARPNeighbor{{
-		ToIPAddress: &agentpb.IPAddress{Family: agentpb.IPFamily_v4, Address: ateomnet.ActorVethGateway},
-		Device:      ateomnet.ActorVethName,
+		ToIPAddress: &agentpb.IPAddress{Family: agentpb.IPFamily_v4, Address: actornet.ActorVethGateway},
+		Device:      actornet.ActorVethName,
 		Lladdr:      gatewayMAC,
 		State:       0x80, // NUD_PERMANENT
 	}})

@@ -22,10 +22,10 @@ import (
 
 	"github.com/vishvananda/netlink"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
-	"github.com/agent-substrate/substrate/internal/ateomtunnel"
+	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
+	"github.com/agent-substrate/substrate/internal/ateworker/tunnel"
 	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/netns"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/roottest"
@@ -41,7 +41,7 @@ func TestHostActorReplacesSameActor(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := &AteWorkerService{
-		tunnel:    &ateomtunnel.Tunnel{Egress: egress, EgressPort: 15001},
+		tunnel:    &tunnel.Tunnel{Egress: egress, EgressPort: 15001},
 		actors:    map[string]*hostedActor{},
 		maxActors: 1,
 	}
@@ -121,12 +121,12 @@ func TestSetupActorTap(t *testing.T) {
 		}
 		var found bool
 		for _, a := range addrs {
-			if a.IPNet.String() == ateomnet.HostVethAddr.IPNet.String() {
+			if a.IPNet.String() == actornet.HostVethAddr.IPNet.String() {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("tap addresses = %v, want the gateway %s the guest routes to", addrs, ateomnet.HostVethAddr)
+			t.Errorf("tap addresses = %v, want the gateway %s the guest routes to", addrs, actornet.HostVethAddr)
 		}
 		return nil
 	}); err != nil {

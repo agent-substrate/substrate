@@ -28,7 +28,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/agent-substrate/substrate/internal/ateom"
+	"github.com/agent-substrate/substrate/internal/ateworker/register"
 )
 
 // commandFlags holds per-command flags for a single command.
@@ -126,7 +126,7 @@ func newFlagStore(ctx context.Context, path string) (*flagStore, error) {
 		return nil, err
 	}
 
-	changes := ateom.WatchFile(ctx, cleanPath)
+	changes := register.WatchFile(ctx, cleanPath)
 	store := &flagStore{
 		path: cleanPath,
 		cfg:  cfg,

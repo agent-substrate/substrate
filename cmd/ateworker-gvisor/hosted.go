@@ -25,34 +25,34 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
+	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/workerstats"
 )
 
 // hostedActor holds one actor's attribution, network, and runtime state.
 type hostedActor struct {
 	// Attribution is available during boot.
 	attribution resources.ActorAttribution
-	network     *ateomnet.SandboxSession
+	network     *actornet.SandboxSession
 	// resolvConf is the actor's resolver bind source, removed with its network.
 	resolvConf string
 	// Set once the containers exist.
 	session *workloadSession
 	// usage is this activation's epoch, CPU baseline, and latest sample.
-	usage *ateomstats.Activation
+	usage *workerstats.Activation
 	// deadReported keeps the usage sweep to one warning per activation.
 	deadReported atomic.Bool
 }
 
 // admitActor reserves capacity before network setup. An actor that is already
 // hosted keeps its slot; its old network is returned for the caller to close.
-func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution) (*hostedActor, *ateomnet.SandboxSession, error) {
+func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution) (*hostedActor, *actornet.SandboxSession, error) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
-	var stale *ateomnet.SandboxSession
+	var stale *actornet.SandboxSession
 	if old, ok := s.actors[attribution.UID]; ok {
 		stale = old.network
 	} else if len(s.actors)+s.draining >= s.maxActors {
@@ -60,7 +60,7 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution) (*
 	}
 	// The sandbox cgroup is new with every activation, so its counters start
 	// at zero.
-	hosted := &hostedActor{attribution: attribution, usage: ateomstats.NewActivation(time.Now(), false)}
+	hosted := &hostedActor{attribution: attribution, usage: workerstats.NewActivation(time.Now(), false)}
 	s.actors[attribution.UID] = hosted
 	return hosted, stale, nil
 }
@@ -85,7 +85,7 @@ func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.
 		}
 	}
 
-	session, err := ateomnet.ServeSandbox(ctx, ateomnet.SandboxNetworkConfig{
+	session, err := actornet.ServeSandbox(ctx, actornet.SandboxNetworkConfig{
 		ActorUID:   uid,
 		Veth:       true,
 		EgressPort: s.tunnel.EgressPort,
@@ -189,7 +189,7 @@ func (s *AteWorkerService) setSession(actorUID string, session *workloadSession)
 func (s *AteWorkerService) sandboxDialer(actorUID string) atunnel.DialFunc {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		s.actorsMu.RLock()
-		var session *ateomnet.SandboxSession
+		var session *actornet.SandboxSession
 		if hosted := s.actors[actorUID]; hosted != nil {
 			session = hosted.network
 		}

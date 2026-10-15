@@ -33,9 +33,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/actorlock"
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/workerstats"
 )
 
 // TestActorBootParamsAttribution pins the mapping from actorBootParams onto the
@@ -101,7 +101,7 @@ func TestActorBootParamsAttributionMatchesRequest(t *testing.T) {
 		templateName:     req.GetActorTemplateName(),
 	}
 
-	if diff := cmp.Diff(ateomstats.ActorAttributionFromRequest(req), p.actorAttribution()); diff != "" {
+	if diff := cmp.Diff(workerstats.ActorAttributionFromRequest(req), p.actorAttribution()); diff != "" {
 		t.Errorf("attribution via actorBootParams differs from attribution via request (-request +params):\n%s", diff)
 	}
 }
@@ -759,8 +759,8 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 // so the sweep samples it. It starts at the unix epoch, so a sample's epoch is
 // zero and the expected samples here need not name it; the epoch has tests of
 // its own.
-func testActivation() *ateomstats.Activation {
-	a := ateomstats.NewActivation(time.Unix(0, 0), false)
+func testActivation() *workerstats.Activation {
+	a := workerstats.NewActivation(time.Unix(0, 0), false)
 	a.Initial(nil, nil)
 	return a
 }

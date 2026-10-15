@@ -27,10 +27,25 @@ linters:
   default: standard
 
   enable:
+    # Import restrictions, see depguard settings below.
+    - depguard
     # Spelling errors in comments, strings, and identifiers.
     - misspell
 
   settings:
+    depguard:
+      rules:
+        # internal/ateworker is the ateworker binaries' shared code. Anything
+        # else should import a flat package under internal/ instead.
+        ateworker:
+          files:
+            - "$all"
+            - "!**/cmd/ateworker-*/**"
+            - "!**/internal/ateworker/**"
+          deny:
+            - pkg: github.com/agent-substrate/substrate/internal/ateworker
+              desc: only the ateworker binaries may import internal/ateworker
+
     errcheck:
       # Functions where ignoring the return is idiomatic in this codebase.
       # Note: errcheck's exclude-functions matches on the static receiver
