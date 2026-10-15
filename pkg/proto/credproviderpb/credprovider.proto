@@ -25,6 +25,11 @@ option go_package = "github.com/agent-substrate/substrate/pkg/proto/credprovider
 service CredentialProvider {
   // FetchSecret resolves a credential URI to its secret material, subject to
   // whatever authorization the provider applies to the request context.
+  //
+  // The egress gateway answers the actor with 403 for NotFound,
+  // PermissionDenied, FailedPrecondition and InvalidArgument, 503 for
+  // Unavailable, DeadlineExceeded and ResourceExhausted, and 502 for any other
+  // code.
   rpc FetchSecret(FetchSecretRequest) returns (FetchSecretResponse) {}
 }
 

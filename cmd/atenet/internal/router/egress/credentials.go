@@ -33,20 +33,21 @@ import (
 )
 
 // mapCredentialProviderError converts a FetchSecret failure into a
-// client-facing ext_proc denial, mirroring mapEgressIdentityError: a credential
-// the provider does not hold or will not release (NotFound, PermissionDenied)
-// denies as 403 — retrying cannot succeed — while a transient provider failure
-// (Unavailable, DeadlineExceeded) fails closed as a retryable 503. Anything
-// unexpected denies rather than inviting retries of a request that cannot be
-// completed as the policy promised.
+// client-facing ext_proc denial, mirroring mapEgressIdentityError. A credential
+// the provider does not hold, will not release or rejects (NotFound,
+// PermissionDenied, FailedPrecondition, InvalidArgument) is 403, since retrying
+// cannot succeed. A provider that is
+// down, slow or overloaded (Unavailable, DeadlineExceeded, ResourceExhausted)
+// is a retryable 503. Any other code is a provider fault, not a refusal, and is
+// 502.
 func mapCredentialProviderError(err error) error {
 	switch status.Code(err) {
-	case codes.NotFound, codes.PermissionDenied:
+	case codes.NotFound, codes.PermissionDenied, codes.FailedPrecondition, codes.InvalidArgument:
 		return extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err, deniedBody)
-	case codes.Unavailable, codes.DeadlineExceeded:
+	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted:
 		return extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err, deniedBody)
 	default:
-		return extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err, deniedBody)
+		return extproc.WrapReqError(envoy_type.StatusCode_BadGateway, err, deniedBody)
 	}
 }
 
@@ -174,7 +175,7 @@ func (h *Handler) providerCredential(ctx context.Context, ref resources.ActorRef
 	if err != nil {
 		slog.ErrorContext(ctx, "egress denied: unusable credential",
 			slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("uri", uri), slog.Any("err", err))
-		return nil, extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err, deniedBody)
+		return nil, extproc.WrapReqError(envoy_type.StatusCode_BadGateway, err, deniedBody)
 	}
 	return secret, nil
 }
