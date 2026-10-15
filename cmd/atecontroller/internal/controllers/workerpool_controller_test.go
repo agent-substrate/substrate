@@ -159,7 +159,7 @@ func TestWorkerPoolCreatesDeployment(t *testing.T) {
 		}
 		return len(dep.Spec.Template.Spec.Volumes) == 4 &&
 			dep.Spec.Template.Spec.Volumes[0].Name == ateomCapacityVolume &&
-			dep.Spec.Template.Spec.Volumes[1].Name == "run-ateom" &&
+			dep.Spec.Template.Spec.Volumes[1].Name == "ate-base" &&
 			dep.Spec.Template.Spec.Volumes[2].Name == atunnelIdentityVolume &&
 			dep.Spec.Template.Spec.Volumes[3].Name == atunnelEgressTrustVolume, nil
 	})

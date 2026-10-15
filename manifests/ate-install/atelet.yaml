@@ -196,7 +196,7 @@ spec:
         - configMapRef:
             name: ate-otel-config
         volumeMounts:
-        - name: run-ateom
+        - name: ate-base
           mountPath: /var/lib/ate
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
@@ -295,7 +295,7 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
         volumeMounts:
-        - name: run-ateom
+        - name: ate-base
           mountPath: /var/lib/ate
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
@@ -326,7 +326,7 @@ spec:
       - name: asset-staging
         emptyDir:
           sizeLimit: 9Gi
-      - name: run-ateom
+      - name: ate-base
         hostPath:
           path: /var/lib/ate
           type: DirectoryOrCreate

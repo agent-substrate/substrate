@@ -94,7 +94,7 @@ const (
 	atunnelIdentityMountPath    = "/run/podidentity.podcert.ate.dev"
 	atunnelEgressTrustVolume    = "atunnel-egress-trust"
 	atunnelEgressTrustMountPath = "/run/servicedns.podcert.ate.dev"
-	ateomCapacityVolume         = "ateom-capacity"
+	ateomCapacityVolume         = "worker-capacity"
 )
 
 // buildDeploymentApplyConfig constructs the SSA apply configuration for the
@@ -188,7 +188,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 				WithMountPath(ateom.CapacityMountPath).
 				WithReadOnly(true),
 			corev1ac.VolumeMount().
-				WithName("run-ateom").
+				WithName("ate-base").
 				WithMountPath(nodepath.BasePath).
 				WithMountPropagation(corev1.MountPropagationHostToContainer),
 			corev1ac.VolumeMount().
@@ -214,7 +214,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 						resourceFieldRefFile(ateom.MemoryLimitFile, "limits.memory", wholeBytes),
 					)),
 			corev1ac.Volume().
-				WithName("run-ateom").
+				WithName("ate-base").
 				WithHostPath(corev1ac.HostPathVolumeSource().
 					WithPath(nodepath.BasePath).
 					WithType(corev1.HostPathDirectoryOrCreate)),

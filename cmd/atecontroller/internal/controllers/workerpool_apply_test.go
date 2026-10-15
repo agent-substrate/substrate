@@ -787,7 +787,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 						resourceFieldRefFile(ateom.MemoryLimitFile, "limits.memory", wholeBytes),
 					)),
 			corev1ac.Volume().
-				WithName("run-ateom").
+				WithName("ate-base").
 				WithHostPath(corev1ac.HostPathVolumeSource().
 					WithPath(nodepath.BasePath).
 					WithType(corev1.HostPathDirectoryOrCreate)),
@@ -886,7 +886,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 					WithMountPath(ateom.CapacityMountPath).
 					WithReadOnly(true),
 				corev1ac.VolumeMount().
-					WithName("run-ateom").
+					WithName("ate-base").
 					WithMountPath(nodepath.BasePath).
 					WithMountPropagation(corev1.MountPropagationHostToContainer),
 				corev1ac.VolumeMount().

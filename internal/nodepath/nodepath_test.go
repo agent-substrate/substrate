@@ -23,7 +23,7 @@ func TestAteomPath(t *testing.T) {
 	podUID := "123e4567-e89b-12d3-a456-426614174000"
 
 	path := AteomPath(podUID)
-	expectedSuffix := "/ateoms/" + podUID
+	expectedSuffix := "/workers/" + podUID
 	if !strings.HasSuffix(path, expectedSuffix) {
 		t.Errorf("expected path to end with %s, got %s", expectedSuffix, path)
 	}
