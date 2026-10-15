@@ -331,7 +331,7 @@ func (s *Server) serveConnectHTTP(w http.ResponseWriter, r *http.Request) {
 	active, ctx, release, ok := s.authorize(r)
 	if !ok {
 		slog.DebugContext(r.Context(), "atunnel CONNECT rejected", slog.Any("actor_header", r.Header.Values(atenet.TargetActorHeader)))
-		s.reject(w)
+		sendRejectResponse(w)
 		return
 	}
 	defer release()
@@ -538,7 +538,7 @@ func closeIdleUpstreamConnections(active *activation) {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	active, requestCtx, release, ok := s.authorize(r)
 	if !ok {
-		s.reject(w)
+		sendRejectResponse(w)
 		return
 	}
 	defer release()
@@ -578,7 +578,7 @@ func (s *Server) authorize(r *http.Request) (*activation, context.Context, func(
 // deactivated, which tells a suspend apart from the router hanging up.
 var errActorDeactivated = errors.New("ingress: actor deactivated")
 
-func (s *Server) reject(w http.ResponseWriter) {
+func sendRejectResponse(w http.ResponseWriter) {
 	w.Header().Set(staleAssignmentHeader, "true")
 	http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
 }
