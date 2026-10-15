@@ -28,6 +28,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/ptr"
@@ -39,6 +42,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -194,6 +198,88 @@ func TestPrewarmProcessRetries(t *testing.T) {
 	p.process(ctx, "deleted-config")
 	if got := p.queue.NumRequeues("deleted-config"); got != 0 {
 		t.Errorf("NumRequeues for a deleted config = %d, want 0 (forgotten)", got)
+	}
+}
+
+// codeAssetClient fails every FetchAsset with code and counts the calls.
+type codeAssetClient struct {
+	code  codes.Code
+	calls int
+}
+
+func (c *codeAssetClient) FetchAsset(context.Context, *objectstorev1.FetchAssetRequest, ...grpc.CallOption) (*objectstorev1.FetchAssetResponse, error) {
+	c.calls++
+	return nil, status.Error(c.code, "plugin failure")
+}
+
+// TestPrewarmProcessPluginCodes covers which final plugin refusals prewarm
+// retries: not the ones that hold until the SandboxConfig or the plugin
+// deployment changes, such as a URL under a snapshot location, but every
+// failure a later attempt may not repeat.
+func TestPrewarmProcessPluginCodes(t *testing.T) {
+	origDir := nodepath.StaticFilesDir
+	t.Cleanup(func() { nodepath.StaticFilesDir = origDir })
+	sha := fmt.Sprintf("%x", sha256.Sum256([]byte("runsc")))
+
+	for _, tc := range []struct {
+		code      codes.Code
+		wantRetry bool
+	}{
+		{codes.PermissionDenied, false},
+		{codes.InvalidArgument, false},
+		{codes.Unimplemented, false},
+		{codes.NotFound, true},
+		{codes.FailedPrecondition, true},
+		{codes.Unavailable, true},
+		{codes.Internal, true},
+	} {
+		t.Run(tc.code.String(), func(t *testing.T) {
+			nodepath.StaticFilesDir = t.TempDir()
+			// Not gs://, so atelet has no anonymous fallback and the
+			// plugin's code is final.
+			cfg := gvisorConfig("private-gvisor", "https://account.blob.core.windows.net/assets/runsc", sha)
+			cfg.Spec.Versions[0].PauseImage = ""
+			indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+			if err := indexer.Add(cfg); err != nil {
+				t.Fatalf("indexer.Add: %v", err)
+			}
+			plugin := &codeAssetClient{code: tc.code}
+			herder := &AteomHerder{assetPlugin: plugin, pluginSocket: "/run/objectstore-plugin/node.sock"}
+			p := newSandboxPrewarmer(herder, nil, listersv1alpha1.NewSandboxConfigLister(indexer), false)
+
+			p.queue.Add(cfg.Name)
+			name, _ := p.queue.Get()
+			p.process(context.Background(), name)
+			if plugin.calls != 1 {
+				t.Errorf("FetchAsset calls = %d, want 1", plugin.calls)
+			}
+			wantRequeues := 0
+			if tc.wantRetry {
+				wantRequeues = 1
+			}
+			if got := p.queue.NumRequeues(cfg.Name); got != wantRequeues {
+				t.Errorf("NumRequeues after %s = %d, want %d", tc.code, got, wantRequeues)
+			}
+		})
+	}
+}
+
+func TestRetryable(t *testing.T) {
+	permanent := &permanentAssetError{err: errors.New("refused")}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"transient", errors.New("network"), true},
+		{"permanent", permanent, false},
+		{"wrapped permanent", fmt.Errorf("while fetching sandbox asset: %w", permanent), false},
+		{"joined permanent", errors.Join(permanent), false},
+		{"joined with a pause image failure", errors.Join(permanent, errors.New("pull failed")), true},
+	} {
+		if got := retryable(tc.err); got != tc.want {
+			t.Errorf("retryable(%s) = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

@@ -344,7 +344,11 @@ func (s *Atelet) downloadVerified(ctx context.Context, entry assetEntry, tmpPref
 		if !anonFallback || !slices.Contains(anonymousFallbackCodes, pluginCode) {
 			slog.WarnContext(ctx, "Object-store plugin failed to fetch sandbox asset",
 				slog.String("url", shown), slog.String("code", pluginCode.String()))
-			return "", s.pluginError(ctx, entry, shown, pluginCode, nil)
+			err := s.pluginError(ctx, entry, shown, pluginCode, nil)
+			if slices.Contains(permanentPluginCodes, pluginCode) {
+				err = &permanentAssetError{err: err}
+			}
+			return "", err
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", fmt.Errorf("sandbox asset %s: %w", shown, ctxErr)
@@ -379,6 +383,23 @@ func (s *Atelet) downloadVerified(ctx context.Context, entry assetEntry, tmpPref
 // GCS refusing its credentials for a public bucket (see #2613), so this falls
 // back on any unexpected failure of that plugin. Any other code is final.
 var anonymousFallbackCodes = []codes.Code{codes.NotFound, codes.InvalidArgument, codes.Unimplemented, codes.Unavailable, codes.Internal}
+
+// permanentPluginCodes are the plugin codes, when final, that the same request
+// gets every time until the SandboxConfig or the plugin's deployment changes:
+// the URL is under a snapshot location, the plugin cannot serve its form, or
+// the plugin does not implement AssetProvider. Either change restarts or
+// re-enqueues the prewarm, so prewarm does not retry them.
+var permanentPluginCodes = []codes.Code{codes.PermissionDenied, codes.InvalidArgument, codes.Unimplemented}
+
+// permanentAssetError marks a sandbox asset fetch that retrying cannot fix
+// (see permanentPluginCodes). It keeps err's message and code.
+type permanentAssetError struct {
+	err error
+}
+
+func (e *permanentAssetError) Error() string { return e.err.Error() }
+
+func (e *permanentAssetError) Unwrap() error { return e.err }
 
 // downloadAnonymous streams the gs:// asset entry.URL into the existing file
 // at path with no credentials, replacing anything a failed plugin fetch left

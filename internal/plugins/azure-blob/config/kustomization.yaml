@@ -1,0 +1,132 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Add this component to a substrate install overlay after replacing the
+# image, client-id, tenant-id, account, and containers placeholders below. It
+# replaces the objectstore-plugin sidecars that the install manifests run next
+# to ate-api-server and atelet, including their startup probes. The caller
+# containers and the shared socket volume stay as the base defines them.
+#
+# On its own it serves snapshots only. Add the assets component after it to
+# serve sandbox assets from blob containers too.
+#
+# The plugin authenticates only with Microsoft Entra workload identity
+# federation, from the service account token projected below.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+- target:
+    kind: Deployment
+    name: ate-api-server
+    namespace: ate-system
+  patch: |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: ate-api-server
+      namespace: ate-system
+    spec:
+      template:
+        spec:
+          initContainers:
+          - name: objectstore-plugin
+            image: example.invalid/replace-with-azure-blob-objectstore-plugin:latest
+            args:
+            - control
+            - --socket=/run/objectstore-plugin/control.sock
+            - --account-url=https://REPLACE_WITH_ACCOUNT.blob.core.windows.net
+            - --containers=REPLACE_WITH_CONTAINERS
+            - --prefix=substrate
+            startupProbe:
+              exec:
+                command:
+                - /ko-app/azure-blob-objectstore-plugin
+                - healthcheck
+                - --socket=/run/objectstore-plugin/control.sock
+            env:
+            - name: ATE_STORAGE_BACKEND
+              $patch: delete
+            - name: AZURE_CLIENT_ID
+              value: REPLACE_WITH_CONTROL_CLIENT_ID
+            - name: AZURE_TENANT_ID
+              value: REPLACE_WITH_TENANT_ID
+            - name: AZURE_FEDERATED_TOKEN_FILE
+              value: /var/run/secrets/azure/tokens/azure-identity-token
+            volumeMounts:
+            - name: azure-identity-token
+              mountPath: /var/run/secrets/azure/tokens
+              readOnly: true
+          volumes:
+          - name: azure-identity-token
+            projected:
+              sources:
+              - serviceAccountToken:
+                  audience: api://AzureADTokenExchange
+                  expirationSeconds: 3600
+                  path: azure-identity-token
+- target:
+    kind: DaemonSet
+    labelSelector: app=atelet
+    namespace: ate-system
+  patch: |-
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      name: ignored
+      namespace: ate-system
+    spec:
+      template:
+        spec:
+          initContainers:
+          - name: objectstore-plugin
+            image: example.invalid/replace-with-azure-blob-objectstore-plugin:latest
+            args:
+            - node
+            - --socket=/run/objectstore-plugin/node.sock
+            - --root=/var/lib/ate
+            - --account-url=https://REPLACE_WITH_ACCOUNT.blob.core.windows.net
+            - --containers=REPLACE_WITH_CONTAINERS
+            - --prefix=substrate
+            # The base manifest's asset-staging volume and its capacity. The
+            # plugin serves sandbox assets only once the config/assets
+            # component names the containers they may be read from.
+            - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
+            - --asset-staging-capacity=8Gi
+            startupProbe:
+              exec:
+                command:
+                - /ko-app/azure-blob-objectstore-plugin
+                - healthcheck
+                - --socket=/run/objectstore-plugin/node.sock
+            env:
+            - name: ATE_STORAGE_BACKEND
+              $patch: delete
+            - name: AZURE_CLIENT_ID
+              value: REPLACE_WITH_NODE_CLIENT_ID
+            - name: AZURE_TENANT_ID
+              value: REPLACE_WITH_TENANT_ID
+            - name: AZURE_FEDERATED_TOKEN_FILE
+              value: /var/run/secrets/azure/tokens/azure-identity-token
+            volumeMounts:
+            - name: azure-identity-token
+              mountPath: /var/run/secrets/azure/tokens
+              readOnly: true
+          volumes:
+          - name: azure-identity-token
+            projected:
+              sources:
+              - serviceAccountToken:
+                  audience: api://AzureADTokenExchange
+                  expirationSeconds: 3600
+                  path: azure-identity-token
