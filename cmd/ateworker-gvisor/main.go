@@ -643,6 +643,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
+		pauseUser:      req.GetSpec().GetPauseUser(),
 		flags:          s.flags,
 	}
 	var containersToDelete []string
@@ -1030,6 +1031,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
+		pauseUser:      req.GetSpec().GetPauseUser(),
 		flags:          s.flags,
 	}
 	var containersToDelete []string
