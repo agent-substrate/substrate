@@ -161,9 +161,6 @@ func (e *Env) ensureCSIPrerequisites(ctx context.Context) error {
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
 		return err
 	}
-	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
-		return err
-	}
 	return e.DeployPodCertificateController(ctx)
 }
 

@@ -112,7 +112,11 @@ func TestRouterConfigValidate(t *testing.T) {
 		{
 			name:    "upstream-connect without the upstream credential bundle rejected",
 			cfg:     routerConfig{Mode: ModeIngress, UpstreamConnect: true},
-			wantErr: "--upstream-connect requires --upstream-credential-bundle",
+			wantErr: "requires --upstream-credential-bundle",
+		},
+		{
+			name: "egress mode ignores upstream-connect",
+			cfg:  routerConfig{Mode: ModeEgress, UpstreamConnect: true},
 		},
 		{
 			name:    "negative drain-delay rejected",

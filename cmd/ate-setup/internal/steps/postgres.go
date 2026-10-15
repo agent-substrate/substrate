@@ -344,9 +344,6 @@ func (e *Env) DeployPostgres(ctx context.Context) error {
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
 		return err
 	}
-	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
-		return err
-	}
 
 	// The StatefulSet's projected serving certificate is issued by this
 	// controller. Applying it here makes `deploy postgres` usable on a fresh

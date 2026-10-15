@@ -145,7 +145,14 @@ func TestValidateCreateWorkerRequest(t *testing.T) {
 	}, {
 		name: "sandbox_class too long",
 		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.SandboxClass = strings.Repeat("x", 64) })),
-		want: field.ErrorList{field.TooLong(field.NewPath("worker", "sandbox_class"), nil, 63).WithOrigin("maxLength")},
+		want: field.ErrorList{
+			field.TooLong(field.NewPath("worker", "sandbox_class"), nil, 63).WithOrigin("maxLength"),
+			field.NotSupported[string](field.NewPath("worker", "sandbox_class"), nil, nil),
+		},
+	}, {
+		name: "unsupported sandbox_class",
+		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.SandboxClass = "kata" })),
+		want: field.ErrorList{field.NotSupported[string](field.NewPath("worker", "sandbox_class"), nil, nil)},
 	}, {
 		name: "valid labels",
 		req: validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) {
@@ -408,7 +415,14 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 	}, {
 		name: "default_runtime.sandbox_class too long",
 		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.DefaultRuntime.SandboxClass = strings.Repeat("c", 64) }),
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("sandbox_class"), "", 63).WithOrigin("maxLength")},
+		want: field.ErrorList{
+			field.TooLong(defaultRuntimePath.Child("sandbox_class"), "", 63).WithOrigin("maxLength"),
+			field.NotSupported[string](defaultRuntimePath.Child("sandbox_class"), nil, nil),
+		},
+	}, {
+		name: "unsupported default_runtime.sandbox_class",
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.DefaultRuntime.SandboxClass = "kata" }),
+		want: field.ErrorList{field.NotSupported[string](defaultRuntimePath.Child("sandbox_class"), nil, nil)},
 	}, {
 		name: "missing default_runtime.version",
 		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.DefaultRuntime.Version = nil }),
@@ -482,6 +496,13 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		}),
 		want: field.ErrorList{field.Required(restorablePath.Index(0).Child("version"), "")},
 	}, {
+		name: "unsupported restorable_runtimes sandbox_class",
+		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
+			r.RestorableRuntimes = []*ateapipb.SandboxRuntime{validSandboxRuntime()}
+			r.RestorableRuntimes[0].SandboxClass = "GVISOR"
+		}),
+		want: field.ErrorList{field.NotSupported[string](restorablePath.Index(0).Child("sandbox_class"), nil, nil)},
+	}, {
 		name: "restorable_runtimes at the bound",
 		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.RestorableRuntimes = sandboxRuntimes(32) }),
 	}, {
@@ -519,6 +540,13 @@ func TestValidateWorkerUpdate_SandboxRuntimes(t *testing.T) {
 			s.DefaultRuntime.SandboxClass = ""
 		},
 		want: field.ErrorList{field.Required(statusPath.Child("default_runtime", "sandbox_class"), "")},
+	}, {
+		name: "unsupported default_runtime.sandbox_class",
+		mutate: func(s *ateapipb.WorkerStatus) {
+			s.DefaultRuntime = validSandboxRuntime()
+			s.DefaultRuntime.SandboxClass = "kata"
+		},
+		want: field.ErrorList{field.NotSupported[string](statusPath.Child("default_runtime", "sandbox_class"), nil, nil)},
 	}, {
 		name: "missing default_runtime.version",
 		mutate: func(s *ateapipb.WorkerStatus) {

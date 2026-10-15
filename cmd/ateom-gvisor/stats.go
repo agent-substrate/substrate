@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
 // defaultCgroupRoot is the worker pod's own cgroup scope. The worker runs in a
@@ -239,7 +240,7 @@ func pendingSample(active *resources.ActorAttribution) *ateompb.WorkloadStatsSam
 		ActorTemplateAtespace: active.TemplateAtespace,
 		ActorTemplateName:     active.TemplateName,
 
-		SandboxClass: ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
+		SandboxClass: string(atev1alpha1.SandboxClassGvisor),
 
 		ObservedAtUnixNano: time.Now().UnixNano(),
 	}
@@ -282,7 +283,7 @@ func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateom
 		ActorTemplateAtespace: active.TemplateAtespace,
 		ActorTemplateName:     active.TemplateName,
 
-		SandboxClass: ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
+		SandboxClass: string(atev1alpha1.SandboxClassGvisor),
 		Source:       ateompb.StatsSource_STATS_SOURCE_CGROUP,
 
 		MemoryCurrentBytes:    sample.MemoryCurrentBytes,

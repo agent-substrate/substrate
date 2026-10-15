@@ -82,10 +82,10 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 		"Ingress authentication and authorization mode.  `deprecated-insecure` (both http and https served, client certificates optional on https) or `static-mtls` (only https served, client certificates required).",
 	)
 
-	fs.StringVar(&cfg.UpstreamCredentialBundlePath, "upstream-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle (cert+key) the router presents as the client cert when dialing the actor's atunnel ingress server over mTLS. Empty disables upstream mTLS (legacy plaintext pod-IP:80).")
+	fs.StringVar(&cfg.UpstreamCredentialBundlePath, "upstream-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle (cert+key) the router presents as the client cert when dialing the actor's atunnel ingress server over mTLS. Empty disables upstream mTLS (legacy plaintext pod-IP:80) and needs --upstream-connect=false.")
 	fs.StringVar(&cfg.UpstreamTrustBundlePath, "upstream-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to validate the actor's atunnel ingress server certificate.")
 	fs.StringVar(&cfg.UpstreamSpiffePrefix, "upstream-spiffe-prefix", "spiffe://cluster.local/", "SPIFFE URI SAN prefix (trust domain) the actor's atunnel server cert must match. Empty falls back to default SAN check against the dialed pod IP (which SPIFFE-only certs never match).")
-	fs.BoolVar(&cfg.UpstreamConnect, "upstream-connect", false, "Reach atunnel through mTLS CONNECT tunnels on port 8443 instead of HTTPS on 443 (Envoy dataplane only). Requires --upstream-credential-bundle")
+	fs.BoolVar(&cfg.UpstreamConnect, "upstream-connect", true, "Reach atunnel through mTLS CONNECT tunnels on port 8443; false reaches it over HTTPS on 443 instead (Envoy dataplane only). Requires --upstream-credential-bundle")
 
 	fs.StringVar(&cfg.ActorIdentityCAFile, "actor-identity-ca-file", "", "PEM trust bundle for the actor-identity CA, used to verify the actor client certificates presented on egress CONNECTs. Required by the egress gateway's ext_proc sidecar; empty (the default) leaves egress authentication unconfigured and every egress CONNECT is denied.")
 

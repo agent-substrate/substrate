@@ -100,7 +100,7 @@ func CleanupSandboxState(ctx context.Context, id string) {
 	}
 	// Kill orphaned per-sandbox processes (cloud-hypervisor / virtiofsd) left by
 	// a prior killed attempt: a canceled Create leaves the CH it spawned running
-	// (reparented to us) holding guest RAM and stale sockets. Matched strictly by
+	// (reparented to the init) holding guest RAM and stale sockets. Matched strictly by
 	// the sandbox id (an actor UUID) appearing in the cmdline, so nothing
 	// unrelated can match.
 	entries, err := os.ReadDir("/proc")

@@ -17,6 +17,7 @@ package objectstorage
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -25,8 +26,35 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
+
+// describeGCSError describes a GCS API error in err's chain for
+// DescribeServiceError. Reads use the XML API, whose error body carries a
+// generic Code and Message and puts the caller and resource in Details, which
+// is not read. JSON API errors quote the caller and resource in their message,
+// so only their reason is kept.
+func describeGCSError(err error) (ServiceError, bool) {
+	apiErr, ok := errors.AsType[*googleapi.Error](err)
+	if !ok {
+		return ServiceError{}, false
+	}
+	desc := ServiceError{HTTPStatus: apiErr.Code}
+	if len(apiErr.Errors) > 0 {
+		desc.Code = apiErr.Errors[0].Reason
+		return desc, true
+	}
+	var body struct {
+		XMLName xml.Name `xml:"Error"`
+		Code    string   `xml:"Code"`
+		Message string   `xml:"Message"`
+	}
+	if xml.Unmarshal([]byte(apiErr.Body), &body) == nil {
+		desc.Code, desc.Message = body.Code, body.Message
+	}
+	return desc, true
+}
 
 type gcsClient struct {
 	client *storage.Client

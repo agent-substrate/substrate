@@ -325,7 +325,7 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 				key := templateKey{
 					templateNamespace: sample.GetActorTemplateAtespace(),
 					templateName:      sample.GetActorTemplateName(),
-					sandboxClass:      ateomstats.SandboxClassLabel(sample.GetSandboxClass()),
+					sandboxClass:      ateattr.NormalizeSandboxClass(sample.GetSandboxClass()),
 					source:            ateomstats.StatsSourceLabel(sample.GetSource()),
 					workerPool:        pools[podUID],
 				}

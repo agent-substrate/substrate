@@ -36,6 +36,7 @@ const (
 	AteomSupport_MintActorCertificate_FullMethodName = "/atelet.AteomSupport/MintActorCertificate"
 	AteomSupport_RegisterWorker_FullMethodName       = "/atelet.AteomSupport/RegisterWorker"
 	AteomSupport_RequestActorSuspend_FullMethodName  = "/atelet.AteomSupport/RequestActorSuspend"
+	AteomSupport_GetActorEgressPolicy_FullMethodName = "/atelet.AteomSupport/GetActorEgressPolicy"
 )
 
 // AteomSupportClient is the client API for AteomSupport service.
@@ -65,6 +66,11 @@ type AteomSupportClient interface {
 	// would need: the control plane answers this by driving a suspend back
 	// through atelet into the calling ateom.
 	RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error)
+	// GetActorEgressPolicy returns the egress policy of the actor this
+	// worker hosts, which atelet reads from the control plane's
+	// Control.GetActorEgressPolicy. An error is the control plane's, passed
+	// through as it was given.
+	GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*GetActorEgressPolicyResponse, error)
 }
 
 type ateomSupportClient struct {
@@ -105,6 +111,16 @@ func (c *ateomSupportClient) RequestActorSuspend(ctx context.Context, in *Reques
 	return out, nil
 }
 
+func (c *ateomSupportClient) GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*GetActorEgressPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetActorEgressPolicyResponse)
+	err := c.cc.Invoke(ctx, AteomSupport_GetActorEgressPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AteomSupportServer is the server API for AteomSupport service.
 // All implementations must embed UnimplementedAteomSupportServer
 // for forward compatibility.
@@ -132,6 +148,11 @@ type AteomSupportServer interface {
 	// would need: the control plane answers this by driving a suspend back
 	// through atelet into the calling ateom.
 	RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error)
+	// GetActorEgressPolicy returns the egress policy of the actor this
+	// worker hosts, which atelet reads from the control plane's
+	// Control.GetActorEgressPolicy. An error is the control plane's, passed
+	// through as it was given.
+	GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*GetActorEgressPolicyResponse, error)
 	mustEmbedUnimplementedAteomSupportServer()
 }
 
@@ -150,6 +171,9 @@ func (UnimplementedAteomSupportServer) RegisterWorker(context.Context, *Register
 }
 func (UnimplementedAteomSupportServer) RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RequestActorSuspend not implemented")
+}
+func (UnimplementedAteomSupportServer) GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*GetActorEgressPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetActorEgressPolicy not implemented")
 }
 func (UnimplementedAteomSupportServer) mustEmbedUnimplementedAteomSupportServer() {}
 func (UnimplementedAteomSupportServer) testEmbeddedByValue()                      {}
@@ -226,6 +250,24 @@ func _AteomSupport_RequestActorSuspend_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AteomSupport_GetActorEgressPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetActorEgressPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomSupportServer).GetActorEgressPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AteomSupport_GetActorEgressPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomSupportServer).GetActorEgressPolicy(ctx, req.(*GetActorEgressPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AteomSupport_ServiceDesc is the grpc.ServiceDesc for AteomSupport service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -244,6 +286,10 @@ var AteomSupport_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RequestActorSuspend",
 			Handler:    _AteomSupport_RequestActorSuspend_Handler,
+		},
+		{
+			MethodName: "GetActorEgressPolicy",
+			Handler:    _AteomSupport_GetActorEgressPolicy_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

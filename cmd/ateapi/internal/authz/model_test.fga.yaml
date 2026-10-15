@@ -38,10 +38,13 @@ tuples:
     relation: viewer
     object: atespace:space-1
 
-  # Templates
+  # Templates and tags
   - user: atespace:space-1
     relation: parent_atespace
     object: actor_template:private-template
+  - user: atespace:space-1
+    relation: parent_atespace
+    object: tag:v1
 
   # Physical Topology & Scheduling (Node -> Worker -> Actor)
   - user: node:node-1
@@ -102,7 +105,7 @@ tests:
           can_create_access_policy: true
           can_get_access_policy: true
           can_update_access_policy: true
-          can_get: true
+          can_list_tags: true
       - user: user:carol
         object: atespace:space-1
         assertions:
@@ -134,7 +137,7 @@ tests:
           can_create_access_policy: false
           can_get_access_policy: true
           can_update_access_policy: false
-          can_get: true
+          can_list_tags: true
       - user: user:frank
         object: atespace:space-1
         assertions:
@@ -221,40 +224,35 @@ tests:
 
   - name: 3. Actor Template Operations (Inherited from Atespace)
     check:
-      - user: user:alice # Owner can get, use, update, delete private template
+      - user: user:alice # Owner can get, use, delete private template
         object: actor_template:private-template
         assertions:
           can_get: true
           can_use_template: true
-          can_update: true
           can_delete: true
-      - user: user:bob # Editor can get, use, update, delete private template
+      - user: user:bob # Editor can get, use, delete private template
         object: actor_template:private-template
         assertions:
           can_get: true
           can_use_template: true
-          can_update: true
           can_delete: true
-      - user: user:dave # Viewer can get and use, but NOT update or delete
+      - user: user:dave # Viewer can get and use, but NOT delete
         object: actor_template:private-template
         assertions:
           can_get: true
           can_use_template: true
-          can_update: false
           can_delete: false
       - user: user:frank # Global viewer can get and use template via parent global
         object: actor_template:private-template
         assertions:
           can_get: true
           can_use_template: true
-          can_update: false
           can_delete: false
       - user: user:eve # External cannot access private template
         object: actor_template:private-template
         assertions:
           can_get: false
           can_use_template: false
-          can_update: false
           can_delete: false
 
   - name: 4. Actor Instance Operations (Inherited from Atespace)
@@ -382,7 +380,6 @@ tests:
           can_list_actors: false
           can_list_atespaces: false
           can_create_atespace: false
-          can_get: false
           viewer: false
       - user: user:sys-controller
         object: worker:pod-1
@@ -403,6 +400,8 @@ tests:
         assertions:
           can_get: true
           can_get_egress_policy: true
+          can_mint_actor_jwt: true
+          can_mint_actor_certificate: true
           can_update: false
           can_delete: false
           can_create_egress_policy: false
@@ -452,3 +451,77 @@ tests:
           controller: false
           egress_gateway: false
           ingress_router: false
+
+  - name: 8. Tag Operations (Inherited from Atespace)
+    check:
+      - user: user:bob # Editor creates, reads, publishes, deletes and clones tags
+        object: atespace:space-1
+        assertions:
+          can_create_tag: true
+          can_list_tags: true
+      - user: user:bob
+        object: tag:v1
+        assertions:
+          can_get: true
+          can_update: true
+          can_delete: true
+          can_use_tag: true
+      - user: user:alice # Atespace owner may clone
+        object: tag:v1
+        assertions:
+          can_use_tag: true
+      - user: user:carol # Global owner may clone
+        object: tag:v1
+        assertions:
+          can_use_tag: true
+      - user: user:dave # Viewer reads tags only
+        object: atespace:space-1
+        assertions:
+          can_create_tag: false
+          can_list_tags: true
+      - user: user:dave
+        object: tag:v1
+        assertions:
+          can_get: true
+          can_update: false
+          can_delete: false
+          can_use_tag: false
+      - user: user:frank # Global viewer reads tags in every atespace
+        object: tag:v1
+        assertions:
+          can_get: true
+          can_update: false
+          can_use_tag: false
+      - user: user:alice # Atespace owner cannot list across all atespaces
+        object: global:root
+        assertions:
+          can_list_tags: false
+      - user: user:eve # External
+        object: tag:v1
+        assertions:
+          can_get: false
+          can_delete: false
+          can_use_tag: false
+      - user: user:sys-egress # System roles hold no tag permissions
+        object: atespace:space-1
+        assertions:
+          can_create_tag: false
+          can_list_tags: false
+
+  - name: 9. Actor Credentials (Egress Gateway Only)
+    check:
+      - user: user:carol # Global owner
+        object: actor:runner-1
+        assertions:
+          can_mint_actor_jwt: false
+          can_mint_actor_certificate: false
+      - user: user:bob # Atespace editor
+        object: actor:runner-1
+        assertions:
+          can_mint_actor_jwt: false
+          can_mint_actor_certificate: false
+      - user: user:sys-router
+        object: actor:runner-1
+        assertions:
+          can_mint_actor_jwt: false
+          can_mint_actor_certificate: false

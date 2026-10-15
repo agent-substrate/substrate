@@ -65,21 +65,3 @@ func TestFidelityToAtelet(t *testing.T) {
 		})
 	}
 }
-
-// TestSandboxClassString pins the label values the scheduler and metrics
-// share with the CRD's lower-case enum.
-func TestSandboxClassString(t *testing.T) {
-	tests := []struct {
-		in       ateapipb.SandboxClass
-		expected string
-	}{
-		{ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, "gvisor"},
-		{ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM, "microvm"},
-		{ateapipb.SandboxClass_SANDBOX_CLASS_UNSPECIFIED, ""},
-	}
-	for _, tt := range tests {
-		if got := sandboxClassString(tt.in); got != tt.expected {
-			t.Errorf("sandboxClassString(%v) = %q, want %q", tt.in, got, tt.expected)
-		}
-	}
-}

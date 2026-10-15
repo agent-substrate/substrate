@@ -75,7 +75,7 @@ func UsageAttrs(pool Pool, kind string, s *ateompb.WorkloadStatsSample) []slog.A
 	}),
 		slog.String(string(ateattr.WorkerPoolNamespaceKey), pool.Namespace),
 		slog.String(string(ateattr.WorkerPoolNameKey), pool.Name),
-		slog.String(string(ateattr.SandboxClassKey), SandboxClassLabel(s.GetSandboxClass())),
+		slog.String(string(ateattr.SandboxClassKey), ateattr.NormalizeSandboxClass(s.GetSandboxClass())),
 		slog.String(string(ateattr.StatsSourceKey), StatsSourceLabel(s.GetSource())),
 		slog.String(string(ateattr.StatsKindKey), kind),
 		slog.Int64(string(ateattr.ActorEpochKey), s.GetEpochUnixNano()),
@@ -92,18 +92,6 @@ func UsageAttrs(pool Pool, kind string, s *ateompb.WorkloadStatsSample) []slog.A
 		attrs = append(attrs, slog.Uint64(string(ateattr.StatsMemoryPeakKey), peak))
 	}
 	return attrs
-}
-
-// SandboxClassLabel maps the wire enum to the ate.sandbox.class values.
-func SandboxClassLabel(c ateompb.SandboxClass) string {
-	switch c {
-	case ateompb.SandboxClass_SANDBOX_CLASS_GVISOR:
-		return "gvisor"
-	case ateompb.SandboxClass_SANDBOX_CLASS_MICROVM:
-		return "microvm"
-	default:
-		return ateattr.SandboxClassUnknown
-	}
 }
 
 // StatsSourceLabel maps the wire enum to the ate.stats.source values.

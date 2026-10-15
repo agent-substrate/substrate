@@ -24,7 +24,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 // TestEnsurePausedFinalized_WorkerGone reproduces the scenario where the worker
@@ -225,6 +227,15 @@ func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
 			workerName := testWorkerUID("worker-pod-1")
+			wantRuntime := &ateapipb.SandboxRuntime{
+				SandboxClass: "gvisor",
+				Version: &ateapipb.VersionedSandboxCompat{
+					SchemaVersion: "v1",
+					Attributes: []*ateapipb.AttributeEntry{
+						{Key: "architecture", Value: "amd64"},
+					},
+				},
+			}
 			created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				Status: &ateapipb.ActorStatus{
@@ -236,6 +247,7 @@ func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 						WorkerPool:      "pool1",
 						WorkerPod:       "worker-pod-1",
 						WorkerPodUid:    workerName,
+						SandboxRuntime:  wantRuntime,
 					},
 				},
 			})
@@ -246,7 +258,7 @@ func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 				WorkerPod:       "worker-pod-1",
 				WorkerPodUid:    workerName,
 				NodeName:        "node1",
-				Status:          &ateapipb.WorkerStatus{},
+				SandboxClass:    "gvisor",
 			}); err != nil {
 				t.Fatalf("CreateWorker: %v", err)
 			}
@@ -284,6 +296,9 @@ func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 			}
 			if localSnap.GetLocality() != "node1" {
 				t.Errorf("local Snapshot.Locality = %q, want %q", localSnap.GetLocality(), "node1")
+			}
+			if diff := cmp.Diff(wantRuntime, localSnap.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+				t.Errorf("Snapshot.SandboxRuntime mismatch (-want +got):\n%s", diff)
 			}
 			if got.GetStatus().GetAssignedNode() != "node1" {
 				t.Errorf("AssignedNode = %q, want %q", got.GetStatus().GetAssignedNode(), "node1")

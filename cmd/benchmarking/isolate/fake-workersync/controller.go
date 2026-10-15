@@ -48,6 +48,7 @@ type workerClient interface {
 	CreateWorker(ctx context.Context, in *ateapipb.CreateWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
 	DeleteWorker(ctx context.Context, in *ateapipb.DeleteWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
 	DrainWorker(ctx context.Context, in *ateapipb.DrainWorkerRequest, opts ...grpc.CallOption) (*ateapipb.DrainWorkerResponse, error)
+	MarkWorkerAvailable(ctx context.Context, in *ateapipb.MarkWorkerAvailableRequest, opts ...grpc.CallOption) (*ateapipb.MarkWorkerAvailableResponse, error)
 	GetWorker(ctx context.Context, in *ateapipb.GetWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
 	UpdateWorker(ctx context.Context, in *ateapipb.UpdateWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
 	ListWorkers(ctx context.Context, in *ateapipb.ListWorkersRequest, opts ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error)
@@ -211,8 +212,10 @@ func (c *controller) adopt(ctx context.Context) error {
 				sandboxClass: w.GetSandboxClass(),
 				capacity:     w.GetStatus().GetCapacity(),
 				reported:     w.GetStatus().GetCapacity() != nil,
-				created:      true,
-				draining:     w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING,
+				// One never marked available goes back through create, which
+				// marks it.
+				created:  w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE,
+				draining: w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING,
 			}
 			if c.workers[name].draining {
 				// When it was drained is not recorded, so its grace restarts.
@@ -441,8 +444,9 @@ func hostCompat() *ateapipb.VersionedSandboxCompat {
 }
 
 // create registers the Worker with the fields the worker syncer would copy
-// from the pool and its pod. Epoch stays 0: a rising epoch makes
-// ate-api-server crash every Actor on the Worker.
+// from the pool and its pod, then marks it available as the syncer does once
+// the pod is Ready. Epoch stays 0: a rising epoch makes ate-api-server crash
+// every Actor on the Worker.
 func (c *controller) create(ctx context.Context, w *fakeWorker, wp *atev1alpha1.WorkerPool) error {
 	name := w.name
 	_, err := c.client.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: &ateapipb.Worker{
@@ -458,6 +462,9 @@ func (c *controller) create(ctx context.Context, w *fakeWorker, wp *atev1alpha1.
 	}})
 	if err != nil && status.Code(err) != codes.AlreadyExists {
 		return fmt.Errorf("while creating Worker %s: %w", name, err)
+	}
+	if _, err := c.client.MarkWorkerAvailable(ctx, &ateapipb.MarkWorkerAvailableRequest{Worker: &ateapipb.ObjectRef{Name: name}}); err != nil {
+		return fmt.Errorf("while marking Worker %s available: %w", name, err)
 	}
 	return nil
 }

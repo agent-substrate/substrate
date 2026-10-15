@@ -89,7 +89,9 @@ spec:
                     description: Enabled controls whether TLS is used.
                     type: boolean
                   serverName:
-                    description: ServerName override for TLS verification.
+                    description: |-
+                      ServerName specifies the expected server name (SAN) for TLS certificate verification.
+                      Required when TLS is enabled.
                     type: string
                   usePodIdentity:
                     description: UsePodIdentity indicates whether to reuse Substrate's
@@ -102,6 +104,9 @@ spec:
                 - message: tls.usePodIdentity must be true when tls.enabled is true;
                     manual certificates are not yet supported
                   rule: '!self.enabled || (has(self.usePodIdentity) && self.usePodIdentity)'
+                - message: tls.serverName is required when tls.enabled is true
+                  rule: '!self.enabled || (has(self.serverName) && size(self.serverName)
+                    > 0)'
             required:
             - controllerEndpoint
             - driverName

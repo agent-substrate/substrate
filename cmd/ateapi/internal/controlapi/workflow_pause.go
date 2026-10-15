@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/protobuf/proto"
 )
 
 // PauseActor executes the workflow to pause a running actor. Idempotent:
@@ -140,14 +141,15 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 		// Increment last_assigned_generation for the new Pause request.
 		gen := toUpdate.Status.LastAssignedGeneration + 1
 		toUpdate.Status.LastAssignedGeneration = gen
-		toUpdate.Status.Snapshots = append(toUpdate.Status.Snapshots,
-			newLocalSnapshot(
-				gen,
-				actorTemplate.GetSnapshotConfig().GetPreferredFidelity(),
-				actorTemplate.GetMetadata().GetUid(),
-				snapshotUUID,
-				"",
-			))
+		snap := newLocalSnapshot(
+			gen,
+			actorTemplate.GetSnapshotConfig().GetPreferredFidelity(),
+			actorTemplate.GetMetadata().GetUid(),
+			snapshotUUID,
+			"",
+		)
+		snap.SandboxRuntime = proto.CloneOf(toUpdate.GetStatus().GetWorkerAssignment().GetSandboxRuntime())
+		toUpdate.Status.Snapshots = append(toUpdate.Status.Snapshots, snap)
 		return nil
 	})
 	if err != nil {

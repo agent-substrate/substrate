@@ -34,6 +34,7 @@ import (
 type ateomSupportServer struct {
 	ateletpb.UnimplementedAteomSupportServer
 	workers ateapipb.WorkerServiceClient
+	control ateapipb.ControlClient
 }
 
 func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
@@ -222,4 +223,49 @@ func (s *ateomSupportServer) RequestActorSuspend(ctx context.Context, req *atele
 		slog.String("actor_name", req.GetActorName()),
 		slog.String("actor_uid", req.GetActorUid()))
 	return &ateletpb.RequestActorSuspendResponse{}, nil
+}
+
+// GetActorEgressPolicy reads the egress policy of an actor.
+func (s *ateomSupportServer) GetActorEgressPolicy(
+	ctx context.Context,
+	req *ateletpb.GetActorEgressPolicyRequest,
+) (*ateletpb.GetActorEgressPolicyResponse, error) {
+	workerIdentity, err := authenticatedWorkerIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Validate request.
+	if errs := apivalidation.ValidateGetActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
+	}
+
+	// TODO(bowei): add validation for which Actor requested this.
+
+	policy, err := s.control.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{
+		Actor: &ateapipb.ObjectRef{
+			Atespace: req.GetActorAtespace(),
+			Name:     req.GetActorName(),
+		},
+		Name: resources.SingletonName,
+	})
+
+	// Note: we do not check that the EgressPolicy is directly attached to the
+	// Actor: Policies are applied by (user-given) name as opposed to linked
+	// explicitly to the internal Actor UUID.
+
+	// NotFound is treated as empty policy (block all).
+	if status.Code(err) == codes.NotFound {
+		return &ateletpb.GetActorEgressPolicyResponse{}, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	slog.DebugContext(ctx, "Fetched an actor egress policy",
+		slog.String("pod_uid", workerIdentity.PodUID),
+		slog.String("actor_atespace", req.GetActorAtespace()),
+		slog.String("actor_name", req.GetActorName()))
+
+	return &ateletpb.GetActorEgressPolicyResponse{EgressPolicy: toAteletEgressPolicy(policy)}, nil
 }

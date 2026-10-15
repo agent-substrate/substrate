@@ -16,6 +16,7 @@ syntax = "proto3";
 
 package ateapi;
 
+import "google/protobuf/descriptor.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
@@ -23,51 +24,77 @@ option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
 // Control is the primary RPC interface for Agentic Substrate.
 service Control {
   // Get an Actor.
-  rpc GetActor(GetActorRequest) returns (Actor) {}
+  rpc GetActor(GetActorRequest) returns (Actor) {
+    option (method).resource = "Actor";
+  }
 
   // Create a new Actor deriving from a given ActorTemplate.
-  rpc CreateActor(CreateActorRequest) returns (Actor) {}
+  rpc CreateActor(CreateActorRequest) returns (Actor) {
+    option (method).resource = "Actor";
+  }
 
   // Update mutable fields on an existing Actor.
-  rpc UpdateActor(UpdateActorRequest) returns (Actor) {}
+  rpc UpdateActor(UpdateActorRequest) returns (Actor) {
+    option (method).resource = "Actor";
+  }
 
   // Suspend a given actor to a new snapshot. A running actor is checkpointed
   // on its worker; a paused actor's node-local snapshot is uploaded, narrowed
   // to the template's commit scope where required (Full capture, Data commit).
-  rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
+  rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Pause a given actor: checkpoint it to its worker's node and leave it
   // SUSPENDED with that node-local snapshot, pinned to the node. A paused
   // actor is told from a suspended one by its snapshots, not its state.
-  rpc PauseActor(PauseActorRequest) returns (PauseActorResponse) {}
+  rpc PauseActor(PauseActorRequest) returns (PauseActorResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Resume an actor from its latest snapshot.
-  rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {}
+  rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Revert an actor to SUSPENDED state at its durable snapshot.
   // Only crashed, running or paused actors can be reverted.
-  rpc RevertActor(RevertActorRequest) returns (RevertActorResponse) {}
+  rpc RevertActor(RevertActorRequest) returns (RevertActorResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Delete an actor. Only suspended or crashed actors can be deleted unless
   // any_state is set.
-  rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
+  rpc DeleteActor(DeleteActorRequest) returns (Actor) {
+    option (method).resource = "Actor";
+  }
 
   // Get the egress policy resource nested under an Actor.
-  rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (EgressPolicy) {}
+  rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (EgressPolicy) {
+    option (method).resource = "EgressPolicy";
+  }
 
   // Create the egress policy resource nested under an Actor.
-  rpc CreateActorEgressPolicy(CreateActorEgressPolicyRequest) returns (EgressPolicy) {}
+  rpc CreateActorEgressPolicy(CreateActorEgressPolicyRequest) returns (EgressPolicy) {
+    option (method).resource = "EgressPolicy";
+  }
 
   // Replace the egress policy resource nested under an Actor.
-  rpc UpdateActorEgressPolicy(UpdateActorEgressPolicyRequest) returns (EgressPolicy) {}
+  rpc UpdateActorEgressPolicy(UpdateActorEgressPolicyRequest) returns (EgressPolicy) {
+    option (method).resource = "EgressPolicy";
+  }
 
   // Delete the egress policy resource nested under an Actor.
-  rpc DeleteActorEgressPolicy(DeleteActorEgressPolicyRequest) returns (EgressPolicy) {}
+  rpc DeleteActorEgressPolicy(DeleteActorEgressPolicyRequest) returns (EgressPolicy) {
+    option (method).resource = "EgressPolicy";
+  }
 
   // Create a Substrate-issued JWT asserting the actor identity.
   //
   // * Called by the egress gateway when actor JWT injection is configured for outbound requests.
-  rpc MintActorJwt(MintActorJwtRequest) returns (MintActorJwtResponse) {}
+  rpc MintActorJwt(MintActorJwtRequest) returns (MintActorJwtResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Create a Substrate-issued SPIFFE certificate asserting the actor identity.
   //
@@ -75,102 +102,179 @@ service Control {
   //
   // * Called by the egress gateway when actor client certificate injection is
   //   configured for outbound requests.
-  rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
+  rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Tag the external snapshot a suspended Actor holds. The tag gets its own
   // copy of that snapshot, so suspending or deleting the Actor afterwards
   // cannot collect it.
-  rpc CreateTag(CreateTagRequest) returns (Tag) {}
+  rpc CreateTag(CreateTagRequest) returns (Tag) {
+    option (method).resource = "Tag";
+  }
 
   // Get a Tag.
-  rpc GetTag(GetTagRequest) returns (Tag) {}
+  rpc GetTag(GetTagRequest) returns (Tag) {
+    option (method).resource = "Tag";
+  }
 
   // List Tags.
-  rpc ListTags(ListTagsRequest) returns (ListTagsResponse) {}
+  rpc ListTags(ListTagsRequest) returns (ListTagsResponse) {
+    option (method).resource = "Tag";
+  }
 
   // Publish or unpublish a Tag without changing its address.
-  rpc UpdateTag(UpdateTagRequest) returns (Tag) {}
+  rpc UpdateTag(UpdateTagRequest) returns (Tag) {
+    option (method).resource = "Tag";
+  }
 
   // Delete a Tag and the external snapshot it owns. Actors created from the
   // tag that have not yet been suspended still point at that external snapshot
   // and become unrecoverable, so do not delete a tag while such Actors exist.
-  rpc DeleteTag(DeleteTagRequest) returns (Tag) {}
+  rpc DeleteTag(DeleteTagRequest) returns (Tag) {
+    option (method).resource = "Tag";
+  }
 
   // List Workers.
-  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {
+    option (method).resource = "Worker";
+  }
 
   // Get a Worker.
-  rpc GetWorker(GetWorkerRequest) returns (Worker) {}
+  rpc GetWorker(GetWorkerRequest) returns (Worker) {
+    option (method).resource = "Worker";
+  }
 
-  // Register a Worker. Called once its Pod is Ready and has an IP.
-  rpc CreateWorker(CreateWorkerRequest) returns (Worker) {}
+  // Register a Worker. Called once its Pod has an IP. A Worker is registered
+  // UNAVAILABLE and takes no Actors until MarkWorkerAvailable.
+  rpc CreateWorker(CreateWorkerRequest) returns (Worker) {
+    option (method).resource = "Worker";
+  }
 
   // Update observed pool state on a Worker.
-  rpc UpdateWorker(UpdateWorkerRequest) returns (Worker) {}
+  rpc UpdateWorker(UpdateWorkerRequest) returns (Worker) {
+    option (method).resource = "Worker";
+  }
 
   // Deregister a Worker. Does not cascade: the caller is responsible for
   // cleaning up related resources first.
-  rpc DeleteWorker(DeleteWorkerRequest) returns (Worker) {}
+  rpc DeleteWorker(DeleteWorkerRequest) returns (Worker) {
+    option (method).resource = "Worker";
+  }
 
   // Mark a Worker as terminating so the scheduler stops routing new Actors to
   // it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
   // Returns ABORTED if another write lands on the Worker first; retry.
-  rpc DrainWorker(DrainWorkerRequest) returns (DrainWorkerResponse) {}
+  rpc DrainWorker(DrainWorkerRequest) returns (DrainWorkerResponse) {
+    option (method).resource = "Worker";
+  }
+
+  // Mark an UNAVAILABLE Worker ACTIVE so the scheduler places Actors on it.
+  // Idempotent. Returns FAILED_PRECONDITION for a DRAINING Worker, and ABORTED
+  // if another write lands on the Worker first; retry.
+  //
+  // Every Actor placed after this call is stamped with the Worker's epoch as
+  // it stands then, so a caller raises epoch for a restarted ateom first.
+  rpc MarkWorkerAvailable(MarkWorkerAvailableRequest) returns (MarkWorkerAvailableResponse) {
+    option (method).resource = "Worker";
+  }
+
+  // Mark an ACTIVE Worker UNAVAILABLE so the scheduler stops placing Actors on
+  // it, as while its Pod is not Ready. Idempotent. Leaves any bound Actor
+  // alone. Returns FAILED_PRECONDITION for a DRAINING Worker, and ABORTED if
+  // another write lands on the Worker first; retry.
+  rpc MarkWorkerUnavailable(MarkWorkerUnavailableRequest) returns (MarkWorkerUnavailableResponse) {
+    option (method).resource = "Worker";
+  }
 
   // List the Actors hosted by a given Worker.
-  rpc ListWorkerActorAssignments(ListWorkerActorAssignmentsRequest) returns (ListWorkerActorAssignmentsResponse) {}
+  rpc ListWorkerActorAssignments(ListWorkerActorAssignmentsRequest) returns (ListWorkerActorAssignmentsResponse) {
+    option (method).resource = "ActorAssignment";
+  }
 
   // List Actors.
-  rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
+  rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Create a new Atespace. Substrate-native, stored in database.
-  rpc CreateAtespace(CreateAtespaceRequest) returns (Atespace) {}
+  rpc CreateAtespace(CreateAtespaceRequest) returns (Atespace) {
+    option (method).resource = "Atespace";
+  }
 
   // Get an Atespace by name.
-  rpc GetAtespace(GetAtespaceRequest) returns (Atespace) {}
+  rpc GetAtespace(GetAtespaceRequest) returns (Atespace) {
+    option (method).resource = "Atespace";
+  }
 
   // List Atespaces.
-  rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {}
+  rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {
+    option (method).resource = "Atespace";
+  }
 
   // Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
   // Tags remain.
-  rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {}
+  rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {
+    option (method).resource = "Atespace";
+  }
 
-  rpc CreateActorTemplate(CreateActorTemplateRequest) returns (ActorTemplate) {}
+  rpc CreateActorTemplate(CreateActorTemplateRequest) returns (ActorTemplate) {
+    option (method).resource = "ActorTemplate";
+  }
 
-  rpc GetActorTemplate(GetActorTemplateRequest) returns (ActorTemplate) {}
+  rpc GetActorTemplate(GetActorTemplateRequest) returns (ActorTemplate) {
+    option (method).resource = "ActorTemplate";
+  }
 
-  rpc ListActorTemplates(ListActorTemplatesRequest) returns (ListActorTemplatesResponse) {}
+  rpc ListActorTemplates(ListActorTemplatesRequest) returns (ListActorTemplatesResponse) {
+    option (method).resource = "ActorTemplate";
+  }
 
   // Delete an ActorTemplate together with its golden actor and golden
   // tag in the reserved ate-golden atespace.
-  rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {}
+  rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {
+    option (method).resource = "ActorTemplate";
+  }
 
   // Get the deployment-wide global access policy singleton. Returns NotFound
   // until the policy has been created.
-  rpc GetGlobalAccessPolicy(GetGlobalAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc GetGlobalAccessPolicy(GetGlobalAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 
   // Create the deployment-wide global access policy singleton. The server's
   // configured bootstrap owners are global owners whether or not this policy
   // exists, so they can create it.
-  rpc CreateGlobalAccessPolicy(CreateGlobalAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc CreateGlobalAccessPolicy(CreateGlobalAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 
   // Replace the deployment-wide global access policy singleton. Empty
   // bindings revoke every grant held through the policy; bootstrap owners
   // keep access.
-  rpc UpdateGlobalAccessPolicy(UpdateGlobalAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc UpdateGlobalAccessPolicy(UpdateGlobalAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 
   // Get the access policy resource nested under an Atespace.
-  rpc GetAtespaceAccessPolicy(GetAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc GetAtespaceAccessPolicy(GetAtespaceAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 
   // Create the access policy resource nested under an Atespace.
-  rpc CreateAtespaceAccessPolicy(CreateAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc CreateAtespaceAccessPolicy(CreateAtespaceAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 
   // Replace the access policy resource nested under an Atespace.
-  rpc UpdateAtespaceAccessPolicy(UpdateAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc UpdateAtespaceAccessPolicy(UpdateAtespaceAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 
   // Delete the access policy resource nested under an Atespace.
-  rpc DeleteAtespaceAccessPolicy(DeleteAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc DeleteAtespaceAccessPolicy(DeleteAtespaceAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 }
 
 // ObjectSnapshot addresses a snapshot held in object storage.
@@ -269,6 +373,12 @@ message Snapshot {
   //
   // +k8s:optional
   SnapshotStorage durable_snapshot = 7;
+
+  // sandbox_runtime is the runtime the actor ran under when the snapshot was
+  // taken.
+  //
+  // +k8s:optional
+  SandboxRuntime sandbox_runtime = 8;
 }
 
 // SnapshotFidelity orders the state layers a snapshot can hold, lowest to
@@ -409,22 +519,6 @@ message ExternalVolume {
   // +k8s:customValidation
   string volume_type = 3;
 
-  enum Status {
-    STATUS_UNSPECIFIED = 0;
-    // Volume creation pending in the storage system.
-    STATUS_PENDING = 1;
-    // Volume successfully created in the storage system.
-    STATUS_CREATED = 2;
-    // Volume being deleted from the storage system.
-    STATUS_DELETING = 3;
-    // Keep this in sync with ExternalVolume.status's maximum.
-  }
-
-  // +k8s:optional
-  // +k8s:minimum=1
-  // +k8s:maximum=3 # keep this in sync with the Status enum
-  Status status = 4;
-
   // volume_context contains metadata returned by the CSI driver during volume
   // provisioning, needed by the node plugin for mounting (e.g. attachment
   // info). Keys and values are the driver's own, so the map is only bounded,
@@ -436,6 +530,11 @@ message ExternalVolume {
 }
 
 message Actor {
+  option (resource) = {
+    scope : SCOPE_ATESPACE
+    plural : "Actors"
+  };
+
   // Common resource metadata: atespace, name, uid, version, timestamps.
   //
   // +k8s:required
@@ -476,6 +575,12 @@ message Actor {
 // at most one egress policy resource, named "default".
 //
 message EgressPolicy {
+  option (resource) = {
+    parents : "Actor"
+    singleton : true
+    plural : "EgressPolicies"
+  };
+
   // Standard resource metadata. Atespace must match the parent Actor and name
   // must be "default". Both are caller-specified on create and immutable.
   // UID, version, create_time, and update_time are server-managed.
@@ -895,6 +1000,12 @@ message WorkerAssignment {
   // +k8s:optional
   // +k8s:minimum=0
   int64 worker_epoch = 8;
+
+  // sandbox_runtime is the sandbox runtime and compatibility version the Actor
+  // was started or restored under on this Worker.
+  //
+  // +k8s:optional
+  SandboxRuntime sandbox_runtime = 9;
 }
 
 // TagStatus is the server-owned state of a Tag.
@@ -925,6 +1036,11 @@ message TagStatus {
 // snapshot is copied when the tag is created, and deleted when the tag is. Its
 // owning Atespace cannot be deleted until the tag is removed.
 message Tag {
+  option (resource) = {
+    scope : SCOPE_ATESPACE
+    plural : "Tags"
+  };
+
   // Common resource metadata: atespace, name, uid, version, timestamps.
   //
   // +k8s:required
@@ -956,6 +1072,11 @@ message Tag {
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:
 // metadata.atespace is always empty; the atespace's identity is metadata.name.
 message Atespace {
+  option (resource) = {
+    scope : SCOPE_GLOBAL
+    plural : "Atespaces"
+  };
+
   // Common resource metadata: name, uid, version, timestamps.
   //
   // +k8s:required
@@ -982,16 +1103,12 @@ message ObjectRef {
   string name = 2;
 }
 
-// SandboxClass selects the sandbox runtime family. Snapshots are not portable
-// across classes.
-enum SandboxClass {
-  SANDBOX_CLASS_UNSPECIFIED = 0;
-  SANDBOX_CLASS_GVISOR = 1;
-  SANDBOX_CLASS_MICROVM = 2;
-  // Keep this in sync with SandboxConfig.sandbox_class's maximum.
-}
-
 message ActorTemplate {
+  option (resource) = {
+    scope : SCOPE_ATESPACE
+    plural : "ActorTemplates"
+  };
+
   // Common resource metadata: atespace, name, uid, version, timestamps.
   //
   // +k8s:required
@@ -1087,12 +1204,13 @@ message ActorTemplateStatus {
 
 // SandboxConfig selects the sandbox runtime for an ActorTemplate.
 message SandboxConfig {
-  // sandbox_class selects the sandbox runtime family.
+  // sandbox_class selects the sandbox runtime family: "gvisor" or "microvm".
+  // Snapshots are not portable across classes.
   //
   // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SandboxClass enum
-  SandboxClass sandbox_class = 1;
+  // +k8s:maxLength=63
+  // +k8s:customValidation # must be "gvisor" or "microvm"
+  string sandbox_class = 1;
 
   // config_name names the cluster-scoped SandboxConfig Kubernetes object
   // supplying the sandbox binaries. Required; must match sandbox_class.
@@ -1120,7 +1238,7 @@ message SnapshotConfig {
   // captured or is too expensive to capture at the time, for example memory
   // under host pressure. A process resumed in place on its worker keeps its
   // memory regardless of this setting. ROOTFS requires
-  // sandbox_config.sandbox_class SANDBOX_CLASS_MICROVM. Defaults to MEMORY
+  // sandbox_config.sandbox_class "microvm". Defaults to MEMORY
   // when unset.
   //
   // +k8s:required
@@ -1800,8 +1918,13 @@ message MintActorJwtResponse {
   // * exp, nbf, iat: Numeric Unix timestamps. nbf is five minutes before iat
   //   to allow for clock skew.
   // * jti: A random token ID.
-  // * `ate.dev`: A JSON object with the actor's `atespace`, `actorName`, and
-  //   `actorUID`.
+  // * `actor.ate.dev`: A JSON object with the actor's `atespace`,
+  //   `actorName`, and `actorUID`.
+  //
+  // The subject and claim name say the token speaks for the actor itself.
+  // A token minted for a Substrate component acting on the actor's behalf
+  // (WorkerService.MintAteomActorJwt) uses `ateom-for-actor` in both places
+  // instead, so a relying party can grant the two different access.
   string actor_jwt = 1 [ debug_redact = true ];
 
   // expire_time is when actor_jwt expires. Equal to its exp claim.
@@ -2045,6 +2168,36 @@ message DrainWorkerResponse {
   Worker worker = 1;
 }
 
+// MarkWorkerAvailableRequest names the Worker to mark ACTIVE.
+message MarkWorkerAvailableRequest {
+  // The Worker to mark ACTIVE.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef worker = 1;
+}
+
+// MarkWorkerAvailableResponse holds the Worker marked ACTIVE.
+message MarkWorkerAvailableResponse {
+  // The Worker marked ACTIVE.
+  Worker worker = 1;
+}
+
+// MarkWorkerUnavailableRequest names the Worker to mark UNAVAILABLE.
+message MarkWorkerUnavailableRequest {
+  // The Worker to mark UNAVAILABLE.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef worker = 1;
+}
+
+// MarkWorkerUnavailableResponse holds the Worker marked UNAVAILABLE.
+message MarkWorkerUnavailableResponse {
+  // The Worker marked UNAVAILABLE.
+  Worker worker = 1;
+}
+
 // List actors with pagination. Provides "soft" guarantees: actors may be
 // missed or duplicated if the system state changes during pagination.
 message ListActorsRequest {
@@ -2079,6 +2232,11 @@ message ListActorsResponse {
 // an immutable field that a request changes — including by omitting it, which
 // would clear it — is rejected with INVALID_ARGUMENT.
 message Worker {
+  option (resource) = {
+    scope : SCOPE_GLOBAL
+    plural : "Workers"
+  };
+
   // Output-only: name, uid, version and timestamps are all server-assigned.
   // uid and version are echoed back on UpdateWorker as preconditions.
   //
@@ -2122,6 +2280,7 @@ message Worker {
   //
   // +k8s:optional
   // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
   // +k8s:immutable
   string sandbox_class = 8;
 
@@ -2151,8 +2310,9 @@ message Worker {
   int64 epoch = 12;
 
   // Output-only server-managed state. Absent from Create/Update request
-  // payloads; whatever a request carries here is ignored. DrainWorker is the
-  // only way a client moves state, and the assignments are the scheduler's.
+  // payloads; whatever a request carries here is ignored. A client moves
+  // state only through DrainWorker, MarkWorkerAvailable and
+  // MarkWorkerUnavailable, and the assignments are the scheduler's.
   //
   // +k8s:optional
   WorkerStatus status = 11;
@@ -2162,15 +2322,19 @@ enum WorkerState {
   WORKER_STATE_UNSPECIFIED = 0;
   // Ready; schedulable.
   WORKER_STATE_ACTIVE = 1;
-  // Pod terminating. Not schedulable.
+  // Pod terminating. Not schedulable. Final: a draining Worker never becomes
+  // active or unavailable again.
   WORKER_STATE_DRAINING = 2;
+  // Registered but not Ready, or its ateom restarting. Not schedulable. Every
+  // Worker starts here until MarkWorkerAvailable.
+  WORKER_STATE_UNAVAILABLE = 3;
   // Keep this in sync with WorkerStatus.state's maximum.
 }
 
 message WorkerStatus {
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the WorkerState enum
+  // +k8s:maximum=3 # keep this in sync with the WorkerState enum
   WorkerState state = 1;
 
   // The total resource capacity of the Worker.
@@ -2223,6 +2387,7 @@ message SandboxRuntime {
   //
   // +k8s:required
   // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
   string sandbox_class = 1;
 
   // Primary compatibility version stamped onto an actor's snapshot when a
@@ -2252,8 +2417,10 @@ message VersionedSandboxCompat {
   // features after masking (e.g. "architecture", "cpu_features").
   // Matched against a snapshot under the same schema_version: every attribute
   // on the snapshot must be present on the worker with an equal value; keys
-  // only the worker has are ignored. Bump schema_version when a key's meaning
-  // changes or older snapshots must no longer match.
+  // only the worker has are ignored, so a worker can gain keys under one
+  // schema_version without invalidating older snapshots. Removing or
+  // recomputing a key is a new schema_version, under which older snapshots
+  // no longer match.
   // Order as sent does not matter: ate-api-server sorts attributes by key
   // before recording them.
   //
@@ -2300,6 +2467,11 @@ message WorkerResources {
 // ActorAssignment binds an Actor to a Worker.  This is a subresource of the
 // Worker.
 message ActorAssignment {
+  option (resource) = {
+    parents : "Worker"
+    plural : "ActorAssignments"
+  };
+
   // Metadata about the assignment.
   //
   // The atespace field is always empty, since it corresponds to a Worker, and
@@ -2354,6 +2526,18 @@ service WorkerService {
   //
   // SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
   rpc MintAteomActorCertificate(MintAteomActorCertificateRequest) returns (MintAteomActorCertificateResponse);
+
+  // MintAteomActorJwt creates a Substrate-issued JWT that asserts an ateom
+  // acting on behalf of a particular actor: the JWT counterpart of
+  // MintAteomActorCertificate. atelet calls it with its own client
+  // certificate and hands the JWT to node-side plugins, which exchange it for
+  // credentials scoped to that actor.
+  //
+  // The token speaks for the ateom, not the actor: its subject is
+  // `ateom-for-actor/<atespace>/<name>` and its claims sit under
+  // `ateom-for-actor.ate.dev`, see MintAteomActorJwtResponse. The lifetime is
+  // fixed at one hour.
+  rpc MintAteomActorJwt(MintAteomActorJwtRequest) returns (MintAteomActorJwtResponse);
 
   // RequestActorSuspend asks the control plane to suspend an Actor that the
   // calling Worker hosts. Only the Worker can observe what makes an Actor
@@ -2459,6 +2643,52 @@ message MintAteomActorCertificateResponse {
   // leaf certificate, and any remaining entries are intermediates in
   // leaf-to-root order.
   repeated bytes actor_certificates = 1;
+}
+
+// Request message for MintAteomActorJwt.
+message MintAteomActorJwtRequest {
+  // The actor for which the JWT should be issued.
+  //
+  // Must be a valid actor that currently exists according to the actor store.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+
+  // The UID of the actor --- used to guard against deletion and recreation of
+  // an actor with the same name.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 2;
+
+  // The audiences the minted JWT is bound to. Tokens are only issued with
+  // audience bindings, so at least one is required.
+  //
+  // +k8s:required
+  // +k8s:maxItems=16 # guardrail; tokens realistically bind a handful of audiences
+  // +k8s:listType=set
+  // +k8s:eachVal=+k8s:minLength=1
+  // +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
+  repeated string audiences = 3;
+}
+
+// Response message for MintAteomActorJwt.
+message MintAteomActorJwtResponse {
+  // The signed JWT. Its claims are those described on
+  // MintActorJwtResponse.actor_jwt, except that it speaks for an ateom
+  // acting on behalf of the actor rather than for the actor itself:
+  //
+  // * sub: `ateom-for-actor/<atespace>/<name>`.
+  // * `ateom-for-actor.ate.dev`: A JSON object with the actor's `atespace`,
+  //   `actorName`, and `actorUID`.
+  //
+  // A relying party that trusts actor JWTs must not accept this token as the
+  // actor, and vice versa.
+  string actor_jwt = 1 [ debug_redact = true ];
+
+  // expire_time is when actor_jwt expires. Equal to its exp claim.
+  google.protobuf.Timestamp expire_time = 2;
 }
 
 message RequestActorSuspendRequest {
@@ -2585,6 +2815,12 @@ message SnapshotReport {
 // the global singleton installation). Every parent resource has at most one
 // access policy resource, named "default".
 message AccessPolicy {
+  option (resource) = {
+    parents : [ "Global", "Atespace" ]
+    singleton : true
+    plural : "AccessPolicies"
+  };
+
   // Standard resource metadata. Atespace must match the parent resource (empty
   // for global-scoped parents like Global and Atespace) and name must be
   // "default". Both are caller-specified on create and immutable. UID, version,
@@ -2716,4 +2952,49 @@ message DeleteAtespaceAccessPolicyRequest {
   //
   // +k8s:optional
   DeleteOptions options = 3;
+}
+
+// ResourceAnnotation marks a message as an API resource. See
+// docs/resource-model.md.
+message ResourceAnnotation {
+  // The resource types this resource is a subresource of: another resource's
+  // message name, or "Global" for the whole Substrate installation. Empty for
+  // a top-level resource.
+  repeated string parents = 1;
+
+  // Whether each parent has at most one instance of this resource.
+  bool singleton = 2;
+
+  // Whether a top-level resource belongs to an atespace. Set only on a
+  // top-level resource: a subresource has its parent's scope.
+  Scope scope = 3;
+
+  // The resource's plural name, as List methods and their response fields
+  // use it. For example, "AccessPolicies" for AccessPolicy.
+  string plural = 4;
+}
+
+// Scope is whether a top-level resource belongs to an atespace.
+enum Scope {
+  // The scope is not set.
+  SCOPE_UNSPECIFIED = 0;
+  // The resource belongs to an atespace, identified by (atespace, name).
+  SCOPE_ATESPACE = 1;
+  // The resource belongs to no atespace, identified by its name alone.
+  SCOPE_GLOBAL = 2;
+}
+
+// MethodAnnotation describes an RPC of the API.
+message MethodAnnotation {
+  // The message name of the resource the method operates on. For example,
+  // "Actor" for SuspendActor, or "EgressPolicy" for GetActorEgressPolicy.
+  string resource = 1;
+}
+
+extend google.protobuf.MessageOptions {
+  ResourceAnnotation resource = 50000;
+}
+
+extend google.protobuf.MethodOptions {
+  MethodAnnotation method = 50000;
 }

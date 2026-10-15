@@ -186,6 +186,34 @@ func TestNormalizeAuthority(t *testing.T) {
 	}
 }
 
+func TestNormalizeHostname(t *testing.T) {
+	tests := []struct {
+		raw    string
+		want   string
+		wantOK bool
+	}{
+		{raw: "example.com", want: "example.com", wantOK: true},
+		{raw: "example.com.", want: "example.com", wantOK: true},
+		{raw: "API.Example.COM.", want: "api.example.com", wantOK: true},
+		{raw: "xn--bcher-kva.example.", want: "xn--bcher-kva.example", wantOK: true},
+		{raw: "", wantOK: false},
+		{raw: ".", wantOK: false},
+		{raw: "example.com..", wantOK: false},
+		{raw: "192.0.2.1", wantOK: false},
+		{raw: "192.0.2.1.", wantOK: false},
+		{raw: "01.2.3.4.", wantOK: false},
+		{raw: "_dmarc.example.com.", wantOK: false},
+		{raw: "bücher.example.", wantOK: false},
+		{raw: "*.example.com", wantOK: false},
+	}
+	for _, tc := range tests {
+		got, ok := NormalizeHostname(tc.raw)
+		if ok != tc.wantOK || got != tc.want {
+			t.Errorf("NormalizeHostname(%q) = (%q, %v), want (%q, %v)", tc.raw, got, ok, tc.want, tc.wantOK)
+		}
+	}
+}
+
 func TestCompileReportsAndDropsInvalidEntries(t *testing.T) {
 	compiled, errs := Compile(policy(
 		httpRule("good.example.com", "BAD.example.com"),
@@ -495,5 +523,22 @@ func TestSNIRules(t *testing.T) {
 				t.Errorf("SNIRules(%d) = %v, want %v", tc.port, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestValidateDNSEgressPolicy(t *testing.T) {
+	tests := []struct {
+		mode    string
+		wantErr bool
+	}{
+		{mode: DNSEgressPolicyEnforceInAtunnel, wantErr: false},
+		{mode: "", wantErr: true},
+		{mode: "unknown", wantErr: true},
+	}
+	for _, tc := range tests {
+		err := ValidateDNSEgressPolicy(tc.mode)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("ValidateDNSEgressPolicy(%q) error = %v, wantErr = %v", tc.mode, err, tc.wantErr)
+		}
 	}
 }

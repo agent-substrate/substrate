@@ -33,7 +33,7 @@ var testPool = Pool{Namespace: "team-a", Name: "default"}
 func measuredSample() *ateompb.WorkloadStatsSample {
 	return &ateompb.WorkloadStatsSample{
 		Atespace: "ns", ActorName: "a", ActorUid: "uid-1", ActorTemplateAtespace: "ns", ActorTemplateName: "t",
-		SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
+		SandboxClass:          "gvisor",
 		Source:                ateompb.StatsSource_STATS_SOURCE_CGROUP,
 		MemoryCurrentBytes:    40 << 20,
 		MemoryPeakBytes:       48 << 20,
@@ -107,6 +107,24 @@ func TestUsageAttrsPendingHasNoMeasurements(t *testing.T) {
 	for _, k := range actorevent.UsageSampled.Conditional {
 		if _, ok := got[k]; ok {
 			t.Errorf("pending record carries %q", k)
+		}
+	}
+}
+
+func TestUsageAttrsNormalizesSandboxClass(t *testing.T) {
+	t.Parallel()
+	for class, want := range map[string]string{
+		"microvm": "microvm",
+		"gvisor":  "gvisor",
+		"gVisor":  ateattr.SandboxClassUnknown,
+		"":        ateattr.SandboxClassUnknown,
+		"kata":    ateattr.SandboxClassUnknown,
+	} {
+		s := measuredSample()
+		s.SandboxClass = class
+		got := attrMap(UsageAttrs(testPool, ateattr.StatsKindPeriodic, s))
+		if v := got[string(ateattr.SandboxClassKey)].String(); v != want {
+			t.Errorf("sandbox class %q: %s = %q, want %q", class, ateattr.SandboxClassKey, v, want)
 		}
 	}
 }
@@ -205,17 +223,8 @@ func TestStartSamplerSurvivesAPanic(t *testing.T) {
 	})
 }
 
-func TestLabels(t *testing.T) {
+func TestStatsSourceLabel(t *testing.T) {
 	t.Parallel()
-	for c, want := range map[ateompb.SandboxClass]string{
-		ateompb.SandboxClass_SANDBOX_CLASS_GVISOR:      "gvisor",
-		ateompb.SandboxClass_SANDBOX_CLASS_MICROVM:     "microvm",
-		ateompb.SandboxClass_SANDBOX_CLASS_UNSPECIFIED: ateattr.SandboxClassUnknown,
-	} {
-		if got := SandboxClassLabel(c); got != want {
-			t.Errorf("SandboxClassLabel(%v) = %q, want %q", c, got, want)
-		}
-	}
 	for src, want := range map[ateompb.StatsSource]string{
 		ateompb.StatsSource_STATS_SOURCE_CGROUP:      ateattr.StatsSourceCgroup,
 		ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT: ateattr.StatsSourceGuestAgent,

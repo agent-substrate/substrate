@@ -22,13 +22,21 @@ import (
 	"strings"
 
 	"github.com/bufbuild/protocompile"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // sourceFileName is an arbitrary internal label: Build only ever compiles
 // one file, so its logical name doesn't matter beyond being self-consistent
 // and appearing in error messages.
 const sourceFileName = "source.proto"
+
+// GlobalParent is the ResourceAnnotation parent that stands for the whole
+// Substrate installation rather than another resource.
+const GlobalParent = "Global"
 
 // API is the whole documented surface of one proto file.
 type API struct {
@@ -40,16 +48,15 @@ type API struct {
 	// "ateapi.ResourceMetadata" both appear here as top-level entries.
 	Messages []Message
 	// Enums lists every enum declared in the file, top-level and nested,
-	// flattened the same way as Messages. For example, both the top-level
-	// "ateapi.ActorState" and the nested "ateapi.ExternalVolume.Status"
-	// appear here.
+	// flattened the same way as Messages. For example, the top-level
+	// "ateapi.ActorState" appears here.
 	Enums []Enum
 }
 
 // MessagesByFullName indexes a.Messages by their FullName, for looking up
 // a Method's InputName/OutputName or a Field's TypeFullName.
-func (a API) MessagesByFullName() map[string]Message {
-	byName := make(map[string]Message, len(a.Messages))
+func (a API) MessagesByFullName() map[protoreflect.FullName]Message {
+	byName := make(map[protoreflect.FullName]Message, len(a.Messages))
 	for _, m := range a.Messages {
 		byName[m.FullName] = m
 	}
@@ -59,9 +66,9 @@ func (a API) MessagesByFullName() map[string]Message {
 // Service is one RPC service. For example, ateapi.proto's "Control" service.
 type Service struct {
 	// FullName is the service's proto full name. For example, "ateapi.Control".
-	FullName string
+	FullName protoreflect.FullName
 	// Name is the service's short name. For example, "Control".
-	Name string
+	Name protoreflect.Name
 	// Comment is the service's leading doc comment. For example, "Control
 	// is the primary API for Agent Substrate." Empty if fd wasn't built
 	// with comments - see Build.
@@ -74,40 +81,44 @@ type Service struct {
 // Method is one RPC declared on a Service.
 type Method struct {
 	// Name is the RPC's name. For example, "CreateActor".
-	Name string
+	Name protoreflect.Name
 	// Comment is the method's leading doc comment. For example, "Create a
 	// new Actor deriving from a given ActorTemplate."
 	Comment string
 	// InputName is the full name of the request message, for linking. For
 	// example, "ateapi.CreateActorRequest" for CreateActor.
-	InputName string
+	InputName protoreflect.FullName
 	// OutputName is the full name of the response message, for linking.
 	// For example, "ateapi.Actor" for CreateActor - most standard methods
 	// return the resource itself rather than a wrapper message.
-	OutputName string
+	OutputName protoreflect.FullName
+
+	// Resource is the resource the method's (ateapi.method) annotation
+	// names, or "" if the method has none. For example, "Actor" for
+	// SuspendActor, or "EgressPolicy" for GetActorEgressPolicy.
+	Resource string
 
 	// ServiceFullName is the declaring service's full name. For example,
 	// "ateapi.Control".
-	ServiceFullName string
+	ServiceFullName protoreflect.FullName
 	// ServiceName is the declaring service's short name. For example, "Control".
-	ServiceName string
+	ServiceName protoreflect.Name
 }
 
 // Message is one message declared in the file, top-level or nested.
 type Message struct {
 	// FullName is the message's proto full name. For example,
 	// "ateapi.ResourceMetadata".
-	FullName string
+	FullName protoreflect.FullName
 	// Name is the message's short name, with its enclosing message's name
 	// dotted in front for a nested type. For example, "ResourceMetadata"
-	// for a top-level message. ateapi.proto has no nested message today
-	// (only a nested enum, ExternalVolume.Status - see Enum.Name for that
-	// shape); a nested message named "Child" inside "Parent" would read
-	// "Parent.Child" here.
+	// for a top-level message. ateapi.proto has no nested message today; a
+	// nested message named "Child" inside "Parent" would read "Parent.Child"
+	// here.
 	Name string
 	// ParentFullName is the enclosing message's full name, or "" for a
 	// top-level message. For example, "" for "ateapi.ResourceMetadata".
-	ParentFullName string
+	ParentFullName protoreflect.FullName
 	// Comment is the message's leading doc comment. For example,
 	// "ResourceMetadata holds the common fields carried by every Substrate
 	// resource."
@@ -116,13 +127,41 @@ type Message struct {
 	// example, ResourceMetadata's atespace, name, uid, version,
 	// create_time, update_time.
 	Fields []Field
+	// ResourceAnnotation is the message's (ateapi.resource) annotation, or
+	// nil if the message isn't a resource. For example, non-nil for
+	// "ateapi.Actor"; nil for "ateapi.ResourceMetadata".
+	ResourceAnnotation *ResourceAnnotation
+}
+
+// IsResource reports whether m is an API resource.
+func (m Message) IsResource() bool {
+	return m.ResourceAnnotation != nil
+}
+
+// ResourceAnnotation is a resource message's (ateapi.resource) annotation.
+type ResourceAnnotation struct {
+	// Parents lists the resource types this resource is a subresource of:
+	// another resource's message name, or GlobalParent. For example,
+	// ["Global", "Atespace"] for AccessPolicy; empty for the top-level
+	// Actor.
+	Parents []string
+	// Singleton is true if each parent has at most one instance of this
+	// resource. For example, true for EgressPolicy.
+	Singleton bool
+	// Scope is whether a top-level resource belongs to an atespace. For
+	// example, SCOPE_ATESPACE for Actor, or SCOPE_GLOBAL for Worker. Set
+	// only on a top-level resource: a subresource has its parent's scope.
+	Scope ateapipb.Scope
+	// Plural is the resource's plural name. For example, "AccessPolicies"
+	// for AccessPolicy.
+	Plural string
 }
 
 // Field is one field declared on a Message.
 type Field struct {
 	// Name is the field's proto name. For example, "atespace" for
 	// ResourceMetadata.atespace.
-	Name string
+	Name protoreflect.Name
 	// Number is the field's proto field number. For example, 4 for
 	// ResourceMetadata.version (`int64 version = 4;`).
 	Number int32
@@ -143,15 +182,17 @@ type Field struct {
 	// ActorStatus.state, or "google.protobuf.Timestamp" for
 	// ResourceMetadata.create_time.
 	TypeDisplay string
-	// TypeFullName and TypeKind ("message" or "enum") are set only for a
-	// singular or repeated message/enum field. Empty for scalars and maps -
-	// see MapValueFullName/MapValueKind for a map's value type. For
-	// example, for Actor.metadata (`ResourceMetadata metadata = 1;`),
-	// TypeFullName is "ateapi.ResourceMetadata" and TypeKind is "message";
-	// for ActorStatus.state (`ActorState state = 1;`), TypeFullName is
-	// "ateapi.ActorState" and TypeKind is "enum".
-	TypeFullName string
-	TypeKind     string
+	// Kind is the field's kind, as protoreflect reports it. For example,
+	// StringKind for ResourceMetadata.name, MessageKind for Actor.metadata,
+	// or EnumKind for ActorStatus.state. A map field is MessageKind, since
+	// its entries are messages - see MapValueKind for its value's kind.
+	Kind protoreflect.Kind
+	// TypeFullName is set only for a singular or repeated message/enum
+	// field. Empty for scalars and maps - see MapValueFullName for a map's
+	// value type. For example, "ateapi.ResourceMetadata" for Actor.metadata
+	// (`ResourceMetadata metadata = 1;`), or "ateapi.ActorState" for
+	// ActorStatus.state (`ActorState state = 1;`).
+	TypeFullName protoreflect.FullName
 	// TypeIsExternal is true when the type isn't declared in this proto
 	// file (for example, an imported well-known type). For example, true
 	// for ResourceMetadata.create_time (google.protobuf.Timestamp,
@@ -160,20 +201,21 @@ type Field struct {
 	// itself).
 	TypeIsExternal bool
 
-	// MapValueFullName and MapValueKind mirror TypeFullName/TypeKind, but
-	// for a map field's value type. For example, for SandboxAssets.assets
-	// (`map<string, ArchAssets> assets = 2;`), MapValueFullName is
-	// "ateapi.ArchAssets" and MapValueKind is "message"; for
-	// Selector.match_labels (`map<string, string> match_labels = 1;`),
-	// both are empty, since the map's value is a scalar.
-	MapValueFullName string
-	MapValueKind     string
+	// MapValueKind and MapValueFullName mirror Kind/TypeFullName, but for a
+	// map field's value type. Both are empty for a field that isn't a map.
+	// For example, for SandboxAssets.assets (`map<string, ArchAssets>
+	// assets = 2;`), MapValueKind is MessageKind and MapValueFullName is
+	// "ateapi.ArchAssets"; for Selector.match_labels (`map<string, string>
+	// match_labels = 1;`), MapValueKind is StringKind and MapValueFullName
+	// is empty, since the map's value is a scalar.
+	MapValueKind     protoreflect.Kind
+	MapValueFullName protoreflect.FullName
 
 	// OneofName is set only for a member of a real, explicit `oneof`
 	// group. ateapi.proto has none today - the API forbids real oneofs by
 	// convention (see lint.NoOneofs) - so OneofName is always "" for every
 	// field this model currently produces.
-	OneofName string
+	OneofName protoreflect.Name
 	// Proto3Optional is true for a proto3 `optional` scalar - protoreflect
 	// models it as a synthetic oneof, not a real one. ateapi.proto
 	// declares no `optional` field today, so this is always false for
@@ -184,26 +226,24 @@ type Field struct {
 // Enum is one enum declared in the file, top-level or nested.
 type Enum struct {
 	// FullName is the enum's proto full name. For example, "ateapi.ActorState"
-	// for a top-level enum, or "ateapi.ExternalVolume.Status" for one
-	// nested inside the ExternalVolume message.
-	FullName string
+	// for a top-level enum, or "ateapi.Parent.Status" for one nested inside
+	// a Parent message.
+	FullName protoreflect.FullName
 	// Name is the enum's short name, with its enclosing message's name
 	// dotted in front for a nested enum. For example, "ActorState" for
-	// the top-level enum, or "ExternalVolume.Status" for the one nested
-	// inside ExternalVolume.
+	// the top-level enum, or "Parent.Status" for one nested inside Parent.
 	Name string
 	// ParentFullName is the enclosing message's full name, or "" for a
 	// top-level enum. For example, "" for "ateapi.ActorState", or
-	// "ateapi.ExternalVolume" for "ateapi.ExternalVolume.Status".
-	ParentFullName string
+	// "ateapi.Parent" for "ateapi.Parent.Status".
+	ParentFullName protoreflect.FullName
 	// Comment is the enum's leading doc comment. ateapi.proto's ActorState
-	// and ExternalVolume.Status have none today, so this is often "" in
-	// practice even though the field is populated the same way as for a
-	// message or field.
+	// has none today, so this is often "" in practice even though the field
+	// is populated the same way as for a message or field.
 	Comment string
 	// Values lists the enum's values, in declaration order. For example,
-	// ExternalVolume.Status's STATUS_UNSPECIFIED, STATUS_PENDING,
-	// STATUS_CREATED, STATUS_DELETING.
+	// ActorState's ACTOR_STATE_UNSPECIFIED, ACTOR_STATE_RESUMING,
+	// ACTOR_STATE_RUNNING, and so on.
 	Values []EnumValue
 }
 
@@ -220,20 +260,21 @@ func (e Enum) ValueByNumber(number int32) *EnumValue {
 
 // EnumValue is one value declared on an Enum.
 type EnumValue struct {
-	// Name is the value's proto name. For example, "STATUS_PENDING" for
-	// ExternalVolume.Status.
-	Name string
+	// Name is the value's proto name. For example, "ACTOR_STATE_RESUMING"
+	// for ActorState.
+	Name protoreflect.Name
 	// Number is the value's proto number. For example, 1 for
-	// `STATUS_PENDING = 1;`.
+	// `ACTOR_STATE_RESUMING = 1;`.
 	Number int32
-	// Comment is the value's leading doc comment. For example, "Volume
-	// creation pending in the storage system." for ExternalVolume.Status's
-	// STATUS_PENDING.
+	// Comment is the value's leading doc comment, or "" when it has none.
 	Comment string
 }
 
 // Build compiles source - a single, self-contained proto3 file's raw text -
-// with source info retained, and walks the result into an API.
+// with source info retained, and walks the result into an API. Annotations
+// are read from the generated descriptors compiled into this binary (see
+// generatedOptions), so a message or method that has none, such as one in a
+// test fixture, comes back unannotated.
 func Build(ctx context.Context, source string) (*API, error) {
 	compiler := protocompile.Compiler{
 		Resolver: protocompile.WithStandardImports(&protocompile.SourceResolver{
@@ -268,9 +309,9 @@ func fromDescriptor(fd protoreflect.FileDescriptor) *API {
 
 // ScopeToService returns a copy of api with only the service named
 // serviceName, plus every message/enum reachable from its methods'
-// input/output types (including through map values). Empty result if
-// serviceName doesn't exist.
-func ScopeToService(api *API, serviceName string) *API {
+// input/output types (including through map values and resource parents).
+// Empty result if serviceName doesn't exist.
+func ScopeToService(api *API, serviceName protoreflect.Name) *API {
 	var svc *Service
 	for i := range api.Services {
 		if api.Services[i].Name == serviceName {
@@ -282,16 +323,20 @@ func ScopeToService(api *API, serviceName string) *API {
 		return &API{}
 	}
 
-	messagesByName := make(map[string]*Message, len(api.Messages))
+	messagesByName := make(map[protoreflect.FullName]*Message, len(api.Messages))
+	resourcesByName := map[string]protoreflect.FullName{}
 	for i := range api.Messages {
 		messagesByName[api.Messages[i].FullName] = &api.Messages[i]
+		if api.Messages[i].IsResource() {
+			resourcesByName[api.Messages[i].Name] = api.Messages[i].FullName
+		}
 	}
 
-	reachableMessages := map[string]bool{}
-	reachableEnums := map[string]bool{}
+	reachableMessages := map[protoreflect.FullName]bool{}
+	reachableEnums := map[protoreflect.FullName]bool{}
 
-	var visitMessage func(name string)
-	visitMessage = func(name string) {
+	var visitMessage func(name protoreflect.FullName)
+	visitMessage = func(name protoreflect.FullName) {
 		if reachableMessages[name] {
 			return
 		}
@@ -300,17 +345,24 @@ func ScopeToService(api *API, serviceName string) *API {
 			return
 		}
 		reachableMessages[name] = true
+		if msg.IsResource() {
+			for _, parent := range msg.ResourceAnnotation.Parents {
+				if full, ok := resourcesByName[parent]; ok {
+					visitMessage(full)
+				}
+			}
+		}
 		for _, f := range msg.Fields {
-			switch f.TypeKind {
-			case "message":
+			switch f.Kind {
+			case protoreflect.MessageKind:
 				visitMessage(f.TypeFullName)
-			case "enum":
+			case protoreflect.EnumKind:
 				reachableEnums[f.TypeFullName] = true
 			}
 			switch f.MapValueKind {
-			case "message":
+			case protoreflect.MessageKind:
 				visitMessage(f.MapValueFullName)
-			case "enum":
+			case protoreflect.EnumKind:
 				reachableEnums[f.MapValueFullName] = true
 			}
 		}
@@ -355,18 +407,19 @@ func collectEnums(fd protoreflect.FileDescriptor, eds protoreflect.EnumDescripto
 
 func buildService(fd protoreflect.FileDescriptor, sd protoreflect.ServiceDescriptor) Service {
 	svc := Service{
-		FullName: string(sd.FullName()),
-		Name:     string(sd.Name()),
+		FullName: sd.FullName(),
+		Name:     sd.Name(),
 		Comment:  comment(fd, sd),
 	}
 	methods := sd.Methods()
 	for i := range methods.Len() {
 		md := methods.Get(i)
 		svc.Methods = append(svc.Methods, Method{
-			Name:            string(md.Name()),
+			Name:            md.Name(),
 			Comment:         comment(fd, md),
-			InputName:       string(md.Input().FullName()),
-			OutputName:      string(md.Output().FullName()),
+			InputName:       md.Input().FullName(),
+			OutputName:      md.Output().FullName(),
+			Resource:        methodResource(md),
 			ServiceFullName: svc.FullName,
 			ServiceName:     svc.Name,
 		})
@@ -376,10 +429,11 @@ func buildService(fd protoreflect.FileDescriptor, sd protoreflect.ServiceDescrip
 
 func buildMessage(fd protoreflect.FileDescriptor, md protoreflect.MessageDescriptor) Message {
 	m := Message{
-		FullName:       string(md.FullName()),
-		Name:           shortName(fd, md.FullName()),
-		ParentFullName: string(parentFullName(md)),
-		Comment:        comment(fd, md),
+		FullName:           md.FullName(),
+		Name:               shortName(fd, md.FullName()),
+		ParentFullName:     parentFullName(md),
+		Comment:            comment(fd, md),
+		ResourceAnnotation: resourceAnnotation(md),
 	}
 	fields := md.Fields()
 	for i := range fields.Len() {
@@ -388,35 +442,68 @@ func buildMessage(fd protoreflect.FileDescriptor, md protoreflect.MessageDescrip
 	return m
 }
 
+// generatedOptions returns the options of the generated descriptor compiled
+// into this binary under d's full name, or nil if there's none. Build reads
+// annotations from there rather than from d: protocompile, compiling the
+// annotations' own definitions from source, fills them in as dynamic
+// messages that the generated ateapipb extension types can't read.
+func generatedOptions(d protoreflect.Descriptor) proto.Message {
+	g, err := protoregistry.GlobalFiles.FindDescriptorByName(d.FullName())
+	if err != nil {
+		return nil
+	}
+	return g.Options()
+}
+
+func methodResource(md protoreflect.MethodDescriptor) string {
+	opts := generatedOptions(md)
+	if opts == nil {
+		return ""
+	}
+	return proto.GetExtension(opts, ateapipb.E_Method).(*ateapipb.MethodAnnotation).GetResource()
+}
+
+func resourceAnnotation(md protoreflect.MessageDescriptor) *ResourceAnnotation {
+	opts := generatedOptions(md)
+	if opts == nil || !proto.HasExtension(opts, ateapipb.E_Resource) {
+		return nil
+	}
+	a := proto.GetExtension(opts, ateapipb.E_Resource).(*ateapipb.ResourceAnnotation)
+	return &ResourceAnnotation{
+		Parents:   a.GetParents(),
+		Singleton: a.GetSingleton(),
+		Scope:     a.GetScope(),
+		Plural:    a.GetPlural(),
+	}
+}
+
 func buildField(fd protoreflect.FileDescriptor, field protoreflect.FieldDescriptor) Field {
 	f := Field{
-		Name:     string(field.Name()),
+		Name:     field.Name(),
 		Number:   int32(field.Number()),
 		Comment:  comment(fd, field),
 		Repeated: field.IsList(),
+		Kind:     field.Kind(),
 	}
 
 	switch {
 	case field.IsMap():
 		f.TypeDisplay = fmt.Sprintf("map<%s, %s>", scalarOrTypeName(fd, field.MapKey()), scalarOrTypeName(fd, field.MapValue()))
-		switch field.MapValue().Kind() {
+		f.MapValueKind = field.MapValue().Kind()
+		switch f.MapValueKind {
 		case protoreflect.MessageKind, protoreflect.GroupKind:
-			f.MapValueFullName = string(field.MapValue().Message().FullName())
-			f.MapValueKind = "message"
+			f.MapValueFullName = field.MapValue().Message().FullName()
 		case protoreflect.EnumKind:
-			f.MapValueFullName = string(field.MapValue().Enum().FullName())
-			f.MapValueKind = "enum"
+			f.MapValueFullName = field.MapValue().Enum().FullName()
 		}
 	case field.Kind() == protoreflect.MessageKind || field.Kind() == protoreflect.GroupKind:
 		name := shortName(fd, field.Message().FullName())
-		f.TypeFullName = string(field.Message().FullName())
-		f.TypeKind = "message"
+		f.TypeFullName = field.Message().FullName()
 		f.TypeIsExternal = field.Message().ParentFile() != fd
 		f.TypeDisplay = repeatedPrefix(field) + name
 	case field.Kind() == protoreflect.EnumKind:
 		name := shortName(fd, field.Enum().FullName())
-		f.TypeFullName = string(field.Enum().FullName())
-		f.TypeKind = "enum"
+		f.TypeFullName = field.Enum().FullName()
 		f.TypeIsExternal = field.Enum().ParentFile() != fd
 		f.TypeDisplay = repeatedPrefix(field) + name
 	default:
@@ -427,7 +514,7 @@ func buildField(fd protoreflect.FileDescriptor, field protoreflect.FieldDescript
 		if oneof.IsSynthetic() {
 			f.Proto3Optional = true
 		} else {
-			f.OneofName = string(oneof.Name())
+			f.OneofName = oneof.Name()
 		}
 	}
 
@@ -436,16 +523,16 @@ func buildField(fd protoreflect.FileDescriptor, field protoreflect.FieldDescript
 
 func buildEnum(fd protoreflect.FileDescriptor, ed protoreflect.EnumDescriptor) Enum {
 	e := Enum{
-		FullName:       string(ed.FullName()),
+		FullName:       ed.FullName(),
 		Name:           shortName(fd, ed.FullName()),
-		ParentFullName: string(parentFullName(ed)),
+		ParentFullName: parentFullName(ed),
 		Comment:        comment(fd, ed),
 	}
 	values := ed.Values()
 	for i := range values.Len() {
 		v := values.Get(i)
 		e.Values = append(e.Values, EnumValue{
-			Name:    string(v.Name()),
+			Name:    v.Name(),
 			Number:  int32(v.Number()),
 			Comment: comment(fd, v),
 		})
@@ -492,97 +579,73 @@ func comment(fd protoreflect.FileDescriptor, d protoreflect.Descriptor) string {
 	return strings.TrimSpace(fd.SourceLocations().ByDescriptor(d).LeadingComments)
 }
 
-// Resource pairs a message with every method (across services) that
-// resourceForMethodName matches it to, in encounter order.
+// Resource pairs a resource message with every method (across services)
+// whose annotation names it, in encounter order.
 type Resource struct {
 	Message Message
 	Methods []Method
 }
 
-// Resources partitions api's methods by resource, matching each method's
-// name against resourceNames (see resourceForMethodName), in api.Messages
-// order. Fails if a method matches no resource name or multiple
-// equally-specific ones, or if a matched name has no corresponding message.
+// Resources groups api's methods by the resource their annotation names,
+// one group per annotated message, in api.Messages order. Fails if a method
+// has no annotation or names a message that isn't a resource, if a resource
+// names a parent that is neither GlobalParent nor another resource, if a
+// resource has no plural, or if a top-level resource has no scope or a
+// subresource has one.
 func Resources(api *API) ([]Resource, error) {
-	// Pass 1: resolve every method to a resource name, and collect the
-	// names actually referenced.
-	methodResource := make(map[string]string, len(api.Services))
-	referencedNames := map[string]bool{}
-	for _, svc := range api.Services {
-		for _, method := range svc.Methods {
-			resource, err := resourceForMethodName(method.Name)
-			if err != nil {
-				return nil, fmt.Errorf("%s.%s: %w", svc.Name, method.Name, err)
-			}
-			methodResource[svc.Name+"."+method.Name] = resource
-			referencedNames[resource] = true
-		}
-	}
-
-	// Pass 2: one group per referenced resource, in api.Messages order,
-	// deleting each name as matched so any left over names an unknown
-	// resource.
-	groups := make([]Resource, 0, len(referencedNames))
+	var resources []Resource
 	for _, m := range api.Messages {
-		if referencedNames[m.Name] {
-			groups = append(groups, Resource{Message: m})
-			delete(referencedNames, m.Name)
+		if m.IsResource() {
+			resources = append(resources, Resource{Message: m})
 		}
 	}
-	for name := range referencedNames {
-		return nil, fmt.Errorf("resource name %q, matched from a method name, has no corresponding message in this API", name)
+
+	// resources's length is fixed by now, so taking addresses into it is safe.
+	byName := make(map[string]*Resource, len(resources))
+	for i := range resources {
+		byName[resources[i].Message.Name] = &resources[i]
 	}
 
-	// Pass 3: append each method to its group. groups's length is fixed by
-	// now, so taking addresses into it is safe.
-	byName := make(map[string]*Resource, len(groups))
-	for i := range groups {
-		byName[groups[i].Message.Name] = &groups[i]
+	for _, r := range resources {
+		if err := validateAnnotation(r.Message, byName); err != nil {
+			return nil, err
+		}
 	}
+
 	for _, svc := range api.Services {
 		for _, method := range svc.Methods {
-			resource := methodResource[svc.Name+"."+method.Name]
-			byName[resource].Methods = append(byName[resource].Methods, method)
+			if method.Resource == "" {
+				return nil, fmt.Errorf("%s.%s: no resource annotation - add `option (ateapi.method).resource = \"<Resource>\";`", svc.Name, method.Name)
+			}
+			r, ok := byName[method.Resource]
+			if !ok {
+				return nil, fmt.Errorf("%s.%s: annotated resource %q is not a resource in this API - annotate its message with (ateapi.resource)", svc.Name, method.Name, method.Resource)
+			}
+			r.Methods = append(r.Methods, method)
 		}
 	}
 
-	return groups, nil
+	return resources, nil
 }
 
-// TODO: We should consider adding proto options to attach this (and other)
-// metadata in the proto service descriptor itself.
-var resourceNames = []string{
-	"AccessPolicy",
-	"Actor",
-	"ActorSnapshot",
-	"Tag",
-	"ActorTemplate",
-	"Atespace",
-	"Worker",
-}
-
-func resourceForMethodName(methodName string) (string, error) {
-	var matches []string
-	for _, name := range resourceNames {
-		if strings.Contains(methodName, name) {
-			matches = append(matches, name)
+// validateAnnotation checks resource's (ateapi.resource) annotation: each
+// parent is GlobalParent or a resource in byName, the plural is set, and a
+// scope is set exactly when resource is top-level.
+func validateAnnotation(resource Message, byName map[string]*Resource) error {
+	annotation := resource.ResourceAnnotation
+	for _, parent := range annotation.Parents {
+		if _, ok := byName[parent]; !ok && parent != GlobalParent {
+			return fmt.Errorf("%s: parent %q is neither %q nor a resource in this API", resource.FullName, parent, GlobalParent)
 		}
 	}
-	if len(matches) == 0 {
-		return "", fmt.Errorf("no name in resourceNames is contained in %q - add one naming the resource this method operates on", methodName)
+	if annotation.Plural == "" {
+		return fmt.Errorf("%s: resource has no plural - set `plural` in its (ateapi.resource) annotation", resource.FullName)
 	}
-
-	longest := matches[:1]
-	for _, m := range matches[1:] {
-		switch {
-		case len(m) > len(longest[0]):
-			longest = []string{m}
-		case len(m) == len(longest[0]):
-			longest = append(longest, m)
-		}
+	if len(annotation.Parents) == 0 && annotation.Scope == ateapipb.Scope_SCOPE_UNSPECIFIED {
+		return fmt.Errorf("%s: top-level resource has no scope - set `scope` in its (ateapi.resource) annotation", resource.FullName)
 	}
-	if len(longest) > 1 {
-		return "", fmt.Errorf("%q matches multiple equally-specific resource names %v - rename the method or the resource so only one matches", methodName, longest)
+	if len(annotation.Parents) > 0 && annotation.Scope != ateapipb.Scope_SCOPE_UNSPECIFIED {
+		return fmt.Errorf("%s: subresource has scope %s - a subresource has its parent's scope, so leave `scope` unset", resource.FullName, annotation.Scope)
 	}
-	return longest[0], nil
+	return nil
 }

@@ -32,9 +32,8 @@ const (
 )
 
 // Relay validates and forwards UDP and TCP DNS queries to the worker pod's
-// resolvers. It listens in the sandbox's gateway namespace and dials from the
-// worker's. DNS bypasses the egress tunnel and is not checked against egress
-// policy.
+// resolvers. It listens in the sandbox's gateway netns and dials from the
+// worker's netns.
 type Relay struct {
 	upstreams []string
 
@@ -98,6 +97,6 @@ func NewRelayForUpstreams(upstreams []string) (*Relay, error) {
 
 // serveOn serves DNS on netC's sockets, which the caller has already bound,
 // and dials upstreams with netC's dialer.
-func (r *Relay) serveOn(ctx context.Context, netC *netConn) (*Server, error) {
-	return newServer(ctx, &serverConfig{upstreams: r.upstreams}, netC)
+func (r *Relay) serveOn(ctx context.Context, netC *netConn, policy PolicySource) (*Server, error) {
+	return newServer(ctx, &serverConfig{upstreams: r.upstreams, policy: policy}, netC)
 }

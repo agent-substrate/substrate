@@ -51,7 +51,7 @@ spec:
 | :--- | :--- | :--- |
 | `enabled` | `bool` | **Required.** Enables TLS/mTLS for the gRPC connection. |
 | `usePodIdentity` | `bool` | **Optional.** When `true`, reuses Substrate's SPIFFE Pod Identity certificates for mutual TLS (mTLS) with dynamic CA trust bundle verification and rotation. Must be `true` when `enabled` is `true`. |
-| `serverName` | `string` | **Optional.** Server name override for TLS certificate verification. |
+| `serverName` | `string` | **Required.** Expected server name (SAN) for TLS certificate verification when TLS is enabled. |
 
 > [!NOTE]
 > For details on exposing CSI controller endpoints over the network and configuring CSI node DaemonSets with required mount propagations, see the [CSI Driver Deployment Guide](csi-deployment.md).
@@ -180,7 +180,7 @@ containers:
       path: /readyz
       port: 8080
 sandboxConfig:
-  sandboxClass: SANDBOX_CLASS_GVISOR
+  sandboxClass: gvisor
   configName: gvisor-default
 snapshotConfig:
   storageLocation: gs://my-snapshots-bucket/stateful-agent

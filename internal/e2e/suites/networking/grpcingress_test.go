@@ -109,15 +109,15 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		// The counter cannot speak h2c. Through atunnel's HTTPS listener Envoy
-		// returns HTTP 502; through a CONNECT tunnel the failure is gRPC's
-		// Unavailable status.
+		// The counter cannot speak h2c. Both dataplanes reach atunnel through
+		// a CONNECT tunnel, where the failure is gRPC's Unavailable status. An
+		// HTTP 502 means Envoy went through atunnel's HTTPS listener instead.
 		grpcStatus := resp.Header.Get("Grpc-Status")
 		if grpcStatus == "" {
 			grpcStatus = resp.Trailer.Get("Grpc-Status")
 		}
-		if resp.StatusCode != http.StatusBadGateway && !(resp.StatusCode == http.StatusOK && grpcStatus == "14") {
-			t.Fatalf("gRPC-shaped POST = %d, grpc-status %q (body %q), want HTTP 502 or gRPC Unavailable: gRPC must not be silently downgraded to HTTP/1.1", resp.StatusCode, grpcStatus, body)
+		if resp.StatusCode != http.StatusOK || grpcStatus != "14" {
+			t.Fatalf("gRPC-shaped POST = %d, grpc-status %q (body %q), want gRPC Unavailable: gRPC must not be silently downgraded to HTTP/1.1", resp.StatusCode, grpcStatus, body)
 		}
 	})
 }

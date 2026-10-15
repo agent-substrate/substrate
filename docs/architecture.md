@@ -349,11 +349,11 @@ Handles actor-aware routing and automatic re-animation.
     not select the Actor.
 
   * **Worker Tunnel**: After resolving the assignment, `atenet-router` opens an
-    authenticated TLS tunnel to the worker's `atunnel` listener on port 443.
+    mTLS `CONNECT` tunnel to the worker's `atunnel` listener on port 8443.
     `atunnel`, hosted by `ateom`, forwards the request to the active Actor over
     its private veth interface. Worker pod port 80 is not a direct Actor ingress
-    path. With `--upstream-connect`, the router instead reaches `atunnel`
-    through mTLS `CONNECT` tunnels on port 8443.
+    path. With `--upstream-connect=false`, the Envoy router instead reaches
+    `atunnel` over HTTPS on port 443.
 
   * **Arbitrary-Port Ingress**: A client reaches a port on the Actor other than
     its default (80) with an HTTP `CONNECT` request naming the port in the

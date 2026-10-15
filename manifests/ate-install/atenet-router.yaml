@@ -359,9 +359,9 @@ spec:
         - name: "servicedns"
           mountPath: "/run/servicedns.podcert.ate.dev"
         # podidentity credential + trust bundles for actor-facing (upstream)
-        # mTLS. Envoy's ORIGINAL_DST actor cluster presents this credential
-        # bundle as its client cert when dialing the actor's atunnel ingress
-        # server on :443, and validates that server against the trust bundle.
+        # mTLS. Envoy presents this credential bundle as its client cert when
+        # opening CONNECT tunnels to the worker's atunnel on :8443, and
+        # validates that server against the trust bundle.
         # The issued SPIFFE identity is
         # spiffe://cluster.local/ns/ate-system/sa/atenet-router, which atunnel's
         # --atunnel-client-identity allows.

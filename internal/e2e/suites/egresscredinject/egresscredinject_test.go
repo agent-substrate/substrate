@@ -324,8 +324,8 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	// Exercise each credential outcome on both HTTP and HTTPS: the echo
 	// origin's credential resolves, and each fail-closed host's cannot.
 	rules := []*ateapipb.EgressRule{
-		e2e.EgressInjectHeader("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost),
-		e2e.EgressInjectHeaderHTTP("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost),
+		e2e.EgressInjectHeader("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost, echoHost+".cluster.local"),
+		e2e.EgressInjectHeaderHTTP("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost, echoHost+".cluster.local"),
 	}
 	for _, credential := range []struct {
 		host string

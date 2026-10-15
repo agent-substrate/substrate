@@ -325,6 +325,31 @@ func TestSchedule(t *testing.T) {
 			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(1000, 2<<30)},
 			wantPod:     "w-busy-big",
 		},
+		{
+			name: "required runtime matches worker default runtime",
+			fleet: fleet{
+				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
+				worker("w-amd", "gvisor", "node-b", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64"))),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64")},
+			wantPod:     "w-amd",
+		},
+		{
+			name: "required runtime matches worker restorable runtime",
+			fleet: fleet{
+				worker("w-upgraded", "gvisor", "node-a", tierTwo,
+					withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64", "old")},
+			wantPod:     "w-upgraded",
+		},
+		{
+			name: "required runtime with no matching worker yields ErrNoCapacity",
+			fleet: fleet{
+				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64")},
+		},
 	}
 
 	for _, tc := range tests {
@@ -419,9 +444,34 @@ func TestApplies(t *testing.T) {
 			want:        false,
 		},
 		{
+			name:        "skips unavailable worker",
+			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)),
+			constraints: Constraints{SandboxClass: "gvisor"},
+			want:        false,
+		},
+		{
 			name:        "skips unspecified worker",
 			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_UNSPECIFIED)),
 			constraints: Constraints{SandboxClass: "gvisor"},
+			want:        false,
+		},
+		{
+			name:        "matches required runtime via default runtime",
+			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "amd64", "old"))),
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64", "old")},
+			want:        true,
+		},
+		{
+			name: "matches required runtime via restorable runtimes",
+			worker: worker("w", "gvisor", "node-a", nil,
+				withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64", "old")},
+			want:        true,
+		},
+		{
+			name:        "skips worker when required runtime does not match",
+			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64")},
 			want:        false,
 		},
 	}
@@ -453,6 +503,27 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 		opt(w)
 	}
 	return w
+}
+
+func sandboxRuntime(class, arch string, assetHash ...string) *ateapipb.SandboxRuntime {
+	attrs := []*ateapipb.AttributeEntry{{Key: "architecture", Value: arch}}
+	if len(assetHash) > 0 && assetHash[0] != "" {
+		attrs = append(attrs, &ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: assetHash[0]})
+	}
+	return &ateapipb.SandboxRuntime{
+		SandboxClass: class,
+		Version: &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes:    attrs,
+		},
+	}
+}
+
+func withRuntimes(def *ateapipb.SandboxRuntime, restorable ...*ateapipb.SandboxRuntime) func(*ateapipb.Worker) {
+	return func(w *ateapipb.Worker) {
+		w.Status.DefaultRuntime = def
+		w.Status.RestorableRuntimes = restorable
+	}
 }
 
 func withState(state ateapipb.WorkerState) func(*ateapipb.Worker) {

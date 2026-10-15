@@ -155,6 +155,7 @@ func StartVirtiofsd(ctx context.Context, o VirtiofsdOptions) (*exec.Cmd, error) 
 	}
 	if err := waitForSocket(ctx, o.SocketPath, virtiofsdSocketTimeout); err != nil {
 		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
 		return nil, err
 	}
 	return cmd, nil

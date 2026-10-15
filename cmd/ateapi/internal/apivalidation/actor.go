@@ -99,6 +99,11 @@ func ValidateMintAteomActorCertificateRequest(ctx context.Context, req *ateapipb
 	return Validate_MintAteomActorCertificateRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateMintAteomActorJwtRequest(ctx context.Context, req *ateapipb.MintAteomActorJwtRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_MintAteomActorJwtRequest(ctx, op, nil, req, nil)
+}
+
 func ValidateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, requireStatus bool) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Update}

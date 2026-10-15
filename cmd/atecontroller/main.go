@@ -22,6 +22,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/workersync"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
+	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
@@ -86,6 +87,8 @@ var (
 	ateapiClientCert = pflag.String("ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required.")
 
 	workerSyncConcurrency = pflag.Int("worker-sync-concurrency", 2, "Number of concurrent worker goroutines reconciling worker pods into the Worker registry. Defaults to 2.")
+
+	dnsEgressPolicy = pflag.String("dns-egress-policy", "", "DNS egress policy enforcement mode propagated to ateom worker pods (must be "+egresspolicy.DNSEgressPolicyEnforceInAtunnel+").")
 )
 
 func init() {
@@ -152,6 +155,10 @@ func main() {
 
 	if *workerSyncConcurrency <= 0 {
 		setupLog.Error(nil, "invalid flag", "flag", "--worker-sync-concurrency", "reason", "must be positive", "value", *workerSyncConcurrency)
+		os.Exit(1)
+	}
+	if err := egresspolicy.ValidateDNSEgressPolicy(*dnsEgressPolicy); err != nil {
+		setupLog.Error(err, "invalid flag", "flag", "--dns-egress-policy", "value", *dnsEgressPolicy)
 		os.Exit(1)
 	}
 
@@ -241,6 +248,7 @@ func main() {
 		SystemNamespace:          systemNamespace,
 		AteletServiceAccount:     *ateletServiceAccount,
 		RouterServiceAccount:     *routerServiceAccount,
+		DNSEgressPolicy:          *dnsEgressPolicy,
 		Recorder:                 mgr.GetEventRecorder("workerpool-controller"),
 		APIReader:                mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {

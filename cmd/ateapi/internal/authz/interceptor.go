@@ -24,15 +24,22 @@ import (
 
 // UnaryServerInterceptor returns a gRPC unary interceptor that enforces per-RPC
 // permissions registered in defaultRPCPermissions using authorizer. When
-// enforce is false, only rules marked alwaysEnforce are checked.
+// enforce is false, only rules marked alwaysEnforce are checked. When enforce
+// is true, an RPC with no rule is denied.
 func UnaryServerInterceptor(authorizer *Authorizer, enforce bool) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if IsBypassed(ctx) {
 			return handler(ctx, req)
 		}
 		rule, registered := defaultRPCPermissions[info.FullMethod]
-		if !registered || (!enforce && !rule.alwaysEnforce) {
+		if registered && rule.authorizedInHandler != "" {
 			return handler(ctx, req)
+		}
+		if !enforce && !rule.alwaysEnforce {
+			return handler(ctx, req)
+		}
+		if !registered {
+			return nil, apierror.PermissionDenied("permission denied: no authorization rule for %s", info.FullMethod)
 		}
 
 		// Authenticate first, so an unauthenticated caller gets Unauthenticated

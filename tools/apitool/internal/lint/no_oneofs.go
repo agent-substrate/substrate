@@ -15,29 +15,18 @@
 package lint
 
 import (
-	"fmt"
-
 	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
 )
 
-// NoOneofs requires that no field belong to an explicit `oneof` group.
 var NoOneofs = Rule{
 	Name:        "no-oneofs",
 	Description: "No field belongs to an explicit oneof group.",
-	Check:       checkNoOneofs,
+	Check:       forEachField(checkNoOneofs),
 }
 
-func checkNoOneofs(api *model.API) ([]Finding, error) {
-	var findings []Finding
-	for _, m := range api.Messages {
-		for _, f := range m.Fields {
-			if f.OneofName != "" {
-				findings = append(findings, Finding{
-					Subject: m.FullName + "." + f.Name,
-					Message: fmt.Sprintf("belongs to oneof %q - oneofs are not used in this API", f.OneofName),
-				})
-			}
-		}
+func checkNoOneofs(m model.Message, f model.Field) []Finding {
+	if f.OneofName == "" {
+		return nil
 	}
-	return findings, nil
+	return []Finding{findingf(m.FullName.Append(f.Name), "belongs to oneof %q - oneofs are not used in this API", f.OneofName)}
 }

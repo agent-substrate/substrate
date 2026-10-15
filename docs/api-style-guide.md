@@ -173,6 +173,7 @@ Rules:
 - Response **must** be the resource itself — not a `GetActorResponse` wrapper.
 - Request **must** identify the resource with a single `ObjectRef` field (for both atespace-scoped and global-scoped resources).
 - That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `tag` for `Tag`), not a generic name like `name` or `ref`.
+- The request **must** have no other fields. A subresource's Get request carries its parent's `ObjectRef` and a `name` instead (see section #2.4).
 - If the resource does not exist: return `NOT_FOUND`.
 
 ### 3.2 List
@@ -211,7 +212,7 @@ message ListActorsResponse {
 ```
 
 Rules:
-- RPC name **must** begin with `List` followed by the **plural** resource name.
+- RPC name **must** begin with `List` followed by the **plural** resource name, as its `(resource)` option declares it (see section #11.1).
 - Both the request and response message names **must** match the RPC name with `Request`/`Response` suffixes. (Unlike Get/Create/Update, List responses are not the resource itself.)
 - `page_size` and `page_token` **must** be carried in a `ListOptions` field named `options`. Further non-resource "control" fields belong in `ListOptions`, not as loose top-level fields on the request.
 - `next_page_token` **must** be present on every List response message. It **must** be empty when there are no further pages.
@@ -280,6 +281,7 @@ Rules:
   - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`, and the whole `status` submessage). Whatever the request carries in them is ignored and the server's own values are kept.
   - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`, and resource-specific ones such as an actor's `source_snapshot_tag`). A request that changes one - including by omitting it, which would clear it - **must** return `INVALID_ARGUMENT` naming the field.
 - The embedded resource field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`), not a generic name like `resource` or `body`.
+- The request **must** have no other fields, apart from its parent's `ObjectRef` for a subresource (see section #2.4).
 - Unknown fields in the request are preserved, so a client built against a newer schema does not lose data by round-tripping through an older one.
 - The resource's `atespace` and `name` identify the resource to update; they are not themselves updatable.
 - If the resource does not exist: return `NOT_FOUND`.
@@ -301,8 +303,7 @@ message DeleteActorRequest {
 
 // DeleteOptions carries per-delete controls. Today it holds optional
 // preconditions that guard against acting on a resource that is not in the
-// state the caller expects (see section #7). Future delete-specific controls
-// (e.g. dry-run) should be added here.
+// state the caller expects (see section #7).
 message DeleteOptions {
   // If non-zero, delete only if the server's current version matches.
   int64 version = 1;
@@ -320,6 +321,7 @@ Rules:
 - If the resource does not exist: return `NOT_FOUND`.
 - `version` and `uid` preconditions are honored via a `DeleteOptions` field (see section #7). Both are optional; the zero value skips the check.
 - Further non-resource "control" fields (e.g. dry-run) belong in `DeleteOptions`, not as loose top-level fields on the request.
+- `DeleteOptions` **must** have only the fields defined above. This list may be extended in the future with options such as `dry_run` or `force`.
 
 
 TODO: Delete operations are synchronous, but might revisit this and introduce the concept of soft-deletion to 
@@ -347,6 +349,7 @@ message SuspendActorResponse {
 
 Rules:
 - RPC name **must** be a verb phrase: `{Verb}{Resource}` (e.g., `SuspendActor`, `ResumeActor`).
+- RPC name **must not** start with a standard verb (`Get`, `List`, `Create`, `Update`, `Delete`). A method named with one is a standard method and follows section #3.
 - Request message name **must** match the RPC name with a `Request` suffix.
 - The request **must** identify the target resource using an `ObjectRef` field (for both atespace-scoped and global-scoped resources).
 - Response message name **must** match the RPC name with a `Response` suffix. A custom method **must not** return the resource directly; put it in a field of the response, so method-specific output can be added later (e.g., `ResumeActorResponse.resumed`).
@@ -373,7 +376,7 @@ Rules:
 
 - Enum type names **must** use `PascalCase`, like message names: `ActorState`.
 - Enum values **must** use `UPPER_SNAKE_CASE`.
-- Package-level enum values **must** be prefixed with the enum name. Some languages (including C++) hoist enum values into the parent namespace, which can cause conflicts between enums in the same proto package. (Values of a *nested* enum **must not** be prefixed.)
+- Enum values **must** be prefixed with the enum name, for top-level and nested enums alike. Some languages (including C++) hoist enum values into the parent namespace, which can cause conflicts between enums in the same proto package or message.
 - The zero value **must** be `{ENUM_NAME}_UNSPECIFIED` and mean "not set."
 
 ```proto
@@ -648,3 +651,70 @@ Rules:
 
 All fields of all APIs must be validated.  We use
 [validation-gen](https://github.com/kubernetes/code-generator/tree/master/cmd/validation-gen) to generate validation code for our APIs.  See [the guidelines for validation](api-validation.md) for more information.
+
+---
+
+## 11. Annotations
+
+Resources and methods carry proto options that say which messages are resources, how they nest, and which resource each RPC operates on.
+
+### 11.1 Resources
+
+Every resource message **must** carry a `(resource)` option:
+
+```proto
+message Actor {
+  option (resource) = {
+    scope : SCOPE_ATESPACE
+    plural : "Actors"
+  };
+
+  // ... fields
+}
+
+message EgressPolicy {
+  option (resource) = {
+    parents : "Actor"
+    singleton : true
+    plural : "EgressPolicies"
+  };
+
+  // ... fields
+}
+
+message AccessPolicy {
+  option (resource) = {
+    parents : [ "Global", "Atespace" ]
+    singleton : true
+    plural : "AccessPolicies"
+  };
+
+  // ... fields
+}
+```
+
+Rules:
+- `parents` lists the resource types the resource is a subresource of (see section #2.4): another resource's message name, or `Global`. A top-level resource has no `parents`.
+- `singleton` is `true` for a singleton (see section #2.5).
+- `scope` **must** be set on a top-level resource: `SCOPE_ATESPACE` or `SCOPE_GLOBAL` (see section #2.1). A subresource **must not** set it, because it has its parent's scope.
+- `plural` **must** be set on every resource, singletons included. It is the plural that List methods and their repeated resource field use (see section #3).
+- A message that is not a resource, such as a request, a status message, or `ObjectRef`, carries no `(resource)` option.
+- When you add, remove, or re-parent a resource, update [the resource model](resource-model.md) too.
+
+### 11.2 Methods
+
+Every RPC of the `Control` service **must** carry a `(method)` option naming the resource it operates on, for standard and custom methods alike:
+
+```proto
+rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (EgressPolicy) {
+  option (method).resource = "EgressPolicy";
+}
+
+rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {
+  option (method).resource = "Actor";
+}
+```
+
+Rules:
+- `resource` is the resource's message name, and that message **must** carry a `(resource)` option.
+- A subresource's method names the subresource, not its parent: `EgressPolicy` for `GetActorEgressPolicy`.

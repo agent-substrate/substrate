@@ -97,48 +97,52 @@ func TestResolveSandboxAssets(t *testing.T) {
 	}{{
 		name: "named config",
 		sandbox: &ateapipb.SandboxConfig{
-			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			SandboxClass: "gvisor",
 			ConfigName:   "gvisor-custom",
 		},
 		wantPauseImage: namedPause,
 	}, {
 		name: "named config without its default version",
 		sandbox: &ateapipb.SandboxConfig{
-			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			SandboxClass: "gvisor",
 			ConfigName:   "gvisor-no-default",
 		},
 		wantErr: `SandboxConfig "gvisor-no-default" has no enabled version ""`,
 	}, {
 		name: "named config whose default version is disabled",
 		sandbox: &ateapipb.SandboxConfig{
-			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			SandboxClass: "gvisor",
 			ConfigName:   "gvisor-disabled-default",
 		},
 		wantErr: `SandboxConfig "gvisor-disabled-default" has no enabled version "v1"`,
 	}, {
 		name: "named config class mismatch",
 		sandbox: &ateapipb.SandboxConfig{
-			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM,
+			SandboxClass: "microvm",
 			ConfigName:   "gvisor-custom",
 		},
 		wantErr: `has class "gvisor"`,
 	}, {
 		name: "missing named config",
 		sandbox: &ateapipb.SandboxConfig{
-			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			SandboxClass: "gvisor",
 			ConfigName:   "does-not-exist",
 		},
 		wantErr: `SandboxConfig "does-not-exist" not found`,
 	}, {
 		name: "unrecognized sandbox class",
 		sandbox: &ateapipb.SandboxConfig{
-			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_UNSPECIFIED,
+			SandboxClass: "kata",
 			ConfigName:   "gvisor-custom",
 		},
-		wantErr: "unrecognized sandbox_class",
+		wantErr: `has class "gvisor" but sandbox_config.sandbox_class is "kata"`,
+	}, {
+		name:    "empty sandbox class",
+		sandbox: &ateapipb.SandboxConfig{ConfigName: "gvisor-custom"},
+		wantErr: "names no sandbox_config.sandbox_class",
 	}, {
 		name:    "empty config name",
-		sandbox: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+		sandbox: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
 		wantErr: "names no sandbox_config.config_name",
 	}}
 	for _, tt := range tests {

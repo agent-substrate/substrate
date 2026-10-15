@@ -29,17 +29,39 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/client-go/tools/cache"
 )
 
 func TestEnsureMarkedSuspending_SnapshotURI(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
+	workerName := testWorkerUID("worker-pod-1")
+	wantRuntime := &ateapipb.SandboxRuntime{
+		SandboxClass: "gvisor",
+		Version: &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateapipb.AttributeEntry{
+				{Key: "architecture", Value: "amd64"},
+			},
+		},
+	}
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
-		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				Worker:          &ateapipb.ObjectRef{Name: workerName},
+				WorkerNamespace: "default",
+				WorkerPool:      "pool1",
+				WorkerPod:       "worker-pod-1",
+				WorkerPodUid:    workerName,
+				SandboxRuntime:  wantRuntime,
+			},
+		},
 	})
 	tmpl := &ateapipb.ActorTemplate{
 		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://bucket/root/"},
@@ -61,6 +83,9 @@ func TestEnsureMarkedSuspending_SnapshotURI(t *testing.T) {
 	want := "gs://bucket/root/atespaces/team-a/actors/" + marked.GetMetadata().GetUid() + "/snapshots/" + uri.Name()
 	if uri.String() != want {
 		t.Errorf("snapshot URI = %q, want %q", uri, want)
+	}
+	if diff := cmp.Diff(wantRuntime, inProgressSnap.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Errorf("Snapshot.SandboxRuntime mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -216,23 +241,23 @@ func TestEnsureMarkedSuspending_RejectsPauseInProgress(t *testing.T) {
 // TestEnsureMarkedSuspending_PausedPromotesLocalSnapshot verifies the suspend
 // edge from a paused actor (SUSPENDED whose latest snapshot is node-local):
 // it takes the edge and promotes that snapshot in place to a pending durable
-// one, keeping its generation and uuid, with the upload destination derived
-// from the uuid.
+// one, keeping its generation, uuid, and sandbox runtime stamp, with the
+// upload destination derived from the uuid.
 func TestEnsureMarkedSuspending_PausedPromotesLocalSnapshot(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	w := &ActorWorkflow{store: persistence}
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	localSnap := newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", "node-1")
+	localSnap.SandboxRuntime = testSandboxRuntime()
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 		Status: &ateapipb.ActorStatus{
 			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			AssignedNode:           "node-1",
 			LastAssignedGeneration: 1,
-			Snapshots: []*ateapipb.Snapshot{
-				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", "node-1"),
-			},
+			Snapshots:              []*ateapipb.Snapshot{localSnap},
 		},
 	})
 
@@ -262,6 +287,11 @@ func TestEnsureMarkedSuspending_PausedPromotesLocalSnapshot(t *testing.T) {
 	}
 	if pending.GetLocality() != "node-1" {
 		t.Errorf("pending snapshot locality = %q, want node-1 kept until the upload finishes", pending.GetLocality())
+	}
+	// The durable copy is the pause checkpoint uploaded, so it keeps the
+	// runtime stamp the pause recorded.
+	if diff := cmp.Diff(testSandboxRuntime(), pending.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Errorf("paused-origin pending Snapshot.SandboxRuntime mismatch (-want +got):\n%s", diff)
 	}
 	if got := marked.GetStatus().GetLastAssignedGeneration(); got != 1 {
 		t.Errorf("paused-origin LastAssignedGeneration = %d, want 1", got)

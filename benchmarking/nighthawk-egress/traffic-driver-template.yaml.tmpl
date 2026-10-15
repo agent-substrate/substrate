@@ -59,7 +59,7 @@ volumes:
         - system-roots.ate.dev
         path: egress-trust-bundle/trust-bundle.pem
 sandboxConfig:
-  sandboxClass: SANDBOX_CLASS_GVISOR
+  sandboxClass: gvisor
   configName: gvisor-default
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY

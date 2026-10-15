@@ -28,10 +28,33 @@ type Finding struct {
 
 // Rule is one predicate over the API model. Check returns one Finding per
 // violation (nil if api satisfies the rule), or a non-nil error if the rule
-// could not be evaluated at all - a failure of the rule's own machinery,
-// not a finding about api.
+// could not be evaluated at all: api is malformed in a way no rule can
+// check past, such as a standard method that doesn't parse.
 type Rule struct {
 	Name        string
 	Description string
 	Check       func(api *model.API) ([]Finding, error)
+}
+
+// All is every rule `apitool validate` runs, in the order their findings
+// are reported.
+var All = []Rule{
+	ResourceMetadata,
+	ListMethodShape,
+	RequestNameMatchesMethod,
+	StandardMethodReturnsResource,
+	GetRequestShape,
+	DeleteRequestShape,
+	DeleteOptionsShape,
+	CreateRequestShape,
+	UpdateRequestShape,
+	ListResponseNameMatchesMethod,
+	CustomResponseNameMatchesMethod,
+	SingletonNoList,
+	SubresourceNaming,
+	EnumZeroValueUnspecified,
+	EnumValuesPrefixed,
+	ResourceStatusFieldShape,
+	NoOneofs,
+	Documented,
 }

@@ -12,7 +12,7 @@ To make underlying infrastructure transitions transparent, Agent Substrate estab
 * `ate.actor.uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
 * `ate.template.name`: The name of the actor's ActorTemplate (e.g., `counter`).
 * `ate.template.atespace`: The atespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
-* `ate.actor.container.name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container. Absent on the synthetic lifecycle records (`Actor starting`, `Actor restored`, …): those are about the actor, so no container produced them.
+* `ate.actor.container.name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container. Absent on the synthetic lifecycle records (`Actor starting`, `Actor restored`, …): those are about the actor, so no container produced them. The `runsc create`, `start`, and `restore` CLI output and the pause container's stdio are wrapped under `_pause`. This does not capture sentry or gofer output, which runsc directs to `/dev/null` when debug logging is disabled.
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and on-demand request tracing, with roadmap plans to fully integrate actor-level correlation.
 
@@ -68,13 +68,19 @@ Actor is currently running on pod ate-demo-counter/counter-ab123-x4y5z
 ```
 
 #### Example 4: Filtering by Container or Source
-An actor can run several containers. By default every line is shown, including the synthetic lifecycle events (`Actor starting`, `Actor started`, `Actor checkpointing`, `Actor checkpointed`, `Actor restoring`, `Actor restored`, `Actor terminated`). `--container` (short form `-c`) restricts the output to the named container's logs:
+An actor can run several containers. By default application container logs and synthetic lifecycle events (`Actor starting`, `Actor started`, `Actor checkpointing`, `Actor checkpointed`, `Actor restoring`, `Actor restored`, `Actor terminated`) are shown. The `_pause` logs are excluded so runsc startup diagnostics do not mix with application output. `--container` (short form `-c`) restricts the output to the named container's logs:
 
 ```bash
 kubectl ate logs actor <actor-name> -a <atespace> -c <container-name>
 ```
 
-`--source` selects a class of lines instead of a container. `containers` shows every container's output with the lifecycle events removed; `lifecycle` shows only the lifecycle events, which is the quickest way to see how often an actor has been suspended and restored on its current worker (a migration moves the actor to another pod, whose log holds none of the earlier workers' events):
+To view the pause container's runsc diagnostics explicitly:
+
+```bash
+kubectl ate logs actors <actor-name> -a <atespace> -c _pause
+```
+
+`--source` selects a class of lines instead of a container. `containers` shows application container output with the lifecycle events removed; `_pause` remains excluded unless selected with `-c _pause`. `lifecycle` shows only the lifecycle events, which is the quickest way to see how often an actor has been suspended and restored on its current worker (a migration moves the actor to another pod, whose log holds none of the earlier workers' events):
 
 ```bash
 $ kubectl ate logs actor test -a demo --source=lifecycle
@@ -458,7 +464,7 @@ Verbatim forwarding is restricted to known ateom sources and refuses anything el
 
 ### Actor telemetry needs an egress policy
 
-An actor's own OpenTelemetry SDK does not use the relay. It dials the collector over the network like any other outbound connection, and that connection is subject to the actor egress lockdown described in [Network Egress](network-egress.md): every actor TCP connection is redirected into `atunnel` and carried to the egress gateway, which refuses anything the actor's `EgressPolicy` does not allow. An actor with no policy, or a policy with no matching rule, cannot reach the collector at all. The SDK sees `Unavailable: connection reset by peer` on each export, and the gateway logs `egress denied: actor has no egress policy`.
+An actor's own OpenTelemetry SDK does not use the relay. It dials the collector over the network like any other outbound connection, and that connection is subject to the actor egress lockdown described in [Network Egress](network-egress.md): every actor TCP connection is redirected into `atunnel` and carried to the egress gateway, which refuses anything the actor's `EgressPolicy` does not allow. An actor with no policy, or a policy with no matching rule, cannot reach the collector at all. With no policy, or a policy whose rules do not include the collector's hostname, the actor cannot even resolve the collector's name: the sandbox's DNS relay answers its queries `REFUSED`, so each export fails before it connects. If a rule allows the hostname on another protocol or port (for example, `*` on port `443`), DNS resolves the name, the SDK sees `Unavailable: connection reset by peer` on each export, and the gateway logs why it denied the connection.
 
 To let an actor export, give it an `http` rule naming the collector's Service and the OTLP ports. It must be an `http` rule, not `https`: the OTLP/gRPC exporter is gRPC over cleartext HTTP/2 (h2c) on `4317`, which an `http` rule admits, and the OTLP/HTTP exporter is cleartext HTTP/1.1 on `4318`. On Kind the collector is `opentelemetry-collector.otel-system.svc`; on GKE with the managed collector it is `opentelemetry-collector.gke-managed-otel.svc.cluster.local`. Whatever the name, it has to match the host the actor's `OTEL_EXPORTER_OTLP_ENDPOINT` names, because the rule is matched on the request authority.
 
@@ -487,7 +493,7 @@ An actor that already has a policy for other destinations keeps those rules and 
 Three things to know when applying this:
 
 * **It is per actor.** The policy is a resource under the actor, and nothing applies one by default today. Every actor that exports telemetry needs its own, created after the actor and before, or shortly after, it is resumed. A template-level default policy is proposed in [#1558](https://github.com/agent-substrate/substrate/pull/1558); the underlying ask is [#1430](https://github.com/agent-substrate/substrate/issues/1430).
-* **A running actor recovers slowly.** If the policy is created while the actor is already exporting and failing, the SDK's gRPC client is in reconnect backoff and the gateway caches the missing policy for `--egress-policy-cache-ttl` (10s by default). Expect the first successful export 45s to two minutes after the policy appears. An actor whose policy exists before it starts has no such delay.
+* **A running actor recovers slowly.** If the policy is created while the actor is already exporting and failing, the SDK's gRPC client is in reconnect backoff, the sandbox's DNS relay takes up to 5s to notice the policy, and the gateway caches the missing policy for `--egress-policy-cache-ttl` (10s by default). Expect the first successful export 45s to two minutes after the policy appears. An actor whose policy exists before it starts has no such delay.
 * **The collector sees the gateway, not the actor.** The TCP connection to the collector comes from the egress gateway pod, so a collector that enriches by source IP (the `k8sattributes` processor, which the GKE managed collector runs) labels the actor's spans and metrics with the gateway's `k8s.pod.name`, `k8s.deployment.name=atenet-egress`, and `k8s.namespace.name`. The actor's `service.name` and anything it puts in `OTEL_RESOURCE_ATTRIBUTES` survive. Set the actor's identity there yourself if you need it on the backend; the relay-based path that will do this for actors is tracked in [#853](https://github.com/agent-substrate/substrate/issues/853) and [#761](https://github.com/agent-substrate/substrate/issues/761).
 
 **Logs written to stdout and stderr need none of this.** ateom reads a container's output stream inside the worker pod and writes it to the pod's own stdout, which is where [`kubectl ate logs`](#active-actor-inspection-via-cli) and a node log agent pick it up. That path never leaves the sandbox over the network, so it is untouched by the egress lockdown and works for an actor with no policy at all. The policy is only for telemetry an SDK inside the actor pushes itself: traces, metrics, and OTLP logs if `OTEL_LOGS_EXPORTER=otlp` is set in the actor.

@@ -94,6 +94,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		failedRules++
 		total += len(shown)
 		fmt.Fprintf(out, "  %s %s\n", failIcon(), r.Rule.Name)
+		fmt.Fprintf(out, "    %s\n", r.Rule.Description)
 		for _, f := range shown {
 			fmt.Fprintf(out, "      %s: %s\n", f.Subject, f.Message)
 		}

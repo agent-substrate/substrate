@@ -23,7 +23,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: traffic-driver-invoker
-  namespace: ate-system
+  namespace: nighthawk
 data:
   envoy.yaml: |
     static_resources:
@@ -90,7 +90,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: traffic-driver-invoker
-  namespace: ate-system
+  namespace: nighthawk
   labels:
     app: traffic-driver-invoker
 spec:
@@ -145,7 +145,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: traffic-driver-invoker
-  namespace: ate-system
+  namespace: nighthawk
 spec:
   type: ClusterIP
   ipFamilyPolicy: PreferDualStack

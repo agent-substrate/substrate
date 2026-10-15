@@ -876,7 +876,6 @@ func validExternalVolume(mutate ...func(*ateapipb.ExternalVolume)) *ateapipb.Ext
 		Name:            "my-vol",
 		StorageVolumeId: "valid-storage-id",
 		VolumeType:      "mock",
-		Status:          ateapipb.ExternalVolume_STATUS_CREATED,
 	}
 	for _, m := range mutate {
 		m(v)
@@ -934,14 +933,6 @@ func TestValidateExternalVolume(t *testing.T) {
 	}, {
 		name: "valid volume with substrate.io prefixed volume type",
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "substrate.io/mock" }),
-	}, {
-		name: "negative status",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.Status = ateapipb.ExternalVolume_Status(-1) }),
-		want: field.ErrorList{field.Invalid(field.NewPath("status"), nil, "").WithOrigin("minimum")},
-	}, {
-		name: "status outside the enum",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.Status = ateapipb.ExternalVolume_Status(4) }),
-		want: field.ErrorList{field.Invalid(field.NewPath("status"), nil, "").WithOrigin("maximum")},
 	}, {
 		name: "storage volume id at the bound",
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = strings.Repeat("x", 256) }),
@@ -1011,15 +1002,9 @@ func TestValidateExternalVolume_Update(t *testing.T) {
 		newObj: valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "pd.csi.storage.gke.io" }),
 		want:   field.ErrorList{field.Invalid(field.NewPath("volume_type"), nil, "").WithOrigin("update")},
 	}, {
-		name: "status and volume_context changed is valid",
-		oldObj: valid(func(v *ateapipb.ExternalVolume) {
-			v.Status = ateapipb.ExternalVolume_STATUS_PENDING
-			v.VolumeContext = nil
-		}),
-		newObj: valid(func(v *ateapipb.ExternalVolume) {
-			v.Status = ateapipb.ExternalVolume_STATUS_CREATED
-			v.VolumeContext = map[string]string{"foo": "bar"}
-		}),
+		name:   "volume_context changed is valid",
+		oldObj: valid(func(v *ateapipb.ExternalVolume) { v.VolumeContext = nil }),
+		newObj: valid(func(v *ateapipb.ExternalVolume) { v.VolumeContext = map[string]string{"foo": "bar"} }),
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

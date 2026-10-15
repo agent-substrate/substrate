@@ -17,6 +17,8 @@ package lint_test
 import (
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/agent-substrate/substrate/tools/apitool/internal/lint"
 	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
 )
@@ -28,18 +30,110 @@ func TestDocumented(t *testing.T) {
 		enumComment    string
 		fieldComment   string
 		methodComment  string
-		wantFindings   int
+		want           []lint.Finding
 	}{
-		{"all documented", "a request", "a state", "does a thing", "does another thing", 0},
-		{"message undocumented", "", "a state", "does a thing", "does another thing", 1},
-		{"enum undocumented", "a request", "", "does a thing", "does another thing", 1},
-		{"field undocumented", "a request", "a state", "", "does another thing", 1},
-		{"method undocumented", "a request", "a state", "does a thing", "", 1},
-		{"nothing documented", "", "", "", "", 4},
-		{"whitespace-only comment counts as undocumented", "\t", "\t", "   ", "\n", 4},
-		{"empty comment lines", "a request", "a state", "\n\n", "does another thing", 1},
-		{"tags only", "+k8s:required", "+k8s:optional", "+k8s:required\n+k8s:format=k8s-short-name", "does another thing", 3},
-		{"prose and tags", "a request\n\n+k8s:required", "a state", "does a thing\n\n+k8s:immutable", "does another thing", 0},
+		{
+			name:           "all documented",
+			messageComment: "a request",
+			enumComment:    "a state",
+			fieldComment:   "does a thing",
+			methodComment:  "does another thing",
+		},
+		{
+			name:           "message undocumented",
+			messageComment: "",
+			enumComment:    "a state",
+			fieldComment:   "does a thing",
+			methodComment:  "does another thing",
+			want: []lint.Finding{
+				{Subject: "test.DoThingRequest", Message: "message has no doc comment"},
+			},
+		},
+		{
+			name:           "enum undocumented",
+			messageComment: "a request",
+			enumComment:    "",
+			fieldComment:   "does a thing",
+			methodComment:  "does another thing",
+			want: []lint.Finding{
+				{Subject: "test.Widget.State", Message: "enum has no doc comment"},
+			},
+		},
+		{
+			name:           "field undocumented",
+			messageComment: "a request",
+			enumComment:    "a state",
+			fieldComment:   "",
+			methodComment:  "does another thing",
+			want: []lint.Finding{
+				{Subject: "test.DoThingRequest.widget", Message: "field has no doc comment"},
+			},
+		},
+		{
+			name:           "method undocumented",
+			messageComment: "a request",
+			enumComment:    "a state",
+			fieldComment:   "does a thing",
+			methodComment:  "",
+			want: []lint.Finding{
+				{Subject: "test.Control.DoThing", Message: "method has no doc comment"},
+			},
+		},
+		{
+			name:           "nothing documented",
+			messageComment: "",
+			enumComment:    "",
+			fieldComment:   "",
+			methodComment:  "",
+			want: []lint.Finding{
+				{Subject: "test.DoThingRequest", Message: "message has no doc comment"},
+				{Subject: "test.DoThingRequest.widget", Message: "field has no doc comment"},
+				{Subject: "test.Widget.State", Message: "enum has no doc comment"},
+				{Subject: "test.Control.DoThing", Message: "method has no doc comment"},
+			},
+		},
+		{
+			name:           "whitespace-only comment counts as undocumented",
+			messageComment: "\t",
+			enumComment:    "\t",
+			fieldComment:   "   ",
+			methodComment:  "\n",
+			want: []lint.Finding{
+				{Subject: "test.DoThingRequest", Message: "message has no doc comment"},
+				{Subject: "test.DoThingRequest.widget", Message: "field has no doc comment"},
+				{Subject: "test.Widget.State", Message: "enum has no doc comment"},
+				{Subject: "test.Control.DoThing", Message: "method has no doc comment"},
+			},
+		},
+		{
+			name:           "empty comment lines",
+			messageComment: "a request",
+			enumComment:    "a state",
+			fieldComment:   "\n\n",
+			methodComment:  "does another thing",
+			want: []lint.Finding{
+				{Subject: "test.DoThingRequest.widget", Message: "field has no doc comment"},
+			},
+		},
+		{
+			name:           "tags only",
+			messageComment: "+k8s:required",
+			enumComment:    "+k8s:optional",
+			fieldComment:   "+k8s:required\n+k8s:format=k8s-short-name",
+			methodComment:  "does another thing",
+			want: []lint.Finding{
+				{Subject: "test.DoThingRequest", Message: "message has no doc comment"},
+				{Subject: "test.DoThingRequest.widget", Message: "field has no doc comment"},
+				{Subject: "test.Widget.State", Message: "enum has no doc comment"},
+			},
+		},
+		{
+			name:           "prose and tags",
+			messageComment: "a request\n\n+k8s:required",
+			enumComment:    "a state",
+			fieldComment:   "does a thing\n\n+k8s:immutable",
+			methodComment:  "does another thing",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -47,7 +141,7 @@ func TestDocumented(t *testing.T) {
 				Services: []model.Service{{
 					Name: "Control",
 					Methods: []model.Method{
-						{Name: "DoThing", ServiceName: "Control", Comment: tt.methodComment, InputName: "test.DoThingRequest", OutputName: "test.DoThingResponse"},
+						{Name: "DoThing", ServiceFullName: "test.Control", ServiceName: "Control", Comment: tt.methodComment, InputName: "test.DoThingRequest", OutputName: "test.DoThingResponse"},
 					},
 				}},
 				Messages: []model.Message{
@@ -63,8 +157,8 @@ func TestDocumented(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Check() error = %v", err)
 			}
-			if len(findings) != tt.wantFindings {
-				t.Errorf("Check() = %+v, want %d finding(s)", findings, tt.wantFindings)
+			if diff := cmp.Diff(tt.want, findings); diff != "" {
+				t.Errorf("Check() findings mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

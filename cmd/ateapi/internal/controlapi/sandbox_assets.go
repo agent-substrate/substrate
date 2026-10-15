@@ -40,7 +40,7 @@ func resolveTemplateSandboxConfig(
 	if err != nil {
 		return nil, fmt.Errorf("while getting SandboxConfig %q: %w", name, err)
 	}
-	if class := sandboxClassString(templateSandbox.GetSandboxClass()); string(sc.Spec.SandboxClass) != class {
+	if class := templateSandbox.GetSandboxClass(); string(sc.Spec.SandboxClass) != class {
 		return nil, apierror.FailedPrecondition(
 			"SandboxConfig %q has class %q but sandbox_config.sandbox_class is %q", name, sc.Spec.SandboxClass, class)
 	}
@@ -56,8 +56,8 @@ func resolveSandboxAssets(
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	templateSandbox *ateapipb.SandboxConfig,
 ) (*ateletpb.SandboxAssets, error) {
-	if sandboxClassString(templateSandbox.GetSandboxClass()) == "" {
-		return nil, fmt.Errorf("ActorTemplate names unrecognized sandbox_class %v", templateSandbox.GetSandboxClass())
+	if templateSandbox.GetSandboxClass() == "" {
+		return nil, fmt.Errorf("ActorTemplate names no sandbox_config.sandbox_class")
 	}
 	if templateSandbox.GetConfigName() == "" {
 		return nil, fmt.Errorf("ActorTemplate names no sandbox_config.config_name")

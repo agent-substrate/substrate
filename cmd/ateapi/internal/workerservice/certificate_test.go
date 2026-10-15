@@ -36,7 +36,30 @@ import (
 
 type fakeActorStore struct {
 	store.Interface
-	actors map[resources.ActorRef]*ateapipb.Actor
+	actors  map[resources.ActorRef]*ateapipb.Actor
+	workers map[string]*ateapipb.Worker
+	// assignments maps an actor UID to the worker holding its assignment.
+	assignments map[string]string
+	// assignmentErr, when set, fails every GetWorkerAssignment.
+	assignmentErr error
+}
+
+func (f *fakeActorStore) GetWorkerAssignment(_ context.Context, workerName, actorUID string) (*ateapipb.ActorAssignment, error) {
+	if f.assignmentErr != nil {
+		return nil, f.assignmentErr
+	}
+	if holder, ok := f.assignments[actorUID]; !ok || holder != workerName {
+		return nil, store.ErrNotFound
+	}
+	return &ateapipb.ActorAssignment{ActorUid: actorUID}, nil
+}
+
+func (f *fakeActorStore) GetWorker(_ context.Context, name string) (*ateapipb.Worker, error) {
+	w, ok := f.workers[name]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return w, nil
 }
 
 func (f *fakeActorStore) GetActor(_ context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
@@ -59,13 +82,19 @@ func newFakeStoreWithActor(atespace, name, uid string) (*fakeActorStore, *ateapi
 			Name:     "template-1",
 		},
 		Status: &ateapipb.ActorStatus{
-			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{Worker: &ateapipb.ObjectRef{Name: "worker-1"}},
 		},
 	}
 	return &fakeActorStore{
 		actors: map[resources.ActorRef]*ateapipb.Actor{
 			{Atespace: atespace, Name: name}: actor,
 		},
+		// worker-1 runs on node-1, the node the tests' atelet certificate names.
+		workers: map[string]*ateapipb.Worker{
+			"worker-1": {Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}, NodeName: "node-1"},
+		},
+		assignments: map[string]string{uid: "worker-1"},
 	}, actor
 }
 
@@ -97,7 +126,7 @@ func newTestCAPool(t *testing.T) *localca.ConcretePool {
 func TestMintAteomActorCertificate(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	caPool := newTestCAPool(t)
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool, "", nil)
 
 	csr, key := generateTestCSR(t)
 
@@ -149,7 +178,7 @@ func TestMintAteomActorCertificate(t *testing.T) {
 func TestMintAteomActorCertificate_Errors(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	caPool := newTestCAPool(t)
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool, "", nil)
 
 	csr, _ := generateTestCSR(t)
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-1"))

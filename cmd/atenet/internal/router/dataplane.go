@@ -63,6 +63,29 @@ func (s *RouterServer) startDataplane(ctx context.Context, g *errgroup.Group, pa
 }
 
 func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Group, parkCfg ingress.ParkedRequestConfig, traceRootSamplingPercent float64) error {
+	xdsSrv, err := s.newEnvoyXdsServer(ctx, parkCfg, traceRootSamplingPercent)
+	if err != nil {
+		return err
+	}
+
+	// Envoy receives all routing configuration from the local xDS server.
+	g.Go(func() error {
+		addr := xdsListenAddress(s.cfg.XdsPort)
+		slog.InfoContext(ctx, "Starting Envoy xDS Server", slog.String("address", addr))
+		lis, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("failed to listen on %s: %w", addr, err)
+		}
+		defer lis.Close()
+
+		return xdsSrv.Serve(ctx, lis)
+	})
+	return nil
+}
+
+// newEnvoyXdsServer applies the router configuration to a new xDS server and
+// builds its snapshot.
+func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.ParkedRequestConfig, traceRootSamplingPercent float64) (*XdsServer, error) {
 	xdsSrv := NewXdsServer(s.cfg.XdsPort)
 	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
 	xdsSrv.SetConnectPorts(s.cfg.ConnectPlainTextPort, s.cfg.ConnectTLSPort)
@@ -87,7 +110,7 @@ func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Grou
 		// one as a listener that never warms. Parse it here so the router
 		// fails startup instead.
 		if _, err := credbundle.ParsePool(s.cfg.IngressAuth.ClientCAFile); err != nil {
-			return fmt.Errorf("loading --ingress-client-ca-file: %w", err)
+			return nil, fmt.Errorf("loading --ingress-client-ca-file: %w", err)
 		}
 		require := s.cfg.IngressAuth.mode() == IngressAuthStaticMTLS
 		xdsSrv.SetDownstreamClientAuth(s.cfg.IngressAuth.ClientCAFile, s.cfg.IngressAuth.AllowedSPIFFEIDs, require)
@@ -106,22 +129,9 @@ func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Grou
 	// is built exactly once; an Envoy that connects later is served from the
 	// xDS cache.
 	if err := xdsSrv.UpdateSnapshot(); err != nil {
-		return fmt.Errorf("building the xDS snapshot: %w", err)
+		return nil, fmt.Errorf("building the xDS snapshot: %w", err)
 	}
-
-	// Envoy receives all routing configuration from the local xDS server.
-	g.Go(func() error {
-		addr := xdsListenAddress(s.cfg.XdsPort)
-		slog.InfoContext(ctx, "Starting Envoy xDS Server", slog.String("address", addr))
-		lis, err := net.Listen("tcp", addr)
-		if err != nil {
-			return fmt.Errorf("failed to listen on %s: %w", addr, err)
-		}
-		defer lis.Close()
-
-		return xdsSrv.Serve(ctx, lis)
-	})
-	return nil
+	return xdsSrv, nil
 }
 
 // xdsListenAddress is where the router serves xDS to the Envoy in its own pod.

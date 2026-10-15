@@ -2,7 +2,7 @@
   {
     "rule": "delete-request-shape",
     "subject": "ateapi.Control.DeleteActor",
-    "message": "field \"any_state\" is not a message, want ateapi.ObjectRef or ateapi.DeleteOptions - non-resource control fields belong in ateapi.DeleteOptions"
+    "message": "request field \"any_state\" is not allowed - want only \"actor\" ateapi.ObjectRef and optional \"options\" ateapi.DeleteOptions"
   },
   {
     "rule": "documented",
@@ -153,16 +153,6 @@
     "rule": "documented",
     "subject": "ateapi.ExternalVolume",
     "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ExternalVolume.Status",
-    "message": "enum has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ExternalVolume.status",
-    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
@@ -415,13 +405,8 @@
     "message": "field has no doc comment"
   },
   {
-    "rule": "list-method-shape",
-    "subject": "ateapi.Control.ListWorkerActorAssignments",
-    "message": "field \"worker\" is not part of the standard List request shape - only atespace and an options field of type ateapi.ListOptions are allowed (sorting/filtering per AIP-132 is not supported)"
-  },
-  {
-    "rule": "list-method-shape",
-    "subject": "ateapi.Control.ListWorkerActorAssignments",
-    "message": "repeated field is named \"actor_assignments\", want \"worker_actor_assignments\" (the plural resource name, matching the method name)"
+    "rule": "resource-metadata",
+    "subject": "ateapi.ActorAssignment",
+    "message": "\"metadata\" field is number 6, want 1"
   }
 ]

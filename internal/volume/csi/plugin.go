@@ -462,6 +462,10 @@ func resolveTLSConfig(cfg *v1alpha1.CSIDriverConfig, paths tlsPaths) (*tls.Confi
 		return nil, fmt.Errorf("only pod identity TLS is supported in this configuration")
 	}
 
+	if tlsCfg.ServerName == "" {
+		return nil, fmt.Errorf("tls.serverName is required when TLS is enabled")
+	}
+
 	caCache := newCAPoolCache(paths.caCert)
 
 	// Verify CA pool exists, is readable, and populate the initial cache.

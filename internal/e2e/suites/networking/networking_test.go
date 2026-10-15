@@ -126,9 +126,7 @@ func TestActorEgress(t *testing.T) {
 
 	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(origin.Port))
 
-	// The Actor resolves the name itself -- DNS leaves over the UDP masquerade,
-	// not the tunnel, and atunnel forwards the resolved address, never the
-	// name -- so dialing by name covers a leg the by-address fetch above skips.
+	// Test resolution by DNS.
 	t.Run("by DNS name", func(t *testing.T) {
 		url := fmt.Sprintf("http://%s.%s.svc.cluster.local/healthz", origin.Name, target.Namespace)
 		status, body := fetchThroughEgressActor(t, ctx, router, actorRef, url)

@@ -20,7 +20,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: nighthawk-server
-  namespace: ate-system
+  namespace: nighthawk
 data:
   nighthawk.yaml: |
     # SDS requires a node id and cluster.
@@ -218,7 +218,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: nighthawk-server
-  namespace: ate-system
+  namespace: nighthawk
   labels:
     app: nighthawk-server
 spec:
@@ -303,7 +303,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: nighthawk-server
-  namespace: ate-system
+  namespace: nighthawk
 spec:
   type: ClusterIP
   ipFamilyPolicy: PreferDualStack

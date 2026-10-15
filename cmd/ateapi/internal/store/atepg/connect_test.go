@@ -350,6 +350,13 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 	if got := p.ownerPool.Config().MaxConns; got != ownerPoolMaxConns {
 		t.Fatalf("owner pool MaxConns = %d, want %d", got, ownerPoolMaxConns)
 	}
+	var probeRole string
+	if err := p.probePool.QueryRow(ctx, `SELECT current_user`).Scan(&probeRole); err != nil || probeRole != runtimeRole {
+		t.Fatalf("probe pool role = %q, %v; want the read/write role %q", probeRole, err, runtimeRole)
+	}
+	if got := p.probePool.Config().MaxConns; got != probePoolMaxConns {
+		t.Fatalf("probe pool MaxConns = %d, want %d", got, probePoolMaxConns)
+	}
 
 	if _, err := p.CreateAtespace(ctx, newTestAtespace("runtime-write")); err != nil {
 		t.Fatalf("read/write operation failed: %v", err)

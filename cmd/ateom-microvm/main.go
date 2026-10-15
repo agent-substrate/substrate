@@ -37,13 +37,13 @@ import (
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/internal/actorlock"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
+	"github.com/agent-substrate/substrate/internal/ateominit"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
@@ -85,6 +85,7 @@ var (
 const minUsageSampleInterval = 50 * time.Second
 
 func main() {
+	ateominit.RunIfPID1()
 	pflag.Parse()
 	if *showVersion {
 		fmt.Println(version.String())
@@ -181,13 +182,6 @@ func do(ctx context.Context) error {
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
 	}
-
-	// Reap children reparented to us: the detached cloud-hypervisor VMM and
-	// virtiofsd. Synchronous subprocesses (mount, umount, cp, ...) instead go
-	// through reaper.Run/RunCombined so this reaper cannot collect them out from
-	// under their own wait (which would surface as "waitid: no child processes").
-	reaper.Start()
-	slog.InfoContext(ctx, "Child process reaper launched")
 
 	// kata's virtio-fs sharing depends on mount propagation: it slave-binds
 	// .../shared (served by virtiofsd) from .../mounts and expects the later
