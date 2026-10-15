@@ -70,13 +70,6 @@ jobs:
       run: ../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/apitool.xml"
         --jsonfile "${ARTIFACTS}/apitool.json" --format standard-verbose
         -- -race -v ./...
-    # tools/cpufeatures generates internal/hardware's CPU feature tables and is
-    # its own module for the same reason.
-    - name: cpufeatures tests
-      working-directory: tools/cpufeatures
-      run: ../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/cpufeatures.xml"
-        --jsonfile "${ARTIFACTS}/cpufeatures.json" --format standard-verbose
-        -- -race -v ./...
     # Kept apart from the root module so it can move to its own repository.
     - name: gcp-secret-manager credential provider tests
       working-directory: internal/plugins/gcp-secret-manager

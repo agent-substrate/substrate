@@ -16,6 +16,8 @@ package hardware
 
 import (
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -246,7 +248,11 @@ func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
 func TestEncodeDecodeCPUFeatures(t *testing.T) {
 	for _, arch := range []string{"amd64", "arm64"} {
 		t.Run(arch+"/all_features_roundtrip", func(t *testing.T) {
-			all := cpuFeatureTables[arch].names
+			table := cpuFeatureTables[arch]
+			all := make([]string, 0, len(table.bits))
+			for _, bit := range table.bits {
+				all = append(all, table.names[bit])
+			}
 			mask, err := EncodeCPUFeatures(arch, all)
 			if err != nil {
 				t.Fatalf("EncodeCPUFeatures(%q, all) error: %v", arch, err)
@@ -314,10 +320,22 @@ func TestEncodeDecodeCPUFeatures(t *testing.T) {
 				t.Errorf("DecodeCPUFeatures(%q) succeeded, want a non-canonical value rejected", bad)
 			}
 		}
-		var outOfRange featureMask
-		outOfRange.set(len(amd64CPUFeatures))
-		if _, err := DecodeCPUFeatures("amd64", outOfRange.String()); err == nil {
-			t.Error("DecodeCPUFeatures with a bit beyond the table succeeded")
+		// Bit 16 is CPUID.1:ECX bit 16, which the hardware reserves, so it
+		// sits inside the table's range with no name; and one past the
+		// highest named bit has none either. Decoding must name the bit.
+		amd64 := cpuFeatureTables["amd64"]
+		lastBit := amd64.bits[len(amd64.bits)-1]
+		for _, bit := range []int{16, lastBit + 1} {
+			if _, named := amd64.names[bit]; named {
+				t.Fatalf("test assumes amd64 bit %d has no name, but it is %q", bit, amd64.names[bit])
+			}
+			var m featureMask
+			m.set(0)
+			m.set(bit)
+			_, err := DecodeCPUFeatures("amd64", m.String())
+			if err == nil || !strings.Contains(err.Error(), strconv.Itoa(bit)) {
+				t.Errorf("DecodeCPUFeatures with unnamed bit %d set = %v, want an error naming the bit", bit, err)
+			}
 		}
 	})
 
@@ -338,17 +356,22 @@ func TestEncodeDecodeCPUFeatures(t *testing.T) {
 }
 
 // TestCPUFeatureTables checks structural invariants of each architecture's
-// feature table and pins anchor bit positions. The generator keeps committed
-// order and only appends, so a moved anchor means the generated file was
-// edited by hand and stored snapshots no longer decode as they were encoded.
+// feature table and pins anchor bits to the values of gVisor's Feature
+// constants (32*block + CPUID bit on amd64). A moved anchor means
+// cpufeatures_table.go no longer follows the hardware's numbering and stored
+// snapshots would decode differently than they were encoded.
 func TestCPUFeatureTables(t *testing.T) {
 	for _, tc := range []struct {
 		arch, name string
 		bit        int
 	}{
 		{"amd64", "pni", 0},
-		{"amd64", "fpu", 31},
-		{"amd64", "avx512_bf16", 174},
+		{"amd64", "pcid", 17},           // after the reserved bit 16
+		{"amd64", "osxsave", 27},        // listed after bit 31 in gVisor's map
+		{"amd64", "fpu", 32},            // block 1, bit 0
+		{"amd64", "avx2", 2*32 + 5},     // block 2
+		{"amd64", "syscall", 6*32 + 11}, // sparse block 6
+		{"amd64", "avx512_bf16", 8*32 + 5},
 		{"arm64", "fp", 0},
 		{"arm64", "asimdfhm", 23},
 	} {
@@ -358,24 +381,48 @@ func TestCPUFeatureTables(t *testing.T) {
 	}
 	for arch, table := range cpuFeatureTables {
 		t.Run(arch, func(t *testing.T) {
-			if len(table.names) == 0 {
+			if len(table.bits) == 0 {
 				t.Fatalf("%s table is empty", arch)
 			}
-			if len(table.names) > featureMaskWords*64 {
-				t.Errorf("%s table has %d names, more than a featureMask's %d bits", arch, len(table.names), featureMaskWords*64)
+			if !slices.IsSorted(table.bits) || len(table.bits) != len(table.names) {
+				t.Errorf("%s table bits %v are not the sorted keys of its %d names", arch, table.bits, len(table.names))
 			}
+			var defined featureMask
 			seen := make(map[string]int, len(table.names))
-			for i, name := range table.names {
-				if j, dup := seen[name]; dup {
-					t.Errorf("%s table lists %q at both %d and %d", arch, name, j, i)
+			for bit, name := range table.names {
+				defined.set(bit) // newFeatureTable panics at init on a bit outside the mask
+				if other, dup := seen[name]; dup {
+					t.Errorf("%s table lists %q at both %d and %d", arch, name, other, bit)
 				}
-				seen[name] = i
+				seen[name] = bit
 				if name != strings.TrimSpace(name) || name == "" {
-					t.Errorf("%s table entry %d is %q, want a trimmed non-empty name", arch, i, name)
+					t.Errorf("%s table bit %d is %q, want a trimmed non-empty name", arch, bit, name)
+				}
+				if got := table.index[name]; got != bit {
+					t.Errorf("%s index[%q] = %d, want %d", arch, name, got, bit)
+				}
+			}
+			if defined != table.defined {
+				t.Errorf("%s table's defined mask %v does not match its names", arch, table.defined)
+			}
+			for name, bit := range table.index {
+				if _, ok := table.names[bit]; !ok {
+					t.Errorf("%s index maps %q to bit %d, which has no name", arch, name, bit)
 				}
 			}
 		})
 	}
+}
+
+// A table entry the mask cannot hold is a panic at package init rather than a
+// dropped name.
+func TestNewFeatureTableRejectsBitOutsideMask(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("newFeatureTable with a bit outside the mask did not panic")
+		}
+	}()
+	newFeatureTable(map[int]string{featureMaskWords * 64: "beyond"})
 }
 
 func TestParseCPUInfo(t *testing.T) {

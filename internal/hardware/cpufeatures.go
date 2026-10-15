@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"maps"
 	"math/bits"
 	"os"
 	"runtime"
@@ -26,39 +27,49 @@ import (
 	"strings"
 )
 
-// cpuFeatureTables maps each supported architecture to its CPU feature table.
-// The tables live in zz_generated.cpufeatures.go, generated from gVisor's
-// sources by hack/update/cpufeatures.sh (see its header for how to move to a
-// newer gVisor). A name's index is its bit in the encoded cpu_features value,
-// and stored snapshots carry those values, so within SchemaVersionV1 the
-// generator only appends; a name gVisor drops stays at its index as retired.
+// cpuFeatureTables maps each supported architecture to its CPU feature table
+// from cpufeatures_table.go, whose header says where the tables come from
+// and what a bit means.
 var cpuFeatureTables = map[string]featureTable{
 	"amd64": newFeatureTable(amd64CPUFeatures),
 	"arm64": newFeatureTable(arm64CPUFeatures),
 }
 
-// featureTable assigns each CPU feature name of one architecture its bit:
-// the name's index in names.
+// featureTable is one architecture's CPU feature names by bit, with the
+// reverse lookup EncodeCPUFeatures uses and the set of bits that have a
+// name, which DecodeCPUFeatures validates against.
 type featureTable struct {
-	names []string
-	index map[string]int
+	names   map[int]string
+	bits    []int // the keys of names, ascending
+	index   map[string]int
+	defined featureMask
 }
 
-func newFeatureTable(names []string) featureTable {
-	index := make(map[string]int, len(names))
-	for i, name := range names {
-		index[name] = i
+// newFeatureTable indexes a table. A bit outside featureMask is a table
+// error, so it is a panic rather than a dropped name.
+func newFeatureTable(names map[int]string) featureTable {
+	t := featureTable{
+		names: names,
+		bits:  slices.Sorted(maps.Keys(names)),
+		index: make(map[string]int, len(names)),
 	}
-	return featureTable{names: names, index: index}
+	for bit, name := range names {
+		if bit < 0 || bit >= featureMaskWords*64 {
+			panic(fmt.Sprintf("hardware: CPU feature %q has bit %d outside a %d-bit featureMask", name, bit, featureMaskWords*64))
+		}
+		t.defined.set(bit)
+		t.index[name] = bit
+	}
+	return t
 }
 
-// featureMaskWords is the width of a cpu_features bitmask in 64-bit words,
-// which bounds how far a table can grow within SchemaVersionV1.
-// TestCPUFeatureTables checks each table fits.
-const featureMaskWords = 4
+// featureMaskWords is the width of a cpu_features bitmask in 64-bit words.
+// gVisor's amd64 blocks 0-8 use bits up to 261, and 6 words leave room for
+// blocks through 11 within SchemaVersionV1.
+const featureMaskWords = 6
 
 // featureMask is a decoded cpu_features value: bit i set means the feature at
-// index i of the architecture's table is present. It is a fixed-size array so
+// bit i of the architecture's table is present. It is a fixed-size array so
 // matching on the scheduler's hot path allocates nothing.
 type featureMask [featureMaskWords]uint64
 
@@ -80,14 +91,15 @@ func (m featureMask) subsetOf(w featureMask) bool {
 	return true
 }
 
-// bitLen is one more than the highest set bit, or 0 for the empty mask.
-func (m featureMask) bitLen() int {
-	for i := featureMaskWords - 1; i >= 0; i-- {
-		if m[i] != 0 {
-			return i*64 + bits.Len64(m[i])
+// firstNotIn is the lowest bit set in m but not in w, or -1 if m is a
+// subset of w.
+func (m featureMask) firstNotIn(w featureMask) int {
+	for i := range m {
+		if extra := m[i] &^ w[i]; extra != 0 {
+			return i*64 + bits.TrailingZeros64(extra)
 		}
 	}
-	return 0
+	return -1
 }
 
 // String is the canonical encoding: lowercase hex, no prefix, no leading
@@ -154,7 +166,8 @@ func EncodeCPUFeatures(arch string, features []string) (string, error) {
 }
 
 // DecodeCPUFeatures returns the feature names a cpu_features value encodes
-// for arch, in table order.
+// for arch, in bit order. A set bit with no name is an error: the hardware
+// reserves it, so no encoder of this schema could have produced the value.
 func DecodeCPUFeatures(arch, value string) ([]string, error) {
 	table, ok := cpuFeatureTables[arch]
 	if !ok {
@@ -164,13 +177,13 @@ func DecodeCPUFeatures(arch, value string) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("invalid cpu_features value %q", value)
 	}
-	if n := m.bitLen(); n > len(table.names) {
-		return nil, fmt.Errorf("cpu_features value %q has bit %d beyond the %d known %s features", value, n-1, len(table.names), arch)
+	if bit := m.firstNotIn(table.defined); bit >= 0 {
+		return nil, fmt.Errorf("cpu_features value %q sets bit %d, which is not a known %s feature", value, bit, arch)
 	}
 	var out []string
-	for i, name := range table.names {
-		if m.has(i) {
-			out = append(out, name)
+	for _, bit := range table.bits {
+		if m.has(bit) {
+			out = append(out, table.names[bit])
 		}
 	}
 	return out, nil

@@ -65,7 +65,6 @@ Thumbs.db
 /validate-image-cache
 /setup-gcp
 /tools/apitool/apitool
-/tools/cpufeatures/cpufeatures
 /tools/junittool/junittool
 
 # Substrate agent workspace scratchpads
