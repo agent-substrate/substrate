@@ -149,7 +149,7 @@ spec:
       # atelet starts only once the startup probe sees the plugin serving.
       initContainers:
       - name: objectstore-plugin
-        image: ko://github.com/agent-substrate/substrate/cmd/objectstore-plugin
+        image: ko://go.ate.dev/substrate/cmd/objectstore-plugin
         restartPolicy: Always
         args:
         - node
@@ -207,7 +207,7 @@ spec:
           mountPath: /var/lib/objectstore-plugin/asset-staging
       containers:
       - name: atelet
-        image: ko://github.com/agent-substrate/substrate/cmd/atelet
+        image: ko://go.ate.dev/substrate/cmd/atelet
         args:
         # Pull credentials come from the node's own kubelet credential provider
         # plugin (mounted read-only below) rather than a cloud SDK compiled into

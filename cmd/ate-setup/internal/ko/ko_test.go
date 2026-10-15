@@ -44,7 +44,7 @@ func TestArgsAlwaysRequestBaseImportPaths(t *testing.T) {
 			if !slices.Contains(tc.args, "--base-import-paths") {
 				t.Errorf("args = %v, want --base-import-paths", tc.args)
 			}
-			if !slices.Contains(tc.args, "--ldflags=-X=github.com/agent-substrate/substrate/internal/version.Version=v0.0.0-test") {
+			if !slices.Contains(tc.args, "--ldflags=-X=go.ate.dev/substrate/internal/version.Version=v0.0.0-test") {
 				t.Errorf("args = %v, want the version stamp", tc.args)
 			}
 		})

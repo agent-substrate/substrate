@@ -29,7 +29,7 @@ volumes:
     storageClassName: ${STORAGE_CLASS_NAME}
 containers:
 - name: glutton-storage
-  image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
+  image: ko://go.ate.dev/substrate/cmd/benchmarking/glutton
   command:
   - "/ko-app/glutton"
   - "--grpc-listen-addr=:80"

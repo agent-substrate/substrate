@@ -87,7 +87,7 @@ func TestRenderServerPod_GRPCProbe(t *testing.T) {
 	})
 
 	container := pod.Spec.Containers[0]
-	if got, want := container.Image, "ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver"; got != want {
+	if got, want := container.Image, "ko://go.ate.dev/substrate/internal/e2e/fixtures/testserver"; got != want {
 		t.Errorf("container image = %q, want %q", got, want)
 	}
 	// Args carry the subcommand ahead of the --listen the template appends. The

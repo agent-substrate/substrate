@@ -11,7 +11,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `replicas` | `int32` | **Required.** Number of physical standby pods to maintain in the cluster. |
-| `workerImage` | `string` | **Required.** The container image for the `ateworker` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateworker-gvisor`). |
+| `workerImage` | `string` | **Required.** The container image for the `ateworker` herder process (e.g. `ko://go.ate.dev/substrate/cmd/ateworker-gvisor`). |
 | `sandboxClasses` | `[]WorkerPoolSandboxClass` | **Required.** The sandbox runtime families the pool runs; exactly one entry today. Each entry has `name` (**required**, `gvisor` or `microvm`, immutable), which drives the worker pod shape (e.g. KVM device mounts, node placement), and `configRef.name` (optional), which names a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) of the same class. Without `configRef`, the pool uses the class default (see [Class default](#class-default)). The controller records the result in `status.sandboxClasses`. The sandbox binaries an actor boots with still come from the `SandboxConfig` its `ActorTemplate` selects. |
 | `template` | `WorkerPoolPodTemplate` | **Optional.** Metadata, scheduling, and resource settings for worker workloads. |
 
@@ -57,7 +57,7 @@ metadata:
     workload: secret-agent
 spec:
   replicas: 10
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateworker-gvisor
+  workerImage: ko://go.ate.dev/substrate/cmd/ateworker-gvisor
   sandboxClasses:
   - name: gvisor
     configRef:
