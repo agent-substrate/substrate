@@ -45,6 +45,16 @@ linters:
           deny:
             - pkg: github.com/agent-substrate/substrate/internal/ateworker
               desc: only the ateworker binaries may import internal/ateworker
+        # internal/egresstunnels is shared by the egress-tunnels benchmark's
+        # binaries alone: the actor, the target and the driver.
+        egresstunnels:
+          files:
+            - "$all"
+            - "!**/cmd/benchmarking/egress-*/**"
+            - "!**/internal/egresstunnels/**"
+          deny:
+            - pkg: github.com/agent-substrate/substrate/internal/egresstunnels
+              desc: only the egress-tunnels benchmark binaries may import internal/egresstunnels
 
     errcheck:
       # Functions where ignoring the return is idiomatic in this codebase.
