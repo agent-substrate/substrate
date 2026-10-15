@@ -48,8 +48,6 @@ import (
 // testGvisorDefault is the gvisor class default TestMain creates.
 const testGvisorDefault = "gvisor-default-test"
 
-const testPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
-
 // testHoldFinalizer keeps a SandboxConfig on the API server after it is
 // deleted, so a test can observe how a config that is being deleted is treated.
 const testHoldFinalizer = "test.ate.dev/hold"
@@ -2397,9 +2395,6 @@ func TestAddProtectionFinalizer(t *testing.T) {
 
 func makeSandboxConfig(name string, class atev1alpha1.SandboxClass, isDefault bool) *atev1alpha1.SandboxConfig {
 	v := atev1alpha1.SandboxVersionConfig{Name: "v1"}
-	if class == atev1alpha1.SandboxClassGvisor {
-		v.PauseImage = testPauseImage
-	}
 	sc := &atev1alpha1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: atev1alpha1.SandboxConfigSpec{

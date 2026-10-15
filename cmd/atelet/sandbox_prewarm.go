@@ -21,14 +21,12 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"runtime"
-	"sync"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
-	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 )
@@ -43,18 +41,17 @@ var prewarmMaxJitter = 30 * time.Second
 
 // prewarmTimeout bounds a single prewarm attempt. The queue is drained by one
 // worker, so without a deadline a download that hangs without failing (a
-// registry that accepts the connection and stalls, a wedged bucket read)
-// would block every other config forever — prewarm runs on the daemon's
-// never-cancelled context. Generous enough for multi-hundred-MiB micro-VM
-// guest images on a busy node; a timed-out attempt requeues with backoff like
-// any other failure. A var so tests can shorten it.
+// wedged bucket read) would block every other config forever — prewarm runs on
+// the daemon's never-cancelled context. Generous enough for multi-hundred-MiB
+// micro-VM guest images on a busy node; a timed-out attempt requeues with
+// backoff like any other failure. A var so tests can shorten it.
 var prewarmTimeout = 5 * time.Minute
 
 // prewarmMaxRetries bounds how often one config's failed prewarm is retried
 // before it is dropped until the next config event (or first use, which stays
 // the correctness path). The backoff below caps at 5 minutes, so this covers
-// transient bucket or registry outages of several minutes without hammering a
-// permanently broken config forever.
+// transient bucket outages of several minutes without hammering a permanently
+// broken config forever.
 const prewarmMaxRetries = 8
 
 // prewarmFinished observes the result of each prewarm attempt, by config
@@ -76,7 +73,6 @@ type sandboxAssetFetcher interface {
 // download+extract on the critical path.
 type sandboxPrewarmer struct {
 	assets sandboxAssetFetcher
-	images *imagecache.Store
 	// lister resolves a queued config name to its latest revision at
 	// processing time, so coalesced events never prewarm a stale spec.
 	lister listersv1alpha1.SandboxConfigLister
@@ -95,10 +91,9 @@ type sandboxPrewarmer struct {
 	done chan struct{}
 }
 
-func newSandboxPrewarmer(assets sandboxAssetFetcher, images *imagecache.Store, lister listersv1alpha1.SandboxConfigLister, microvmCapable bool) *sandboxPrewarmer {
+func newSandboxPrewarmer(assets sandboxAssetFetcher, lister listersv1alpha1.SandboxConfigLister, microvmCapable bool) *sandboxPrewarmer {
 	return &sandboxPrewarmer{
 		assets: assets,
-		images: images,
 		lister: lister,
 		// Downloads fail on the scale of network timeouts, not API conflicts,
 		// so back off in seconds and cap in minutes rather than the
@@ -112,16 +107,15 @@ func newSandboxPrewarmer(assets sandboxAssetFetcher, images *imagecache.Store, l
 
 // startSandboxAssetPrewarm registers an event handler on the SandboxConfig
 // informer and starts a background worker that pre-downloads each config's
-// sandbox assets for this node's architecture, and pulls its pause image into
-// the image cache. Prewarming is purely a latency optimization: every failure
-// is logged and left to the on-demand fetch in ensureSandboxAssets and the
-// pull inside prepareOCIBundles, which remain the correctness path.
+// sandbox assets for this node's architecture. Prewarming is purely a latency
+// optimization: every failure is logged and left to the on-demand fetch in
+// ensureSandboxAssets, which remains the correctness path.
 //
 // TODO: the static-files cache is never pruned, and prewarming every config
 // revision makes stale releases accumulate faster. Add a GC that removes
 // assets referenced by no current SandboxConfig and no on-node actor record.
-func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInformer, assets sandboxAssetFetcher, images *imagecache.Store, microvmCapable bool) (*sandboxPrewarmer, error) {
-	p := newSandboxPrewarmer(assets, images, listersv1alpha1.NewSandboxConfigLister(informer.GetIndexer()), microvmCapable)
+func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInformer, assets sandboxAssetFetcher, microvmCapable bool) (*sandboxPrewarmer, error) {
+	p := newSandboxPrewarmer(assets, listersv1alpha1.NewSandboxConfigLister(informer.GetIndexer()), microvmCapable)
 	// Atelet startup never waits for this informer to sync: prewarm is
 	// best-effort, so a failing list/watch (e.g. Forbidden while an RBAC
 	// rollout lags the binary) must degrade prewarm, not hang the node. The
@@ -255,10 +249,8 @@ func (p *sandboxPrewarmer) process(ctx context.Context, name string) {
 }
 
 // prewarm fetches every asset of one SandboxConfig into the static-files
-// cache and its pause image into the image cache. Racing an on-demand
-// ensureSandboxAssets for the same assets is safe: both paths install
-// content-addressed files via atomic rename, and the image cache collapses
-// concurrent pulls of one digest.
+// cache. Racing an on-demand ensureSandboxAssets for the same assets is safe:
+// both paths install content-addressed files via atomic rename.
 func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxConfig) error {
 	ctx, cancel := context.WithTimeout(ctx, prewarmTimeout)
 	defer cancel()
@@ -273,44 +265,25 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 		return nil
 	}
 
-	var imageErr error
-	var wg sync.WaitGroup
-	// schedule prewarm pause image if provided
-	if ver.PauseImage != "" {
-		wg.Go(func() {
-			if _, err := p.images.EnsureImage(ctx, ver.PauseImage); err != nil {
-				imageErr = fmt.Errorf("while prewarming pause image %q: %w", ver.PauseImage, err)
-			}
-		})
-	}
-	// schedule prewarm sandbox assets if provided
-	rec, assetErr := recordFromSandboxConfig(cfg, ver)
+	rec, err := recordFromSandboxConfig(cfg, ver)
 	switch {
-	case errors.Is(assetErr, errNoAssetsForArch):
+	case errors.Is(err, errNoAssetsForArch):
 		// Permanent until the config changes, and a change re-enqueues:
-		// retrying would burn every attempt on a non-failure and redo the
-		// pause-image pull with it. Nothing to do for this node.
+		// retrying would burn every attempt on a non-failure. Nothing to do
+		// for this node.
 		slog.DebugContext(ctx, "No sandbox assets to prewarm for this node's architecture",
 			slog.String("config", cfg.Name), slog.String("arch", runtime.GOARCH))
-		assetErr = nil
-	case assetErr == nil:
-		wg.Go(func() {
-			_, assetErr = p.assets.ensureSandboxAssets(ctx, rec)
-		})
-	}
-	wg.Wait()
-	if err := errors.Join(assetErr, imageErr); err != nil {
+		return nil
+	case err != nil:
 		return err
 	}
-	assets := 0
-	if rec != nil {
-		assets = len(rec.Assets)
+	if _, err := p.assets.ensureSandboxAssets(ctx, rec); err != nil {
+		return err
 	}
 	slog.InfoContext(ctx, "Sandbox assets prewarmed",
 		slog.String("config", cfg.Name),
 		slog.String("version", ver.Name),
-		slog.Int("assets", assets),
-		slog.String("pauseImage", ver.PauseImage),
+		slog.Int("assets", len(rec.Assets)),
 		slog.Duration("duration", time.Since(t)))
 	return nil
 }
@@ -331,7 +304,6 @@ func recordFromSandboxConfig(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxV
 	}
 	rec := &sandboxAssetsRecord{
 		SandboxClass: string(cfg.Spec.SandboxClass),
-		PauseImage:   ver.PauseImage,
 		Assets:       make(map[string]assetEntry, len(files)),
 	}
 	for name, f := range files {

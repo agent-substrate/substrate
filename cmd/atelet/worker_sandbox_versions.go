@@ -18,7 +18,7 @@ package main
 // in the steps syncPod runs:
 //   - resolve: find the SandboxConfig of the pod's WorkerPool
 //   - plan: pick the config's versions this node can run
-//   - build: hash each version's assets and pause image digests into its
+//   - build: hash each version's asset digests into its
 //     sandbox_runtime_hash
 //   - write: replace the file in the worker directory if its content changed
 //
@@ -38,7 +38,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/google/go-containerregistry/pkg/name"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/agent-substrate/substrate/internal/hardware"
@@ -51,8 +50,8 @@ import (
 // errPermanent marks a failure that retrying cannot fix, so the syncer drops
 // the item instead of backing off until the next event for the pod:
 //   - the pod has no worker pool label
-//   - the config's default version is missing, has no assets for this
-//     node's architecture, or has a pause image not pinned by digest
+//   - the config's default version is missing or has no assets for this
+//     node's architecture
 var errPermanent = errors.New("permanent failure")
 
 // sandboxPlan is what one worker's sandbox versions file is built from.
@@ -163,7 +162,6 @@ func recordForArch(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConf
 	}
 	rec := &sandboxAssetsRecord{
 		SandboxClass: string(cfg.Spec.SandboxClass),
-		PauseImage:   ver.PauseImage,
 		Assets:       make(map[string]assetEntry, len(files)),
 	}
 	for name, f := range files {
@@ -181,23 +179,14 @@ func recordForArch(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConf
 // prewarmer fetches each config's default version, and Run/Restore fetch any
 // other version on demand.
 //
-// TODO: fetch the default version's assets and pause image through
+// TODO: fetch the default version's assets through
 // cmd/atelet/internal/filecache here, and remove sandbox_prewarm.go. Other
 // versions stay fetched on demand at Restore.
-func buildFile(ctx context.Context, plan *sandboxPlan) (*sandboxversions.File, error) {
+func buildFile(plan *sandboxPlan) *sandboxversions.File {
 	out := &sandboxversions.File{}
 	seen := make(map[string]bool, len(plan.versions))
 	for _, v := range plan.versions {
-		h, err := versionRuntimeHash(v.rec)
-		if err != nil {
-			err = fmt.Errorf("SandboxConfig %q, version %q: %w", plan.config, v.name, err)
-			if v.isDefault {
-				// No worker of the pool could start actors on this node.
-				return nil, fmt.Errorf("%w: %w", errPermanent, err)
-			}
-			slog.WarnContext(ctx, "Leaving a sandbox version out of the worker sandbox versions file", slog.Any("err", err))
-			continue
-		}
+		h := runtimeHash(v.rec)
 		if seen[h] {
 			continue
 		}
@@ -209,34 +198,17 @@ func buildFile(ctx context.Context, plan *sandboxPlan) (*sandboxversions.File, e
 			out.RestorableRuntimes = append(out.RestorableRuntimes, attrs)
 		}
 	}
-	return out, nil
-}
-
-// versionRuntimeHash returns the runtime hash of one version. The CRD
-// requires every pause image to be pinned by digest, which is the digest the
-// image cache resolves the ref to, so the hash needs no pull.
-func versionRuntimeHash(rec *sandboxAssetsRecord) (string, error) {
-	var pauseDigest string
-	if rec.PauseImage != "" {
-		ref, err := name.NewDigest(rec.PauseImage)
-		if err != nil {
-			return "", fmt.Errorf("pause image %q is not pinned by digest: %w", rec.PauseImage, err)
-		}
-		pauseDigest = ref.DigestStr()
-	}
-	return runtimeHash(rec, pauseDigest), nil
+	return out
 }
 
 // runtimeHash is the sandbox_runtime_hash of a version: a sha256 over one
-// sorted "key=value" line per asset digest and pause image digest. Version names and URLs are left out, so the same binaries under
-// another name or in another bucket are the same runtime.
-func runtimeHash(rec *sandboxAssetsRecord, pauseDigest string) string {
-	lines := make([]string, 0, len(rec.Assets)+1)
+// sorted "asset/<name>=<sha256>" line per asset digest. Version names and URLs
+// are left out, so the same binaries under another name or in another bucket
+// are the same runtime.
+func runtimeHash(rec *sandboxAssetsRecord) string {
+	lines := make([]string, 0, len(rec.Assets))
 	for name, a := range rec.Assets {
 		lines = append(lines, "asset/"+name+"="+a.SHA256)
-	}
-	if pauseDigest != "" {
-		lines = append(lines, "pause_image="+pauseDigest)
 	}
 	slices.Sort(lines)
 	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
@@ -252,11 +224,7 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 	if err != nil {
 		return err
 	}
-	want, err := buildFile(ctx, plan)
-	if err != nil {
-		return err
-	}
-	return s.write(ctx, string(pod.UID), plan.config, want)
+	return s.write(ctx, string(pod.UID), plan.config, buildFile(plan))
 }
 
 func (s *workerSandboxSyncer) write(ctx context.Context, uid, config string, want *sandboxversions.File) error {

@@ -561,10 +561,6 @@ func tagSnapshotURI(tag *ateapipb.Tag) string {
 	return tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetObject().GetSnapshotUri()
 }
 
-// testPauseImage is the pause image the default test SandboxConfig carries;
-// it is what a resolved WorkloadSpec's sandbox assets should name.
-const testPauseImage = "pause@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
 // ensureDefaultGvisorSandboxConfig creates the cluster-scoped "gvisor-default"
 // SandboxConfig (idempotently) and waits for it to appear in the lister.
 func ensureDefaultGvisorSandboxConfig(t *testing.T, tc *testContext) {
@@ -582,8 +578,7 @@ func ensureGvisorSandboxConfig(t *testing.T, tc *testContext, name string) {
 			SandboxClass:   atev1alpha1.SandboxClassGvisor,
 			DefaultVersion: "v1",
 			Versions: []atev1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				PauseImage: testPauseImage,
+				Name: "v1",
 				Assets: map[string]map[string]atev1alpha1.AssetFile{
 					"amd64": {"runsc": {
 						URL:    "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc",

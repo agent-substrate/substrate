@@ -47,23 +47,23 @@ func testAssets() map[string]map[string]atev1alpha1.AssetFile {
 
 // TestResolveSandboxAssets pins the template-side resolution: the config the
 // template names is resolved (with its class checked) to its default version,
-// a missing default version, an empty name or an unrecognized class is an
-// error, and the pause image travels with the sandbox binaries.
+// and a missing default version, an empty name or an unrecognized class is an
+// error.
 func TestResolveSandboxAssets(t *testing.T) {
-	const namedPause = "gcr.io/gke-release/pause@sha256:named"
+	const v2SHA = "v2-sha"
 	namedConfig := &atev1alpha1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-custom"},
 		Spec: atev1alpha1.SandboxConfigSpec{
 			SandboxClass:   atev1alpha1.SandboxClassGvisor,
 			DefaultVersion: "v2",
 			Versions: []atev1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				PauseImage: "gcr.io/gke-release/pause@sha256:old",
-				Assets:     testAssets(),
+				Name:   "v1",
+				Assets: testAssets(),
 			}, {
-				Name:       "v2",
-				PauseImage: namedPause,
-				Assets:     testAssets(),
+				Name: "v2",
+				Assets: map[string]map[string]atev1alpha1.AssetFile{
+					"amd64": {"gvisor": {URL: "gs://bucket/gvisor.tar.bz2", SHA256: v2SHA}},
+				},
 			}},
 		},
 	}
@@ -81,26 +81,25 @@ func TestResolveSandboxAssets(t *testing.T) {
 			SandboxClass:   atev1alpha1.SandboxClassGvisor,
 			DefaultVersion: "v1",
 			Versions: []atev1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				State:      ptr.To(atev1alpha1.SandboxVersionStateDisabled),
-				PauseImage: namedPause,
-				Assets:     testAssets(),
+				Name:   "v1",
+				State:  ptr.To(atev1alpha1.SandboxVersionStateDisabled),
+				Assets: testAssets(),
 			}},
 		},
 	}
 
 	tests := []struct {
-		name           string
-		sandbox        *ateapipb.SandboxConfig
-		wantPauseImage string
-		wantErr        string
+		name    string
+		sandbox *ateapipb.SandboxConfig
+		wantSHA string
+		wantErr string
 	}{{
 		name: "named config",
 		sandbox: &ateapipb.SandboxConfig{
 			SandboxClass: "gvisor",
 			ConfigName:   "gvisor-custom",
 		},
-		wantPauseImage: namedPause,
+		wantSHA: v2SHA,
 	}, {
 		name: "named config without its default version",
 		sandbox: &ateapipb.SandboxConfig{
@@ -159,8 +158,8 @@ func TestResolveSandboxAssets(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveSandboxAssets() error: %v", err)
 			}
-			if got.GetPauseImage() != tt.wantPauseImage {
-				t.Errorf("pause image = %q, want %q", got.GetPauseImage(), tt.wantPauseImage)
+			if gotSHA := got.GetAssets()["amd64"].GetFiles()["gvisor"].GetSha256(); gotSHA != tt.wantSHA {
+				t.Errorf("amd64 gvisor sha256 = %q, want %q", gotSHA, tt.wantSHA)
 			}
 		})
 	}

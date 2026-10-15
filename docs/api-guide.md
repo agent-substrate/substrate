@@ -105,7 +105,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
 | `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
-The sandbox itself — the binaries (e.g. the gVisor `runsc` binary) and the `pauseImage` holding the sandbox's namespaces — comes from the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object the template names via `sandboxConfig.configName`. An actor always resolves the config from its current template — repointing the actor at another template requires the same config.
+The sandbox itself — the binaries (e.g. the gVisor `runsc` binary) — comes from the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object the template names via `sandboxConfig.configName`. An actor always resolves the config from its current template — repointing the actor at another template requires the same config.
 
 Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is a **hard scheduling gate**: an actor is only ever placed on a `WorkerPool` whose `sandboxClasses` entry matches. It is AND'd with `workerSelector` (and the actor's `worker_selector`), which can only narrow the eligible pools further. It has no default — `sandboxConfig` is required and its `sandboxClass` must be set — and, like the rest of the template, is immutable, so each template's class is fixed at creation.
 
@@ -435,7 +435,7 @@ One consequence worth planning for: **a published snapshot is read from the ates
 
 ## 3. SandboxConfig: The Sandbox Itself
 
-`SandboxConfig` is a **cluster-scoped** resource that decouples the sandbox — its binaries (the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) and the `pauseImage` that holds the sandbox's namespaces — from the workload definition in the `ActorTemplate`. An actor's cold boot resolves the sandbox binaries from the default version of the config its `ActorTemplate` names via `sandboxConfig.configName`.
+`SandboxConfig` is a **cluster-scoped** resource that decouples the sandbox binaries (the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) from the workload definition in the `ActorTemplate`. An actor's cold boot resolves the sandbox binaries from the default version of the config its `ActorTemplate` names via `sandboxConfig.configName`.
 
 This means a single, cluster-managed config pins the sandbox runtime version for many templates, and operators upgrade the runtime in one place. A resume also resolves the default version at restore time: the snapshot manifest records the assets it was captured with, but a restore runs the current default, so changing `defaultVersion` applies to every existing snapshot on its next resume. gVisor does not promise that a checkpoint restores under a different release, so after a version change recut the golden snapshots and expect snapshots captured under the old version to fail on their next resume.
 
@@ -453,7 +453,6 @@ Each entry of `versions` (`SandboxVersionConfig`):
 | :--- | :--- | :--- |
 | `name` | `string` | **Required.** Identifies the version within the config. A DNS label (lower-case alphanumerics and `-`, at most 63 characters). |
 | `state` | `string` | Optional. `Enabled` (default) or `Disabled`. The version named by `defaultVersion` cannot be `Disabled`. |
-| `pauseImage` | `string` | **Required for `gvisor`; not allowed for `microvm`**, which runs no pause container. The image for the sandbox's root container (e.g. `registry.k8s.io/pause`, or `gcr.io/gke-release/pause` on GKE). Must include a digest (`...@sha256:...`) — it is recorded in each snapshot's manifest so a restore rebuilds the sandbox from the same image. |
 | `assets` | `map[arch]map[name]AssetFile` | Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair; `url` is at most 2048 bytes. A `ValidatingAdmissionPolicy` enforces each class's required assets on every version. atelet holds no storage credentials: it fetches every URL through the node's object-store plugin (`AssetProvider`), with the plugin's credentials. Which schemes work depends on the plugin; the in-tree one serves only its storage backend's scheme, `gs://` on GCS and `s3://` on S3, as `<bucket>/<object>`, and rejects other schemes without reading them. A `gs://` URL the plugin cannot serve (it has no such object, rejects the URL, does not implement `AssetProvider`, is unreachable, or fails with an error it does not recognize, such as GCS refusing its credentials for a public bucket) is then read anonymously, which serves public buckets such as `gs://gvisor`; any other refusal by the plugin is final. The plugin returns an object only if its content matches `sha256`, and refuses any URL under a snapshot location (an `ActorTemplate`'s `snapshotConfig.location` followed by `/atespaces/`), so assets may share the snapshot bucket but must not be stored there. atelet verifies the sha256 again before using an asset. Its logs and errors show an asset URL as `scheme://host/path`. |
 
 A cluster-wide gVisor `SandboxConfig` (`gvisor-default`) is installed with the platform, so gVisor templates can name it via `sandboxConfig.configName` without any extra setup.
@@ -497,7 +496,6 @@ spec:
   versions:
   - name: v3
     state: Enabled
-    pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
     assets:
       amd64:
         gvisor:

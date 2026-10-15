@@ -1159,9 +1159,8 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 			SandboxClass:   atev1alpha1.SandboxClassGvisor,
 			DefaultVersion: "v1",
 			Versions: []atev1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				PauseImage: "pause@sha256:abc",
-				Assets:     testAssets(),
+				Name:   "v1",
+				Assets: testAssets(),
 			}},
 		},
 	}})
@@ -1530,7 +1529,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	// template's SandboxConfig resolves to.
 	wantSandboxAssets := sandboxAssetsProto(
 		&atev1alpha1.SandboxConfig{Spec: atev1alpha1.SandboxConfigSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}},
-		&atev1alpha1.SandboxVersionConfig{Name: "v1", PauseImage: "pause@sha256:abc", Assets: testAssets()},
+		&atev1alpha1.SandboxVersionConfig{Name: "v1", Assets: testAssets()},
 	)
 
 	for _, tt := range tests {

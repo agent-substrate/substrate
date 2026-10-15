@@ -47,9 +47,9 @@ func resolveTemplateSandboxConfig(
 	return sc, nil
 }
 
-// resolveSandboxAssets determines the sandbox binaries and pause image an actor
-// should boot with and projects them onto the ateletpb.SandboxAssets atelet
-// fetches: the default version of the SandboxConfig the ActorTemplate names via
+// resolveSandboxAssets determines the sandbox binaries an actor should boot
+// with and projects them onto the ateletpb.SandboxAssets atelet fetches: the
+// default version of the SandboxConfig the ActorTemplate names via
 // sandbox_config.config_name (required; enforced by CreateActorTemplate),
 // checked against the template's sandbox_class.
 func resolveSandboxAssets(
@@ -80,7 +80,6 @@ func resolveSandboxAssets(
 func sandboxAssetsProto(sc *atev1alpha1.SandboxConfig, ver *atev1alpha1.SandboxVersionConfig) *ateletpb.SandboxAssets {
 	out := &ateletpb.SandboxAssets{
 		SandboxClass: string(sc.Spec.SandboxClass),
-		PauseImage:   ver.PauseImage,
 		Assets:       make(map[string]*ateletpb.ArchAssets, len(ver.Assets)),
 	}
 	for arch, files := range ver.Assets {

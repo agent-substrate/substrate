@@ -1781,10 +1781,10 @@ func (x *ArchAssets) GetFiles() map[string]*AssetFile {
 }
 
 // SandboxAssets is the generic, backend-agnostic description of the sandbox
-// an actor runs in: a sandbox class, the pause image holding its namespaces,
-// and binaries keyed first by architecture (GOARCH) and then by asset name.
-// atelet's backend code interprets the asset names (gVisor expects "gvisor",
-// the release tarball; legacy "runsc", a bare binary, is still accepted).
+// an actor runs in: a sandbox class and binaries keyed first by architecture
+// (GOARCH) and then by asset name. atelet's backend code interprets the asset
+// names (gVisor expects "gvisor", the release tarball; legacy "runsc", a bare
+// binary, is still accepted).
 type SandboxAssets struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
@@ -1794,17 +1794,7 @@ type SandboxAssets struct {
 	// +k8s:required
 	// +k8s:maxProperties=8 # one entry per architecture
 	// +k8s:eachKey=+k8s:maxLength=16
-	Assets map[string]*ArchAssets `protobuf:"bytes,2,rep,name=assets,proto3" json:"assets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // arch -> {name -> file}
-	// pause_image is the image for the sandbox's root container. Like the
-	// binaries above it is sandbox configuration, not workload configuration,
-	// and atelet pins it into the snapshot manifest so a restore rebuilds the
-	// sandbox from the same image. Empty for sandboxes without a pause
-	// container (microvm).
-	//
-	// +k8s:optional
-	// +k8s:maxLength=512
-	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
-	PauseImage    string `protobuf:"bytes,3,opt,name=pause_image,json=pauseImage,proto3" json:"pause_image,omitempty"`
+	Assets        map[string]*ArchAssets `protobuf:"bytes,2,rep,name=assets,proto3" json:"assets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // arch -> {name -> file}
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1851,13 +1841,6 @@ func (x *SandboxAssets) GetAssets() map[string]*ArchAssets {
 		return x.Assets
 	}
 	return nil
-}
-
-func (x *SandboxAssets) GetPauseImage() string {
-	if x != nil {
-		return x.PauseImage
-	}
-	return ""
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -4085,12 +4068,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\n" +
 	"FilesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12'\n" +
-	"\x05value\x18\x02 \x01(\v2\x11.atelet.AssetFileR\x05value:\x028\x01\"\xdf\x01\n" +
+	"\x05value\x18\x02 \x01(\v2\x11.atelet.AssetFileR\x05value:\x028\x01\"\xbe\x01\n" +
 	"\rSandboxAssets\x12#\n" +
 	"\rsandbox_class\x18\x01 \x01(\tR\fsandboxClass\x129\n" +
-	"\x06assets\x18\x02 \x03(\v2!.atelet.SandboxAssets.AssetsEntryR\x06assets\x12\x1f\n" +
-	"\vpause_image\x18\x03 \x01(\tR\n" +
-	"pauseImage\x1aM\n" +
+	"\x06assets\x18\x02 \x03(\v2!.atelet.SandboxAssets.AssetsEntryR\x06assets\x1aM\n" +
 	"\vAssetsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12(\n" +
 	"\x05value\x18\x02 \x01(\v2\x12.atelet.ArchAssetsR\x05value:\x028\x01\"k\n" +

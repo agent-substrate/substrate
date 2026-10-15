@@ -85,10 +85,6 @@ func ValidateCustom_SandboxAssets_SandboxClass(_ context.Context, _ operation.Op
 	return resources.ValidateSandboxClass(fldPath, *value)
 }
 
-func ValidateCustom_SandboxAssets_PauseImage(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidatePinnedImage(fldPath, *value)
-}
-
 func ValidateCustom_AssetFile_Sha256(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if err := resources.ValidateAssetHash(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}

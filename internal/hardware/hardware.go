@@ -31,8 +31,7 @@ const (
 	AttrArchitecture = "architecture"
 
 	// AttrSandboxRuntimeHash identifies the sandbox runtime binaries: a
-	// sha256 over a SandboxConfig version's asset digests and pause image
-	// digest, computed by atelet.
+	// sha256 over a SandboxConfig version's asset digests, computed by atelet.
 	AttrSandboxRuntimeHash = "sandbox_runtime_hash"
 
 	// TODO: Add AttrCPUFeatures ("cpu_features") and other compatibility

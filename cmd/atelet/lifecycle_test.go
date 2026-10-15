@@ -198,7 +198,6 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 	}
 	sandboxAssets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
-		PauseImage:   pinnedImage,
 		Assets: map[string]*ateletpb.ArchAssets{
 			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 				runscAssetName: {
@@ -346,25 +345,26 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	host := imageVolumeTestRegistry(t)
 	image := host + "/actor:v1"
 	pinnedImage := pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
-	checkpointPause := pushTestImage(t, host+"/pause:v1", singleFileLayer(t, "pause", "pause-v1"))
-	restorePause := pushTestImage(t, host+"/pause:v2", singleFileLayer(t, "pause", "pause-v2"))
 
-	runsc := []byte("runsc binary")
+	checkpointRunsc := []byte("runsc binary v1")
+	checkpointSHA := fmt.Sprintf("%x", sha256.Sum256(checkpointRunsc))
+	restoreRunsc := []byte("runsc binary v2")
+	restoreSHA := fmt.Sprintf("%x", sha256.Sum256(restoreRunsc))
+
 	s := &AteomHerder{
 		ateomDialer:       newAteomDialer(1),
 		imageCache:        newImageVolumeStore(t),
-		anonGCSClient:     fakeObjectStorage{data: runsc},
+		anonGCSClient:     fakeObjectStorage{data: checkpointRunsc},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 	}
-	assetsWithPause := func(pause string) *ateletpb.SandboxAssets {
+	assetsWithRunsc := func(url, sha string) *ateletpb.SandboxAssets {
 		return &ateletpb.SandboxAssets{
 			SandboxClass: "gvisor",
-			PauseImage:   pause,
 			Assets: map[string]*ateletpb.ArchAssets{
 				runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 					runscAssetName: {
-						Url:    "gs://test-bucket/runsc",
-						Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
+						Url:    url,
+						Sha256: sha,
 					},
 				}},
 			},
@@ -381,7 +381,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          workerPodUID,
-		SandboxAssets:         assetsWithPause(checkpointPause),
+		SandboxAssets:         assetsWithRunsc("gs://test-bucket/runsc-v1", checkpointSHA),
 		Spec:                  spec,
 	}); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -412,10 +412,11 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unmarshalling snapshot manifest: %v", err)
 	}
-	if manifestRec.PauseImage != checkpointPause {
-		t.Fatalf("manifest pause image = %q, want %q", manifestRec.PauseImage, checkpointPause)
+	if manifestRec.Assets[runscAssetName].SHA256 != checkpointSHA {
+		t.Fatalf("manifest runsc sha256 = %q, want %q", manifestRec.Assets[runscAssetName].SHA256, checkpointSHA)
 	}
 
+	s.anonGCSClient = fakeObjectStorage{data: restoreRunsc}
 	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
@@ -423,7 +424,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          workerPodUID,
-		SandboxAssets:         assetsWithPause(restorePause),
+		SandboxAssets:         assetsWithRunsc("gs://test-bucket/runsc-v2", restoreSHA),
 		Spec:                  spec,
 		Snapshot: &ateletpb.Snapshot{
 			SnapshotUuid: snapshotName,
@@ -437,8 +438,8 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading on-node sandbox record: %v", err)
 	}
-	if got.PauseImage != restorePause {
-		t.Errorf("restored actor pause image = %q, want the request's %q", got.PauseImage, restorePause)
+	if got.Assets[runscAssetName].SHA256 != restoreSHA {
+		t.Errorf("restored actor runsc sha256 = %q, want the request's %q", got.Assets[runscAssetName].SHA256, restoreSHA)
 	}
 }
 
@@ -484,7 +485,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
 			if tc.restore && tc.failure != "manifest" {
 				writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
-					SandboxClass: "gvisor", PauseImage: testPauseImage,
+					SandboxClass:  "gvisor",
 					Assets:        map[string]assetEntry{"runsc": {URL: "gs://test-bucket/runsc", SHA256: assetHash}},
 					SnapshotFiles: []string{"checkpoint.img"},
 				}, map[string]string{"checkpoint.img": "guest-memory"})
@@ -511,7 +512,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			}
 			s := &AteomHerder{anonGCSClient: storage, systemInfoVolumes: refresher}
 			assets := &ateletpb.SandboxAssets{
-				SandboxClass: "gvisor", PauseImage: testPauseImage,
+				SandboxClass: "gvisor",
 				Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 					runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
 				}}},
@@ -585,6 +586,10 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		systemInfoVolumes: refresher,
 	}
 	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{
+			Name:  "app",
+			Image: missingContainerImage(t),
+		}},
 		Volumes: []*ateletpb.Volume{{
 			Name:       "trust",
 			SystemInfo: trustVolumeSpec("ca.pem"),
@@ -597,14 +602,13 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		WorkerPodUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
 		SandboxAssets: &ateletpb.SandboxAssets{
 			SandboxClass: "gvisor",
-			PauseImage:   missingPauseImage(t),
 			Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 				runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
 			}}},
 		},
 		Spec: spec,
 	})
-	if err == nil || !strings.Contains(err.Error(), "while creating pause OCI bundle") {
+	if err == nil || !strings.Contains(err.Error(), `while creating "app" OCI bundle`) {
 		t.Fatalf("Run error = %v, want the post-registration OCI preparation failure", err)
 	}
 	if _, err := os.ReadFile(filepath.Join(ateletpath.SystemInfoVolumeRoot(actorUID, "trust"), "ca.pem")); err != nil {
@@ -615,12 +619,12 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	}
 }
 
-// missingPauseImage returns a digest-pinned reference that passes request
+// missingContainerImage returns a digest-pinned reference that passes request
 // validation but names a manifest the local test registry does not serve, so
 // the pull fails only once OCI bundle preparation starts.
-func missingPauseImage(t *testing.T) string {
+func missingContainerImage(t *testing.T) string {
 	t.Helper()
-	return imageVolumeTestRegistry(t) + "/pause@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	return imageVolumeTestRegistry(t) + "/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 }
 
 func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
@@ -629,7 +633,6 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		actorUID     = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a63"
 		snapshotName = "pause-snap-after"
 	)
-	pauseImage := missingPauseImage(t)
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
 	refresher := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
@@ -637,15 +640,20 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
 	writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    pauseImage,
 		Assets:        map[string]assetEntry{"runsc": {URL: "gs://test-bucket/runsc", SHA256: assetHash}},
 		SnapshotFiles: []string{"checkpoint.img"},
 	}, map[string]string{"checkpoint.img": "guest-memory"})
 
-	spec := &ateletpb.WorkloadSpec{Volumes: []*ateletpb.Volume{{
-		Name:       "trust",
-		SystemInfo: trustVolumeSpec("ca.pem"),
-	}}}
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{
+			Name:  "app",
+			Image: missingContainerImage(t),
+		}},
+		Volumes: []*ateletpb.Volume{{
+			Name:       "trust",
+			SystemInfo: trustVolumeSpec("ca.pem"),
+		}},
+	}
 	s := &AteomHerder{
 		anonGCSClient:     fakeObjectStorage{data: content},
 		imageCache:        newImageVolumeStore(t),
@@ -658,7 +666,6 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		WorkerPodUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
 		SandboxAssets: &ateletpb.SandboxAssets{
 			SandboxClass: "gvisor",
-			PauseImage:   pauseImage,
 			Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 				runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
 			}}},
@@ -669,7 +676,7 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "while creating pause OCI bundle") {
+	if err == nil || !strings.Contains(err.Error(), `while creating "app" OCI bundle`) {
 		t.Fatalf("Restore error = %v, want the post-registration OCI preparation failure", err)
 	}
 	if _, err := os.ReadFile(filepath.Join(ateletpath.SystemInfoVolumeRoot(actorUID, "trust"), "ca.pem")); err != nil {
@@ -704,7 +711,6 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 	assetHash := fmt.Sprintf("%x", sha256.Sum256(runsc))
 	sandboxAssets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
-		PauseImage:   pinnedImage,
 		Assets: map[string]*ateletpb.ArchAssets{
 			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 				runscAssetName: {
@@ -719,7 +725,6 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 	}
 	manifestRec := sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    pinnedImage,
 		Assets:        map[string]assetEntry{runscAssetName: {URL: "gs://test-bucket/runsc", SHA256: assetHash}},
 		SnapshotFiles: []string{"checkpoint.img"},
 	}
@@ -846,7 +851,7 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 	)
 	assetHash := fmt.Sprintf("%x", sha256.Sum256([]byte("runsc binary")))
 	assets := &ateletpb.SandboxAssets{
-		SandboxClass: "gvisor", PauseImage: testPauseImage,
+		SandboxClass: "gvisor",
 		Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 			runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
 		}}},
@@ -878,7 +883,7 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 			useTempNodeDirs(t)
 			if tc.unusableLocal {
 				writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
-					SandboxClass: "gvisor", PauseImage: testPauseImage, SnapshotFiles: []string{"checkpoint.img"},
+					SandboxClass: "gvisor", SnapshotFiles: []string{"checkpoint.img"},
 				}, nil)
 			}
 			// The object store is empty: nothing was ever uploaded.

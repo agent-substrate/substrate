@@ -65,9 +65,8 @@ func gvisorDefaultLister(t *testing.T) listersv1alpha1.SandboxConfigLister {
 			SandboxClass:   atev1alpha1.SandboxClassGvisor,
 			DefaultVersion: "v1",
 			Versions: []atev1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				PauseImage: "registry.k8s.io/pause@sha256:x",
-				Assets:     testAssets(),
+				Name:   "v1",
+				Assets: testAssets(),
 			}},
 		},
 	}})

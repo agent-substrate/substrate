@@ -649,14 +649,6 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			}
 		}
 	}()
-	// Create and start pause container. The bundle rootfs is composed here —
-	// an overlay of the node's cached image layers plus the bundle's private
-	// upper — because mounting is ateom's job (atelet runs with no
-	// capabilities); runsc's gofer resolves the mount in this pod's mount
-	// namespace.
-	if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer)); err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
-	}
 	containersToDelete = append(containersToDelete, ocispec.PauseContainer)
 	// Attribute runsc CLI output and the pause container's stdio to the actor.
 	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
@@ -673,6 +665,10 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 
 	// Create and start each application container, each with its own log pipe so
 	// every line is tagged with the originating container (ate.actor.container.name).
+	// The bundle rootfs is composed here — an overlay of the node's cached
+	// image layers plus the bundle's private upper — because mounting is
+	// ateom's job (atelet runs with no capabilities); runsc's gofer resolves
+	// the mount in this pod's mount namespace.
 	for _, ac := range req.GetSpec().GetContainers() {
 		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
 		if err != nil {
@@ -1020,15 +1016,6 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	restoreArgs, err := fsRestoreArgs(checkpointDir)
 	if err != nil {
 		return nil, err
-	}
-
-	// Compose the pause rootfs before create (see RunWorkload). runsc restore
-	// only needs the rootfs to hold the correct content; whether it came from
-	// an untar or an overlay of cached layers is transparent to it.
-	err = imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer))
-	timing.pauseRootfs = lap(&tLast)
-	if err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
 
 	// Attribute runsc CLI output and the pause container's stdio to the actor.

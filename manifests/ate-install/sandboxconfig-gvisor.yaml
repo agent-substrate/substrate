@@ -34,14 +34,11 @@ spec:
   # ateom-gvisor uses to save and restore durable-dir volumes.
   - name: v3
     state: Enabled
-    # The root sandbox container's image. On GCP, prefer the in-project mirror
-    # gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da.
-    pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
     assets:
       amd64:
         gvisor:
-          url: "gs://gvisor/releases/nightly/2026-10-10/x86_64/gvisor.tar.zstd"
-          sha256: "4ae7fab988c3647d2a835d6c3c70c6a99021c562db97827592562b6c51c3e88c"
+          url: "gs://snapshot-substrate-test-nybidari-cgroups/gvisor-pr15551/gvisor.tar.zstd"
+          sha256: "9a92f6c36c4bfc4c45d52ac344d7bf115b74b0886329efeeed9ae580e42057a9"
       arm64:
         gvisor:
           url: "gs://gvisor/releases/nightly/2026-10-10/aarch64/gvisor.tar.zstd"

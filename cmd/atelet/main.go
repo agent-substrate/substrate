@@ -44,7 +44,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -374,7 +373,7 @@ func main() {
 	// TODO: remove once the worker sandbox syncer fetches assets through
 	// cmd/atelet/internal/filecache.
 	sandboxConfigInformer := ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
-	if _, err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
+	if _, err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, microvmNodeCapable(hostDevRoot)); err != nil {
 		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
 	}
 	// Keep a sandbox versions file in each local worker's directory: the
@@ -594,9 +593,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 	if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 		return nil, err
 	}
-	containerSpecs, err := s.prepareOCIBundles(ctx, actorUID, actorRef,
-		req.GetSpec(), sandboxRec.PauseImage,
-	)
+	containerSpecs, err := s.prepareOCIBundles(ctx, actorUID, actorRef, req.GetSpec())
 	if err != nil {
 		return nil, err
 	}
@@ -1119,11 +1116,11 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 
-	// The sandbox (binaries + pause image) that runs the restored workload
-	// comes from the request, resolved by the control plane from the
-	// ActorTemplate's SandboxConfig. The snapshot manifests only supply the
-	// files to restore and the actor identity. Resolved before any on-node
-	// work so an invalid request changes nothing.
+	// The sandbox binaries that run the restored workload come from the
+	// request, resolved by the control plane from the ActorTemplate's
+	// SandboxConfig. The snapshot manifests only supply the files to restore
+	// and the actor identity. Resolved before any on-node work so an invalid
+	// request changes nothing.
 	runtimeRec, err := recordFromRequest(req.GetSandboxAssets())
 	if err != nil {
 		return nil, apierror.InvalidArgument("invalid sandbox_assets: %v", err)
@@ -1280,7 +1277,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return err
 		}
 		t := time.Now()
-		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage)
+		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec())
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -1303,7 +1300,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, err
 	}
 
-	// Tell ateom to do runsc create + runsc restore for pause container and
+	// Tell ateom to do runsc create + runsc restore for the sandbox and
 	// all application containers.
 	spec, err := buildAteomWorkloadSpec(req.GetSpec(), containerSpecs)
 	if err != nil {
@@ -1539,19 +1536,14 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 	return nil
 }
 
-// prepareOCIBundles pulls images and assembles OCI bundles for the pause
-// container and every application container in spec, in parallel. pauseImage
-// comes from the sandbox record, not the workload spec: it is sandbox
-// configuration, and on a restore it must be the image the snapshot was taken
-// with. It is empty for sandboxes without a pause container, which get no
-// pause bundle. It returns each application container's spec, indexed like
-// spec.GetContainers().
+// prepareOCIBundles pulls images and assembles OCI bundles for every
+// application container in spec, in parallel. It returns each application
+// container's spec, indexed like spec.GetContainers().
 func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
 	actorRef resources.ActorRef,
 	spec *ateletpb.WorkloadSpec,
-	pauseImage string,
 ) ([]*ateompb.ContainerSpec, error) {
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
@@ -1564,16 +1556,6 @@ func (s *AteomHerder) prepareOCIBundles(
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
-
-	if pauseImage != "" {
-		g.Go(func() error {
-			// pause is sandbox infra; it mounts no volumes.
-			if _, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ocispec.PauseContainer, pauseImage, nil, nil); err != nil {
-				return wrapFileSystemErr("while creating pause OCI bundle", err)
-			}
-			return nil
-		})
-	}
 
 	// Application containers.
 	containerSpecs := make([]*ateompb.ContainerSpec, len(spec.GetContainers()))

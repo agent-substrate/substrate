@@ -58,6 +58,9 @@ func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 	}
 	spec.Annotations["io.kubernetes.cri.container-name"] = o.ContainerName
 	if o.ContainerName == PauseContainer {
+		spec.Process = nil
+		spec.Root = nil
+		spec.Mounts = nil
 		spec.Annotations["io.kubernetes.cri.container-type"] = "sandbox"
 		for _, v := range o.DurableVolumes {
 			spec.Annotations["dev.gvisor.spec.mount."+v+".type"] = "tmpfs"
@@ -67,24 +70,24 @@ func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 	} else {
 		spec.Annotations["io.kubernetes.cri.container-type"] = "container"
 		spec.Annotations["io.kubernetes.cri.sandbox-id"] = PauseContainer
-	}
 
-	// Insert resolv.conf before any volume bind mounts.
-	if !slices.ContainsFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == resolvConf }) {
-		i := slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Type == "bind" })
-		if i < 0 {
-			i = len(spec.Mounts)
+		// Insert resolv.conf before any volume bind mounts.
+		if !slices.ContainsFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == resolvConf }) {
+			i := slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Type == "bind" })
+			if i < 0 {
+				i = len(spec.Mounts)
+			}
+			source := o.ResolvConf
+			if source == "" {
+				source = resolvConf
+			}
+			spec.Mounts = slices.Insert(spec.Mounts, i, specs.Mount{
+				Destination: resolvConf,
+				Type:        "bind",
+				Source:      source,
+				Options:     []string{"ro"},
+			})
 		}
-		source := o.ResolvConf
-		if source == "" {
-			source = resolvConf
-		}
-		spec.Mounts = slices.Insert(spec.Mounts, i, specs.Mount{
-			Destination: resolvConf,
-			Type:        "bind",
-			Source:      source,
-			Options:     []string{"ro"},
-		})
 	}
 
 	if spec.Linux == nil {

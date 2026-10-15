@@ -20,9 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
-	"net/http/httptest"
-	"net/url"
 	"os"
 	"runtime"
 	"testing"
@@ -33,41 +30,12 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
-	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
-	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/google/go-containerregistry/pkg/registry"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/empty"
-	"github.com/google/go-containerregistry/pkg/v1/mutate"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
-
-// pushPauseImage pushes a tiny image to ref and returns its manifest digest,
-// so tests can later assert a cache hit by digest with the registry gone.
-func pushPauseImage(t *testing.T, ref string) v1.Hash {
-	t.Helper()
-	img, err := mutate.AppendLayers(empty.Image, singleFileLayer(t, "pause", "pause bytes"))
-	if err != nil {
-		t.Fatalf("mutate.AppendLayers: %v", err)
-	}
-	digest, err := img.Digest()
-	if err != nil {
-		t.Fatalf("img.Digest: %v", err)
-	}
-	tag, err := name.ParseReference(ref, name.Insecure)
-	if err != nil {
-		t.Fatalf("name.ParseReference(%q): %v", ref, err)
-	}
-	if err := remote.Write(tag, img); err != nil {
-		t.Fatalf("remote.Write(%q): %v", ref, err)
-	}
-	return digest
-}
 
 func gvisorConfig(name, url, sha string) *v1alpha1.SandboxConfig {
 	return &v1alpha1.SandboxConfig{
@@ -76,8 +44,7 @@ func gvisorConfig(name, url, sha string) *v1alpha1.SandboxConfig {
 			SandboxClass:   v1alpha1.SandboxClassGvisor,
 			DefaultVersion: "v1",
 			Versions: []v1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				PauseImage: "registry.k8s.io/pause@sha256:abc",
+				Name: "v1",
 				Assets: map[string]map[string]v1alpha1.AssetFile{
 					runtime.GOARCH: {
 						runscAssetName: {URL: url, SHA256: sha},
@@ -98,9 +65,6 @@ func TestRecordFromSandboxConfig(t *testing.T) {
 	}
 	if rec.SandboxClass != string(v1alpha1.SandboxClassGvisor) {
 		t.Errorf("SandboxClass = %q, want %q", rec.SandboxClass, v1alpha1.SandboxClassGvisor)
-	}
-	if rec.PauseImage != cfg.Spec.Versions[0].PauseImage {
-		t.Errorf("PauseImage = %q, want %q", rec.PauseImage, cfg.Spec.Versions[0].PauseImage)
 	}
 	want := assetEntry{URL: "gs://bucket/runsc", SHA256: sha}
 	if got := rec.Assets[runscAssetName]; got != want {
@@ -131,7 +95,7 @@ func TestPrewarmEnqueueFilters(t *testing.T) {
 	gvisor := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("runsc"))))
 
 	t.Run("node without KVM", func(t *testing.T) {
-		p := newSandboxPrewarmer(nil, nil, nil, false)
+		p := newSandboxPrewarmer(nil, nil, false)
 
 		p.enqueue(ctx, "not a sandbox config")
 		p.enqueue(ctx, microvm)
@@ -155,7 +119,7 @@ func TestPrewarmEnqueueFilters(t *testing.T) {
 	})
 
 	t.Run("node with KVM", func(t *testing.T) {
-		p := newSandboxPrewarmer(nil, nil, nil, true)
+		p := newSandboxPrewarmer(nil, nil, true)
 		p.enqueue(ctx, microvm)
 		p.enqueue(ctx, gvisor)
 		if p.queue.Len() != 2 {
@@ -174,15 +138,13 @@ func TestPrewarmProcessRetries(t *testing.T) {
 
 	ctx := context.Background()
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("runsc"))))
-	// No pause image, so a failing prewarm exercises only the asset path.
-	cfg.Spec.Versions[0].PauseImage = ""
 
 	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
 	if err := indexer.Add(cfg); err != nil {
 		t.Fatalf("indexer.Add: %v", err)
 	}
 	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
-	p := newSandboxPrewarmer(herder, nil, listersv1alpha1.NewSandboxConfigLister(indexer), false)
+	p := newSandboxPrewarmer(herder, listersv1alpha1.NewSandboxConfigLister(indexer), false)
 
 	p.queue.Add(cfg.Name)
 	name, _ := p.queue.Get()
@@ -218,7 +180,7 @@ func TestPrewarmProcessReappliesClassGate(t *testing.T) {
 	// Any fetch would fail and requeue, so NumRequeues distinguishes
 	// "skipped" from "attempted and failed".
 	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
-	p := newSandboxPrewarmer(herder, nil, listersv1alpha1.NewSandboxConfigLister(indexer), false)
+	p := newSandboxPrewarmer(herder, listersv1alpha1.NewSandboxConfigLister(indexer), false)
 
 	p.queue.Add(cfg.Name)
 	name, _ := p.queue.Get()
@@ -244,81 +206,6 @@ func TestMicrovmNodeCapable(t *testing.T) {
 	}
 }
 
-// TestPrewarmPauseImage covers the pause-image half of prewarm: the image
-// lands in the image cache, and an asset fetch failure does not stop the
-// pull (the two live in different backends).
-func TestPrewarmPauseImage(t *testing.T) {
-	origDir := nodepath.StaticFilesDir
-	nodepath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { nodepath.StaticFilesDir = origDir })
-
-	srv := httptest.NewServer(registry.New(registry.Logger(log.New(io.Discard, "", 0))))
-	defer srv.Close()
-	u, err := url.Parse(srv.URL)
-	if err != nil {
-		t.Fatalf("parsing registry URL: %v", err)
-	}
-	pauseRef := u.Host + "/pause:3.10"
-	pauseDigest := pushPauseImage(t, pauseRef)
-
-	newStore := func() *imagecache.Store {
-		s, err := imagecache.New(t.TempDir())
-		if err != nil {
-			t.Fatalf("imagecache.New: %v", err)
-		}
-		return s
-	}
-	okStore, failStore, archStore := newStore(), newStore(), newStore()
-
-	ctx := context.Background()
-	content := []byte("runsc binary bytes")
-	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256(content)))
-	cfg.Spec.Versions[0].PauseImage = pauseRef
-
-	p := &sandboxPrewarmer{
-		assets: &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}},
-		images: okStore,
-	}
-	if err := p.prewarm(ctx, cfg); err != nil {
-		t.Fatalf("prewarm: %v", err)
-	}
-
-	// A different asset hash misses the shared static-files cache, so the
-	// failing object storage is actually consulted — and must not keep the
-	// pause image from being pulled.
-	failCfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("other runsc"))))
-	failCfg.Spec.Versions[0].PauseImage = pauseRef
-	p = &sandboxPrewarmer{
-		assets: &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}},
-		images: failStore,
-	}
-	if err := p.prewarm(ctx, failCfg); err == nil {
-		t.Error("prewarm returned nil despite the asset fetch failing")
-	}
-
-	// A config with no assets for this node's architecture still gets its
-	// pause image pulled, and prewarm succeeds: the missing assets are
-	// permanent until the config changes, not a retryable failure.
-	archCfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256(content)))
-	archCfg.Spec.Versions[0].Assets = map[string]map[string]v1alpha1.AssetFile{
-		"other-arch": {runscAssetName: archCfg.Spec.Versions[0].Assets[runtime.GOARCH][runscAssetName]},
-	}
-	archCfg.Spec.Versions[0].PauseImage = pauseRef
-	p = &sandboxPrewarmer{images: archStore}
-	if err := p.prewarm(ctx, archCfg); err != nil {
-		t.Errorf("prewarm with no assets for the local architecture: %v", err)
-	}
-
-	// With the registry gone, only a cache hit can satisfy a digest ref.
-	srv.Close()
-	digestRef := u.Host + "/pause@" + pauseDigest.String()
-	for name, store := range map[string]*imagecache.Store{"ok": okStore, "asset-failure": failStore, "no-local-arch": archStore} {
-		if _, err := store.EnsureImage(ctx, digestRef); err != nil {
-			t.Errorf("pause image not prewarmed into the %s store: %v", name, err)
-		}
-	}
-}
-
 // hangingObjectStorage blocks GetObject until the caller's context ends,
 // simulating a bucket read that stalls without failing.
 type hangingObjectStorage struct{}
@@ -340,7 +227,6 @@ func TestPrewarmTimeout(t *testing.T) {
 	t.Cleanup(func() { nodepath.StaticFilesDir, prewarmTimeout = origDir, origTimeout })
 
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("hung runsc"))))
-	cfg.Spec.Versions[0].PauseImage = ""
 	p := &sandboxPrewarmer{assets: &AteomHerder{anonGCSClient: hangingObjectStorage{}}}
 
 	done := make(chan error, 1)
@@ -367,7 +253,6 @@ func TestPrewarmDefaultVersionOnly(t *testing.T) {
 	ctx := context.Background()
 	content := []byte("runsc binary bytes")
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256(content)))
-	cfg.Spec.Versions[0].PauseImage = ""
 	// A non-default version whose asset the fake bucket cannot serve: fetching
 	// it would fail the hash check.
 	otherSHA := fmt.Sprintf("%x", sha256.Sum256([]byte("other runsc")))
@@ -405,11 +290,6 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	origDir, origJitter, origFinished := nodepath.StaticFilesDir, prewarmMaxJitter, prewarmFinished
 	nodepath.StaticFilesDir = t.TempDir()
 	prewarmMaxJitter = 0
-	// The worker's own prewarm call returns only when the asset has landed
-	// and the pause-image pull has finished: it waits for the pull on a live
-	// context, while the pull runs detached from that context (see
-	// imagecache.Store.EnsureImage). Waiting for the call keeps the pull's
-	// last writes from racing the TempDir cleanup.
 	prewarmed := make(chan error, 1)
 	prewarmFinished = func(_ string, err error) {
 		// Non-blocking: a failed attempt is retried, and the worker must not
@@ -423,37 +303,26 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 		nodepath.StaticFilesDir, prewarmMaxJitter, prewarmFinished = origDir, origJitter, origFinished
 	})
 
-	host := imageVolumeTestRegistry(t)
-	pauseRef := host + "/pause:3.10"
-	pushPauseImage(t, pauseRef)
-
 	content := []byte("runsc binary bytes")
 	sha := fmt.Sprintf("%x", sha256.Sum256(content))
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", sha)
-	cfg.Spec.Versions[0].PauseImage = pauseRef
 
 	ctx := t.Context()
 	client := fake.NewSimpleClientset(cfg)
 	factory := externalversions.NewSharedInformerFactory(client, 0)
 	informer := factory.Api().V1alpha1().SandboxConfigs().Informer()
 
-	store, err := imagecache.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("imagecache.New: %v", err)
-	}
 	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
 	// Handler first, informer start second, mirroring main: atelet startup
 	// must never wait on this informer's sync, and the initial List replays
 	// the pre-existing config into the handler as an Add.
-	p, err := startSandboxAssetPrewarm(ctx, informer, herder, store, false)
+	p, err := startSandboxAssetPrewarm(ctx, informer, herder, false)
 	if err != nil {
 		t.Fatalf("startSandboxAssetPrewarm: %v", err)
 	}
 	// The worker reads the patched globals above. t.Context() is canceled
 	// before cleanups run, and cleanups run last-registered-first, so this
-	// joins the worker before the earlier cleanup restores the globals —
-	// without it the restore races the worker's tail (pause-image pull
-	// after the asset lands) and trips the race detector.
+	// joins the worker before the earlier cleanup restores the globals.
 	t.Cleanup(p.wait)
 	stopCh := make(chan struct{})
 	defer close(stopCh)
