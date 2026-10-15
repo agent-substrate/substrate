@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -531,6 +532,62 @@ func TestWorkerPoolPodTemplateUpdate(t *testing.T) {
 		return podSpec.NodeSelector["workload"] == "updated" &&
 			podSpec.Containers[0].Resources.Requests.Cpu().String() == "500m", nil
 	})
+}
+
+// TestWorkerPoolCapabilitiesRepairDrift checks that reconciliation restores
+// each runtime's fixed permissions after another client changes them.
+func TestWorkerPoolCapabilitiesRepairDrift(t *testing.T) {
+	for _, class := range []atev1.SandboxClass{atev1.SandboxClassGvisor, atev1.SandboxClassMicroVM} {
+		t.Run(string(class), func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			wantAdd := slices.Clone(workerGvisorCapabilities)
+			if class == atev1.SandboxClassMicroVM {
+				wantAdd = slices.Clone(workerMicroVMCapabilities)
+			}
+			wp := makeWorkerPool("test-caps-drift-"+string(class), "default", 1, "worker:v1")
+			wp.Spec.SandboxClasses = []atev1.WorkerPoolSandboxClass{{Name: class}}
+			if class == atev1.SandboxClassMicroVM {
+				config := makeSandboxConfig(wp.Name, class, false)
+				createSandboxConfig(t, config)
+				wp.Spec.SandboxClasses[0].ConfigRef = &atev1.SandboxConfigReference{Name: config.Name}
+			}
+			if err := k8sClient.Create(ctx, wp); err != nil {
+				t.Fatal(err)
+			}
+			deleteOnCleanup(t, wp)
+			eventually(t, func(ctx context.Context) (bool, error) {
+				dep, err := getDeployment(ctx, wp)
+				if err != nil {
+					return false, client.IgnoreNotFound(err)
+				}
+				return slices.Equal(dep.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities.Add, wantAdd), nil
+			})
+			updateDeploymentSpec(t, ctx, wp, "re-add a dropped capability", func(dep *appsv1.Deployment) {
+				sc := dep.Spec.Template.Spec.Containers[0].SecurityContext
+				sc.Capabilities.Add = append(sc.Capabilities.Add, "SYS_PTRACE")
+				sc.AllowPrivilegeEscalation = ptr.To(true)
+			})
+			// Apply synchronously so failure reports the surviving capabilities
+			// rather than timing out waiting for background reconciliation.
+			r := &WorkerPoolReconciler{Client: k8sClient}
+			if err := r.applyDeployment(ctx, wp); err != nil {
+				t.Fatal(err)
+			}
+			dep, err := getDeployment(ctx, wp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sc := dep.Spec.Template.Spec.Containers[0].SecurityContext
+			caps := sc.Capabilities
+			if !slices.Equal(caps.Add, wantAdd) || !slices.Equal(caps.Drop, []corev1.Capability{"ALL"}) {
+				t.Fatalf("capabilities after reconciliation = %+v, want add %v and drop [ALL]", caps, wantAdd)
+			}
+			if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+				t.Fatalf("AllowPrivilegeEscalation after reconciliation = %v, want false", sc.AllowPrivilegeEscalation)
+			}
+		})
+	}
 }
 
 // TestWorkerPoolPodTemplateClear verifies that clearing template.nodeSelector

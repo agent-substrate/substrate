@@ -38,7 +38,6 @@ const (
 	capFowner      = 3
 	capFsetid      = 4
 	capSysAdmin    = 21
-	capMknod       = 27
 )
 
 // capSet is a capability set a root-gated test runs under, as root with
@@ -60,8 +59,8 @@ var (
 	// (cmd/atecontroller/internal/controllers) that composing a rootfs uses.
 	// Only the microVM worker also gets CAP_FSETID.
 	gvisorWorkerCaps = capSet{
-		bounding: "-all,+chown,+dac_override,+fowner,+mknod,+sys_admin",
-		eff:      1<<capChown | 1<<capDacOverride | 1<<capFowner | 1<<capMknod | 1<<capSysAdmin,
+		bounding: "-all,+chown,+dac_override,+fowner,+sys_admin",
+		eff:      1<<capChown | 1<<capDacOverride | 1<<capFowner | 1<<capSysAdmin,
 	}
 )
 
