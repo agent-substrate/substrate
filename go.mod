@@ -1,4 +1,4 @@
-module github.com/agent-substrate/substrate
+module go.ate.dev/substrate
 
 go 1.27.0
 
