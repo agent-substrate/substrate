@@ -189,7 +189,7 @@ func do(ctx context.Context) error {
 	if err := resources.ValidateWorkerPodUID(*podUID); err != nil {
 		return fmt.Errorf("in resources.ValidateWorkerPodUID: %w", err)
 	}
-	// atelet owns the directory and the sandbox versions file in it; only the
+	// atelet owns the directory and the sandbox runtimes file in it; only the
 	// socket below is this process's. Both outlive a container restart.
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
@@ -262,11 +262,12 @@ func do(ctx context.Context) error {
 		svr.GracefulStop()
 	}()
 
-	// Report what this worker can supply. Nothing else tells the control plane,
-	// which places no Actor here until it lands, so a worker that cannot report
-	// is one that will sit idle forever. Report retries every failure it can
-	// outlast, including the window before the Worker record exists; anything
-	// that reaches here is a misconfiguration no restart-in-place will fix.
+	// Report what this worker can supply and the sandbox runtimes it can run.
+	// Nothing else tells the control plane, which places no Actor here until it
+	// lands, so a worker that cannot report is one that will sit idle forever.
+	// Report retries every failure it can outlast, including the window before
+	// the Worker record exists; anything that reaches here is a misconfiguration
+	// no restart-in-place will fix.
 	go func() {
 		err := ateom.Report(ctx, ateom.ReportConfig{
 			SocketPath:           nodepath.AteomSupportSocket,
@@ -275,9 +276,10 @@ func do(ctx context.Context) error {
 			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 			Actors:               *maxActors,
 			SandboxClass:         string(atev1alpha1.SandboxClassGvisor),
+			RuntimesFile:         nodepath.AteomSandboxRuntimesPath(*podUID),
 		})
 		if err != nil && ctx.Err() == nil {
-			serverboot.Fatal(ctx, "Failed to report worker capacity", err)
+			serverboot.Fatal(ctx, "Failed to register worker", err)
 		}
 	}()
 

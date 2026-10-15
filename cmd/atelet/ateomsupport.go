@@ -106,10 +106,10 @@ func verifyClientOnSameNode(node *substratex509.PodIdentity) func(tls.Connection
 // worker says its capacity and sandbox runtimes are, in one
 // WorkerService.RegisterWorker call so capacity and runtimes land atomically.
 //
-// It returns the control plane's error unwrapped so the caller retries: a
-// worker reports once, so an accepted call is the only thing that puts
-// capacity and runtimes on the Worker, and a Worker record the syncer has not
-// created yet is the ordinary reason for a first attempt to fail.
+// It returns the control plane's error unwrapped so the caller retries: an
+// accepted call is the only thing that puts capacity and the current runtimes
+// on the Worker, and a Worker record the syncer has not created yet is the
+// ordinary reason for a first attempt to fail.
 func (s *ateomSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.RegisterWorkerRequest) (*ateletpb.RegisterWorkerResponse, error) {
 	// Identity comes only from the mTLS certificate, never from the request:
 	// a worker can report its own capacity and runtimes and no one else's.

@@ -42,19 +42,19 @@ const (
 	AttrCPUFeatures = "cpu_features"
 
 	// AttrCPUVendor identifies the host CPU vendor (e.g. "GenuineIntel",
-	// "AuthenticAMD", or arm64 implementer "0x41") for microVM compatibility.
+	// "AuthenticAMD", or arm64 implementer "0x41") reported by microVM
+	// runtimes.
 	AttrCPUVendor = "cpu_vendor"
 
 	// AttrCPUModel identifies the host CPU family/model (e.g. "6:143" on amd64
-	// or "0x0:0xd40:1" on arm64) for microVM compatibility.
+	// or "0x0:0xd40:1" on arm64) reported by microVM runtimes.
 	AttrCPUModel = "cpu_model"
 )
 
-// ProbeHost inspects the current host and returns its v1 VersionedSandboxCompat
-// in atelet wire format.
-//
-// TODO: Probe and populate cpu_features and other host hardware attributes
-// (e.g. via CPUID on amd64 and MIDR_EL1 on arm64).
+// ProbeHost returns a minimal v1 VersionedSandboxCompat with the current
+// host's architecture in atelet wire format, for synthetic workers in tests
+// and benchmarks. Production workers report the attributes atelet writes to
+// sandbox-runtimes.json instead.
 func ProbeHost() *ateletpb.VersionedSandboxCompat {
 	return &ateletpb.VersionedSandboxCompat{
 		SchemaVersion: SchemaVersionV1,
