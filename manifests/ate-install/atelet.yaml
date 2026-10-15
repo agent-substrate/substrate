@@ -111,6 +111,16 @@ metadata:
   labels:
     app: atelet
 spec:
+  # A change to this DaemonSet rolls a quarter of the nodes at a time: a
+  # node's atelet is away for about 20 s while its actors keep running and
+  # ate-api retries what it had in flight there, so a wider roll shortens the
+  # total without deepening any node's outage. No surge: atelet binds host
+  # ports and owns the node's kubelet plugin sockets, so two cannot share a
+  # node.
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
   selector:
     matchLabels:
       app: atelet
