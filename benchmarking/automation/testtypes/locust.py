@@ -16,14 +16,27 @@
 
 The runner Job wraps benchmarking/locust/runner.py, which drives locust
 (and boomer for glutton tests) and uploads its own results.
+
+An optional `ateapi:` block shapes the control plane for a capacity run of
+ate-api-server and Postgres (see controlplane.py); without it pre_test
+leaves the cluster as installed.
 """
 
+import json
 import os
 from typing import Any
 
+import controlplane
 from util import build_and_push
 
 TEST_TYPE = "locust"
+
+
+def ateapi_config(test: dict[str, Any]) -> dict[str, Any] | None:
+    """The test's `ateapi:` block merged over its defaults, or None."""
+    if "ateapi" not in test:
+        return None
+    return controlplane.config(test["ateapi"])
 
 
 def validate(test: dict[str, Any]) -> None:
@@ -31,6 +44,12 @@ def validate(test: dict[str, Any]) -> None:
     for field in ("file", "duration", "users"):
         if field not in test:
             raise ValueError(f"locust test {name!r} missing {field!r}")
+    if "ateapi" not in test:
+        return
+    try:
+        controlplane.validate(test["ateapi"], test.get("ateArgs", []))
+    except ValueError as e:
+        raise ValueError(f"locust test {name!r}: {e}") from None
 
 
 def build_image(commit: str) -> str:
@@ -43,7 +62,11 @@ def build_image(commit: str) -> str:
 
 
 def pre_test(test: dict[str, Any]) -> None:
-    """Nothing to shape on the cluster before a locust run."""
+    """With an `ateapi:` block, shape the control plane for the run."""
+    cfg = ateapi_config(test)
+    if cfg is None:
+        return
+    controlplane.shape(cfg, test.get("runnerCpu", DEFAULT_RUNNER_CPU))
 
 
 def job_tmpl(manifests_dir: str) -> str:
@@ -59,10 +82,14 @@ DEFAULT_RUNNER_MEMORY = "512Mi"
 
 
 def job_subs(test: dict[str, Any]) -> dict[str, Any]:
+    cfg = ateapi_config(test)
+    pinned = cfg is not None and cfg["pinNodes"]
     return {
         "TEST_FILE": test["file"],
         "DURATION": test["duration"],
         "USERS": test["users"],
         "RUNNER_CPU": test.get("runnerCpu", DEFAULT_RUNNER_CPU),
         "RUNNER_MEMORY": test.get("runnerMemory", DEFAULT_RUNNER_MEMORY),
+        # JSON is YAML flow syntax, thus it drops into `affinity:` as is.
+        "RUNNER_AFFINITY": json.dumps(controlplane.role_affinity("runner") if pinned else {}),
     }
