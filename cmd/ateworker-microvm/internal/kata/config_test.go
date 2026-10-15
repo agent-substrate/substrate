@@ -42,3 +42,21 @@ func TestWithAgentDebug(t *testing.T) {
 		t.Errorf("expected WithAgentDebug to be idempotent, but got %q then %q", got, again)
 	}
 }
+
+func TestWithMemAgent(t *testing.T) {
+	got := WithMemAgent(BaseKernelParams)
+	for _, want := range []string{
+		"psi=1",
+		"agent.mem_agent_enable=true",
+		"agent.mem_agent_memcg_swap=true",
+		"agent.mem_agent_memcg_period_secs=60",
+		"agent.mem_agent_memcg_eviction_run_aging_count_min=1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected WithMemAgent(%q) to contain %q, but got %q", BaseKernelParams, want, got)
+		}
+	}
+	if again := WithMemAgent(got); again != got {
+		t.Errorf("expected WithMemAgent to be idempotent, but got %q then %q", got, again)
+	}
+}

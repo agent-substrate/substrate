@@ -736,6 +736,9 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 // kernelParams returns the guest kernel params
 func (s *AteWorkerService) kernelParams() string {
 	kparams := kata.BaseKernelParams
+	if s.enableMemAgent {
+		kparams = kata.WithMemAgent(kparams)
+	}
 	if s.guestDebug {
 		kparams = kata.WithAgentDebug(kparams)
 	}
