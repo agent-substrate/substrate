@@ -649,15 +649,27 @@ func TestInitMetricsBridgedPushesEachMetricOnce(t *testing.T) {
 
 // A skip list that cannot be gathered drops the batch without failing the
 // collection, so nothing is pushed twice and the other metrics still push.
+// inner's own error is still returned.
 func TestSkipFamiliesDropsBatchOnGatherError(t *testing.T) {
-	inner := producerFunc(func(context.Context) ([]metricdata.ScopeMetrics, error) {
-		return []metricdata.ScopeMetrics{{Metrics: []metricdata.Metrics{{Name: "kept"}}}}, nil
-	})
-	failing := prometheus.NewRegistry()
-	failing.MustRegister(failingCollector{})
-	scopes, err := skipFamilies{inner: inner, skip: failing}.Produce(t.Context())
-	if err != nil || scopes != nil {
-		t.Errorf("Produce = %v, %v; want no metrics and no error", scopes, err)
+	innerErr := errors.New("inner failed")
+	for _, tt := range []struct {
+		name     string
+		innerErr error
+	}{
+		{"no inner error", nil},
+		{"inner error", innerErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			inner := producerFunc(func(context.Context) ([]metricdata.ScopeMetrics, error) {
+				return []metricdata.ScopeMetrics{{Metrics: []metricdata.Metrics{{Name: "kept"}}}}, tt.innerErr
+			})
+			failing := prometheus.NewRegistry()
+			failing.MustRegister(failingCollector{})
+			scopes, err := skipFamilies{inner: inner, skip: failing}.Produce(t.Context())
+			if scopes != nil || err != tt.innerErr {
+				t.Errorf("Produce = %v, %v; want no metrics and %v", scopes, err, tt.innerErr)
+			}
+		})
 	}
 }
 

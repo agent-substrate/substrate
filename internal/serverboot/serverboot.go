@@ -340,7 +340,7 @@ func (p skipFamilies) Produce(ctx context.Context) ([]metricdata.ScopeMetrics, e
 	families, gerr := p.skip.Gather()
 	if gerr != nil {
 		otel.Handle(fmt.Errorf("gather the families to skip: %w", gerr))
-		return nil, nil
+		return nil, err
 	}
 	skip := make(map[string]bool, len(families))
 	for _, f := range families {
