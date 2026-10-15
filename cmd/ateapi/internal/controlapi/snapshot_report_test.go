@@ -26,6 +26,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -514,6 +515,124 @@ func TestActorOnNode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := actorOnNode(tc.actor, reportNode); got != tc.want {
 				t.Errorf("actorOnNode() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// ateletReported is reported(t, gen) as atelet returns it.
+func ateletReported(t *testing.T, gen int32) *ateletpb.SnapshotReport {
+	t.Helper()
+	return &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
+		SnapshotUuid: snapName(gen),
+		Generation:   gen,
+		Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Object:       &ateletpb.ObjectStorage{SnapshotUri: ownedURI(t, reportActorUID, gen)},
+	}}
+}
+
+func TestApplyCheckpointState(t *testing.T) {
+	const (
+		pending    = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+		completed  = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		suspended  = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+		suspending = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
+	)
+	tests := []struct {
+		name     string
+		status   *ateapipb.ActorStatus
+		state    *ateletpb.ActorSnapshotState
+		want     *ateapipb.ActorStatus
+		wantCode codes.Code
+	}{{
+		name: "an immediate checkpoint marks its snapshot COMPLETED",
+		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, "", pending),
+		}},
+		state: &ateletpb.ActorSnapshotState{LatestDurable: ateletReported(t, 2)},
+		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, "", completed),
+		}},
+	}, {
+		name: "an immediate checkpoint records the fidelity it reports",
+		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, "", pending),
+		}},
+		state: &ateletpb.ActorSnapshotState{LatestDurable: func() *ateletpb.SnapshotReport {
+			r := ateletReported(t, 2)
+			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+			return r
+		}()},
+		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			func() *ateapipb.Snapshot {
+				snap := withDurable(t, 2, "", completed)
+				snap.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+				return snap
+			}(),
+		}},
+	}, {
+		name: "a deferred checkpoint changes nothing",
+		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			localOnly(2, ""),
+		}},
+		state: &ateletpb.ActorSnapshotState{LatestLocal: ateletReported(t, 2)},
+		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			localOnly(2, ""),
+		}},
+	}, {
+		name: "a deferred checkpoint records an older upload that finished",
+		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 1, reportNode, pending),
+			localOnly(2, ""),
+		}},
+		state: &ateletpb.ActorSnapshotState{LatestLocal: ateletReported(t, 2), LatestDurable: ateletReported(t, 1)},
+		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 1, reportNode, completed),
+			localOnly(2, ""),
+		}},
+	}, {
+		name: "no local snapshot is not a detach",
+		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, reportNode, completed),
+		}},
+		state: &ateletpb.ActorSnapshotState{LatestDurable: ateletReported(t, 2)},
+		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, reportNode, completed),
+		}},
+	}, {
+		name: "an upload URI other than the recorded one is refused",
+		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, "", pending),
+		}},
+		state: &ateletpb.ActorSnapshotState{LatestDurable: func() *ateletpb.SnapshotReport {
+			r := ateletReported(t, 2)
+			r.Snapshot.Object.SnapshotUri = ownedURI(t, reportActorUID, 9)
+			return r
+		}()},
+		wantCode: codes.InvalidArgument,
+	}, {
+		name: "an unset state changes nothing",
+		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, "", pending),
+		}},
+		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, "", pending),
+		}},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := applyCheckpointState(context.Background(), tt.status, tt.state)
+			if tt.wantCode != codes.OK {
+				if got := apierror.Code(err); got != tt.wantCode {
+					t.Fatalf("applyCheckpointState() error = %v, want code %v", err, tt.wantCode)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("applyCheckpointState() error = %v", err)
+			}
+			if diff := cmp.Diff(tt.want, tt.status, protocmp.Transform()); diff != "" {
+				t.Errorf("status mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

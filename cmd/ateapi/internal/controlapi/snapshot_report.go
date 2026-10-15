@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/preview"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -149,6 +150,16 @@ func applyActorSnapshotState(ctx context.Context, status *ateapipb.ActorStatus, 
 		return applyDetach(status, node, state.GetLatestDurable().GetGeneration())
 	}
 	return nil
+}
+
+// applyCheckpointState records an upload that atelet's state, as returned by
+// Checkpoint or PromoteSnapshot, says finished, with the same rules as a
+// report. atelet echoes the Snapshot it was asked for, so the fidelity recorded
+// is the one requested, not read from the manifest. Unlike a report, a state
+// with no local snapshot is not a detach: the workflow that made the call
+// records where its snapshot lives.
+func applyCheckpointState(ctx context.Context, status *ateapipb.ActorStatus, state *ateletpb.ActorSnapshotState) error {
+	return applyLatestDurable(ctx, status, snapshotReportFromAtelet(state.GetLatestDurable()))
 }
 
 // applyLatestDurable marks the reported durable snapshot COMPLETED and records
