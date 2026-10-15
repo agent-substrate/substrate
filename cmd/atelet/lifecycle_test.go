@@ -39,6 +39,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
@@ -239,6 +240,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
 
+	advertiseRuntime(t, s, sandboxAssets)
 	if _, err := s.Run(ctx, &ateletpb.RunRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
@@ -442,6 +444,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
 
+	advertiseRuntime(t, s, assetsWithPause(checkpointPause))
 	if _, err := s.Run(ctx, &ateletpb.RunRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
@@ -481,6 +484,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		t.Fatalf("manifest pause image = %q, want %q", manifestRec.PauseImage, checkpointPause)
 	}
 
+	advertiseRuntime(t, s, assetsWithPause(restorePause))
 	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
@@ -592,6 +596,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 					runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
 				}}},
 			}
+			advertiseRuntime(t, s, assets)
 			if tc.restore {
 				_, err = s.Restore(ctx, &ateletpb.RestoreRequest{
 					Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
@@ -688,19 +693,21 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 			SystemInfo: trustVolumeSpec("ca.pem"),
 		}},
 	}
+	assets := &ateletpb.SandboxAssets{
+		SandboxClass: "gvisor",
+		PauseImage:   missingPauseImage(t),
+		Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+			runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
+		}}},
+	}
+	advertiseRuntime(t, s, assets)
 	_, err := s.Run(t.Context(), &ateletpb.RunRequest{
-		Atespace:     "team-a",
-		ActorName:    "actor-run",
-		ActorUid:     actorUID,
-		WorkerPodUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
-		SandboxAssets: &ateletpb.SandboxAssets{
-			SandboxClass: "gvisor",
-			PauseImage:   missingPauseImage(t),
-			Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-				runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
-			}}},
-		},
-		Spec: spec,
+		Atespace:      "team-a",
+		ActorName:     "actor-run",
+		ActorUid:      actorUID,
+		WorkerPodUid:  "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+		SandboxAssets: assets,
+		Spec:          spec,
 	})
 	if err == nil || !strings.Contains(err.Error(), "while creating pause OCI bundle") {
 		t.Fatalf("Run error = %v, want the post-registration OCI preparation failure", err)
@@ -751,19 +758,21 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		systemInfoVolumes: refresher,
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 	}
+	assets := &ateletpb.SandboxAssets{
+		SandboxClass: "gvisor",
+		PauseImage:   pauseImage,
+		Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+			runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
+		}}},
+	}
+	advertiseRuntime(t, s, assets)
 	_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
-		Atespace:     "team-a",
-		ActorName:    "actor-restore-after",
-		ActorUid:     actorUID,
-		WorkerPodUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
-		SandboxAssets: &ateletpb.SandboxAssets{
-			SandboxClass: "gvisor",
-			PauseImage:   pauseImage,
-			Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-				runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
-			}}},
-		},
-		Spec: spec,
+		Atespace:      "team-a",
+		ActorName:     "actor-restore-after",
+		ActorUid:      actorUID,
+		WorkerPodUid:  "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+		SandboxAssets: assets,
+		Spec:          spec,
 		Snapshot: &ateletpb.Snapshot{
 			SnapshotUuid: snapshotName,
 			Generation:   1,
@@ -893,6 +902,7 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 			useTempNodeDirs(t)
 			localDir := ateletpath.LocalSnapshotDir(actorUID, snapshotName)
 			tc.prepLocal(t, localDir)
+			advertiseRuntime(t, s, sandboxAssets)
 
 			if _, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
 				Atespace:              atespace,
@@ -986,6 +996,7 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 			// The object store is empty: nothing was ever uploaded.
 			s := newPluginHerder(t, &recordingObjectStorage{})
 			s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
+			advertiseRuntime(t, s, assets)
 			_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
 				Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID,
 				WorkerPodUid:  "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
@@ -1127,6 +1138,7 @@ func runPluginActor(t *testing.T) *pluginActor {
 		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
 
+	advertiseRuntime(t, a.s, a.assets)
 	if _, err := a.s.Run(t.Context(), &ateletpb.RunRequest{
 		Atespace:              "ate-demo",
 		ActorName:             "counter",
@@ -1365,6 +1377,7 @@ func TestConcurrentRunsShareOneAssetDownload(t *testing.T) {
 		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
 
+	advertiseRuntime(t, s, sandboxAssets)
 	actorUIDs := []string{"01234567-89ab-cdef-0123-456789abcde1", "01234567-89ab-cdef-0123-456789abcde2"}
 	var wg sync.WaitGroup
 	errs := make([]error, len(actorUIDs))
@@ -1690,4 +1703,78 @@ func TestPromoteSnapshotFoundAlreadyUploaded(t *testing.T) {
 	if got := a.promote(t, snap).GetLatestDurable(); !proto.Equal(got.GetSnapshot(), snap) || got.GetDurableCompleteTime() != nil {
 		t.Errorf("latest_durable = %v, want %v with no upload time", got, snap)
 	}
+}
+
+// advertiseRuntime makes the runtime that sa names one a worker on this
+// node advertises, as the syncer would have after planning that worker's
+// pod, so a Run or Restore carrying sa resolves. It gives s an index if it
+// has none.
+func advertiseRuntime(t *testing.T, s *Atelet, sa *ateletpb.SandboxAssets) {
+	t.Helper()
+	if s.runtimes == nil {
+		s.runtimes = newRuntimeIndex()
+	}
+	rec, err := recordFromRequest(sa)
+	if err != nil {
+		t.Fatalf("recordFromRequest: %v", err)
+	}
+	hash, err := versionBundleHash(rec)
+	if err != nil {
+		t.Fatalf("versionBundleHash: %v", err)
+	}
+	s.runtimes.register("test-worker-pod", advertisedClass{
+		class:  v1alpha1.SandboxClass(rec.SandboxClass),
+		config: "test-config",
+		hashed: []hashedVersion{{versionPlan: versionPlan{name: "v1", isDefault: true, rec: rec}, hash: hash}},
+	})
+}
+
+// TestRunRejectsUnadvertisedRuntime pins that an actor placed for a runtime
+// no worker on this node advertises is refused before anything is fetched
+// or staged, rather than run on whatever the request describes.
+func TestRunRejectsUnadvertisedRuntime(t *testing.T) {
+	useTempNodeDirs(t)
+	const actorUID = "01234567-89ab-cdef-0123-456789abcdef"
+	var gets atomic.Int32
+	s := &Atelet{
+		runtimes:          newRuntimeIndex(),
+		sandboxAssetCache: newTestAssetCache(t),
+		anonGCSClient:     fakeObjectStorage{data: []byte("runsc binary"), gets: &gets},
+		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+	}
+	assets := &ateletpb.SandboxAssets{
+		SandboxClass: "gvisor",
+		PauseImage:   testPauseImage,
+		Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+			runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: fmt.Sprintf("%x", sha256.Sum256([]byte("runsc binary")))},
+		}}},
+	}
+	_, err := s.Run(t.Context(), &ateletpb.RunRequest{
+		Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+		SandboxAssets: assets, Spec: &ateletpb.WorkloadSpec{},
+	})
+	if apierror.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "not advertised") {
+		t.Fatalf("Run for an unadvertised runtime = %v (code %s), want %s naming the runtime", err, apierror.Code(err), codes.FailedPrecondition)
+	}
+	if gets.Load() != 0 {
+		t.Errorf("assets fetched %d times for a refused Run, want 0", gets.Load())
+	}
+	if _, err := os.Lstat(ateletpath.ActorPath(actorUID)); !os.IsNotExist(err) {
+		t.Errorf("refused Run created the actor dir (lstat err = %v)", err)
+	}
+
+	// Once a worker advertises it, the same request resolves.
+	advertiseRuntime(t, s, assets)
+	if _, err := s.advertisedSandboxAssets(t.Context(), mustRecord(t, assets)); err != nil {
+		t.Errorf("advertisedSandboxAssets after advertising: %v", err)
+	}
+}
+
+func mustRecord(t *testing.T, sa *ateletpb.SandboxAssets) *sandboxAssetsRecord {
+	t.Helper()
+	rec, err := recordFromRequest(sa)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rec
 }

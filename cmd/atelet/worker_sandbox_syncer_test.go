@@ -167,7 +167,7 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	s := newWorkerSandboxSyncer(&workerSandboxResolver{
 		workerPools: listersv1alpha1.NewWorkerPoolLister(pools),
 		configs:     listersv1alpha1.NewSandboxConfigLister(configs),
-	}, pods, newTestAssetFetcher(), t.TempDir())
+	}, pods, newTestAssetFetcher(), t.TempDir(), newRuntimeIndex())
 	s.scratchDir = t.TempDir() // the runsc probe stages the binary there
 	s.probeCPUIdentity = func() (string, string, error) { return testCPUVendor, testCPUModel, nil }
 	s.runCPUFeatures = func(context.Context, string) ([]string, error) { return testCPUFeatures(), nil }
@@ -359,6 +359,40 @@ func TestWorkerSandboxSyncerJitter(t *testing.T) {
 				t.Errorf("UIDs enqueued after the jitter mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// TestWorkerSandboxSyncerRegistersAheadOfJitter pins what closes the window
+// between a SandboxConfig change and the jittered sync: the config's
+// runtimes resolve as soon as the event is handled, while the file, and
+// with it what the worker advertises, waits for the sync.
+func TestWorkerSandboxSyncerRegistersAheadOfJitter(t *testing.T) {
+	pod := workerPod("pod-a", "pool")
+	s := newTestSyncer(t, pod, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+	s.maxJitter = time.Hour
+
+	cfg := multiVersionConfig()
+	cfg.Generation = 2
+	s.sandboxConfigHandler().OnUpdate(multiVersionConfig(), cfg)
+
+	plan, err := s.resolver.plan(pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashed, err := hashVersions(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range hashed {
+		if _, ok := s.index.lookup(v.hash); !ok {
+			t.Errorf("runtime %s (%s) does not resolve before the jittered sync", v.name, v.hash)
+		}
+	}
+	if _, ok := s.index.worker("pod-a"); ok {
+		t.Error("the worker advertises runtimes before its file is written")
+	}
+	if got := drain(s); len(got) != 0 {
+		t.Errorf("enqueued %v right away, want the jittered delay", got)
 	}
 }
 
@@ -771,7 +805,7 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 				ateFactory.Api().V1alpha1().WorkerPools(),
 				ateFactory.Api().V1alpha1().SandboxConfigs(),
 				newScriptAssetFetcher(t),
-				dir)
+				dir, newRuntimeIndex())
 			if err != nil {
 				t.Fatalf("startWorkerSandboxSyncer() error = %v", err)
 			}
@@ -794,4 +828,76 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWorkerSandboxSyncerInitialSync pins when atelet may start serving:
+// not before the caches sync, and not before every pod found at that first
+// sync has been processed once, failures included; with no pods, as soon
+// as the caches sync.
+func TestWorkerSandboxSyncerInitialSync(t *testing.T) {
+	closed := func(ch <-chan struct{}) bool {
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}
+	runSyncer := func(t *testing.T, s *workerSandboxSyncer, synced bool) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			s.run(ctx, func() bool { return synced })
+		}()
+		t.Cleanup(func() {
+			cancel()
+			<-stopped
+		})
+	}
+
+	t.Run("caches not synced", func(t *testing.T) {
+		s := newTestSyncer(t)
+		runSyncer(t, s, false)
+		time.Sleep(300 * time.Millisecond) // cache.WaitForCacheSync polls every 100ms
+		if closed(s.InitialSync()) {
+			t.Error("InitialSync closed before the caches synced")
+		}
+	})
+
+	t.Run("no pods", func(t *testing.T) {
+		s := newTestSyncer(t)
+		runSyncer(t, s, true)
+		waitFor(t, "InitialSync to close with no pods", func() bool { return closed(s.InitialSync()) })
+	})
+
+	t.Run("every initial pod attempted once", func(t *testing.T) {
+		// pod-live resolves and is indexed; pod-orphan's pool does not
+		// exist, so its sync fails and is retried in the background. Both
+		// count as attempted: one unresolved pool must not hold the node.
+		s := newTestSyncer(t, workerPod("pod-live", "pool"), workerPod("pod-orphan", "missing-pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+		if closed(s.InitialSync()) {
+			t.Fatal("InitialSync closed before run")
+		}
+		// The initial list replays each pod as an Add before the caches sync.
+		s.queue.Add("pod-live")
+		s.queue.Add("pod-orphan")
+		runSyncer(t, s, true)
+		waitFor(t, "InitialSync to close once both pods were attempted", func() bool { return closed(s.InitialSync()) })
+		wr, ok := s.index.worker("pod-live")
+		if !ok {
+			t.Fatal("index.worker(pod-live) not indexed")
+		}
+		cr, ok := wr.class(v1alpha1.SandboxClassGvisor)
+		if !ok || cr.config != "gvisor-release" || cr.defaultHash == "" {
+			t.Errorf("index.worker(pod-live).class(gvisor) = %+v, %v; want gvisor-release with a default runtime", cr, ok)
+		}
+		if _, ok := s.index.lookup(cr.defaultHash); !ok {
+			t.Error("pod-live's default runtime is not resolvable")
+		}
+		if _, ok := s.index.worker("pod-orphan"); ok {
+			t.Error("a pod whose pool does not exist was indexed")
+		}
+	})
 }

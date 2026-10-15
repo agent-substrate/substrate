@@ -323,6 +323,9 @@ func main() {
 	trackerCtx, stopTracker := context.WithCancel(ctx)
 	store := &trackerStore{}
 	snapshots := snapshottracker.New(trackerCtx, store, clock.RealClock{}, snapshottracker.WithDetachDelay(*snapshotDetachDelay))
+	// The runtimes this node's workers advertise, filled by the worker
+	// sandbox syncer below and read by Run and Restore.
+	runtimes := newRuntimeIndex()
 	wmService := NewService(
 		ctx,
 		workerDialer,
@@ -332,6 +335,7 @@ func main() {
 		*objectStorePluginSocket,
 		imageCache,
 		sandboxAssetCache,
+		runtimes,
 		instruments,
 		volPlugins,
 		csiDriverConfigGetter,
@@ -360,11 +364,6 @@ func main() {
 	}
 	defer ateapiConn.Close()
 
-	lis, err := net.Listen("tcp", ":"+strconv.Itoa(*port))
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to listen", err)
-	}
-
 	tlsCfg, err := ateletServerTLSConfig(*grpcServerCredBundle, *clientCACerts)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to build server TLS config", err)
@@ -385,10 +384,12 @@ func main() {
 	// WorkerPools tell the syncer which SandboxConfig each local worker's pool
 	// uses.
 	//
-	// We intentionally never WaitForCacheSync on these factories, so a failing
-	// list/watch (e.g. Forbidden while the ClusterRole rollout lags the
-	// binary) cannot hold up atelet startup: the reflector retries in the
-	// background and the prewarmer and syncer wait until it recovers.
+	// Startup does not wait on these factories here; the syncer does, and
+	// atelet serves actors only once the syncer has indexed the runtimes the
+	// workers already on this node advertise (see InitialSync below). A
+	// failing list/watch (e.g. Forbidden while the ClusterRole rollout lags
+	// the binary) therefore holds up serving, which is right: without the
+	// SandboxConfigs no actor could be placed, and /readyz says why.
 	//
 	// 0 disables periodic resync. Both react to watch events and retry on their own.
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
@@ -413,14 +414,24 @@ func main() {
 	// Keep a sandbox runtimes file in each local worker's directory: the
 	// runtimes of the enabled versions of its pool's SandboxConfig,
 	// rewritten when the config changes.
-	if _, err := startWorkerSandboxSyncer(ctx,
+	syncer, err := startWorkerSandboxSyncer(ctx,
 		workerPodFactory.Core().V1().Pods(),
 		ateFactory.Api().V1alpha1().WorkerPools(),
 		ateFactory.Api().V1alpha1().SandboxConfigs(),
 		wmService,
-		nodepath.WorkersDir()); err != nil {
-		slog.ErrorContext(ctx, "Worker sandbox runtimes syncer disabled", slog.Any("err", err))
+		nodepath.WorkersDir(), runtimes)
+	if err != nil {
+		// Without the syncer no runtime is ever indexed, so no actor could run.
+		serverboot.Fatal(ctx, "Failed to start the worker sandbox runtimes syncer", err)
 	}
+	readiness.AddCheck("worker-sandbox-runtimes", func(context.Context) error {
+		select {
+		case <-syncer.InitialSync():
+			return nil
+		default:
+			return errors.New("the sandbox runtimes of this node's workers are not indexed yet")
+		}
+	})
 	// Start after the informers are registered: a factory only runs
 	// informers that exist when Start is called.
 	ateFactory.Start(stopCh)
@@ -452,16 +463,30 @@ func main() {
 		}
 	}()
 
-	svr := grpc.NewServer(ateletServerOptions(credentials.NewTLS(tlsCfg))...)
-	ateletpb.RegisterAteletServer(svr, wmService)
-	reflection.Register(svr)
-	slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))
+	// Workers already registered with the control plane may be sent actors
+	// the moment atelet is reachable, and after a restart their runtimes are
+	// known only once the syncer has indexed them. Until then the port stays
+	// closed: a connection refused is retried by ate-api-server, a request
+	// that missed the index would fail the actor.
+	if waitForWorkerRuntimes(shutdownCtx, syncer.InitialSync()) {
+		lis, err := net.Listen("tcp", ":"+strconv.Itoa(*port))
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to listen", err)
+		}
+		svr := grpc.NewServer(ateletServerOptions(credentials.NewTLS(tlsCfg))...)
+		ateletpb.RegisterAteletServer(svr, wmService)
+		reflection.Register(svr)
+		slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))
 
-	drainDone := drainOnShutdown(shutdownCtx, svr, readiness)
-	if err := svr.Serve(lis); err != nil {
-		serverboot.Fatal(ctx, "Failed to serve", err)
+		drainDone := drainOnShutdown(shutdownCtx, svr, readiness)
+		if err := svr.Serve(lis); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve", err)
+		}
+		<-drainDone
+	} else {
+		slog.InfoContext(ctx, "Shutdown signal received before this node's worker runtimes were indexed; not serving")
+		readiness.MarkNotReady()
 	}
-	<-drainDone
 	stopTracker()
 	// Workers stop once their operations see the cancellation. The bound keeps
 	// one that does not from holding atelet past its telemetry flushes.
@@ -471,6 +496,32 @@ func main() {
 	}
 	cancelWait()
 	slog.InfoContext(ctx, "Shutdown complete")
+}
+
+// waitForWorkerRuntimes blocks until synced is closed or ctx ends, logging
+// every so often so a node held at startup by a failing SandboxConfig or
+// WorkerPool watch says so. It reports whether synced closed: false means
+// ctx ended first, and the caller must not open the port.
+func waitForWorkerRuntimes(ctx context.Context, synced <-chan struct{}) bool {
+	select {
+	case <-synced:
+		return true
+	default:
+	}
+	slog.InfoContext(ctx, "Waiting for the sandbox runtimes of this node's workers to be indexed before serving")
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-synced:
+			slog.InfoContext(ctx, "Worker sandbox runtimes indexed; serving")
+			return true
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+			slog.WarnContext(ctx, "Still waiting for the sandbox runtimes of this node's workers; are the SandboxConfig and WorkerPool watches failing?")
+		}
+	}
 }
 
 // ateletServerOptions are the options of the gRPC server that serves
@@ -546,6 +597,9 @@ type Atelet struct {
 	// sandboxAssetCache holds every sandbox asset on the node once; actors get hard
 	// links into their own directories (see ensureSandboxAssets).
 	sandboxAssetCache *filecache.Store
+	// runtimes resolves the runtime a Run or Restore names to the assets to
+	// stage, among those this node's workers advertise.
+	runtimes *runtimeIndex
 	// anonGCSClient reads gs:// assets the plugin cannot serve, without credentials.
 	anonGCSClient objectstorage.ObjectStorage
 	// objectStorePlugin moves external snapshot files between the node and storage.
@@ -580,6 +634,7 @@ func NewService(
 	pluginSocket string,
 	imageCache *imagecache.Store,
 	sandboxAssetCache *filecache.Store,
+	runtimes *runtimeIndex,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
 	csiDriverConfigGetter csi.CSIDriverConfigGetter,
@@ -590,6 +645,7 @@ func NewService(
 		workerDialer:          workerDialer,
 		imageCache:            imageCache,
 		sandboxAssetCache:     sandboxAssetCache,
+		runtimes:              runtimes,
 		anonGCSClient:         anonGCSClient,
 		objectStorePlugin:     objectStorePlugin,
 		assetPlugin:           assetPlugin,
@@ -614,9 +670,17 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 
 	// Resolved before any on-node work, BeginStart included, so an invalid
 	// request changes nothing.
-	sandboxRec, err := recordFromRequest(req.GetSandboxAssets())
+	//
+	// TODO: drop this projection, and the hashing inside
+	// advertisedSandboxAssets, once RunRequest carries the sandbox runtime
+	// hash instead of sandbox_assets; the hash then goes straight to the index.
+	requested, err := recordFromRequest(req.GetSandboxAssets())
 	if err != nil {
 		return nil, apierror.InvalidArgument("%v", err)
+	}
+	sandboxRec, err := s.advertisedSandboxAssets(ctx, requested)
+	if err != nil {
+		return nil, err
 	}
 	endStart, err := s.snapshots.BeginStart(ctx, actorUID)
 	if err != nil {
@@ -1268,9 +1332,17 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// ActorTemplate's SandboxConfig. The snapshot manifests only supply the
 	// files to restore and the actor identity. Resolved before any on-node
 	// work so an invalid request changes nothing.
-	runtimeRec, err := recordFromRequest(req.GetSandboxAssets())
+	// TODO: drop this projection, and the hashing inside
+	// advertisedSandboxAssets, once RestoreRequest carries the sandbox
+	// runtime hash instead of sandbox_assets; the hash then goes straight to
+	// the index.
+	requested, err := recordFromRequest(req.GetSandboxAssets())
 	if err != nil {
 		return nil, apierror.InvalidArgument("invalid sandbox_assets: %v", err)
+	}
+	runtimeRec, err := s.advertisedSandboxAssets(ctx, requested)
+	if err != nil {
+		return nil, err
 	}
 
 	// Per-step timing so we can attribute resume latency between the rustfs
