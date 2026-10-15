@@ -51,6 +51,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -74,7 +75,9 @@ import (
 )
 
 const (
-	layoutVersion   = "1"
+	// Version 2 layers were hashed against their diffID at unpack; version
+	// 1 layers never were, so a version 1 pool is refused rather than reused.
+	layoutVersion   = "2"
 	versionFileName = "version"
 
 	layerFSDirName           = "fs"
@@ -224,6 +227,13 @@ type Store struct {
 	// (removeStaleRecord), so a hit's last-use touch and eviction's final
 	// re-check can never interleave. Uncontended except during a pass.
 	hitMu sync.RWMutex
+
+	// pins counts the in-flight pulls using each layer, by diffID hex;
+	// retireLayer never retires a pinned layer. Held only across a pin, an
+	// unpin, or a retirement's stat and rename. Entries are deleted at
+	// zero, so the map holds only layers pulls are using right now.
+	pinMu sync.Mutex
+	pins  map[string]int
 }
 
 // Option configures a Store.
@@ -305,7 +315,7 @@ type imageRecord struct {
 // startup recovery: verifying the layout version and sweeping temp dirs left
 // by unpacks that were in flight when a previous atelet died.
 func New(root string, opts ...Option) (*Store, error) {
-	s := &Store{root: root, minAge: defaultMinAge, pullTimeout: defaultPullTimeout}
+	s := &Store{root: root, minAge: defaultMinAge, pullTimeout: defaultPullTimeout, pins: map[string]int{}}
 	for _, o := range opts {
 		o(s)
 	}
@@ -328,9 +338,9 @@ func New(root string, opts ...Option) (*Store, error) {
 	switch b, err := os.ReadFile(versionPath); {
 	case err == nil:
 		if got := strings.TrimSpace(string(b)); got != layoutVersion {
-			// Fail loudly instead of silently mixing layouts; an operator can
-			// delete the cache dir to rebuild it (it holds no unique state).
-			return nil, fmt.Errorf("image cache at %q has layout version %q, this atelet supports %q", root, got, layoutVersion)
+			// Fail loudly instead of silently mixing layouts. The cache holds
+			// no unique state, but its layers may be mounted lowerdirs.
+			return nil, fmt.Errorf("image cache at %q has layout version %q, this atelet supports %q; delete the directory while no actors are running on this node to rebuild it", root, got, layoutVersion)
 		}
 	case errors.Is(err, os.ErrNotExist):
 		if err := os.WriteFile(versionPath, []byte(layoutVersion+"\n"), 0o600); err != nil {
@@ -589,6 +599,10 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 	diffIDs := make([]string, len(layers))
 	for i, d := range cfgFile.RootFS.DiffIDs {
 		diffIDs[i] = d.String()
+		// Pinned until this pull returns: eviction never retires a pinned
+		// layer, so nothing this pull has unpacked or reused can be taken
+		// out from under it, whatever happens to its record meanwhile.
+		defer s.pinLayer(d.Hex)()
 	}
 
 	// The full diffID list is known from the config before any unpack; make
@@ -614,24 +628,19 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 	g.SetLimit(layerPullConcurrency)
 	for i, layer := range layers {
 		g.Go(func() error {
-			diffID, err := layer.DiffID()
-			if err != nil {
-				return fmt.Errorf("while reading layer diffID: %w", err)
-			}
-			if diffID.String() != diffIDs[i] {
-				// The record must reference exactly what lands on disk.
-				return fmt.Errorf("layer %d diffID %s does not match config rootfs diffID %s", i, diffID, diffIDs[i])
-			}
+			// A remote layer's DiffID() is read from this same config, so
+			// the claim is checked against the content at unpack instead.
+			diffID := cfgFile.RootFS.DiffIDs[i]
 			dir, err := s.ensureLayer(gctx, diffID, layer)
 			if err != nil {
 				return fmt.Errorf("while unpacking layer %s: %w", diffID, err)
 			}
 			layerDirs[i] = dir
 			// Each completed layer refreshes the record's mtime: a pull
-			// making progress stays fresh indefinitely; a wedged one ages
-			// into ordinary LRU eviction. The twin is not touched — the
-			// primary keeps the layers referenced, and the final rewrite
-			// recreates the twin if it ages out mid-pull.
+			// making progress stays fresh indefinitely; a wedged one loses
+			// its record to ordinary LRU eviction, though its layers stay
+			// pinned until it returns or times out. The twin is not touched
+			// — the final rewrite recreates it if it ages out mid-pull.
 			s.touchRecord(digest)
 			return nil
 		})
@@ -641,8 +650,8 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 	}
 
 	// Rewrite the record: eviction may legitimately remove it mid-pull
-	// (no progress for min-age reads as wedged), and success must never
-	// leave the just-unpacked layers unreferenced.
+	// (no progress for min-age reads as wedged), and the pins that kept
+	// the layers meanwhile lapse when this pull returns.
 	if err := s.writeRecord(digest, rec); err != nil {
 		return nil, fmt.Errorf("while rewriting image record after unpack: %w", err)
 	}
@@ -671,16 +680,55 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 	return &Image{Digest: digest, Config: cfgFile.Config, LayerDirs: layerDirs}, nil
 }
 
+// pinLayer marks the layer as in use by an in-flight pull and returns the
+// matching unpin, which releases only this pin however often it is called.
+// Taken by each pull for each of its layers before any ensureLayer call —
+// outside the layer flight, so a pull that joins another pull's flight is
+// protected by its own pin once the leader's lapses.
+func (s *Store) pinLayer(hex string) (unpin func()) {
+	s.pinMu.Lock()
+	s.pins[hex]++
+	s.pinMu.Unlock()
+	released := false
+	return func() {
+		s.pinMu.Lock()
+		defer s.pinMu.Unlock()
+		if released {
+			return
+		}
+		released = true
+		if s.pins[hex]--; s.pins[hex] == 0 {
+			delete(s.pins, hex)
+		}
+	}
+}
+
+// pinned reports whether an in-flight pull holds the layer. A snapshot:
+// retirement itself checks under whileUnpinned instead.
+func (s *Store) pinned(hex string) bool {
+	s.pinMu.Lock()
+	defer s.pinMu.Unlock()
+	return s.pins[hex] > 0
+}
+
 // ensureLayer makes the unpacked tree for diffID present in the pool,
-// collapsing concurrent requests for the same layer across images.
+// collapsing concurrent requests for the same layer blob across images.
+//
+// The caller must hold a pin on the layer (see pinLayer) from before this
+// call until it no longer relies on the returned dir. The pin, not the
+// flight, is what keeps eviction from retiring the layer meanwhile.
 func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {
 	dir := s.layerDir(diffID)
-	_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
+	// From the manifest: no network I/O.
+	blob, err := layer.Digest()
+	if err != nil {
+		return "", fmt.Errorf("while reading layer blob digest: %w", err)
+	}
+	_, err, _ = s.layerSF.Do(layerFlightKey(diffID, blob), func() (any, error) {
 		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
-			// Refresh the dir mtime inside the flight: retireLayer re-checks
-			// the mtime in this same flight, so a layer reused here can
-			// never be renamed away between this stat and the image record
-			// that will re-reference it.
+			// Refresh the dir mtime so eviction's LRU order sees the reuse.
+			// The pull's pin, not this stamp, is what keeps the layer from
+			// being retired before the image record re-references it.
 			now := time.Now()
 			if err := os.Chtimes(dir, now, now); err != nil {
 				slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
@@ -694,6 +742,12 @@ func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer)
 	}
 	return dir, nil
 }
+
+// layerFlightKey keys ensureLayer's flight by blob as well as diffID: a
+// caller joining a flight gets the leader's result, so an image lying about
+// a common layer's diffID must lead a flight of its own and fail only its
+// own pull.
+func layerFlightKey(diffID, blob v1.Hash) string { return diffID.String() + "@" + blob.String() }
 
 // unpackLayerToPool streams the layer (download → decompress → untar) into a
 // temp dir and renames it into place, so a layer dir either exists complete
@@ -717,28 +771,27 @@ func (s *Store) unpackLayerToPool(ctx context.Context, diffID v1.Hash, layer v1.
 		return fmt.Errorf("while creating layer fs dir: %w", err)
 	}
 
-	rc, err := layer.Uncompressed()
-	if err != nil {
-		return fmt.Errorf("while opening layer stream: %w", err)
-	}
-	defer rc.Close()
-
 	root, err := os.OpenRoot(fsDir)
 	if err != nil {
 		return fmt.Errorf("while opening layer fs dir as os.Root: %w", err)
 	}
 	defer root.Close()
 
+	var wh *whiteoutSet
 	// The uncompressed tar stream is the recorded size: an optimistic
 	// estimate (tar framing vs. block rounding), cheap to capture here.
-	cr := &countingReader{r: rc}
-	wh, err := unpackLayer(ctx, cr, root)
+	n, err := readVerifiedLayer(layer, diffID, func(r io.Reader) (err error) {
+		wh, err = unpackLayer(ctx, r, root)
+		return err
+	})
 	if err != nil {
+		// Returning before the rename discards the unpacked tree, so
+		// unverified content never enters the pool.
 		return err
 	}
 	// Non-fatal: a missing size file is recovered by layerSize's backfill,
 	// so a metadata write must not discard a successful unpack.
-	if err := os.WriteFile(filepath.Join(tmp, layerSizeFileName), []byte(strconv.FormatInt(cr.n, 10)+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, layerSizeFileName), []byte(strconv.FormatInt(n, 10)+"\n"), 0o600); err != nil {
 		slog.WarnContext(ctx, "Failed to record layer size; will backfill lazily",
 			slog.String("diffid", diffID.String()), slog.Any("err", err))
 	}
@@ -826,7 +879,8 @@ func (s *Store) withCredentials(ctx context.Context, parsedRef name.Reference, f
 			return nil
 		}
 		errs = append(errs, err)
-		if ctx.Err() != nil {
+		// Another credential cannot change the image's content.
+		if ctx.Err() != nil || errors.Is(err, errDiffIDMismatch) {
 			break
 		}
 	}
