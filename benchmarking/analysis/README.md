@@ -12,8 +12,8 @@ Two joinable JSON log records feed it, each written by both layers:
 
 | record (`msg`) | emitter | keys |
 |---|---|---|
-| `Restore timing breakdown` | atelet, ateom-microvm and ateom-gvisor | `ate.actor.restore.duration.<phase>` / `ateom.actor.restore.duration.<phase>` |
-| `Checkpoint timing breakdown` | atelet, ateom-microvm and ateom-gvisor | `ate.actor.checkpoint.duration.<phase>` / `ateom.actor.checkpoint.duration.<phase>` |
+| `Restore timing breakdown` | atelet, ateworker-microvm and ateworker-gvisor | `ate.actor.restore.duration.<phase>` / `ateom.actor.restore.duration.<phase>` |
+| `Checkpoint timing breakdown` | atelet, ateworker-microvm and ateworker-gvisor | `ate.actor.checkpoint.duration.<phase>` / `ateom.actor.checkpoint.duration.<phase>` |
 
 Every record carries the full actor identity (`ate.actor.uid`, name,
 atespace, template) and the snapshot scope, which the histograms are barred
@@ -83,7 +83,7 @@ restore between `volume_mount`, `manifest_fetch`, `sandbox_assets`,
 on a checkpoint and `prep` / … / `vm_restore` / `wakeup_probe` on a restore;
 for gVisor `pause` / `checkpoint` / `durable_dir` / `resume` / `teardown` and
 `prep` / `net_setup` / … / `pause_restore` / `app_restore` / `wakeup_probe` /
-`activate` (the full lists are in `cmd/ateom-*/phaselog.go`). The ateom
+`activate` (the full lists are in `cmd/ateworker-*/phaselog.go`). The ateom
 records carry no sandbox class or kind of their own; a paired one takes both
 from its atelet record, so both layers split into the same rows.
 

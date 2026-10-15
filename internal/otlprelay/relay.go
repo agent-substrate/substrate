@@ -128,7 +128,7 @@ type Server struct {
 // service.name their resource declares — which the OTEL_* environment can
 // override out from under an ateom; see sourceGate for what that looks like.
 // Mirrors the serviceName constants in
-// cmd/ateom-gvisor and cmd/ateom-microvm, which are package main and cannot be
+// cmd/ateworker-gvisor and cmd/ateworker-microvm, which are package main and cannot be
 // imported; TestAteomServicesMatchTheAteomBinaries guards the duplication.
 //
 // This allowlist is a protocol contract rather than a security boundary:
@@ -138,8 +138,8 @@ type Server struct {
 // Peer authentication, if needed, would require per-pod sockets or UDS peer
 // credentials (SO_PEERCRED) tied to #741.
 var ateomServices = map[string]bool{
-	"ateom-gvisor":  true,
-	"ateom-microvm": true,
+	"ateworker-gvisor":  true,
+	"ateworker-microvm": true,
 }
 
 // sourceGate applies the ateomServices allowlist and reports the first

@@ -583,7 +583,7 @@ it from the meter for the scenario you run.
 > [!IMPORTANT]
 > **With `ParentBased`, the caller makes the root decision.** Since
 > [#711](https://github.com/agent-substrate/substrate/pull/711) the defaults are
-> `ParentBased(TraceIDRatioBased)` at 0.1 for `ateapi`, `atelet`, and `ateom-*`,
+> `ParentBased(TraceIDRatioBased)` at 0.1 for `ateapi`, `atelet`, and `ateworker-*`,
 > and 0.01 for `atenet-router` and Envoy. These rates apply only to an operation
 > that arrives with no `traceparent`. A client that sends a `traceparent` makes
 > the decision for the full chain, and the defaults of substrate do not apply.

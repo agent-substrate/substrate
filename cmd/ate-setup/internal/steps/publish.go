@@ -26,7 +26,7 @@ import (
 // workerImages are the ateom images a WorkerPool points at through
 // workerImage, one per sandbox class. No manifest references them, so the
 // install never publishes them as a side effect.
-var workerImages = []string{"ateom-gvisor", "ateom-microvm"}
+var workerImages = []string{"ateworker-gvisor", "ateworker-microvm"}
 
 // PublishWorkerImages builds and pushes the ateom images for this build and
 // writes their pushed references to w, one "<binary>: <ref>" line per image,

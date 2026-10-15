@@ -647,7 +647,7 @@ still succeeds. A `null` means the value was not measured. It never means zero.
 
 `SuspendActor` and `ResumeActor` latency can be attributed to the phases
 inside them (object-storage transfer, hypervisor snapshot/restore, rootfs
-assembly, ...) from the structured log records atelet and ateom-microvm
+assembly, ...) from the structured log records atelet and ateworker-microvm
 emit. `analysis/collect_logs.sh` dumps the node logs of a run and
 `analysis/phase_report.py` aggregates them into per-phase percentiles and
 waterfalls of the slowest operations. See

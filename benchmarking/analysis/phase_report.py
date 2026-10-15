@@ -57,7 +57,7 @@ from pathlib import Path
 
 # The duration-key prefixes. Source of truth: cmd/atelet/metrics.go
 # (restoreDurationMetric, checkpointDurationMetric) and
-# cmd/ateom-microvm/phaselog.go.
+# cmd/ateworker-microvm/phaselog.go.
 BREAKDOWN_PREFIXES = {
     ("atelet", "restore"): "ate.actor.restore.duration.",
     ("atelet", "checkpoint"): "ate.actor.checkpoint.duration.",
@@ -91,8 +91,8 @@ PHASE_ORDER = [
     # atelet restore
     "volume_mount", "manifest_fetch", "sandbox_assets", "download",
     "oci_unpack", "ateom_restore",
-    # ateom restore: micro-VM (cmd/ateom-microvm/phaselog.go) and gVisor
-    # (cmd/ateom-gvisor/phaselog.go), each in its own sequential order
+    # ateom restore: micro-VM (cmd/ateworker-microvm/phaselog.go) and gVisor
+    # (cmd/ateworker-gvisor/phaselog.go), each in its own sequential order
     "prep", "egress_prepare", "net_setup", "bundles", "upper_join", "lowers",
     "pause_rootfs", "pause_create", "pause_restore",
     "app_rootfs", "app_create", "app_restore",

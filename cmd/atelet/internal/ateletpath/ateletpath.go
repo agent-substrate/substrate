@@ -138,7 +138,7 @@ func DurableDirVolumeMountPoint(actorUID, volumeName string) string {
 // Run/Restore; each sandbox class excludes them differently:
 //
 //   - micro-VM captures by location: its checkpoint tars all of
-//     DurableDirVolumeMountsDir (see ateom-microvm's tarDurableVolumes), so
+//     DurableDirVolumeMountsDir (see ateworker-microvm's tarDurableVolumes), so
 //     system-info roots are excluded by living in this separate directory.
 //   - gVisor captures by declaration: durable mounts are registered with
 //     the sandbox (mount-hint annotations for MEMORY checkpoints, the

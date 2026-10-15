@@ -206,7 +206,7 @@ func TestRelayForwardsTracesVerbatim(t *testing.T) {
 
 	req := &coltracepb.ExportTraceServiceRequest{
 		ResourceSpans: []*tracepb.ResourceSpans{{
-			Resource: serviceResource("ateom-microvm"),
+			Resource: serviceResource("ateworker-microvm"),
 			ScopeSpans: []*tracepb.ScopeSpans{{
 				Spans: []*tracepb.Span{{
 					Name:    "RunWorkload",
@@ -248,7 +248,7 @@ func TestRelayForwardsMetrics(t *testing.T) {
 
 	req := &colmetricspb.ExportMetricsServiceRequest{
 		ResourceMetrics: []*metricspb.ResourceMetrics{{
-			Resource: serviceResource("ateom-microvm"),
+			Resource: serviceResource("ateworker-microvm"),
 			ScopeMetrics: []*metricspb.ScopeMetrics{{
 				Metrics: []*metricspb.Metric{{Name: "ateom.workload.runs"}},
 			}},
@@ -278,7 +278,7 @@ func TestRelayForwardsMetrics(t *testing.T) {
 func usageLogs() *collogspb.ExportLogsServiceRequest {
 	return &collogspb.ExportLogsServiceRequest{
 		ResourceLogs: []*logspb.ResourceLogs{{
-			Resource: serviceResource("ateom-gvisor"),
+			Resource: serviceResource("ateworker-gvisor"),
 			ScopeLogs: []*logspb.ScopeLogs{{
 				LogRecords: []*logspb.LogRecord{{EventName: "ate.actor.usage_sampled"}},
 			}},
@@ -425,7 +425,7 @@ func TestSourceGateLogsEachRejectionOnce(t *testing.T) {
 	if err := gate.check(context.Background(), serviceResource("atelet")); err == nil {
 		t.Fatal("gate.check accepted atelet")
 	}
-	if err := gate.check(context.Background(), serviceResource("ateom-gvisor")); err != nil {
+	if err := gate.check(context.Background(), serviceResource("ateworker-gvisor")); err != nil {
 		t.Fatalf("gate.check rejected an ateom: %v", err)
 	}
 
@@ -504,7 +504,7 @@ func TestRelayRefusesMixedBatch(t *testing.T) {
 
 	_, err = coltracepb.NewTraceServiceClient(conn).Export(context.Background(), &coltracepb.ExportTraceServiceRequest{
 		ResourceSpans: []*tracepb.ResourceSpans{
-			{Resource: serviceResource("ateom-gvisor")},
+			{Resource: serviceResource("ateworker-gvisor")},
 			{Resource: serviceResource("actor")},
 		},
 	})
@@ -514,7 +514,7 @@ func TestRelayRefusesMixedBatch(t *testing.T) {
 
 	_, err = collogspb.NewLogsServiceClient(conn).Export(context.Background(), &collogspb.ExportLogsServiceRequest{
 		ResourceLogs: []*logspb.ResourceLogs{
-			{Resource: serviceResource("ateom-gvisor")},
+			{Resource: serviceResource("ateworker-gvisor")},
 			{Resource: serviceResource("actor")},
 		},
 	})
@@ -576,7 +576,7 @@ func TestAteomServicesMatchTheAteomBinaries(t *testing.T) {
 	decl := regexp.MustCompile(`(?m)^\s*const\s+serviceName\s*=\s*"([^"]+)"`)
 
 	found := map[string]bool{}
-	for _, main := range []string{"../../cmd/ateom-gvisor/main.go", "../../cmd/ateom-microvm/main.go"} {
+	for _, main := range []string{"../../cmd/ateworker-gvisor/main.go", "../../cmd/ateworker-microvm/main.go"} {
 		src, err := os.ReadFile(main)
 		if err != nil {
 			t.Fatalf("reading %s: %v", main, err)
@@ -842,7 +842,7 @@ func TestExportDropsClientMetadata(t *testing.T) {
 		"authorization", "Bearer client-token",
 		"custom-header", "custom-value",
 	)
-	traceMD, metricMD, logMD := exportAll(t, sink, sock, "ateom-gvisor", ctx)
+	traceMD, metricMD, logMD := exportAll(t, sink, sock, "ateworker-gvisor", ctx)
 
 	for _, tc := range []struct {
 		signal string
@@ -869,7 +869,7 @@ func TestExportAttachesAteletHeaders(t *testing.T) {
 	// The client sends its own, which must lose to atelet's rather than
 	// appending a second value the collector might pick either way.
 	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer client-token")
-	traceMD, metricMD, logMD := exportAll(t, sink, sock, "ateom-gvisor", ctx)
+	traceMD, metricMD, logMD := exportAll(t, sink, sock, "ateworker-gvisor", ctx)
 
 	if got := traceMD.Get("authorization"); len(got) != 1 || got[0] != "Bearer atelet-token" {
 		t.Errorf("trace export authorization = %v, want exactly [Bearer atelet-token]", got)

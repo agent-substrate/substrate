@@ -119,7 +119,7 @@ Before you patch any pool, list the pools and save the list for rollback. Each p
 kubectl get workerpools -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,CLASS:.spec.sandboxClasses[0].name,IMAGE:.spec.workerImage' | tee ~/ate-upgrade/before-workerpools.txt
 ```
 
-If you build from source, build and push both worker images once. This touches nothing in the cluster and ends by printing `ateom-gvisor: <ref>` and `ateom-microvm: <ref>`:
+If you build from source, build and push both worker images once. This touches nothing in the cluster and ends by printing `ateworker-gvisor: <ref>` and `ateworker-microvm: <ref>`:
 
 ```bash
 go run ./cmd/ate-setup publish worker-images --config ~/ate-upgrade/new.yaml | tee ~/ate-upgrade/worker-images.txt

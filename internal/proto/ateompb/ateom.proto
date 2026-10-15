@@ -430,8 +430,8 @@ message WorkloadStatsSample {
   string actor_template_name = 5;
 
   // The sandbox runtime family that produced this sample, in the
-  // ate.dev/v1alpha1 SandboxClass form: "gvisor" (cmd/ateom-gvisor) or
-  // "microvm" (cmd/ateom-microvm). An ateom binary only ever reports its own.
+  // ate.dev/v1alpha1 SandboxClass form: "gvisor" (cmd/ateworker-gvisor) or
+  // "microvm" (cmd/ateworker-microvm). An ateom binary only ever reports its own.
   string sandbox_class = 6;
 
   // How the measurements below were obtained.

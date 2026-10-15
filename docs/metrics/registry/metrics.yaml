@@ -283,7 +283,7 @@ groups:
           has killed, over the life of the leaf (memory.events oom_kill).
         note: >
           Logs only. It is only ever recorded beside actor identity, which no
-          metric may carry. ateom-gvisor sets it on the record it writes when a
+          metric may carry. ateworker-gvisor sets it on the record it writes when a
           hosted actor's sandbox has no process left. A leaf left behind by an
           earlier activation of the same actor carries its count forward.
         examples: [0, 3]
@@ -594,7 +594,7 @@ groups:
               value: final
               brief: >
                 The last sample of an activation, written when a checkpoint, a
-                terminate, a graceful shutdown, or a re-host on ateom-microvm
+                terminate, a graceful shutdown, or a re-host on ateworker-microvm
                 ends it. When the sandbox is still running, ateom reads the
                 stats just before the teardown; when no read runs, or the read
                 fails or times out, it repeats the newest measured sample, or
@@ -1285,7 +1285,7 @@ groups:
       cmd/credential-provider/kubernetes-secrets.
     annotations:
       substrate:
-        emitted_by: [ateapi, atelet, atenet-router, ateom-gvisor, ateom-microvm, credprovider]
+        emitted_by: [ateapi, atelet, atenet-router, ateworker-gvisor, ateworker-microvm, credprovider]
         golden_signals: [latency, traffic, errors]
         source: external
         instrumentation: go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc

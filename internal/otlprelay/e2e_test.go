@@ -55,7 +55,7 @@ func TestEndToEndThroughServerboot(t *testing.T) {
 	}
 	defer conn.Close()
 
-	const serviceName = "ateom-microvm"
+	const serviceName = "ateworker-microvm"
 	tp, err := serverboot.InitTracing(context.Background(), serverboot.TracingOptions{
 		ServiceName: serviceName,
 		// Ratio 1.0: this test asserts on delivery, not on sampling.
@@ -131,7 +131,7 @@ const relayAttrKey = "ate.otlp.relay"
 // must fall back to the network path rather than dropping telemetry.
 //
 // This is the case the ateoms degrade into instead of exiting (see the Dial call
-// in cmd/ateom-*/main.go), so it needs to be more than a nil check: the span has
+// in cmd/ateworker-*/main.go), so it needs to be more than a nil check: the span has
 // to reach the collector, and it has to be distinguishable from a relayed one at
 // query time — hence the "direct" attribute.
 func TestEndToEndFallsBackToDirect(t *testing.T) {
@@ -152,7 +152,7 @@ func TestEndToEndFallsBackToDirect(t *testing.T) {
 		t.Fatal("Dial returned a connection for a socket that does not exist")
 	}
 
-	const serviceName = "ateom-microvm"
+	const serviceName = "ateworker-microvm"
 	tp, err := serverboot.InitTracing(context.Background(), serverboot.TracingOptions{
 		ServiceName:  serviceName,
 		Sampling:     serverboot.ParentRatioSampling(1.0),

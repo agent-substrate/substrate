@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # Assemble the micro-VM (kata + cloud-hypervisor) runtime asset set that
-# ateom-microvm fetches at runtime (fetch-not-bake). Run this on a Linux
+# ateworker-microvm fetches at runtime (fetch-not-bake). Run this on a Linux
 # host of the TARGET arch.
 #
 # Produces, under $OUT, the four assets named as the SandboxConfig expects:
@@ -99,7 +99,7 @@ tar --zstd -xf kata-static.tar.zst -C kata
 KROOT="kata/opt/kata"
 
 cp "$(readlink -f "${KROOT}/share/kata-containers/vmlinux.container")" "${OUT}/vmlinux"
-# rootfs.img is attached over virtio-pmem and mounted with DAX (cmd/ateom-microvm/run.go).
+# rootfs.img is attached over virtio-pmem and mounted with DAX (cmd/ateworker-microvm/run.go).
 # The image must meet the following requirements:
 #   - a size that is a multiple of 2 MiB (cloud-hypervisor)
 #   - partition 1 aligned to the guest page size

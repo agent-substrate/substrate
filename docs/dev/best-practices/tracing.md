@@ -57,7 +57,7 @@ Samplers are resolved with `serverboot.ResolveTraceSampling`, which applies the 
 
 | Component | Default |
 |---|---|
-| ateapi, atelet, ateom-gvisor, ateom-microvm | `parentbased_traceidratio` 0.1 |
+| ateapi, atelet, ateworker-gvisor, ateworker-microvm | `parentbased_traceidratio` 0.1 |
 | atenet router (data plane root) | `parentbased_traceidratio` 0.01, mirrored into Envoy's `RandomSampling` |
 | glutton (benchmarking) | `parentbased_always_off` |
 | boomer (benchmarking) | runtime-controlled via dynconfig, ignores the env vars |

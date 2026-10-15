@@ -125,7 +125,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		}
 		missingStates = e2e.StatesNotAdvanced(lifecycleBaseline, e2e.LifecycleEventCounts(scrape), wantStates)
 		lifecycleSeen = len(missingStates) == 0
-		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
+		ateomSeen = e2e.CollectorHasService(scrape, "ateworker-gvisor", "ateworker-microvm")
 		// atecontroller bridges controller-runtime's Prometheus registry onto its OTLP
 		// reader, so the reconcile families are what prove the bridge, not just that
 		// some series arrived. Substring, not prefix: the collector's Prometheus
@@ -333,7 +333,7 @@ func validateSnapshotPhaseLabels(scrape string) error {
 // unexpanded or dropped attribute has nothing downstream to restore it.
 func validateNodeAttribution(scrape string) error {
 	var checked int
-	for _, svc := range []string{"atelet", "ateom-gvisor", "ateom-microvm"} {
+	for _, svc := range []string{"atelet", "ateworker-gvisor", "ateworker-microvm"} {
 		if !e2e.CollectorHasService(scrape, svc) {
 			continue
 		}

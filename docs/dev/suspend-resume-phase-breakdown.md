@@ -8,7 +8,7 @@ elsewhere; follow the links when a step needs more than the command shown.
 The breakdown comes from two developer-facing log records, `Checkpoint timing
 breakdown` and `Restore timing breakdown`, written once per operation by
 atelet (the outer phases: `download`, `persist`, `ateom_*`, …) and by
-ateom-microvm (the phases inside `ateom_*`: `pause`, `snapshot`, `vm_restore`,
+ateworker-microvm (the phases inside `ateom_*`: `pause`, `snapshot`, `vm_restore`,
 `wakeup_probe`, …). `benchmarking/analysis/` collects the records from the pod
 logs and aggregates them. See
 [docs/observability.md](../observability.md#actor-attributed-component-logs)

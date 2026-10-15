@@ -43,7 +43,7 @@ privileged** and own all mounts on the node. The module is split accordingly:
 | Half | Runs in | Files | Needs |
 |---|---|---|---|
 | Store: pull, parse, unpack, record | atelet | `imagecache.go`, `unpack.go`, `spec.go` (portable) | nothing but file I/O |
-| Consumer: finalize, mount, unmount | ateom-gvisor / ateom-microvm | `bundle_linux.go` (`//go:build linux`) | `CAP_MKNOD`, `CAP_SYS_ADMIN` |
+| Consumer: finalize, mount, unmount | ateworker-gvisor / ateworker-microvm | `bundle_linux.go` (`//go:build linux`) | `CAP_MKNOD`, `CAP_SYS_ADMIN` |
 
 The two halves communicate through the filesystem only: the shared cache
 directory (on the `/var/lib/ate` hostPath, so the same absolute
@@ -162,8 +162,8 @@ keeps building its own tmpfs upper, as before.
 
 **Teardown**: `UnmountAllUnder(bundleDir)` lazily detaches every mount below
 an actor's bundle directory (via `/proc/self/mountinfo`) before atelet wipes
-it — called from the checkpoint cleanup path in ateom-gvisor and
-`teardownActor` in ateom-microvm.
+it — called from the checkpoint cleanup path in ateworker-gvisor and
+`teardownActor` in ateworker-microvm.
 
 ## Garbage collection
 

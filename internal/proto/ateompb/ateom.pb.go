@@ -1695,8 +1695,8 @@ type WorkloadStatsSample struct {
 	ActorTemplateAtespace string `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
 	ActorTemplateName     string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// The sandbox runtime family that produced this sample, in the
-	// ate.dev/v1alpha1 SandboxClass form: "gvisor" (cmd/ateom-gvisor) or
-	// "microvm" (cmd/ateom-microvm). An ateom binary only ever reports its own.
+	// ate.dev/v1alpha1 SandboxClass form: "gvisor" (cmd/ateworker-gvisor) or
+	// "microvm" (cmd/ateworker-microvm). An ateom binary only ever reports its own.
 	SandboxClass string `protobuf:"bytes,6,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	// How the measurements below were obtained.
 	Source StatsSource `protobuf:"varint,7,opt,name=source,proto3,enum=ateom.StatsSource" json:"source,omitempty"`

@@ -13,8 +13,8 @@
 // limitations under the License.
 
 // Package serverboot collects the startup boilerplate shared by the
-// long-running substrate server binaries (ateapi, atelet, ateom-gvisor,
-// ateom-microvm): slog wiring, OTel tracer + meter providers, a Prometheus
+// long-running substrate server binaries (ateapi, atelet, ateworker-gvisor,
+// ateworker-microvm): slog wiring, OTel tracer + meter providers, a Prometheus
 // /metrics server, a /readyz and /healthz server for the kubelet probes, and a
 // couple of small helpers for startup fail-fast.
 package serverboot

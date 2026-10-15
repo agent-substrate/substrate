@@ -159,7 +159,7 @@ The duration keys are the [`ate.actor.restore.duration`](#the-metric-registry) i
 
 This is the record to use for a per-actor wake-up distribution. The histogram cannot answer that question at all, because actor identity is barred from metric labels; traces can, but the data plane is head-sampled at 1%.
 
-Both ateoms write records with the same two messages from inside the `ateom_restore` and `ateom_checkpoint` phases, under `ateom.actor.restore.duration.<phase>` and `ateom.actor.checkpoint.duration.<phase>`. The phases are each runtime's own and are listed in `cmd/ateom-gvisor/phaselog.go` and `cmd/ateom-microvm/phaselog.go`; `internal/ateomphaselog` renders the record. They are not instruments. The same identity keys make the two layers' records joinable per actor, and a failed operation's record carries `error.type`.
+Both ateoms write records with the same two messages from inside the `ateom_restore` and `ateom_checkpoint` phases, under `ateom.actor.restore.duration.<phase>` and `ateom.actor.checkpoint.duration.<phase>`. The phases are each runtime's own and are listed in `cmd/ateworker-gvisor/phaselog.go` and `cmd/ateworker-microvm/phaselog.go`; `internal/ateomphaselog` renders the record. They are not instruments. The same identity keys make the two layers' records joinable per actor, and a failed operation's record carries `error.type`.
 
 ateapi's `Actor state changed` is written once per committed actor state transition. ateapi owns the state machine, so this is where an actor's state and the time it reached it come from:
 
@@ -195,7 +195,7 @@ Creating an actor counts as a change. A new actor is born suspended, so it gets 
 
 The counter carries no actor identity, so this record is the only way to attribute a crash to one agent. The decision-point line that precedes it (`Setting Actor to crashed due to error`) carries only `ate.atespace` and `ate.actor.name`: it is written before the Actor is loaded, so no uid exists yet.
 
-ateom-gvisor's `Sandbox has no processes left while the actor is hosted` is a WARN written when a running actor's gVisor sandbox has died: the sentry crashed, was killed, or was OOM-killed. The ateom's usage sweep finds it, so it shows up within one sweep (`--usage-sample-interval`, a minute by default), once per activation. `ate.sandbox.oom_kills` is the cgroup's `oom_kill` count, so a non-zero value points at the kernel OOM killer:
+ateworker-gvisor's `Sandbox has no processes left while the actor is hosted` is a WARN written when a running actor's gVisor sandbox has died: the sentry crashed, was killed, or was OOM-killed. The ateom's usage sweep finds it, so it shows up within one sweep (`--usage-sample-interval`, a minute by default), once per activation. `ate.sandbox.oom_kills` is the cgroup's `oom_kill` count, so a non-zero value points at the kernel OOM killer:
 
 ```json
 {"time":"…","level":"WARN","msg":"Sandbox has no processes left while the actor is hosted",
@@ -270,7 +270,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
-| `rpc.server.call.duration` | ateapi, atelet, atenet-router, ateom-gvisor, ateom-microvm & credprovider (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
+| `rpc.server.call.duration` | ateapi, atelet, atenet-router, ateworker-gvisor, ateworker-microvm & credprovider (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
 | `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` (labels `ate.actor.operation.name`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.atespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed allocated size in bytes of each snapshot image written during checkpoint (`st_blocks * 512`, excluding sparse holes in micro-VM `memory-ranges`) (labels `file.name`, `ate.template.atespace`, `ate.template.name`) |
@@ -418,7 +418,7 @@ To visualize traces locally:
    ```
    The kind overlay pins `ateapi` to `parentbased_always_on`, so API calls show up even without `--trace`; the flag additionally prints the trace ID and forces sampling on every hop.
 
-4. **Search and Inspect**: Copy the printed Trace ID from the CLI output and paste it into the Jaeger search box (top right), or select `ateapi`, `atelet`, or `ateom-gvisor` under the **Service** dropdown and click **Find Traces** to inspect detailed call stacks, DB transactions, state updates, and worker pod handoffs.
+4. **Search and Inspect**: Copy the printed Trace ID from the CLI output and paste it into the Jaeger search box (top right), or select `ateapi`, `atelet`, or `ateworker-gvisor` under the **Service** dropdown and click **Find Traces** to inspect detailed call stacks, DB transactions, state updates, and worker pod handoffs.
 
 > ateom carries no manual spans — its only instrumentation is the `otelgrpc` interceptor on the gRPC surface `atelet` calls. So it produces a span for an actor lifecycle operation (`suspend`, `resume`) and nothing at all for a read like `kubectl ate get actor`. Its sampler is parent based, so a lifecycle command is traced end to end into ateom whenever `ateapi` roots a sampled trace, which the kind overlay makes unconditional; the per-component ratio never enters into it. To check whether ateom exported its spans through the [OTLP relay](#the-ateom-otlp-relay) rather than falling back to direct network egress, inspect the span's resource attributes: `ate.otlp.relay` will be set to `"relay"` (instead of `"direct"`).
 

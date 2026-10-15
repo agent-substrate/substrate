@@ -21,7 +21,7 @@
 // records).
 //
 // It exists for snapshotting durable-dir volumes and rootfs overlay uppers
-// (see cmd/ateom-microvm): the contents are written by the sandboxed workload
+// (see cmd/ateworker-microvm): the contents are written by the sandboxed workload
 // under arbitrary uids, shipped to object storage, and restored — possibly
 // onto another node — where the workload must see them unchanged. The upper
 // is why device nodes and overlay xattrs matter: the host kernel's overlayfs

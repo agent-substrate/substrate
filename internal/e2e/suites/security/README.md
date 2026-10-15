@@ -111,7 +111,7 @@ kubectl logs -n ate-e2e-sec-a -l app=ateom -c ateom -f
 # The on-host per-actor layout the host-state probes assert against.
 # Two UID-keyed durable dirs (victim's + attacker's) live side by side here:
 POD=$(kubectl get pods -n ate-e2e-sec-a -l app=ateom -o name | head -1)
-kubectl exec -n ate-e2e-sec-a "$POD" -c ateom -- ls -la /var/lib/ateom-gvisor/actors
+kubectl exec -n ate-e2e-sec-a "$POD" -c ateom -- ls -la /var/lib/ateworker-gvisor/actors
 Control plane / snapshots (for the tag-scope subtest)
 
 kubectl ate get tags -a ate-e2e-sec-a          # atespace-a-tag appears during the last subtest

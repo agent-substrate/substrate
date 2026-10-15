@@ -21,9 +21,9 @@ package sandboxclass
 import "slices"
 
 const (
-	// GVisor is the gVisor/runsc runtime (cmd/ateom-gvisor). Default.
+	// GVisor is the gVisor/runsc runtime (cmd/ateworker-gvisor). Default.
 	GVisor = "gvisor"
-	// MicroVM is the micro-VM runtime (cmd/ateom-microvm). It needs /dev/kvm
+	// MicroVM is the micro-VM runtime (cmd/ateworker-microvm). It needs /dev/kvm
 	// and vhost devices.
 	MicroVM = "microvm"
 )
