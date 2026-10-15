@@ -276,7 +276,7 @@ func TestValidateRunRequest(t *testing.T) {
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid worker_pod_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.WorkerPodUid = "ateom-1" }),
+		obj:  valid(func(r *ateletpb.RunRequest) { r.WorkerPodUid = "worker-1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "missing atespace",
@@ -508,6 +508,7 @@ func TestValidateCheckpointRequest(t *testing.T) {
 			Spec:                  &ateletpb.WorkloadSpec{},
 			Snapshot: &ateletpb.Snapshot{
 				SnapshotUuid: "snap-1",
+				Generation:   1,
 				Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				Object:       &ateletpb.ObjectStorage{SnapshotUri: snapshotURI},
 			},
@@ -556,7 +557,7 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid worker_pod_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.WorkerPodUid = "ateom-1" }),
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.WorkerPodUid = "worker-1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid atespace: path escape",
@@ -621,6 +622,14 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		obj:  valid(deferred("../escape")),
 		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "snapshot_uuid"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
+		name: "missing generation",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Snapshot.Generation = 0 }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "generation"), "")},
+	}, {
+		name: "negative generation",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Snapshot.Generation = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "generation"), nil, "").WithOrigin("minimum")},
+	}, {
 		name: "missing snapshot_uri",
 		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Snapshot.Object.SnapshotUri = "" }),
 		want: field.ErrorList{field.Required(field.NewPath("snapshot", "object", "snapshot_uri"), "")},
@@ -673,6 +682,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 			Spec:                  &ateletpb.WorkloadSpec{},
 			Snapshot: &ateletpb.Snapshot{
 				SnapshotUuid: "snap-1",
+				Generation:   1,
 				Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				Object:       &ateletpb.ObjectStorage{SnapshotUri: snapshotURI},
 			},
@@ -722,7 +732,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid worker_pod_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.WorkerPodUid = "ateom-1" }),
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.WorkerPodUid = "worker-1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid atespace: path escape",
@@ -768,6 +778,14 @@ func TestValidateRestoreRequest(t *testing.T) {
 		name: "invalid snapshot_uuid: path escape",
 		obj:  valid(local("../escape")),
 		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "snapshot_uuid"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing generation",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.Generation = 0 }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "generation"), "")},
+	}, {
+		name: "negative generation",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.Generation = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "generation"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "missing snapshot_uri",
 		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Snapshot.Object.SnapshotUri = "" }),
@@ -835,6 +853,7 @@ func TestValidatePromoteSnapshotRequest(t *testing.T) {
 			ActorTemplateName:     "tmpl-1",
 			Snapshot: &ateletpb.Snapshot{
 				SnapshotUuid: "pause-snap-1",
+				Generation:   1,
 				Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				Object: &ateletpb.ObjectStorage{
 					SnapshotUri: "gs://bucket/root/atespaces/team-a/actors/01234567-89ab-cdef-0123-456789abcdef/snapshots/snap-1",
@@ -905,6 +924,14 @@ func TestValidatePromoteSnapshotRequest(t *testing.T) {
 		name: "invalid snapshot_uuid: path escape",
 		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Snapshot.SnapshotUuid = "../escape" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "snapshot_uuid"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing generation",
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Snapshot.Generation = 0 }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "generation"), "")},
+	}, {
+		name: "negative generation",
+		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Snapshot.Generation = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot", "generation"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "missing snapshot.object",
 		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Snapshot.Object = nil }),
@@ -984,7 +1011,7 @@ func TestValidateTerminateRequest(t *testing.T) {
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid worker_pod_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.TerminateRequest) { r.WorkerPodUid = "ateom-1" }),
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.WorkerPodUid = "worker-1" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "missing atespace",
@@ -1103,7 +1130,20 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 				Version:      testRuntime().Version,
 			},
 		},
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("sandbox_class"), "", 63).WithOrigin("maxLength")},
+		want: field.ErrorList{
+			field.TooLong(defaultRuntimePath.Child("sandbox_class"), "", 63).WithOrigin("maxLength"),
+			field.NotSupported[string](defaultRuntimePath.Child("sandbox_class"), nil, nil),
+		},
+	}, {
+		name: "unsupported default_runtime.sandbox_class",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity: &ateletpb.WorkerResources{},
+			DefaultRuntime: &ateletpb.SandboxRuntime{
+				SandboxClass: "kata",
+				Version:      testRuntime().Version,
+			},
+		},
+		want: field.ErrorList{field.NotSupported[string](defaultRuntimePath.Child("sandbox_class"), nil, nil)},
 	}, {
 		name: "missing default_runtime.version",
 		obj: &ateletpb.RegisterWorkerRequest{
@@ -1243,6 +1283,17 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 			RestorableRuntimes: []*ateletpb.SandboxRuntime{{SandboxClass: "gvisor"}},
 		},
 		want: field.ErrorList{field.Required(restorablePath.Index(0).Child("version"), "")},
+	}, {
+		name: "unsupported restorable_runtimes sandbox_class",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity:       &ateletpb.WorkerResources{},
+			DefaultRuntime: testRuntime(),
+			RestorableRuntimes: []*ateletpb.SandboxRuntime{{
+				SandboxClass: "GVISOR",
+				Version:      testRuntime().Version,
+			}},
+		},
+		want: field.ErrorList{field.NotSupported[string](restorablePath.Index(0).Child("sandbox_class"), nil, nil)},
 	}, {
 		name: "restorable_runtimes at the bound",
 		obj: &ateletpb.RegisterWorkerRequest{

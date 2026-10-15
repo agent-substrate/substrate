@@ -45,7 +45,7 @@ var getEgressPolicyCmd = &cobra.Command{
 	Aliases: []string{"egress-policies"},
 	Short:   "Get the egress policy of an actor",
 	// TODO(#1550): accept several actors and print a list document.
-	Args: cobra.ExactArgs(1),
+	Args: exactlyOneArg("<actor-name>", "atespace"),
 	RunE: runGetEgressPolicy,
 }
 
@@ -57,7 +57,7 @@ var createEgressPolicyCmd = &cobra.Command{
 The manifest is a YAML or JSON EgressPolicy, as printed by
 "kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
 Its metadata may be omitted.`,
-	Args: cobra.ExactArgs(1),
+	Args: exactlyOneArg("<actor-name>", "atespace", "filename"),
 	RunE: runCreateEgressPolicy,
 }
 
@@ -70,14 +70,14 @@ The manifest is a YAML or JSON EgressPolicy, as printed by
 "kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
 Its metadata.uid and metadata.version are required preconditions; the server
 rejects the update when they no longer match those of the stored egress policy.`,
-	Args: cobra.ExactArgs(1),
+	Args: exactlyOneArg("<actor-name>", "atespace", "filename"),
 	RunE: runUpdateEgressPolicy,
 }
 
 var deleteEgressPolicyCmd = &cobra.Command{
 	Use:   "egress-policy <actor-name>",
 	Short: "Delete the egress policy of an actor",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<actor-name>", "atespace"),
 	RunE:  runDeleteEgressPolicy,
 }
 
@@ -416,7 +416,7 @@ func runDeleteEgressPolicy(cmd *cobra.Command, args []string) error {
 		version:    egressPolicyFlags.version,
 	})
 	if err != nil {
-		return err
+		return wrapUsageError(err)
 	}
 
 	apiClient, err := newAPIClient(cmd)
@@ -435,25 +435,19 @@ func runDeleteEgressPolicy(cmd *cobra.Command, args []string) error {
 }
 
 func init() {
-	getEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "Atespace the actor lives in (required)")
-	_ = getEgressPolicyCmd.MarkFlagRequired("atespace")
+	getEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "the actor's atespace")
 	getCmd.AddCommand(getEgressPolicyCmd)
 
-	createEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "Atespace the actor lives in (required)")
-	createEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.filename, "filename", "f", "", "Manifest file holding one EgressPolicy; use - for stdin (required)")
-	_ = createEgressPolicyCmd.MarkFlagRequired("atespace")
-	_ = createEgressPolicyCmd.MarkFlagRequired("filename")
+	createEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "the actor's atespace")
+	createEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.filename, "filename", "f", "", "a manifest file holding a single JSON or YAML egress-policy document, or - for stdin")
 	createCmd.AddCommand(createEgressPolicyCmd)
 
-	updateEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "Atespace the actor lives in (required)")
-	updateEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.filename, "filename", "f", "", "Manifest file holding one EgressPolicy; use - for stdin (required)")
-	_ = updateEgressPolicyCmd.MarkFlagRequired("atespace")
-	_ = updateEgressPolicyCmd.MarkFlagRequired("filename")
+	updateEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "the actor's atespace")
+	updateEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.filename, "filename", "f", "", "a manifest file holding a single JSON or YAML egress-policy document, or - for stdin")
 	updateCmd.AddCommand(updateEgressPolicyCmd)
 
-	deleteEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "Atespace the actor lives in (required)")
-	_ = deleteEgressPolicyCmd.MarkFlagRequired("atespace")
-	deleteEgressPolicyCmd.Flags().StringVar(&egressPolicyFlags.uid, "uid", "", "Delete only if the policy's metadata.uid matches; from get -o yaml")
-	deleteEgressPolicyCmd.Flags().Int64Var(&egressPolicyFlags.version, "version", 0, "Delete only if the policy's metadata.version matches; from get -o yaml")
+	deleteEgressPolicyCmd.Flags().StringVarP(&egressPolicyFlags.atespace, "atespace", "a", "", "the actor's atespace")
+	deleteEgressPolicyCmd.Flags().StringVar(&egressPolicyFlags.uid, "uid", "", "delete only if the policy's metadata.uid matches; from get -o yaml")
+	deleteEgressPolicyCmd.Flags().Int64Var(&egressPolicyFlags.version, "version", 0, "delete only if the policy's metadata.version matches; from get -o yaml")
 	deleteCmd.AddCommand(deleteEgressPolicyCmd)
 }

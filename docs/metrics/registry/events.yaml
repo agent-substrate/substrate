@@ -106,14 +106,14 @@ groups:
     stability: development
     brief: A measurement of the CPU and the memory of one actor.
     note: >
-      The ateom that runs the actor writes one record per actor on a timer,
+      The ateworker that runs the actor writes one record per actor on a timer,
       plus an initial and a final record per activation. ate.stats.kind tells
       them apart. The records of an activation are written in that order: the
       initial one, then the periodic ones, then the final one. Each is dated
       when its sample was read, thus a final record that repeats an older
       sample can carry an earlier timestamp than the records before it. The
       initial record is absent when the first reading fails. The final record
-      is written when the ateom tears the activation down: a checkpoint, a
+      is written when the ateworker tears the activation down: a checkpoint, a
       terminate, a graceful shutdown of the worker, or a re-host on a
       micro-VM. It is read just before the teardown and repeats the newest
       sample when that read fails or times out, or is pending when none was
@@ -136,8 +136,8 @@ groups:
       consumer can sample or drop it without touching the lifecycle events.
     annotations:
       substrate:
-        emitted_by: [ateom-gvisor, ateom-microvm]
-        code_anchor: internal/ateomstats/usage.go
+        emitted_by: [ateworker-gvisor, ateworker-microvm]
+        code_anchor: internal/workerstats/usage.go
         cuj: How much CPU and memory does this actor use, and since when?
     attributes:
       - ref: ate.atespace

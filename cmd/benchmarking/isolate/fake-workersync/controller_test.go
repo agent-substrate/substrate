@@ -638,7 +638,7 @@ func TestReconcileIsIdempotent(t *testing.T) {
 }
 
 // A limits edit replaces the pool's Workers, as it rolls a real pool's pods:
-// ateom reads its limits once at startup, so a Worker's capacity never
+// worker reads its limits once at startup, so a Worker's capacity never
 // changes. The old Worker is not reported again.
 func TestPoolLimitsChangeReplacesWorkers(t *testing.T) {
 	limits := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi")}
@@ -678,7 +678,7 @@ func TestPoolLimitsChangeReplacesWorkers(t *testing.T) {
 	}
 }
 
-// ateom's actor count is a flag, so changing it rolls a real pool's pods too.
+// worker's actor count is a flag, so changing it rolls a real pool's pods too.
 func TestMaxActorsAnnotationChangeReplacesWorkers(t *testing.T) {
 	c, ctl, rel, cl := newTestController(pool("bench", 1, nil))
 	if err := reconcile(t, c); err != nil {
@@ -704,7 +704,7 @@ func TestMaxActorsAnnotationChangeReplacesWorkers(t *testing.T) {
 	}
 }
 
-// A node's allocatable reaches ateom once, at startup, so a later change
+// A node's allocatable reaches worker once, at startup, so a later change
 // leaves a pool with no limits as it is: no new Worker and no report.
 func TestAllocatableChangeKeepsWorkerCapacity(t *testing.T) {
 	c, ctl, rel, cl := newTestController(pool("bench", 2, nil))
@@ -758,7 +758,7 @@ func TestScaleDownDrainsThenDeletes(t *testing.T) {
 	}
 }
 
-// Nothing stops a fake Worker's Actors the way ateom stops a terminating
+// Nothing stops a fake Worker's Actors the way worker stops a terminating
 // pod's, so a Worker still held after the drain grace is deleted anyway,
 // which releases its Actors, rather than left draining for good.
 func TestDrainGraceDeletesAWorkerStillHeld(t *testing.T) {
@@ -1168,7 +1168,7 @@ func TestAdoptReplacesWorkersOfAPoolEditedWhileDown(t *testing.T) {
 }
 
 // An adopted Worker whose capacity ate-api-server never accepted is reported
-// after the restart, as ateom keeps retrying its one report.
+// after the restart, as worker keeps retrying its one report.
 func TestAdoptReportsAWorkerNeverAccepted(t *testing.T) {
 	c, ctl, rel, cl := newTestController(pool("bench", 1, nil))
 	const first = "worker-1" // the first name newTestController's controller mints
@@ -1208,7 +1208,7 @@ func TestDeleteAll(t *testing.T) {
 	}
 }
 
-func TestCapacityFormatsLikeAteom(t *testing.T) {
+func TestCapacityFormatsLikeWorker(t *testing.T) {
 	capacity := func(wp *atev1alpha1.WorkerPool) *ateapipb.WorkerResources {
 		t.Helper()
 		tmpl, err := templateOf(wp)
@@ -1218,7 +1218,7 @@ func TestCapacityFormatsLikeAteom(t *testing.T) {
 		return tmpl.capacity(nil)
 	}
 	got := capacity(pool("p", 1, corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("0.5"), corev1.ResourceMemory: resource.MustParse("1G")}))
-	// ateom spells cpu as decimal milli-cores and memory as a binary-SI byte
+	// worker spells cpu as decimal milli-cores and memory as a binary-SI byte
 	// count; 1G is not a power of two, so 1e9.
 	if want := wantCapacity(1000, "500m", "1e9"); !proto.Equal(got, want) {
 		t.Errorf("capacity = %v, want %v", got, want)

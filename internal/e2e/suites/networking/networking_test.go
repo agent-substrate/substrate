@@ -370,7 +370,7 @@ func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.
 				if !strings.HasSuffix(authority, ":"+port) {
 					continue
 				}
-				spiffeSlug := "/ateom-for-actor/" + atespace + "/" + actorName
+				spiffeSlug := "/worker-for-actor/" + atespace + "/" + actorName
 				if !strings.Contains(line.text, spiffeSlug) {
 					continue
 				}
@@ -956,7 +956,7 @@ func postEgressWithStatus(t *testing.T, ctx context.Context, router *e2e.RouterC
 func assertProtocolGateway(t *testing.T, ctx context.Context, since metav1.Time, actorName, authority string) {
 	t.Helper()
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
-	identity := resources.AteomForActorSPIFFEID(actorRef).String()
+	identity := resources.WorkerForActorSPIFFEID(actorRef).String()
 	waitForAccessLog(t, ctx, since, "successful gateway traffic for "+identity+" to "+authority, func(lines []gatewayAccessLogLine) bool {
 		for _, entry := range lines {
 			if protocolGatewayAccessLogMatches(entry, actorRef, authority, false) {
@@ -978,7 +978,7 @@ func protocolGatewayAccessLogMatches(entry gatewayAccessLogLine, actorRef resour
 			return false
 		}
 		for peer := range strings.SplitSeq(peers, ",") {
-			if peer == resources.AteomForActorSPIFFEID(actorRef).String() {
+			if peer == resources.WorkerForActorSPIFFEID(actorRef).String() {
 				return true
 			}
 		}

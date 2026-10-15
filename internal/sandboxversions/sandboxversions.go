@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package sandboxversions reads and writes a worker's sandbox versions file,
-// which atelet keeps in the worker's directory (nodepath.AteomPath) as
+// which atelet keeps in the worker's directory (nodepath.WorkerPath) as
 // nodepath.SandboxVersionsFileName.
 package sandboxversions
 
@@ -27,7 +27,7 @@ import (
 
 // File is the content of a worker's sandbox versions file: the sandbox
 // runtimes the worker can run, as the compatibility attributes atelet computed
-// for them. The ateom adds each runtime's attributes to the ones it probes
+// for them. The worker adds each runtime's attributes to the ones it probes
 // itself and registers the result as RegisterWorkerRequest's default_runtime
 // and restorable_runtimes.
 type File struct {

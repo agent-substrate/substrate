@@ -189,19 +189,24 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			// allocate generation 4 rather than reusing 2 or 3.
 			running := mustUpdateActorStatus(t, ctx, st, reverted, func(s *ateapipb.ActorStatus) {
 				s.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+				s.AssignedNode = "node-1"
+				s.WorkerAssignment = wireTestAssignment()
 			})
-			tmpl := &ateapipb.ActorTemplate{
-				SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots/"},
-			}
-			suspending, err := w.ensureMarkedSuspending(ctx, actorRef, running, tmpl)
+			seedWireWorker(t, ctx, st, assignmentOf(running))
+			wire, atelet := newWireCaptureWorkflow(t, st)
+			suspended, err := wire.SuspendActor(ctx, actorRef)
 			if err != nil {
-				t.Fatalf("ensureMarkedSuspending after revert: %v", err)
+				t.Fatalf("SuspendActor after revert: %v", err)
 			}
-			if got := suspending.GetStatus().GetLastAssignedGeneration(); got != 4 {
+			if got := suspended.GetStatus().GetLastAssignedGeneration(); got != 4 {
 				t.Errorf("last_assigned_generation after post-revert suspend = %d, want 4", got)
 			}
-			if got := snapshotAtLatestGeneration(suspending.GetStatus()).GetGeneration(); got != 4 {
+			newSnap := snapshotAtLatestGeneration(suspended.GetStatus())
+			if got := newSnap.GetGeneration(); got != 4 {
 				t.Errorf("new snapshot generation after post-revert suspend = %d, want 4", got)
+			}
+			if got, want := atelet.checkpointRequest().GetSnapshot().GetSnapshotUuid(), newSnap.GetUuid(); got != want {
+				t.Errorf("CheckpointRequest.Snapshot.SnapshotUuid = %q, want the generation 4 snapshot %q", got, want)
 			}
 		})
 	}

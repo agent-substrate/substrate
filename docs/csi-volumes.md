@@ -2,6 +2,14 @@
 
 Substrate integrates with the **Container Storage Interface (CSI)** to provide dynamically provisioned, per-actor external volumes that seamlessly attach and detach as actors transition through their lifecycle.
 
+External volumes are a preview feature. The ate API server accepts them only
+when it runs with `--preview=ExternalVolumes` (ate-setup's `preview` setting)
+and the client opts in to preview features: `kubectl ate --preview`, or the
+`Ate-Preview-Allowed: true` gRPC metadata header. The opt-in is needed to
+create an actor template with external volumes, or an actor from such a
+template. Later operations on that actor, such as resume, suspend and delete,
+do not need it.
+
 ---
 
 ## 1. CSI in Substrate vs. Standard Kubernetes
@@ -153,13 +161,13 @@ metadata:
     workload: stateful-agent
 spec:
   replicas: 5
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateworker-gvisor
   sandboxClasses:
   - name: gvisor
 ```
 
 The `ActorTemplate` is a protojson-shaped `ateapipb.ActorTemplate`, created
-through the ate API with `kubectl ate create actor-template -f -` (the
+through the ate API with `kubectl ate --preview create actor-template -f -` (the
 `ate-demo` atespace must exist):
 
 ```yaml
@@ -182,6 +190,12 @@ containers:
 sandboxConfig:
   sandboxClass: gvisor
   configName: gvisor-default
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 1Gi
 snapshotConfig:
   storageLocation: gs://my-snapshots-bucket/stateful-agent
 volumes:

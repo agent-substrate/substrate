@@ -33,10 +33,10 @@ const (
 	// KindActor is the actor itself. Subject "actor/<atespace>/<name>",
 	// claims under "actor.ate.dev".
 	KindActor
-	// KindAteomForActor is an ateom, or another Substrate component, acting
-	// on behalf of the actor. Subject "ateom-for-actor/<atespace>/<name>",
-	// claims under "ateom-for-actor.ate.dev".
-	KindAteomForActor
+	// KindWorkerForActor is a worker, or another Substrate component, acting
+	// on behalf of the actor. Subject "worker-for-actor/<atespace>/<name>",
+	// claims under "worker-for-actor.ate.dev".
+	KindWorkerForActor
 )
 
 // SubjectPrefix is the first segment of the sub claim for this kind.
@@ -44,8 +44,8 @@ func (k Kind) SubjectPrefix() string {
 	switch k {
 	case KindActor:
 		return "actor"
-	case KindAteomForActor:
-		return "ateom-for-actor"
+	case KindWorkerForActor:
+		return "worker-for-actor"
 	}
 	return ""
 }
@@ -56,8 +56,8 @@ func (k Kind) ClaimName() string {
 	switch k {
 	case KindActor:
 		return "actor.ate.dev"
-	case KindAteomForActor:
-		return "ateom-for-actor.ate.dev"
+	case KindWorkerForActor:
+		return "worker-for-actor.ate.dev"
 	}
 	return ""
 }
@@ -98,18 +98,18 @@ type WireClaims struct {
 
 	// Substrate claims, under the claim name for the token's kind. Exactly
 	// one is set.
-	Actor         *WireSubstrateClaims `json:"actor.ate.dev,omitempty"`
-	AteomForActor *WireSubstrateClaims `json:"ateom-for-actor.ate.dev,omitempty"`
+	Actor          *WireSubstrateClaims `json:"actor.ate.dev,omitempty"`
+	WorkerForActor *WireSubstrateClaims `json:"worker-for-actor.ate.dev,omitempty"`
 }
 
 // Substrate returns the token's kind and its Substrate claims, or ok false if
 // the token carries neither claim or both.
 func (w *WireClaims) Substrate() (kind Kind, claims *WireSubstrateClaims, ok bool) {
 	switch {
-	case w.Actor != nil && w.AteomForActor == nil:
+	case w.Actor != nil && w.WorkerForActor == nil:
 		return KindActor, w.Actor, true
-	case w.AteomForActor != nil && w.Actor == nil:
-		return KindAteomForActor, w.AteomForActor, true
+	case w.WorkerForActor != nil && w.Actor == nil:
+		return KindWorkerForActor, w.WorkerForActor, true
 	}
 	return 0, nil, false
 }
@@ -143,10 +143,10 @@ func ClaimsToWire(claims *Claims) (*WireClaims, error) {
 	switch claims.Kind {
 	case KindActor:
 		wire.Actor = substrate
-	case KindAteomForActor:
-		wire.AteomForActor = substrate
+	case KindWorkerForActor:
+		wire.WorkerForActor = substrate
 	default:
-		return nil, fmt.Errorf("token kind %d is not one of KindActor or KindAteomForActor", claims.Kind)
+		return nil, fmt.Errorf("token kind %d is not one of KindActor or KindWorkerForActor", claims.Kind)
 	}
 
 	return wire, nil

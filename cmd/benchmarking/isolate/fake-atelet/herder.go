@@ -44,16 +44,16 @@ type objectWriter interface {
 
 // actorCertMinter is the part of ateapipb.WorkerServiceClient the herder uses.
 type actorCertMinter interface {
-	MintAteomActorCertificate(ctx context.Context, in *ateapipb.MintAteomActorCertificateRequest, opts ...grpc.CallOption) (*ateapipb.MintAteomActorCertificateResponse, error)
+	MintWorkerActorCertificate(ctx context.Context, in *ateapipb.MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*ateapipb.MintWorkerActorCertificateResponse, error)
 }
 
-// delays is how long each AteomHerder call takes before it succeeds: the
+// delays is how long each Atelet call takes before it succeeds: the
 // data plane's share of it, not counting an actor certificate mint.
 type delays struct {
 	run, restore, checkpoint, promoteSnapshot, terminate time.Duration
 }
 
-// herder answers every AteomHerder call with success after its delay, without
+// herder answers every Atelet call with success after its delay, without
 // running or saving any workload. Actors it "runs" do not exist.
 //
 // The one side effect it keeps is a placeholder object under each snapshot
@@ -61,12 +61,12 @@ type delays struct {
 // snapshot when it creates a tag, golden tags included, and refuses to copy
 // an empty one.
 //
-// The one call back it keeps is the actor certificate mint: before ateom
+// The one call back it keeps is the actor certificate mint: before worker
 // starts a workload with tunneled egress it has atelet mint the actor's
 // certificate from ate-api-server, so in production every Run and Restore
 // that names an egress gateway costs ate-api-server a mint.
 type herder struct {
-	ateletpb.UnimplementedAteomHerderServer
+	ateletpb.UnimplementedAteletServer
 
 	delays  delays
 	storage objectWriter
@@ -77,7 +77,7 @@ type herder struct {
 }
 
 // newActorCSR returns a CSR for a fresh key. ate-api-server takes only the
-// public key from it, so one serves every mint; ateom makes a key per
+// public key from it, so one serves every mint; worker makes a key per
 // activation, but that cost is the data plane's, not ate-api-server's.
 func newActorCSR() ([]byte, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -92,14 +92,14 @@ func newActorCSR() ([]byte, error) {
 }
 
 // mintActorCertificate mints the actor's certificate when the call names an
-// egress gateway, as ateom does before it starts the workload. Its time is
+// egress gateway, as worker does before it starts the workload. Its time is
 // ate-api-server's, so it adds to the call's delay rather than running inside
-// it; a failure fails the call, as tunneled egress fails closed in ateom.
+// it; a failure fails the call, as tunneled egress fails closed in worker.
 func (h *herder) mintActorCertificate(ctx context.Context, atespace, name, uid string, gateway *ateletpb.EgressGateway) error {
 	if h.minter == nil || gateway == nil {
 		return nil
 	}
-	if _, err := h.minter.MintAteomActorCertificate(ctx, &ateapipb.MintAteomActorCertificateRequest{
+	if _, err := h.minter.MintWorkerActorCertificate(ctx, &ateapipb.MintWorkerActorCertificateRequest{
 		Actor:                     &ateapipb.ObjectRef{Atespace: atespace, Name: name},
 		ActorUid:                  uid,
 		CertificateSigningRequest: h.csr,

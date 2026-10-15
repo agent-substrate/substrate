@@ -24,7 +24,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/proto/glutton"
 	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
 	"github.com/agent-substrate/substrate/internal/protoredact"
@@ -379,7 +379,7 @@ func TestNeedsRedactionIsSafeUnderConcurrentFirstUse(t *testing.T) {
 var ourProtoFiles = []protoreflect.FileDescriptor{
 	ateapipb.File_ateapi_proto,
 	ateletpb.File_atelet_proto,
-	ateompb.File_ateom_proto,
+	ateworkerpb.File_ateworker_proto,
 	credproviderpb.File_credprovider_proto,
 	glutton.File_glutton_proto,
 	grpcechopb.File_grpcecho_proto,
@@ -417,10 +417,10 @@ func TestDebugRedactFieldsArePinned(t *testing.T) {
 	want := map[string]bool{
 		"ateapi.EnvVar.value":                            true,
 		"ateapi.MintActorJwtResponse.actor_jwt":          true,
-		"ateapi.MintAteomActorJwtResponse.actor_jwt":     true,
+		"ateapi.MintWorkerActorJwtResponse.actor_jwt":    true,
 		"atelet.AssetFile.url":                           true,
 		"atelet.EnvEntry.value":                          true,
-		"ateom.ContainerSpec.env":                        true,
+		"ateworker.ContainerSpec.env":                    true,
 		"credprovider.FetchSecretResponse.opaque_bytes":  true,
 		"objectstore.v1.FetchAssetRequest.asset_uri":     true,
 		"objectstore.v1.FetchSnapshotRequest.actor_jwt":  true,

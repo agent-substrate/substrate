@@ -32,7 +32,7 @@ func TestDiscoveryDocument(t *testing.T) {
 		`"response_types_supported":["id_token"],` +
 		`"subject_types_supported":["public"],` +
 		`"id_token_signing_alg_values_supported":["RS256"],` +
-		`"claims_supported":["iss","sub","aud","exp","nbf","iat","jti","actor.ate.dev","ateom-for-actor.ate.dev"]}`
+		`"claims_supported":["iss","sub","aud","exp","nbf","iat","jti","actor.ate.dev","worker-for-actor.ate.dev"]}`
 	if diff := cmp.Diff(want, string(got)); diff != "" {
 		t.Errorf("DiscoveryDocument mismatch (-want +got):\n%s", diff)
 	}

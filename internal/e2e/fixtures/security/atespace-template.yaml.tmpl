@@ -70,7 +70,12 @@ volumes:
           path: actor-uid
 - name: data
   durableDir: {}
-${TEMPLATE_RESOURCES}
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
 ${TEMPLATE_SANDBOX_CONFIG}
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e${FIXTURE_SUFFIX}/

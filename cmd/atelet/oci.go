@@ -89,7 +89,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		return nil, fmt.Errorf("while clearing bundle %q: %w", bundlePath, err)
 	}
 
-	// The bundle's rootfs is composed by ateom as an overlay mount just before
+	// The bundle's rootfs is composed by worker as an overlay mount just before
 	// the workload runs: the cached image layers are the read-only lowerdirs,
 	// and the bundle-local upper/work hold this actor's private writes (wiped
 	// between runs, preserving the pristine-rootfs-per-run contract the old
@@ -123,7 +123,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	}
 
 	// Every bind target must exist in the rootfs for the mount to attach;
-	// ateom creates them through the mounted overlay (they land in the
+	// worker creates them through the mounted overlay (they land in the
 	// actor's upper).
 	var extraDirs []string
 	for _, vm := range volumeMounts {

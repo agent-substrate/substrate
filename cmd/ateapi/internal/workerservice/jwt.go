@@ -33,13 +33,13 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// ateomActorJWTLifetime is the fixed lifetime of an ateom-for-actor JWT. It
+// workerActorJWTLifetime is the fixed lifetime of a worker-for-actor JWT. It
 // is not chosen by the caller: the token's only consumers are node-side
 // plugins that exchange it for short-lived credentials.
-const ateomActorJWTLifetime = time.Hour
+const workerActorJWTLifetime = time.Hour
 
-func (s *Server) MintAteomActorJwt(ctx context.Context, req *ateapipb.MintAteomActorJwtRequest) (*ateapipb.MintAteomActorJwtResponse, error) {
-	if errs := apivalidation.ValidateMintAteomActorJwtRequest(ctx, req); len(errs) > 0 {
+func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapipb.MintWorkerActorJwtRequest) (*ateapipb.MintWorkerActorJwtResponse, error) {
+	if errs := apivalidation.ValidateMintWorkerActorJwtRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 
@@ -62,7 +62,7 @@ func (s *Server) MintAteomActorJwt(ctx context.Context, req *ateapipb.MintAteomA
 	if err := s.checkActorOnNode(ctx, dbActor, caller.NodeName); err != nil {
 		return nil, err
 	}
-	// A stale UID is Aborted, as in MintAteomActorCertificate.
+	// A stale UID is Aborted, as in MintWorkerActorCertificate.
 	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
 		return nil, apierror.Aborted("conflict; actor has been deleted and recreated")
 	}
@@ -70,12 +70,12 @@ func (s *Server) MintAteomActorJwt(ctx context.Context, req *ateapipb.MintAteomA
 	// JWT timestamps have one-second resolution. Truncating keeps expire_time
 	// equal to the exp claim.
 	now := time.Now().Truncate(time.Second)
-	expiresAt := now.Add(ateomActorJWTLifetime)
+	expiresAt := now.Add(workerActorJWTLifetime)
 	meta := dbActor.GetMetadata()
 	claims := &actoridjwt.Claims{
-		Kind:       actoridjwt.KindAteomForActor,
+		Kind:       actoridjwt.KindWorkerForActor,
 		Issuer:     s.actorJWTIssuer,
-		Subject:    fmt.Sprintf("%s/%s/%s", actoridjwt.KindAteomForActor.SubjectPrefix(), meta.GetAtespace(), meta.GetName()),
+		Subject:    fmt.Sprintf("%s/%s/%s", actoridjwt.KindWorkerForActor.SubjectPrefix(), meta.GetAtespace(), meta.GetName()),
 		Audiences:  req.GetAudiences(),
 		Expiration: expiresAt,
 		NotBefore:  now.Add(-5 * time.Minute),
@@ -90,9 +90,9 @@ func (s *Server) MintAteomActorJwt(ctx context.Context, req *ateapipb.MintAteomA
 	}
 	token, err := s.actorIDJWTPool.SignJWT(claims)
 	if err != nil {
-		return nil, fmt.Errorf("while signing ateom-for-actor JWT: %w", err)
+		return nil, fmt.Errorf("while signing worker-for-actor JWT: %w", err)
 	}
-	return &ateapipb.MintAteomActorJwtResponse{
+	return &ateapipb.MintWorkerActorJwtResponse{
 		ActorJwt:   token,
 		ExpireTime: timestamppb.New(expiresAt),
 	}, nil
@@ -108,7 +108,7 @@ func (s *Server) checkActorOnNode(ctx context.Context, actor *ateapipb.Actor, ca
 		return err
 	}
 	if hostingNode == "" || hostingNode != callerNode {
-		slog.WarnContext(ctx, "Refusing an ateom-for-actor JWT for an actor the caller's node does not host",
+		slog.WarnContext(ctx, "Refusing a worker-for-actor JWT for an actor the caller's node does not host",
 			slog.String("actor", resources.ActorRefFromActor(actor).String()),
 			slog.String("hosting_node", hostingNode),
 			slog.String("caller_node", callerNode))

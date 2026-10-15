@@ -278,7 +278,7 @@ func TestTopWorkersRunner_VerboseSurfacesMetricsIssues(t *testing.T) {
 		}
 		got := errOut.String()
 		for _, want := range []string{
-			`Container "ateom" not found in pod metrics for ns-1/pod-1; summing all 1 container(s)`,
+			`Container "worker" not found in pod metrics for ns-1/pod-1; summing all 1 container(s)`,
 			"No pod metrics returned for worker pod ns-1/pod-2",
 		} {
 			if !strings.Contains(got, want) {

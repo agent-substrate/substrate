@@ -696,7 +696,7 @@ func TestEgressManifestsInnerListenerSelectsOnTheModuleVerdict(t *testing.T) {
 
 // The outer ext_proc must accept dev.ate.policy.egress, and the outer chain
 // must copy it after ext_proc into shared filter state for the module.
-func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.T) {
+func TestEgressManifestsConnectLegHandsTheSNIRulesHashToTheInnerListener(t *testing.T) {
 	tree := bootstrapTree(t, egressManifest)
 	outer := outerChain(t, tree)
 	cfg, extProcAt, filters := extProcOf(outer)
@@ -708,9 +708,9 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.
 		t.Errorf("the CONNECT leg's ext_proc does not admit dynamic metadata in %q; the SNI rules would be dropped and every ClientHello denied", extproc.EgressPolicyMetadataNamespace)
 	}
 
-	writers := filterStateWriters(tree, extproc.EgressPolicyMetadataNamespace)
+	writers := filterStateWriters(tree, extproc.EgressPolicyHashFilterStateKey)
 	if len(writers) != 1 {
-		t.Fatalf("%s is set by %d filters, want exactly the CONNECT leg's copy of its answer", extproc.EgressPolicyMetadataNamespace, len(writers))
+		t.Fatalf("%s is set by %d filters, want exactly the CONNECT leg's copy of its answer", extproc.EgressPolicyHashFilterStateKey, len(writers))
 	}
 	entry := writers[0]
 	var gotKeys []string
@@ -724,7 +724,7 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.
 			key := str(v, "object_key")
 			gotKeys = append(gotKeys, key)
 			actionsByKey[key] = v
-			if key == extproc.EgressPolicyMetadataNamespace {
+			if key == extproc.EgressPolicyHashFilterStateKey {
 				at = i
 			}
 			if got := str(v, "shared_with_upstream"); got != "ONCE" {
@@ -737,7 +737,7 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.
 		extproc.ActorIdentityFilterStateKey,
 		extproc.ConnectAuthorityFilterStateKey,
 		extproc.UpstreamDynamicPortFilterStateKey,
-		extproc.EgressPolicyMetadataNamespace,
+		extproc.EgressPolicyHashFilterStateKey,
 	}
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Errorf("outer chain set_filter_state actions write keys %v, want %v", gotKeys, wantKeys)
@@ -748,7 +748,7 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.
 	for _, key := range []string{
 		extproc.ActorIdentityFilterStateKey,
 		extproc.ConnectAuthorityFilterStateKey,
-		extproc.EgressPolicyMetadataNamespace,
+		extproc.EgressPolicyHashFilterStateKey,
 	} {
 		// Make sure factory creates hashable filter state objects, so it impacts pool selection.
 		if got := str(actionsByKey[key], "factory_key"); got != "envoy.hashable_string" {
@@ -762,8 +762,8 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.
 		t.Errorf("%s is set at http_filters[%d], before ext_proc at [%d]; the metadata it reads does not exist yet", extproc.EgressPolicyMetadataNamespace, at, extProcAt)
 	}
 	format := child(entry, "format_string")
-	if got := str(child(format, "text_format_source"), "inline_string"); got != extproc.EgressPolicyMetadataFormat {
-		t.Errorf("%s is set from %q, want %q", extproc.EgressPolicyMetadataNamespace, got, extproc.EgressPolicyMetadataFormat)
+	if got := str(child(format, "text_format_source"), "inline_string"); got != extproc.EgressPolicyHashFormat {
+		t.Errorf("%s is set from %q, want %q", extproc.EgressPolicyHashFilterStateKey, got, extproc.EgressPolicyHashFormat)
 	}
 	if skip, _ := entry["skip_if_empty"].(bool); !skip {
 		t.Errorf("%s is not skip_if_empty; an absent answer would be written as unparseable JSON", extproc.EgressPolicyMetadataNamespace)

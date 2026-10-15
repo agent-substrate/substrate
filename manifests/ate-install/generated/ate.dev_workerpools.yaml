@@ -483,7 +483,7 @@ spec:
                     x-kubernetes-list-type: atomic
                 type: object
               workerImage:
-                description: workerImage is the ateom container image to deploy as
+                description: workerImage is the worker container image to deploy as
                   workers.
                 minLength: 1
                 type: string

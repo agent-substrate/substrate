@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/hardware"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -41,6 +42,7 @@ import (
 // and passed by value to the restore step — never mutated after resolution.
 type resumeSnapshotSource struct {
 	SnapshotUUID string
+	Generation   int32
 	// SnapshotURI is the storage location of the durable snapshot to restore
 	// from: the actor's latest snapshot, including a tag borrowed at creation.
 	// Zero means cold boot from the spec (unless the actor holds a local
@@ -68,6 +70,7 @@ type restoreTelemetry struct {
 // a re-entered workflow fast-forwards past the steps a previous attempt
 // completed, deriving progress from the persisted actor alone.
 func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, resumed bool, err error) {
+	ctx = preview.ContextWithOptIn(ctx)
 	start := time.Now()
 	var actor *ateapipb.Actor
 	var actorTemplate *ateapipb.ActorTemplate
@@ -185,6 +188,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			return nil, nil, src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
 		}
 		src.SnapshotUUID = snap.GetUuid()
+		src.Generation = snap.GetGeneration()
 		src.Fidelity = snap.GetFidelity()
 		capturedUnder := snap.GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
@@ -193,23 +197,23 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	return actor, actorTemplate, src, nil
 }
 
-// ensureVolumesCreated provisions any initial actor volumes that are in
-// PENDING state, persisting the resulting volume state (even when creation
+// ensureVolumesCreated provisions any actor volumes that have no storage
+// volume ID yet, persisting the resulting volume state (even when creation
 // partially failed, so progress is not lost) and returning the stored copy.
+// An actor being deleted gets no new volumes.
 func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "CreateVolumes")
 	defer func() { err = done(err) }()
 
-	pending := false
-	for _, vol := range actor.GetStatus().GetExternalVolumes() {
-		if vol.GetStatus() == ateapipb.ExternalVolume_STATUS_PENDING {
-			pending = true
-			break
-		}
-	}
+	pending := slices.ContainsFunc(actor.GetStatus().GetExternalVolumes(), func(vol *ateapipb.ExternalVolume) bool {
+		return vol.GetStorageVolumeId() == ""
+	})
 	if !pending {
 		markSkipped(ctx, "no volumes awaiting creation")
 		return actor, nil
+	}
+	if st := actor.GetStatus().GetState(); st == ateapipb.ActorState_ACTOR_STATE_DELETING {
+		return nil, apierror.FailedPrecondition("cannot create volumes for Actor %s in state %s", actorRef, st)
 	}
 
 	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetExternalVolumes())
@@ -386,7 +390,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef.String())
 	}
-	// An unavailable worker may come back with its Actors intact. If its ateom
+	// An unavailable worker may come back with its Actors intact. If its worker
 	// restarted instead, the raised epoch has this Actor crashed for it.
 	if worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
 		return nil, apierror.Unavailable("worker %s assigned to actor %s is unavailable", worker.GetMetadata().GetName(), actorRef)
@@ -617,7 +621,7 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime *ateapipb.SandboxRunti
 		// with a runtime that did not produce it. Resolve the assets for the
 		// matched version once SandboxConfig can name them, or treat a
 		// restorable-only match as incompatible until it can. Latent for now:
-		// ateom reports no restorable_runtimes (internal/ateom/register.go).
+		// worker reports no restorable_runtimes (internal/ateworker/register.go).
 		SandboxRuntime: proto.CloneOf(hardware.RuntimeFor(w.GetStatus(), snapRuntime)),
 	}
 }
@@ -722,6 +726,10 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 	ctx, done := stepSpan(ctx, "AttachVolumes")
 	defer func() { err = done(err) }()
 
+	if len(actor.GetStatus().GetExternalVolumes()) > 0 && !preview.IsEnabled(preview.GateExternalVolumes) {
+		return nil, fmt.Errorf("external volumes are not supported unless the ExternalVolumes preview gate is enabled")
+	}
+
 	node := worker.GetNodeName()
 	if node == "" {
 		return nil, fmt.Errorf("assigned worker has no node name")
@@ -762,7 +770,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	if err != nil {
 		return tele, err
 	}
-	client := ateletpb.NewAteomHerderClient(ateletConn)
+	client := ateletpb.NewAteletClient(ateletConn)
 
 	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, volumePublishContexts)
 	if err != nil {
@@ -801,6 +809,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			Spec:                  workloadSpec,
 			Snapshot: &ateletpb.Snapshot{
 				SnapshotUuid: localSnap.GetUuid(),
+				Generation:   localSnap.GetGeneration(),
 				Fidelity:     fidelity,
 			},
 			SandboxAssets: sandboxAssets,
@@ -835,6 +844,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			Spec:                  workloadSpec,
 			Snapshot: &ateletpb.Snapshot{
 				SnapshotUuid: src.SnapshotUUID,
+				Generation:   src.Generation,
 				Fidelity:     scope,
 				Object: &ateletpb.ObjectStorage{
 					SnapshotUri: src.SnapshotURI.String(),

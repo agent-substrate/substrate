@@ -23,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -36,6 +37,7 @@ import (
 // already did. An absent Worker is NOT_FOUND rather than success; idempotency
 // belongs to the caller, which knows whether that is the state it wanted.
 func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error) {
+	ctx = preview.ContextWithOptIn(ctx)
 	worker, err := w.loadWorkerForDelete(ctx, name)
 	if err != nil {
 		return nil, err

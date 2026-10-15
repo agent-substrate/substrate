@@ -47,10 +47,8 @@ func TestActorStateChangeRecords(t *testing.T) {
 		{
 			name:      "suspend marks the actor suspending",
 			seedState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) {
-				if _, err := w.ensureMarkedSuspending(context.Background(), ref, actor, tmpl); err != nil {
-					t.Fatalf("ensureMarkedSuspending: %v", err)
-				}
+			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
+				markOnly(t, w, ref, actor, w.SuspendActor)
 			},
 			wantOp:     ateattr.OperationSuspend,
 			wantState:  ateattr.ActorStateSuspending,
@@ -59,10 +57,8 @@ func TestActorStateChangeRecords(t *testing.T) {
 		{
 			name:      "pause marks the actor suspending",
 			seedState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) {
-				if _, err := w.ensureMarkedPausing(context.Background(), ref, actor, tmpl); err != nil {
-					t.Fatalf("ensureMarkedPausing: %v", err)
-				}
+			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
+				markOnly(t, w, ref, actor, w.PauseActor)
 			},
 			wantOp:     ateattr.OperationPause,
 			wantState:  ateattr.ActorStateSuspending,
@@ -150,6 +146,23 @@ func TestActorStateChangeRecords(t *testing.T) {
 			}
 		})
 	}
+}
+
+// markOnly runs a suspend or pause on a RUNNING actor only as far as its mark
+// step: the actor gets a worker to checkpoint on, but the atelet dial fails,
+// so the SUSPENDING mark is the only transition the workflow commits.
+func markOnly(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, run func(context.Context, resources.ActorRef) (*ateapipb.Actor, error)) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := w.store.UpdateActor(ctx, ref, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status.WorkerAssignment = wireTestAssignment()
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateActor: %v", err)
+	}
+	w.dialer = newDanglingDialer()
+	_, err := run(ctx, ref)
+	assertStoppedAtDial(t, err)
 }
 
 // TestActorCreatedRecord covers creation. An actor created and never resumed

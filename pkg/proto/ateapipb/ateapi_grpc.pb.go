@@ -161,7 +161,7 @@ type ControlClient interface {
 	// if another write lands on the Worker first; retry.
 	//
 	// Every Actor placed after this call is stamped with the Worker's epoch as
-	// it stands then, so a caller raises epoch for a restarted ateom first.
+	// it stands then, so a caller raises epoch for a restarted the worker first.
 	MarkWorkerAvailable(ctx context.Context, in *MarkWorkerAvailableRequest, opts ...grpc.CallOption) (*MarkWorkerAvailableResponse, error)
 	// Mark an ACTIVE Worker UNAVAILABLE so the scheduler stops placing Actors on
 	// it, as while its Pod is not Ready. Idempotent. Leaves any bound Actor
@@ -738,7 +738,7 @@ type ControlServer interface {
 	// if another write lands on the Worker first; retry.
 	//
 	// Every Actor placed after this call is stamped with the Worker's epoch as
-	// it stands then, so a caller raises epoch for a restarted ateom first.
+	// it stands then, so a caller raises epoch for a restarted the worker first.
 	MarkWorkerAvailable(context.Context, *MarkWorkerAvailableRequest) (*MarkWorkerAvailableResponse, error)
 	// Mark an ACTIVE Worker UNAVAILABLE so the scheduler stops placing Actors on
 	// it, as while its Pod is not Ready. Idempotent. Leaves any bound Actor
@@ -1927,11 +1927,11 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	WorkerService_RegisterWorker_FullMethodName            = "/ateapi.WorkerService/RegisterWorker"
-	WorkerService_MintAteomActorCertificate_FullMethodName = "/ateapi.WorkerService/MintAteomActorCertificate"
-	WorkerService_MintAteomActorJwt_FullMethodName         = "/ateapi.WorkerService/MintAteomActorJwt"
-	WorkerService_RequestActorSuspend_FullMethodName       = "/ateapi.WorkerService/RequestActorSuspend"
-	WorkerService_ReportActorSnapshotState_FullMethodName  = "/ateapi.WorkerService/ReportActorSnapshotState"
+	WorkerService_RegisterWorker_FullMethodName             = "/ateapi.WorkerService/RegisterWorker"
+	WorkerService_MintWorkerActorCertificate_FullMethodName = "/ateapi.WorkerService/MintWorkerActorCertificate"
+	WorkerService_MintWorkerActorJwt_FullMethodName         = "/ateapi.WorkerService/MintWorkerActorJwt"
+	WorkerService_RequestActorSuspend_FullMethodName        = "/ateapi.WorkerService/RequestActorSuspend"
+	WorkerService_ReportActorSnapshotState_FullMethodName   = "/ateapi.WorkerService/ReportActorSnapshotState"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
@@ -1954,22 +1954,22 @@ type WorkerServiceClient interface {
 	// MintCert. Idempotent: re-sending the same capacity and runtimes is not a
 	// write.
 	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
-	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
+	// Create a Substrate-issued SPIFFE certificate that asserts a worker acting
 	// on behalf of a particular actor.
 	//
-	// SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
-	MintAteomActorCertificate(ctx context.Context, in *MintAteomActorCertificateRequest, opts ...grpc.CallOption) (*MintAteomActorCertificateResponse, error)
-	// MintAteomActorJwt creates a Substrate-issued JWT that asserts an ateom
+	// SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
+	MintWorkerActorCertificate(ctx context.Context, in *MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*MintWorkerActorCertificateResponse, error)
+	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
 	// acting on behalf of a particular actor: the JWT counterpart of
-	// MintAteomActorCertificate. atelet calls it with its own client
+	// MintWorkerActorCertificate. atelet calls it with its own client
 	// certificate and hands the JWT to node-side plugins, which exchange it for
 	// credentials scoped to that actor.
 	//
-	// The token speaks for the ateom, not the actor: its subject is
-	// `ateom-for-actor/<atespace>/<name>` and its claims sit under
-	// `ateom-for-actor.ate.dev`, see MintAteomActorJwtResponse. The lifetime is
+	// The token speaks for the worker, not the actor: its subject is
+	// `worker-for-actor/<atespace>/<name>` and its claims sit under
+	// `worker-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
 	// fixed at one hour.
-	MintAteomActorJwt(ctx context.Context, in *MintAteomActorJwtRequest, opts ...grpc.CallOption) (*MintAteomActorJwtResponse, error)
+	MintWorkerActorJwt(ctx context.Context, in *MintWorkerActorJwtRequest, opts ...grpc.CallOption) (*MintWorkerActorJwtResponse, error)
 	// RequestActorSuspend asks the control plane to suspend an Actor that the
 	// calling Worker hosts. Only the Worker can observe what makes an Actor
 	// worth reclaiming -- whether its workload still has anything to do -- and
@@ -2023,20 +2023,20 @@ func (c *workerServiceClient) RegisterWorker(ctx context.Context, in *RegisterWo
 	return out, nil
 }
 
-func (c *workerServiceClient) MintAteomActorCertificate(ctx context.Context, in *MintAteomActorCertificateRequest, opts ...grpc.CallOption) (*MintAteomActorCertificateResponse, error) {
+func (c *workerServiceClient) MintWorkerActorCertificate(ctx context.Context, in *MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*MintWorkerActorCertificateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MintAteomActorCertificateResponse)
-	err := c.cc.Invoke(ctx, WorkerService_MintAteomActorCertificate_FullMethodName, in, out, cOpts...)
+	out := new(MintWorkerActorCertificateResponse)
+	err := c.cc.Invoke(ctx, WorkerService_MintWorkerActorCertificate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *workerServiceClient) MintAteomActorJwt(ctx context.Context, in *MintAteomActorJwtRequest, opts ...grpc.CallOption) (*MintAteomActorJwtResponse, error) {
+func (c *workerServiceClient) MintWorkerActorJwt(ctx context.Context, in *MintWorkerActorJwtRequest, opts ...grpc.CallOption) (*MintWorkerActorJwtResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MintAteomActorJwtResponse)
-	err := c.cc.Invoke(ctx, WorkerService_MintAteomActorJwt_FullMethodName, in, out, cOpts...)
+	out := new(MintWorkerActorJwtResponse)
+	err := c.cc.Invoke(ctx, WorkerService_MintWorkerActorJwt_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -2083,22 +2083,22 @@ type WorkerServiceServer interface {
 	// MintCert. Idempotent: re-sending the same capacity and runtimes is not a
 	// write.
 	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
-	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
+	// Create a Substrate-issued SPIFFE certificate that asserts a worker acting
 	// on behalf of a particular actor.
 	//
-	// SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
-	MintAteomActorCertificate(context.Context, *MintAteomActorCertificateRequest) (*MintAteomActorCertificateResponse, error)
-	// MintAteomActorJwt creates a Substrate-issued JWT that asserts an ateom
+	// SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
+	MintWorkerActorCertificate(context.Context, *MintWorkerActorCertificateRequest) (*MintWorkerActorCertificateResponse, error)
+	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
 	// acting on behalf of a particular actor: the JWT counterpart of
-	// MintAteomActorCertificate. atelet calls it with its own client
+	// MintWorkerActorCertificate. atelet calls it with its own client
 	// certificate and hands the JWT to node-side plugins, which exchange it for
 	// credentials scoped to that actor.
 	//
-	// The token speaks for the ateom, not the actor: its subject is
-	// `ateom-for-actor/<atespace>/<name>` and its claims sit under
-	// `ateom-for-actor.ate.dev`, see MintAteomActorJwtResponse. The lifetime is
+	// The token speaks for the worker, not the actor: its subject is
+	// `worker-for-actor/<atespace>/<name>` and its claims sit under
+	// `worker-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
 	// fixed at one hour.
-	MintAteomActorJwt(context.Context, *MintAteomActorJwtRequest) (*MintAteomActorJwtResponse, error)
+	MintWorkerActorJwt(context.Context, *MintWorkerActorJwtRequest) (*MintWorkerActorJwtResponse, error)
 	// RequestActorSuspend asks the control plane to suspend an Actor that the
 	// calling Worker hosts. Only the Worker can observe what makes an Actor
 	// worth reclaiming -- whether its workload still has anything to do -- and
@@ -2145,11 +2145,11 @@ type UnimplementedWorkerServiceServer struct{}
 func (UnimplementedWorkerServiceServer) RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterWorker not implemented")
 }
-func (UnimplementedWorkerServiceServer) MintAteomActorCertificate(context.Context, *MintAteomActorCertificateRequest) (*MintAteomActorCertificateResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method MintAteomActorCertificate not implemented")
+func (UnimplementedWorkerServiceServer) MintWorkerActorCertificate(context.Context, *MintWorkerActorCertificateRequest) (*MintWorkerActorCertificateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MintWorkerActorCertificate not implemented")
 }
-func (UnimplementedWorkerServiceServer) MintAteomActorJwt(context.Context, *MintAteomActorJwtRequest) (*MintAteomActorJwtResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method MintAteomActorJwt not implemented")
+func (UnimplementedWorkerServiceServer) MintWorkerActorJwt(context.Context, *MintWorkerActorJwtRequest) (*MintWorkerActorJwtResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MintWorkerActorJwt not implemented")
 }
 func (UnimplementedWorkerServiceServer) RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RequestActorSuspend not implemented")
@@ -2196,38 +2196,38 @@ func _WorkerService_RegisterWorker_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
-func _WorkerService_MintAteomActorCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MintAteomActorCertificateRequest)
+func _WorkerService_MintWorkerActorCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MintWorkerActorCertificateRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(WorkerServiceServer).MintAteomActorCertificate(ctx, in)
+		return srv.(WorkerServiceServer).MintWorkerActorCertificate(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: WorkerService_MintAteomActorCertificate_FullMethodName,
+		FullMethod: WorkerService_MintWorkerActorCertificate_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerServiceServer).MintAteomActorCertificate(ctx, req.(*MintAteomActorCertificateRequest))
+		return srv.(WorkerServiceServer).MintWorkerActorCertificate(ctx, req.(*MintWorkerActorCertificateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _WorkerService_MintAteomActorJwt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MintAteomActorJwtRequest)
+func _WorkerService_MintWorkerActorJwt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MintWorkerActorJwtRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(WorkerServiceServer).MintAteomActorJwt(ctx, in)
+		return srv.(WorkerServiceServer).MintWorkerActorJwt(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: WorkerService_MintAteomActorJwt_FullMethodName,
+		FullMethod: WorkerService_MintWorkerActorJwt_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerServiceServer).MintAteomActorJwt(ctx, req.(*MintAteomActorJwtRequest))
+		return srv.(WorkerServiceServer).MintWorkerActorJwt(ctx, req.(*MintWorkerActorJwtRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2280,12 +2280,12 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _WorkerService_RegisterWorker_Handler,
 		},
 		{
-			MethodName: "MintAteomActorCertificate",
-			Handler:    _WorkerService_MintAteomActorCertificate_Handler,
+			MethodName: "MintWorkerActorCertificate",
+			Handler:    _WorkerService_MintWorkerActorCertificate_Handler,
 		},
 		{
-			MethodName: "MintAteomActorJwt",
-			Handler:    _WorkerService_MintAteomActorJwt_Handler,
+			MethodName: "MintWorkerActorJwt",
+			Handler:    _WorkerService_MintWorkerActorJwt_Handler,
 		},
 		{
 			MethodName: "RequestActorSuspend",

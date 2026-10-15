@@ -93,11 +93,11 @@ func (c *countingAssetClient) FetchAsset(ctx context.Context, in *objectstorev1.
 	return c.AssetProviderClient.FetchAsset(ctx, in, opts...)
 }
 
-// assetHerderFixture is an AteomHerder whose assets come from the in-tree
+// assetHerderFixture is an Atelet whose assets come from the in-tree
 // plugin on an in-memory bucket, with an anonymous client that cannot read
 // that bucket.
 type assetHerderFixture struct {
-	herder  *AteomHerder
+	herder  *Atelet
 	bucket  *bucketStorage
 	anon    *bucketStorage
 	plugin  *countingAssetClient
@@ -125,7 +125,7 @@ func newAssetHerderFixture(t *testing.T, scheme string) *assetHerderFixture {
 		t.Fatal(err)
 	}
 	f.plugin = &countingAssetClient{AssetProviderClient: objectstoreplugintest.AssetClient(plugin)}
-	f.herder = &AteomHerder{anonGCSClient: f.anon, assetPlugin: f.plugin, pluginSocket: testPluginSock}
+	f.herder = &Atelet{anonGCSClient: f.anon, assetPlugin: f.plugin, pluginSocket: testPluginSock}
 	return f
 }
 

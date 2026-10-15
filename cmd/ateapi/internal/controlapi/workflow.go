@@ -100,6 +100,10 @@ func logActorState(ctx context.Context, actor *ateapipb.Actor, opName, state str
 }
 
 // ActorWorkflow handles the workflows for actor's resume / suspend operations.
+//
+// Workflows act for the system, not the user whose request started them, so
+// each exported method begins with preview.ContextWithOptIn: the request was
+// already validated, and what the workflow writes is the system's own state.
 type ActorWorkflow struct {
 	store                actorWorkflowStore
 	workerCache          *workercache.Cache
@@ -181,7 +185,8 @@ type actorWorkflowStore interface {
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
-// WorkerWorkflow handles the multi-step operations on a Worker.
+// WorkerWorkflow handles the multi-step operations on a Worker. Like
+// ActorWorkflow, each exported method begins with preview.ContextWithOptIn.
 //
 // Its steps reach across the Actor↔Worker binding, which an ActorWorkflow step
 // does from the other side: releasing the Actor bound to a Worker stays
