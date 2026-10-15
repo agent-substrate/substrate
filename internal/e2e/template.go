@@ -42,6 +42,8 @@ type SubstrateTemplateOptions struct {
 	// k8s namespace.
 	PoolName     string
 	PoolReplicas int32
+	// PoolTemplate configures the worker pods before the golden actor starts.
+	PoolTemplate *v1alpha1.WorkerPoolPodTemplate
 	// Labels tie the template's workerSelector to the pool, keeping this
 	// pool's workers invisible to other namespaces' actors.
 	Labels map[string]string
@@ -88,6 +90,7 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 			Replicas:       opts.PoolReplicas,
 			WorkerImage:    existingWp.Spec.WorkerImage,
 			SandboxClasses: existingWp.Spec.SandboxClasses,
+			Template:       opts.PoolTemplate.DeepCopy(),
 		},
 	}
 	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(namespace).Create(ctx, wp, metav1.CreateOptions{}); err != nil {

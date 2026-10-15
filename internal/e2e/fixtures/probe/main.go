@@ -460,6 +460,13 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func main() {
+	if len(os.Args) == 4 && os.Args[1] == "filesystem-child" {
+		if err := filesystemChild(os.Args[2], os.Args[3]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	// Hold the identity file open before serving: every snapshot of this actor
 	// then contains an open guest handle on a system-info file (see
 	// heldIdentity).
@@ -476,6 +483,7 @@ func main() {
 	mux.HandleFunc("/writefile", writefile)
 	mux.HandleFunc("/resources", resources)
 	mux.HandleFunc("/capabilities", capabilities)
+	mux.HandleFunc("/filesystem", filesystem)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	const addr = ":80"

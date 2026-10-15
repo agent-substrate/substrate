@@ -126,6 +126,9 @@ func virtiofsdArgs(o VirtiofsdOptions) []string {
 	return []string{
 		"--socket-path=" + o.SocketPath,
 		"--shared-dir=" + o.SharedDir,
+		// Namespace isolation uses pivot_root, not the separate chroot mode.
+		"--sandbox=namespace",
+		"--seccomp=kill",
 		"--cache=auto",
 		"--thread-pool-size=1",
 		"--announce-submounts",
