@@ -19,7 +19,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +42,66 @@ import (
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 )
 
+const (
+	testCPUVendor = "GenuineIntel"
+	testCPUModel  = "6:143"
+)
+
+// testCPUFeatures are the first two CPU feature names for runtime.GOARCH,
+// which encode to bit 0 | bit 1 = "3" on both amd64 and arm64.
+func testCPUFeatures() []string {
+	switch runtime.GOARCH {
+	case "arm64":
+		return []string{"fp", "asimd"}
+	default:
+		return []string{"pni", "pclmulqdq"}
+	}
+}
+
+type fakeAssetFetcher struct {
+	fn func(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error)
+}
+
+func (f *fakeAssetFetcher) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+	return f.fn(ctx, rec)
+}
+
+// newTestAssetFetcher returns a sandboxAssetFetcher that maps every asset of
+// a record to a path under its digest without fetching anything, for syncers
+// whose runsc probe is faked.
+func newTestAssetFetcher() sandboxAssetFetcher {
+	return &fakeAssetFetcher{
+		fn: func(_ context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+			paths := make(map[string]string, len(rec.Assets))
+			for name, a := range rec.Assets {
+				paths[name] = "/cache/" + a.SHA256 + "/" + name
+			}
+			return paths, nil
+		},
+	}
+}
+
+// newScriptAssetFetcher returns a sandboxAssetFetcher that backs every asset
+// with an executable script printing testCPUFeatures(), for a syncer that
+// runs the real runsc probe.
+func newScriptAssetFetcher(t *testing.T) sandboxAssetFetcher {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "runsc")
+	body := "#!/bin/sh\necho " + strings.Join(testCPUFeatures(), ",") + "\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return &fakeAssetFetcher{
+		fn: func(_ context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+			paths := make(map[string]string, len(rec.Assets))
+			for name := range rec.Assets {
+				paths[name] = script
+			}
+			return paths, nil
+		},
+	}
+}
+
 // workerPod is a worker pod on this node with the given UID, in pool when
 // pool is not "".
 func workerPod(uid, pool string) *corev1.Pod {
@@ -53,18 +115,26 @@ func workerPod(uid, pool string) *corev1.Pod {
 // resolvedPool is a gVisor WorkerPool whose class resolved to config, or has
 // not resolved when config is "".
 func resolvedPool(name, config string) *v1alpha1.WorkerPool {
+	return resolvedPoolOf(v1alpha1.SandboxClassGvisor, name, config)
+}
+
+// resolvedPoolOf is a WorkerPool of the given sandbox class whose class
+// resolved to config, or has not resolved when config is "".
+func resolvedPoolOf(class v1alpha1.SandboxClass, name, config string) *v1alpha1.WorkerPool {
 	pool := &v1alpha1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Namespace: "workers", Name: name}}
-	pool.Spec.SandboxClasses = []v1alpha1.WorkerPoolSandboxClass{{Name: v1alpha1.SandboxClassGvisor}}
-	class := v1alpha1.WorkerPoolSandboxClassStatus{Name: v1alpha1.SandboxClassGvisor}
+	pool.Spec.SandboxClasses = []v1alpha1.WorkerPoolSandboxClass{{Name: class}}
+	status := v1alpha1.WorkerPoolSandboxClassStatus{Name: class}
 	if config != "" {
-		class.ConfigRef = &v1alpha1.SandboxConfigReference{Name: config}
+		status.ConfigRef = &v1alpha1.SandboxConfigReference{Name: config}
 	}
-	pool.Status.SandboxClasses = []v1alpha1.WorkerPoolSandboxClassStatus{class}
+	pool.Status.SandboxClasses = []v1alpha1.WorkerPoolSandboxClassStatus{status}
 	return pool
 }
 
 // newTestSyncer serves objs from synced caches and keeps worker directories
-// under a temp dir.
+// under a temp dir. Its probes are faked: the host CPU is
+// testCPUVendor/testCPUModel and every runsc reports testCPUFeatures();
+// TestRunRunscCPUFeatures covers the real probe.
 func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	t.Helper()
 	newIndexer := func() cache.Indexer {
@@ -94,7 +164,9 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	s := newWorkerSandboxSyncer(&workerSandboxResolver{
 		workerPools: listersv1alpha1.NewWorkerPoolLister(pools),
 		configs:     listersv1alpha1.NewSandboxConfigLister(configs),
-	}, pods, t.TempDir())
+	}, pods, newTestAssetFetcher(), t.TempDir())
+	s.probeCPUIdentity = func() (string, string, error) { return testCPUVendor, testCPUModel, nil }
+	s.runCPUFeatures = func(context.Context, string) ([]string, error) { return testCPUFeatures(), nil }
 	// Tests that check the jitter set it.
 	s.maxJitter = 0
 	return s
@@ -654,6 +726,7 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 				podFactory.Core().V1().Pods(),
 				ateFactory.Api().V1alpha1().WorkerPools(),
 				ateFactory.Api().V1alpha1().SandboxConfigs(),
+				newScriptAssetFetcher(t),
 				dir)
 			if err != nil {
 				t.Fatalf("startWorkerSandboxSyncer() error = %v", err)

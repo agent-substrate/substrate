@@ -44,6 +44,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
+	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	informersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/informers/externalversions/api/v1alpha1"
@@ -84,26 +85,42 @@ const syncMaxRetries = 8
 type workerSandboxSyncer struct {
 	resolver *workerSandboxResolver
 	// pods holds this node's worker pods, indexed by podUIDIndex.
-	pods cache.Indexer
+	pods   cache.Indexer
+	assets sandboxAssetFetcher
 	// queue carries pod UIDs. One worker drains it, so a pod's file is never
 	// written and its directory removed at the same time.
 	queue     workqueue.TypedRateLimitingInterface[string]
 	ateomsDir string // nodepath.AteomsDir(); a temp dir in tests
 	minAge    time.Duration
 	maxJitter time.Duration
+
+	// probeCPUIdentity is hardware.ProbeCPUIdentity. Overridable in tests.
+	probeCPUIdentity func() (vendor, model string, err error)
+	// runCPUFeatures is runRunscCPUFeatures. Overridable in tests.
+	runCPUFeatures func(ctx context.Context, runscPath string) ([]string, error)
+	// hostCPU is the probed host CPU identity, nil until a probe succeeds,
+	// and cpuFeatures the encoded cpu_features of each runsc binary by its
+	// gVisor asset's SHA256 digest, so each binary is fetched and run at most
+	// once. Only run's goroutine touches them: buildFile runs there alone.
+	hostCPU     *cpuIdentity
+	cpuFeatures map[string]string
 }
 
-func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, ateomsDir string) *workerSandboxSyncer {
+func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, ateomsDir string) *workerSandboxSyncer {
 	return &workerSandboxSyncer{
 		resolver: resolver,
 		pods:     pods,
+		assets:   assets,
 		// Failures are informer lag and unresolved pools, both on the scale
 		// of seconds to minutes.
 		queue: workqueue.NewTypedRateLimitingQueue(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)),
-		ateomsDir: ateomsDir,
-		minAge:    orphanMinAge,
-		maxJitter: syncMaxJitter,
+		ateomsDir:        ateomsDir,
+		minAge:           orphanMinAge,
+		maxJitter:        syncMaxJitter,
+		probeCPUIdentity: hardware.ProbeCPUIdentity,
+		runCPUFeatures:   runRunscCPUFeatures,
+		cpuFeatures:      make(map[string]string),
 	}
 }
 
@@ -115,7 +132,7 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 // The syncer never holds up atelet startup: until the informers sync, or
 // while a list/watch fails (e.g. Forbidden while an RBAC rollout lags the
 // binary), files wait and existing ones stay as they are.
-func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, ateomsDir string) (*workerSandboxSyncer, error) {
+func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, assets sandboxAssetFetcher, ateomsDir string) (*workerSandboxSyncer, error) {
 	if err := pods.Informer().AddIndexers(cache.Indexers{podUIDIndex: func(obj any) ([]string, error) {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok {
@@ -129,7 +146,7 @@ func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInforme
 		workerPools: workerPools.Lister(),
 		configs:     configs.Lister(),
 	}
-	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), ateomsDir)
+	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), assets, ateomsDir)
 	if err := watch(ctx, "worker pod", pods.Informer(), s.podHandler()); err != nil {
 		return nil, err
 	}

@@ -384,6 +384,7 @@ func main() {
 		workerPodFactory.Core().V1().Pods(),
 		ateFactory.Api().V1alpha1().WorkerPools(),
 		ateFactory.Api().V1alpha1().SandboxConfigs(),
+		wmService,
 		nodepath.AteomsDir()); err != nil {
 		slog.ErrorContext(ctx, "Worker sandbox versions syncer disabled", slog.Any("err", err))
 	}
