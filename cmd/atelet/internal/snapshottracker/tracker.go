@@ -38,8 +38,10 @@ type Store interface {
 }
 
 // Tracker tracks each actor's snapshots on this node: the latest one stored
-// locally, and the latest one confirmed in object storage. State reports them.
-// It uploads and detaches them in the background.
+// locally, and the latest one confirmed in object storage. State reports them,
+// BeginCheckpoint and BeginPromote reject a stale generation before Checkpoint
+// or PromoteSnapshot does any work, and commits never replace a snapshot with
+// an older generation. It uploads and detaches them in the background.
 //
 // Background work runs off two delaying workqueues of actor UIDs, one for
 // uploads and one for detaches, each drained by a fixed pool of workers of its
@@ -87,11 +89,6 @@ type Store interface {
 // in progress; and PromoteSnapshot waits for a detach or a background upload
 // of the same snapshot. A worker leaves an actor with an operation in
 // progress to that operation's end, which queues the actor again.
-//
-// TODO: Commits record the snapshot they are given without comparing
-// Snapshot.generation. Checkpoint and PromoteSnapshot should reject a stale
-// generation before doing any work, as Snapshot.generation describes, so that
-// no commit replaces a snapshot with an older one.
 type Tracker struct {
 	// ctx bounds background work, and shuts the queues down when it ends.
 	ctx context.Context

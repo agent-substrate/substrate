@@ -335,9 +335,9 @@ func TestTrackerBackoff(t *testing.T) {
 		name string
 		call func()
 	}{
-		{"CommitLocal", func() { tr.CommitLocal(trackedActorUID, testRef("s0", 1, clk.Now())) }},
-		{"CommitDurable", func() { tr.CommitDurable(trackedActorUID, testRef("s1", 1, clk.Now())) }},
-		{"CommitPromoted", func() { tr.CommitPromoted(trackedActorUID, testRef("s2", 2, clk.Now())) }},
+		{"CommitLocal", func() { tr.CommitLocal(trackedActorUID, testRef("s1", 1, clk.Now())) }},
+		{"CommitDurable", func() { tr.CommitDurable(trackedActorUID, testRef("s2", 2, clk.Now())) }},
+		{"CommitPromoted", func() { tr.CommitPromoted(trackedActorUID, testRef("s3", 3, clk.Now())) }},
 		{"Forget", func() {
 			if err := tr.Forget(trackedActorUID); err != nil {
 				t.Fatalf("Forget: %v", err)

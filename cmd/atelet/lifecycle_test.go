@@ -83,6 +83,9 @@ type fakeWorker struct {
 	// fidelities records the fidelity each checkpoint or restore arrived
 	// with, by RPC name.
 	fidelities map[string]ateworkerpb.SnapshotFidelity
+	// onCheckpoint, if non-nil, runs inside CheckpointWorkload after snapshot
+	// files are written.
+	onCheckpoint func()
 }
 
 func (f *fakeWorker) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFidelity) {
@@ -118,6 +121,9 @@ func (f *fakeWorker) CheckpointWorkload(_ context.Context, req *ateworkerpb.Chec
 			return nil, err
 		}
 		names = append(names, name)
+	}
+	if f.onCheckpoint != nil {
+		f.onCheckpoint()
 	}
 	return &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: names}, nil
 }
@@ -1982,5 +1988,197 @@ func TestCheckpointKeepsSnapshotBeingUploaded(t *testing.T) {
 	})
 	if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-2")); err != nil {
 		t.Errorf("pause-snap-2 after the upload of pause-snap-1: stat = %v, want it kept", err)
+	}
+}
+
+// TestCheckpointRejectsStaleGeneration checks that Checkpoint fails with
+// FailedPrecondition when given a generation below the actor's newest snapshot
+// or equal to it under another snapshot_uuid, before calling worker, pruning
+// local checkpoints, or changing tracked state.
+func TestCheckpointRejectsStaleGeneration(t *testing.T) {
+	a := runPluginActor(t)
+	snap2 := a.snapshot("pause-snap-2", 2)
+	resp, err := a.checkpoint(t, snap2, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+	if err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	wantState := resp.GetState()
+	a.restoreLocal(t, "pause-snap-2", 2)
+	delete(a.worker.actorDirs, "CheckpointWorkload")
+
+	for _, stale := range []*ateletpb.Snapshot{
+		a.snapshot("stale-snap-1", 1),
+		a.snapshot("other-snap-2", 2),
+	} {
+		_, err := a.checkpoint(t, stale, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+		if code := apierror.Code(err); code != codes.FailedPrecondition {
+			t.Errorf("Checkpoint(%v) error = %v (code %v), want FailedPrecondition", stale, err, code)
+		}
+		if got := a.worker.actorDirs["CheckpointWorkload"]; got != nil {
+			t.Errorf("Checkpoint(%v) called worker.CheckpointWorkload (%v), want rejected before worker", stale, got)
+		}
+		if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-2")); err != nil {
+			t.Errorf("local snapshot pause-snap-2 after rejected Checkpoint(%v): stat = %v, want preserved", stale, err)
+		}
+		if got := a.s.snapshots.State(pluginActorUID); !proto.Equal(got, wantState) {
+			t.Errorf("tracked state after rejected Checkpoint(%v) = %v, want %v", stale, got, wantState)
+		}
+	}
+}
+
+// TestPromoteSnapshotRejectsStaleGeneration checks that PromoteSnapshot fails
+// with FailedPrecondition when given a generation below the actor's newest
+// snapshot or equal to it under another snapshot_uuid, before uploading to
+// object storage, pruning local checkpoints, or changing tracked state.
+func TestPromoteSnapshotRejectsStaleGeneration(t *testing.T) {
+	a := runPluginActor(t)
+	snap2 := a.snapshot("pause-snap-2", 2)
+	resp, err := a.checkpoint(t, snap2, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+	if err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	wantState := resp.GetState()
+
+	for _, stale := range []*ateletpb.Snapshot{
+		a.snapshot("stale-snap-1", 1),
+		a.snapshot("other-snap-2", 2),
+	} {
+		writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(pluginActorUID, stale.GetSnapshotUuid()), sandboxAssetsRecord{
+			SandboxClass:  "gvisor",
+			PauseImage:    a.assets.GetPauseImage(),
+			SnapshotFiles: []string{"checkpoint.img"},
+			Fidelity:      "MEMORY",
+		}, map[string]string{"checkpoint.img": "stale-memory"})
+
+		_, err := a.s.PromoteSnapshot(t.Context(), &ateletpb.PromoteSnapshotRequest{
+			Atespace:              "ate-demo",
+			ActorName:             "counter",
+			ActorUid:              pluginActorUID,
+			ActorTemplateAtespace: "default",
+			ActorTemplateName:     "counter",
+			Snapshot:              stale,
+		})
+		if code := apierror.Code(err); code != codes.FailedPrecondition {
+			t.Errorf("PromoteSnapshot(%v) error = %v (code %v), want FailedPrecondition", stale, err, code)
+		}
+		if got := a.store.keys(); len(got) != 0 {
+			t.Errorf("objects after rejected PromoteSnapshot(%v) = %v, want nothing uploaded", stale, got)
+		}
+		if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-2")); err != nil {
+			t.Errorf("local snapshot pause-snap-2 after rejected PromoteSnapshot(%v): stat = %v, want preserved", stale, err)
+		}
+		if got := a.s.snapshots.State(pluginActorUID); !proto.Equal(got, wantState) {
+			t.Errorf("tracked state after rejected PromoteSnapshot(%v) = %v, want %v", stale, got, wantState)
+		}
+	}
+}
+
+// TestCheckpointInFlightRejectsOlderGeneration checks that while Checkpoint is
+// running on the worker for generation 3, an out-of-order Checkpoint or
+// PromoteSnapshot for generation 2 fails with FailedPrecondition.
+func TestCheckpointInFlightRejectsOlderGeneration(t *testing.T) {
+	a := runPluginActor(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	a.worker.onCheckpoint = func() {
+		once.Do(func() {
+			close(started)
+			<-release
+		})
+	}
+
+	cpErr := make(chan error, 1)
+	go func() {
+		_, err := a.checkpoint(t, a.snapshot("pause-snap-3", 3), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+		cpErr <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for Checkpoint(pause-snap-3) to reach worker")
+	}
+
+	stale := a.snapshot("pause-snap-2", 2)
+	if _, err := a.checkpoint(t, stale, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); apierror.Code(err) != codes.FailedPrecondition {
+		t.Errorf("Checkpoint(%v) while generation 3 is in flight = %v, want FailedPrecondition", stale, err)
+	}
+	if _, err := a.s.PromoteSnapshot(t.Context(), &ateletpb.PromoteSnapshotRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              pluginActorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		Snapshot:              stale,
+	}); apierror.Code(err) != codes.FailedPrecondition {
+		t.Errorf("PromoteSnapshot(%v) while generation 3 is in flight = %v, want FailedPrecondition", stale, err)
+	}
+
+	close(release)
+	if err := <-cpErr; err != nil {
+		t.Fatalf("Checkpoint(pause-snap-3): %v", err)
+	}
+	if got := a.s.snapshots.State(pluginActorUID).GetLatestLocal().GetSnapshot().GetSnapshotUuid(); got != "pause-snap-3" {
+		t.Errorf("latest_local = %q, want pause-snap-3", got)
+	}
+}
+
+// TestCheckpointSkipsStaleCommitAndKeepsNewerLocal checks that when a stalled
+// Checkpoint(gen=2) reaches CommitLocal and PruneLocalCheckpoints after a newer
+// snapshot (gen=3) has already committed locally, gen=3 stays tracked and its
+// local directory stays on disk while gen=2's local copy is pruned.
+func TestCheckpointSkipsStaleCommitAndKeepsNewerLocal(t *testing.T) {
+	a := runPluginActor(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	a.worker.onCheckpoint = func() {
+		once.Do(func() {
+			close(started)
+			<-release
+		})
+	}
+
+	type cpResult struct {
+		resp *ateletpb.CheckpointResponse
+		err  error
+	}
+	resCh := make(chan cpResult, 1)
+	go func() {
+		resp, err := a.checkpoint(t, a.snapshot("pause-snap-2", 2), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+		resCh <- cpResult{resp, err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for Checkpoint(pause-snap-2) to reach worker")
+	}
+
+	snap3 := a.snapshot("pause-snap-3", 3)
+	snap3Dir := ateletpath.LocalSnapshotDir(pluginActorUID, snap3.GetSnapshotUuid())
+	writeLocalSnapshot(t, snap3Dir, sandboxAssetsRecord{
+		SandboxClass:  "gvisor",
+		PauseImage:    a.assets.GetPauseImage(),
+		SnapshotFiles: []string{"checkpoint.img"},
+		Fidelity:      "MEMORY",
+	}, map[string]string{"checkpoint.img": "newer-memory"})
+	wantState := a.s.snapshots.CommitLocal(pluginActorUID, snapshottracker.SnapshotRef{
+		Snapshot:   snap3,
+		CommitTime: time.Now(),
+	})
+
+	close(release)
+	res := <-resCh
+	if res.err != nil {
+		t.Fatalf("Checkpoint(pause-snap-2): %v", res.err)
+	}
+	if !proto.Equal(res.resp.GetState(), wantState) {
+		t.Errorf("Checkpoint(pause-snap-2) state = %v, want %v (keeping pause-snap-3)", res.resp.GetState(), wantState)
+	}
+	if _, err := os.Stat(snap3Dir); err != nil {
+		t.Errorf("newer local snapshot pause-snap-3: stat = %v, want kept", err)
+	}
+	if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-2")); !os.IsNotExist(err) {
+		t.Errorf("stale local snapshot pause-snap-2: stat = %v, want pruned", err)
 	}
 }

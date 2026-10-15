@@ -3153,8 +3153,6 @@ type Snapshot struct {
 	// for the actor, or for its newest under another snapshot_uuid: the
 	// caller's view is stale.
 	//
-	// TODO: Temporarily, atelet does not compare it with the snapshots it holds.
-	//
 	// +k8s:required
 	// +k8s:minimum=1
 	Generation int32 `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`

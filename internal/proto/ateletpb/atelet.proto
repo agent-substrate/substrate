@@ -901,8 +901,6 @@ message Snapshot {
   // for the actor, or for its newest under another snapshot_uuid: the
   // caller's view is stale.
   //
-  // TODO: Temporarily, atelet does not compare it with the snapshots it holds.
-  //
   // +k8s:required
   // +k8s:minimum=1
   int32 generation = 2;

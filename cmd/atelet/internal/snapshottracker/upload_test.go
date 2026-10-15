@@ -534,7 +534,9 @@ func TestTrackerStartAndCheckpointDoNotWaitForUpload(t *testing.T) {
 		begin func(context.Context, string) (func(), error)
 	}{
 		{"BeginStart", tr.BeginStart},
-		{"BeginCheckpoint", tr.BeginCheckpoint},
+		{"BeginCheckpoint", func(ctx context.Context, uid string) (func(), error) {
+			return tr.BeginCheckpoint(ctx, uid, testRef("s2", 2, time.Time{}).Snapshot)
+		}},
 	} {
 		returnsPromptly(t, tc.name+" during a background upload", func() {
 			end, err := tc.begin(t.Context(), trackedActorUID)
@@ -559,7 +561,7 @@ func TestTrackerUploadRunsWhileActorHeld(t *testing.T) {
 	t0 := tr.clock.Now()
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
 
-	end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID)
+	end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s2", 2, t0).Snapshot)
 	if err != nil {
 		t.Fatalf("BeginCheckpoint: %v", err)
 	}
@@ -646,6 +648,36 @@ func TestTrackerBeginPromote(t *testing.T) {
 		res := <-resCh
 		if res.err != nil || !res.durable {
 			t.Errorf("BeginPromote = (%v, %v), want (true, nil)", res.durable, res.err)
+		}
+	})
+
+	t.Run("rejects snapshot superseded during upload", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		store.setBlocking(true)
+		tr := newTestTracker(t, store)
+		s1 := testRef("s1", 1, tr.clock.Now())
+		tr.CommitLocal(trackedActorUID, s1)
+		done := startUpload(t, tr, store)
+
+		errCh := make(chan error, 1)
+		go func() {
+			_, end, err := tr.BeginPromote(t.Context(), trackedActorUID, s1)
+			if err == nil {
+				end()
+			}
+			errCh <- err
+		}()
+		select {
+		case err := <-errCh:
+			t.Fatalf("BeginPromote returned (%v) during an upload of the same snapshot", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		tr.CommitLocal(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
+		store.release <- nil
+		waitClosed(t, done, "the upload")
+		if err := <-errCh; apierror.Code(err) != codes.FailedPrecondition {
+			t.Errorf("BeginPromote = %v, want FailedPrecondition", err)
 		}
 	})
 

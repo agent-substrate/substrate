@@ -395,12 +395,18 @@ func (t *Tracker) waitIdleLocked(ctx context.Context, actorUID string, check fun
 // waitForDetachLocked waits, as long as ctx allows, until no detach of the
 // actor is in progress, and returns the actor's entry, which may be nil. It
 // releases the actor's lock while it waits, and holds it again when it
-// returns. Checkpoint, Run, and Restore call this first so they never race
-// with a detach pruning the actor's local directory, without waiting behind
-// an upload.
-func (t *Tracker) waitForDetachLocked(ctx context.Context, actorUID string) (*actorSnapshots, error) {
+// returns. check, if not nil, vets the entry on every pass: an error from it
+// is returned at once, without waiting further. Checkpoint, Run, and Restore
+// call this first so they never race with a detach pruning the actor's local
+// directory, without waiting behind an upload.
+func (t *Tracker) waitForDetachLocked(ctx context.Context, actorUID string, check func(*actorSnapshots) error) (*actorSnapshots, error) {
 	for {
 		a := t.findLocked(actorUID)
+		if a != nil && check != nil {
+			if err := check(a); err != nil {
+				return nil, err
+			}
+		}
 		if a == nil || a.runningDetach() == nil {
 			return a, nil
 		}
@@ -412,11 +418,19 @@ func (t *Tracker) waitForDetachLocked(ctx context.Context, actorUID string) (*ac
 
 // waitForDetachOrSnapshotUploadLocked waits, as long as ctx allows, until no
 // detach of the actor and no background upload of snap is in progress, and
-// returns the actor's entry, which may be nil. PromoteSnapshot calls this
-// first so it never races with a detach or uploads the same snapshot twice.
+// returns the actor's entry, which may be nil. It checks snap's generation on
+// every pass, so a stale generation fails at once without waiting, and one
+// superseded while waiting fails as soon as the wait ends. PromoteSnapshot
+// calls this first so it never races with a detach or uploads the same
+// snapshot twice.
 func (t *Tracker) waitForDetachOrSnapshotUploadLocked(ctx context.Context, actorUID string, snap SnapshotRef) (*actorSnapshots, error) {
 	for {
 		a := t.findLocked(actorUID)
+		if a != nil {
+			if err := a.checkGeneration(snap.Snapshot); err != nil {
+				return nil, err
+			}
+		}
 		if a == nil || a.op == nil {
 			return a, nil
 		}
