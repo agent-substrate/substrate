@@ -30,10 +30,9 @@ import (
 	"strings"
 )
 
-// PostgresImage is the PostgreSQL testcontainer image. It comes from Google's
-// Docker Hub mirror, because anonymous pulls from Docker Hub are rate limited
-// per runner IP and fail every PostgreSQL-backed test at once.
-const PostgresImage = "mirror.gcr.io/library/postgres:18-alpine"
+// PostgresImage is the PostgreSQL testcontainer image, shared by every test
+// that starts one.
+const PostgresImage = "postgres:18-alpine"
 
 // Configure sets the environment testcontainers reads to find Docker, unless
 // it is already set. testcontainers-go resolves the daemon from DOCKER_HOST
