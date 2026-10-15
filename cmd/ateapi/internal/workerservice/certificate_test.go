@@ -378,6 +378,18 @@ func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 			want:   codes.NotFound,
 		},
 		{
+			// Resume binds the worker in the store before it writes the
+			// assignment to the actor's status, and starts the actor only
+			// after that. In between, the worker holds the store's assignment
+			// but runs nothing, and HostingNode trusts assigned_node without
+			// reading the store, so only the status comparison refuses.
+			name:        "paused actor bound to a worker on this node before its status names the worker",
+			ctx:         authed,
+			status:      pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1"),
+			assignments: map[string]string{actor.GetMetadata().GetUid(): "worker-1"},
+			want:        codes.NotFound,
+		},
+		{
 			name:   "paused actor on another node",
 			ctx:    authed,
 			status: pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-2"),
