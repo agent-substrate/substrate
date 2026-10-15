@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -26,13 +27,19 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// AteClient connects to the ate-api-server, port-forwarding if needed.
+// AteClient connects to the ate-api-server, port-forwarding if needed. It
+// opts in to preview features if the install enables any.
 func (e *Env) AteClient(ctx context.Context) (*ateclient.Client, error) {
-	return ateclient.NewClient(ctx, e.Cfg.Kubeconfig, e.Cfg.Context, "", "", false)
+	var opts []grpc.DialOption
+	if len(e.Cfg.PreviewGates) > 0 {
+		opts = preview.DialOptionsWithOptIn()
+	}
+	return ateclient.NewClient(ctx, e.Cfg.Kubeconfig, e.Cfg.Context, "", "", false, opts...)
 }
 
 // EnsureAtespace creates the atespace if it does not already exist. The store

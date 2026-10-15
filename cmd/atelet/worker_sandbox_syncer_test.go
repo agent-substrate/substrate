@@ -517,7 +517,7 @@ func TestWorkerSandboxSyncerExistingDirs(t *testing.T) {
 		entries: map[string]string{"pod-a": oldDir, "pod-b": oldDir},
 		want:    []string{"pod-a", "pod-b"},
 	}, {
-		// Its ateom may have made it before the pod reached the cache.
+		// Its worker may have made it before the pod reached the cache.
 		name:      "a young directory waits for minAge",
 		entries:   map[string]string{"pod-a": oldDir, "pod-b": youngDir},
 		want:      []string{"pod-a"},
@@ -535,10 +535,10 @@ func TestWorkerSandboxSyncerExistingDirs(t *testing.T) {
 			// Short enough to observe a delayed enqueue.
 			s.minAge = 50 * time.Millisecond
 			if tt.entries == nil {
-				s.ateomsDir = filepath.Join(s.ateomsDir, "missing")
+				s.workersDir = filepath.Join(s.workersDir, "missing")
 			}
 			for name, kind := range tt.entries {
-				path := filepath.Join(s.ateomsDir, name)
+				path := filepath.Join(s.workersDir, name)
 				var err error
 				switch kind {
 				case file:

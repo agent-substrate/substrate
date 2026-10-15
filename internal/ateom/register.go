@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateom registers an ateom worker with the control plane through the
+// Package ateom registers a worker with the control plane through the
 // node-local atelet, reporting its compute capacity and the sandbox runtimes
-// of its pool, and provides file-watching helpers shared by ateom binaries.
+// of its pool, and provides file-watching helpers shared by worker binaries.
 package ateom
 
 import (
@@ -44,10 +44,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/sandboxruntimes"
 )
 
-// Files the atecontroller projects into the ateom container from the downward
+// Files the atecontroller projects into the worker container from the downward
 // API, in milli-cores and bytes.
 const (
-	CapacityMountPath = "/run/ateom-capacity"
+	CapacityMountPath = "/run/worker-capacity"
 	CPULimitFile      = "cpu_milli"
 	MemoryLimitFile   = "memory_bytes"
 )
@@ -59,7 +59,7 @@ const (
 	resyncInterval       = 5 * time.Minute
 )
 
-// FromFiles combines the downward API compute limits with the ateom's own
+// FromFiles combines the downward API compute limits with the worker's own
 // actor limit.
 //
 // A limit that is missing or unparseable is reported as zero, which the control
@@ -146,7 +146,7 @@ func readLimit(path string) int64 {
 	return value
 }
 
-// ReportConfig configures how an ateom reaches the node-local atelet and what
+// ReportConfig configures how a worker reaches the node-local atelet and what
 // it registers with.
 type ReportConfig struct {
 	SocketPath           string
@@ -156,12 +156,12 @@ type ReportConfig struct {
 	// names atelet's namespace, not this worker's, so it is configured rather
 	// than derived from the downward API.
 	AteletSPIFFEID string
-	// Actors is how many actors this ateom will host at once.
+	// Actors is how many actors this worker will host at once.
 	Actors int
-	// SandboxClass is the class this ateom implements ("gvisor", "microvm").
+	// SandboxClass is the class this worker implements ("gvisor", "microvm").
 	SandboxClass string
 	// RuntimesFile is the sandbox runtimes file atelet keeps for this worker
-	// (nodepath.AteomSandboxRuntimesPath).
+	// (nodepath.WorkerSandboxRuntimesPath).
 	RuntimesFile string
 }
 
@@ -172,7 +172,7 @@ type ReportConfig struct {
 //
 // Retrying is what makes a report durable: atelet only accepts once the
 // control plane has recorded it, and the Worker record may not exist yet when
-// an ateom first comes up. Nothing else reports this, so giving up would leave
+// a worker first comes up. Nothing else reports this, so giving up would leave
 // the Worker holding no capacity and hosting nothing.
 func Report(ctx context.Context, cfg ReportConfig) error {
 	if cfg.SandboxClass == "" {
@@ -304,6 +304,6 @@ func reportOnce(ctx context.Context, socketPath string, tlsConfig *tls.Config, r
 	defer conn.Close()
 	callCtx, cancel := context.WithTimeout(ctx, reportTimeout)
 	defer cancel()
-	_, err = ateletpb.NewAteomSupportClient(conn).RegisterWorker(callCtx, req)
+	_, err = ateletpb.NewWorkerSupportClient(conn).RegisterWorker(callCtx, req)
 	return err
 }

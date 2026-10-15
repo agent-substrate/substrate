@@ -58,6 +58,13 @@ volumes:
         - egress-mitm.ate.dev
         - system-roots.ate.dev
         path: egress-trust-bundle/trust-bundle.pem
+# Sandbox size: headroom so the load generator is not the bottleneck.
+resources:
+  limits:
+  - name: cpu
+    quantity: "2"
+  - name: memory
+    quantity: 1Gi
 sandboxConfig:
   sandboxClass: gvisor
   configName: gvisor-default

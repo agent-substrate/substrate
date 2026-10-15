@@ -16,7 +16,7 @@
 // controller and worker syncer in control-plane benchmarks. It honors every
 // WorkerPool's spec.replicas with fake Workers that no pod backs, placed
 // round robin on the nodes that run a fake-atelet pod, and has each Worker's
-// capacity reported through the fake-atelet on its node, as ateom reports
+// capacity reported through the fake-atelet on its node, as worker reports
 // through atelet. It writes each pool's status, so the scale subresource and
 // `kubectl get workerpool` work. It leaves its Workers registered when it
 // shuts down and adopts them when it starts, so a restart keeps every Actor
@@ -76,7 +76,7 @@ var (
 	cleanup      = pflag.Bool("cleanup", false, "Delete this run's registered fake Workers, then exit. Stop the serving fake-workersync first, as by scaling its Deployment to zero: it would go on counting the deleted Workers until it restarts.")
 	nodeGrace    = pflag.Duration("node-grace", 5*time.Minute, "How long a node keeps its fake Workers with no fake-atelet pod, as while its fake-atelet is replaced.")
 	healthAddr   = pflag.String("health-listen-addr", ":9091", "Address to serve /healthz and /readyz on.")
-	drainGrace   = pflag.Duration("drain-grace", time.Minute, "How long a draining fake Worker waits for its Actors to leave before it is deleted, releasing them. Stands in for the time ateom takes to stop a terminating pod's Actors.")
+	drainGrace   = pflag.Duration("drain-grace", time.Minute, "How long a draining fake Worker waits for its Actors to leave before it is deleted, releasing them. Stands in for the time worker takes to stop a terminating pod's Actors.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")

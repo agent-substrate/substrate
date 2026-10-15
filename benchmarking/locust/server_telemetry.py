@@ -222,9 +222,9 @@ def _query_window_quantile(
     )
 
 
-# Each ateom pod's whole cgroup, systemd or cgroupfs; drops the pause container.
+# Each worker pod's whole cgroup, systemd or cgroupfs; drops the pause container.
 POD_PSI_SELECTOR = (
-    'pod=~"benchmark-ateom.*", container="", '
+    'pod=~"benchmark-worker.*", container="", '
     'id=~".*[/-]pod[^/]+(\\\\.slice)?"'
 )
 
@@ -314,7 +314,7 @@ def _harvest_cluster_packing(
 ) -> dict[str, Any]:
     """Workers with an actor over all workers, per sample and as percentiles."""
     packing_query = (
-        'ate_workerpool_workers{ate_workerpool_name="benchmark-ateom"}'
+        'ate_workerpool_workers{ate_workerpool_name="benchmark-worker"}'
     )
     packing_series = query_prometheus_range(
         prom_url, packing_query, start_ts, end_ts, step="10s"

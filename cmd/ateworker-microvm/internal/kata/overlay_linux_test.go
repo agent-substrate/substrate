@@ -1,0 +1,189 @@
+//go:build linux
+
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package kata
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"syscall"
+	"testing"
+
+	"github.com/agent-substrate/substrate/internal/roottest"
+	"golang.org/x/sys/unix"
+)
+
+// The container rootfs is untrusted (the image below, the guest's own snapshot
+// upper above): a symlink planted at proc/sys/dev must not send the mountpoint
+// mkdir somewhere else on the worker pod.
+func TestEnsureOCIMountpoints(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "outside")
+	rootfs := filepath.Join(dir, "rootfs")
+	if err := os.MkdirAll(filepath.Join(rootfs, "realsys"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// proc escapes, sys is an in-rootfs symlink to an existing dir, dev is absent.
+	if err := os.Symlink(filepath.Join(outside, "proc"), filepath.Join(rootfs, "proc")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("realsys", filepath.Join(rootfs, "sys")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureOCIMountpoints(rootfs); err != nil {
+		t.Fatalf("ensureOCIMountpoints(%q) = %v", rootfs, err)
+	}
+
+	if _, err := os.Lstat(outside); !os.IsNotExist(err) {
+		t.Errorf("Lstat(%q) = %v, want it never created: the symlink was followed out of the rootfs", outside, err)
+	}
+	if fi, err := os.Stat(filepath.Join(rootfs, "dev")); err != nil || !fi.IsDir() {
+		t.Errorf("dev: Stat = %v, %v; want a directory", fi, err)
+	}
+	if got, err := os.Readlink(filepath.Join(rootfs, "sys")); err != nil || got != "realsys" {
+		t.Errorf("sys: Readlink = %q, %v; want the in-rootfs symlink left alone", got, err)
+	}
+}
+
+// The kernel requires overlay upperdir and workdir on the same filesystem and
+// rejects a workdir nested inside (or equal to) upperdir — so they must be
+// SIBLINGS under the container's subdirectory of the actor's upper base.
+func TestUpperWorkDirsAreSiblings(t *testing.T) {
+	const base = "/var/lib/ateworker-gvisor/actors/uid/rootfs-upper"
+	upper, work := UpperWorkDirs(base, "app")
+	cidDir := filepath.Join(base, "app")
+	if filepath.Dir(upper) != cidDir || filepath.Dir(work) != cidDir {
+		t.Errorf("UpperWorkDirs = %q, %q; want both directly under %q", upper, work, cidDir)
+	}
+	if upper == work {
+		t.Errorf("UpperWorkDirs: upper and work are the same directory %q", upper)
+	}
+	if strings.HasPrefix(work+"/", upper+"/") {
+		t.Errorf("UpperWorkDirs: work %q is nested inside upper %q", work, upper)
+	}
+}
+
+func TestVirtiofsdArgs(t *testing.T) {
+	args := virtiofsdArgs(VirtiofsdOptions{
+		SocketPath: "/run/vm/virtiofsd.sock",
+		SharedDir:  "/run/kata-containers/shared/sandboxes/uid/shared",
+	})
+	if !slices.Contains(args, "--cache=auto") {
+		t.Errorf("args %v do not contain --cache=auto", args)
+	}
+	// The host kernel owns the overlay; the guest needs no xattr passthrough, so
+	// the flag must never be emitted.
+	if slices.Contains(args, "--xattr") {
+		t.Errorf("args %v contain --xattr; the guest has no overlay to feed it to", args)
+	}
+	// With the default (abort), a guest holding a reference to an unlinked
+	// inode, such as a live-rotated trust bundle, could never be restored.
+	if i := slices.Index(args, "--migration-on-error"); i < 0 || i+1 >= len(args) || args[i+1] != "guest-error" {
+		t.Errorf("args %v do not set --migration-on-error guest-error", args)
+	}
+}
+
+func TestRemountReadOnly_NonExistent(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "nonexistent")
+	err := RemountReadOnly(dst)
+	if err == nil {
+		t.Fatalf("RemountReadOnly(%q) = nil, want error", dst)
+	}
+	if !strings.Contains(err.Error(), "statfs") {
+		t.Errorf("RemountReadOnly(%q) error = %v, want error from statfs", dst, err)
+	}
+}
+
+func TestUnmount_NonExistent(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "nonexistent")
+	// Unmount must handle non-existent destinations cleanly without panicking.
+	Unmount(dst)
+}
+
+func TestRemountReadOnlyAndUnmount(t *testing.T) {
+	roottest.Require(t, "bind mounts")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mount(src, dst, "", unix.MS_BIND, ""); err != nil {
+		t.Fatalf("Mount(%q, %q, BIND) = %v", src, dst, err)
+	}
+	defer Unmount(dst)
+
+	testFile := filepath.Join(dst, "test.txt")
+	if err := os.WriteFile(testFile, []byte("write test"), 0o644); err != nil {
+		t.Fatalf("WriteFile before remount = %v", err)
+	}
+
+	if err := RemountReadOnly(dst); err != nil {
+		t.Fatalf("RemountReadOnly(%q) = %v", dst, err)
+	}
+
+	if err := os.WriteFile(testFile, []byte("should fail"), 0o644); !errors.Is(err, syscall.EROFS) {
+		t.Fatalf("WriteFile after remount = %v, want EROFS", err)
+	}
+
+	Unmount(dst)
+}
+
+// setNosuidNodev must add both flags to the bind and the mounts beneath it
+// without clearing read-only.
+func TestSetNosuidNodev(t *testing.T) {
+	roottest.Require(t, "mounting requires root")
+
+	src, dst := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(src, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mount("tmpfs", filepath.Join(src, "sub"), "tmpfs", 0, ""); err != nil {
+		t.Fatalf("mounting nested tmpfs: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Unmount(filepath.Join(src, "sub"), unix.MNT_DETACH) })
+	if err := unix.Mount(src, dst, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		t.Fatalf("bind-mounting: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Unmount(dst, unix.MNT_DETACH) })
+	if err := unix.MountSetattr(unix.AT_FDCWD, dst, 0, &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_RDONLY}); err != nil {
+		t.Fatalf("making bind read-only: %v", err)
+	}
+
+	if err := setNosuidNodev(dst); err != nil {
+		t.Fatalf("setNosuidNodev: %v", err)
+	}
+
+	for path, wantRO := range map[string]bool{dst: true, filepath.Join(dst, "sub"): false} {
+		var st unix.Statfs_t
+		if err := unix.Statfs(path, &st); err != nil {
+			t.Fatalf("statfs %q: %v", path, err)
+		}
+		if st.Flags&unix.ST_NOSUID == 0 || st.Flags&unix.ST_NODEV == 0 {
+			t.Errorf("%q: flags %#x, want nosuid and nodev", path, st.Flags)
+		}
+		if gotRO := st.Flags&unix.ST_RDONLY != 0; gotRO != wantRO {
+			t.Errorf("%q: read-only = %v, want %v", path, gotRO, wantRO)
+		}
+	}
+}

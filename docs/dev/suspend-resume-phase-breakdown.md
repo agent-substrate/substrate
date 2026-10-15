@@ -7,8 +7,8 @@ elsewhere; follow the links when a step needs more than the command shown.
 
 The breakdown comes from two developer-facing log records, `Checkpoint timing
 breakdown` and `Restore timing breakdown`, written once per operation by
-atelet (the outer phases: `download`, `persist`, `ateom_*`, …) and by
-ateom-microvm (the phases inside `ateom_*`: `pause`, `snapshot`, `vm_restore`,
+atelet (the outer phases: `download`, `persist`, `worker_*`, …) and by
+ateworker-microvm (the phases inside `worker_*`: `pause`, `snapshot`, `vm_restore`,
 `wakeup_probe`, …). `benchmarking/analysis/` collects the records from the pod
 logs and aggregates them. See
 [docs/observability.md](../observability.md#actor-attributed-component-logs)
@@ -24,7 +24,7 @@ the report.
   or the [GKE Quickstart](../../README.md#gke-quickstart-development). For GKE
   the scripts below read `.ate-dev-env.sh` from the repository root
   (`collect_logs.sh` sources it itself; set `NO_DEV_ENV` to opt out).
-* A **micro-VM** or **gVisor** pool: both ateoms write the inner records,
+* A **micro-VM** or **gVisor** pool: both ateworkers write the inner records,
   so the report shows both layers for either class (a worker image that
   predates the gVisor records shows the atelet layer only on a gVisor pool).
   For micro-VM see [microvm-local.md](microvm-local.md).
@@ -136,16 +136,16 @@ or the images predate the records.
 ## 5. Read it
 
 * **Phase percentiles** rank the phases. For a suspend, compare atelet's
-  `persist` against `ateom_checkpoint`, then the ateom rows (`snapshot`,
+  `persist` against `worker_checkpoint`, then the ateworker rows (`snapshot`,
   `teardown`, `pause`, …) against each other; for a resume, `download` against
-  `ateom_restore`, then `vm_restore` and `wakeup_probe`. The `unattributed`
+  `worker_restore`, then `vm_restore` and `wakeup_probe`. The `unattributed`
   row is the part of a checkpoint no logged phase names.
-* **Waterfalls** show the slowest operations with the ateom record nested
+* **Waterfalls** show the slowest operations with the ateworker record nested
   under the atelet phase it decomposes; a tail that is always the same phase
   is systematic, one that moves between phases is environmental.
-* Two sanity checks on a healthy run: the atelet and ateom rows for one
-  operation have the same `n`, and atelet's `ateom_checkpoint` p50 is a few
-  tens of milliseconds above ateom's `total` p50 (the `(gap)` line in a
+* Two sanity checks on a healthy run: the atelet and ateworker rows for one
+  operation have the same `n`, and atelet's `worker_checkpoint` p50 is a few
+  tens of milliseconds above ateworker's `total` p50 (the `(gap)` line in a
   waterfall is that RPC overhead).
 
 `/tmp/run1/report/phase_percentiles.csv` holds the same table for comparing
@@ -160,8 +160,8 @@ phases scale with dirty memory.
 
 ## Troubleshooting
 
-* **Only atelet rows, no ateom rows.** The worker image predates the ateom
-  records (check step 1's grep against a worker pod), or the ateom records
+* **Only atelet rows, no ateworker rows.** The worker image predates the ateworker
+  records (check step 1's grep against a worker pod), or the ateworker records
   fell outside the collection window.
 * **Counts differ between layers.** The collection window cut through a
   cycle, or a worker pod restarted and took its log with it (the script dumps
@@ -170,5 +170,5 @@ phases scale with dirty memory.
 * **A record has `error.type`.** That operation failed; the report leaves it
   out of the percentiles and the waterfalls. To see where it died, grep the
   record itself: a `DeadlineExceeded` whose time sits in `download` or
-  `persist` with a normal-looking `ateom_*` phase points at object storage,
+  `persist` with a normal-looking `worker_*` phase points at object storage,
   not the runtime.

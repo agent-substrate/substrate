@@ -129,8 +129,8 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 	for _, fixture := range substrateFixtures {
 		t.Run(fixture.manifests.Pool, func(t *testing.T) {
 			pool := renderPool(t, fixture.manifests.Pool)
-			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-gvisor") {
-				t.Errorf("WorkerPool workerImage = %q, want the gVisor ateom", pool.Spec.WorkerImage)
+			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateworker-gvisor") {
+				t.Errorf("WorkerPool workerImage = %q, want the gVisor worker", pool.Spec.WorkerImage)
 			}
 			if pool.Spec.DefaultSandboxClass() != v1alpha1.SandboxClassGvisor {
 				t.Errorf("WorkerPool runtime = class %q, want gvisor", pool.Spec.DefaultSandboxClass())
@@ -178,8 +178,8 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 	for _, fixture := range substrateFixtures {
 		t.Run(fixture.manifests.Pool, func(t *testing.T) {
 			pool := renderPool(t, fixture.manifests.Pool)
-			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-microvm") {
-				t.Errorf("WorkerPool workerImage = %q, want the micro-VM ateom", pool.Spec.WorkerImage)
+			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateworker-microvm") {
+				t.Errorf("WorkerPool workerImage = %q, want the micro-VM worker", pool.Spec.WorkerImage)
 			}
 			if pool.Spec.DefaultSandboxClass() != SandboxClassMicroVM {
 				t.Errorf("WorkerPool runtime = class %q, want microvm", pool.Spec.DefaultSandboxClass())
@@ -199,11 +199,9 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 				if got := tmpl.GetSandboxConfig().GetConfigName(); got != "microvm" {
 					t.Errorf("template %s configName = %q, want microvm", name, got)
 				}
-				// Undeclared limits boot the guest at ateom's default size
-				// (2GiB), which does not fit beside the demo pools on one kind
-				// node.
+				// The API rejects a template without limits.
 				if memoryLimit(tmpl) == "" {
-					t.Errorf("template %s declares no memory limit, so the guest would boot at the kata default", name)
+					t.Errorf("template %s declares no memory limit", name)
 				}
 				location := tmpl.GetSnapshotConfig().GetStorageLocation()
 				if want := "-microvm-render/"; !strings.HasSuffix(location, want) {

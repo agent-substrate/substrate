@@ -29,31 +29,31 @@ import (
 
 func ValidateCreateActorTemplateRequest(ctx context.Context, req *ateapipb.CreateActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_CreateActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetActorTemplateRequest(ctx context.Context, req *ateapipb.GetActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_GetActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateListActorTemplatesRequest(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_ListActorTemplatesRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDeleteActorTemplateRequest(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := MakeCreateOp(ctx)
 	return Validate_DeleteActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.ActorTemplate) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Update}
+	op := MakeUpdateOp(ctx)
 	return Validate_ActorTemplate(ctx, op, fldPath, newVal, oldVal)
 }
 
@@ -86,6 +86,22 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 					fldPath.Child("containers").Index(i).Child("volume_mounts").Index(j).Child("name"),
 					name, "must reference a volume declared in the template"))
 			}
+		}
+	}
+	return errs
+}
+
+// ValidateCustom_ActorTemplate_Resources requires both a cpu and a memory
+// limit, which the scheduler books against worker capacity.
+func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Resources) field.ErrorList {
+	set := sets.New[string]()
+	for _, l := range value.GetLimits() {
+		set.Insert(l.GetName())
+	}
+	var errs field.ErrorList
+	for _, name := range []string{resources.ResourceCPU, resources.ResourceMemory} {
+		if !set.Has(name) {
+			errs = append(errs, field.Required(fldPath.Child("limits"), "must set a "+name+" limit"))
 		}
 	}
 	return errs

@@ -332,7 +332,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 
 // restoreModTime sets the atime and mtime of an unpacked path to the mtime its
 // tar entry records, so that every node unpacks a layer to the same tree (see
-// the deterministic-unpack note in cmd/ateom-microvm/restore.go).
+// the deterministic-unpack note in cmd/ateworker-microvm/restore.go).
 func restoreModTime(root *os.Root, name string, modTime time.Time) error {
 	if modTime.IsZero() {
 		return nil

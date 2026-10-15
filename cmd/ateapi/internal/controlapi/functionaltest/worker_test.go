@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
@@ -33,7 +34,7 @@ const testWorkerName = "5f2c1a90-7b34-4e6d-8a11-0c3e9d5b7f42"
 // newTestWorker returns a Worker in the shape CreateWorker accepts: named after
 // its pod UID, with the pod coordinates filled in and no status. Status is
 // output-only, and that includes capacity — a Worker gets that from its own
-// ateom's report to WorkerService, not from whoever registered it. These tests
+// worker's report to WorkerService, not from whoever registered it. These tests
 // never place an actor, so the unreported default is enough.
 //
 // The Worker stands on its own, with no pod behind it. That is enough for the
@@ -127,7 +128,7 @@ func TestCreateAndGetWorker(t *testing.T) {
 //  1. Creates a mock WorkerPool in Kubernetes.
 //  2. Creates a mock worker Pod in Kubernetes belonging to that pool, registers
 //     the Worker the syncer would derive from it, and reports the capacity its
-//     ateom would.
+//     worker would.
 //  3. Calls ListWorkers RPC.
 //  4. Verifies that the worker appears in the response.
 func TestListWorkers(t *testing.T) {
@@ -166,7 +167,10 @@ func TestListWorkers(t *testing.T) {
 			Ips:             []string{"127.0.0.1"},
 			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"foo": "bar"},
-			Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+			Status: &ateapipb.WorkerStatus{
+				State:    ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				Capacity: &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(1000, 512<<20)},
+			},
 		},
 	}
 

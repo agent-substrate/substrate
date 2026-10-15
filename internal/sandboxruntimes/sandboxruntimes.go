@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package sandboxruntimes reads and writes a worker's sandbox runtimes file,
-// which atelet keeps in the worker's directory (nodepath.AteomPath) as
+// which atelet keeps in the worker's directory (nodepath.WorkerPath) as
 // nodepath.SandboxRuntimesFileName.
 package sandboxruntimes
 
@@ -27,7 +27,7 @@ import (
 
 // File is the content of a worker's sandbox runtimes file: the sandbox
 // runtimes the worker can run, as the compatibility attributes atelet computed
-// for them. The ateom registers DefaultRuntime and RestorableRuntimes as
+// for them. The worker registers DefaultRuntime and RestorableRuntimes as
 // RegisterWorkerRequest's default_runtime and restorable_runtimes.
 type File struct {
 	// DefaultRuntime is the runtime new and cold-booted actors start under,

@@ -35,7 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/sandboxruntimes"
 )
 
-// testActors stands in for the ateom's own ceiling, which is a flag in
+// testActors stands in for the worker's own ceiling, which is a flag in
 // production rather than a constant here.
 const testActors = 7
 
@@ -384,8 +384,8 @@ func TestWatchFileFilterAndErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	dir := nodepath.AteomPath("pod-uid")
-	target := nodepath.AteomSandboxRuntimesPath("pod-uid")
+	dir := nodepath.WorkerPath("pod-uid")
+	target := nodepath.WorkerSandboxRuntimesPath("pod-uid")
 	events := make(chan fsnotify.Event)
 	errs := make(chan error)
 	changes := make(chan struct{}, 1)
@@ -414,9 +414,9 @@ func TestWatchFileFilterAndErrors(t *testing.T) {
 	}
 
 	// Unrelated files in the same worker directory must be ignored.
-	events <- fsnotify.Event{Name: nodepath.AteomSocketPath("pod-uid"), Op: fsnotify.Create}
+	events <- fsnotify.Event{Name: nodepath.WorkerSocketPath("pod-uid"), Op: fsnotify.Create}
 	events <- fsnotify.Event{Name: filepath.Join(dir, ".sandbox-runtimes-123456"), Op: fsnotify.Create | fsnotify.Write}
-	assertNoSignal(t, "events on ateom.sock and temp file")
+	assertNoSignal(t, "events on worker.sock and temp file")
 
 	// Non-Create/Write operations on the target file must be ignored.
 	events <- fsnotify.Event{Name: target, Op: fsnotify.Chmod}
@@ -460,7 +460,7 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 		done <- r.run(ctx, changes)
 	}()
 
-	// Write the file after WatchFile has started, as happens when ateom comes up
+	// Write the file after WatchFile has started, as happens when a worker comes up
 	// before atelet has reconciled the pod.
 	v1 := &sandboxruntimes.File{
 		DefaultRuntime: sandboxruntimes.Attributes{

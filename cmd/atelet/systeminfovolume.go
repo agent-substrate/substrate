@@ -258,7 +258,7 @@ func writeSystemInfoFile(root *os.Root, relPath string, data []byte) (bool, erro
 	return true, nil
 }
 
-// writeFileAtomicRoot is writeFileAtomic confined to root. The fixed temp
+// writeFileAtomicRoot is atomicfile.Write confined to root. The fixed temp
 // name is safe because writers of an actor's volumes serialize on its lock.
 func writeFileAtomicRoot(root *os.Root, relPath string, data []byte, perm os.FileMode) error {
 	dir, base := filepath.Dir(relPath), filepath.Base(relPath)

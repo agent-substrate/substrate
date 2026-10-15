@@ -32,7 +32,7 @@ To enable validation of reading from an external volume (e.g.
 `/external-data/test.txt`), run:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-counter-with-external-volume
+./hack/install-ate.sh --deploy-demo-counter-with-external-volume --preview=ExternalVolumes
 ```
 
 This command will:
@@ -140,7 +140,7 @@ prioritizing it, not a fundamental limitation of the design.
 ## Micro-VM variant
 
 The same in-RAM-counter suspend/resume-continuity demo also runs on the micro-VM
-sandbox class (`ateom-microvm`: a Kata guest on Cloud Hypervisor), proving that
+sandbox class (`ateworker-microvm`: a Kata guest on Cloud Hypervisor), proving that
 the guest-memory snapshot round-trips just as gVisor's process snapshot does.
 The micro-VM class is also the one that serves `SNAPSHOT_FIDELITY_ROOTFS`, a
 snapshot of the volumes and each container's rootfs writes without guest

@@ -31,7 +31,7 @@ spec:
   versions:
   # gVisor nightly 2026-10-10, for the split filesystem checkpoint
   # (runsc fscheckpoint, -fs-checkpoint-paths and -fs-restore-image-path) that
-  # ateom-gvisor uses to save and restore durable-dir volumes.
+  # ateworker-gvisor uses to save and restore durable-dir volumes.
   - name: v3
     state: Enabled
     # The root sandbox container's image. On GCP, prefer the in-project mirror

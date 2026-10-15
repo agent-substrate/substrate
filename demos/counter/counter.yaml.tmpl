@@ -37,7 +37,7 @@ spec:
   # pool that cannot place every replica is worse than a smaller one -- the
   # deploy blocks on a rollout that never completes.
   replicas: 3
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateworker-gvisor
   # No configRef: the pool follows the class default, the newest SandboxConfig
   # of the class annotated sandboxconfig.ate.dev/is-class-default=true
   # (gvisor-default as installed), and moves to a new default when one appears.

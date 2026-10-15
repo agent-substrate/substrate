@@ -600,7 +600,7 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 
 // logSource names a class of lines in an actor's log stream, selected with
 // --source. Container output carries the container's name; the lifecycle
-// events ateom emits around a start, checkpoint, restore, or termination
+// events worker emits around a start, checkpoint, restore, or termination
 // carry none, which is what tells the two apart.
 type logSource string
 

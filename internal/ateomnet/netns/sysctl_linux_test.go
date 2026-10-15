@@ -32,7 +32,7 @@ import (
 // and /proc/sys is left as it was found. Remounting it read-only on the way
 // out would break every later write.
 func TestSetSysctlReportsAnUnrelatedError(t *testing.T) {
-	err := setSysctl("net/ipv4/ateomnet_no_such_sysctl", "0")
+	err := setSysctl("net/ipv4/workernet_no_such_sysctl", "0")
 	if !errors.Is(err, unix.ENOENT) {
 		t.Fatalf("setSysctl() on a missing key: got %v, want ENOENT", err)
 	}

@@ -174,7 +174,7 @@ service Control {
   // if another write lands on the Worker first; retry.
   //
   // Every Actor placed after this call is stamped with the Worker's epoch as
-  // it stands then, so a caller raises epoch for a restarted ateom first.
+  // it stands then, so a caller raises epoch for a restarted the worker first.
   rpc MarkWorkerAvailable(MarkWorkerAvailableRequest) returns (MarkWorkerAvailableResponse) {
     option (method).resource = "Worker";
   }
@@ -518,22 +518,6 @@ message ExternalVolume {
   // +k8s:update=NoUnset # set-once, like name above
   // +k8s:customValidation
   string volume_type = 3;
-
-  enum Status {
-    STATUS_UNSPECIFIED = 0;
-    // Volume creation pending in the storage system.
-    STATUS_PENDING = 1;
-    // Volume successfully created in the storage system.
-    STATUS_CREATED = 2;
-    // Volume being deleted from the storage system.
-    STATUS_DELETING = 3;
-    // Keep this in sync with ExternalVolume.status's maximum.
-  }
-
-  // +k8s:optional
-  // +k8s:minimum=1
-  // +k8s:maximum=3 # keep this in sync with the Status enum
-  Status status = 4;
 
   // volume_context contains metadata returned by the CSI driver during volume
   // provisioning, needed by the node plugin for mounting (e.g. attachment
@@ -897,6 +881,7 @@ message ActorStatus {
   // They are deleted when the actor is deleted. Each template volume
   // appears at most once.
   //
+  // +ate:preview=ExternalVolumes
   // +k8s:optional
   // +k8s:maxItems=32 # matches the template's volumes bound
   // +k8s:listType=map
@@ -1157,9 +1142,12 @@ message ActorTemplate {
   // +k8s:required
   SandboxConfig sandbox_config = 6;
 
-  // Resource usage configuration.
+  // resources is the actor's compute size. Both cpu and memory limits are
+  // required: the scheduler books them against worker capacity, and a
+  // micro-VM is booted at that size.
   //
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:customValidation # cpu and memory limits are both set
   Resources resources = 7;
 
   // +k8s:optional
@@ -1462,6 +1450,8 @@ message Volume {
   // +k8s:unionMember
   DurableDirVolumeSource durable_dir = 2;
 
+  // +ate:preview=ExternalVolumes
+  // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
   // +k8s:optional
   // +k8s:unionMember
   ExternalVolumeTemplate external_volume_template = 3;
@@ -1939,7 +1929,7 @@ message MintActorJwtResponse {
   //
   // The subject and claim name say the token speaks for the actor itself.
   // A token minted for a Substrate component acting on the actor's behalf
-  // (WorkerService.MintAteomActorJwt) uses `ateom-for-actor` in both places
+  // (WorkerService.MintWorkerActorJwt) uses `worker-for-actor` in both places
   // instead, so a relying party can grant the two different access.
   string actor_jwt = 1 [ debug_redact = true ];
 
@@ -2296,6 +2286,7 @@ message Worker {
   //
   // +k8s:optional
   // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
   // +k8s:immutable
   string sandbox_class = 8;
 
@@ -2310,10 +2301,10 @@ message Worker {
   // +k8s:eachVal=+k8s:format=k8s-label-value
   map<string, string> labels = 9;
 
-  // epoch counts the runs of the worker pod's ateom container: 1 for its first
+  // epoch counts the runs of the worker pod's worker container: 1 for its first
   // run and one more for each restart. 0 means it has not been reported.
   //
-  // A restarted ateom has lost the sandboxes of the Actors it was hosting, so
+  // A restarted worker has lost the sandboxes of the Actors it was hosting, so
   // once epoch rises the control plane crashes every Actor placed during an
   // earlier epoch; status.observed_epoch reports when that is done. It may only
   // increase.
@@ -2340,7 +2331,7 @@ enum WorkerState {
   // Pod terminating. Not schedulable. Final: a draining Worker never becomes
   // active or unavailable again.
   WORKER_STATE_DRAINING = 2;
-  // Registered but not Ready, or its ateom restarting. Not schedulable. Every
+  // Registered but not Ready, or its the worker restarting. Not schedulable. Every
   // Worker starts here until MarkWorkerAvailable.
   WORKER_STATE_UNAVAILABLE = 3;
   // Keep this in sync with WorkerStatus.state's maximum.
@@ -2373,7 +2364,7 @@ message WorkerStatus {
 
   // observed_epoch is the latest epoch whose earlier Actors the control plane
   // has crashed and released. While it is below epoch, Actors placed before
-  // the ateom's last restart may still be reported as running.
+  // the worker's last restart may still be reported as running.
   //
   // +k8s:optional
   // +k8s:minimum=0
@@ -2402,6 +2393,7 @@ message SandboxRuntime {
   //
   // +k8s:required
   // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
   string sandbox_class = 1;
 
   // Primary compatibility version stamped onto an actor's snapshot when a
@@ -2536,23 +2528,23 @@ service WorkerService {
   // write.
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
 
-  // Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
+  // Create a Substrate-issued SPIFFE certificate that asserts a worker acting
   // on behalf of a particular actor.
   //
-  // SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
-  rpc MintAteomActorCertificate(MintAteomActorCertificateRequest) returns (MintAteomActorCertificateResponse);
+  // SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
+  rpc MintWorkerActorCertificate(MintWorkerActorCertificateRequest) returns (MintWorkerActorCertificateResponse);
 
-  // MintAteomActorJwt creates a Substrate-issued JWT that asserts an ateom
+  // MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
   // acting on behalf of a particular actor: the JWT counterpart of
-  // MintAteomActorCertificate. atelet calls it with its own client
+  // MintWorkerActorCertificate. atelet calls it with its own client
   // certificate and hands the JWT to node-side plugins, which exchange it for
   // credentials scoped to that actor.
   //
-  // The token speaks for the ateom, not the actor: its subject is
-  // `ateom-for-actor/<atespace>/<name>` and its claims sit under
-  // `ateom-for-actor.ate.dev`, see MintAteomActorJwtResponse. The lifetime is
+  // The token speaks for the worker, not the actor: its subject is
+  // `worker-for-actor/<atespace>/<name>` and its claims sit under
+  // `worker-for-actor.ate.dev`, see MintWorkerActorJwtResponse. The lifetime is
   // fixed at one hour.
-  rpc MintAteomActorJwt(MintAteomActorJwtRequest) returns (MintAteomActorJwtResponse);
+  rpc MintWorkerActorJwt(MintWorkerActorJwtRequest) returns (MintWorkerActorJwtResponse);
 
   // RequestActorSuspend asks the control plane to suspend an Actor that the
   // calling Worker hosts. Only the Worker can observe what makes an Actor
@@ -2626,8 +2618,8 @@ message RegisterWorkerResponse {
   Worker worker = 1;
 }
 
-// Request message for MintAteomActorCertificate.
-message MintAteomActorCertificateRequest {
+// Request message for MintWorkerActorCertificate.
+message MintWorkerActorCertificateRequest {
   // The actor for which the certificate should be issued.
   //
   // Must be a valid actor that currently exists according to the actor store.
@@ -2652,16 +2644,16 @@ message MintAteomActorCertificateRequest {
   bytes certificate_signing_request = 3;
 }
 
-// Response message for MintAteomActorCertificate.
-message MintAteomActorCertificateResponse {
+// Response message for MintWorkerActorCertificate.
+message MintWorkerActorCertificateResponse {
   // Response contains a list of DER encoded certificates. The first entry is the
   // leaf certificate, and any remaining entries are intermediates in
   // leaf-to-root order.
   repeated bytes actor_certificates = 1;
 }
 
-// Request message for MintAteomActorJwt.
-message MintAteomActorJwtRequest {
+// Request message for MintWorkerActorJwt.
+message MintWorkerActorJwtRequest {
   // The actor for which the JWT should be issued.
   //
   // Must be a valid actor that currently exists according to the actor store.
@@ -2688,14 +2680,14 @@ message MintAteomActorJwtRequest {
   repeated string audiences = 3;
 }
 
-// Response message for MintAteomActorJwt.
-message MintAteomActorJwtResponse {
+// Response message for MintWorkerActorJwt.
+message MintWorkerActorJwtResponse {
   // The signed JWT. Its claims are those described on
-  // MintActorJwtResponse.actor_jwt, except that it speaks for an ateom
+  // MintActorJwtResponse.actor_jwt, except that it speaks for a worker
   // acting on behalf of the actor rather than for the actor itself:
   //
-  // * sub: `ateom-for-actor/<atespace>/<name>`.
-  // * `ateom-for-actor.ate.dev`: A JSON object with the actor's `atespace`,
+  // * sub: `worker-for-actor/<atespace>/<name>`.
+  // * `worker-for-actor.ate.dev`: A JSON object with the actor's `atespace`,
   //   `actorName`, and `actorUID`.
   //
   // A relying party that trusts actor JWTs must not accept this token as the

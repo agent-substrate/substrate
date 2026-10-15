@@ -13,9 +13,9 @@
 // limitations under the License.
 
 // Package ateomphaselog renders the per-actor "timing breakdown" log record an
-// ateom emits for each checkpoint and restore. Every ateom binary times its
+// worker emits for each checkpoint and restore. Every worker binary times its
 // own phases, which are implementation details of that runtime; this package
-// holds the shape they share so the records of all ateoms carry the same
+// holds the shape they share so the records of all workers carry the same
 // identity, fidelity and key layout, and atelet's own record joins to any of them.
 package ateomphaselog
 
@@ -26,43 +26,43 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc/status"
 )
 
 // The keys the per-phase durations are logged under. They are named like
 // instruments but deliberately are not ones: the phases are implementation
-// details of each ateom, so they stay a developer-facing log record rather
-// than becoming metric API. They decompose the ateom_restore /
-// ateom_checkpoint phases of atelet's ate.actor.*.duration histograms, whose
+// details of each worker, so they stay a developer-facing log record rather
+// than becoming metric API. They decompose the worker_restore /
+// worker_checkpoint phases of atelet's ate.actor.*.duration histograms, whose
 // names they extend, and are joined per actor by benchmarking tooling.
 const (
-	RestoreDurationKey    = "ateom.actor.restore.duration"
-	CheckpointDurationKey = "ateom.actor.checkpoint.duration"
+	RestoreDurationKey    = "ateworker.actor.restore.duration"
+	CheckpointDurationKey = "ateworker.actor.checkpoint.duration"
 )
 
 // Phase is one timed step of a snapshot operation. A zero duration means the
 // phase never ran (a VOLUMES checkpoint captures no guest) and is skipped
 // rather than logged as instant. Name is suffixed onto the duration key; each
-// ateom defines its own names, with ateattr.SnapshotPhaseTotal shared so the
+// worker defines its own names, with ateattr.SnapshotPhaseTotal shared so the
 // two layers' records agree on the denominator.
 type Phase struct {
 	Name string
 	D    time.Duration
 }
 
-// FidelityLogValue maps the ateom wire enum onto the shared fidelity label
+// FidelityLogValue maps the worker wire enum onto the shared fidelity label
 // values, the same way ateattr.SnapshotFidelityValue does for the atelet
 // enum. An unrecognized fidelity reports as unknown rather than stringified,
 // so no wire value can widen the value set readers key on.
-func FidelityLogValue(fidelity ateompb.SnapshotFidelity) string {
+func FidelityLogValue(fidelity ateworkerpb.SnapshotFidelity) string {
 	switch fidelity {
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		return ateattr.SnapshotFidelityVolumes
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 		return ateattr.SnapshotFidelityRootfs
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		return ateattr.SnapshotFidelityMemory
 	default:
 		return ateattr.SnapshotFidelityUnknown
@@ -79,7 +79,7 @@ func FidelityLogValue(fidelity ateompb.SnapshotFidelity) string {
 // it completed, marked with error.type (the gRPC code, context errors as
 // DeadlineExceeded / Canceled) so a reader can leave it out of a latency
 // distribution. Absence means success.
-func SnapshotPhaseAttrs(a resources.ActorAttribution, fidelity ateompb.SnapshotFidelity, durationKey string, err error, phases []Phase) []slog.Attr {
+func SnapshotPhaseAttrs(a resources.ActorAttribution, fidelity ateworkerpb.SnapshotFidelity, durationKey string, err error, phases []Phase) []slog.Attr {
 	attrs := ateattr.ActorLogAttrs(a)
 	attrs = append(attrs, slog.String(string(ateattr.SnapshotFidelityKey), FidelityLogValue(fidelity)))
 	if err != nil {
@@ -103,6 +103,6 @@ func SnapshotPhaseAttrs(a resources.ActorAttribution, fidelity ateompb.SnapshotF
 }
 
 // LogSnapshotPhases emits the SnapshotPhaseAttrs record under msg.
-func LogSnapshotPhases(ctx context.Context, msg string, a resources.ActorAttribution, fidelity ateompb.SnapshotFidelity, durationKey string, err error, phases []Phase) {
+func LogSnapshotPhases(ctx context.Context, msg string, a resources.ActorAttribution, fidelity ateworkerpb.SnapshotFidelity, durationKey string, err error, phases []Phase) {
 	slog.LogAttrs(ctx, slog.LevelInfo, msg, SnapshotPhaseAttrs(a, fidelity, durationKey, err, phases)...)
 }

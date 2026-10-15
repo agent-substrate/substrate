@@ -28,7 +28,7 @@ import (
 )
 
 func TestNamedNetNSRejectsInvalidNames(t *testing.T) {
-	for _, name := range []string{"", ".", "..", "/absolute", "../outside", "nested/name", "ateom-actor:uid/../../outside", "nul\x00name"} {
+	for _, name := range []string{"", ".", "..", "/absolute", "../outside", "nested/name", "worker-actor:uid/../../outside", "nul\x00name"} {
 		t.Run(name, func(t *testing.T) {
 			if err := RemoveNamed(name); !errors.Is(err, os.ErrInvalid) {
 				t.Fatalf("RemoveNamed(%q): got %v, want invalid name", name, err)

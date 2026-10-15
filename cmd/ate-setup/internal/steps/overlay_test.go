@@ -441,6 +441,12 @@ func TestRenderCordonControlPlane(t *testing.T) {
 			want: []string{"ate-api-server"},
 		},
 		{
+			name: "kind api server overlay",
+			cfg:  config.Config{Kind: true},
+			path: func(e *Env) string { return e.apiServerManifestPath() },
+			want: []string{"ate-api-server"},
+		},
+		{
 			name: "podcert file",
 			path: func(e *Env) string { return e.Cfg.Manifest("pod-certificate-controller.yaml") },
 			want: []string{"podcertificate-controller"},
@@ -629,7 +635,7 @@ func TestRenderFakeDataPlane(t *testing.T) {
 		{
 			name:       "kind atelet overlay",
 			cfg:        config.Config{Kind: true},
-			path:       func(e *Env) string { return e.Cfg.Path(installDir + "/kind/atelet") },
+			path:       func(e *Env) string { return e.ateletManifestPath() },
 			wantAtelet: true, wantStorage: "s3",
 		},
 		{
@@ -650,7 +656,7 @@ func TestRenderFakeDataPlane(t *testing.T) {
 			cfg.FakeDataPlane = true
 			e := &Env{Cfg: &cfg}
 
-			rendered, err := e.renderDataPlane(tc.path(e))
+			rendered, err := e.render(tc.path(e))
 			if err != nil {
 				t.Fatalf("renderDataPlane: %v", err)
 			}
@@ -755,20 +761,113 @@ func TestRenderFakeDataPlane(t *testing.T) {
 	}
 }
 
+// Under --ingress-auth-mode=static-mtls both paths that deliver the router
+// -- the system bundle and the lone router redeploy -- have to carry the
+// static-mtls flags, alone or alongside the cordon component. Whether the
+// router accepts those flags is pinned on the router side, by
+// TestRouterIngressAuthManifestsAreValid.
+func TestRenderRouterStaticMTLS(t *testing.T) {
+	root := repoRoot(t)
+	for _, tc := range []struct {
+		name   string
+		cfg    config.Config
+		path   func(e *Env) string
+		cordon bool
+	}{
+		{
+			name: "base bundle",
+			cfg:  config.Config{Router: config.RouterEnvoy},
+			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+		},
+		{
+			name: "kind bundle",
+			cfg:  config.Config{Router: config.RouterEnvoy, Kind: true},
+			path: func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+		},
+		{
+			name: "router file",
+			cfg:  config.Config{Router: config.RouterEnvoy},
+			path: func(e *Env) string { return e.Cfg.Manifest("atenet-router.yaml") },
+		},
+		{
+			name:   "kind bundle with cordon",
+			cfg:    config.Config{Router: config.RouterEnvoy, Kind: true},
+			path:   func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			cordon: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.Root = root
+			cfg.IngressAuthMode = config.IngressAuthStaticMTLS
+			cfg.CordonControlPlane = tc.cordon
+			e := &Env{Cfg: &cfg}
+
+			rendered, err := e.render(tc.path(e))
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			args := routerArgs(t, rendered)
+			if !slices.Contains(args, "--ingress-auth-mode=static-mtls") {
+				t.Errorf("atenet-router args %v do not select static-mtls", args)
+			}
+			if tc.cordon {
+				if pinned, _ := pinnedWorkloads(t, rendered); pinned["atenet-router"] != "ate-control-plane" {
+					t.Errorf("composing both components dropped the cordon pinning (pinned: %v)", pinned)
+				}
+			}
+			t.Run("deprecated-insecure leaves the router alone", func(t *testing.T) {
+				e := &Env{Cfg: &config.Config{Root: root, Router: config.RouterEnvoy, IngressAuthMode: config.IngressAuthDeprecatedInsecure}}
+				rendered, err := e.render(e.Cfg.Manifest("atenet-router.yaml"))
+				if err != nil {
+					t.Fatalf("render: %v", err)
+				}
+				for _, arg := range routerArgs(t, rendered) {
+					if strings.HasPrefix(arg, "--ingress-auth-mode") {
+						t.Errorf("deprecated-insecure render sets %s", arg)
+					}
+				}
+			})
+		})
+	}
+}
+
+// routerArgs returns the atenet-router container's args from a rendered
+// manifest.
+func routerArgs(t *testing.T, manifest []byte) []string {
+	t.Helper()
+	for _, doc := range strings.Split(string(manifest), "\n---\n") {
+		var deployment appsv1.Deployment
+		if err := yaml.Unmarshal([]byte(doc), &deployment); err != nil {
+			t.Fatalf("rendered document is not valid YAML: %v", err)
+		}
+		if deployment.Kind != "Deployment" || deployment.Name != "atenet-router" {
+			continue
+		}
+		for _, c := range deployment.Spec.Template.Spec.Containers {
+			if c.Name == "atenet-router" {
+				return c.Args
+			}
+		}
+	}
+	t.Fatal("rendered manifest has no atenet-router container")
+	return nil
+}
+
 // Without --fake-data-plane the data plane renders as it always has.
 func TestRenderDataPlaneWithoutFakeIsRender(t *testing.T) {
 	e := &Env{Cfg: &config.Config{Root: repoRoot(t), Router: config.RouterEnvoy, Kind: true}}
 	path := e.Cfg.Path(SystemOverlay(e.Cfg))
-	got, err := e.renderDataPlane(path)
+	got, err := e.render(path)
 	if err != nil {
-		t.Fatalf("renderDataPlane: %v", err)
+		t.Fatalf("render: %v", err)
 	}
 	want, err := e.render(path)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
 	if string(got) != string(want) {
-		t.Error("renderDataPlane without --fake-data-plane differs from render")
+		t.Error("render without --fake-data-plane differs from render")
 	}
 	if _, deployments := dataPlaneWorkloads(t, got); deployments[fakeWorkersyncDeployment].Name != "" {
 		t.Errorf("render without --fake-data-plane has a %s Deployment", fakeWorkersyncDeployment)
@@ -1214,7 +1313,7 @@ func TestRequireNoWorkerPods(t *testing.T) {
 	workerPod := func(name string, terminating bool) *corev1.Pod {
 		p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 			Namespace: "benchmark-workloads", Name: name,
-			Labels: map[string]string{workerPoolLabel: "benchmark-ateom"},
+			Labels: map[string]string{workerPoolLabel: "benchmark-worker"},
 		}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
 		if terminating {
 			now := metav1.Now()
@@ -1249,7 +1348,7 @@ func TestRequireNoWorkerPods(t *testing.T) {
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("requireNoWorkerPods() = %v, want error %v", err, tc.wantErr)
 			}
-			if err != nil && strings.Count(err.Error(), "benchmark-workloads/benchmark-ateom") != 1 {
+			if err != nil && strings.Count(err.Error(), "benchmark-workloads/benchmark-worker") != 1 {
 				t.Errorf("error %q does not name the WorkerPool exactly once", err)
 			}
 		})

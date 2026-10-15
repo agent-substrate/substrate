@@ -107,7 +107,7 @@ func emittedResource(t *testing.T, relayCapable bool, conn *grpc.ClientConn) map
 	t.Helper()
 	proc := withCaptureProcessor(t)
 	lp, err := newLoggerProvider(context.Background(), LoggingOptions{
-		ServiceName:  "ateom-gvisor",
+		ServiceName:  "ateworker-gvisor",
 		Exporter:     Exporters{ExporterOTLP: true},
 		ExporterConn: conn,
 		RelayCapable: relayCapable,

@@ -680,6 +680,9 @@ func TestEnsureAteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 			if got := req.GetSnapshot().GetSnapshotUuid(); got != "local-snap-1" {
 				t.Errorf("CheckpointRequest.Snapshot.SnapshotUuid = %q, want %q", got, "local-snap-1")
 			}
+			if got := req.GetSnapshot().GetGeneration(); got != 1 {
+				t.Errorf("CheckpointRequest.Snapshot.Generation = %d, want 1, the in-progress snapshot's", got)
+			}
 			if got := req.GetUploadConfig().GetMode(); got != ateletpb.UploadMode_UPLOAD_MODE_DEFERRED {
 				t.Errorf("CheckpointRequest.UploadConfig.Mode = %v, want UPLOAD_MODE_DEFERRED", got)
 			}

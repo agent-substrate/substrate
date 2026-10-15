@@ -1,7 +1,7 @@
 # Micro-VM runtime assets + counter demo (kind, fetch-not-bake)
 
-The `microvm` runtime (`cmd/ateom-microvm`, kata + cloud-hypervisor) fetches its
-toolchain at runtime — nothing kata-specific is baked into the worker image. ateom drives
+The `microvm` runtime (`cmd/ateworker-microvm`, kata + cloud-hypervisor) fetches its
+toolchain at runtime — nothing kata-specific is baked into the worker image. ateworker drives
 the kata-agent directly (no kata shim, no containerd). Each actor container's rootfs is an
 overlay of a read-only lower (the OCI image, served into the guest over virtio-fs by
 `virtiofsd`) and a writable upper on a guest tmpfs, so `virtiofsd` is part of the asset

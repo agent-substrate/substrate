@@ -57,7 +57,7 @@ import (
 const podUIDIndex = "uid"
 
 // orphanMinAge is how old a worker directory found on disk at startup must be
-// before the syncer looks at it. The grace covers an ateom that made its own
+// before the syncer looks at it. The grace covers a worker that made its own
 // directory before its pod reached atelet's cache.
 const orphanMinAge = time.Minute
 
@@ -79,7 +79,7 @@ const syncMaxJitter = 30 * time.Second
 const syncMaxRetries = 8
 
 // workerSandboxSyncer keeps a sandbox versions file in each local worker's
-// directory under ateomsDir: the runtimes of the enabled versions of the
+// directory under workersDir: the runtimes of the enabled versions of the
 // SandboxConfig the worker's pool uses. It creates a worker's directory once
 // it writes the pod's file and removes it when the pod is gone.
 type workerSandboxSyncer struct {
@@ -89,10 +89,10 @@ type workerSandboxSyncer struct {
 	assets sandboxAssetFetcher
 	// queue carries pod UIDs. One worker drains it, so a pod's file is never
 	// written and its directory removed at the same time.
-	queue     workqueue.TypedRateLimitingInterface[string]
-	ateomsDir string // nodepath.AteomsDir(); a temp dir in tests
-	minAge    time.Duration
-	maxJitter time.Duration
+	queue      workqueue.TypedRateLimitingInterface[string]
+	workersDir string // nodepath.WorkersDir(); a temp dir in tests
+	minAge     time.Duration
+	maxJitter  time.Duration
 
 	// probeCPUIdentity is hardware.ProbeCPUIdentity. Overridable in tests.
 	probeCPUIdentity func() (vendor, model string, err error)
@@ -106,7 +106,7 @@ type workerSandboxSyncer struct {
 	cpuFeatures map[string]string
 }
 
-func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, ateomsDir string) *workerSandboxSyncer {
+func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, workersDir string) *workerSandboxSyncer {
 	return &workerSandboxSyncer{
 		resolver: resolver,
 		pods:     pods,
@@ -115,7 +115,7 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 		// of seconds to minutes.
 		queue: workqueue.NewTypedRateLimitingQueue(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)),
-		ateomsDir:        ateomsDir,
+		workersDir:       workersDir,
 		minAge:           orphanMinAge,
 		maxJitter:        syncMaxJitter,
 		probeCPUIdentity: hardware.ProbeCPUIdentity,
@@ -127,12 +127,12 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 // startWorkerSandboxSyncer wires a syncer to the given informers, which the
 // caller starts, and runs it until ctx ends. pods must hold only this node's
 // worker pods and must not have started yet. Worker directories live under
-// ateomsDir.
+// workersDir.
 //
 // The syncer never holds up atelet startup: until the informers sync, or
 // while a list/watch fails (e.g. Forbidden while an RBAC rollout lags the
 // binary), files wait and existing ones stay as they are.
-func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, assets sandboxAssetFetcher, ateomsDir string) (*workerSandboxSyncer, error) {
+func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string) (*workerSandboxSyncer, error) {
 	if err := pods.Informer().AddIndexers(cache.Indexers{podUIDIndex: func(obj any) ([]string, error) {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok {
@@ -146,7 +146,7 @@ func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInforme
 		workerPools: workerPools.Lister(),
 		configs:     configs.Lister(),
 	}
-	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), assets, ateomsDir)
+	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), assets, workersDir)
 	if err := watch(ctx, "worker pod", pods.Informer(), s.podHandler()); err != nil {
 		return nil, err
 	}
@@ -261,10 +261,10 @@ func (s *workerSandboxSyncer) enqueuePool(pool *v1alpha1.WorkerPool, maxDelay ti
 // one left by a pod that went away while atelet was down is removed. A
 // directory younger than minAge is enqueued once it reaches that age.
 func (s *workerSandboxSyncer) enqueueExistingDirs(ctx context.Context) {
-	entries, err := os.ReadDir(s.ateomsDir)
+	entries, err := os.ReadDir(s.workersDir)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			slog.WarnContext(ctx, "Could not list worker directories", slog.String("dir", s.ateomsDir), slog.Any("err", err))
+			slog.WarnContext(ctx, "Could not list worker directories", slog.String("dir", s.workersDir), slog.Any("err", err))
 		}
 		return
 	}
@@ -375,5 +375,5 @@ func (s *workerSandboxSyncer) removeDir(ctx context.Context, uid string) error {
 }
 
 func (s *workerSandboxSyncer) podDir(uid string) string {
-	return filepath.Join(s.ateomsDir, uid)
+	return filepath.Join(s.workersDir, uid)
 }

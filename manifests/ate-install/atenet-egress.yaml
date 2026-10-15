@@ -234,6 +234,12 @@ data:
                       untyped:
                       - dev.ate.egress
                       - dev.ate.policy.egress
+              - name: envoy.filters.http.dynamic_modules
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter
+                  dynamic_module_config:
+                    name: envoy_substrate_egress_policy
+                  filter_name: envoy_substrate_egress_policy_store
               # The CONNECT leg's answers, copied into filter state shared with
               # the inner listener. Must stay after ext_proc.
               - name: envoy.filters.http.set_filter_state
@@ -251,15 +257,15 @@ data:
                       text_format_source:
                         inline_string: "%DYNAMIC_METADATA(dev.ate.egress:dialed_port)%"
                       omit_empty_values: true
-                  # SNI rules for the egress-policy module. If absent, all TLS
-                  # is denied.
-                  - object_key: dev.ate.policy.egress
+                  # Workaround for dynamic module inability to store filter state that is shared with the upstream.
+                  # TODO(yanavlasov): Remove after Envoy v1.40 is released.
+                  - object_key: dev.ate.policy.egress.hash
                     factory_key: envoy.hashable_string
                     skip_if_empty: true
                     shared_with_upstream: ONCE
                     format_string:
                       text_format_source:
-                        inline_string: "%DYNAMIC_METADATA(dev.ate.policy.egress)%"
+                        inline_string: "%FILTER_STATE(dev.ate.policy.egress.hash.not_shared:PLAIN)%"
                       omit_empty_values: true
               - name: envoy.filters.http.router
                 typed_config:
@@ -866,7 +872,7 @@ data:
         # Create one pool per unique tuple, containing the following filter state objects:
         # actor ID from "dev.ate.actor.identity"
         # CONNECT authority from "dev.ate.connect.authority"
-        # Egress policy from "dev.ate.policy.egress"
+        # Egress policy hash from "dev.ate.policy.egress.hash"
         # TODO(yanavlasov): use just the port from CONNECT athority to minimize number of pools.
         # Pools are create using hashes of filter state, which includes filter state objects that use
         # envoy.hashable_string factory.
@@ -889,7 +895,7 @@ data:
             idle_timeout: 30s
         # Copies every filter state object shared with the upstream onto the
         # internal listener's downstream connection: dev.ate.actor.identity,
-        # dev.ate.connect.authority, dev.ate.policy.egress, and
+        # dev.ate.connect.authority, dev.ate.policy.egress.hash, and
         # envoy.upstream.dynamic_port, all set on the CONNECT leg above.
         #
         # Without this none of them reaches mitm_listener, and nothing reports it:

@@ -19,7 +19,9 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc/metadata"
 
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/version"
 )
 
@@ -31,6 +33,7 @@ var (
 	outputFmt    string
 	traceEnabled bool
 	verbosity    int
+	usePreview   bool
 )
 
 var rootCmd = &cobra.Command{
@@ -42,6 +45,9 @@ var rootCmd = &cobra.Command{
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		if outputFmt != "table" && outputFmt != "json" && outputFmt != "yaml" {
 			return fmt.Errorf("invalid output format %q. Must be one of: table, json, yaml", outputFmt)
+		}
+		if usePreview {
+			cmd.SetContext(metadata.AppendToOutgoingContext(cmd.Context(), preview.Header, "true"))
 		}
 		return nil
 	},
@@ -62,6 +68,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&outputFmt, "output", "o", "table", "Output format. One of: table|json|yaml")
 	rootCmd.PersistentFlags().BoolVar(&traceEnabled, "trace", false, "Enable tracing for the request")
 	rootCmd.PersistentFlags().CountVarP(&verbosity, "verbose", "v", "Increase output verbosity; may be repeated (e.g. -v, -vv, -vvvvv)")
+	rootCmd.PersistentFlags().BoolVar(&usePreview, "preview", false, "Allow the request to use preview features the server has enabled")
 
 	// Register --version without a -v shorthand so -v stays free for --verbose.
 	rootCmd.Flags().Bool("version", false, "version for "+rootCmd.DisplayName())

@@ -14,11 +14,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateominit runs a minimal init as PID 1 so ateom doesn't have to.
+// Package ateominit runs a minimal init as PID 1 so worker doesn't have to.
 //
 // PID 1 inherits every orphan (e.g. the runsc sandbox once `runsc create`
 // exits) and must reap them with wait4(-1), which races os/exec for the exit
-// status of ateom's own subprocesses. The init re-executes the binary as its
+// status of worker's own subprocesses. The init re-executes the binary as its
 // only child, reaps everything, and exits with the child's status.
 package ateominit
 
@@ -30,7 +30,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// forwarded are the signals passed through to ateom.
+// forwarded are the signals passed through to worker.
 var forwarded = []os.Signal{
 	unix.SIGTERM, unix.SIGINT, unix.SIGHUP, unix.SIGQUIT, unix.SIGUSR1, unix.SIGUSR2,
 }

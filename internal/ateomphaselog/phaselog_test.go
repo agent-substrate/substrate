@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -53,7 +53,7 @@ func renderPhaseRecord(t *testing.T, attrs []slog.Attr) map[string]any {
 func TestSnapshotPhaseAttrs(t *testing.T) {
 	t.Parallel()
 
-	attrs := SnapshotPhaseAttrs(phaseLogAttribution(), ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+	attrs := SnapshotPhaseAttrs(phaseLogAttribution(), ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		CheckpointDurationKey, nil, []Phase{
 			{Name: "prep", D: 40 * time.Millisecond},
 			{Name: "pause", D: 3 * time.Millisecond},
@@ -92,11 +92,11 @@ func TestSnapshotPhaseAttrs(t *testing.T) {
 	// Seconds, not slog.Duration's nanoseconds: the keys extend the atelet
 	// histograms' names, and those declare unit s.
 	for k, want := range map[string]float64{
-		"ateom.actor.checkpoint.duration.prep":     0.04,
-		"ateom.actor.checkpoint.duration.pause":    0.003,
-		"ateom.actor.checkpoint.duration.snapshot": 0.85,
-		"ateom.actor.checkpoint.duration.teardown": 0.23,
-		"ateom.actor.checkpoint.duration.total":    1.25,
+		"ateworker.actor.checkpoint.duration.prep":     0.04,
+		"ateworker.actor.checkpoint.duration.pause":    0.003,
+		"ateworker.actor.checkpoint.duration.snapshot": 0.85,
+		"ateworker.actor.checkpoint.duration.teardown": 0.23,
+		"ateworker.actor.checkpoint.duration.total":    1.25,
 	} {
 		got, ok := rec[k].(float64)
 		if !ok {
@@ -106,7 +106,7 @@ func TestSnapshotPhaseAttrs(t *testing.T) {
 		}
 	}
 	for _, k := range []string{
-		"ateom.actor.checkpoint.duration.durable_dir",
+		"ateworker.actor.checkpoint.duration.durable_dir",
 		// The phase key names the one step a datapoint timed; this record
 		// carries them all.
 		"ate.snapshot.phase",
@@ -140,7 +140,7 @@ func TestSnapshotPhaseAttrsFailure(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			rec := renderPhaseRecord(t, SnapshotPhaseAttrs(phaseLogAttribution(),
-				ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, CheckpointDurationKey, tt.err,
+				ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, CheckpointDurationKey, tt.err,
 				[]Phase{
 					{Name: "prep", D: 40 * time.Millisecond},
 					{Name: "pause", D: 3 * time.Millisecond},
@@ -151,10 +151,10 @@ func TestSnapshotPhaseAttrsFailure(t *testing.T) {
 			}
 			// The phases that ran before the failure are still on the record;
 			// the ones that never started are not.
-			if _, ok := rec["ateom.actor.checkpoint.duration.pause"]; !ok {
-				t.Error("missing ateom.actor.checkpoint.duration.pause")
+			if _, ok := rec["ateworker.actor.checkpoint.duration.pause"]; !ok {
+				t.Error("missing ateworker.actor.checkpoint.duration.pause")
 			}
-			if v, ok := rec["ateom.actor.checkpoint.duration.snapshot"]; ok {
+			if v, ok := rec["ateworker.actor.checkpoint.duration.snapshot"]; ok {
 				t.Errorf("snapshot phase present with %v, want absent", v)
 			}
 		})
@@ -162,19 +162,19 @@ func TestSnapshotPhaseAttrsFailure(t *testing.T) {
 }
 
 // TestFidelityLogValue pins the mapping onto the shared fidelity values, so the
-// ateom and atelet records of one operation agree on the fidelity they carry.
+// worker and atelet records of one operation agree on the fidelity they carry.
 func TestFidelityLogValue(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		scope ateompb.SnapshotFidelity
+		scope ateworkerpb.SnapshotFidelity
 		want  string
 	}{
-		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateattr.SnapshotFidelityMemory},
-		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateattr.SnapshotFidelityVolumes},
-		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateattr.SnapshotFidelityRootfs},
-		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateattr.SnapshotFidelityUnknown},
-		{ateompb.SnapshotFidelity(99), ateattr.SnapshotFidelityUnknown},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateattr.SnapshotFidelityMemory},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateattr.SnapshotFidelityVolumes},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateattr.SnapshotFidelityRootfs},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateattr.SnapshotFidelityUnknown},
+		{ateworkerpb.SnapshotFidelity(99), ateattr.SnapshotFidelityUnknown},
 	}
 	for _, tt := range tests {
 		if got := FidelityLogValue(tt.scope); got != tt.want {
@@ -184,7 +184,7 @@ func TestFidelityLogValue(t *testing.T) {
 }
 
 // TestLogSnapshotPhases: the record goes out under the caller's message and
-// at Info, through the default logger the ateoms write to.
+// at Info, through the default logger the workers write to.
 func TestLogSnapshotPhases(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
@@ -192,7 +192,7 @@ func TestLogSnapshotPhases(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	LogSnapshotPhases(context.Background(), "Restore timing breakdown", phaseLogAttribution(),
-		ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, RestoreDurationKey, nil,
+		ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, RestoreDurationKey, nil,
 		[]Phase{{Name: ateattr.SnapshotPhaseTotal, D: 2 * time.Second}})
 
 	var rec map[string]any
@@ -208,7 +208,7 @@ func TestLogSnapshotPhases(t *testing.T) {
 	if rec["ate.snapshot.fidelity"] != ateattr.SnapshotFidelityVolumes {
 		t.Errorf("ate.snapshot.fidelity = %v, want %q", rec["ate.snapshot.fidelity"], ateattr.SnapshotFidelityVolumes)
 	}
-	if got := rec["ateom.actor.restore.duration.total"]; got != 2.0 {
-		t.Errorf("ateom.actor.restore.duration.total = %v, want 2", got)
+	if got := rec["ateworker.actor.restore.duration.total"]; got != 2.0 {
+		t.Errorf("ateworker.actor.restore.duration.total = %v, want 2", got)
 	}
 }

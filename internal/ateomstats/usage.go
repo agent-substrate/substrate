@@ -27,11 +27,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
-// Pool is the WorkerPool of the ateom's pod.
+// Pool is the WorkerPool of the worker's pod.
 type Pool struct {
 	Namespace string
 	Name      string
@@ -55,7 +55,7 @@ func NewUsageEmitter(lp *sdklog.LoggerProvider, stdout slog.Handler, pool Pool) 
 
 // Emit writes one record for s, dated when s was read. kind is one of the
 // ateattr.StatsKind values.
-func (e *UsageEmitter) Emit(ctx context.Context, kind string, s *ateompb.WorkloadStatsSample) {
+func (e *UsageEmitter) Emit(ctx context.Context, kind string, s *ateworkerpb.WorkloadStatsSample) {
 	if e == nil {
 		return
 	}
@@ -66,7 +66,7 @@ func (e *UsageEmitter) Emit(ctx context.Context, kind string, s *ateompb.Workloa
 // UsageAttrs is the attribute set of ate.actor.usage_sampled for s. The
 // measurements are absent while s has no source, and the peak also when the
 // source reports none.
-func UsageAttrs(pool Pool, kind string, s *ateompb.WorkloadStatsSample) []slog.Attr {
+func UsageAttrs(pool Pool, kind string, s *ateworkerpb.WorkloadStatsSample) []slog.Attr {
 	attrs := append(ateattr.ActorLogAttrs(resources.ActorAttribution{
 		Ref:              resources.ActorRef{Atespace: s.GetAtespace(), Name: s.GetActorName()},
 		UID:              s.GetActorUid(),
@@ -80,7 +80,7 @@ func UsageAttrs(pool Pool, kind string, s *ateompb.WorkloadStatsSample) []slog.A
 		slog.String(string(ateattr.StatsKindKey), kind),
 		slog.Int64(string(ateattr.ActorEpochKey), s.GetEpochUnixNano()),
 	)
-	if s.GetSource() == ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED {
+	if s.GetSource() == ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED {
 		return attrs
 	}
 	attrs = append(attrs,
@@ -95,11 +95,11 @@ func UsageAttrs(pool Pool, kind string, s *ateompb.WorkloadStatsSample) []slog.A
 }
 
 // StatsSourceLabel maps the wire enum to the ate.stats.source values.
-func StatsSourceLabel(s ateompb.StatsSource) string {
+func StatsSourceLabel(s ateworkerpb.StatsSource) string {
 	switch s {
-	case ateompb.StatsSource_STATS_SOURCE_CGROUP:
+	case ateworkerpb.StatsSource_STATS_SOURCE_CGROUP:
 		return ateattr.StatsSourceCgroup
-	case ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT:
+	case ateworkerpb.StatsSource_STATS_SOURCE_GUEST_AGENT:
 		return ateattr.StatsSourceGuestAgent
 	default:
 		return ateattr.StatsSourceUnspecified
@@ -111,7 +111,7 @@ func StatsSourceLabel(s ateompb.StatsSource) string {
 const stdoutQueue = 4096
 
 // NewStdoutHandler writes the stdout form of the usage records to w in the
-// ateom's JSON format, at a fixed level so --log-level does not silence it, and
+// worker's JSON format, at a fixed level so --log-level does not silence it, and
 // off the caller's goroutine.
 func NewStdoutHandler(w io.Writer) *actorevent.AsyncHandler {
 	json := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo})
@@ -145,7 +145,7 @@ func StartSampler(ctx context.Context, interval time.Duration, sweep func(contex
 }
 
 // sweepOnce runs one sweep. It recovers from panics: the sampler is a
-// background job, and a bug in it must not take the ateom down and every actor
+// background job, and a bug in it must not take the worker down and every actor
 // on the worker with it.
 func sweepOnce(ctx context.Context, sweep func(context.Context)) {
 	defer func() {
