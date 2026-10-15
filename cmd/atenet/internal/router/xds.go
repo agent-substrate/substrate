@@ -202,6 +202,13 @@ const (
 	tunnelPortFilterStateKey   = "dev.ate.tunnel.port"
 )
 
+// connectPoolFilterStateKey is the only hashable value on the CONNECT chain.
+// Envoy keys main_internal's connection pool by it, so a connection never
+// carries another actor's or port's dev.ate.target.actor and
+// dev.ate.connect.authority into a new tunnel. It is the only hashable value so
+// Envoy has no order of hashes to split the pool on.
+const connectPoolFilterStateKey = "dev.ate.connect.pool"
+
 // tunnelCircuitBreakerLimit lifts Envoy's default of 1024: there is a tunnel
 // per active actor and port, and idle ones count too.
 const tunnelCircuitBreakerLimit = 65536
@@ -1175,15 +1182,19 @@ func setFilterStateHTTPFilter(values ...*setfilterstatecommonv3.FilterStateValue
 }
 
 // actorRoutingFilterStateFilter captures the actor routing header so
-// main_internal can read it across the CONNECT internal-listener hop.
+// main_internal can read it across the CONNECT internal-listener hop. With
+// captureAuthority it also captures the authority, and pools the hop by both.
 func actorRoutingFilterStateFilter(captureAuthority bool) *hcmv3.HttpFilter {
 	once := setfilterstatecommonv3.FilterStateValue_ONCE
+	actor := "%CEL(request.headers['" + atenet.TargetActorHeader + "'])%"
 	values := []*setfilterstatecommonv3.FilterStateValue{
-		filterStateValue(extproc.TargetActorFilterStateKey, "envoy.string", "%CEL(request.headers['"+atenet.TargetActorHeader+"'])%", once),
+		filterStateValue(extproc.TargetActorFilterStateKey, "envoy.string", actor, once),
 	}
 	if captureAuthority {
+		authority := "%REQ(" + extproc.AuthorityHeader + ")%"
 		values = append(values,
-			filterStateValue(extproc.ConnectAuthorityFilterStateKey, "envoy.string", "%REQ("+extproc.AuthorityHeader+")%", once))
+			filterStateValue(extproc.ConnectAuthorityFilterStateKey, "envoy.string", authority, once),
+			filterStateValue(connectPoolFilterStateKey, "envoy.hashable_string", actor+"|"+authority, once))
 	}
 	return setFilterStateHTTPFilter(values...)
 }

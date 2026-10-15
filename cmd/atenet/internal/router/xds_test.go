@@ -71,6 +71,7 @@ func TestActorRoutingFilterStateFilter(t *testing.T) {
 			want: map[string]string{
 				extproc.TargetActorFilterStateKey:      "%CEL(request.headers['ate-target-actor'])%",
 				extproc.ConnectAuthorityFilterStateKey: "%REQ(:authority)%",
+				connectPoolFilterStateKey:              "%CEL(request.headers['ate-target-actor'])%|%REQ(:authority)%",
 			},
 		},
 	} {
@@ -90,8 +91,18 @@ func TestActorRoutingFilterStateFilter(t *testing.T) {
 				if format != tc.want[key] {
 					t.Errorf("capture %q = %q, want %q", key, format, tc.want[key])
 				}
-				if key != extproc.ConnectAuthorityFilterStateKey && strings.Contains(strings.ToLower(format), ":authority") {
+				if key != extproc.ConnectAuthorityFilterStateKey && key != connectPoolFilterStateKey && strings.Contains(strings.ToLower(format), ":authority") {
 					t.Errorf("capture %q derives actor routing from authority", key)
+				}
+				// Only the pool key may be hashable: it partitions main_internal's
+				// connections by actor and authority, and a second hashable value
+				// would split the pool.
+				wantFactory := "envoy.string"
+				if key == connectPoolFilterStateKey {
+					wantFactory = "envoy.hashable_string"
+				}
+				if value.GetFactoryKey() != wantFactory {
+					t.Errorf("capture %q uses factory %q, want %q", key, value.GetFactoryKey(), wantFactory)
 				}
 			}
 		})
