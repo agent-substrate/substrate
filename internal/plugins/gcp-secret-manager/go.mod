@@ -1,11 +1,11 @@
-module github.com/agent-substrate/substrate/internal/plugins/gcp-secret-manager
+module go.ate.dev/substrate/internal/plugins/gcp-secret-manager
 
 go 1.27.0
 
 require (
 	cloud.google.com/go/secretmanager v1.16.0
-	github.com/agent-substrate/substrate v0.2.0
 	github.com/googleapis/gax-go/v2 v2.21.0
+	go.ate.dev/substrate v0.2.0
 	google.golang.org/api v0.274.0
 	google.golang.org/grpc v1.83.2
 	sigs.k8s.io/yaml v1.6.0
@@ -42,4 +42,4 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 )
 
-replace github.com/agent-substrate/substrate => ../../..
+replace go.ate.dev/substrate => ../../..

@@ -11,7 +11,7 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
 ## What it demonstrates
 
 ```text
-  ┌──────────────── ateom worker pod ─────────────────┐
+  ┌─────────────────── worker pod ────────────────────┐
   │  Actor (gVisor)                                     │
   │  GET http://<dst-ip>:80/   (plain HTTP)             │
   │        │                                            │

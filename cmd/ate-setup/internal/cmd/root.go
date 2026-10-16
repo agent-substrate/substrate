@@ -22,10 +22,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
-	"github.com/agent-substrate/substrate/internal/version"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/internal/version"
 )
 
 // Inputs that select where configuration comes from, as opposed to the
@@ -112,6 +112,11 @@ is present (skipped for --kind, and by NO_DEV_ENV=1).`,
 		if err := cfg.EnsureClusterCredentials(cmd.Context()); err != nil {
 			return err
 		}
+		if cfg.Kind && isDeployCommand(cmd) {
+			if err := cfg.CheckKindCluster(cmd.Context()); err != nil {
+				return err
+			}
+		}
 		env, err = steps.NewEnv(cfg)
 		if err != nil {
 			return err
@@ -128,6 +133,15 @@ is present (skipped for --kind, and by NO_DEV_ENV=1).`,
 		recordRun(cmd, nil)
 		return nil
 	},
+}
+
+func isDeployCommand(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		if c == deployCmd {
+			return true
+		}
+	}
+	return false
 }
 
 // recordRun writes what this run used, so the next one can reproduce it by
@@ -150,9 +164,7 @@ func recordRun(cmd *cobra.Command, runErr error) {
 	// failed before it had an environment to ask.
 	var version string
 	if env != nil {
-		if v, _, err := env.SubstrateVersion(); err == nil {
-			version = v
-		}
+		version = env.SubstrateVersion()
 	}
 
 	var path string

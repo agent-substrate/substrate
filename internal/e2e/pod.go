@@ -24,7 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/agent-substrate/substrate/internal/portforward"
+	"go.ate.dev/substrate/internal/portforward"
 )
 
 // WaitForPodReady blocks until the pod passes its readiness probe, and fails the

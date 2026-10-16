@@ -34,8 +34,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
+	corev1 "k8s.io/api/core/v1"
+
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 )
 
 func TestStatuszEndpoint(t *testing.T) {
@@ -58,15 +60,21 @@ func TestStatuszEndpoint(t *testing.T) {
 	// Run() dials ateapi in mtls mode, which requires real TLS material; generate it.
 	caPath, clientCertPath := writeTestTLSMaterial(t)
 
+	statusAddr, err := NewRouterCmd().Flags().GetString("status-address")
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := routerConfig{
 		Mode:               ModeIngress,
 		Namespace:          "default",
 		StatusPort:         httpPort,
+		StatusAddr:         statusAddr,
 		HttpPort:           8080,
 		XdsPort:            18000,
 		ExtprocPort:        50051,
 		ExtProcMaxRequests: defaultExtProcMaxRequests,
 		MetricsAddr:        "127.0.0.1:0",
+		HealthAddr:         "127.0.0.1:0",
 		ParkedRequest:      ingress.DefaultParkedRequestConfig(),
 		Auth: authConfig{
 			AteapiCAFile:         caPath,
@@ -166,6 +174,37 @@ func TestStatuszEndpoint(t *testing.T) {
 	}
 	if dashboard.Parking.MaxParked != ingress.DefaultParkedRequestMax {
 		t.Errorf("expected parking max_parked %d, got %d", ingress.DefaultParkedRequestMax, dashboard.Parking.MaxParked)
+	}
+}
+
+// The manifest's router args, defaults included, keep /statusz off the pod IP.
+func TestRouterManifestBindsStatusToLoopback(t *testing.T) {
+	addr, err := routerManifestFlags(t).GetString("status-address")
+	if err != nil {
+		t.Fatalf("reading --status-address from the manifest args: %v", err)
+	}
+	// Port 0 binds any free port; only the address is under test.
+	lis, err := routerConfig{StatusAddr: addr}.listenStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lis.Close()
+	if ip := lis.Addr().(*net.TCPAddr).IP; !ip.IsLoopback() {
+		t.Errorf("--status-address %q in %s binds %s, which other pods can reach", addr, routerManifestPath, ip)
+	}
+}
+
+func TestRouterServiceDoesNotExposeStatus(t *testing.T) {
+	statusPort, err := routerManifestFlags(t).GetInt("status-port")
+	if err != nil {
+		t.Fatalf("reading --status-port from the manifest args: %v", err)
+	}
+	var service corev1.Service
+	manifestObject(t, routerManifestPath, "Service", "atenet-router", &service)
+	for _, port := range service.Spec.Ports {
+		if port.Name == "status" || int(port.Port) == statusPort || port.TargetPort.IntValue() == statusPort || port.TargetPort.StrVal == "status" {
+			t.Errorf("router Service exposes the status server: %+v", port)
+		}
 	}
 }
 

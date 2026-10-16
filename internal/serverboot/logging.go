@@ -24,7 +24,7 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"google.golang.org/grpc"
 
-	"github.com/agent-substrate/substrate/internal/actorevent"
+	"go.ate.dev/substrate/internal/actorevent"
 )
 
 const logsExporterEnv = "OTEL_LOGS_EXPORTER"
@@ -48,7 +48,7 @@ type LoggingOptions struct {
 	// ResolveLogsExporter.
 	Exporter Exporters
 	// ExporterConn and RelayCapable are the logs counterpart of the same fields
-	// on TracingOptions: ateom passes its relay connection and marks itself
+	// on TracingOptions: worker passes its relay connection and marks itself
 	// relay-capable so the resource carries ate.otlp.relay.
 	ExporterConn *grpc.ClientConn
 	RelayCapable bool

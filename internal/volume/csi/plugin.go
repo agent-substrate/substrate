@@ -24,11 +24,11 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/agent-substrate/substrate/internal/credbundle"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/volume"
-	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/volume"
+	v1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -460,6 +460,10 @@ func resolveTLSConfig(cfg *v1alpha1.CSIDriverConfig, paths tlsPaths) (*tls.Confi
 	if !tlsCfg.UsePodIdentity {
 		// TODO: Support manual certificates loaded from Secrets specified in the config.
 		return nil, fmt.Errorf("only pod identity TLS is supported in this configuration")
+	}
+
+	if tlsCfg.ServerName == "" {
+		return nil, fmt.Errorf("tls.serverName is required when TLS is enabled")
 	}
 
 	caCache := newCAPoolCache(paths.caCert)

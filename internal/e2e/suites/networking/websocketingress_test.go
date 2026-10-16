@@ -22,10 +22,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/gorilla/websocket"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // deployWebsocketFixture installs the websocket fixture for the sandbox class
@@ -40,7 +40,7 @@ func deployWebsocketFixture(t *testing.T, ctx context.Context) e2e.SubstrateFixt
 	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, e2e.GetClients(), e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/testserver/websocket.yaml.tmpl",
 		Template: "internal/e2e/fixtures/testserver/websocket-template.yaml.tmpl",
-	}, env["BUCKET_NAME"], "websocket", false)
+	}, env["BUCKET_NAME"], "websocket", nil)
 
 	return e2e.SubstrateFixture{
 		Atespace:   atespace,

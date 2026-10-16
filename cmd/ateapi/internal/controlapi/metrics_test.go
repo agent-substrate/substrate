@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -246,7 +246,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 		},
 	}
 	template := &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
 	}
 	inst.recordLifecycleOp(context.Background(), ateattr.OperationResume, time.Now(), nil,
 		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest, ateattr.SnapshotFidelityVolumes)...)
@@ -294,6 +294,16 @@ func TestLifecycleOpAttrsOmitsUnknownScope(t *testing.T) {
 	}
 }
 
+// TestLifecycleOpAttrsOmitsTemplateBeforeLoad guards a failure before or in the
+// load step, such as lease contention or a missing ActorTemplate: the workflow
+// holds no actor, so the template keys are omitted, as on a failed delete,
+// rather than recorded as the empty string.
+func TestLifecycleOpAttrsOmitsTemplateBeforeLoad(t *testing.T) {
+	if got := lifecycleOpAttrs(nil, nil, "", ""); len(got) != 0 {
+		t.Errorf("lifecycleOpAttrs(nil actor) = %v, want no attributes", got)
+	}
+}
+
 // TestRecordLifecycleOp_OutcomeClassification asserts success omits error.type and
 // each gRPC failure maps onto its status-code string; the absence of error.type is
 // the success signal, so there is no separate failure counter.
@@ -311,7 +321,7 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 		{name: "wrapped apierror", op: ateattr.OperationResume, err: fmt.Errorf("workflow failed at step Load: %w", apierror.NotFound("missing")), wantErrorType: "NotFound"},
 		{name: "upstream status is what the caller gets", op: ateattr.OperationResume, err: fmt.Errorf("actor crashed: %w", status.Error(codes.Unavailable, "atelet down")), wantErrorType: "Internal"},
 		{name: "context deadline", op: ateattr.OperationSuspend, err: fmt.Errorf("while checkpointing: %w", context.DeadlineExceeded), wantErrorType: "DeadlineExceeded"},
-		{name: "plain error", op: ateattr.OperationPause, err: errors.New("store is down"), wantErrorType: "Internal"},
+		{name: "plain error", op: ateattr.OperationSuspend, err: errors.New("store is down"), wantErrorType: "Internal"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

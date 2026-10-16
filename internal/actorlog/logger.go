@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package actorlog provides structured JSON logging for actor sandboxes shared
-// by the gVisor and micro-VM ateom runtimes. It forwards an actor container's
+// by the gVisor and micro-VM worker runtimes. It forwards an actor container's
 // stdout/stderr to the worker pod's stdout, annotated with the ate.* identity
 // labels from internal/ateattr, and emits synthetic actor lifecycle events.
 //
@@ -38,8 +38,8 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // SyncedWriter wraps an io.Writer and synchronizes writes across goroutines.

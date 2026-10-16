@@ -28,9 +28,9 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
 )
 
 // prewarmMaxJitter spreads the fleet's asset downloads after a SandboxConfig
@@ -57,7 +57,13 @@ var prewarmTimeout = 5 * time.Minute
 // permanently broken config forever.
 const prewarmMaxRetries = 8
 
-// sandboxAssetFetcher is the one slice of AteomHerder the prewarmer needs.
+// prewarmFinished observes the result of each prewarm attempt, by config
+// name, once the worker's call has returned. A no-op in production; a var so
+// a test can wait for the worker's own prewarm call to return before it tears
+// down what that call writes into.
+var prewarmFinished = func(string, error) {}
+
+// sandboxAssetFetcher is the one slice of Atelet the prewarmer needs.
 // Prewarming through the same method as the Run/Restore path keeps the two
 // fetches from ever diverging on cache layout or validation.
 type sandboxAssetFetcher interface {
@@ -226,6 +232,7 @@ func (p *sandboxPrewarmer) process(ctx context.Context, name string) {
 	}
 	if err == nil {
 		err = p.prewarm(ctx, cfg)
+		prewarmFinished(name, err)
 	}
 	if err == nil {
 		p.queue.Forget(name)

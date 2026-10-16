@@ -15,8 +15,8 @@
 package demos
 
 import (
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/render"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/render"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
 )
 
 // bucketNamePlaceholder is substituted into every demo template with the
@@ -33,16 +33,10 @@ var ExternalVolumePlaceholders = []string{
 	"EXTERNAL_VOLUMES",
 }
 
-// Render expands a demo template with the configured bucket name and the
-// build version (pool templates pin worker pods to version-labeled nodes).
+// Render expands a demo template with the configured bucket name.
 func Render(e *steps.Env, relPath string, extraValues map[string]string, drop []string) ([]byte, error) {
-	version, _, err := e.SubstrateVersion()
-	if err != nil {
-		return nil, err
-	}
 	values := map[string]string{
 		bucketNamePlaceholder: e.Cfg.BucketName,
-		"SUBSTRATE_VERSION":   version,
 	}
 	for k, v := range extraValues {
 		values[k] = v

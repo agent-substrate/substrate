@@ -1,0 +1,38 @@
+{
+  "globalFlags": [
+    "-log-format",
+    "json",
+    "--alsologtostderr"
+  ],
+  "commands": {
+    "create": {
+      "globalFlags": [
+        "--cpu-num-from-quota"
+      ]
+    },
+    "start": {
+      "globalFlags": [
+        "-allow-connected-on-save"
+      ]
+    },
+    "restore": {
+      "globalFlags": [
+        "--cpu-num-from-quota"
+      ],
+      "subcommandFlags": [
+        "-background",
+        "-detach"
+      ]
+    },
+    "delete": {
+      "subcommandFlags": [
+        "-force"
+      ]
+    },
+    "list": {
+      "subcommandFlags": [
+        "-quiet"
+      ]
+    }
+  }
+}

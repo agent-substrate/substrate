@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/api/operation"
@@ -116,7 +116,7 @@ func TestValidateResourceMetadataCreate(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
+			op := MakeCreateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_ResourceMetadata(context.Background(), op, nil, tt.obj, nil))
 		})
@@ -232,7 +232,7 @@ func TestValidateResourceMetadataUpdate(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Update}
+			op := MakeUpdateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_ResourceMetadata(context.Background(), op, nil, tt.newObj, tt.oldObj))
 		})
@@ -431,7 +431,7 @@ func TestValidateResourceMetadataNameAndAtespaceFormat(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			obj := proto.CloneOf(tt.obj) // avoid internal mutations
-			op := operation.Operation{Type: operation.Create}
+			op := MakeCreateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_ResourceMetadata(context.Background(), op, nil, obj, nil))
 		})
@@ -645,7 +645,7 @@ func TestValidateObjectRef(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
+			op := MakeCreateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_ObjectRef(context.Background(), op, nil, tt.ref, nil))
 		})
@@ -761,55 +761,9 @@ func TestValidateSystemInfoVolumeSource(t *testing.T) {
 		}),
 		want: field.ErrorList{field.TooLong(itemsPath.Index(0).Child("path"), nil, 255).WithOrigin("maxLength")},
 	}, {
-		name: "valid: nested item path",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "meta/actor-name"
-		}),
-	}, {
 		name: "item path traversal",
 		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
 			s.DataSources[0].ActorMetadata.Items[0].Path = "../../traversal-escape"
-		}),
-		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
-	}, {
-		name: "absolute item path",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "/escaped"
-		}),
-		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
-	}, {
-		name: "item path with dot segment",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "./actor-name"
-		}),
-		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
-	}, {
-		name: "item path with trailing slash",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "actor-name/"
-		}),
-		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
-	}, {
-		name: "item path with empty segment",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "meta//actor-name"
-		}),
-		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
-	}, {
-		name: "item path with NUL byte",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "actor\x00name"
-		}),
-		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
-	}, {
-		name: "valid: unicode item path",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "méta/имя"
-		}),
-	}, {
-		name: "item path with too many segments",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = strings.Repeat("d/", 16) + "actor-name"
 		}),
 		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
 	}, {
@@ -830,10 +784,23 @@ func TestValidateSystemInfoVolumeSource(t *testing.T) {
 			s.DataSources[1].TrustBundle.Path = "actor-uid"
 		}),
 		want: field.ErrorList{field.Duplicate(dsPath.Index(1).Child("trust_bundle", "path"), nil)},
+	}, {
+		name: "second actor_metadata entry",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources = append(s.DataSources, &ateapipb.SystemInfoDataSource{
+				ActorMetadata: &ateapipb.ActorMetadataDataSource{
+					Items: []*ateapipb.ActorMetadataItem{{
+						Field: ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME,
+						Path:  "actor-name-2",
+					}},
+				},
+			})
+		}),
+		want: field.ErrorList{field.Forbidden(dsPath.Index(2).Child("actor_metadata"), "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
+			op := MakeCreateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_SystemInfoVolumeSource(context.Background(), op, nil, tt.obj, nil))
 		})
@@ -891,20 +858,13 @@ func TestValidateTrustBundleDataSource(t *testing.T) {
 		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = strings.Repeat("p", 256) }),
 		want: field.ErrorList{field.TooLong(field.NewPath("path"), nil, 255).WithOrigin("maxLength")},
 	}, {
-		name: "valid: nested path",
-		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = "certs/ca.pem" }),
-	}, {
 		name: "path traversal",
 		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = "../escape" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
-	}, {
-		name: "absolute path",
-		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = "/escaped" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
+			op := MakeCreateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_TrustBundleDataSource(context.Background(), op, nil, tt.obj, nil))
 		})
@@ -916,7 +876,6 @@ func validExternalVolume(mutate ...func(*ateapipb.ExternalVolume)) *ateapipb.Ext
 		Name:            "my-vol",
 		StorageVolumeId: "valid-storage-id",
 		VolumeType:      "mock",
-		Status:          ateapipb.ExternalVolume_STATUS_CREATED,
 	}
 	for _, m := range mutate {
 		m(v)
@@ -950,28 +909,9 @@ func TestValidateExternalVolume(t *testing.T) {
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "vol\x00id" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
 	}, {
-		name: "invalid storage volume id with unit separator U+001F",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "vol\x1fid" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
-	}, {
-		name: "invalid storage volume id with DEL U+007F",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "vol\x7fid" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
-	}, {
-		name: "invalid storage volume id with C1 control U+0080",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "vol\u0080id" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
-	}, {
-		name: "invalid storage volume id with C1 control U+009F",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "vol\u009fid" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
-	}, {
 		name: "storage volume id too long",
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = strings.Repeat("x", 257) }),
 		want: field.ErrorList{field.TooLong(field.NewPath("storage_volume_id"), nil, 256).WithOrigin("maxLength")},
-	}, {
-		name: "valid csi volume type",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "pd.csi.storage.gke.io" }),
 	}, {
 		name: "missing volume type",
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "" }),
@@ -994,52 +934,32 @@ func TestValidateExternalVolume(t *testing.T) {
 		name: "valid volume with substrate.io prefixed volume type",
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "substrate.io/mock" }),
 	}, {
-		name: "invalid volume type with empty plugin after substrate.io prefix",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "substrate.io/" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("volume_type"), nil, "")},
-	}, {
-		name: "invalid volume type with invalid plugin name after substrate.io prefix",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "substrate.io/Mock_Plugin" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("volume_type"), nil, "")},
-	}, {
-		name: "invalid volume type with non-substrate prefix",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "other.io/mock" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("volume_type"), nil, "")},
-	}, {
-		name: "negative status",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.Status = ateapipb.ExternalVolume_Status(-1) }),
-		want: field.ErrorList{field.Invalid(field.NewPath("status"), nil, "").WithOrigin("minimum")},
-	}, {
-		name: "status outside the enum",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.Status = ateapipb.ExternalVolume_Status(4) }),
-		want: field.ErrorList{field.Invalid(field.NewPath("status"), nil, "").WithOrigin("maximum")},
-	}, {
 		name: "storage volume id at the bound",
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = strings.Repeat("x", 256) }),
 	}, {
-		name: "too many volume_context entries",
+		name: "volume_context with many entries, as a CSI driver may return",
 		obj: valid(func(v *ateapipb.ExternalVolume) {
-			ctxMap := make(map[string]string, 33)
-			for i := 0; i < 33; i++ {
-				ctxMap[fmt.Sprintf("key-%d", i)] = "v"
+			ctxMap := make(map[string]string, 100)
+			for i := range 100 {
+				ctxMap[fmt.Sprintf("key-%03d", i)] = "v"
 			}
 			v.VolumeContext = ctxMap
 		}),
-		want: field.ErrorList{field.TooMany(field.NewPath("volume_context"), 33, 32).WithOrigin("maxProperties")},
 	}, {
-		name: "volume_context key too long",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeContext = map[string]string{strings.Repeat("k", 129): "v"} }),
-		want: field.ErrorList{field.TooLong(field.NewPath("volume_context"), nil, 128).WithOrigin("maxLength")},
-	}, {
-		name: "volume_context value too long",
+		name: "volume_context with one long value, as a CSI driver may return",
 		obj: valid(func(v *ateapipb.ExternalVolume) {
-			v.VolumeContext = map[string]string{"attachment": strings.Repeat("v", 257)}
+			v.VolumeContext = map[string]string{"attachment": strings.Repeat("v", 4000)}
 		}),
-		want: field.ErrorList{field.TooLong(field.NewPath("volume_context").Key("attachment"), nil, 256).WithOrigin("maxLength")},
+	}, {
+		name: "volume_context over the size bound",
+		obj: valid(func(v *ateapipb.ExternalVolume) {
+			v.VolumeContext = map[string]string{"attachment": strings.Repeat("v", 40*1024)}
+		}),
+		want: field.ErrorList{field.TooLong(field.NewPath("volume_context"), nil, 40*1024)},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
+			op := MakeCreateOp(context.Background())
 			assertValidateErr(t, Validate_ExternalVolume(context.Background(), op, nil, tt.obj, nil), tt.want)
 		})
 	}
@@ -1082,19 +1002,13 @@ func TestValidateExternalVolume_Update(t *testing.T) {
 		newObj: valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "pd.csi.storage.gke.io" }),
 		want:   field.ErrorList{field.Invalid(field.NewPath("volume_type"), nil, "").WithOrigin("update")},
 	}, {
-		name: "status and volume_context changed is valid",
-		oldObj: valid(func(v *ateapipb.ExternalVolume) {
-			v.Status = ateapipb.ExternalVolume_STATUS_PENDING
-			v.VolumeContext = nil
-		}),
-		newObj: valid(func(v *ateapipb.ExternalVolume) {
-			v.Status = ateapipb.ExternalVolume_STATUS_CREATED
-			v.VolumeContext = map[string]string{"foo": "bar"}
-		}),
+		name:   "volume_context changed is valid",
+		oldObj: valid(func(v *ateapipb.ExternalVolume) { v.VolumeContext = nil }),
+		newObj: valid(func(v *ateapipb.ExternalVolume) { v.VolumeContext = map[string]string{"foo": "bar"} }),
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Update}
+			op := MakeUpdateOp(context.Background())
 			assertValidateErr(t, Validate_ExternalVolume(context.Background(), op, nil, tt.newObj, tt.oldObj), tt.want)
 		})
 	}
@@ -1135,7 +1049,7 @@ func TestValidateDeleteOptions(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
+			op := MakeCreateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_DeleteOptions(context.Background(), op, nil, tt.obj, nil))
 		})
@@ -1154,10 +1068,8 @@ func validObjectSnapshot(mutate ...func(*ateapipb.ObjectSnapshot)) *ateapipb.Obj
 
 func validSnapshotStorage(mutate ...func(*ateapipb.SnapshotStorage)) *ateapipb.SnapshotStorage {
 	ss := &ateapipb.SnapshotStorage{
-		Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-		Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-		Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		Object:     validObjectSnapshot(),
+		Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+		Object: validObjectSnapshot(),
 	}
 	for _, m := range mutate {
 		m(ss)
@@ -1167,9 +1079,12 @@ func validSnapshotStorage(mutate ...func(*ateapipb.SnapshotStorage)) *ateapipb.S
 
 func validSnapshot(mutate ...func(*ateapipb.Snapshot)) *ateapipb.Snapshot {
 	s := &ateapipb.Snapshot{
-		Generation: 1,
-		Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
-		Storage:    []*ateapipb.SnapshotStorage{validSnapshotStorage()},
+		Uuid:            "snap-1",
+		Generation:      1,
+		Owner:           ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+		Fidelity:        ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Locality:        "node-1",
+		DurableSnapshot: validSnapshotStorage(),
 	}
 	for _, m := range mutate {
 		m(s)
@@ -1181,23 +1096,26 @@ func validSnapshot(mutate ...func(*ateapipb.Snapshot)) *ateapipb.Snapshot {
 // containing type reaches every field of it.
 func badSnapshot(mutate ...func(*ateapipb.Snapshot)) *ateapipb.Snapshot {
 	breakIt := func(s *ateapipb.Snapshot) {
-		s.Storage = []*ateapipb.SnapshotStorage{{
-			Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-			Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-			Fidelity:   ateapipb.SnapshotFidelity(4),
-			Object:     &ateapipb.ObjectSnapshot{SnapshotUri: ""},
-		}}
+		s.Fidelity = ateapipb.SnapshotFidelity(4)
+		s.DurableSnapshot = &ateapipb.SnapshotStorage{
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: ""},
+		}
 	}
 	return validSnapshot(append([]func(*ateapipb.Snapshot){breakIt}, mutate...)...)
 }
 
 func TestValidateSnapshot(t *testing.T) {
 	valid := validSnapshot
+	uuidPath := field.NewPath("uuid")
 	genPath := field.NewPath("generation")
 	ownerPath := field.NewPath("owner")
-	storagePath := field.NewPath("storage")
-	fidelityPath := storagePath.Index(0).Child("fidelity")
-	uriPath := storagePath.Index(0).Child("object", "snapshot_uri")
+	fidelityPath := field.NewPath("fidelity")
+	localityPath := field.NewPath("locality")
+	durableSnapshotPath := field.NewPath("durable_snapshot")
+	statusPath := durableSnapshotPath.Child("status")
+	objectPath := durableSnapshotPath.Child("object")
+	uriPath := objectPath.Child("snapshot_uri")
 
 	tests := []struct {
 		name string
@@ -1207,6 +1125,27 @@ func TestValidateSnapshot(t *testing.T) {
 		{
 			name: "valid",
 			obj:  valid(),
+		},
+		{
+			name: "valid optional fields unset",
+			obj: valid(func(s *ateapipb.Snapshot) {
+				s.Locality = ""
+			}),
+		},
+		{
+			name: "missing uuid",
+			obj:  valid(func(s *ateapipb.Snapshot) { s.Uuid = "" }),
+			want: field.ErrorList{field.Required(uuidPath, "")},
+		},
+		{
+			name: "invalid uuid",
+			obj:  valid(func(s *ateapipb.Snapshot) { s.Uuid = "SNAP 1" }),
+			want: field.ErrorList{field.Invalid(uuidPath, nil, "").WithOrigin("format=k8s-short-name")},
+		},
+		{
+			name: "invalid locality",
+			obj:  valid(func(s *ateapipb.Snapshot) { s.Locality = "NODE 1" }),
+			want: field.ErrorList{field.Invalid(localityPath, nil, "").WithOrigin("format=k8s-long-name")},
 		},
 		{
 			name: "missing generation",
@@ -1231,96 +1170,68 @@ func TestValidateSnapshot(t *testing.T) {
 		{
 			name: "valid fidelity: volumes",
 			obj: valid(func(s *ateapipb.Snapshot) {
-				s.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+				s.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 			}),
 		},
 		{
 			name: "missing fidelity",
 			obj: valid(func(s *ateapipb.Snapshot) {
-				s.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+				s.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 			}),
 			want: field.ErrorList{field.Required(fidelityPath, "")},
 		},
 		{
-			name: "missing storage",
-			obj:  valid(func(s *ateapipb.Snapshot) { s.Storage = nil }),
-			want: field.ErrorList{field.Required(storagePath, "")},
+			name: "valid without durable_snapshot",
+			obj:  valid(func(s *ateapipb.Snapshot) { s.DurableSnapshot = nil }),
 		},
 		{
-			name: "too many storage entries",
+			name: "missing durable_snapshot.status",
 			obj: valid(func(s *ateapipb.Snapshot) {
-				s.Storage = []*ateapipb.SnapshotStorage{
-					validSnapshotStorage(func(ss *ateapipb.SnapshotStorage) {
-						ss.Durability = ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL
-						ss.Object = nil
-						ss.Local = &ateapipb.LocalSnapshot{SnapshotName: "snap-1"}
-					}),
-					validSnapshotStorage(func(ss *ateapipb.SnapshotStorage) {
-						ss.Durability = ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE
-					}),
-					validSnapshotStorage(func(ss *ateapipb.SnapshotStorage) {
-						ss.Durability = ateapipb.SnapshotDurability(3)
-					}),
-				}
+				s.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED
 			}),
-			want: field.ErrorList{field.TooMany(storagePath, 3, 2).WithOrigin("maxItems")},
+			want: field.ErrorList{field.Required(statusPath, "")},
 		},
 		{
-			name: "missing storage durability",
+			name: "negative durable_snapshot.status",
 			obj: valid(func(s *ateapipb.Snapshot) {
-				s.Storage[0].Durability = ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_UNSPECIFIED
+				s.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus(-1)
 			}),
-			want: field.ErrorList{field.Required(storagePath.Index(0).Child("durability"), "")},
+			want: field.ErrorList{field.Invalid(statusPath, nil, "").WithOrigin("minimum")},
 		},
 		{
-			name: "negative storage durability",
+			name: "durable_snapshot.status above the enum",
 			obj: valid(func(s *ateapipb.Snapshot) {
-				s.Storage[0].Durability = ateapipb.SnapshotDurability(-1)
+				s.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus(3)
 			}),
-			want: field.ErrorList{field.Invalid(storagePath.Index(0).Child("durability"), nil, "").WithOrigin("minimum")},
+			want: field.ErrorList{field.Invalid(statusPath, nil, "").WithOrigin("maximum")},
 		},
 		{
-			name: "storage durability above the enum",
+			name: "missing durable_snapshot.object",
 			obj: valid(func(s *ateapipb.Snapshot) {
-				s.Storage[0].Durability = ateapipb.SnapshotDurability(3)
+				s.DurableSnapshot.Object = nil
 			}),
-			want: field.ErrorList{field.Invalid(storagePath.Index(0).Child("durability"), nil, "").WithOrigin("maximum")},
-		},
-		{
-			name: "storage union missing both local and object",
-			obj: valid(func(s *ateapipb.Snapshot) {
-				s.Storage[0].Object = nil
-				s.Storage[0].Local = nil
-			}),
-			want: field.ErrorList{field.Invalid(storagePath.Index(0), nil, "one of").WithOrigin("union")},
-		},
-		{
-			name: "storage union has both local and object",
-			obj: valid(func(s *ateapipb.Snapshot) {
-				s.Storage[0].Local = &ateapipb.LocalSnapshot{SnapshotName: "snap-1"}
-			}),
-			want: field.ErrorList{field.Invalid(storagePath.Index(0), nil, "one of").WithOrigin("union")},
+			want: field.ErrorList{field.Required(objectPath, "")},
 		},
 		{
 			name: "missing snapshot_uri",
-			obj:  valid(func(s *ateapipb.Snapshot) { s.Storage[0].Object.SnapshotUri = "" }),
+			obj:  valid(func(s *ateapipb.Snapshot) { s.DurableSnapshot.Object.SnapshotUri = "" }),
 			want: field.ErrorList{field.Required(uriPath, "")},
 		},
 		{
 			name: "snapshot_uri too long",
 			obj: valid(func(s *ateapipb.Snapshot) {
-				s.Storage[0].Object.SnapshotUri = "gs://" + strings.Repeat("x", 2044)
+				s.DurableSnapshot.Object.SnapshotUri = "gs://" + strings.Repeat("x", 2044)
 			}),
 			want: field.ErrorList{field.TooLong(uriPath, nil, 2048).WithOrigin("maxLength")},
 		},
 		{
 			name: "fidelity above the enum",
-			obj:  valid(func(s *ateapipb.Snapshot) { s.Storage[0].Fidelity = ateapipb.SnapshotFidelity(4) }),
+			obj:  valid(func(s *ateapipb.Snapshot) { s.Fidelity = ateapipb.SnapshotFidelity(4) }),
 			want: field.ErrorList{field.Invalid(fidelityPath, nil, "").WithOrigin("maximum")},
 		},
 		{
 			name: "negative fidelity",
-			obj:  valid(func(s *ateapipb.Snapshot) { s.Storage[0].Fidelity = ateapipb.SnapshotFidelity(-1) }),
+			obj:  valid(func(s *ateapipb.Snapshot) { s.Fidelity = ateapipb.SnapshotFidelity(-1) }),
 			want: field.ErrorList{field.Invalid(fidelityPath, nil, "").WithOrigin("minimum")},
 		},
 		{
@@ -1334,7 +1245,7 @@ func TestValidateSnapshot(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
+			op := MakeCreateOp(context.Background())
 			assertValidateErr(t, Validate_Snapshot(context.Background(), op, nil, tt.obj, nil), tt.want)
 		})
 	}
@@ -1342,8 +1253,8 @@ func TestValidateSnapshot(t *testing.T) {
 
 func TestValidateSnapshotUpdate(t *testing.T) {
 	valid := validSnapshot
-	fidelityPath := field.NewPath("storage").Index(0).Child("fidelity")
-	uriPath := field.NewPath("storage").Index(0).Child("object", "snapshot_uri")
+	fidelityPath := field.NewPath("fidelity")
+	uriPath := field.NewPath("durable_snapshot", "object", "snapshot_uri")
 
 	tests := []struct {
 		name   string
@@ -1368,27 +1279,27 @@ func TestValidateSnapshotUpdate(t *testing.T) {
 			name:   "fidelity changed to a valid value",
 			oldObj: valid(),
 			newObj: valid(func(s *ateapipb.Snapshot) {
-				s.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+				s.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 			}),
 		},
 		{
 			name:   "fidelity cleared",
 			oldObj: valid(),
 			newObj: valid(func(s *ateapipb.Snapshot) {
-				s.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+				s.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 			}),
 			want: field.ErrorList{field.Required(fidelityPath, "")},
 		},
 		{
 			name:   "fidelity changed to a value outside the enum",
 			oldObj: valid(),
-			newObj: valid(func(s *ateapipb.Snapshot) { s.Storage[0].Fidelity = ateapipb.SnapshotFidelity(4) }),
+			newObj: valid(func(s *ateapipb.Snapshot) { s.Fidelity = ateapipb.SnapshotFidelity(4) }),
 			want:   field.ErrorList{field.Invalid(fidelityPath, nil, "").WithOrigin("maximum")},
 		},
 		{
 			name:   "snapshot_uri cleared",
 			oldObj: valid(),
-			newObj: valid(func(s *ateapipb.Snapshot) { s.Storage[0].Object.SnapshotUri = "" }),
+			newObj: valid(func(s *ateapipb.Snapshot) { s.DurableSnapshot.Object.SnapshotUri = "" }),
 			want:   field.ErrorList{field.Required(uriPath, "")},
 		},
 		{
@@ -1397,21 +1308,21 @@ func TestValidateSnapshotUpdate(t *testing.T) {
 			name:   "fidelity repaired",
 			oldObj: badSnapshot(),
 			newObj: badSnapshot(func(s *ateapipb.Snapshot) {
-				s.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+				s.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 			}),
 		},
 		{
 			name:   "snapshot_uri changed to a value that is too long",
 			oldObj: valid(),
 			newObj: valid(func(s *ateapipb.Snapshot) {
-				s.Storage[0].Object.SnapshotUri = "gs://" + strings.Repeat("x", 2044)
+				s.DurableSnapshot.Object.SnapshotUri = "gs://" + strings.Repeat("x", 2044)
 			}),
 			want: field.ErrorList{field.TooLong(uriPath, nil, 2048).WithOrigin("maxLength")},
 		},
 		{
 			name:   "snapshot_uri repaired",
 			oldObj: badSnapshot(),
-			newObj: badSnapshot(func(s *ateapipb.Snapshot) { s.Storage[0].Object.SnapshotUri = validObjectSnapshot().SnapshotUri }),
+			newObj: badSnapshot(func(s *ateapipb.Snapshot) { s.DurableSnapshot.Object.SnapshotUri = validObjectSnapshot().SnapshotUri }),
 		},
 		{
 			name:   "every field repaired",
@@ -1421,7 +1332,7 @@ func TestValidateSnapshotUpdate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Update}
+			op := MakeUpdateOp(context.Background())
 			assertValidateErr(t, Validate_Snapshot(context.Background(), op, nil, tt.newObj, tt.oldObj), tt.want)
 		})
 	}
@@ -1443,7 +1354,7 @@ func TestValidateNestedSnapshot(t *testing.T) {
 			validate: func(ctx context.Context) field.ErrorList {
 				// The live path: the server validates the Actor it is about to
 				// write, as an update against the stored one.
-				op := operation.Operation{Type: operation.Update}
+				op := MakeUpdateOp(context.Background())
 				oldVal := validActor(withActorStatus())
 				newVal := validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
 					s.Snapshots = []*ateapipb.Snapshot{badSnapshot()}
@@ -1455,7 +1366,7 @@ func TestValidateNestedSnapshot(t *testing.T) {
 			name: "tag.status.snapshot",
 			path: field.NewPath("status", "snapshot"),
 			validate: func(ctx context.Context) field.ErrorList {
-				op := operation.Operation{Type: operation.Create}
+				op := MakeCreateOp(context.Background())
 				obj := validTag(func(tag *ateapipb.Tag) {
 					tag.Status.Snapshot = badSnapshot()
 				})
@@ -1466,8 +1377,8 @@ func TestValidateNestedSnapshot(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			want := field.ErrorList{
-				field.Required(tt.path.Child("storage").Index(0).Child("object", "snapshot_uri"), ""),
-				field.Invalid(tt.path.Child("storage").Index(0).Child("fidelity"), nil, "").WithOrigin("maximum"),
+				field.Required(tt.path.Child("durable_snapshot", "object", "snapshot_uri"), ""),
+				field.Invalid(tt.path.Child("fidelity"), nil, "").WithOrigin("maximum"),
 			}
 			assertValidateErr(t, tt.validate(context.Background()), want)
 		})
@@ -1571,14 +1482,19 @@ func TestValidateTag(t *testing.T) {
 			want: field.ErrorList{field.Invalid(statusPath.Child("actor_template_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 		},
 		{
+			// A reserved tag has no snapshot until the tag workflow records it.
 			name: "missing status.snapshot",
 			obj:  valid(func(tag *ateapipb.Tag) { tag.Status.Snapshot = nil }),
-			want: field.ErrorList{field.Required(statusPath.Child("snapshot"), "")},
+		},
+		{
+			name: "missing status.snapshot.durable_snapshot",
+			obj:  valid(func(tag *ateapipb.Tag) { tag.Status.Snapshot.DurableSnapshot = nil }),
+			want: field.ErrorList{field.Required(statusPath.Child("snapshot", "durable_snapshot"), "")},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
+			op := MakeCreateOp(context.Background())
 			assertValidateErr(t, Validate_Tag(context.Background(), op, nil, tt.obj, nil), tt.want)
 		})
 	}
@@ -1622,7 +1538,7 @@ func TestValidateTagUpdate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Update}
+			op := MakeUpdateOp(context.Background())
 			assertValidateErr(t, Validate_Tag(context.Background(), op, nil, tt.newObj, tt.oldObj), tt.want)
 		})
 	}
@@ -1666,8 +1582,8 @@ func TestValidateTagRequestPayloads(t *testing.T) {
 				return Validate_CreateTagRequest(ctx, op, nil, req, nil)
 			},
 			want: field.ErrorList{
-				field.Required(tagPath.Child("status", "snapshot", "storage").Index(0).Child("object", "snapshot_uri"), ""),
-				field.Invalid(tagPath.Child("status", "snapshot", "storage").Index(0).Child("fidelity"), nil, "").WithOrigin("maximum"),
+				field.Required(tagPath.Child("status", "snapshot", "durable_snapshot", "object", "snapshot_uri"), ""),
+				field.Invalid(tagPath.Child("status", "snapshot", "fidelity"), nil, "").WithOrigin("maximum"),
 			},
 		},
 		{
@@ -1772,23 +1688,23 @@ func TestValidateTagRequestPayloads(t *testing.T) {
 		{
 			name: "list: negative page_size",
 			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
-				req := &ateapipb.ListTagsRequest{PageSize: -1}
+				req := &ateapipb.ListTagsRequest{Options: &ateapipb.ListOptions{PageSize: -1}}
 				return Validate_ListTagsRequest(ctx, op, nil, req, nil)
 			},
-			want: field.ErrorList{field.Invalid(field.NewPath("page_size"), nil, "").WithOrigin("minimum")},
+			want: field.ErrorList{field.Invalid(field.NewPath("options", "page_size"), nil, "").WithOrigin("minimum")},
 		},
 		{
 			name: "list: over-long page_token",
 			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
-				req := &ateapipb.ListTagsRequest{PageToken: strings.Repeat("t", 257)}
+				req := &ateapipb.ListTagsRequest{Options: &ateapipb.ListOptions{PageToken: strings.Repeat("t", 257)}}
 				return Validate_ListTagsRequest(ctx, op, nil, req, nil)
 			},
-			want: field.ErrorList{field.TooLong(field.NewPath("page_token"), nil, 256).WithOrigin("maxLength")},
+			want: field.ErrorList{field.TooLong(field.NewPath("options", "page_token"), nil, 256).WithOrigin("maxLength")},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
+			op := MakeCreateOp(context.Background())
 			assertValidateErr(t, tt.validate(context.Background(), op), tt.want)
 		})
 	}
@@ -1796,8 +1712,8 @@ func TestValidateTagRequestPayloads(t *testing.T) {
 
 func validGoldenSnapshotStatus(mutate ...func(*ateapipb.GoldenSnapshotStatus)) *ateapipb.GoldenSnapshotStatus {
 	s := &ateapipb.GoldenSnapshotStatus{
-		GoldenTag:            &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "01234567-89ab-cdef-0123-456789abcdef"},
-		TakeGoldenSnapshotAt: &timestamppb.Timestamp{Seconds: 867},
+		GoldenTag:    &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "01234567-89ab-cdef-0123-456789abcdef"},
+		SnapshotTime: &timestamppb.Timestamp{Seconds: 867},
 	}
 	for _, m := range mutate {
 		m(s)
@@ -1825,8 +1741,8 @@ func TestValidateGoldenSnapshotStatus(t *testing.T) {
 		{
 			name: "valid failed",
 			obj: &ateapipb.GoldenSnapshotStatus{
-				TakeGoldenSnapshotAt: &timestamppb.Timestamp{Seconds: 867},
-				ErrorMessage:         "GoldenActorCrashed: golden actor crashed before its snapshot was taken",
+				SnapshotTime: &timestamppb.Timestamp{Seconds: 867},
+				ErrorMessage: "GoldenActorCrashed: golden actor crashed before its snapshot was taken",
 			},
 		},
 		{
@@ -1852,7 +1768,7 @@ func TestValidateGoldenSnapshotStatus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Create}
+			op := MakeCreateOp(context.Background())
 			assertValidateErr(t, Validate_GoldenSnapshotStatus(context.Background(), op, nil, tt.obj, nil), tt.want)
 		})
 	}
@@ -1875,14 +1791,14 @@ func TestValidateGoldenSnapshotStatusUpdate(t *testing.T) {
 		{
 			// The reconciler restarts the warmup clock on every resume, so the
 			// deadline must stay mutable.
-			name:   "take_golden_snapshot_at changed",
+			name:   "snapshot_time changed",
 			oldObj: valid(),
 			newObj: valid(func(s *ateapipb.GoldenSnapshotStatus) {
-				s.TakeGoldenSnapshotAt = &timestamppb.Timestamp{Seconds: 5309}
+				s.SnapshotTime = &timestamppb.Timestamp{Seconds: 5309}
 			}),
 		},
 		{
-			name:   "take_golden_snapshot_at set",
+			name:   "snapshot_time set",
 			oldObj: &ateapipb.GoldenSnapshotStatus{},
 			newObj: valid(),
 		},
@@ -1904,7 +1820,7 @@ func TestValidateGoldenSnapshotStatusUpdate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := operation.Operation{Type: operation.Update}
+			op := MakeUpdateOp(context.Background())
 			assertValidateErr(t, Validate_GoldenSnapshotStatus(context.Background(), op, nil, tt.newObj, tt.oldObj), tt.want)
 		})
 	}

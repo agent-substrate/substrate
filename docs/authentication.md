@@ -24,11 +24,10 @@ matches. `certificateAuthorityFile` and `discoveryTokenFile` are optional and
 are needed for OIDC discovery against some private Kubernetes API servers.
 
 `actorIdentityJWTProvider` identifies the provider allowed to call
-`ActorIdentity.MintJWT`. Other authenticated providers can call every RPC.
-Authorization and RBAC are not implemented yet, so only configure providers
-whose users should have full control of the entire control plane: every
-atespace, actor, actor template, egress policy, snapshot and worker in the
-cluster.
+`ActorIdentity.MintJWT`. What an authenticated caller may do is decided by
+authorization; see [authorization.md](authorization.md). Its principal ID does
+not record which provider issued the token, so only configure providers you
+trust not to issue a token whose subject is another principal's ID.
 
 ## Google Cloud CLI tokens
 

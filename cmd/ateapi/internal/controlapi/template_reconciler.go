@@ -22,10 +22,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -254,7 +254,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			return 0, r.fail(ctx, tmpl, reasonGoldenActorCrashed, "golden actor crashed before its snapshot was taken")
 
 		case ateapipb.ActorState_ACTOR_STATE_RUNNING:
-			takeAt := goldenSnapshotStatus.GetTakeGoldenSnapshotAt()
+			takeAt := goldenSnapshotStatus.GetSnapshotTime()
 			if takeAt == nil {
 				// Resumed, but the deadline write was lost (a replica died
 				// after ResumeActor). The elapsed warmup is unknowable, so
@@ -262,7 +262,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				slog.WarnContext(ctx, "Golden actor running without a snapshot deadline; restarting warmup", slog.String("ActorTemplate", ref.String()))
 				deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl.GetContainers()))
 				if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
-					snapshotStatus.TakeGoldenSnapshotAt = timestamppb.New(deadline)
+					snapshotStatus.SnapshotTime = timestamppb.New(deadline)
 				}); err != nil {
 					return 0, err
 				}
@@ -291,7 +291,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
 			// The golden actor was never resumed, or a previous resume didn't
 			// finish; ResumeActor is reentrant from both.
-			if _, st := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); st != nil {
+			if findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) != nil {
 				// Golden actors never start from a source snapshot, so an
 				// existing snapshot means an earlier suspend completed
 				// without being recorded.
@@ -303,12 +303,12 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			}
 			deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl.GetContainers()))
 			if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
-				snapshotStatus.TakeGoldenSnapshotAt = timestamppb.New(deadline)
+				snapshotStatus.SnapshotTime = timestamppb.New(deadline)
 			}); err != nil {
 				return 0, err
 			}
-		case ateapipb.ActorState_ACTOR_STATE_DELETING, ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_PAUSING, ateapipb.ActorState_ACTOR_STATE_REVERTING:
-			// Nothing in the golden flow deletes, pauses, or reverts the actor before
+		case ateapipb.ActorState_ACTOR_STATE_DELETING, ateapipb.ActorState_ACTOR_STATE_REVERTING:
+			// Nothing in the golden flow deletes or reverts the actor before
 			// the snapshot is taken; someone else interfered.
 			return 0, r.fail(ctx, tmpl, reasonUnexpectedState, fmt.Sprintf("golden actor in unexpected state %v", state))
 
@@ -326,7 +326,7 @@ func (r *ActorTemplateReconciler) suspendActor(ctx context.Context, goldenRef *a
 		// A crash during suspend is observed as CRASHED on the retry.
 		return fmt.Errorf("while suspending golden actor: %w", err)
 	}
-	if _, st := findLatestSnapshotStorage(resp.GetActor().GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); st == nil {
+	if findLatestDurableSnapshot(resp.GetActor().GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == nil {
 		return fmt.Errorf("suspending golden actor produced no external snapshot")
 	}
 	return nil

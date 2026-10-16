@@ -150,7 +150,7 @@ const file_credprovider_proto_rawDesc = "" +
 	"\x13FetchSecretResponse\x12&\n" +
 	"\fopaque_bytes\x18\x01 \x01(\fB\x03\x80\x01\x01R\vopaqueBytes2j\n" +
 	"\x12CredentialProvider\x12T\n" +
-	"\vFetchSecret\x12 .credprovider.FetchSecretRequest\x1a!.credprovider.FetchSecretResponse\"\x00B?Z=github.com/agent-substrate/substrate/pkg/proto/credproviderpbb\x06proto3"
+	"\vFetchSecret\x12 .credprovider.FetchSecretRequest\x1a!.credprovider.FetchSecretResponse\"\x00B/Z-go.ate.dev/substrate/pkg/proto/credproviderpbb\x06proto3"
 
 var (
 	file_credprovider_proto_rawDescOnce sync.Once

@@ -22,11 +22,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
 
-	"github.com/agent-substrate/substrate/internal/roottest"
+	"go.ate.dev/substrate/internal/roottest"
 )
 
 // writeLayer builds a layer dir (fs/ tree + whiteouts.json) as the store's
@@ -254,18 +255,27 @@ func TestSetupBundleRootfs_MountAndUnmount(t *testing.T) {
 // limit. Needs CAP_SYS_ADMIN.
 func TestSetupBundleRootfs_ManyLayers(t *testing.T) {
 	roottest.Require(t, "mount/unmount")
-	// Digest-length dir names so each path matches production length (~114
-	// bytes); 64 of them comfortably exceed the page that motivated this.
+	// Overlayfs caps a chain at 500 lower layers, and production-length
+	// paths (~114 bytes) cannot outgrow a 64 KiB page within that cap. So
+	// each digest-named layer dir is padded until its path fills the 255
+	// bytes one fsconfig(2) string value carries, and the layer count
+	// follows the page size: 17 layers on 4 KiB pages, 257 on 64 KiB pages.
 	pool := filepath.Join(t.TempDir(), "sha256")
-	const n = 64
+	const lowerLen = 255
+	pad := lowerLen - len(filepath.Join(pool, strings.Repeat("0", 64), layerFSDirName))
+	if pad < 0 {
+		t.Fatalf("temp dir %q is too long to pad a lowerdir path to %d bytes", pool, lowerLen)
+	}
+	pageSize := os.Getpagesize()
+	n := pageSize/(lowerLen+1) + 1
 	layers := make([]string, n)
 	joined := 0
 	for i := range layers {
-		layers[i] = filepath.Join(pool, fmt.Sprintf("%064d", i))
+		layers[i] = filepath.Join(pool, fmt.Sprintf("%064d", i)+strings.Repeat("p", pad))
 		writeLayer(t, layers[i], map[string]string{fmt.Sprintf("from-layer-%02d.txt", i): "x"}, nil)
 		joined += len(layers[i]) + len("/fs") + 1
 	}
-	if pageSize := os.Getpagesize(); joined <= pageSize {
+	if joined <= pageSize {
 		t.Fatalf("test layers join to %d bytes, not exceeding the %d-byte page this test guards against", joined, pageSize)
 	}
 

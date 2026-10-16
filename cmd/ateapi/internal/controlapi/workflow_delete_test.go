@@ -20,14 +20,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
+	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
@@ -65,13 +66,6 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 			wantCode:  codes.FailedPrecondition,
 		},
 		{
-			name:      "delete paused actor rejected when not any_state",
-			seedState: ateapipb.ActorState_ACTOR_STATE_PAUSED,
-			anyState:  false,
-			wantErr:   true,
-			wantCode:  codes.FailedPrecondition,
-		},
-		{
 			name:      "any_state delete suspended actor succeeds",
 			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			anyState:  true,
@@ -80,12 +74,6 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 		{
 			name:      "any_state delete running actor succeeds",
 			seedState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			anyState:  true,
-			wantErr:   false,
-		},
-		{
-			name:      "any_state delete paused actor succeeds",
-			seedState: ateapipb.ActorState_ACTOR_STATE_PAUSED,
 			anyState:  true,
 			wantErr:   false,
 		},
@@ -168,8 +156,6 @@ func TestEnsureMarkedDeleting_StateMatrix(t *testing.T) {
 				ateapipb.ActorState_ACTOR_STATE_RUNNING:     true,
 				ateapipb.ActorState_ACTOR_STATE_RESUMING:    true,
 				ateapipb.ActorState_ACTOR_STATE_SUSPENDING:  true,
-				ateapipb.ActorState_ACTOR_STATE_PAUSING:     true,
-				ateapipb.ActorState_ACTOR_STATE_PAUSED:      true,
 				ateapipb.ActorState_ACTOR_STATE_SUSPENDED:   true,
 				ateapipb.ActorState_ACTOR_STATE_CRASHED:     true,
 				ateapipb.ActorState_ACTOR_STATE_REVERTING:   true,
@@ -276,8 +262,8 @@ func TestEnsureExternalSnapshotsReleased(t *testing.T) {
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 				s.LastAssignedGeneration = 2
 				s.Snapshots = []*ateapipb.Snapshot{
-					newDurableSnapshot(1, currentType, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-					newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+					newDurableSnapshot(1, currentType, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 				}
 			})
 
@@ -325,7 +311,7 @@ func TestEnsureExternalSnapshotsReleased_CollectsStrandedSnapshots(t *testing.T)
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 		s.LastAssignedGeneration = 1
 		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", currentSnapshot.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", currentSnapshot.Name(), currentSnapshot.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 		}
 	})
 
@@ -365,7 +351,7 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 		s.LastAssignedGeneration = 1
 		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 		}
 	})
 
@@ -398,7 +384,7 @@ func TestEnsureExternalSnapshotsReleased_DeletePrefixFailure(t *testing.T) {
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 		s.LastAssignedGeneration = 1
 		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 		}
 	})
 
@@ -459,62 +445,52 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 			objects := objectstoretest.New()
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			workerName := testWorkerUID("pod-1")
+			workerName := wireTestAssignment().GetWorker().GetName()
 			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
 				Status: &ateapipb.ActorStatus{
-					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker:          &ateapipb.ObjectRef{Name: workerName},
-						WorkerNamespace: "worker-ns",
-						WorkerPool:      "pool",
-						WorkerPod:       "pod-1",
-						WorkerPodUid:    workerName,
-					},
+					State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: wireTestAssignment(),
 				},
 			})
-			if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
-				Metadata:        &ateapipb.ResourceMetadata{Name: workerName},
-				WorkerNamespace: "worker-ns",
-				WorkerPool:      "pool",
-				WorkerPod:       "pod-1",
-				WorkerPodUid:    workerName,
-				Status:          &ateapipb.WorkerStatus{},
-			}); err != nil {
-				t.Fatalf("CreateWorker: %v", err)
-			}
-			seedAssignment(t, persistence, workerName, &ateapipb.ActorAssignment{
-				Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
-				ActorUid: actor.GetMetadata().GetUid(),
-			})
+			seedWireWorker(t, ctx, persistence, assignmentOf(actor))
 
 			if tt.hasBeenSuspended {
 				previous := mustActorSnapshotURI(t, template, actor, "old")
 				objects.PutSnapshot(t, previous, "manifest.json")
-				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+				mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 					s.LastAssignedGeneration = 1
 					s.Snapshots = []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 					}
 				})
 			}
 
-			actorWorkflow := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects))
-			// Suspend the actor as far as it gets: MarkSuspending mints the
-			// in-progress URI, and the checkpoint writes under it
-			actor, err := actorWorkflow.ensureMarkedSuspending(ctx, actorRef, actor, template)
-			if err != nil {
-				t.Fatalf("ensureMarkedSuspending: %v", err)
+			actorWorkflow, atelet := newWireCaptureWorkflow(t, persistence)
+			actorWorkflow.objectStorePlugin = objectstoreplugintest.ControlClient(objects)
+			// atelet writes part of the snapshot, then the worker's pod goes
+			// away mid-checkpoint, so the checkpoint fails and the suspend never
+			// commits.
+			var fresh resources.SnapshotURI
+			atelet.onCheckpoint = func(context.Context) error {
+				uri, err := resources.ParseSnapshotURI(atelet.checkpointRequest().GetSnapshot().GetObject().GetSnapshotUri())
+				if err != nil {
+					t.Errorf("ParseSnapshotURI: %v", err)
+					return err
+				}
+				fresh = uri
+				objects.PutSnapshot(t, fresh, "manifest.json")
+				// The worker's pod goes away with the commit still outstanding, so
+				// the suspend never gets to finish.
+				if _, err := NewWorkerWorkflow(persistence).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
+					t.Errorf("DeleteWorker: %v", err)
+					return err
+				}
+				return status.Error(codes.Unavailable, "worker pod is gone")
 			}
-			_, freshSt := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS)
-			fresh := mustParseSnapshotURI(t, freshSt.GetObject().GetSnapshotUri())
-			objects.PutSnapshot(t, fresh, "manifest.json")
-
-			// The worker's pod goes away with the commit still outstanding, so
-			// the suspend never gets to finish.
-			if _, err := NewWorkerWorkflow(persistence).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
-				t.Fatalf("DeleteWorker: %v", err)
+			if _, err := actorWorkflow.SuspendActor(ctx, actorRef); apierror.Code(err) != codes.Unavailable {
+				t.Fatalf("SuspendActor err = %v, want Unavailable from the failed checkpoint", err)
 			}
 
 			// The actor is CRASHED; DeleteActor deletes the in-progress snapshot

@@ -24,8 +24,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/objectstore"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/objectstore"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // Fake is an in-memory object store. It is safe for concurrent use, as the

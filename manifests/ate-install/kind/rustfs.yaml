@@ -131,3 +131,34 @@ spec:
           done
           echo "timed out waiting for rustfs"
           exit 1
+---
+# ../ate-system-networkpolicies.yaml denies ingress to every ate-system pod by
+# default. rustfs's S3 API is reached by the snapshot-plugin sidecars of
+# ate-api-server and atelet and by the bucket-init Job; its console is not
+# admitted (use a port-forward).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rustfs
+  namespace: ate-system
+spec:
+  podSelector:
+    matchLabels:
+      app: rustfs
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchExpressions:
+        - key: app
+          operator: In
+          values:
+          - ate-api-server
+          - atelet
+    - podSelector:
+        matchLabels:
+          batch.kubernetes.io/job-name: rustfs-bucket-init
+    ports:
+    - protocol: TCP
+      port: api

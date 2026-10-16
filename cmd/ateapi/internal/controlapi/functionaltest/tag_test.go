@@ -19,11 +19,11 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 )
@@ -49,7 +49,7 @@ func seedTag(t *testing.T, tc *testContext, actorName, tagName string, opts ...f
 	actor, err = tc.persistence.UpdateActor(ctx, resources.ActorRefFromActor(actor), store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.LastAssignedGeneration = 1
 		toUpdate.Status.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", actorSnapshotURI.String()),
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", actorSnapshotURI.Name(), actorSnapshotURI.String()),
 		}
 		return nil
 	})
@@ -65,16 +65,7 @@ func seedTag(t *testing.T, tc *testContext, actorName, tagName string, opts ...f
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
 		Status: &ateapipb.TagStatus{
-			Snapshot: &ateapipb.Snapshot{
-				Generation: 1,
-				Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
-				Storage: []*ateapipb.SnapshotStorage{{
-					Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-					Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-					Fidelity:   durableSnapshotStorage(actor.GetStatus()).GetFidelity(),
-					Object:     &ateapipb.ObjectSnapshot{SnapshotUri: uri.String()},
-				}},
-			},
+			Snapshot: newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, durableSnapshot(actor.GetStatus()).GetFidelity(), "", uri.Name(), uri.String()),
 		},
 	}
 	for _, opt := range opts {

@@ -36,8 +36,11 @@ type Options struct {
 	Router                         string
 	RolloutTimeout                 string
 	PodcertWorkersPerSigner        int
+	EnvoyConcurrency               int
 	ClusterSize                    string
 	CordonControlPlane             bool
+	FakeDataPlane                  bool
+	IngressAuthMode                string
 	AdditionalEgressExtprocService string
 	CredentialProvider             string
 	OtlpEndpoint                   string
@@ -86,6 +89,7 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 		{"atenet-dataplane", opts.Router},
 		{"rollout-timeout", opts.RolloutTimeout},
 		{"cluster-size", opts.ClusterSize},
+		{"ingress-auth-mode", opts.IngressAuthMode},
 		{"experimental-additional-egress-extproc-service", opts.AdditionalEgressExtprocService},
 		{"credential-provider", opts.CredentialProvider},
 		{"otlp-endpoint", opts.OtlpEndpoint},
@@ -102,6 +106,7 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 	}{
 		{"kind", opts.Kind},
 		{"cordon-control-plane", opts.CordonControlPlane},
+		{"fake-data-plane", opts.FakeDataPlane},
 	} {
 		if kv.val {
 			if err := fs.Set(kv.flag, "true"); err != nil {
@@ -111,6 +116,11 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 	}
 	if opts.PodcertWorkersPerSigner != 0 {
 		if err := fs.Set("podcert-workers-per-signer", strconv.Itoa(opts.PodcertWorkersPerSigner)); err != nil {
+			return nil, err
+		}
+	}
+	if opts.EnvoyConcurrency != 0 {
+		if err := fs.Set("e2e-envoy-concurrency", strconv.Itoa(opts.EnvoyConcurrency)); err != nil {
 			return nil, err
 		}
 	}
