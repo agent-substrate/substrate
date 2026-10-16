@@ -17,23 +17,33 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 )
 
-// killSandboxScript SIGKILLs every process whose command line names the actor:
-// the runsc sandbox and gofer, or cloud-hypervisor and virtiofsd. The UID comes
-// from the environment so the script never matches itself.
-const killSandboxScript = `n=0
-for d in /proc/[0-9]*; do
-  c=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
-  case "$c" in *"$ACTOR_UID"*) kill -9 "${d#/proc/}" && n=$((n+1)) ;; esac
-done
-echo "killed $n"
-[ "$n" -gt 0 ]`
+// testserverImage resolves the e2e testserver image, whose kill subcommand
+// does the killing.
+func testserverImage(t *testing.T) string {
+	t.Helper()
+	manifest := filepath.Join(t.TempDir(), "image.yaml")
+	if err := os.WriteFile(manifest, []byte("image: ko://go.ate.dev/substrate/internal/e2e/fixtures/testserver\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// the first line; ko appends a document separator
+	line, _, _ := strings.Cut(string(koResolve(t, manifest)), "\n")
+	image := strings.TrimSpace(strings.TrimPrefix(line, "image:"))
+	if image == "" {
+		t.Fatal("ko resolved no testserver image")
+	}
+	return image
+}
 
 // KillActorSandbox kills the actor's sandbox processes on its worker, the way a
 // crash would, from an ephemeral container sharing the worker's PID namespace.
@@ -48,13 +58,15 @@ func KillActorSandbox(ctx context.Context, t *testing.T, clients *Clients, names
 	pod.Spec.EphemeralContainers = append(pod.Spec.EphemeralContainers, corev1.EphemeralContainer{
 		TargetContainerName: "worker",
 		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
-			Name:    name,
-			Image:   "busybox@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e",
-			Command: []string{"sh", "-c", killSandboxScript},
-			Env:     []corev1.EnvVar{{Name: "ACTOR_UID", Value: actorUID}},
-			// the sandbox processes run unconfined, and the default AppArmor
-			// profile, enforced on GKE, may not signal them
+			Name:  name,
+			Image: testserverImage(t),
+			// kills the runsc sandbox and gofer, or cloud-hypervisor and
+			// virtiofsd: each names the actor UID in its command line
+			Args: []string{"kill", "--cmdline-contains", actorUID},
+			// root, like the sandbox processes, which also run unconfined, and
+			// the default AppArmor profile, enforced on GKE, may not signal them
 			SecurityContext: &corev1.SecurityContext{
+				RunAsUser:       ptr.To[int64](0),
 				AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
 			},
 		},
@@ -70,11 +82,17 @@ func KillActorSandbox(ctx context.Context, t *testing.T, clients *Clients, names
 			t.Fatalf("getting worker pod %s/%s: %v", namespace, podName, err)
 		}
 		for _, st := range pod.Status.EphemeralContainerStatuses {
-			if st.Name != name || st.State.Terminated == nil {
+			if st.Name != name {
+				continue
+			}
+			if w := st.State.Waiting; w != nil && w.Reason != "" && w.Reason != "ContainerCreating" && w.Reason != "PodInitializing" {
+				t.Fatalf("kill container for actor %s cannot start: %s: %s", actorUID, w.Reason, w.Message)
+			}
+			if st.State.Terminated == nil {
 				continue
 			}
 			if code := st.State.Terminated.ExitCode; code != 0 {
-				t.Fatalf("killing the sandbox of actor %s exited %d: no process named it", actorUID, code)
+				t.Fatalf("killing the sandbox of actor %s exited %d", actorUID, code)
 			}
 			t.Logf("Killed the sandbox of actor %s on %s/%s", actorUID, namespace, podName)
 			return
