@@ -100,7 +100,7 @@ func canHardLink(cacheDir, actorsDir string) error {
 	link := filepath.Join(actorsDir, filepath.Base(probe.Name()))
 	if err := os.Link(probe.Name(), link); err != nil {
 		if errors.Is(err, syscall.EXDEV) {
-			return fmt.Errorf("%s and %s are on different mounts, so assets cannot be hard-linked into actor dirs; put the cache on the mount that holds %s", cacheDir, actorsDir, actorsDir)
+			return fmt.Errorf("%s and %s are on different mounts, so assets cannot be hard-linked into actor dirs; put the cache on the mount that holds %s: %w", cacheDir, actorsDir, actorsDir, err)
 		}
 		return fmt.Errorf("while probing a hard link from %s into %s: %w", cacheDir, actorsDir, err)
 	}

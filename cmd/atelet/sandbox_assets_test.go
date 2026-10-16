@@ -37,7 +37,9 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"google.golang.org/grpc/codes"
 )
 
 func TestExtractTarArchive(t *testing.T) {
@@ -483,5 +485,46 @@ func TestStageAssetFetchErrorWrappingErrExistIsNotStaged(t *testing.T) {
 	}
 	if _, err := os.Lstat(dst); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("destination exists after a failed fetch (lstat err = %v)", err)
+	}
+}
+
+// TestEnsureSandboxAssetsRejectsBadAssetNames pins that an asset name that
+// is not one plain path element is refused before anything is fetched or
+// staged. "." is the case that slips past Base and IsLocal: it would make
+// the assets dir itself the destination, which staged would then report as
+// present without a fetch.
+func TestEnsureSandboxAssetsRejectsBadAssetNames(t *testing.T) {
+	content := []byte("kernel bytes")
+	sha := fmt.Sprintf("%x", sha256.Sum256(content))
+	for _, name := range []string{".", "..", "", "kata/kernel", "/kata-kernel", "./kata-kernel"} {
+		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
+			root := t.TempDir()
+			var gets atomic.Int32
+			s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content, gets: &gets}}
+			dstDir := filepath.Join(root, "actor", "sandbox-assets")
+			rec := &sandboxAssetsRecord{SandboxClass: "microvm", Assets: map[string]assetEntry{name: {URL: "gs://assets/vmlinux", SHA256: sha}}}
+			_, err := s.ensureSandboxAssets(t.Context(), rec, dstDir)
+			if apierror.Code(err) != codes.InvalidArgument {
+				t.Fatalf("ensureSandboxAssets with asset name %q = %v (code %s), want %s", name, err, apierror.Code(err), codes.InvalidArgument)
+			}
+			if gets.Load() != 0 {
+				t.Errorf("asset fetched %d times for a refused name", gets.Load())
+			}
+			if entries, _ := os.ReadDir(dstDir); len(entries) != 0 {
+				t.Errorf("refused name left %d entries in the assets dir", len(entries))
+			}
+		})
+	}
+
+	// A plain name is staged as the file it names.
+	root := t.TempDir()
+	s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
+	dstDir := filepath.Join(root, "actor", "sandbox-assets")
+	paths, err := s.ensureSandboxAssets(t.Context(), &sandboxAssetsRecord{SandboxClass: "microvm", Assets: map[string]assetEntry{"kata-kernel": {URL: "gs://assets/vmlinux", SHA256: sha}}}, dstDir)
+	if err != nil {
+		t.Fatalf("ensureSandboxAssets: %v", err)
+	}
+	if fi, err := os.Stat(paths["kata-kernel"]); err != nil || !fi.Mode().IsRegular() || paths["kata-kernel"] != filepath.Join(dstDir, "kata-kernel") {
+		t.Errorf("kata-kernel staged at %q (%v), want a regular file at %s", paths["kata-kernel"], err, filepath.Join(dstDir, "kata-kernel"))
 	}
 }

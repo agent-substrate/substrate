@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
-	"go.ate.dev/substrate/internal/nodepath"
 )
 
 func TestValidateSandboxAssetCacheFlags(t *testing.T) {
@@ -98,18 +97,6 @@ func TestCanHardLink(t *testing.T) {
 			t.Errorf("%s holds %d entries after the probe (%v), want none", dir, len(entries), err)
 		}
 	}
-	// /dev is a separate mount on Linux and macOS alike.
-	if err := canHardLink(cache, "/dev/ate-link-probe"); err == nil {
-		t.Error("a temp dir and /dev reported linkable")
-	}
-}
-
-func TestOpenSandboxAssetCacheRejectsOtherFilesystem(t *testing.T) {
-	useTempAssetScratch(t)
-	orig := nodepath.ActorsDir
-	nodepath.ActorsDir = "/dev/actors"
-	t.Cleanup(func() { nodepath.ActorsDir = orig })
-	if _, err := openSandboxAssetCache(t.Context(), filepath.Join(t.TempDir(), "cache"), time.Hour, time.Minute); err == nil {
-		t.Fatal("openSandboxAssetCache accepted a cache on another filesystem than the actor dirs")
-	}
+	// The cross-mount case needs a second mount a non-root user can write
+	// to; see sandbox_asset_cache_linux_test.go.
 }
