@@ -179,7 +179,9 @@ type ActorDirs struct {
 	VolumesDir string `protobuf:"bytes,7,opt,name=volumes_dir,json=volumesDir,proto3" json:"volumes_dir,omitempty"`
 	// Holds the sandbox runtime assets staged for this actor (runsc, or the
 	// micro-VM kernel, VMM and guest image), hard-linked from atelet's asset
-	// cache. The only location a sandbox runtime may run a binary from.
+	// cache. The only location a sandbox runtime may run a binary from; the
+	// worker derives the same path from actor_uid and rejects a request
+	// naming any other.
 	SandboxAssetsDir string `protobuf:"bytes,8,opt,name=sandbox_assets_dir,json=sandboxAssetsDir,proto3" json:"sandbox_assets_dir,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
