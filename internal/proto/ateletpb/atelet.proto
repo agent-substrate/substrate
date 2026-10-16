@@ -456,6 +456,16 @@ message RunRequest {
   // +k8s:optional
   // +k8s:minimum=0
   int64 memory_bytes = 11; // Memory limit in bytes.
+
+  // The runtime the assigned worker runs this actor under, from
+  // WorkerAssignment.sandbox_runtime.
+  //
+  // TODO: atelet still runs with sandbox_assets; a follow-up resolves the
+  // SandboxConfig version from this field, makes it required, and removes
+  // sandbox_assets.
+  //
+  // +k8s:optional
+  SandboxRuntime sandbox_runtime = 12;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -1131,6 +1141,16 @@ message RestoreRequest {
   //
   // +k8s:required
   SandboxAssets sandbox_assets = 16;
+
+  // The runtime the assigned worker restores this actor under, from
+  // WorkerAssignment.sandbox_runtime.
+  //
+  // TODO: atelet still restores with sandbox_assets; a follow-up resolves the
+  // SandboxConfig version from this field, makes it required, and removes
+  // sandbox_assets.
+  //
+  // +k8s:optional
+  SandboxRuntime sandbox_runtime = 17;
 }
 
 message RestoreResponse {

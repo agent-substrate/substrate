@@ -616,16 +616,32 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime hardware.Requirement) 
 		// changes its default does not relabel state captured on the old one.
 		//
 		// TODO: Workers report restorable_runtimes, so a match on one records
-		// that older runtime here, but resolveSandboxAssets still ships the
-		// template's SandboxConfig default version and atelet restores with
-		// the assets in the request: the restore runs on the newer version and
-		// fails, or its next checkpoint is stamped with a runtime that did not
-		// produce it. A follow-up replaces the assets in Run and Restore with
-		// this sandbox_runtime, which atelet resolves to the matching version
-		// of the worker pool's SandboxConfig; until it lands, keep a config's
+		// that older runtime here and ensureAteletRestored sends it on Run and
+		// Restore, but atelet still restores with the assets in the request
+		// (the template's SandboxConfig default version): the restore runs on
+		// the newer version and fails, or its next checkpoint is stamped with a
+		// runtime that did not produce it. A follow-up resolves the matching
+		// version of the worker pool's SandboxConfig from sandbox_runtime in
+		// atelet and removes sandbox_assets; until it lands, keep a config's
 		// default version the only enabled one.
 		SandboxRuntime: proto.CloneOf(snapRuntime.RuntimeFor(w.GetStatus())),
 	}
+}
+
+// toAteletSandboxRuntime converts the control plane's SandboxRuntime to
+// atelet's, which it mirrors field for field.
+func toAteletSandboxRuntime(in *ateapipb.SandboxRuntime) *ateletpb.SandboxRuntime {
+	if in == nil {
+		return nil
+	}
+	out := &ateletpb.SandboxRuntime{SandboxClass: in.GetSandboxClass()}
+	if v := in.GetVersion(); v != nil {
+		out.Version = &ateletpb.VersionedSandboxCompat{SchemaVersion: v.GetSchemaVersion()}
+		for _, a := range v.GetAttributes() {
+			out.Version.Attributes = append(out.Version.Attributes, &ateletpb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
+		}
+	}
+	return out
 }
 
 // actorResourceLimits returns the actor's declared CPU (millicores) and memory
@@ -800,6 +816,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 
 	// The assignment is what the next checkpoint is stamped from, so it is also
 	// what decides how this restore runs.
+	sandboxRuntime := toAteletSandboxRuntime(assignment.GetSandboxRuntime())
 	runtimeIncompatible := src.RequiredRuntime != nil && !hardware.Matches(assignment.GetSandboxRuntime(), src.RequiredRuntime)
 	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
@@ -818,11 +835,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 				Generation:   localSnap.GetGeneration(),
 				Fidelity:     fidelity,
 			},
-			SandboxAssets: sandboxAssets,
-			ActorUid:      actor.GetMetadata().Uid,
-			EgressGateway: egressGateway,
-			CpuMilli:      cpuMilli,
-			MemoryBytes:   memBytes,
+			SandboxAssets:  sandboxAssets,
+			SandboxRuntime: sandboxRuntime,
+			ActorUid:       actor.GetMetadata().Uid,
+			EgressGateway:  egressGateway,
+			CpuMilli:       cpuMilli,
+			MemoryBytes:    memBytes,
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 
@@ -860,11 +878,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 					SnapshotUri: src.SnapshotURI.String(),
 				},
 			},
-			SandboxAssets: sandboxAssets,
-			ActorUid:      actor.GetMetadata().Uid,
-			EgressGateway: egressGateway,
-			CpuMilli:      cpuMilli,
-			MemoryBytes:   memBytes,
+			SandboxAssets:  sandboxAssets,
+			SandboxRuntime: sandboxRuntime,
+			ActorUid:       actor.GetMetadata().Uid,
+			EgressGateway:  egressGateway,
+			CpuMilli:       cpuMilli,
+			MemoryBytes:    memBytes,
 		}
 		if _, err = client.Restore(ctx, req); err != nil {
 			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
@@ -881,6 +900,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 			ActorTemplateName:     actor.GetActorTemplate().GetName(),
 			SandboxAssets:         sandboxAssets,
+			SandboxRuntime:        sandboxRuntime,
 			Spec:                  workloadSpec,
 			ActorUid:              actor.GetMetadata().Uid,
 			EgressGateway:         egressGateway,

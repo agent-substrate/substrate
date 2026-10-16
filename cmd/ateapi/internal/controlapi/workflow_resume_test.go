@@ -1282,6 +1282,22 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 
 	amd64RT := testSandboxRuntime()
 	arm64RT := testRuntime("arm64", "")
+	wantAteletRuntime := map[*ateapipb.SandboxRuntime]*ateletpb.SandboxRuntime{
+		amd64RT: {
+			SandboxClass: "gvisor",
+			Version: &ateletpb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes:    []*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
+			},
+		},
+		arm64RT: {
+			SandboxClass: "gvisor",
+			Version: &ateletpb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes:    []*ateletpb.AttributeEntry{{Key: "architecture", Value: "arm64"}},
+			},
+		},
+	}
 	stampedExtSnap := func(owner ateapipb.SnapshotOwner, uri string, fidelity ateapipb.SnapshotFidelity, rt *ateapipb.SandboxRuntime) *ateapipb.Snapshot {
 		snap := newDurableSnapshot(1, owner, fidelity, "", durableSnapshotName, uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 		snap.SandboxRuntime = rt
@@ -1295,8 +1311,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		want  restoreWant
 	}{
 		{
-			name: "01 nothing to restore cold-boots from the spec",
-			want: restoreWant{run: true},
+			name:  "01 nothing to restore cold-boots from the spec",
+			actor: actorSeed{assignedRuntime: amd64RT},
+			want:  restoreWant{run: true},
 		},
 		{
 			name:  "02 inherited golden snapshot restores in Full",
@@ -1425,7 +1442,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		{
 			name: "13 Full pause snapshot restores locally as Full",
 			actor: actorSeed{
-				localSnapshot: localSnap(localSnapshotName, fullScope),
+				localSnapshot:   localSnap(localSnapshotName, fullScope),
+				assignedRuntime: amd64RT,
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
@@ -1672,12 +1690,16 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				return
 			}
 
+			wantSandboxRuntime := wantAteletRuntime[tt.actor.assignedRuntime]
 			if tt.want.run {
 				if run == nil || restore != nil {
 					t.Fatalf("atelet requests = (restore=%v, run=%v), want exactly one Run", restore, run)
 				}
 				if !proto.Equal(run.GetSandboxAssets(), wantSandboxAssets) {
 					t.Errorf("run SandboxAssets = %v, want %v", run.GetSandboxAssets(), wantSandboxAssets)
+				}
+				if !proto.Equal(run.GetSandboxRuntime(), wantSandboxRuntime) {
+					t.Errorf("run SandboxRuntime = %v, want %v", run.GetSandboxRuntime(), wantSandboxRuntime)
 				}
 				return
 			}
@@ -1686,6 +1708,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			}
 			if !proto.Equal(restore.GetSandboxAssets(), wantSandboxAssets) {
 				t.Errorf("restore SandboxAssets = %v, want %v", restore.GetSandboxAssets(), wantSandboxAssets)
+			}
+			if !proto.Equal(restore.GetSandboxRuntime(), wantSandboxRuntime) {
+				t.Errorf("restore SandboxRuntime = %v, want %v", restore.GetSandboxRuntime(), wantSandboxRuntime)
 			}
 			if got := restore.GetSnapshot().GetSnapshotUuid(); got != tt.want.snapshotName {
 				t.Errorf("Snapshot.SnapshotUuid = %q, want %q", got, tt.want.snapshotName)
@@ -2698,5 +2723,50 @@ func TestWorkerAssignmentFromCopiesSPIFFEID(t *testing.T) {
 	got := workerAssignmentFrom(&ateapipb.Worker{WorkerSpiffeId: id}, hardware.Requirement{})
 	if got.GetWorkerSpiffeId() != id {
 		t.Errorf("worker SPIFFE ID = %q, want %q", got.GetWorkerSpiffeId(), id)
+	}
+}
+
+func TestToAteletSandboxRuntime(t *testing.T) {
+	tests := []struct {
+		name string
+		in   *ateapipb.SandboxRuntime
+		want *ateletpb.SandboxRuntime
+	}{
+		{name: "nil"},
+		{
+			name: "class only",
+			in:   &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+			want: &ateletpb.SandboxRuntime{SandboxClass: "gvisor"},
+		},
+		{
+			name: "full",
+			in: &ateapipb.SandboxRuntime{
+				SandboxClass: "gvisor",
+				Version: &ateapipb.VersionedSandboxCompat{
+					SchemaVersion: "v1",
+					Attributes: []*ateapipb.AttributeEntry{
+						{Key: "architecture", Value: "amd64"},
+						{Key: "cpu_features", Value: "3f"},
+					},
+				},
+			},
+			want: &ateletpb.SandboxRuntime{
+				SandboxClass: "gvisor",
+				Version: &ateletpb.VersionedSandboxCompat{
+					SchemaVersion: "v1",
+					Attributes: []*ateletpb.AttributeEntry{
+						{Key: "architecture", Value: "amd64"},
+						{Key: "cpu_features", Value: "3f"},
+					},
+				},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if diff := cmp.Diff(tc.want, toAteletSandboxRuntime(tc.in), protocmp.Transform()); diff != "" {
+				t.Errorf("toAteletSandboxRuntime mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
