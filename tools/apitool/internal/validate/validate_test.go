@@ -27,7 +27,12 @@ func TestExemptions(t *testing.T) {
 		t.Fatalf("validate.API() error = %v", err)
 	}
 
-	results, err := validate.All(api)
+	protos, err := validate.Protos(t.Context())
+	if err != nil {
+		t.Fatalf("validate.Protos() error = %v", err)
+	}
+
+	results, err := validate.All(api, protos)
 	if err != nil {
 		t.Fatalf("validate.All() error = %v", err)
 	}

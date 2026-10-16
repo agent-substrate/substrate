@@ -27,7 +27,7 @@ import (
 
 var validateCmd = &cobra.Command{
 	Use:           "validate",
-	Short:         "Run API shape rules against ateapi.proto",
+	Short:         "Run API shape rules against ateapi.proto, and cross-proto rules against every proto",
 	RunE:          runValidate,
 	SilenceUsage:  true,
 	SilenceErrors: true,
@@ -46,11 +46,15 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	protos, err := validate.Protos(cmd.Context())
+	if err != nil {
+		return err
+	}
 	path, err := validate.DefaultExemptionsPath()
 	if err != nil {
 		return err
 	}
-	results, err := validate.All(api)
+	results, err := validate.All(api, protos)
 	if err != nil {
 		return err
 	}
@@ -74,7 +78,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	}
 	remaining := exemption.NewSet(exemptions)
 
-	fmt.Fprintf(out, "Validating ateapi.proto (%s), %d rule(s), %d exemption(s)...\n\n", api.Services[0].Name, len(lint.All), len(exemptions))
+	fmt.Fprintf(out, "Validating ateapi.proto (%s), %d rule(s), and every proto, %d rule(s), %d exemption(s)...\n\n", api.Services[0].Name, len(lint.All), len(lint.CrossProto), len(exemptions))
 
 	var total, failedRules, exempted int
 	for _, r := range results {
@@ -111,7 +115,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	}
 
 	if total == 0 && len(stale) == 0 {
-		fmt.Fprintf(out, "%s all %d rules passed (%d finding(s) exempted)\n", passIcon(), len(lint.All), exempted)
+		fmt.Fprintf(out, "%s all %d rules passed (%d finding(s) exempted)\n", passIcon(), len(results), exempted)
 		return nil
 	}
 	if total > 0 {
