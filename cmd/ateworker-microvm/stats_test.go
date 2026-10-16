@@ -118,6 +118,10 @@ var testActor = resources.ActorAttribution{
 	TemplateName:     "template-a",
 }
 
+// otherActorUID is a second actor's UID, for requests and targets that must
+// not match testActor.
+const otherActorUID = "bbbbbbbb-0000-4000-8000-000000000002"
+
 // fakeAgent stands in for the kata-agent client: a canned reply per container
 // id, or a canned error for the ones that are meant to fail.
 type fakeAgent struct {
@@ -226,7 +230,7 @@ func TestGetWorkloadStats(t *testing.T) {
 	s := newStatsService(agent, "app_ovl")
 
 	before := time.Now().UnixNano()
-	got, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: "aaaaaaaa-0000-4000-8000-000000000001"})
+	got, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: testActor.UID})
 	after := time.Now().UnixNano()
 	if err != nil {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
@@ -241,7 +245,7 @@ func TestGetWorkloadStats(t *testing.T) {
 	want := &ateworkerpb.GetWorkloadStatsResponse{Sample: &ateworkerpb.WorkloadStatsSample{
 		Atespace:              "space-a",
 		ActorName:             "actor-a",
-		ActorUid:              "aaaaaaaa-0000-4000-8000-000000000001",
+		ActorUid:              testActor.UID,
 		ActorTemplateAtespace: "ns-a",
 		ActorTemplateName:     "template-a",
 		SandboxClass:          "microvm",
@@ -273,7 +277,7 @@ func TestGetWorkloadStatsSumsContainers(t *testing.T) {
 	}}
 	s := newStatsService(agent, "app_ovl", "sidecar_ovl")
 
-	got, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: "aaaaaaaa-0000-4000-8000-000000000001"})
+	got, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: testActor.UID})
 	if err != nil {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
 	}
@@ -310,7 +314,7 @@ func TestGetWorkloadStatsSkipsUnreadableContainer(t *testing.T) {
 	}
 	s := newStatsService(agent, "app_ovl", "exited_ovl")
 
-	got, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: "aaaaaaaa-0000-4000-8000-000000000001"})
+	got, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: testActor.UID})
 	if err != nil {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
 	}
@@ -329,7 +333,7 @@ func TestGetWorkloadStatsCountsAnsweredContainer(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": nil}}
 	s := newStatsService(agent, "app_ovl")
 
-	got, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: "aaaaaaaa-0000-4000-8000-000000000001"})
+	got, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: testActor.UID})
 	if err != nil {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
 	}
@@ -368,7 +372,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			// what the caller should do about it is re-resolve, not retry.
 			name:     "ateworker is available",
 			service:  func() *AteWorkerService { return &AteWorkerService{} },
-			actorUID: "aaaaaaaa-0000-4000-8000-000000000001",
+			actorUID: testActor.UID,
 			want:     codes.NotFound,
 		},
 		{
@@ -377,7 +381,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			// another's name, and it is the same "not here" as the case above.
 			name:     "actor_uid does not match the executing workload",
 			service:  func() *AteWorkerService { return newStatsService(healthy, "app_ovl") },
-			actorUID: "bbbbbbbb-0000-4000-8000-000000000002",
+			actorUID: otherActorUID,
 			want:     codes.NotFound,
 		},
 		{
@@ -390,7 +394,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 				hostTestActor(s, testActor, nil)
 				return s
 			},
-			actorUID: "aaaaaaaa-0000-4000-8000-000000000001",
+			actorUID: testActor.UID,
 			want:     codes.FailedPrecondition,
 		},
 		{
@@ -400,10 +404,10 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			name: "guest agent connection belongs to another actor",
 			service: func() *AteWorkerService {
 				s := newStatsService(healthy, "app_ovl")
-				hostTestActor(s, testActor, &guestStatsTarget{actorUID: "bbbbbbbb-0000-4000-8000-000000000002", agent: healthy, workloadIDs: []string{"app_ovl"}})
+				hostTestActor(s, testActor, &guestStatsTarget{actorUID: otherActorUID, agent: healthy, workloadIDs: []string{"app_ovl"}})
 				return s
 			},
-			actorUID: "aaaaaaaa-0000-4000-8000-000000000001",
+			actorUID: testActor.UID,
 			want:     codes.Internal,
 		},
 		{
@@ -420,7 +424,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 				}}
 				return newStatsService(agent, "app_ovl", "sidecar_ovl")
 			},
-			actorUID: "aaaaaaaa-0000-4000-8000-000000000001",
+			actorUID: testActor.UID,
 			want:     codes.FailedPrecondition,
 		},
 		{
@@ -428,7 +432,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			// confident zero would be reporting a state we do not understand.
 			name:     "no containers to measure",
 			service:  func() *AteWorkerService { return newStatsService(healthy) },
-			actorUID: "aaaaaaaa-0000-4000-8000-000000000001",
+			actorUID: testActor.UID,
 			want:     codes.FailedPrecondition,
 		},
 	} {
@@ -457,7 +461,7 @@ func TestGetWorkloadStatsDoesNotTakeLock(t *testing.T) {
 	}
 	defer s.locks.Unlock(testActor.UID)
 
-	if _, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: "aaaaaaaa-0000-4000-8000-000000000001"}); err != nil {
+	if _, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: testActor.UID}); err != nil {
 		t.Errorf("GetWorkloadStats() error = %v, want nil", err)
 	}
 }
@@ -494,7 +498,7 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 	// The keyed read against the same fake is the reference: the discovery read
 	// must produce the identical sample, since both are the same measurement
 	// with a different addressing mode.
-	want, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: "aaaaaaaa-0000-4000-8000-000000000001"})
+	want, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: testActor.UID})
 	if err != nil {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
 	}
@@ -562,7 +566,7 @@ func TestGetActiveWorkloadStatsBooting(t *testing.T) {
 
 func TestGetActiveWorkloadStatsSeveralActors(t *testing.T) {
 	second := testActor
-	second.UID = "bbbbbbbb-0000-4000-8000-000000000002"
+	second.UID = otherActorUID
 	second.Ref.Name = "actor-b"
 
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{
@@ -597,7 +601,7 @@ func TestGetActiveWorkloadStatsSeveralActors(t *testing.T) {
 // pending entry alongside their samples.
 func TestGetActiveWorkloadStatsOneBooting(t *testing.T) {
 	booting := testActor
-	booting.UID = "bbbbbbbb-0000-4000-8000-000000000002"
+	booting.UID = otherActorUID
 
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{
 		"app_ovl": containerStats(1000, 2000, 100, 5000),
@@ -630,7 +634,7 @@ func TestGetWorkloadStatsTransition(t *testing.T) {
 	s := newStatsService(agent, "app_ovl")
 	agent.onCall = func() { unhostTestActor(s, testActor.UID) }
 
-	_, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: "aaaaaaaa-0000-4000-8000-000000000001"})
+	_, err := s.GetWorkloadStats(context.Background(), &ateworkerpb.GetWorkloadStatsRequest{ActorUid: testActor.UID})
 	if got := apierror.Code(err); got != codes.NotFound {
 		t.Errorf("GetWorkloadStats() during transition: code = %v, want %v (err: %v)", got, codes.NotFound, err)
 	}
@@ -644,7 +648,7 @@ func TestGetActiveWorkloadStatsStaleTarget(t *testing.T) {
 		"app_ovl": containerStats(1000, 2000, 100, 5000),
 	}}
 	s := newStatsService(agent, "app_ovl")
-	hostTestActor(s, testActor, &guestStatsTarget{actorUID: "bbbbbbbb-0000-4000-8000-000000000002", agent: agent, workloadIDs: []string{"app_ovl"}})
+	hostTestActor(s, testActor, &guestStatsTarget{actorUID: otherActorUID, agent: agent, workloadIDs: []string{"app_ovl"}})
 
 	got, err := sweepAndList(s)
 	if err != nil {
@@ -707,7 +711,7 @@ func TestGetActiveWorkloadStatsSamplesGuestsConcurrently(t *testing.T) {
 // activation they were read for.
 func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 	otherActor := testActor
-	otherActor.UID = "bbbbbbbb-0000-4000-8000-000000000002"
+	otherActor.UID = otherActorUID
 	otherTemplate := testActor
 	otherTemplate.TemplateName = "template-b"
 

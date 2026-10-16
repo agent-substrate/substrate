@@ -636,7 +636,7 @@ func TestValidateNestedMountPaths(t *testing.T) {
 // points at the right one.
 func TestValidateNestedMountPathsAt(t *testing.T) {
 	fields := []*field.Path{
-		field.NewPath("csi_volume_mounts").Index(0).Child("mount_path"),
+		field.NewPath("external_volume_mounts").Index(0).Child("mount_path"),
 		field.NewPath("image_volume_mounts").Index(0).Child("mount_path"),
 		field.NewPath("image_volume_mounts").Index(1).Child("mount_path"),
 	}
