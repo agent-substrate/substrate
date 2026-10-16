@@ -15,6 +15,7 @@
 package steps
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -26,6 +27,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/internal/installdefaults"
@@ -118,8 +120,11 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		if !e.Cfg.PostgresOwnerRoleSet && recorded["ATE_API_POSTGRES_OWNER_ROLE"] != "" {
 			ownerRole = recorded["ATE_API_POSTGRES_OWNER_ROLE"]
 		}
-		if poolMaxConns == "" {
-			poolMaxConns = recorded["ATE_API_POSTGRES_POOL_MAX_CONNS"]
+		if !e.Cfg.PostgresPoolMaxConnsSet {
+			// An adopted database is external, so the bundled size10 limit
+			// does not apply: the recorded limit, or the default for an
+			// install that recorded none.
+			poolMaxConns = cmp.Or(recorded["ATE_API_POSTGRES_POOL_MAX_CONNS"], config.DefaultPostgresPoolMaxConns)
 		}
 		if e.Cfg.PostgresSchema == "" {
 			secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
