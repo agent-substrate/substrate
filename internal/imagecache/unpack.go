@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -149,16 +150,22 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	}
 
 	// replaceExisting removes whatever is at name ("later entry wins" within a
-	// layer) and drops any deferred dir mode/mtime/owner restore for name and its
-	// subtree so the restore pass does not chmod a removed directory.
+	// layer) and drops the deferred restore of every directory it removes,
+	// under any name, so the restore pass applies none of their headers to a
+	// directory created later.
 	replaceExisting := func(name, before string) error {
-		if _, err := root.Lstat(name); err == nil {
+		if fi, err := root.Lstat(name); err == nil {
+			var removed map[dirInode]bool
+			if fi.IsDir() {
+				if removed, err = subtreeDirInodes(root, name); err != nil {
+					return fmt.Errorf("while replacing existing path at %q before %s: %w", name, before, err)
+				}
+			}
 			if err := root.RemoveAll(name); err != nil {
 				return fmt.Errorf("while replacing existing path at %q before %s: %w", name, before, err)
 			}
-			prefix := name + "/"
-			for d := range dirHdrs {
-				if d == name || strings.HasPrefix(d, prefix) {
+			for d, dh := range dirHdrs {
+				if removed[dh.inode] {
 					delete(dirHdrs, d)
 				}
 			}
@@ -287,8 +294,20 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			} else if err != nil {
 				return nil, fmt.Errorf("while creating directory=%q, mode=%v: %w", name, mode, err)
 			}
-			dirHdrs[name] = dirHdr{hdr: hdr, seq: dirSeq}
-			dirSeq++
+			// The header belongs to the directory now at name; Mkdir may
+			// have found a non-directory there, which keeps no header.
+			fi, err := root.Lstat(name)
+			if err != nil {
+				return nil, fmt.Errorf("while checking directory %q: %w", name, err)
+			}
+			if fi.IsDir() {
+				inode, err := dirInodeOf(name, fi)
+				if err != nil {
+					return nil, err
+				}
+				dirHdrs[name] = dirHdr{hdr: hdr, seq: dirSeq, inode: inode}
+				dirSeq++
+			}
 			declared[name] = true
 			delete(implicit, name)
 
@@ -385,22 +404,31 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	// needs CAP_FOWNER, which atelet does not hold. Chown leaves a directory's
 	// mode alone, setgid and sticky included.
 	//
-	// Names that a symlink makes aliases ("a -> cc" makes "a/b" and "cc/b"
-	// one directory) are restored once, with the header written last: a
-	// second chmod after the first chown would also need CAP_FOWNER.
-	type dirInode struct{ dev, ino uint64 }
+	// Each header was recorded against the directory its entry created or
+	// found, and replaceExisting dropped the headers of every directory it
+	// removed, so each recorded directory still exists. Names that a symlink
+	// makes aliases ("a -> cc" makes "a/b" and "cc/b" one directory) record
+	// one directory, which is restored once, with the header written last to
+	// it: a second chmod after the first chown would also need CAP_FOWNER.
+	// The restore goes through a name that still resolves to that directory;
+	// one a later symlink points elsewhere is not used. A directory left with
+	// no such name keeps the mode and owner it was extracted with.
 	type dirRestore struct {
-		name string
-		dirHdr
+		name    string // a name that resolves to the directory
+		nameSeq int
+		hdr     *tar.Header
+		seq     int
 	}
-	byInode := map[dirInode]dirRestore{}
+	byInode := map[dirInode]*dirRestore{}
 	for name, dh := range dirHdrs {
-		// Directories a later entry replaced were dropped from dirHdrs as it
-		// was written, so name resolves to the directory its entry created,
-		// through any symlink that already stood on its path then. A path
-		// that no longer resolves to a directory (a replacement reached
-		// through a symlink, or a declared dir whose Mkdir found a
-		// non-directory there) carries the replacing entry's metadata.
+		r := byInode[dh.inode]
+		if r == nil {
+			r = &dirRestore{nameSeq: -1, seq: -1}
+			byInode[dh.inode] = r
+		}
+		if dh.seq > r.seq {
+			r.hdr, r.seq = dh.hdr, dh.seq
+		}
 		fi, err := root.Lstat(name)
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 			continue
@@ -410,18 +438,19 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		if !fi.IsDir() {
 			continue
 		}
-		st, ok := fi.Sys().(*syscall.Stat_t)
-		if !ok {
-			return nil, fmt.Errorf("while checking directory %q: no inode in %T", name, fi.Sys())
+		inode, err := dirInodeOf(name, fi)
+		if err != nil {
+			return nil, err
 		}
-		key := dirInode{dev: uint64(st.Dev), ino: st.Ino}
-		if cur, ok := byInode[key]; !ok || dh.seq > cur.seq {
-			byInode[key] = dirRestore{name: name, dirHdr: dh}
+		if inode == dh.inode && dh.seq > r.nameSeq {
+			r.name, r.nameSeq = name, dh.seq
 		}
 	}
-	dirs := make([]dirRestore, 0, len(byInode))
+	dirs := make([]*dirRestore, 0, len(byInode))
 	for _, d := range byInode {
-		dirs = append(dirs, d)
+		if d.name != "" {
+			dirs = append(dirs, d)
+		}
 	}
 	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i].name) > len(dirs[j].name) })
 	for _, d := range dirs {
@@ -468,11 +497,50 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	return wh, nil
 }
 
-// dirHdr is a directory entry's header and its position among the layer's
-// directory entries.
+// dirHdr is a directory entry's header, its position among the layer's
+// directory entries, and the directory it was written to.
 type dirHdr struct {
-	hdr *tar.Header
-	seq int
+	hdr   *tar.Header
+	seq   int
+	inode dirInode
+}
+
+// dirInode identifies a directory by device and inode number.
+type dirInode struct{ dev, ino uint64 }
+
+// dirInodeOf returns the device and inode number of name, whose Lstat result
+// is fi.
+func dirInodeOf(name string, fi os.FileInfo) (dirInode, error) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return dirInode{}, fmt.Errorf("while checking directory %q: no inode in %T", name, fi.Sys())
+	}
+	return dirInode{dev: uint64(st.Dev), ino: st.Ino}, nil
+}
+
+// subtreeDirInodes returns the directories at and below dir, a directory in
+// root, without following symlinks.
+func subtreeDirInodes(root *os.Root, dir string) (map[dirInode]bool, error) {
+	inodes := map[dirInode]bool{}
+	err := fs.WalkDir(root.FS(), dir, func(name string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		fi, err := root.Lstat(name)
+		if err != nil {
+			return err
+		}
+		inode, err := dirInodeOf(name, fi)
+		if err != nil {
+			return err
+		}
+		inodes[inode] = true
+		return nil
+	})
+	return inodes, err
 }
 
 // tarMode returns the mode an unpacked entry takes from its tar header: the
