@@ -42,6 +42,7 @@ const networkingAtespace = "networking-e2e"
 
 // egressFixture returns the unified egress demo deployed by the E2E workflow.
 func egressFixture() e2e.Fixture { return e2e.EgressFixture() }
+
 func TestActorDirectAccess(t *testing.T) {
 	ctx := context.Background()
 	_, actorName, actor := createAndResumeSubstrateActor(t, ctx, "direct", e2e.SubstrateCounterFixture())
@@ -59,6 +60,10 @@ func TestActorDirectAccess(t *testing.T) {
 		t.Logf("Actor access through ingress succeeded; body: %s", body)
 	})
 	t.Run("duplicate actor header rejected on plain HTTP", func(t *testing.T) {
+		if e2e.IngressMTLS() {
+			t.Skipf("This subtest only checks deprecated-insecure functionality")
+		}
+
 		actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, router.BaseURL()+"/readyz", nil)
 		if err != nil {
