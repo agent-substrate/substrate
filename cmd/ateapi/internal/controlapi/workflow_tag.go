@@ -222,8 +222,8 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	if snap == nil {
 		return nil, nil, apierror.FailedPrecondition("Actor %s holds no external snapshot to tag", actorRef)
 	}
-	// The actor's latest snapshot is local only. It must be uploaded before it can be tagged.
-	if latestSnapshotIsLocalOnly(actor.GetStatus()) {
+	// The actor's latest snapshot isn't durable yet. It must be uploaded before it can be tagged.
+	if latestSnapshotIsLocalNotYetDurable(actor.GetStatus()) {
 		return nil, nil, apierror.FailedPrecondition("Actor %s holds no external snapshot of its latest state to tag: suspend it first", actorRef)
 	}
 	// Every way an Actor comes to hold an external snapshot records the

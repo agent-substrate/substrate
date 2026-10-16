@@ -992,3 +992,73 @@ func TestMintActorCertificate(t *testing.T) {
 		t.Errorf("ActorIdentity mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// TestUpdateActor_RepointTemplateRefusedWhileOnNode verifies a suspended actor
+// can't change its template while its latest snapshot is held on a node,
+// uploaded or not: resume would restore that copy, captured from the old
+// template's sandbox. Once the snapshot is only durable, the repoint is
+// accepted.
+func TestUpdateActor_RepointTemplateRefusedWhileOnNode(t *testing.T) {
+	const storageLocation = "gs://my-bucket/snapshots"
+	// durable builds the actor's latest snapshot from its upload URI.
+	durable := func(st ateapipb.SnapshotStorageStatus, locality string) func(string) *ateapipb.Snapshot {
+		return func(uri string) *ateapipb.Snapshot {
+			snap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap", uri, st)
+			snap.Locality = locality
+			return snap
+		}
+	}
+	tests := []struct {
+		name     string
+		snap     func(uri string) *ateapipb.Snapshot
+		wantCode codes.Code
+	}{
+		{"local only", func(string) *ateapipb.Snapshot {
+			return newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap", "node-1")
+		}, codes.FailedPrecondition},
+		{"local, upload pending", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING, "node-1"), codes.FailedPrecondition},
+		{"local and durable", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED, "node-1"), codes.FailedPrecondition},
+		{"durable only", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED, ""), codes.OK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence, cleanup := storetest.SetupTestStore(t)
+			t.Cleanup(cleanup)
+			storetest.MustCreateAtespace(t, ctx, persistence, testAtespace)
+			for _, name := range []string{"tmpl-a", "tmpl-b"} {
+				if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+					Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+					Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1"}},
+					SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: storageLocation},
+					SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
+					Resources:      resources.CPUMemory(1000, 512<<20),
+				}); err != nil {
+					t.Fatalf("creating template %s: %v", name, err)
+				}
+			}
+			created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"},
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			})
+			uri, err := resources.NewActorSnapshotURI(storageLocation, testAtespace, created.GetMetadata().GetUid(), "snap")
+			if err != nil {
+				t.Fatal(err)
+			}
+			created = mustUpdateActorStatus(t, ctx, persistence, created, func(s *ateapipb.ActorStatus) {
+				s.AssignedNode = "node-1"
+				s.LastAssignedGeneration = 1
+				s.Snapshots = []*ateapipb.Snapshot{tt.snap(uri.String())}
+			})
+			svc := &RPCService{impl: newServiceImpl(persistence, nil)}
+			_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      created.GetMetadata(),
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
+			}})
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Errorf("UpdateActor repoint = %v, want %v (err: %v)", got, tt.wantCode, err)
+			}
+		})
+	}
+}

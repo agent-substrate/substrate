@@ -1457,6 +1457,26 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
+			// atelet restores from the local copy when it still holds it, and
+			// from the URI once a detach has deleted it.
+			name: "13b local snapshot with a recorded upload sends its URI",
+			actor: actorSeed{
+				localSnapshot: func() *ateapipb.Snapshot {
+					snap := localSnap(localSnapshotName, fullScope)
+					snap.DurableSnapshot = &ateapipb.SnapshotStorage{
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: actorURI},
+					}
+					return snap
+				}(),
+			},
+			want: restoreWant{
+				snapshotName: localSnapshotName,
+				snapshotURI:  actorURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			},
+		},
+		{
 			// The repoint permutation without a durable snapshot is
 			// deliberately not pinned: its wire scope is in flux while the
 			// resume-source resolution is being reworked.

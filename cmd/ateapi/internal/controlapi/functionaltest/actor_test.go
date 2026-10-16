@@ -3742,8 +3742,8 @@ func TestResumeActor_LocalRestoreFailureCrashesActor(t *testing.T) {
 	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref}); status.Code(err) != codes.Internal {
 		t.Fatalf("ResumeActor status code = %v, want Internal (err: %v)", status.Code(err), err)
 	}
-	if got := tc.fakeAtelet.RestoreRequest.GetSnapshot(); got.GetSnapshotUuid() == "" || got.GetObject() != nil {
-		t.Fatalf("restore snapshot = %v, want local snapshot (uuid set, no object)", got)
+	if got := tc.fakeAtelet.RestoreRequest.GetSnapshot(); got.GetSnapshotUuid() == "" || !strings.HasSuffix(got.GetObject().GetSnapshotUri(), "/snapshots/"+got.GetSnapshotUuid()) {
+		t.Fatalf("restore snapshot = %v, want the local snapshot with its recorded upload URI", got)
 	}
 
 	actor, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: ref})
@@ -4201,8 +4201,8 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 		t.Fatalf("ResumeActor(from v2 pause) failed: %v", err)
 	}
 	restoreReq := tc.fakeAtelet.lastRestoreRequest()
-	if got := restoreReq.GetSnapshot(); got.GetSnapshotUuid() == "" || got.GetObject() != nil {
-		t.Errorf("restore request snapshot = %v, want local snapshot (uuid set, no object)", got)
+	if got := restoreReq.GetSnapshot(); got.GetSnapshotUuid() == "" || !strings.HasSuffix(got.GetObject().GetSnapshotUri(), "/snapshots/"+got.GetSnapshotUuid()) {
+		t.Errorf("restore request snapshot = %v, want the local snapshot with its recorded upload URI", got)
 	}
 	if got := restoreReq.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		t.Errorf("restore request scope = %v, want FULL (local checkpoint was captured on v2)", got)
@@ -4267,6 +4267,16 @@ func TestPauseActor(t *testing.T) {
 	if ls.GetUuid() == "" {
 		t.Error("Snapshot.Uuid is empty, want the name the pause checkpointed under")
 	}
+	// The pause records the upload URI its checkpoint sent atelet.
+	uploadURI, err := resources.NewActorSnapshotURI(testStorageLocation, testAtespace, getResp.GetMetadata().GetUid(), ls.GetUuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pausedSnap := newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "ignored", "node1")
+	pausedSnap.DurableSnapshot = &ateapipb.SnapshotStorage{
+		Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+		Object: &ateapipb.ObjectSnapshot{SnapshotUri: uploadURI.String()},
+	}
 	want := &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
@@ -4276,7 +4286,7 @@ func TestPauseActor(t *testing.T) {
 			LastAssignedGeneration: 2,
 			Snapshots: []*ateapipb.Snapshot{
 				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
-				newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "ignored", "node1"),
+				pausedSnap,
 			},
 		},
 	}

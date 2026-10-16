@@ -199,12 +199,12 @@ func TestSnapshotPruningHelpers(t *testing.T) {
 	})
 }
 
-// TestLatestSnapshotIsLocalOnly pins the shape a pause leaves behind: the
-// latest snapshot is node-local with no durable copy. A durable latest
-// snapshot, a pending upload of the local one, or a local snapshot that is
-// not captured yet do not count; a RUNNING actor that kept its local snapshot
-// across a resume does.
-func TestLatestSnapshotIsLocalOnly(t *testing.T) {
+// TestLatestSnapshotIsLocalNotYetDurable pins the shape an async suspend leaves behind:
+// the latest snapshot is node-local and not yet durable, with or without a
+// pending upload. A durable latest snapshot, local or not, or a local snapshot
+// that is not captured yet do not count; a RUNNING actor that kept its local
+// snapshot across a resume does.
+func TestLatestSnapshotIsLocalNotYetDurable(t *testing.T) {
 	local := func(gen int32) *ateapipb.Snapshot {
 		return newLocalSnapshot(gen, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local", "node-1")
 	}
@@ -224,15 +224,20 @@ func TestLatestSnapshotIsLocalOnly(t *testing.T) {
 		{"local only above a durable one", &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{durable(1, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED), local(2)}}, true},
 		{"local only alone", &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{local(1)}}, true},
 		{"durable only", &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{durable(2, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)}}, false},
-		{"local with an upload pending", &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{uploading}}, false},
+		{"local with an upload pending", &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{uploading}}, true},
+		{"local and durable", &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{func() *ateapipb.Snapshot {
+			snap := durable(2, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			snap.Locality = "node-1"
+			return snap
+		}()}}, false},
 		{"local not yet captured", &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local", "")}}, false},
 		{"older local only under a pause in progress", &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{local(1), newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local", "")}}, false},
 		{"latest generation dropped by a revert", &ateapipb.ActorStatus{LastAssignedGeneration: 3, Snapshots: []*ateapipb.Snapshot{local(2)}}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := latestSnapshotIsLocalOnly(tc.status); got != tc.want {
-				t.Errorf("latestSnapshotIsLocalOnly = %t, want %t", got, tc.want)
+			if got := latestSnapshotIsLocalNotYetDurable(tc.status); got != tc.want {
+				t.Errorf("latestSnapshotIsLocalNotYetDurable = %t, want %t", got, tc.want)
 			}
 		})
 	}
@@ -290,5 +295,67 @@ func TestTagDurableSnapshotURI(t *testing.T) {
 	}
 	if got := tagDurableSnapshotURI(pendingTag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED); got != "gs://b/tag-1" {
 		t.Errorf("tagDurableSnapshotURI(pendingTag, UNSPECIFIED) = %q, want gs://b/tag-1", got)
+	}
+}
+
+// TestLatestSnapshotOnNode pins that the latest snapshot counts as held on a
+// node whenever it has a locality, uploaded or not.
+func TestLatestSnapshotOnNode(t *testing.T) {
+	withStorage := func(st ateapipb.SnapshotStorageStatus, locality string) *ateapipb.Snapshot {
+		snap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap", "gs://b/snap", st)
+		snap.Locality = locality
+		return snap
+	}
+	tests := []struct {
+		name   string
+		status *ateapipb.ActorStatus
+		want   bool
+	}{
+		{"nil status", nil, false},
+		{"local only", &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap", "node-1")}}, true},
+		{"local, upload pending", &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{withStorage(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING, "node-1")}}, true},
+		{"local and durable", &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{withStorage(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED, "node-1")}}, true},
+		{"durable only", &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{withStorage(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED, "")}}, false},
+		{"latest generation dropped by a revert", &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{withStorage(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED, "node-1")}}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := latestSnapshotOnNode(tc.status); got != tc.want {
+				t.Errorf("latestSnapshotOnNode = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDroppedSnapshotURIs pins which upload URIs count as dropped: those
+// before records and after doesn't, each once, skipping entries with none.
+func TestDroppedSnapshotURIs(t *testing.T) {
+	snap := func(gen int32, uri string) *ateapipb.Snapshot {
+		if uri == "" {
+			return newLocalSnapshot(gen, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local", "node-1")
+		}
+		return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap", uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	}
+	status := func(snaps ...*ateapipb.Snapshot) *ateapipb.ActorStatus {
+		return &ateapipb.ActorStatus{Snapshots: snaps}
+	}
+	tests := []struct {
+		name          string
+		before, after *ateapipb.ActorStatus
+		want          []string
+	}{
+		{"nothing dropped", status(snap(1, "gs://b/1")), status(snap(1, "gs://b/1")), nil},
+		{"one dropped, one kept", status(snap(1, "gs://b/1"), snap(2, "gs://b/2")), status(snap(2, "gs://b/2")), []string{"gs://b/1"}},
+		{"a URI kept by another entry isn't dropped", status(snap(1, "gs://b/shared")), status(snap(2, "gs://b/shared")), nil},
+		{"entries with no URI are skipped", status(snap(1, ""), snap(2, "gs://b/2")), status(), []string{"gs://b/2"}},
+		{"a URI two entries name is returned once", status(snap(1, "gs://b/dup"), snap(2, "gs://b/dup")), status(), []string{"gs://b/dup"}},
+		{"nil statuses", nil, nil, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if diff := cmp.Diff(tc.want, droppedSnapshotURIs(tc.before, tc.after)); diff != "" {
+				t.Errorf("droppedSnapshotURIs mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
