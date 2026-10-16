@@ -44,7 +44,7 @@ containers:
 resources:
   limits:
     cpuMillicores: 2000
-    memoryBytes: 4294967296 # 4Gi
+    memoryBytes: "${SWEPERF_ACTOR_MEMORY_BYTES}"
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/sweperf-sphinx-8638/
