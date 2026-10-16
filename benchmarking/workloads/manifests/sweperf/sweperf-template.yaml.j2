@@ -46,7 +46,7 @@ resources:
   - name: cpu
     quantity: "2"
   - name: memory
-    quantity: 4Gi
+    quantity: ${SWEPERF_ACTOR_MEMORY}
 sandboxConfig:
   sandboxClass: ${SANDBOX_CLASS}
   configName: ${SANDBOX_CONFIG_NAME}
