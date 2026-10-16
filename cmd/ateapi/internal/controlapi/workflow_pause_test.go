@@ -292,6 +292,9 @@ func TestPauseActor_Finalized_MissingLocalSnapshotClearsAssignment(t *testing.T)
 	if _, err := w.PauseActor(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("PauseActor error = %v, want FailedPrecondition for the actor it crashed", err)
 	}
+	if got := atelet.terminateCalls(); got != 1 {
+		t.Errorf("got %d Terminate requests, want 1 before the crash frees the worker", got)
+	}
 	got := mustReadActor(t, ctx, st, actorRef)
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())

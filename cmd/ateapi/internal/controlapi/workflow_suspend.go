@@ -142,7 +142,7 @@ func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.Act
 	// them here, as crash.go does for the crash counter.
 	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", wireFidelity)
 	var finalized *ateapipb.Actor
-	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, mode); err != nil {
+	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, actorTemplate, mode); err != nil {
 		return nil, err
 	}
 	actor = finalized
@@ -319,7 +319,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		// Missing active worker pod reference in SUSPENDING state indicates corrupted store state.
-		return "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageWorkerAssignmentMissing)
+		return "", w.crashActorAndFail(ctx, actorRef, actorTemplate, ateattr.OperationSuspend, crashMessageWorkerAssignmentMissing)
 	}
 
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
@@ -364,7 +364,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	wireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 
 	if _, err = client.Checkpoint(ctx, req); err != nil {
-		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
+		return wireFidelity, w.handleAteletError(ctx, actorRef, actorTemplate, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
 	return wireFidelity, nil
 }
@@ -382,13 +382,13 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 
 	localSnap := findLatestLocalSnapshot(actor.GetStatus())
 	if localSnap == nil {
-		return "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
+		return "", w.crashActorAndFail(ctx, actorRef, actorTemplate, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
 	}
 	nodeName := actor.GetStatus().GetAssignedNode()
 	if nodeName == "" {
 		// Without the node the snapshot can never be found (mirrors an async
 		// FinalizeSuspended, which crashes rather than record an unknown node).
-		return "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown)
+		return "", w.crashActorAndFail(ctx, actorRef, actorTemplate, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown)
 	}
 
 	ateletConn, err := w.dialer.DialForAteletOnNode(nodeName)
@@ -420,7 +420,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	wireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 
 	if _, err = client.PromoteSnapshot(ctx, req); err != nil {
-		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "PromoteSnapshot", false, err)
+		return wireFidelity, w.handleAteletError(ctx, actorRef, actorTemplate, ateattr.OperationSuspend, "PromoteSnapshot", false, err)
 	}
 	return wireFidelity, nil
 }
@@ -464,7 +464,7 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // crashing the actor after its worker died) is not overwritten: an actor that
 // is no longer SUSPENDING is left as it is and the step fails with
 // FailedPrecondition.
-func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, mode suspendMode) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate, mode suspendMode) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
 
@@ -496,15 +496,15 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	switch mode {
 	case suspendSync:
 		if snapshotAtLatestGeneration(latestActor.GetStatus()).GetDurableSnapshot() == nil {
-			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageDurableSnapshotMissing)
+			return nil, w.crashActorAndFail(ctx, actorRef, actorTemplate, ateattr.OperationSuspend, crashMessageDurableSnapshotMissing)
 		}
 	case suspendAsync:
 		// A local snapshot on an unknown node can never be found by the scheduler.
 		if latestActor.GetStatus().GetAssignedNode() == "" {
-			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown)
+			return nil, w.crashActorAndFail(ctx, actorRef, actorTemplate, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown)
 		}
 		if snapshotAtLatestGeneration(latestActor.GetStatus()) == nil {
-			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
+			return nil, w.crashActorAndFail(ctx, actorRef, actorTemplate, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
 		}
 	}
 

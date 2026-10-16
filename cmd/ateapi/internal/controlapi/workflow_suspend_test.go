@@ -1067,6 +1067,9 @@ func TestSuspendActor_Finalized_MissingDurableSnapshotClearsAssignment(t *testin
 	if _, err := w.SuspendActor(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
 	}
+	if got := atelet.terminateCalls(); got != 1 {
+		t.Errorf("got %d Terminate requests, want 1 before the crash frees the worker", got)
+	}
 	got, err := st.GetActor(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("GetActor: %v", err)
