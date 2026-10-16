@@ -1971,11 +1971,11 @@ type ExternalVolumeSource struct {
 	// sends volumes that finished provisioning.
 	//
 	// +k8s:required
-	// +k8s:maxLength=256 # matches ExternalVolume.storage_volume_id's bound
+	// +k8s:maxLength=256 # matches ExternalVolumeStatus.storage_volume_id's bound
 	// +k8s:customValidation # no control characters
 	StorageVolumeId string `protobuf:"bytes,1,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
 	// +k8s:optional
-	// +k8s:maxLength=253 # matches ExternalVolume.volume_type's bound
+	// +k8s:maxLength=253 # matches ExternalVolumeStatus.volume_type's bound
 	// +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
 	VolumeType string `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// volume_context is the driver's provisioning metadata. Its entries are the

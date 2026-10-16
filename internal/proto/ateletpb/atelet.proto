@@ -552,12 +552,12 @@ message ExternalVolumeSource {
   // sends volumes that finished provisioning.
   //
   // +k8s:required
-  // +k8s:maxLength=256 # matches ExternalVolume.storage_volume_id's bound
+  // +k8s:maxLength=256 # matches ExternalVolumeStatus.storage_volume_id's bound
   // +k8s:customValidation # no control characters
   string storage_volume_id = 1;
 
   // +k8s:optional
-  // +k8s:maxLength=253 # matches ExternalVolume.volume_type's bound
+  // +k8s:maxLength=253 # matches ExternalVolumeStatus.volume_type's bound
   // +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
   string volume_type = 2;
 
