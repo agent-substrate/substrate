@@ -16,11 +16,10 @@ package imagecache
 
 import (
 	"archive/tar"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
-	"strings"
 	"syscall"
 	"testing"
 
@@ -95,7 +94,10 @@ var ownershipEntries = []tarEntry{
 // so its own user could not enter it inside the actor.
 func TestUnpackLayer_AppliesOwnership(t *testing.T) {
 	roottest.Require(t, "giving files to other uids requires CAP_CHOWN")
+	runAsRootAndAtelet(t, testUnpackLayerAppliesOwnership)
+}
 
+func testUnpackLayerAppliesOwnership(t *testing.T) {
 	dir, _, err := runUnpack(t, ownershipEntries)
 	if err != nil {
 		t.Fatalf("unpackLayer: %v", err)
@@ -155,37 +157,19 @@ func TestUnpackLayer_UnprivilegedKeepsUnpackingUser(t *testing.T) {
 	}
 }
 
-// hasEffectiveCap reports whether this process holds capability bit in its
-// effective set, read from /proc/self/status.
-func hasEffectiveCap(t *testing.T, bit uint) bool {
-	t.Helper()
-	b, err := os.ReadFile("/proc/self/status")
-	if err != nil {
-		t.Skipf("reading capabilities: %v", err)
-	}
-	for line := range strings.SplitSeq(string(b), "\n") {
-		if v, ok := strings.CutPrefix(line, "CapEff:"); ok {
-			caps, err := strconv.ParseUint(strings.TrimSpace(v), 16, 64)
-			if err != nil {
-				t.Fatalf("parsing CapEff %q: %v", v, err)
-			}
-			return caps&(1<<bit) != 0
-		}
-	}
-	t.Fatalf("no CapEff in /proc/self/status")
-	return false
-}
-
 // TestUnpackLayer_AppliesModesWithOwners checks that files keep their tar
 // mode once given to their owners: group write survives the umask, and
 // setuid and setgid, which the kernel clears on chown, are put back where the
 // process's capabilities allow. atelet holds only CAP_CHOWN and
-// CAP_DAC_OVERRIDE (run this under setpriv to check that set); with them a
-// setuid-root binary keeps its bit, while one another user owns, or one setgid
-// to a group root is not in, loses it without failing the unpack.
+// CAP_DAC_OVERRIDE; with them a setuid-root binary keeps its bit, while one
+// another user owns, or one setgid to a group root is not in, loses it
+// without failing the unpack.
 func TestUnpackLayer_AppliesModesWithOwners(t *testing.T) {
 	roottest.Require(t, "giving files to other uids requires CAP_CHOWN")
-	const capFowner, capFsetid = 3, 4
+	runAsRootAndAtelet(t, testUnpackLayerAppliesModesWithOwners)
+}
+
+func testUnpackLayerAppliesModesWithOwners(t *testing.T) {
 	fowner, fsetid := hasEffectiveCap(t, capFowner), hasEffectiveCap(t, capFsetid)
 
 	old := syscall.Umask(0o022)
@@ -222,4 +206,80 @@ func TestUnpackLayer_AppliesModesWithOwners(t *testing.T) {
 	assertOwner(t, filepath.Join(dir, "usr/bin/newgrp"), 0, 0, os.ModeSetuid|os.ModeSetgid|0o755)
 	assertOwner(t, filepath.Join(dir, "usr/bin/crontab"), 0, 54321, ifCap(fsetid, os.ModeSetgid)|0o755)
 	assertOwner(t, filepath.Join(dir, "opt/tool"), 1000, 1000, ifCap(fowner, os.ModeSetuid)|0o755)
+}
+
+// stickyDirEntries is a layer with sticky directories other users own, holding
+// entries that belong to users other than root. Unlinking such an entry takes
+// owning it or the directory, or CAP_FOWNER, which atelet does not hold;
+// CAP_DAC_OVERRIDE does not cover it.
+var stickyDirEntries = []tarEntry{
+	// A shared drop directory, as `install -d -m 1777 -o app` creates.
+	{name: "shared/", typeflag: tar.TypeDir, mode: 0o1777, uid: 1000, gid: 1000},
+	{name: "shared/f", typeflag: tar.TypeReg, mode: 0o644, body: "f", uid: 1000, gid: 1000},
+	{name: "shared/g", typeflag: tar.TypeReg, mode: 0o644, body: "g", uid: 1001, gid: 1001},
+	// The same, read-only, inside a private directory, with a read-only
+	// directory a third user owns below it.
+	{name: "home/", typeflag: tar.TypeDir},
+	{name: "home/app/", typeflag: tar.TypeDir, mode: 0o700, uid: 1000, gid: 1000},
+	{name: "home/app/drop/", typeflag: tar.TypeDir, mode: 0o1555, uid: 1000, gid: 1000},
+	{name: "home/app/drop/sub/", typeflag: tar.TypeDir, mode: 0o555, uid: 1001, gid: 1001},
+	{name: "home/app/drop/sub/h", typeflag: tar.TypeReg, mode: 0o444, body: "h", uid: 1002, gid: 1002},
+}
+
+// unpackStickyDirs unpacks stickyDirEntries into dir and checks the tree has
+// the owners and modes the removal tests rely on.
+func unpackStickyDirs(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := unpackInto(t, dir, buildTar(t, stickyDirEntries)); err != nil {
+		t.Fatalf("unpackLayer: %v", err)
+	}
+	assertOwner(t, filepath.Join(dir, "shared"), 1000, 1000, os.ModeDir|os.ModeSticky|0o777)
+	assertOwner(t, filepath.Join(dir, "shared/g"), 1001, 1001, 0o644)
+	assertOwner(t, filepath.Join(dir, "home/app/drop"), 1000, 1000, os.ModeDir|os.ModeSticky|0o555)
+	assertOwner(t, filepath.Join(dir, "home/app/drop/sub/h"), 1002, 1002, 0o444)
+}
+
+// TestRemoveAllWritable_OtherUsersStickyDirs checks that eviction can remove a
+// layer whose sticky directories belong to other users.
+func TestRemoveAllWritable_OtherUsersStickyDirs(t *testing.T) {
+	roottest.Require(t, "giving files to other uids requires CAP_CHOWN")
+	runAsRootAndAtelet(t, func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "layer")
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		unpackStickyDirs(t, dir)
+		if err := RemoveAllWritable(dir); err != nil {
+			t.Fatalf("RemoveAllWritable: %v", err)
+		}
+		if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("layer dir survived RemoveAllWritable: %v", err)
+		}
+	})
+}
+
+// TestNew_SweepsRetiredLayerWithOtherUsersStickyDirs checks that a retired
+// layer holding other users' sticky directories does not stop the store from
+// opening: the startup sweep must remove it, or atelet fails to start.
+func TestNew_SweepsRetiredLayerWithOtherUsersStickyDirs(t *testing.T) {
+	roottest.Require(t, "giving files to other uids requires CAP_CHOWN")
+	runAsRootAndAtelet(t, func(t *testing.T) {
+		root := t.TempDir()
+		s, err := New(root)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		retired := filepath.Join(s.layersDir(), retiredPrefix+"0123456789ab-1")
+		fsDir := filepath.Join(retired, layerFSDirName)
+		if err := os.MkdirAll(fsDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		unpackStickyDirs(t, fsDir)
+		if _, err := New(root); err != nil {
+			t.Fatalf("New after a retirement left the layer behind: %v", err)
+		}
+		if _, err := os.Lstat(retired); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("retired layer dir survived the startup sweep: %v", err)
+		}
+	})
 }
