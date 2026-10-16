@@ -458,6 +458,108 @@ func testUnpackLayerDirectoryHeadersStayWithTheirDirectory(t *testing.T) {
 	}
 }
 
+// TestUnpackLayer_NonUTF8DirectoryNames covers directory names that are not
+// valid UTF-8, which tar allows (a Latin-1 "café" is "caf\xe9"), on both paths
+// that walk a directory tree: replacing a directory, and finding a directory
+// no name reaches any more in the restore pass.
+func TestUnpackLayer_NonUTF8DirectoryNames(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("macOS filesystems reject names that are not valid UTF-8")
+	}
+	if os.Geteuid() != 0 {
+		testUnpackLayerNonUTF8DirectoryNames(t)
+		return
+	}
+	runAsRootAndAtelet(t, testUnpackLayerNonUTF8DirectoryNames)
+}
+
+func testUnpackLayerNonUTF8DirectoryNames(t *testing.T) {
+	const latin1 = "caf\xe9"
+	mtime := time.Date(2020, 6, 1, 0, 0, 0, 0, time.UTC)
+	type want struct {
+		mode     os.FileMode
+		uid, gid uint32
+	}
+	tests := []struct {
+		name    string
+		entries []tarEntry
+		want    map[string]want
+	}{
+		{
+			name: "file replaces the directory",
+			entries: []tarEntry{
+				{name: latin1 + "/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000},
+				{name: latin1 + "/sub/", typeflag: tar.TypeDir},
+				{name: latin1, typeflag: tar.TypeReg, mode: 0o644, body: "f", uid: 1001, gid: 1001, modTime: mtime},
+			},
+			want: map[string]want{latin1: {0o644, 1001, 1001}},
+		},
+		{
+			name: "file replaces the directory's parent",
+			entries: []tarEntry{
+				{name: "d/", typeflag: tar.TypeDir},
+				{name: "d/" + latin1 + "/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000},
+				{name: "d", typeflag: tar.TypeReg, mode: 0o644, body: "f", uid: 1001, gid: 1001, modTime: mtime},
+			},
+			want: map[string]want{"d": {0o644, 1001, 1001}},
+		},
+		{
+			// latin1/x is reached only as "a/x", and a then points
+			// elsewhere, so the restore pass walks the tree to find it.
+			name: "restore walk finds the directory",
+			entries: []tarEntry{
+				{name: latin1 + "/", typeflag: tar.TypeDir},
+				{name: "dd/", typeflag: tar.TypeDir},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: latin1},
+				{name: "a/x/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: mtime},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "dd"},
+			},
+			want: map[string]want{latin1 + "/x": {os.ModeDir | 0o750, 1000, 1000}},
+		},
+		{
+			name: "restore walk passes the directory",
+			entries: []tarEntry{
+				{name: latin1 + "/", typeflag: tar.TypeDir, mode: 0o705, uid: 1001, gid: 1001, modTime: mtime},
+				{name: latin1 + "/sub/", typeflag: tar.TypeDir},
+				{name: "cc/", typeflag: tar.TypeDir},
+				{name: "dd/", typeflag: tar.TypeDir},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+				{name: "a/x/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: mtime},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "dd"},
+			},
+			want: map[string]want{
+				latin1: {os.ModeDir | 0o705, 1001, 1001},
+				"cc/x": {os.ModeDir | 0o750, 1000, 1000},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, _, err := runUnpack(t, tc.entries)
+			if err != nil {
+				t.Fatalf("unpackLayer: %v", err)
+			}
+			for name, w := range tc.want {
+				uid, gid, mode := ownerOf(t, filepath.Join(dir, name))
+				if mode != w.mode {
+					t.Errorf("%q mode = %v, want %v", name, mode, w.mode)
+				}
+				// Without CAP_CHOWN every entry keeps the unpacking user.
+				if os.Geteuid() == 0 && (uid != w.uid || gid != w.gid) {
+					t.Errorf("%q owner = %d:%d, want %d:%d", name, uid, gid, w.uid, w.gid)
+				}
+				fi, err := os.Lstat(filepath.Join(dir, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !fi.ModTime().Equal(mtime) {
+					t.Errorf("%q mtime = %v, want %v", name, fi.ModTime(), mtime)
+				}
+			}
+		})
+	}
+}
+
 // stickyDirEntries is a layer with sticky directories other users own, holding
 // entries that belong to users other than root. Unlinking such an entry takes
 // owning it or the directory, or CAP_FOWNER, which atelet does not hold;

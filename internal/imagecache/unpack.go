@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -519,28 +518,39 @@ func dirInodeOf(name string, fi os.FileInfo) (dirInode, error) {
 }
 
 // dirPaths returns the directories at and below dir, a directory in root,
-// with the path of each, without following symlinks.
+// with the path of each, without following symlinks. It reads directories
+// through root rather than root.FS(), which rejects names that are not valid
+// UTF-8 and tar allows.
 func dirPaths(root *os.Root, dir string) (map[dirInode]string, error) {
 	paths := map[dirInode]string{}
-	err := fs.WalkDir(root.FS(), dir, func(name string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() {
-			return nil
-		}
+	for pending := []string{dir}; len(pending) > 0; {
+		name := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
 		fi, err := root.Lstat(name)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		inode, err := dirInodeOf(name, fi)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		paths[inode] = name
-		return nil
-	})
-	return paths, err
+		f, err := root.Open(name)
+		if err != nil {
+			return nil, err
+		}
+		entries, err := f.ReadDir(-1)
+		f.Close()
+		if err != nil {
+			return nil, fmt.Errorf("while reading directory %q: %w", name, err)
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				pending = append(pending, filepath.Join(name, e.Name()))
+			}
+		}
+	}
+	return paths, nil
 }
 
 // restoreSetIDBits puts back the setuid and setgid bits of want on name, a
