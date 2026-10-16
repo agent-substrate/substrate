@@ -63,8 +63,9 @@ const (
 )
 
 // requireStaticMTLS skips the test unless the router was installed with
-// --ingress-auth-mode=static-mtls. In CI the mode must be stated explicitly,
-// so a lane that forgot to set it fails instead of skipping.
+// --ingress-auth-mode=static-mtls.
+//
+// Only needed until agent-gateway supports static-mtls mode as well.
 func requireStaticMTLS(t *testing.T) {
 	t.Helper()
 	if !e2e.IngressAuthModeSet() && e2e.IngressAuthModeRequired() {
