@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -247,6 +248,22 @@ func TestExtractKeepsFileSparse(t *testing.T) {
 	}
 	if allocated := st.Blocks * 512; allocated > 1<<20 {
 		t.Errorf("extracted disk.img allocates %d bytes of its %d, want its holes left unallocated", allocated, size)
+	}
+}
+
+// TestExtractNamesTruncatedFile verifies an archive cut off inside a file's
+// contents fails with an error naming that file, rather than the file being
+// restored short.
+func TestExtractNamesTruncatedFile(t *testing.T) {
+	tarPath := filepath.Join(t.TempDir(), "trunc.tar")
+	writeTar(t, tarPath, tar.Header{Name: "data.bin", Mode: 0o644, Size: 10000, Typeflag: tar.TypeReg})
+	// Keep the 512-byte header and the first 5000 bytes of contents.
+	if err := os.Truncate(tarPath, 512+5000); err != nil {
+		t.Fatalf("truncating tar: %v", err)
+	}
+	err := Extract(tarPath, t.TempDir())
+	if !errors.Is(err, io.ErrUnexpectedEOF) || !strings.Contains(err.Error(), "data.bin") {
+		t.Fatalf("Extract = %v, want an unexpected-EOF error naming data.bin", err)
 	}
 }
 

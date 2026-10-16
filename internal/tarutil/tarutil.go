@@ -19,7 +19,8 @@
 // ownership, modification times, symlinks, hardlinks, FIFOs, overlay
 // whiteouts, and user.* / overlay extended attributes (as PAX SCHILY.xattr
 // records). Extraction leaves all-zero blocks unallocated, so a sparse file
-// such as a disk image stays sparse across a snapshot.
+// such as a disk image is restored sparse; the archive itself still stores
+// holes as zeros.
 //
 // It exists for snapshotting durable-dir volumes and rootfs overlay uppers
 // (see cmd/ateom-microvm): the contents are written by the sandboxed workload
@@ -65,6 +66,9 @@ const copyBufSize = 128 << 10
 
 // File contents must bypass the stream buffer.
 const _ = uint(copyBufSize - streamBufSize - 1)
+
+// writeSparse skips whole blocks only if each buffer holds whole blocks.
+const _ = uint(-(copyBufSize % sparseBlockSize))
 
 // Stream buffers must be Reset(nil) before pooling to avoid retaining files.
 var (
@@ -395,7 +399,7 @@ func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, d
 		if err != nil {
 			return fmt.Errorf("creating file %q: %w", name, err)
 		}
-		copyErr := writeSparse(out, tr)
+		copyErr := writeSparse(out, tr, hdr.Size)
 		closeErr := out.Close()
 		if copyErr != nil {
 			return fmt.Errorf("writing contents of %q: %w", name, copyErr)
@@ -466,11 +470,12 @@ const sparseBlockSize = 4 << 10
 
 var zeroBlock [sparseBlockSize]byte
 
-// writeSparse copies src into the empty file f, writing only blocks that hold
-// a non-zero byte and leaving the rest as holes, then sets f's length so a
-// trailing hole is kept. On a filesystem without hole support the skipped
-// blocks read back as zeros all the same.
-func writeSparse(f *os.File, src io.Reader) error {
+// writeSparse copies the size bytes of src into the empty file f, writing only
+// blocks that hold a non-zero byte and leaving the rest as holes, then sets f's
+// length so a trailing hole is kept. On a filesystem without hole support the
+// skipped blocks read back as zeros all the same. It fails if src ends before
+// size bytes, as it does when the archive is truncated mid-entry.
+func writeSparse(f *os.File, src io.Reader, size int64) error {
 	bp := copyBufPool.Get().(*[]byte)
 	defer copyBufPool.Put(bp)
 	buf := *bp
@@ -498,6 +503,9 @@ func writeSparse(f *os.File, src io.Reader) error {
 		}
 		off += int64(n)
 		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+			if off != size {
+				return fmt.Errorf("got %d of %d bytes: %w", off, size, io.ErrUnexpectedEOF)
+			}
 			return f.Truncate(off)
 		}
 		if readErr != nil {
