@@ -523,6 +523,84 @@ func TestEgressBoundsHowLongATunnelWaitsToOpen(t *testing.T) {
 	}
 }
 
+// A connection the egress policy rejects is reset rather than cleanly closed,
+// so the actor can tell a policy refusal (ECONNRESET) apart from the
+// destination hanging up (clean EOF). Served through a kernel TCP listener,
+// the production listener type, so the reset path is the one under test.
+func TestEgressPolicyRejectionResets(t *testing.T) {
+	egress, err := New(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = egress.Deactivate(context.Background(), testActorUID) })
+	dialer := tunnelDialerFunc(func(context.Context, string) (net.Conn, error) {
+		return nil, &ConnectRejectedError{StatusCode: http.StatusForbidden, status: "403 Forbidden", message: "egress policy denies the destination"}
+	})
+	if err := egress.Activate(testActorUID, dialer, fakeActorCertificateSource{expiresAt: time.Now().Add(time.Hour)}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	serve, err := egress.Bind(testActorUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go serve(context.Background(), listener)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		// The reset can overtake connect() itself; observing it at dial time
+		// satisfies the contract exactly as well as at first read.
+		if !errors.Is(err, syscall.ECONNRESET) {
+			t.Fatalf("dial error = %v, want connection reset by peer", err)
+		}
+		return
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("read error = %v, want connection reset by peer", err)
+	}
+}
+
+// Failures that are not refusals — the PEP unreachable, the TLS handshake
+// failing — keep the ordinary clean close: the actor sees a quiet EOF, not a
+// reset, and the two halves of the egress contract stay distinguishable.
+func TestEgressDialFailureClosesCleanly(t *testing.T) {
+	egress, err := New(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := tunnelDialerFunc(func(context.Context, string) (net.Conn, error) {
+		return nil, errors.New("test: PEP unreachable")
+	})
+	if err := egress.Activate(testActorUID, dialer, fakeActorCertificateSource{expiresAt: time.Now().Add(time.Hour)}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = egress.Deactivate(context.Background(), testActorUID) })
+
+	actor, proxy := net.Pipe()
+	defer actor.Close()
+	// Set before handle runs: once the proxy side closes, the pipe refuses
+	// new deadlines.
+	if err := actor.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	egress.mu.Lock()
+	active := egress.active[testActorUID]
+	egress.mu.Unlock()
+	egress.handle(proxy, active)
+
+	if _, err := actor.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Errorf("reading the actor's connection = %v, want clean EOF", err)
+	}
+}
+
 type tunnelDialerFunc func(context.Context, string) (net.Conn, error)
 
 func (f tunnelDialerFunc) DialContext(ctx context.Context, destination string) (net.Conn, error) {
