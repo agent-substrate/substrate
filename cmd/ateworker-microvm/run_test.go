@@ -222,3 +222,25 @@ func TestKernelParamsDebugConsole(t *testing.T) {
 		}
 	}
 }
+
+func TestKernelParamsMemAgent(t *testing.T) {
+	defaultParams := (&AteWorkerService{enableMemAgent: false}).kernelParams()
+	for _, forbidden := range []string{"psi=1", "agent.mem_agent_enable=true"} {
+		if strings.Contains(defaultParams, forbidden) {
+			t.Errorf("expected kernelParams() with enableMemAgent=false not to contain %q, but got %q", forbidden, defaultParams)
+		}
+	}
+
+	memAgentParams := (&AteWorkerService{enableMemAgent: true}).kernelParams()
+	for _, want := range []string{
+		"psi=1",
+		"agent.mem_agent_enable=true",
+		"agent.mem_agent_memcg_swap=true",
+		"agent.mem_agent_memcg_period_secs=60",
+		"agent.mem_agent_memcg_eviction_run_aging_count_min=1",
+	} {
+		if !strings.Contains(memAgentParams, want) {
+			t.Errorf("expected kernelParams() with enableMemAgent=true to contain %q, but got %q", want, memAgentParams)
+		}
+	}
+}
