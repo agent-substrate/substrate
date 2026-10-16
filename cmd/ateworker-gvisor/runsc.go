@@ -111,7 +111,6 @@ func (r *runsc) writeSpec(containerName string) error {
 		ContainerName:  containerName,
 		DurableVolumes: r.durableVolumes,
 		Size:           r.size,
-		ResolvConf:     resolvConfPath(r.actorDirs),
 	})
 	return ocispec.Save(ociBundlePath(r.actorDirs, containerName), spec)
 }

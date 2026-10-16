@@ -16,7 +16,6 @@ package ocispec
 
 import (
 	"encoding/json"
-	"slices"
 	"strings"
 	"testing"
 
@@ -135,18 +134,6 @@ func TestShapeMicroVM_UnstagedSourceIsAnError(t *testing.T) {
 	spec.Mounts = append(spec.Mounts, specs.Mount{Destination: "/mnt/new", Type: "bind", Source: "/var/lib/ate/new-kind/x"})
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err == nil {
 		t.Fatal("ShapeMicroVM() = nil, want an error for a bind that is not staged into the share")
-	}
-}
-
-// ShapeGVisor inserts resolv.conf ahead of the volume bind mounts.
-func TestShapeGVisor_ResolvConfPrecedesVolumes(t *testing.T) {
-	spec := Build(parityOptions)
-	ShapeGVisor(spec, GVisorOptions{ActorUID: testActorUID, ContainerName: "app", Size: paritySize})
-	at := func(dest string) int {
-		return slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == dest })
-	}
-	if got, want := at(resolvConf), at("/var/data"); got > want {
-		t.Errorf("%s is at index %d, after the first volume bind at %d", resolvConf, got, want)
 	}
 }
 

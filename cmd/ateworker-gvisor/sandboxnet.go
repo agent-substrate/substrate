@@ -17,12 +17,6 @@
 package main
 
 import (
-	"context"
-	"errors"
-	"fmt"
-	"io/fs"
-	"log/slog"
-	"os"
 	"path/filepath"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
@@ -31,43 +25,12 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
-// actorResolvConf writes the resolver bind source outside the actor's rootfs.
-func actorResolvConf(actorDirs *ateworkerpb.ActorDirs) (string, error) {
-	pod, err := os.ReadFile("/etc/resolv.conf")
-	if err != nil {
-		return "", fmt.Errorf("reading the worker pod resolv.conf: %w", err)
-	}
-	path := resolvConfPath(actorDirs)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", fmt.Errorf("creating the actor directory: %w", err)
-	}
-	if err := os.WriteFile(path, actornet.SandboxResolvConf(actornet.ActorVethGateway, pod), 0o644); err != nil {
-		return "", fmt.Errorf("writing the actor resolv.conf: %w", err)
-	}
-	return path, nil
-}
-
-// setupAppRootfs composes an application container's bundle rootfs and writes
-// its /etc/hosts there.
-//
-// This is the base layer under the sandbox's restored rootfs writes, so
-// rewriting it on every activation keeps the actor's own edits. Writing it
-// after restore instead would clobber them.
+// setupAppRootfs composes an application container's bundle rootfs, the base
+// layer under the sandbox's restored rootfs writes, and writes its /etc files.
 func setupAppRootfs(actorDirs *ateworkerpb.ActorDirs, containerName string) error {
 	bundle := ociBundlePath(actorDirs, containerName)
 	if err := imagecache.SetupBundleRootfs(bundle); err != nil {
 		return err
 	}
-	return actornet.WriteRootfsHosts(filepath.Join(bundle, "rootfs"), actornet.SandboxHosts(ocispec.Hostname, actornet.ActorVethIP))
-}
-
-// removeActorResolvConf drops the file with the actor's network; atelet's
-// per-activation reset clears directories under the actor's path, not files.
-func removeActorResolvConf(ctx context.Context, path string) {
-	if path == "" {
-		return
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		slog.WarnContext(ctx, "Failed to remove the actor resolv.conf", slog.Any("err", err))
-	}
+	return actornet.WriteRootfsEtcFiles(filepath.Join(bundle, "rootfs"), ocispec.Hostname)
 }

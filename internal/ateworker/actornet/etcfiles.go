@@ -14,29 +14,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package actornet
 
 import (
 	"fmt"
 	"os"
-
-	"go.ate.dev/substrate/internal/ateworker/actornet"
-	"go.ate.dev/substrate/internal/ocispec"
 )
 
-// writeActorEtcFiles points the guest resolver at its fixed gateway address
-// and writes the guest's /etc/hosts.
+// WriteRootfsEtcFiles writes the sandbox's /etc/resolv.conf and /etc/hosts
+// into rootfs, pointing the resolver at the actor's gateway.
 //
-// rootfs is the read-only lower under the actor's restored overlay upper, so
-// rewriting both on every activation keeps the actor's own edits. Writing them
+// rootfs must be the base layer under the actor's restored rootfs writes, so
+// rewriting it on every activation keeps the actor's own edits. Writing these
 // after restore instead would clobber them.
-func writeActorEtcFiles(rootfs string) error {
+func WriteRootfsEtcFiles(rootfs, hostname string) error {
 	pod, err := os.ReadFile("/etc/resolv.conf")
 	if err != nil {
 		return fmt.Errorf("reading the worker pod resolv.conf: %w", err)
 	}
-	if err := actornet.WriteRootfsResolvConf(rootfs, actornet.SandboxResolvConf(actornet.ActorVethGateway, pod)); err != nil {
+	if err := WriteRootfsResolvConf(rootfs, SandboxResolvConf(ActorVethGateway, pod)); err != nil {
 		return err
 	}
-	return actornet.WriteRootfsHosts(rootfs, actornet.SandboxHosts(ocispec.Hostname, actornet.ActorVethIP))
+	return WriteRootfsHosts(rootfs, SandboxHosts(hostname, ActorVethIP))
 }

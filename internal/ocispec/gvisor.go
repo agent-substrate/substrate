@@ -16,7 +16,6 @@ package ocispec
 
 import (
 	"path/filepath"
-	"slices"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
@@ -28,9 +27,6 @@ import (
 // name is drawn from, so no actor container can collide with it.
 const PauseContainer = "_pause"
 
-// resolvConf is the sandbox resolver path and default bind source.
-const resolvConf = "/etc/resolv.conf"
-
 // GVisorOptions describes the gVisor-specific context of one actor container.
 type GVisorOptions struct {
 	ActorUID      string
@@ -38,8 +34,6 @@ type GVisorOptions struct {
 	ContainerName string
 	// DurableVolumes are declared on the sandbox (pause) spec only.
 	DurableVolumes []string
-	// ResolvConf is the bind source for /etc/resolv.conf; empty uses the pod's file.
-	ResolvConf string
 	// Size sizes the container's cgroup leaf. Only gVisor applies it; a micro-VM
 	// container's limits come from its own declared resources (see sizing).
 	Size sizing.SandboxSize
@@ -50,8 +44,8 @@ func GVisorCgroupLeaf(actorUID, containerName string) string {
 	return actorUID + "-" + containerName
 }
 
-// ShapeGVisor adds runsc CRI annotations, durable-dir mount hints, host
-// resolv.conf, and per-container cgroups to the spec. It is idempotent.
+// ShapeGVisor adds runsc CRI annotations, durable-dir mount hints, and
+// per-container cgroups to the spec. It is idempotent.
 func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 	if spec.Annotations == nil {
 		spec.Annotations = make(map[string]string)
@@ -67,24 +61,6 @@ func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 	} else {
 		spec.Annotations["io.kubernetes.cri.container-type"] = "container"
 		spec.Annotations["io.kubernetes.cri.sandbox-id"] = PauseContainer
-	}
-
-	// Insert resolv.conf before any volume bind mounts.
-	if !slices.ContainsFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == resolvConf }) {
-		i := slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Type == "bind" })
-		if i < 0 {
-			i = len(spec.Mounts)
-		}
-		source := o.ResolvConf
-		if source == "" {
-			source = resolvConf
-		}
-		spec.Mounts = slices.Insert(spec.Mounts, i, specs.Mount{
-			Destination: resolvConf,
-			Type:        "bind",
-			Source:      source,
-			Options:     []string{"ro"},
-		})
 	}
 
 	if spec.Linux == nil {
