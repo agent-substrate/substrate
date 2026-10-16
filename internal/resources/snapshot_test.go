@@ -57,13 +57,20 @@ func TestNewActorSnapshotURI(t *testing.T) {
 			wantOwner: "gs://bucket/atespaces/team-a/actors/actor-uid",
 		},
 		{
-			name:      "location containing an atespaces segment",
-			location:  "gs://my-bucket/atespaces/secret-agent",
-			atespace:  "team-a",
-			actorUID:  "actor-uid",
-			snapshot:  "snap-1",
-			want:      "gs://my-bucket/atespaces/secret-agent/atespaces/team-a/actors/actor-uid/snapshots/snap-1",
-			wantOwner: "gs://my-bucket/atespaces/secret-agent/atespaces/team-a/actors/actor-uid",
+			name:     "location containing an atespaces segment",
+			location: "gs://my-bucket/atespaces/secret-agent",
+			atespace: "team-a",
+			actorUID: "actor-uid",
+			snapshot: "snap-1",
+			wantErr:  true,
+		},
+		{
+			name:     "location under another actor's prefix",
+			location: "gs://snaps/root/atespaces/team-a/actors/actor-a",
+			atespace: "team-b",
+			actorUID: "actor-b",
+			snapshot: "snap-1",
+			wantErr:  true,
 		},
 		{
 			name:     "empty location",
@@ -193,6 +200,13 @@ func TestNewTagSnapshotURI(t *testing.T) {
 			name:     "empty location",
 			location: "",
 			atespace: "team-a",
+			tagUID:   "tag-uid-1",
+			wantErr:  true,
+		},
+		{
+			name:     "location under another tag's prefix",
+			location: "gs://snaps/root/atespaces/team-a/tags/tag-uid-0",
+			atespace: "team-b",
 			tagUID:   "tag-uid-1",
 			wantErr:  true,
 		},
@@ -334,6 +348,18 @@ func TestSnapshotOwnerPrefix(t *testing.T) {
 			location: "/root",
 			wantErr:  true,
 		},
+		{
+			name:     "location under another actor's prefix",
+			owner:    ActorSnapshotOwner("team-b", "actor-b"),
+			location: "gs://snaps/root/atespaces/team-a/actors/actor-a",
+			wantErr:  true,
+		},
+		{
+			name:     "location under an atespace's prefix",
+			owner:    TagSnapshotOwner("team-b", "snap-1"),
+			location: "s3://snaps/root/atespaces/team-a",
+			wantErr:  true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -409,12 +435,22 @@ func TestParseSnapshotURI(t *testing.T) {
 			wantOwner:    ActorSnapshotOwner("team-a", "actor-uid"),
 		},
 		{
+			// A recorded URI is read even though its location could no
+			// longer be set, so its owner can still be collected.
 			name:         "location containing an atespaces segment",
 			uri:          "gs://my-bucket/atespaces/secret-agent/atespaces/team-a/actors/actor-uid/snapshots/snap-1",
 			wantLocation: "gs://my-bucket/atespaces/secret-agent",
 			wantAtespace: "team-a",
 			wantName:     "snap-1",
 			wantOwner:    ActorSnapshotOwner("team-a", "actor-uid"),
+		},
+		{
+			name:         "location under another actor's prefix",
+			uri:          "gs://snaps/root/atespaces/team-a/actors/actor-a/atespaces/team-b/tags/snap-1",
+			wantLocation: "gs://snaps/root/atespaces/team-a/actors/actor-a",
+			wantAtespace: "team-b",
+			wantName:     "snap-1",
+			wantOwner:    TagSnapshotOwner("team-b", "snap-1"),
 		},
 		{
 			name:    "rejects an actor prefix with no snapshot",
@@ -593,6 +629,30 @@ func TestSnapshotURIZeroValue(t *testing.T) {
 	}
 	if uri.IsZero() {
 		t.Errorf("%q reports IsZero", uri)
+	}
+}
+
+// TestParseSnapshotURIUnderAtespacesLocation covers a URI recorded under a
+// location ValidateSnapshotLocation rejects: it is read and its owner's
+// prefix can be collected, but nothing new is built under that location.
+func TestParseSnapshotURIUnderAtespacesLocation(t *testing.T) {
+	const uri = "gs://snaps/root/atespaces/team-a/actors/actor-a/atespaces/team-b/actors/actor-b/snapshots/snap-1"
+	got, err := ParseSnapshotURI(uri)
+	if err != nil {
+		t.Fatalf("ParseSnapshotURI(%q) error = %v", uri, err)
+	}
+	const wantOwnerPrefix = "gs://snaps/root/atespaces/team-a/actors/actor-a/atespaces/team-b/actors/actor-b"
+	if got.OwnerPrefix().String() != wantOwnerPrefix {
+		t.Errorf("OwnerPrefix() = %q, want %q", got.OwnerPrefix(), wantOwnerPrefix)
+	}
+	if p, err := got.Owner().Prefix(got.Location()); err == nil {
+		t.Errorf("Owner().Prefix(%q) = %q, want an error", got.Location(), p)
+	}
+	if u, err := NewActorSnapshotURI(got.Location(), "team-b", "actor-b", "snap-2"); err == nil {
+		t.Errorf("NewActorSnapshotURI(%q, ...) = %q, want an error", got.Location(), u)
+	}
+	if u, err := NewTagSnapshotURI(got.Location(), "team-b", "snap-2"); err == nil {
+		t.Errorf("NewTagSnapshotURI(%q, ...) = %q, want an error", got.Location(), u)
 	}
 }
 
