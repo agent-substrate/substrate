@@ -366,9 +366,6 @@ func TestRegisterWorker_RejectsNonsense(t *testing.T) {
 		{"negative ceiling", &ateapipb.WorkerResources{Actors: -1}},
 		{"int32 underflow", &ateapipb.WorkerResources{Actors: -2147483648}},
 		{"negative quantity", &ateapipb.WorkerResources{Resources: resources.CPUMemory(-1, 0)}},
-		{"unparseable quantity", &ateapipb.WorkerResources{
-			Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "lots"}}},
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.RegisterWorker(authed, &ateapipb.RegisterWorkerRequest{

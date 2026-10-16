@@ -537,51 +537,34 @@ func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
 
 func TestToAteletResources(t *testing.T) {
 	tests := []struct {
-		name    string
-		in      *ateapipb.Resources
-		want    *ateletpb.ResourceLimits
-		wantErr bool
+		name string
+		in   *ateapipb.Resources
+		want *ateletpb.ResourceLimits
 	}{{
 		name: "nil resources",
 		in:   nil,
 		want: nil,
 	}, {
-		name: "empty limits",
+		name: "empty resources",
 		in:   &ateapipb.Resources{},
 		want: nil,
 	}, {
 		name: "memory only",
-		in:   &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "256Mi"}}},
+		in:   &ateapipb.Resources{Limits: &ateapipb.ResourceList{MemoryBytes: 256 << 20}},
 		want: &ateletpb.ResourceLimits{MemoryBytes: 268435456},
 	}, {
 		name: "cpu only",
-		in:   &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "200m"}}},
+		in:   &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: 200}},
 		want: &ateletpb.ResourceLimits{CpuMillis: 200},
 	}, {
 		name: "both",
-		in: &ateapipb.Resources{Limits: []*ateapipb.Limits{
-			{Name: "cpu", Quantity: "1"},
-			{Name: "memory", Quantity: "1Gi"},
-		}},
+		in:   &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: 1000, MemoryBytes: 1 << 30}},
 		want: &ateletpb.ResourceLimits{MemoryBytes: 1073741824, CpuMillis: 1000},
-	}, {
-		name:    "invalid quantity",
-		in:      &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "banana"}}},
-		wantErr: true,
 	}}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := toAteletResources(tc.in)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("toAteletResources() error = nil, want parse error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("toAteletResources() failed: %v", err)
-			}
+			got := toAteletResources(tc.in)
 			if tc.want == nil {
 				if got != nil {
 					t.Fatalf("toAteletResources() = %v, want nil", got)
@@ -610,12 +593,9 @@ func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-limits"},
 		Containers: []*ateapipb.Container{
 			{
-				Name:  "limited",
-				Image: "main",
-				Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
-					{Name: "cpu", Quantity: "200m"},
-					{Name: "memory", Quantity: "256Mi"},
-				}},
+				Name:      "limited",
+				Image:     "main",
+				Resources: &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: 200, MemoryBytes: 256 << 20}},
 			},
 			{Name: "unlimited", Image: "main"},
 		},

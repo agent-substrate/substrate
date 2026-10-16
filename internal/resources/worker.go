@@ -15,53 +15,36 @@
 package resources
 
 import (
-	"fmt"
-
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // AddToAllocated adjusts allocation by an assignment; sign is 1 or -1.
 // It returns nil when allocation reaches zero.
-func AddToAllocated(total *ateapipb.WorkerResources, assignment *ateapipb.ActorAssignment, sign int64) (*ateapipb.WorkerResources, error) {
-	held, err := ParseQuantities(total.GetResources())
-	if err != nil {
-		return nil, fmt.Errorf("allocated: %w", err)
-	}
-	booked, err := ParseQuantities(assignment.GetResources())
-	if err != nil {
-		return nil, fmt.Errorf("assignment for actor %s: %w", assignment.GetActorUid(), err)
-	}
-	if held == nil {
-		held = Quantities{}
-	}
+func AddToAllocated(total *ateapipb.WorkerResources, assignment *ateapipb.ActorAssignment, sign int64) *ateapipb.WorkerResources {
+	var held *ateapipb.Resources
 	if sign > 0 {
-		held.Add(booked)
+		held = Add(total.GetResources(), assignment.GetResources())
 	} else {
-		held.Sub(booked)
+		held = Sub(total.GetResources(), assignment.GetResources())
 	}
 
 	actors := total.GetActors() + int32(sign)
-	resources := held.Proto()
-	if actors == 0 && resources == nil {
-		return nil, nil
+	if actors == 0 && held == nil {
+		return nil
 	}
-	return &ateapipb.WorkerResources{Actors: actors, Resources: resources}, nil
+	return &ateapipb.WorkerResources{Actors: actors, Resources: held}
 }
 
 // SumAllocated is what a set of assignments takes from a Worker, or nil for
 // none. Rebuilds the total rather than adjusting it, which is what the checks
 // holding AddToAllocated to the assignments it counts compare against.
-func SumAllocated(assignments []*ateapipb.ActorAssignment) (*ateapipb.WorkerResources, error) {
+func SumAllocated(assignments []*ateapipb.ActorAssignment) *ateapipb.WorkerResources {
 	if len(assignments) == 0 {
-		return nil, nil
+		return nil
 	}
-	total := Quantities{}
+	var total *ateapipb.Resources
 	for _, assignment := range assignments {
-		booked, err := ParseQuantities(assignment.GetResources())
-		if err != nil {
-			return nil, fmt.Errorf("assignment for actor %s: %w", assignment.GetActorUid(), err)
-		}
-		total.Add(booked)
+		total = Add(total, assignment.GetResources())
 	}
-	return &ateapipb.WorkerResources{Actors: int32(len(assignments)), Resources: total.Proto()}, nil
+	return &ateapipb.WorkerResources{Actors: int32(len(assignments)), Resources: total}
 }

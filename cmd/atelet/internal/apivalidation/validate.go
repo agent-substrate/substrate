@@ -79,13 +79,6 @@ func ValidateRegisterWorkerRequest(ctx context.Context, req *ateletpb.RegisterWo
 	return Validate_RegisterWorkerRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
-// ValidateCustom_Limits validates one limit with resources.ValidateLimit, the
-// rule the control plane applies to its own Limits. Presence and uniqueness
-// of names are enforced by tags.
-func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.Limits) field.ErrorList {
-	return resources.ValidateLimit(fldPath, value.GetName(), value.GetQuantity())
-}
-
 func ValidateCustom_EgressGateway_Address(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateHostPort(fldPath, *value)
 }

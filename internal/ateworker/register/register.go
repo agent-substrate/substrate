@@ -35,13 +35,11 @@ import (
 	"go.ate.dev/substrate/internal/ateletdial"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/sandboxruntimes"
 	"go.ate.dev/substrate/internal/workercapacity"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -107,20 +105,13 @@ func buildRequest(capacity *ateletpb.WorkerResources, sandboxClass string, f *sa
 	return req
 }
 
-// cpuMemory is the Resources for those two dimensions. A zero dimension is
-// left out, which the control plane reads as none of it; nil when both are.
+// cpuMemory is the Resources for those two dimensions; nil when both are
+// zero.
 func cpuMemory(cpuMilli, memoryBytes int64) *ateletpb.Resources {
-	var limits []*ateletpb.Limits
-	if cpuMilli != 0 {
-		limits = append(limits, &ateletpb.Limits{Name: resources.ResourceCPU, Quantity: resource.NewMilliQuantity(cpuMilli, resource.DecimalSI).String()})
-	}
-	if memoryBytes != 0 {
-		limits = append(limits, &ateletpb.Limits{Name: resources.ResourceMemory, Quantity: resource.NewQuantity(memoryBytes, resource.BinarySI).String()})
-	}
-	if len(limits) == 0 {
+	if cpuMilli == 0 && memoryBytes == 0 {
 		return nil
 	}
-	return &ateletpb.Resources{Limits: limits}
+	return &ateletpb.Resources{Limits: &ateletpb.ResourceList{CpuMillicores: cpuMilli, MemoryBytes: memoryBytes}}
 }
 
 func readLimit(path string) int64 {

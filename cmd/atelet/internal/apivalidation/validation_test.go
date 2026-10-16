@@ -1012,9 +1012,9 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 			},
 		}
 	}
-	withLimits := func(limits ...*ateletpb.Limits) *ateletpb.RegisterWorkerRequest {
+	withResources := func(r *ateletpb.Resources) *ateletpb.RegisterWorkerRequest {
 		return &ateletpb.RegisterWorkerRequest{
-			Capacity:       &ateletpb.WorkerResources{Resources: &ateletpb.Resources{Limits: limits}},
+			Capacity:       &ateletpb.WorkerResources{Resources: r},
 			DefaultRuntime: testRuntime(),
 		}
 	}
@@ -1244,9 +1244,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 	}, {
 		name: "full capacity",
 		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{Actors: 4, Resources: &ateletpb.Resources{
-				Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "4"}, {Name: "memory", Quantity: "8Gi"}},
-			}},
+			Capacity:       &ateletpb.WorkerResources{Actors: 4, Resources: &ateletpb.Resources{Limits: &ateletpb.ResourceList{CpuMillicores: 4000, MemoryBytes: 8 << 30}}},
 			DefaultRuntime: testRuntime(),
 		},
 	}, {
@@ -1254,51 +1252,17 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		obj:  &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: -1}, DefaultRuntime: testRuntime()},
 		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "actors"), nil, "").WithOrigin("minimum")},
 	}, {
-		name: "unsupported resource name",
-		obj:  withLimits(&ateletpb.Limits{Name: "gpu", Quantity: "1"}),
-		want: field.ErrorList{field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil)},
+		name: "negative cpu_millicores",
+		obj:  withResources(&ateletpb.Resources{Limits: &ateletpb.ResourceList{CpuMillicores: -1}}),
+		want: field.ErrorList{field.Invalid(limitsPath.Child("cpu_millicores"), nil, "").WithOrigin("minimum")},
 	}, {
-		name: "missing resource name",
-		obj:  withLimits(&ateletpb.Limits{Quantity: "1"}),
-		want: field.ErrorList{
-			field.Required(limitsPath.Index(0).Child("name"), ""),
-			field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil),
-		},
+		name: "cpu_millicores above the cap",
+		obj:  withResources(&ateletpb.Resources{Limits: &ateletpb.ResourceList{CpuMillicores: 1000000}}),
+		want: field.ErrorList{field.Invalid(limitsPath.Child("cpu_millicores"), nil, "").WithOrigin("maximum")},
 	}, {
-		name: "resource name too long",
-		obj:  withLimits(&ateletpb.Limits{Name: strings.Repeat("x", 17), Quantity: "1"}),
-		want: field.ErrorList{
-			field.TooLong(limitsPath.Index(0).Child("name"), nil, 16).WithOrigin("maxLength"),
-			field.NotSupported[string](limitsPath.Index(0).Child("name"), nil, nil),
-		},
-	}, {
-		name: "quantity too long",
-		obj:  withLimits(&ateletpb.Limits{Name: "memory", Quantity: "1." + strings.Repeat("0", 31)}),
-		want: field.ErrorList{field.TooLong(limitsPath.Index(0).Child("quantity"), nil, 32).WithOrigin("maxLength")},
-	}, {
-		name: "duplicate resource name",
-		obj:  withLimits(&ateletpb.Limits{Name: "cpu", Quantity: "1"}, &ateletpb.Limits{Name: "cpu", Quantity: "2"}),
-		want: field.ErrorList{field.Duplicate(limitsPath.Index(1), nil)},
-	}, {
-		name: "missing quantity",
-		obj:  withLimits(&ateletpb.Limits{Name: "cpu"}),
-		want: field.ErrorList{field.Required(limitsPath.Index(0).Child("quantity"), "")},
-	}, {
-		name: "malformed quantity",
-		obj:  withLimits(&ateletpb.Limits{Name: "cpu", Quantity: "not-a-quantity"}),
-		want: field.ErrorList{field.Invalid(limitsPath.Index(0).Child("quantity"), nil, "")},
-	}, {
-		name: "too many limits",
-		obj: withLimits(
-			&ateletpb.Limits{Name: "cpu", Quantity: "1"},
-			&ateletpb.Limits{Name: "memory", Quantity: "1Gi"},
-			&ateletpb.Limits{Name: "cpu", Quantity: "2"},
-		),
-		want: field.ErrorList{field.TooMany(limitsPath, 3, 2).WithOrigin("maxItems")},
-	}, {
-		name: "nil limit entry",
-		obj:  withLimits(nil),
-		want: field.ErrorList{field.Required(limitsPath.Index(0), "")},
+		name: "negative memory_bytes",
+		obj:  withResources(&ateletpb.Resources{Limits: &ateletpb.ResourceList{MemoryBytes: -1}}),
+		want: field.ErrorList{field.Invalid(limitsPath.Child("memory_bytes"), nil, "").WithOrigin("minimum")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
