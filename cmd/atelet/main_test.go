@@ -508,6 +508,22 @@ func TestToWorkerFidelity(t *testing.T) {
 	}
 }
 
+func TestShouldPrepareSandboxForRestore(t *testing.T) {
+	tests := []struct {
+		scope ateletpb.SnapshotFidelity
+		want  bool
+	}{
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, true},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, false},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, false},
+	}
+	for _, tt := range tests {
+		if got := shouldPrepareSandboxForRestore(tt.scope); got != tt.want {
+			t.Errorf("shouldPrepareSandboxForRestore(%v) = %v, want %v", tt.scope, got, tt.want)
+		}
+	}
+}
+
 // TestFetchAssetRejectsBadHash confirms fetchAsset validates the asset hash
 // before the cache-hit os.Stat/early-return, not merely "at some point". To
 // prove the ordering, it plants a real file at the exact path an invalid hash

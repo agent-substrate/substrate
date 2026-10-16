@@ -33,6 +33,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	Worker_PrepareSandbox_FullMethodName         = "/ateworker.Worker/PrepareSandbox"
+	Worker_DiscardPreparedSandbox_FullMethodName = "/ateworker.Worker/DiscardPreparedSandbox"
 	Worker_RunWorkload_FullMethodName            = "/ateworker.Worker/RunWorkload"
 	Worker_CheckpointWorkload_FullMethodName     = "/ateworker.Worker/CheckpointWorkload"
 	Worker_RestoreWorkload_FullMethodName        = "/ateworker.Worker/RestoreWorkload"
@@ -59,6 +61,10 @@ const (
 // running workload (with CheckpointWorkload).  This moves the worker back to
 // "free" state.
 type WorkerClient interface {
+	// PrepareSandbox initializes the sandbox while application images are prepared.
+	PrepareSandbox(ctx context.Context, in *PrepareSandboxRequest, opts ...grpc.CallOption) (*PrepareSandboxResponse, error)
+	// DiscardPreparedSandbox releases an unused prepared sandbox.
+	DiscardPreparedSandbox(ctx context.Context, in *DiscardPreparedSandboxRequest, opts ...grpc.CallOption) (*DiscardPreparedSandboxResponse, error)
 	// RunWorkload tells the worker to begin running a new workload (one or more
 	// containers, potentially with shared filesystems).
 	RunWorkload(ctx context.Context, in *RunWorkloadRequest, opts ...grpc.CallOption) (*RunWorkloadResponse, error)
@@ -133,6 +139,26 @@ type workerClient struct {
 
 func NewWorkerClient(cc grpc.ClientConnInterface) WorkerClient {
 	return &workerClient{cc}
+}
+
+func (c *workerClient) PrepareSandbox(ctx context.Context, in *PrepareSandboxRequest, opts ...grpc.CallOption) (*PrepareSandboxResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrepareSandboxResponse)
+	err := c.cc.Invoke(ctx, Worker_PrepareSandbox_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerClient) DiscardPreparedSandbox(ctx context.Context, in *DiscardPreparedSandboxRequest, opts ...grpc.CallOption) (*DiscardPreparedSandboxResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiscardPreparedSandboxResponse)
+	err := c.cc.Invoke(ctx, Worker_DiscardPreparedSandbox_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *workerClient) RunWorkload(ctx context.Context, in *RunWorkloadRequest, opts ...grpc.CallOption) (*RunWorkloadResponse, error) {
@@ -213,6 +239,10 @@ func (c *workerClient) TerminateWorkload(ctx context.Context, in *TerminateWorkl
 // running workload (with CheckpointWorkload).  This moves the worker back to
 // "free" state.
 type WorkerServer interface {
+	// PrepareSandbox initializes the sandbox while application images are prepared.
+	PrepareSandbox(context.Context, *PrepareSandboxRequest) (*PrepareSandboxResponse, error)
+	// DiscardPreparedSandbox releases an unused prepared sandbox.
+	DiscardPreparedSandbox(context.Context, *DiscardPreparedSandboxRequest) (*DiscardPreparedSandboxResponse, error)
 	// RunWorkload tells the worker to begin running a new workload (one or more
 	// containers, potentially with shared filesystems).
 	RunWorkload(context.Context, *RunWorkloadRequest) (*RunWorkloadResponse, error)
@@ -289,6 +319,12 @@ type WorkerServer interface {
 // pointer dereference when methods are called.
 type UnimplementedWorkerServer struct{}
 
+func (UnimplementedWorkerServer) PrepareSandbox(context.Context, *PrepareSandboxRequest) (*PrepareSandboxResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareSandbox not implemented")
+}
+func (UnimplementedWorkerServer) DiscardPreparedSandbox(context.Context, *DiscardPreparedSandboxRequest) (*DiscardPreparedSandboxResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DiscardPreparedSandbox not implemented")
+}
 func (UnimplementedWorkerServer) RunWorkload(context.Context, *RunWorkloadRequest) (*RunWorkloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RunWorkload not implemented")
 }
@@ -326,6 +362,42 @@ func RegisterWorkerServer(s grpc.ServiceRegistrar, srv WorkerServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&Worker_ServiceDesc, srv)
+}
+
+func _Worker_PrepareSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareSandboxRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServer).PrepareSandbox(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Worker_PrepareSandbox_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServer).PrepareSandbox(ctx, req.(*PrepareSandboxRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Worker_DiscardPreparedSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiscardPreparedSandboxRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServer).DiscardPreparedSandbox(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Worker_DiscardPreparedSandbox_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServer).DiscardPreparedSandbox(ctx, req.(*DiscardPreparedSandboxRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _Worker_RunWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -443,6 +515,14 @@ var Worker_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "ateworker.Worker",
 	HandlerType: (*WorkerServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "PrepareSandbox",
+			Handler:    _Worker_PrepareSandbox_Handler,
+		},
+		{
+			MethodName: "DiscardPreparedSandbox",
+			Handler:    _Worker_DiscardPreparedSandbox_Handler,
+		},
 		{
 			MethodName: "RunWorkload",
 			Handler:    _Worker_RunWorkload_Handler,

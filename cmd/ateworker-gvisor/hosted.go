@@ -41,6 +41,8 @@ type hostedActor struct {
 	resolvConf string
 	// Set once the containers exist.
 	session *workloadSession
+	// Prepared pointer is guarded by actorsMu; its contents use the actor lock.
+	prepared *preparedSandbox
 	// usage is this activation's epoch, CPU baseline, and latest sample.
 	usage *workerstats.Activation
 	// deadReported keeps the usage sweep to one warning per activation.

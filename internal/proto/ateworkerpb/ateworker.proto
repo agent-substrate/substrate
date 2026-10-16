@@ -32,6 +32,12 @@ option go_package = "go.ate.dev/substrate/internal/proto/ateworkerpb";
 // running workload (with CheckpointWorkload).  This moves the worker back to
 // "free" state.
 service Worker {
+  // PrepareSandbox initializes the sandbox while application images are prepared.
+  rpc PrepareSandbox(PrepareSandboxRequest) returns (PrepareSandboxResponse) {}
+
+  // DiscardPreparedSandbox releases an unused prepared sandbox.
+  rpc DiscardPreparedSandbox(DiscardPreparedSandboxRequest) returns (DiscardPreparedSandboxResponse) {}
+
   // RunWorkload tells the worker to begin running a new workload (one or more
   // containers, potentially with shared filesystems).
   rpc RunWorkload(RunWorkloadRequest) returns (RunWorkloadResponse) {}
@@ -484,3 +490,21 @@ message GetActiveWorkloadStatsResponse {
   // assume that.
   repeated WorkloadStatsSample samples = 1;
 }
+
+// PrepareSandboxRequest carries the image-independent portion of a startup.
+message PrepareSandboxRequest {
+  // ContainerSpec is not yet resolved from the application images. The other
+  // fields must match the eventual RunWorkload or RestoreWorkload request.
+  RunWorkloadRequest workload = 1;
+  // A volumes-only restore must leave checkpoint-dependent initialization to
+  // RestoreWorkload after the snapshot files are available.
+  bool from_checkpoint = 2;
+}
+
+message PrepareSandboxResponse {}
+
+message DiscardPreparedSandboxRequest {
+  string actor_uid = 1;
+}
+
+message DiscardPreparedSandboxResponse {}

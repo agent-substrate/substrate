@@ -1982,6 +1982,179 @@ func (x *GetActiveWorkloadStatsResponse) GetSamples() []*WorkloadStatsSample {
 	return nil
 }
 
+// PrepareSandboxRequest carries the image-independent portion of a startup.
+type PrepareSandboxRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// ContainerSpec is not yet resolved from the application images. The other
+	// fields must match the eventual RunWorkload or RestoreWorkload request.
+	Workload *RunWorkloadRequest `protobuf:"bytes,1,opt,name=workload,proto3" json:"workload,omitempty"`
+	// A volumes-only restore must leave checkpoint-dependent initialization to
+	// RestoreWorkload after the snapshot files are available.
+	FromCheckpoint bool `protobuf:"varint,2,opt,name=from_checkpoint,json=fromCheckpoint,proto3" json:"from_checkpoint,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *PrepareSandboxRequest) Reset() {
+	*x = PrepareSandboxRequest{}
+	mi := &file_ateworker_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareSandboxRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareSandboxRequest) ProtoMessage() {}
+
+func (x *PrepareSandboxRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ateworker_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareSandboxRequest.ProtoReflect.Descriptor instead.
+func (*PrepareSandboxRequest) Descriptor() ([]byte, []int) {
+	return file_ateworker_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *PrepareSandboxRequest) GetWorkload() *RunWorkloadRequest {
+	if x != nil {
+		return x.Workload
+	}
+	return nil
+}
+
+func (x *PrepareSandboxRequest) GetFromCheckpoint() bool {
+	if x != nil {
+		return x.FromCheckpoint
+	}
+	return false
+}
+
+type PrepareSandboxResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrepareSandboxResponse) Reset() {
+	*x = PrepareSandboxResponse{}
+	mi := &file_ateworker_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareSandboxResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareSandboxResponse) ProtoMessage() {}
+
+func (x *PrepareSandboxResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ateworker_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareSandboxResponse.ProtoReflect.Descriptor instead.
+func (*PrepareSandboxResponse) Descriptor() ([]byte, []int) {
+	return file_ateworker_proto_rawDescGZIP(), []int{26}
+}
+
+type DiscardPreparedSandboxRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ActorUid      string                 `protobuf:"bytes,1,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiscardPreparedSandboxRequest) Reset() {
+	*x = DiscardPreparedSandboxRequest{}
+	mi := &file_ateworker_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiscardPreparedSandboxRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiscardPreparedSandboxRequest) ProtoMessage() {}
+
+func (x *DiscardPreparedSandboxRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ateworker_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiscardPreparedSandboxRequest.ProtoReflect.Descriptor instead.
+func (*DiscardPreparedSandboxRequest) Descriptor() ([]byte, []int) {
+	return file_ateworker_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *DiscardPreparedSandboxRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
+type DiscardPreparedSandboxResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiscardPreparedSandboxResponse) Reset() {
+	*x = DiscardPreparedSandboxResponse{}
+	mi := &file_ateworker_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiscardPreparedSandboxResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiscardPreparedSandboxResponse) ProtoMessage() {}
+
+func (x *DiscardPreparedSandboxResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ateworker_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiscardPreparedSandboxResponse.ProtoReflect.Descriptor instead.
+func (*DiscardPreparedSandboxResponse) Descriptor() ([]byte, []int) {
+	return file_ateworker_proto_rawDescGZIP(), []int{28}
+}
+
 var File_ateworker_proto protoreflect.FileDescriptor
 
 const file_ateworker_proto_rawDesc = "" +
@@ -2150,7 +2323,14 @@ const file_ateworker_proto_rawDesc = "" +
 	"\x06sample\x18\x01 \x01(\v2\x1e.ateworker.WorkloadStatsSampleR\x06sample\"\x1f\n" +
 	"\x1dGetActiveWorkloadStatsRequest\"Z\n" +
 	"\x1eGetActiveWorkloadStatsResponse\x128\n" +
-	"\asamples\x18\x01 \x03(\v2\x1e.ateworker.WorkloadStatsSampleR\asamples*\x90\x01\n" +
+	"\asamples\x18\x01 \x03(\v2\x1e.ateworker.WorkloadStatsSampleR\asamples\"{\n" +
+	"\x15PrepareSandboxRequest\x129\n" +
+	"\bworkload\x18\x01 \x01(\v2\x1d.ateworker.RunWorkloadRequestR\bworkload\x12'\n" +
+	"\x0ffrom_checkpoint\x18\x02 \x01(\bR\x0efromCheckpoint\"\x18\n" +
+	"\x16PrepareSandboxResponse\"<\n" +
+	"\x1dDiscardPreparedSandboxRequest\x12\x1b\n" +
+	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\" \n" +
+	"\x1eDiscardPreparedSandboxResponse*\x90\x01\n" +
 	"\x10SnapshotFidelity\x12!\n" +
 	"\x1dSNAPSHOT_FIDELITY_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19SNAPSHOT_FIDELITY_VOLUMES\x10\x01\x12\x1c\n" +
@@ -2159,8 +2339,10 @@ const file_ateworker_proto_rawDesc = "" +
 	"\vStatsSource\x12\x1c\n" +
 	"\x18STATS_SOURCE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13STATS_SOURCE_CGROUP\x10\x01\x12\x1c\n" +
-	"\x18STATS_SOURCE_GUEST_AGENT\x10\x022\xcb\x04\n" +
-	"\x06Worker\x12N\n" +
+	"\x18STATS_SOURCE_GUEST_AGENT\x10\x022\x95\x06\n" +
+	"\x06Worker\x12W\n" +
+	"\x0ePrepareSandbox\x12 .ateworker.PrepareSandboxRequest\x1a!.ateworker.PrepareSandboxResponse\"\x00\x12o\n" +
+	"\x16DiscardPreparedSandbox\x12(.ateworker.DiscardPreparedSandboxRequest\x1a).ateworker.DiscardPreparedSandboxResponse\"\x00\x12N\n" +
 	"\vRunWorkload\x12\x1d.ateworker.RunWorkloadRequest\x1a\x1e.ateworker.RunWorkloadResponse\"\x00\x12c\n" +
 	"\x12CheckpointWorkload\x12$.ateworker.CheckpointWorkloadRequest\x1a%.ateworker.CheckpointWorkloadResponse\"\x00\x12Z\n" +
 	"\x0fRestoreWorkload\x12!.ateworker.RestoreWorkloadRequest\x1a\".ateworker.RestoreWorkloadResponse\"\x00\x12]\n" +
@@ -2181,7 +2363,7 @@ func file_ateworker_proto_rawDescGZIP() []byte {
 }
 
 var file_ateworker_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_ateworker_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_ateworker_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_ateworker_proto_goTypes = []any{
 	(SnapshotFidelity)(0),                  // 0: ateworker.SnapshotFidelity
 	(StatsSource)(0),                       // 1: ateworker.StatsSource
@@ -2210,15 +2392,19 @@ var file_ateworker_proto_goTypes = []any{
 	(*GetWorkloadStatsResponse)(nil),       // 24: ateworker.GetWorkloadStatsResponse
 	(*GetActiveWorkloadStatsRequest)(nil),  // 25: ateworker.GetActiveWorkloadStatsRequest
 	(*GetActiveWorkloadStatsResponse)(nil), // 26: ateworker.GetActiveWorkloadStatsResponse
-	nil,                                    // 27: ateworker.RunWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                    // 28: ateworker.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                    // 29: ateworker.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	(*PrepareSandboxRequest)(nil),          // 27: ateworker.PrepareSandboxRequest
+	(*PrepareSandboxResponse)(nil),         // 28: ateworker.PrepareSandboxResponse
+	(*DiscardPreparedSandboxRequest)(nil),  // 29: ateworker.DiscardPreparedSandboxRequest
+	(*DiscardPreparedSandboxResponse)(nil), // 30: ateworker.DiscardPreparedSandboxResponse
+	nil,                                    // 31: ateworker.RunWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                    // 32: ateworker.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                    // 33: ateworker.RestoreWorkloadRequest.RuntimeAssetPathsEntry
 }
 var file_ateworker_proto_depIdxs = []int32{
 	7,  // 0: ateworker.TerminateWorkloadRequest.spec:type_name -> ateworker.WorkloadSpec
 	2,  // 1: ateworker.TerminateWorkloadRequest.actor_dirs:type_name -> ateworker.ActorDirs
 	7,  // 2: ateworker.RunWorkloadRequest.spec:type_name -> ateworker.WorkloadSpec
-	27, // 3: ateworker.RunWorkloadRequest.runtime_asset_paths:type_name -> ateworker.RunWorkloadRequest.RuntimeAssetPathsEntry
+	31, // 3: ateworker.RunWorkloadRequest.runtime_asset_paths:type_name -> ateworker.RunWorkloadRequest.RuntimeAssetPathsEntry
 	6,  // 4: ateworker.RunWorkloadRequest.egress_gateway:type_name -> ateworker.EgressGateway
 	2,  // 5: ateworker.RunWorkloadRequest.actor_dirs:type_name -> ateworker.ActorDirs
 	8,  // 6: ateworker.WorkloadSpec.containers:type_name -> ateworker.Container
@@ -2231,34 +2417,39 @@ var file_ateworker_proto_depIdxs = []int32{
 	10, // 13: ateworker.ContainerSpec.resources:type_name -> ateworker.ResourceLimits
 	16, // 14: ateworker.WakeupProbe.http_get:type_name -> ateworker.HttpGetAction
 	7,  // 15: ateworker.CheckpointWorkloadRequest.spec:type_name -> ateworker.WorkloadSpec
-	28, // 16: ateworker.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateworker.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	32, // 16: ateworker.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateworker.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
 	0,  // 17: ateworker.CheckpointWorkloadRequest.fidelity:type_name -> ateworker.SnapshotFidelity
 	2,  // 18: ateworker.CheckpointWorkloadRequest.actor_dirs:type_name -> ateworker.ActorDirs
 	7,  // 19: ateworker.RestoreWorkloadRequest.spec:type_name -> ateworker.WorkloadSpec
-	29, // 20: ateworker.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateworker.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	33, // 20: ateworker.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateworker.RestoreWorkloadRequest.RuntimeAssetPathsEntry
 	0,  // 21: ateworker.RestoreWorkloadRequest.fidelity:type_name -> ateworker.SnapshotFidelity
 	6,  // 22: ateworker.RestoreWorkloadRequest.egress_gateway:type_name -> ateworker.EgressGateway
 	2,  // 23: ateworker.RestoreWorkloadRequest.actor_dirs:type_name -> ateworker.ActorDirs
 	1,  // 24: ateworker.WorkloadStatsSample.source:type_name -> ateworker.StatsSource
 	23, // 25: ateworker.GetWorkloadStatsResponse.sample:type_name -> ateworker.WorkloadStatsSample
 	23, // 26: ateworker.GetActiveWorkloadStatsResponse.samples:type_name -> ateworker.WorkloadStatsSample
-	5,  // 27: ateworker.Worker.RunWorkload:input_type -> ateworker.RunWorkloadRequest
-	18, // 28: ateworker.Worker.CheckpointWorkload:input_type -> ateworker.CheckpointWorkloadRequest
-	20, // 29: ateworker.Worker.RestoreWorkload:input_type -> ateworker.RestoreWorkloadRequest
-	22, // 30: ateworker.Worker.GetWorkloadStats:input_type -> ateworker.GetWorkloadStatsRequest
-	25, // 31: ateworker.Worker.GetActiveWorkloadStats:input_type -> ateworker.GetActiveWorkloadStatsRequest
-	3,  // 32: ateworker.Worker.TerminateWorkload:input_type -> ateworker.TerminateWorkloadRequest
-	17, // 33: ateworker.Worker.RunWorkload:output_type -> ateworker.RunWorkloadResponse
-	19, // 34: ateworker.Worker.CheckpointWorkload:output_type -> ateworker.CheckpointWorkloadResponse
-	21, // 35: ateworker.Worker.RestoreWorkload:output_type -> ateworker.RestoreWorkloadResponse
-	24, // 36: ateworker.Worker.GetWorkloadStats:output_type -> ateworker.GetWorkloadStatsResponse
-	26, // 37: ateworker.Worker.GetActiveWorkloadStats:output_type -> ateworker.GetActiveWorkloadStatsResponse
-	4,  // 38: ateworker.Worker.TerminateWorkload:output_type -> ateworker.TerminateWorkloadResponse
-	33, // [33:39] is the sub-list for method output_type
-	27, // [27:33] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	5,  // 27: ateworker.PrepareSandboxRequest.workload:type_name -> ateworker.RunWorkloadRequest
+	27, // 28: ateworker.Worker.PrepareSandbox:input_type -> ateworker.PrepareSandboxRequest
+	29, // 29: ateworker.Worker.DiscardPreparedSandbox:input_type -> ateworker.DiscardPreparedSandboxRequest
+	5,  // 30: ateworker.Worker.RunWorkload:input_type -> ateworker.RunWorkloadRequest
+	18, // 31: ateworker.Worker.CheckpointWorkload:input_type -> ateworker.CheckpointWorkloadRequest
+	20, // 32: ateworker.Worker.RestoreWorkload:input_type -> ateworker.RestoreWorkloadRequest
+	22, // 33: ateworker.Worker.GetWorkloadStats:input_type -> ateworker.GetWorkloadStatsRequest
+	25, // 34: ateworker.Worker.GetActiveWorkloadStats:input_type -> ateworker.GetActiveWorkloadStatsRequest
+	3,  // 35: ateworker.Worker.TerminateWorkload:input_type -> ateworker.TerminateWorkloadRequest
+	28, // 36: ateworker.Worker.PrepareSandbox:output_type -> ateworker.PrepareSandboxResponse
+	30, // 37: ateworker.Worker.DiscardPreparedSandbox:output_type -> ateworker.DiscardPreparedSandboxResponse
+	17, // 38: ateworker.Worker.RunWorkload:output_type -> ateworker.RunWorkloadResponse
+	19, // 39: ateworker.Worker.CheckpointWorkload:output_type -> ateworker.CheckpointWorkloadResponse
+	21, // 40: ateworker.Worker.RestoreWorkload:output_type -> ateworker.RestoreWorkloadResponse
+	24, // 41: ateworker.Worker.GetWorkloadStats:output_type -> ateworker.GetWorkloadStatsResponse
+	26, // 42: ateworker.Worker.GetActiveWorkloadStats:output_type -> ateworker.GetActiveWorkloadStatsResponse
+	4,  // 43: ateworker.Worker.TerminateWorkload:output_type -> ateworker.TerminateWorkloadResponse
+	36, // [36:44] is the sub-list for method output_type
+	28, // [28:36] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_ateworker_proto_init() }
@@ -2274,7 +2465,7 @@ func file_ateworker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ateworker_proto_rawDesc), len(file_ateworker_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   28,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

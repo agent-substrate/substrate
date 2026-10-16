@@ -76,6 +76,9 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
+	if s.preparedSandbox(req.GetActorUid()) != nil {
+		return nil, apierror.FailedPrecondition("actor has an unconsumed prepared sandbox")
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -141,6 +144,9 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
 	// either way ateworker owns it and tracks its api-socket.
 	ra := s.runningVM(actorUID)
+	if prepared := s.preparedSandbox(actorUID); ra == nil && prepared != nil {
+		ra = prepared.actor
+	}
 	chSocket := kata.CLHSocketPath(actorUID)
 	if ra != nil && ra.apiSocket != "" {
 		chSocket = ra.apiSocket

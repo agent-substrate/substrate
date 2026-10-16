@@ -35,6 +35,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sandboxprep"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
@@ -61,6 +62,9 @@ func useTempNodeDirs(t *testing.T) {
 // the request, never derived from the actor UID.
 type fakeWorker struct {
 	ateworkerpb.UnimplementedWorkerServer
+	prepared    *ateworkerpb.PrepareSandboxRequest
+	prepareHook func(context.Context) error
+	discardHook func(context.Context) error
 	// snapshotFiles are written at checkpoint and reported back to atelet as
 	// the exact set the snapshot consists of.
 	snapshotFiles map[string]string
@@ -91,7 +95,32 @@ func (f *fakeWorker) recordActorDirs(rpc string, actorDirs *ateworkerpb.ActorDir
 	f.actorDirs[rpc] = actorDirs
 }
 
+func (f *fakeWorker) PrepareSandbox(ctx context.Context, req *ateworkerpb.PrepareSandboxRequest) (*ateworkerpb.PrepareSandboxResponse, error) {
+	f.prepared = req
+	f.recordActorDirs("PrepareSandbox", req.GetWorkload().GetActorDirs())
+	if f.prepareHook != nil {
+		if err := f.prepareHook(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return &ateworkerpb.PrepareSandboxResponse{}, nil
+}
+
+func (f *fakeWorker) DiscardPreparedSandbox(ctx context.Context, _ *ateworkerpb.DiscardPreparedSandboxRequest) (*ateworkerpb.DiscardPreparedSandboxResponse, error) {
+	f.prepared = nil
+	if f.discardHook != nil {
+		if err := f.discardHook(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return &ateworkerpb.DiscardPreparedSandboxResponse{}, nil
+}
+
 func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkloadRequest) (*ateworkerpb.RunWorkloadResponse, error) {
+	if f.prepared == nil || !sandboxprep.Matches(f.prepared, &ateworkerpb.PrepareSandboxRequest{Workload: req}) {
+		return nil, fmt.Errorf("RunWorkload did not match its prepared sandbox")
+	}
+	f.prepared = nil
 	f.recordActorDirs("RunWorkload", req.GetActorDirs())
 	return &ateworkerpb.RunWorkloadResponse{}, nil
 }
@@ -111,6 +140,14 @@ func (f *fakeWorker) CheckpointWorkload(_ context.Context, req *ateworkerpb.Chec
 }
 
 func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.RestoreWorkloadRequest) (*ateworkerpb.RestoreWorkloadResponse, error) {
+	if req.GetFidelity() == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		if f.prepared == nil || !sandboxprep.Matches(f.prepared, sandboxprep.FromRestore(req)) {
+			return nil, fmt.Errorf("volumes restore did not match its prepared sandbox")
+		}
+	} else if f.prepared != nil {
+		return nil, fmt.Errorf("non-volumes restore unexpectedly prepared a sandbox")
+	}
+	f.prepared = nil
 	f.recordActorDirs("RestoreWorkload", req.GetActorDirs())
 	f.recordFidelity("RestoreWorkload", req.GetFidelity())
 	f.preserveRestoreDir = req.GetPreserveRestoreDir()
@@ -625,6 +662,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 
 func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	useTempNodeDirs(t)
+	serveFakeWorker(t, &fakeWorker{})
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
 	refresher := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
@@ -632,6 +670,7 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
 	const actorUID = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a62"
 	s := &Atelet{
+		workerDialer:      newWorkerDialer(1),
 		anonGCSClient:     fakeObjectStorage{data: content},
 		imageCache:        newImageVolumeStore(t),
 		systemInfoVolumes: refresher,
