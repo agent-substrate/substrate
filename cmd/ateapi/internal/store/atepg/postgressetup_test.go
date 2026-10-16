@@ -25,7 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 
-	"github.com/agent-substrate/substrate/pkg/postgressetup"
+	"go.ate.dev/substrate/pkg/postgressetup"
 )
 
 func TestPostgresSetupScript(t *testing.T) {
@@ -35,11 +35,15 @@ func TestPostgresSetupScript(t *testing.T) {
 		t.Fatalf("copying setup script to PostgreSQL container: %v", err)
 	}
 
+	// These cases exercise optional password provisioning for external databases.
+	defaults := postgressetup.DefaultConfig()
+	defaults.OwnerPassword = "test-owner-password"
+	defaults.ReadWritePassword = "test-runtime-password"
 	for _, tc := range []struct {
 		name   string
 		config postgressetup.Config
 	}{
-		{name: "bundled defaults", config: postgressetup.DefaultConfig()},
+		{name: "bundled identity names", config: defaults},
 		{name: "operator values", config: postgressetup.Config{
 			Schema:            "custom-substrate",
 			OwnerRole:         "custom_substrate_owner",

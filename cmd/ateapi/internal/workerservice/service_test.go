@@ -18,9 +18,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // The Worker every test in this package calls about, and the node its atelet
@@ -41,6 +42,9 @@ type fakeSuspender struct {
 	calls []*ateapipb.SuspendActorRequest
 	resp  *ateapipb.SuspendActorResponse
 	err   error
+
+	reports   []appliedReport
+	reportErr error
 }
 
 func (f *fakeSuspender) SuspendActor(_ context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
@@ -48,26 +52,49 @@ func (f *fakeSuspender) SuspendActor(_ context.Context, req *ateapipb.SuspendAct
 	return f.resp, f.err
 }
 
+func (f *fakeSuspender) ApplyActorSnapshotState(_ context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapipb.ActorSnapshotState) error {
+	f.reports = append(f.reports, appliedReport{actorRef: actorRef, actorUID: actorUID, node: node, state: state})
+	return f.reportErr
+}
+
+// appliedReport is one ApplyActorSnapshotState call.
+type appliedReport struct {
+	actorRef resources.ActorRef
+	actorUID string
+	node     string
+	state    *ateapipb.ActorSnapshotState
+}
+
 // seedReportedWorker registers a Worker on nodeName that has already reported
-// capacity and hardware: identity from the pod, the way the syncer writes it,
-// plus the result of an earlier registration. A Worker that has never
-// registered carries none, so what a fresh registration replaces is what this
-// seeds.
+// capacity and its default runtime: identity from the pod, the way the syncer
+// writes it, plus the result of an earlier registration. A Worker that has
+// never registered carries none, so what a fresh registration replaces is what
+// this seeds.
 func seedReportedWorker(t *testing.T, st store.Interface, nodeName string, capacity *ateapipb.WorkerResources) *ateapipb.Worker {
 	t.Helper()
+	return seedWorker(t, st, testWorkerName, nodeName, testDefaultRuntime.GetSandboxClass(), &ateapipb.WorkerStatus{
+		State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: capacity, DefaultRuntime: testDefaultRuntime,
+	})
+}
+
+// seedWorker registers a Worker named name, of sandbox class class, on
+// nodeName, with status already recorded. name doubles as the pod UID, so it
+// must be UUID-shaped. class "" is a Worker recorded without one.
+func seedWorker(t *testing.T, st store.Interface, name, nodeName, class string, status *ateapipb.WorkerStatus) *ateapipb.Worker {
+	t.Helper()
 	created, err := st.CreateWorker(context.Background(), &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
+		Metadata:        &ateapipb.ResourceMetadata{Name: name},
 		WorkerNamespace: "ate-system",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "worker-pod-1",
-		WorkerPodUid:    testWorkerName,
+		WorkerPodUid:    name,
 		NodeName:        nodeName,
 		Ips:             []string{"10.1.2.3"},
-		SandboxClass:    "gvisor",
-		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: capacity, Hardware: testHardware},
+		SandboxClass:    class,
+		Status:          status,
 	})
 	if err != nil {
-		t.Fatalf("seeding worker: %v", err)
+		t.Fatalf("seeding worker %s: %v", name, err)
 	}
 	return created
 }

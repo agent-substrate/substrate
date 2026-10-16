@@ -19,8 +19,8 @@ package v1alpha1
 import (
 	context "context"
 
-	apiv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	scheme "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/scheme"
+	apiv1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	scheme "go.ate.dev/substrate/pkg/client/clientset/versioned/scheme"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	types "k8s.io/apimachinery/pkg/types"
 	watch "k8s.io/apimachinery/pkg/watch"

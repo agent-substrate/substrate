@@ -19,8 +19,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -90,6 +91,12 @@ func TestValidateCreateGlobalAccessPolicyRequest(t *testing.T) {
 		})},
 		wantError: field.ErrorList{field.Forbidden(accessPolicyPath.Child("metadata", "atespace"), "")},
 	}, {
+		name: "missing name",
+		req: &ateapipb.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Metadata.Name = ""
+		})},
+		wantError: field.ErrorList{field.Required(accessPolicyPath.Child("metadata", "name"), "")},
+	}, {
 		name: "name not default",
 		req: &ateapipb.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
 			p.Metadata.Name = "other"
@@ -106,6 +113,13 @@ func TestValidateCreateGlobalAccessPolicyRequest(t *testing.T) {
 		name: "unknown role",
 		req: &ateapipb.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
 			p.Bindings[1].Role = "admin"
+		})},
+		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(1).Child("role"), "", nil)},
+	}, {
+		// System component roles are granted only by ateapi's configuration.
+		name: "system component role",
+		req: &ateapipb.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Bindings[1].Role = authz.RoleIngressRouter
 		})},
 		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(1).Child("role"), "", nil)},
 	}, {
@@ -164,7 +178,15 @@ func TestValidateGetGlobalAccessPolicyRequest(t *testing.T) {
 		wantError field.ErrorList
 	}{{
 		name: "valid",
-		req:  &ateapipb.GetGlobalAccessPolicyRequest{},
+		req:  &ateapipb.GetGlobalAccessPolicyRequest{Name: resources.SingletonName},
+	}, {
+		name:      "missing name",
+		req:       &ateapipb.GetGlobalAccessPolicyRequest{},
+		wantError: field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		name:      "wrong name",
+		req:       &ateapipb.GetGlobalAccessPolicyRequest{Name: "other"},
+		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -253,9 +275,27 @@ func TestValidateCreateAtespaceAccessPolicyRequest(t *testing.T) {
 		req:       &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: atespace},
 		wantError: field.ErrorList{field.Required(accessPolicyPath, "")},
 	}, {
+		name: "missing name",
+		req: &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Metadata.Name = ""
+		})},
+		wantError: field.ErrorList{field.Required(accessPolicyPath.Child("metadata", "name"), "")},
+	}, {
+		name: "name not default",
+		req: &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Metadata.Name = "other"
+		})},
+		wantError: field.ErrorList{field.Invalid(accessPolicyPath.Child("metadata", "name"), nil, "").WithOrigin("custom=default")},
+	}, {
 		name: "unknown role",
 		req: &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
 			p.Bindings[0].Role = "admin"
+		})},
+		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(0).Child("role"), "", nil)},
+	}, {
+		name: "system component role",
+		req: &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Bindings[0].Role = authz.RoleEgressGateway
 		})},
 		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(0).Child("role"), "", nil)},
 	}, {
@@ -280,11 +320,19 @@ func TestValidateGetAtespaceAccessPolicyRequest(t *testing.T) {
 		wantError field.ErrorList
 	}{{
 		name: "valid",
-		req:  &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}},
+		req:  &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}, Name: resources.SingletonName},
 	}, {
 		name:      "missing atespace",
-		req:       &ateapipb.GetAtespaceAccessPolicyRequest{},
+		req:       &ateapipb.GetAtespaceAccessPolicyRequest{Name: resources.SingletonName},
 		wantError: field.ErrorList{field.Required(field.NewPath("atespace"), "")},
+	}, {
+		name:      "missing name",
+		req:       &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}},
+		wantError: field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		name:      "wrong name",
+		req:       &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}, Name: "other"},
+		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -354,11 +402,19 @@ func TestValidateDeleteAtespaceAccessPolicyRequest(t *testing.T) {
 		wantError field.ErrorList
 	}{{
 		name: "valid",
-		req:  &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}},
+		req:  &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}, Name: resources.SingletonName},
 	}, {
 		name:      "missing atespace",
-		req:       &ateapipb.DeleteAtespaceAccessPolicyRequest{},
+		req:       &ateapipb.DeleteAtespaceAccessPolicyRequest{Name: resources.SingletonName},
 		wantError: field.ErrorList{field.Required(field.NewPath("atespace"), "")},
+	}, {
+		name:      "missing name",
+		req:       &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}},
+		wantError: field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		name:      "wrong name",
+		req:       &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}, Name: "other"},
+		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

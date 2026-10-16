@@ -49,24 +49,20 @@ func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
 func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
 	oldRuntime, oldDDL := *postgresReadWriteConnectionString, *postgresOwnerConnectionString
 	oldRuntimeRole, oldDDLRole := *postgresReadWriteRole, *postgresOwnerRole
-	oldAuthz := *experimentalEnableAuthz
 	t.Cleanup(func() {
 		*postgresReadWriteConnectionString = oldRuntime
 		*postgresOwnerConnectionString = oldDDL
 		*postgresReadWriteRole = oldRuntimeRole
 		*postgresOwnerRole = oldDDLRole
-		*experimentalEnableAuthz = oldAuthz
 	})
 	*postgresReadWriteConnectionString = "@env"
 	*postgresOwnerConnectionString = "@env"
 	*postgresReadWriteRole = "@env"
 	*postgresOwnerRole = "@env"
-	*experimentalEnableAuthz = false
 	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-a")
 	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-a")
 	t.Setenv("ATE_API_POSTGRES_READ_WRITE_ROLE", "runtime-role")
 	t.Setenv("ATE_API_POSTGRES_OWNER_ROLE", "ddl-role")
-	t.Setenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ", "true")
 
 	if err := loadFlagsFromEnv(); err != nil {
 		t.Fatal(err)
@@ -74,9 +70,6 @@ func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
 	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" ||
 		*postgresReadWriteRole != "runtime-role" || *postgresOwnerRole != "ddl-role" {
 		t.Fatalf("resolved values = %q, %q, %q, %q", *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole)
-	}
-	if !*experimentalEnableAuthz {
-		t.Fatal("authorization environment flag was not resolved alongside PostgreSQL settings")
 	}
 	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-b")
 	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-b")
@@ -104,35 +97,34 @@ func TestLoadFlagsFromEnvPoolMaxConns(t *testing.T) {
 	}
 }
 
-func TestResolveActorJWTIssuer(t *testing.T) {
-	tests := []struct {
-		name      string
-		flagValue string
-		namespace string
-		want      string
-		wantErr   bool
+func TestValidateActorJWTIssuer(t *testing.T) {
+	for _, tt := range []struct {
+		issuer  string
+		wantErr bool
 	}{
-		{name: "unset uses the namespace's idp Service", namespace: "ate-system", want: "https://idp.ate-system.svc"},
-		{name: "unset in a relocated install", namespace: "team-a", want: "https://idp.team-a.svc"},
-		{name: "set is used as given", flagValue: "https://idp.example.com/prod/", namespace: "ate-system", want: "https://idp.example.com/prod/"},
-		{name: "set but invalid", flagValue: "http://idp.example.com", namespace: "ate-system", wantErr: true},
+		{issuer: "", wantErr: true},
+		{issuer: "http://idp.example.com", wantErr: true},
+		{issuer: "https://idp.ate-system.svc"},
+		{issuer: "https://idp.example.com/prod/"},
+	} {
+		err := validateActorJWTIssuer(tt.issuer)
+		if gotErr := err != nil; gotErr != tt.wantErr {
+			t.Errorf("validateActorJWTIssuer(%q) = %v, want error %t", tt.issuer, err, tt.wantErr)
+		}
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveActorJWTIssuer(tt.flagValue, tt.namespace)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("resolveActorJWTIssuer(%q, %q) = %q, want error", tt.flagValue, tt.namespace, got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("resolveActorJWTIssuer(%q, %q) returned error: %v", tt.flagValue, tt.namespace, err)
-			}
-			if got != tt.want {
-				t.Errorf("resolveActorJWTIssuer(%q, %q) = %q, want %q", tt.flagValue, tt.namespace, got, tt.want)
-			}
-		})
+}
+
+func TestLoadFlagsFromEnvActorJWTIssuer(t *testing.T) {
+	old := *actorJWTIssuer
+	t.Cleanup(func() { *actorJWTIssuer = old })
+	*actorJWTIssuer = "@env"
+	t.Setenv("ATE_API_ACTOR_JWT_ISSUER", "https://idp.example.com")
+
+	if err := loadFlagsFromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if *actorJWTIssuer != "https://idp.example.com" {
+		t.Errorf("--actor-jwt-issuer = %q, want %q", *actorJWTIssuer, "https://idp.example.com")
 	}
 }
 
@@ -304,3 +296,34 @@ func writeCA(t *testing.T, path, cn string) {
 		t.Fatalf("WriteFile(%s) error = %v", path, err)
 	}
 }
+
+func TestRejectStorageEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value *string // nil leaves the variable unset
+		want  bool    // an error naming the sidecar
+	}{
+		{name: "unset", value: nil, want: false},
+		{name: "s3", value: ptr("s3"), want: true},
+		// The old manifests set the default explicitly, so a stale patch
+		// can carry it.
+		{name: "gcs", value: ptr("gcs"), want: true},
+		{name: "empty", value: ptr(""), want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// t.Setenv restores the variable after the subtest, which also
+			// undoes the Unsetenv.
+			t.Setenv("ATE_STORAGE_BACKEND", "")
+			os.Unsetenv("ATE_STORAGE_BACKEND")
+			if tc.value != nil {
+				os.Setenv("ATE_STORAGE_BACKEND", *tc.value)
+			}
+			err := rejectStorageEnv()
+			if got := err != nil && strings.Contains(err.Error(), "objectstore-plugin sidecar"); got != tc.want {
+				t.Errorf("rejectStorageEnv() = %v, want error naming the sidecar: %t", err, tc.want)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

@@ -22,8 +22,9 @@ import (
 	"math/rand"
 	"slices"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -32,6 +33,12 @@ type Constraints struct {
 	// SandboxClass must equal the worker's sandbox class. Snapshots are not
 	// portable across sandbox classes, so this is never relaxed.
 	SandboxClass string
+
+	// RequiredRuntime, when it names a runtime, restricts placement to
+	// workers whose DefaultRuntime or RestorableRuntimes can restore a
+	// snapshot stamped with it. Prepared once per Schedule, since Applies
+	// asks it of every candidate.
+	RequiredRuntime hardware.Requirement
 
 	// TemplateSelector and ActorSelector must both match the worker's labels.
 	TemplateSelector labels.Selector
@@ -222,15 +229,19 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 		return false
 	}
 
+	if len(constraints.RequiredNodes) > 0 && !slices.Contains(constraints.RequiredNodes, worker.GetNodeName()) {
+		return false
+	}
+
+	if !constraints.RequiredRuntime.WorkerMatches(worker.GetStatus()) {
+		return false
+	}
+
 	set := labels.Set(worker.GetLabels())
 	if constraints.TemplateSelector != nil && !constraints.TemplateSelector.Matches(set) {
 		return false
 	}
-	if constraints.ActorSelector != nil && !constraints.ActorSelector.Matches(set) {
-		return false
-	}
-
-	return len(constraints.RequiredNodes) == 0 || slices.Contains(constraints.RequiredNodes, worker.GetNodeName())
+	return constraints.ActorSelector == nil || constraints.ActorSelector.Matches(set)
 }
 
 // HasRoom reports whether what the worker has left admits one more actor of

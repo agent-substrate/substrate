@@ -20,13 +20,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 )
 
@@ -49,7 +49,7 @@ func seedEpochWorker(t *testing.T, ctx context.Context, persistence store.Interf
 }
 
 // raiseEpoch sends the UpdateWorker the syncer sends when the worker pod's
-// ateom restarts.
+// worker restarts.
 func raiseEpoch(t *testing.T, ctx context.Context, svc *RPCService, persistence store.Interface, epoch int64) (*ateapipb.Worker, error) {
 	t.Helper()
 	return svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
@@ -177,7 +177,10 @@ func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 	svc, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 1, 1)
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
-		a.Status.InProgressLocalSnapshotName = "partial-local-snapshot"
+		a.Status.LastAssignedGeneration = 1
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-local-snapshot", ""),
+		}
 	})
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 	mustRaiseEpoch(t, ctx, svc, persistence, 2)
@@ -196,16 +199,16 @@ func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 	}
 	got := mustGetActor(t, ctx, persistence)
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("actor state = %v, want CRASHED: its sandbox died with the ateom", got.GetStatus().GetState())
+		t.Errorf("actor state = %v, want CRASHED: its sandbox died with the worker", got.GetStatus().GetState())
 	}
-	if msg := got.GetStatus().GetCrash().GetMessage(); msg != crashMessageAteomRestarted {
-		t.Errorf("crash message = %q, want %q", msg, crashMessageAteomRestarted)
+	if msg := got.GetStatus().GetCrash().GetMessage(); msg != crashMessageWorkerRestarted {
+		t.Errorf("crash message = %q, want %q", msg, crashMessageWorkerRestarted)
 	}
 	if got.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("actor worker assignment = %v, want it cleared", got.GetStatus().GetWorkerAssignment())
 	}
-	if got.GetStatus().GetInProgressLocalSnapshotName() != "" {
-		t.Errorf("in-progress local checkpoint not cleared: %v", got.GetStatus())
+	if gotSnap := snapshotAtLatestGeneration(got.GetStatus()); gotSnap.GetUuid() != "partial-local-snapshot" {
+		t.Errorf("in-progress local checkpoint = %q, want %q preserved", gotSnap.GetUuid(), "partial-local-snapshot")
 	}
 	if a := firstAssignment(t, persistence, apiWorkerName); a != nil {
 		t.Errorf("worker still hosts %v, want the assignment released", a)
@@ -213,7 +216,7 @@ func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 }
 
 // An Actor placed after the raise was stamped with the new epoch, so it runs on
-// the restarted ateom and is kept.
+// the restarted worker and is kept.
 func TestReconcileAssignments_KeepsActorsPlacedAfterRaise(t *testing.T) {
 	ctx := context.Background()
 	svc, persistence := newWorkerAPIService(t)
@@ -298,7 +301,6 @@ func TestReconcileAssignments_ReleasesByActorState(t *testing.T) {
 		// touching the Actor.
 		{name: "crashed unassigned is released", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, pointsAt: unassigned, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantRelease: true},
 		{name: "suspended unassigned is released", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, pointsAt: unassigned, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantRelease: true},
-		{name: "paused unassigned is released", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, pointsAt: unassigned, wantState: ateapipb.ActorState_ACTOR_STATE_PAUSED, wantRelease: true},
 		{name: "running elsewhere is released", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, pointsAt: otherWorker, wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantRelease: true},
 		{name: "suspended elsewhere is released", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, pointsAt: otherWorker, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantRelease: true},
 		{name: "resuming crashes", state: ateapipb.ActorState_ACTOR_STATE_RESUMING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantRelease: true},
@@ -428,7 +430,7 @@ func (s *hookedStore) UpdateWorker(ctx context.Context, name string, preconditio
 }
 
 // An Actor bound again in the current epoch after the pass listed its earlier
-// assignment runs on the restarted ateom, so it is kept.
+// assignment runs on the restarted worker, so it is kept.
 func TestReconcileAssignments_KeepsActorReboundSinceList(t *testing.T) {
 	ctx := context.Background()
 	svc, persistence := newWorkerAPIService(t)
@@ -598,7 +600,7 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 	}
 
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
+	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
 	stored, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if err != nil {
 		t.Fatalf("assignWorkerAttempt: %v", err)

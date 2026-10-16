@@ -22,7 +22,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
-	"github.com/agent-substrate/substrate/internal/version"
+	"go.ate.dev/substrate/internal/version"
 )
 
 // Outcome is how the run that produced a document ended.
@@ -47,6 +47,10 @@ type DocumentMetadata struct {
 	Outcome Outcome `json:"outcome,omitempty"`
 	// FailedAt is the command that returned an error, for a failed run.
 	FailedAt string `json:"failedAt,omitempty"`
+	// SubstrateVersion is the Substrate release the run installed: the
+	// version stamped into the binaries it built, or the image tag of a
+	// prebuilt install.
+	SubstrateVersion string `json:"substrateVersion,omitempty"`
 	// WrittenAt and WrittenBy identify the run for a reader comparing two
 	// documents.
 	WrittenAt string `json:"writtenAt,omitempty"`

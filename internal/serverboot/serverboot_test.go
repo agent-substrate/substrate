@@ -17,6 +17,7 @@ package serverboot
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -29,15 +30,20 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateattr"
 )
 
 func resourceAttrs(res *resource.Resource) map[string]string {
@@ -112,7 +118,7 @@ func TestRelayAttrs(t *testing.T) {
 			if tc.conn {
 				conn = lazyConn(t)
 			}
-			res, err := newResource(context.Background(), "ateom-gvisor", relayAttrs(tc.relayCapable, conn)...)
+			res, err := newResource(context.Background(), "ateworker-gvisor", relayAttrs(tc.relayCapable, conn)...)
 			if err != nil {
 				t.Fatalf("newResource: %v", err)
 			}
@@ -137,7 +143,7 @@ func TestRelayAttrs(t *testing.T) {
 func collectedResource(t *testing.T, relayCapable bool, conn *grpc.ClientConn) map[string]string {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
-	mp, err := newMeterProvider(context.Background(), "ateom-gvisor", true, relayCapable, conn, nil, reader)
+	mp, err := newMeterProvider(context.Background(), "ateworker-gvisor", true, relayCapable, conn, nil, reader)
 	if err != nil {
 		t.Fatalf("newMeterProvider: %v", err)
 	}
@@ -176,12 +182,66 @@ func TestMeterProviderRelayAttribute(t *testing.T) {
 	}
 }
 
+// A real call through the otelgrpc client handler, so the test covers the
+// scope name and the key that otelgrpc uses, not only the View.
+func TestMeterProviderDropsRPCServerAddress(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp, err := newMeterProvider(context.Background(), "atelet", false, false, nil, nil, reader)
+	if err != nil {
+		t.Fatalf("newMeterProvider: %v", err)
+	}
+	t.Cleanup(func() { mp.Shutdown(context.Background()) })
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := grpc.NewServer()
+	healthpb.RegisterHealthServer(srv, health.NewServer())
+	go srv.Serve(lis)
+	t.Cleanup(srv.Stop)
+
+	conn, err := grpc.NewClient(lis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler(otelgrpc.WithMeterProvider(mp))),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if _, err := healthpb.NewHealthClient(conn).Check(context.Background(), &healthpb.HealthCheckRequest{}); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	var points []metricdata.HistogramDataPoint[float64]
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == "rpc.client.call.duration" {
+				points = append(points, m.Data.(metricdata.Histogram[float64]).DataPoints...)
+			}
+		}
+	}
+	if len(points) != 1 {
+		t.Fatalf("rpc.client.call.duration has %d data points, want 1", len(points))
+	}
+	attrs := points[0].Attributes
+	if v, ok := attrs.Value("server.address"); ok {
+		t.Errorf("server.address = %q, want absent", v.String())
+	}
+	for _, key := range []attribute.Key{"server.port", "rpc.method"} {
+		if _, ok := attrs.Value(key); !ok {
+			t.Errorf("%s is absent, want present", key)
+		}
+	}
+}
+
 func TestReadyzDrainsWhileHealthzStaysUp(t *testing.T) {
 	readiness := &Readiness{}
-	mux := metricsMux(MetricsServerOptions{
-		Readiness:     readiness,
-		EnableHealthz: true,
-	})
+	mux := healthMux(readiness)
 
 	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
 		t.Errorf("/readyz before drain = %d, want %d", got, http.StatusOK)
@@ -201,40 +261,147 @@ func TestReadyzDrainsWhileHealthzStaysUp(t *testing.T) {
 }
 
 func TestReadyzStaticWithZeroValueReadiness(t *testing.T) {
-	mux := metricsMux(MetricsServerOptions{Readiness: &Readiness{}})
+	mux := healthMux(&Readiness{})
 	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
 		t.Errorf("/readyz with zero-value Readiness = %d, want %d", got, http.StatusOK)
 	}
 }
 
-func TestReadinessMux(t *testing.T) {
+func TestReadyzFollowsCheck(t *testing.T) {
+	var down atomic.Bool
 	readiness := &Readiness{}
-	mux := readinessMux(readiness)
+	readiness.AddCheck("store", func(context.Context) error {
+		if down.Load() {
+			return errors.New("failed to connect to host=db.internal user=ate")
+		}
+		return nil
+	})
+	mux := healthMux(readiness)
 
 	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
-		t.Errorf("/readyz before drain = %d, want %d", got, http.StatusOK)
+		t.Errorf("/readyz with a passing check = %d, want %d", got, http.StatusOK)
 	}
-	if got := getCode(t, mux, "/metrics"); got != http.StatusNotFound {
-		t.Errorf("/metrics = %d, want %d", got, http.StatusNotFound)
+
+	down.Store(true)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("/readyz with a failing check = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
+	if !strings.Contains(rec.Body.String(), "store") || strings.Contains(rec.Body.String(), "db.internal") {
+		t.Errorf("/readyz body = %q, want it to name the check and not leak the error", rec.Body.String())
+	}
+	if got := getCode(t, mux, "/healthz"); got != http.StatusOK {
+		t.Errorf("/healthz with a failing check = %d, want %d (liveness must not follow a dependency)", got, http.StatusOK)
+	}
+
+	down.Store(false)
+	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
+		t.Errorf("/readyz after the check recovers = %d, want %d", got, http.StatusOK)
+	}
+}
+
+func TestReadyzCheckTimeout(t *testing.T) {
+	readiness := &Readiness{}
+	readiness.AddCheck("store", func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	mux := healthMux(readiness)
+
+	start := time.Now()
+	if got := getCode(t, mux, "/readyz"); got != http.StatusServiceUnavailable {
+		t.Errorf("/readyz with a hung check = %d, want %d", got, http.StatusServiceUnavailable)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("/readyz took %v with a hung check, want under the 1s kubelet probe timeout", elapsed)
+	}
+}
+
+func TestReadyzDrainSkipsChecks(t *testing.T) {
+	var calls atomic.Int32
+	readiness := &Readiness{}
+	readiness.AddCheck("store", func(context.Context) error {
+		calls.Add(1)
+		return nil
+	})
+	mux := healthMux(readiness)
 
 	readiness.MarkNotReady()
 	if got := getCode(t, mux, "/readyz"); got != http.StatusServiceUnavailable {
 		t.Errorf("/readyz during drain = %d, want %d", got, http.StatusServiceUnavailable)
 	}
-}
-
-func TestReadyzAbsentWithoutReadiness(t *testing.T) {
-	mux := metricsMux(MetricsServerOptions{})
-	if got := getCode(t, mux, "/readyz"); got != http.StatusNotFound {
-		t.Errorf("/readyz with nil Readiness = %d, want %d", got, http.StatusNotFound)
+	if got := calls.Load(); got != 0 {
+		t.Errorf("check ran %d times during drain, want 0", got)
 	}
 }
 
-func TestHealthzAbsentUnlessEnabled(t *testing.T) {
-	mux := metricsMux(MetricsServerOptions{Readiness: &Readiness{}})
-	if got := getCode(t, mux, "/healthz"); got != http.StatusNotFound {
-		t.Errorf("/healthz without EnableHealthz = %d, want %d", got, http.StatusNotFound)
+func TestReadyzLogsCheckTransitionsOnce(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	var down atomic.Bool
+	readiness := &Readiness{}
+	readiness.AddCheck("store", func(context.Context) error {
+		if down.Load() {
+			return errors.New("connection refused")
+		}
+		return nil
+	})
+	mux := healthMux(readiness)
+
+	down.Store(true)
+	for range 3 {
+		getCode(t, mux, "/readyz")
+	}
+	down.Store(false)
+	for range 3 {
+		getCode(t, mux, "/readyz")
+	}
+
+	if got := strings.Count(buf.String(), "Readiness check failing"); got != 1 {
+		t.Errorf("logged failure %d times over 3 failing requests, want 1:\n%s", got, buf.String())
+	}
+	if got := strings.Count(buf.String(), "Readiness check recovered"); got != 1 {
+		t.Errorf("logged recovery %d times over 3 passing requests, want 1:\n%s", got, buf.String())
+	}
+}
+
+// The probes and /metrics live on separate servers, so turning one off can
+// never take the other with it.
+func TestMetricsAndHealthServeSeparateEndpoints(t *testing.T) {
+	servers := map[string]*http.ServeMux{
+		"metrics": metricsMux(),
+		"health":  healthMux(&Readiness{}),
+	}
+	for _, tc := range []struct {
+		server string
+		path   string
+		want   int
+	}{
+		{server: "metrics", path: "/metrics", want: http.StatusOK},
+		{server: "metrics", path: "/readyz", want: http.StatusNotFound},
+		{server: "metrics", path: "/healthz", want: http.StatusNotFound},
+		{server: "health", path: "/metrics", want: http.StatusNotFound},
+		{server: "health", path: "/readyz", want: http.StatusOK},
+		{server: "health", path: "/healthz", want: http.StatusOK},
+	} {
+		t.Run(tc.server+tc.path, func(t *testing.T) {
+			if got := getCode(t, servers[tc.server], tc.path); got != tc.want {
+				t.Errorf("%s server GET %s = %d, want %d", tc.server, tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+// A server with no ReadHeaderTimeout lets a slow client hold a connection
+// open forever.
+func TestHTTPServerBoundsHeaderRead(t *testing.T) {
+	srv := newHTTPServer(":0", http.NewServeMux())
+	if srv.ReadHeaderTimeout <= 0 {
+		t.Errorf("ReadHeaderTimeout = %v, want > 0", srv.ReadHeaderTimeout)
 	}
 }
 
@@ -346,19 +513,41 @@ func gatheredNames(t *testing.T, reg prometheus.Gatherer) map[string]bool {
 }
 
 func TestMetricsPushEnabled(t *testing.T) {
-	for value, wantPush := range map[string]bool{"": true, "otlp": true, " OTLP ": true, "none": false, " None ": false, "prometheus": true} {
-		var buf bytes.Buffer
-		prev := slog.Default()
-		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-		t.Setenv(metricsExporterEnv, value)
-		push := metricsPushEnabled(t.Context())
-		slog.SetDefault(prev)
+	type want struct{ push, warn bool }
+	tests := []struct {
+		value      string
+		pullServed want
+		pushOnly   want
+	}{
+		{"", want{true, false}, want{true, false}},
+		{"otlp", want{true, false}, want{true, false}},
+		{" OTLP ", want{true, false}, want{true, false}},
+		{"none", want{false, false}, want{false, false}},
+		{" None ", want{false, false}, want{false, false}},
+		{"prometheus", want{false, false}, want{true, true}},
+		{" Prometheus ", want{false, false}, want{true, true}},
+		{"console", want{true, true}, want{true, true}},
+		{"otlp,prometheus", want{true, false}, want{true, true}},
+		{"prometheus, otlp", want{true, false}, want{true, true}},
+		{"prometheus,console", want{false, true}, want{true, true}},
+		{"none,otlp", want{true, true}, want{true, true}},
+		{"none,prometheus", want{true, true}, want{false, true}},
+	}
+	for _, tt := range tests {
+		for pullServed, w := range map[bool]want{true: tt.pullServed, false: tt.pushOnly} {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Setenv(metricsExporterEnv, tt.value)
+			push := metricsPushEnabled(t.Context(), pullServed)
+			slog.SetDefault(prev)
 
-		if push != wantPush {
-			t.Errorf("%s=%q: push = %t, want %t", metricsExporterEnv, value, push, wantPush)
-		}
-		if warned, wantWarn := strings.Contains(buf.String(), "level=WARN"), value == "prometheus"; warned != wantWarn {
-			t.Errorf("%s=%q: warned = %t, want %t:\n%s", metricsExporterEnv, value, warned, wantWarn, buf.String())
+			if push != w.push {
+				t.Errorf("%s=%q, pullServed %t: push = %t, want %t", metricsExporterEnv, tt.value, pullServed, push, w.push)
+			}
+			if warned := strings.Contains(buf.String(), "level=WARN"); warned != w.warn {
+				t.Errorf("%s=%q, pullServed %t: warned = %t, want %t:\n%s", metricsExporterEnv, tt.value, pullServed, warned, w.warn, buf.String())
+			}
 		}
 	}
 }
@@ -416,23 +605,32 @@ func bridgedRegistry(t *testing.T) *prometheus.Registry {
 	return reg
 }
 
-// With the OTLP export, the bridged family and the OTel instrument are each
-// pushed once. The instrument must stay off the bridged registry: there the
-// bridge would push it a second time, under its Prometheus name.
+// With the OTLP export, whether selected or the default, the bridged family and
+// the OTel instrument are each pushed once. The instrument must stay off the
+// bridged registry: there the bridge would push it a second time, under its
+// Prometheus name.
 func TestInitMetricsBridgedPushesEachMetricOnce(t *testing.T) {
-	collector := startMetricsCollector(t, "otlp")
-	reg := bridgedRegistry(t)
-	mp, err := InitMetricsBridged(t.Context(), "test-bridged-otlp", reg, nil)
-	if err != nil {
-		t.Fatalf("InitMetricsBridged: %v", err)
-	}
-	addOne(t, mp, "ate.test.bridged.count")
-	if gatheredNames(t, reg)["ate_test_bridged_count_total"] {
-		t.Error("the OTel instrument is registered on the bridged registry")
-	}
-	pushed := collector.flush(t, mp)
-	if pushed["ate.test.bridged.count"] != 1 || pushed["test_bridged_family"] != 1 || pushed["ate_test_bridged_count_total"] != 0 {
-		t.Errorf("want ate.test.bridged.count and test_bridged_family pushed once each and nothing else for them, got %v", pushed)
+	for _, tt := range []struct{ name, value string }{
+		{"unset", ""},
+		{"otlp", "otlp"},
+		{"list", "otlp,prometheus"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			collector := startMetricsCollector(t, tt.value)
+			reg := bridgedRegistry(t)
+			mp, _, err := InitMetricsBridged(t.Context(), "test-bridged-otlp", reg, nil)
+			if err != nil {
+				t.Fatalf("InitMetricsBridged: %v", err)
+			}
+			addOne(t, mp, "ate.test.bridged.count")
+			if gatheredNames(t, reg)["ate_test_bridged_count_total"] {
+				t.Error("the OTel instrument is registered on the bridged registry")
+			}
+			pushed := collector.flush(t, mp)
+			if pushed["ate.test.bridged.count"] != 1 || pushed["test_bridged_family"] != 1 || pushed["ate_test_bridged_count_total"] != 0 {
+				t.Errorf("want ate.test.bridged.count and test_bridged_family pushed once each and nothing else for them, got %v", pushed)
+			}
+		})
 	}
 }
 
@@ -446,7 +644,7 @@ func TestInitMetricsBridgedWrapsPushedProducer(t *testing.T) {
 			return inner.Produce(ctx)
 		})
 	}
-	mp, err := InitMetricsBridged(t.Context(), "test-bridged-wrap", bridgedRegistry(t), wrap)
+	mp, _, err := InitMetricsBridged(t.Context(), "test-bridged-wrap", bridgedRegistry(t), wrap)
 	if err != nil {
 		t.Fatalf("InitMetricsBridged: %v", err)
 	}
@@ -463,27 +661,82 @@ type producerFunc func(context.Context) ([]metricdata.ScopeMetrics, error)
 
 func (f producerFunc) Produce(ctx context.Context) ([]metricdata.ScopeMetrics, error) { return f(ctx) }
 
-// With OTEL_METRICS_EXPORTER=none, the OTel instrument is served from the
+// With OTEL_METRICS_EXPORTER=prometheus, the OTel instrument is served from the
 // bridged registry next to its own families, and nothing is pushed.
-func TestInitMetricsBridgedExporterNoneServesFromRegistry(t *testing.T) {
-	collector := startMetricsCollector(t, "none")
+func TestInitMetricsBridgedPrometheusServesFromRegistry(t *testing.T) {
+	collector := startMetricsCollector(t, "prometheus")
 	reg := bridgedRegistry(t)
-	mp, err := InitMetricsBridged(t.Context(), "test-bridged-none", reg, nil)
+	mp, servePull, err := InitMetricsBridged(t.Context(), "test-bridged-prometheus", reg, nil)
 	if err != nil {
 		t.Fatalf("InitMetricsBridged: %v", err)
 	}
-	addOne(t, mp, "ate.test.bridgednone.count")
+	if !servePull {
+		t.Error("OTEL_METRICS_EXPORTER=prometheus turned the scrape endpoint off")
+	}
+	addOne(t, mp, "ate.test.bridgedprom.count")
 	names := gatheredNames(t, reg)
-	if !names["ate_test_bridgednone_count_total"] || !names["test_bridged_family"] {
+	if !names["ate_test_bridgedprom_count_total"] || !names["test_bridged_family"] {
 		t.Errorf("the bridged registry does not serve both the instrument and its own family: %v", names)
+	}
+	if pushed := collector.flush(t, mp); pushed != nil {
+		t.Errorf("OTEL_METRICS_EXPORTER=prometheus still pushed %v", pushed)
+	}
+}
+
+// With OTEL_METRICS_EXPORTER=none there is no push and no endpoint to serve,
+// so the instrument is not registered anywhere.
+func TestInitMetricsBridgedExporterNoneExportsNothing(t *testing.T) {
+	collector := startMetricsCollector(t, "none")
+	reg := bridgedRegistry(t)
+	mp, servePull, err := InitMetricsBridged(t.Context(), "test-bridged-none", reg, nil)
+	if err != nil {
+		t.Fatalf("InitMetricsBridged: %v", err)
+	}
+	if servePull {
+		t.Error("OTEL_METRICS_EXPORTER=none left the scrape endpoint on")
+	}
+	addOne(t, mp, "ate.test.bridgednone.count")
+	if gatheredNames(t, reg)["ate_test_bridgednone_count_total"] {
+		t.Error("the instrument is registered on the bridged registry")
 	}
 	if pushed := collector.flush(t, mp); pushed != nil {
 		t.Errorf("OTEL_METRICS_EXPORTER=none still pushed %v", pushed)
 	}
 }
 
+// servePull follows the policy table: unset and the list keep both paths.
+func TestInitMetricsBridgedServePull(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		wantPush bool
+		wantPull bool
+	}{
+		{"unset", "", true, true},
+		{"otlp", "otlp", true, false},
+		{"prometheus", "prometheus", false, true},
+		{"list", "otlp,prometheus", true, true},
+		{"none", "none", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collector := startMetricsCollector(t, tt.value)
+			mp, servePull, err := InitMetricsBridged(t.Context(), "test-bridged-table", bridgedRegistry(t), nil)
+			if err != nil {
+				t.Fatalf("InitMetricsBridged: %v", err)
+			}
+			if servePull != tt.wantPull {
+				t.Errorf("servePull = %t, want %t", servePull, tt.wantPull)
+			}
+			if pushed := collector.flush(t, mp) != nil; pushed != tt.wantPush {
+				t.Errorf("pushed = %t, want %t", pushed, tt.wantPush)
+			}
+		})
+	}
+}
+
 func TestInitMetricsBridgedRequiresServiceName(t *testing.T) {
-	if _, err := InitMetricsBridged(t.Context(), "", prometheus.NewRegistry(), nil); err == nil {
+	if _, _, err := InitMetricsBridged(t.Context(), "", prometheus.NewRegistry(), nil); err == nil {
 		t.Error("InitMetricsBridged(\"\") must return an error")
 	}
 }
@@ -558,5 +811,105 @@ func TestSetLogLevel(t *testing.T) {
 	}
 	if got := logLevel.Level(); got != slog.LevelWarn {
 		t.Errorf("SetLogLevel(\"\") changed the level to %v", got)
+	}
+}
+
+func TestTracesPushEnabled(t *testing.T) {
+	tests := []struct {
+		value      string
+		push, warn bool
+	}{
+		{"", true, false},
+		{"otlp", true, false},
+		{" OTLP ", true, false},
+		{"none", false, false},
+		{" None ", false, false},
+		{"console", true, true},
+		{"otlp,console", true, true},
+		{"none,otlp", true, true},
+	}
+	for _, tt := range tests {
+		var buf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+		t.Setenv(tracesExporterEnv, tt.value)
+		push := tracesPushEnabled(t.Context())
+		slog.SetDefault(prev)
+
+		if push != tt.push {
+			t.Errorf("%s=%q: push = %t, want %t", tracesExporterEnv, tt.value, push, tt.push)
+		}
+		if warned := strings.Contains(buf.String(), "level=WARN"); warned != tt.warn {
+			t.Errorf("%s=%q: warned = %t, want %t:\n%s", tracesExporterEnv, tt.value, warned, tt.warn, buf.String())
+		}
+	}
+}
+
+type traceCollector struct {
+	coltracepb.UnimplementedTraceServiceServer
+	spans atomic.Int64
+}
+
+func (c *traceCollector) Export(_ context.Context, req *coltracepb.ExportTraceServiceRequest) (*coltracepb.ExportTraceServiceResponse, error) {
+	for _, rs := range req.GetResourceSpans() {
+		for _, ss := range rs.GetScopeSpans() {
+			c.spans.Add(int64(len(ss.GetSpans())))
+		}
+	}
+	return &coltracepb.ExportTraceServiceResponse{}, nil
+}
+
+// startTraceCollector serves a traceCollector on a loopback port, points
+// OTEL_EXPORTER_OTLP_ENDPOINT at it, and sets OTEL_TRACES_EXPORTER.
+func startTraceCollector(t *testing.T, exporter string) *traceCollector {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	collector := &traceCollector{}
+	srv := grpc.NewServer()
+	coltracepb.RegisterTraceServiceServer(srv, collector)
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(srv.Stop)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+ln.Addr().String())
+	t.Setenv(tracesExporterEnv, exporter)
+	return collector
+}
+
+// endOneSpan ends a sampled span, then flushes and shuts the provider down, so
+// a span exporter, if there is one, has exported it.
+func endOneSpan(t *testing.T, serviceName string) {
+	t.Helper()
+	tp, err := InitTracing(t.Context(), TracingOptions{ServiceName: serviceName, Sampling: ParentRatioSampling(1)})
+	if err != nil {
+		t.Fatalf("InitTracing: %v", err)
+	}
+	_, span := tp.Tracer("test").Start(t.Context(), "test")
+	if !span.SpanContext().IsSampled() {
+		t.Fatal("the span was not sampled")
+	}
+	span.End()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_ = tp.ForceFlush(ctx)
+	_ = tp.Shutdown(ctx)
+}
+
+func TestInitTracingExportsOverOTLPByDefault(t *testing.T) {
+	collector := startTraceCollector(t, "")
+	endOneSpan(t, "test-traces-default")
+	if got := collector.spans.Load(); got != 1 {
+		t.Errorf("the collector received %d span(s), want 1", got)
+	}
+}
+
+// With OTEL_TRACES_EXPORTER=none the span is still sampled, so the context a
+// component propagates keeps its sampled flag, and nothing is exported.
+func TestInitTracingExporterNoneExportsNothing(t *testing.T) {
+	collector := startTraceCollector(t, "none")
+	endOneSpan(t, "test-traces-none")
+	if got := collector.spans.Load(); got != 0 {
+		t.Errorf("OTEL_TRACES_EXPORTER=none still exported %d span(s)", got)
 	}
 }

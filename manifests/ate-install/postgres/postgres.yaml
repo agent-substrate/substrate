@@ -23,7 +23,7 @@ data:
     ssl = on
     ssl_cert_file = '/run/servicedns.podcert.ate.dev/credential-bundle.pem'
     ssl_key_file = '/run/servicedns.podcert.ate.dev/credential-bundle.pem'
-    ssl_ca_file = '/run/podidentity.podcert.ate.dev/trust-bundle.pem'
+    ssl_ca_file = '/run/postgres.podcert.ate.dev/trust-bundle.pem'
     hba_file = '/etc/postgresql/pg_hba.conf'
   pg_hba.conf: |
     # Local socket access is limited to processes in this pod and is used by
@@ -32,9 +32,8 @@ data:
     local all all trust
     # The setup user is local-only; application pods never receive it.
     hostssl all postgres all reject
-    # Application connections require both a password and a pod-identity
-    # client certificate. ate-setup uses the local socket for identity setup.
-    hostssl atepg all all scram-sha-256 clientcert=verify-ca
+    # Client certificate CNs must match the requested database username.
+    hostssl atepg substrate_owner_user,substrate_readwrite_user all cert
   reload-tls.sh: |
     # PostgreSQL opens ssl_cert_file, ssl_key_file and ssl_ca_file at startup
     # and on SIGHUP, and nowhere else. The kubelet replaces the projected pod
@@ -50,7 +49,7 @@ data:
     trap 'exit 0' TERM INT
 
     CERT=/run/servicedns.podcert.ate.dev/credential-bundle.pem
-    CA=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+    CA=/run/postgres.podcert.ate.dev/trust-bundle.pem
 
     # Comfortably inside the 30m headroom (notAfter - beginRefreshAt) that
     # cmd/podcertcontroller/internal/servicednssigner/servicednssigner.go
@@ -137,8 +136,8 @@ spec:
         - name: servicedns
           mountPath: /run/servicedns.podcert.ate.dev
           readOnly: true
-        - name: podidentity-ca
-          mountPath: /run/podidentity.podcert.ate.dev
+        - name: postgres-ca
+          mountPath: /run/postgres.podcert.ate.dev
           readOnly: true
         - name: socket
           mountPath: /var/run/postgresql
@@ -201,8 +200,8 @@ spec:
         - name: servicedns
           mountPath: /run/servicedns.podcert.ate.dev
           readOnly: true
-        - name: podidentity-ca
-          mountPath: /run/podidentity.podcert.ate.dev
+        - name: postgres-ca
+          mountPath: /run/postgres.podcert.ate.dev
           readOnly: true
         - name: socket
           mountPath: /var/run/postgresql
@@ -236,11 +235,11 @@ spec:
       # this path, so nothing else has to know about it.
       - name: socket
         emptyDir: {}
-      - name: podidentity-ca
+      - name: postgres-ca
         projected:
           sources:
           - clusterTrustBundle:
-              signerName: podidentity.podcert.ate.dev/identity
+              signerName: postgres.podcert.ate.dev/identity
               labelSelector:
                 matchLabels:
                   podcert.ate.dev/canarying: live

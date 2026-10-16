@@ -17,8 +17,8 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
 )
 
 // The command paths the benchmark settings bind their flags to. Both accept
@@ -63,8 +63,9 @@ func benchmarkOptions() (steps.BenchmarkOptions, error) {
 }
 
 var deployBenchmarksCmd = &cobra.Command{
-	Use:   "benchmarks",
-	Short: "Deploy the benchmark workloads and the locust load test stack",
+	Annotations: map[string]string{recordAnnotation: "no"},
+	Use:         "benchmarks",
+	Short:       "Deploy the benchmark workloads and the locust load test stack",
 	Long: `Deploy the benchmark workloads and the locust load test stack.
 
 See benchmarking/README.md for the walkthrough and customization options.`,

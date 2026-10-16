@@ -22,10 +22,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
-	"github.com/agent-substrate/substrate/internal/version"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/internal/version"
 )
 
 // Inputs that select where configuration comes from, as opposed to the
@@ -50,18 +50,21 @@ var env *steps.Env
 // from Execute, which cobra's PersistentPostRunE does not reach.
 var resolved *config.Resolved
 
-// recordAnnotation marks a command whose runs are worth recording. It is
-// inherited by subcommands, so the deploy subtree opts in once and a demo
-// added later cannot quietly miss it. Commands that install nothing -- delete,
-// publish, setup -- are not marked: a record describes how a cluster was
-// configured, and those do not configure one.
+// recordAnnotation says whether a command's runs are recorded: "yes" or "no".
+// The nearest command that carries it, the command itself or an ancestor,
+// decides, so the deploy subtree opts in once and a component added later
+// cannot quietly miss it. Demos and benchmarks opt back out: they deploy on
+// top of an installed system with only their own settings, so recording them
+// would replace the system's record with one that no longer reproduces it.
+// Commands that install nothing -- delete, publish, setup -- are not marked.
 const recordAnnotation = "record"
 
-// recordsRun reports whether cmd or an ancestor opted in.
+// recordsRun reports whether the nearest annotated command, cmd or an
+// ancestor, opted in.
 func recordsRun(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
-		if c.Annotations[recordAnnotation] != "" {
-			return true
+		if v, ok := c.Annotations[recordAnnotation]; ok {
+			return v == "yes"
 		}
 	}
 	return false
@@ -109,6 +112,11 @@ is present (skipped for --kind, and by NO_DEV_ENV=1).`,
 		if err := cfg.EnsureClusterCredentials(cmd.Context()); err != nil {
 			return err
 		}
+		if cfg.Kind && isDeployCommand(cmd) {
+			if err := cfg.CheckKindCluster(cmd.Context()); err != nil {
+				return err
+			}
+		}
 		env, err = steps.NewEnv(cfg)
 		if err != nil {
 			return err
@@ -127,6 +135,15 @@ is present (skipped for --kind, and by NO_DEV_ENV=1).`,
 	},
 }
 
+func isDeployCommand(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		if c == deployCmd {
+			return true
+		}
+	}
+	return false
+}
+
 // recordRun writes what this run used, so the next one can reproduce it by
 // pointing --config at the file. Recording is best effort: an install that
 // worked must not be reported as failed because a directory was read-only.
@@ -143,12 +160,19 @@ func recordRun(cmd *cobra.Command, runErr error) {
 	}
 	context := resolved.ClusterKey()
 
+	// Recorded so the file says what the cluster runs. Left out when the run
+	// failed before it had an environment to ask.
+	var version string
+	if env != nil {
+		version = env.SubstrateVersion()
+	}
+
 	var path string
 	var omitted []string
 	if runErr == nil {
-		path, omitted, err = config.RecordSuccess(dir, context, resolved)
+		path, omitted, err = config.RecordSuccess(dir, context, version, resolved)
 	} else {
-		path, omitted, err = config.RecordFailure(dir, context, resolved, cmd.CommandPath())
+		path, omitted, err = config.RecordFailure(dir, context, version, resolved, cmd.CommandPath())
 	}
 	if err != nil {
 		log.Warnf("not recording this run: %v", err)

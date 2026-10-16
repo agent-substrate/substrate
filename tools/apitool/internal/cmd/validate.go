@@ -20,9 +20,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/tools/apitool/internal/exemption"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/lint"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/validate"
+	"go.ate.dev/substrate/tools/apitool/internal/exemption"
+	"go.ate.dev/substrate/tools/apitool/internal/lint"
+	"go.ate.dev/substrate/tools/apitool/internal/validate"
 )
 
 var validateCmd = &cobra.Command{
@@ -94,6 +94,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		failedRules++
 		total += len(shown)
 		fmt.Fprintf(out, "  %s %s\n", failIcon(), r.Rule.Name)
+		fmt.Fprintf(out, "    %s\n", r.Rule.Description)
 		for _, f := range shown {
 			fmt.Fprintf(out, "      %s: %s\n", f.Subject, f.Message)
 		}

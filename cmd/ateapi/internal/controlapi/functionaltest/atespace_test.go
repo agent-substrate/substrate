@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -223,12 +223,12 @@ func TestValidation_Atespace(t *testing.T) {
 	defer tc.cleanup()
 
 	t.Run("ListAtespaces", func(t *testing.T) {
-		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{PageSize: -1})
+		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{Options: &ateapipb.ListOptions{PageSize: -1}})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
 	t.Run("ListAtespaces invalid token", func(t *testing.T) {
-		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{PageToken: "%%%"})
+		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{Options: &ateapipb.ListOptions{PageToken: "%%%"}})
 		assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
 	})
 

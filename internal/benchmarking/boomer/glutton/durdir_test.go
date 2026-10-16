@@ -24,12 +24,12 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	"github.com/agent-substrate/substrate/internal/benchmarking/glutton/fake"
-	"github.com/agent-substrate/substrate/internal/controlclienttest"
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
+	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
+	"go.ate.dev/substrate/internal/controlclienttest"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 )
 
 func TestDurDirLoopSequence(t *testing.T) {

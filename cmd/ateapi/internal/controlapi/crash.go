@@ -21,12 +21,12 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/actorevent"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/actorevent"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -37,12 +37,14 @@ import (
 const (
 	crashMessageWorkerAssignmentMissing  = "actor has no worker assignment in a state that requires one"
 	crashMessageLocalSnapshotNodeUnknown = "node holding the actor's local snapshot is unknown"
+	crashMessageLocalSnapshotMissing     = "actor has no local snapshot"
+	crashMessageDurableSnapshotMissing   = "actor has no durable snapshot"
 	crashMessageWorkerGone               = "assigned worker no longer exists"
 	crashMessageWorkerDraining           = "assigned worker is draining"
 	crashMessageWorkerReassigned         = "assigned worker no longer hosts the actor"
 	crashMessageWorkerIneligible         = "assigned worker no longer satisfies the actor's placement constraints"
 	crashMessageWorkerPodGone            = "worker pod went away while hosting the actor"
-	crashMessageAteomRestarted           = "ateom restarted while hosting the actor"
+	crashMessageWorkerRestarted          = "worker restarted while hosting the actor"
 )
 
 // maxCrashMessageBytes matches the maxLength on ActorCrash.message.
@@ -93,10 +95,27 @@ func handleAteletError(ctx context.Context, st crashActorStore, actorRef resourc
 		return fmt.Errorf("actor %s crashed: %w", actorRef, err)
 	}
 
+	// The caller went away or its deadline passed: report that, not atelet's
+	// error. The actor keeps its assignment, so a retry can finish the operation.
+	if ctx.Err() != nil {
+		return fmt.Errorf("while calling atelet %s: %w: %w", rpc, err, ctx.Err())
+	}
 	if status.Code(err) == codes.Unavailable {
 		return apierror.Unavailable("while calling atelet %s: %w", rpc, err)
 	}
 	return apierror.Internal("while calling atelet %s: %w", rpc, err)
+}
+
+// crashActorAndFail crashes the actor for a workflow step that found its
+// record in a state no retry can recover from, and returns the error the step
+// fails with: FailedPrecondition once the crash is committed, since retrying
+// the operation is pointless, or crashActor's own error if the crash did not
+// commit, so the caller retries and the retry crashes the actor again.
+func crashActorAndFail(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, message string) error {
+	if err := crashActor(ctx, st, actorRef, opName, message); err != nil {
+		return err
+	}
+	return apierror.FailedPrecondition("actor %s is CRASHED: %s", actorRef, message)
 }
 
 // crashActor moves the actor to CRASHED state and frees the worker it was
@@ -135,11 +154,10 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 			toUpdate.Status.Crash = newActorCrash(opName, message)
 		}
 
-		// InProgressSnapshotUri and InProgressLocalSnapshotName are kept so a
-		// later DeleteActor or RevertActor can delete what they name: each is
-		// the only pointer to it, so clearing them here would leak the objects
-		// for good; failed workflow steps must never promote either of them to an
-		// ExternalSnapshot or to LocalSnapshot.
+		// In-progress snapshot entries in Status.Snapshots are kept so a later
+		// DeleteActor or RevertActor can delete what they name: each is the only
+		// pointer to it, so clearing them here would leak the objects for good;
+		// failed workflow steps must never promote them to COMPLETED.
 		toUpdate.Status.WorkerAssignment = nil
 		return nil
 	})
@@ -172,8 +190,8 @@ func newActorCrash(opName, message string) *ateapipb.ActorCrash {
 // is barred from metric labels, so this record is the only way to attribute a
 // crash to one agent. Call it beside recordActorCrash, under the same guard.
 //
-// It names ate.actor.state for the same reason ateom's lifecycle records do: a
-// crash is the one transition ateom never observes, so a consumer taking the
+// It names ate.actor.state for the same reason worker's lifecycle records do: a
+// crash is the one transition worker never observes, so a consumer taking the
 // last state an actor reached has to see this record to reach "crashed" at all.
 func logActorCrashed(ctx context.Context, actor *ateapipb.Actor, opName string) {
 	attrs := ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor))

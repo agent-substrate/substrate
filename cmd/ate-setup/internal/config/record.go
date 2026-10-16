@@ -64,10 +64,11 @@ func RecordDir(configured string) (string, error) {
 // RecordSuccess writes the configuration a completed run used, replacing the
 // previous record for that context. It returns the path and the secret
 // settings it left out.
-func RecordSuccess(dir, context string, r *Resolved) (string, []string, error) {
+func RecordSuccess(dir, context, substrateVersion string, r *Resolved) (string, []string, error) {
 	d, omitted := NewDocument(r, DocumentMetadata{
-		Context: context,
-		Outcome: Succeeded,
+		Context:          context,
+		Outcome:          Succeeded,
+		SubstrateVersion: substrateVersion,
 	})
 	path := filepath.Join(dir, installsDir, recordName(context)+".yaml")
 	return path, omitted, write(path, d)
@@ -80,11 +81,12 @@ func RecordSuccess(dir, context string, r *Resolved) (string, []string, error) {
 // a botched value would otherwise become the default and reach the cluster on
 // the next success -- so recovering it is an explicit act: pass the path to
 // --config.
-func RecordFailure(dir, context string, r *Resolved, failedAt string) (string, []string, error) {
+func RecordFailure(dir, context, substrateVersion string, r *Resolved, failedAt string) (string, []string, error) {
 	d, omitted := NewDocument(r, DocumentMetadata{
-		Context:  context,
-		Outcome:  Failed,
-		FailedAt: failedAt,
+		Context:          context,
+		Outcome:          Failed,
+		FailedAt:         failedAt,
+		SubstrateVersion: substrateVersion,
 	})
 	stamp := time.Now().UTC().Format("20060102T150405Z")
 	base := filepath.Join(dir, failedDir, recordName(context)+"-"+stamp)

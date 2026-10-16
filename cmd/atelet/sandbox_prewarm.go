@@ -28,9 +28,9 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
 )
 
 // prewarmMaxJitter spreads the fleet's asset downloads after a SandboxConfig
@@ -57,7 +57,13 @@ var prewarmTimeout = 5 * time.Minute
 // permanently broken config forever.
 const prewarmMaxRetries = 8
 
-// sandboxAssetFetcher is the one slice of AteomHerder the prewarmer needs.
+// prewarmFinished observes the result of each prewarm attempt, by config
+// name, once the worker's call has returned. A no-op in production; a var so
+// a test can wait for the worker's own prewarm call to return before it tears
+// down what that call writes into.
+var prewarmFinished = func(string, error) {}
+
+// sandboxAssetFetcher is the one slice of Atelet the prewarmer needs.
 // Prewarming through the same method as the Run/Restore path keeps the two
 // fetches from ever diverging on cache layout or validation.
 type sandboxAssetFetcher interface {
@@ -226,6 +232,7 @@ func (p *sandboxPrewarmer) process(ctx context.Context, name string) {
 	}
 	if err == nil {
 		err = p.prewarm(ctx, cfg)
+		prewarmFinished(name, err)
 	}
 	if err == nil {
 		p.queue.Forget(name)
@@ -257,18 +264,27 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 	defer cancel()
 	t := time.Now()
 
+	// TODO: prewarm every Enabled version, not just the default.
+	ver, ok := cfg.Spec.DefaultVersionConfig()
+	if !ok {
+		// The CRD rejects this shape, so this should not be reachable.
+		slog.WarnContext(ctx, "Skipping sandbox asset prewarm: config has no enabled default version",
+			slog.String("config", cfg.Name), slog.String("defaultVersion", cfg.Spec.DefaultVersion))
+		return nil
+	}
+
 	var imageErr error
 	var wg sync.WaitGroup
 	// schedule prewarm pause image if provided
-	if cfg.Spec.PauseImage != "" {
+	if ver.PauseImage != "" {
 		wg.Go(func() {
-			if _, err := p.images.EnsureImage(ctx, cfg.Spec.PauseImage); err != nil {
-				imageErr = fmt.Errorf("while prewarming pause image %q: %w", cfg.Spec.PauseImage, err)
+			if _, err := p.images.EnsureImage(ctx, ver.PauseImage); err != nil {
+				imageErr = fmt.Errorf("while prewarming pause image %q: %w", ver.PauseImage, err)
 			}
 		})
 	}
 	// schedule prewarm sandbox assets if provided
-	rec, assetErr := recordFromSandboxConfig(cfg)
+	rec, assetErr := recordFromSandboxConfig(cfg, ver)
 	switch {
 	case errors.Is(assetErr, errNoAssetsForArch):
 		// Permanent until the config changes, and a change re-enqueues:
@@ -292,8 +308,9 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 	}
 	slog.InfoContext(ctx, "Sandbox assets prewarmed",
 		slog.String("config", cfg.Name),
+		slog.String("version", ver.Name),
 		slog.Int("assets", assets),
-		slog.String("pauseImage", cfg.Spec.PauseImage),
+		slog.String("pauseImage", ver.PauseImage),
 		slog.Duration("duration", time.Since(t)))
 	return nil
 }
@@ -303,17 +320,18 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 // config changes, so prewarm treats it as nothing-to-do rather than retrying.
 var errNoAssetsForArch = errors.New("no sandbox assets for this architecture")
 
-// recordFromSandboxConfig projects a SandboxConfig's per-architecture assets
-// onto the local node's architecture, mirroring recordFromRequest.
-func recordFromSandboxConfig(cfg *v1alpha1.SandboxConfig) (*sandboxAssetsRecord, error) {
+// recordFromSandboxConfig projects the per-architecture assets of one version
+// of a SandboxConfig onto the local node's architecture, mirroring
+// recordFromRequest.
+func recordFromSandboxConfig(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConfig) (*sandboxAssetsRecord, error) {
 	arch := runtime.GOARCH
-	files := cfg.Spec.Assets[arch]
+	files := ver.Assets[arch]
 	if len(files) == 0 {
-		return nil, fmt.Errorf("sandbox config %q, architecture %q: %w", cfg.Name, arch, errNoAssetsForArch)
+		return nil, fmt.Errorf("sandbox config %q, version %q, architecture %q: %w", cfg.Name, ver.Name, arch, errNoAssetsForArch)
 	}
 	rec := &sandboxAssetsRecord{
 		SandboxClass: string(cfg.Spec.SandboxClass),
-		PauseImage:   cfg.Spec.PauseImage,
+		PauseImage:   ver.PauseImage,
 		Assets:       make(map[string]assetEntry, len(files)),
 	}
 	for name, f := range files {

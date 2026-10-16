@@ -20,16 +20,17 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
-	"github.com/agent-substrate/substrate/internal/actorevent"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/objectstore"
-	"github.com/agent-substrate/substrate/internal/resources"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
+	"go.ate.dev/substrate/internal/actorevent"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/pluginsocket"
+	"go.ate.dev/substrate/internal/resources"
+	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -99,6 +100,10 @@ func logActorState(ctx context.Context, actor *ateapipb.Actor, opName, state str
 }
 
 // ActorWorkflow handles the workflows for actor's resume / suspend operations.
+//
+// Workflows act for the system, not the user whose request started them, so
+// each exported method begins with preview.ContextWithOptIn: the request was
+// already validated, and what the workflow writes is the system's own state.
 type ActorWorkflow struct {
 	store                actorWorkflowStore
 	workerCache          *workercache.Cache
@@ -109,14 +114,14 @@ type ActorWorkflow struct {
 	instruments          *Instruments
 	egressGatewayAddress string
 	pluginRegistry       VolumePluginRegistry
-	objectStore          objectstore.Store
+	objectStorePlugin    objectstorev1.ControlProviderClient
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
 //
-// objectStore may be nil, which leaves external snapshots in place instead of
-// copying and releasing them. Only tests that never reach those steps pass nil;
-// ate-api always builds one.
+// objectStorePlugin may be nil, which leaves external snapshots in place instead
+// of copying and releasing them. Only tests that never reach those steps pass
+// nil; ate-api always builds one.
 func NewActorWorkflow(
 	store actorWorkflowStore,
 	workerCache *workercache.Cache,
@@ -126,7 +131,7 @@ func NewActorWorkflow(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	pluginRegistry VolumePluginRegistry,
-	objectStore objectstore.Store,
+	objectStorePlugin objectstorev1.ControlProviderClient,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:                store,
@@ -138,8 +143,22 @@ func NewActorWorkflow(
 		instruments:          instruments,
 		egressGatewayAddress: egressGatewayAddress,
 		pluginRegistry:       pluginRegistry,
-		objectStore:          objectStore,
+		objectStorePlugin:    objectStorePlugin,
 	}
+}
+
+// cleanupSnapshot deletes every object under prefix through the control
+// object-store plugin.
+func (w *ActorWorkflow) cleanupSnapshot(ctx context.Context, prefix resources.StoragePrefix) error {
+	_, err := w.objectStorePlugin.CleanupSnapshot(ctx, &objectstorev1.CleanupSnapshotRequest{SnapshotUri: prefix.String()})
+	return pluginsocket.CallError(err)
+}
+
+// copySnapshot copies every object under src to dst through the control
+// object-store plugin.
+func (w *ActorWorkflow) copySnapshot(ctx context.Context, src, dst resources.StoragePrefix) error {
+	_, err := w.objectStorePlugin.CopySnapshot(ctx, &objectstorev1.CopySnapshotRequest{SrcUri: src.String(), DstUri: dst.String()})
+	return pluginsocket.CallError(err)
 }
 
 // actorWorkflowStore enumerates the exact storage methods needed by
@@ -166,7 +185,8 @@ type actorWorkflowStore interface {
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
-// WorkerWorkflow handles the multi-step operations on a Worker.
+// WorkerWorkflow handles the multi-step operations on a Worker. Like
+// ActorWorkflow, each exported method begins with preview.ContextWithOptIn.
 //
 // Its steps reach across the Actor↔Worker binding, which an ActorWorkflow step
 // does from the other side: releasing the Actor bound to a Worker stays

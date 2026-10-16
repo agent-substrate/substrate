@@ -40,14 +40,20 @@ const (
 
 	// AteletTrustDomain and the ServiceAccount constants are the trust-domain
 	// and service-account segments of the SPIFFE IDs that atelet,
-	// atenet-router and atenet-egress Pod certificates carry, as minted by the
-	// podidentity signer (cmd/podcertcontroller/internal/podidentitysigner).
+	// atenet-router, atenet-egress and ate-controller Pod certificates carry,
+	// as minted by the podidentity signer
+	// (cmd/podcertcontroller/internal/podidentitysigner).
 	// The namespace segment is the namespace they run in, which callers
 	// resolve themselves rather than assume.
-	AteletTrustDomain    = "cluster.local"
-	AteletServiceAccount = "atelet"
-	RouterServiceAccount = "atenet-router"
-	EgressServiceAccount = "atenet-egress"
+	AteletTrustDomain        = "cluster.local"
+	AteletServiceAccount     = "atelet"
+	RouterServiceAccount     = "atenet-router"
+	EgressServiceAccount     = "atenet-egress"
+	ControllerServiceAccount = "ate-controller"
+
+	// WorkerServiceAccount is what worker pods run as when their WorkerPool
+	// names none; atecontroller creates it in the pool's namespace.
+	WorkerServiceAccount = "ateworker"
 
 	// PodNamespaceEnv is the conventional env var name for the namespace
 	// a pod is running in, exposed via Kubernetes' downward API.
@@ -74,6 +80,13 @@ func ActorJWTIssuer(namespace string) string {
 	}).String()
 }
 
+// ClientPrincipal returns the principal ID ate-api-server sees for a bearer
+// token minted from ClientServiceAccount in namespace: the Kubernetes
+// ServiceAccount username in the token's subject.
+func ClientPrincipal(namespace string) string {
+	return "system:serviceaccount:" + namespace + ":" + ClientServiceAccount
+}
+
 // SPIFFEID returns the SPIFFE ID that Pod certificates for serviceAccount in
 // namespace carry. Peers authenticate by comparing against this exact string.
 func SPIFFEID(namespace, serviceAccount string) string {
@@ -98,4 +111,9 @@ func RouterSPIFFEID(namespace string) string {
 // namespace. The credential provider verifies it on the injector connection.
 func EgressSPIFFEID(namespace string) string {
 	return SPIFFEID(namespace, EgressServiceAccount)
+}
+
+// ControllerSPIFFEID returns the SPIFFE ID ate-controller presents when it runs in namespace.
+func ControllerSPIFFEID(namespace string) string {
+	return SPIFFEID(namespace, ControllerServiceAccount)
 }

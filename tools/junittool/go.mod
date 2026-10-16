@@ -1,3 +1,3 @@
-module github.com/agent-substrate/substrate/tools/junittool
+module go.ate.dev/substrate/tools/junittool
 
 go 1.27.0

@@ -27,10 +27,10 @@ DECLARE
     schema_name text := current_setting('agent_substrate.setup_schema');
     owner_role text := current_setting('agent_substrate.setup_owner_role');
     owner_user text := current_setting('agent_substrate.setup_owner_user');
-    owner_password text := current_setting('agent_substrate.setup_owner_password');
+    owner_password text := NULLIF(current_setting('agent_substrate.setup_owner_password'), '');
     readwrite_role text := current_setting('agent_substrate.setup_readwrite_role');
     readwrite_user text := current_setting('agent_substrate.setup_readwrite_user');
-    readwrite_password text := current_setting('agent_substrate.setup_readwrite_password');
+    readwrite_password text := NULLIF(current_setting('agent_substrate.setup_readwrite_password'), '');
     managed record;
     role_attrs record;
     schema_owner text;

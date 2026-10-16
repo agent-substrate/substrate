@@ -59,10 +59,14 @@ data:
     admin:
       address:
         socket_address:
-          # ipv4_compat keeps `kubectl port-forward` to the admin port working;
-          # in-pod callers dial localhost and need no help.
-          address: "::"
-          ipv4_compat: true
+          # Loopback only. The admin API is unauthenticated and includes
+          # /quitquitquit, /drain_listeners, /runtime_modify and /config_dump,
+          # so it must not be reachable on the pod IP. In-pod callers (the
+          # router's drain sequence and dataplane health check) dial localhost,
+          # and `kubectl port-forward` dials loopback inside the pod's network
+          # namespace, so both keep working. Prometheus scrapes the
+          # envoy_metrics listener below instead.
+          address: 127.0.0.1
           port_value: 9901
 
     node:
@@ -92,7 +96,62 @@ data:
             cluster_name: xds_cluster
 
     static_resources:
+      # envoy_metrics is the only pod-IP-reachable view of the admin API: it
+      # proxies GET /stats/prometheus (the PodMonitoring in
+      # atenet-router-monitoring.yaml) and GET /ready (the envoy container's
+      # readiness probe) to the loopback-only admin listener and 404s
+      # everything else. The stat prefixes contain "admin" so
+      # envoyDrainer.activeConnections excludes probes and scrapes from the
+      # downstream connection count it waits on to reach zero.
+      listeners:
+      - name: envoy_metrics
+        stat_prefix: admin_metrics
+        address:
+          socket_address:
+            address: "::"
+            ipv4_compat: true
+            port_value: 9902
+        filter_chains:
+        - filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: admin_metrics
+              route_config:
+                name: envoy_metrics
+                virtual_hosts:
+                - name: envoy_metrics
+                  domains: ["*"]
+                  routes:
+                  - match:
+                      path: /stats/prometheus
+                      headers:
+                      - name: ":method"
+                        string_match: { exact: GET }
+                    route: { cluster: envoy_admin }
+                  - match:
+                      path: /ready
+                      headers:
+                      - name: ":method"
+                        string_match: { exact: GET }
+                    route: { cluster: envoy_admin }
+              http_filters:
+              - name: envoy.filters.http.router
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
       clusters:
+      - name: envoy_admin
+        connect_timeout: 0.25s
+        type: STATIC
+        load_assignment:
+          cluster_name: envoy_admin
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: 127.0.0.1
+                    port_value: 9901
       - name: xds_cluster
         connect_timeout: 0.25s
         type: STRICT_DNS
@@ -142,7 +201,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
       - name: atenet-router
-        image: ko://github.com/agent-substrate/substrate/cmd/atenet
+        image: ko://go.ate.dev/substrate/cmd/atenet
         args:
         - "router"
         # Serve the ingress direction only: the ingress ext_proc handler, plus
@@ -164,6 +223,24 @@ spec:
         # CONNECT-tunneled ingress (arbitrary-port support).
         - "--port-connect=8081"
         - "--port-connect-tls=8444"
+        # Client auth on the TLS listeners (--port-https, --port-connect-tls).
+        # A client certificate must chain to the podidentity
+        # ClusterTrustBundle, which the envoy container mounts too, and carry
+        # one of the SPIFFE IDs below. The default --ingress-auth-mode,
+        # deprecated-insecure, only checks a certificate a client chooses to
+        # present, and keeps the plaintext listeners open;
+        # components/router-static-mtls makes the certificate mandatory.
+        #
+        # Allowed SPIFFE IDs (exact match), one per client workload:
+        #
+        #   spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client
+        #       The e2e suites' router client (see internal/e2e/ingressauth.go).
+        #
+        # Add an ID for every in-cluster workload that sends traffic to actors
+        # through the router. The podidentity signer issues
+        # spiffe://cluster.local/ns/<namespace>/sa/<service-account>.
+        - "--ingress-client-ca-file=/run/podidentity.podcert.ate.dev/trust-bundle.pem"
+        - "--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client"
         # Client auth to ateapi (mtls): verify the serving cert against the
         # servicedns trust bundle and present the podidentity client cert.
         - "--ateapi-address=k8s:///api.ate-system.svc:443"
@@ -206,19 +283,20 @@ spec:
         envFrom:
         - configMapRef:
             name: ate-otel-config
+        # The xDS server (--port-xds) binds 127.0.0.1 and serves only the Envoy
+        # in this pod, and the /statusz page (--status-port) binds 127.0.0.1 for
+        # port-forward access, so neither is declared as a container port.
         ports:
-        - name: xds
-          containerPort: 18000
         - name: extproc
           containerPort: 50051
-        - name: status
-          containerPort: 4040
         - name: metrics
           containerPort: 9090
+        - name: health
+          containerPort: 9091
         readinessProbe:
           httpGet:
             path: /readyz
-            port: 9090
+            port: health
           initialDelaySeconds: 5
           periodSeconds: 2
           failureThreshold: 3
@@ -227,7 +305,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /healthz
-            port: 9090
+            port: health
           initialDelaySeconds: 10
           periodSeconds: 10
         volumeMounts:
@@ -243,7 +321,8 @@ spec:
         - name: "drain-signal"
           mountPath: "/var/run/atenet"
       - name: envoy
-        image: envoyproxy/envoy:v1.39-latest@sha256:57e14a549d7bd43c8d3f6d03e8cfa653e037d4b38e133acd9b54f38c524401b4
+        # ENVOY_DATAPLANE_IMAGE is substituted for the image URI by ate-setup
+        image: ${ENVOY_DATAPLANE_IMAGE}
         command:
         - "/usr/local/bin/envoy"
         - "-c"
@@ -265,17 +344,26 @@ spec:
           containerPort: 8081
         - name: connect-tls
           containerPort: 8444
-        - name: admin
-          containerPort: 9901
+        # Filtered admin view (GET /stats/prometheus and /ready only). The
+        # admin API itself (9901) is loopback-only and deliberately not listed.
+        - name: envoy-metrics
+          containerPort: 9902
+        # Keeps the pod out of the Service until Envoy is ready.
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: envoy-metrics
+          periodSeconds: 2
         volumeMounts:
         - name: envoy-config
           mountPath: /etc/envoy
         - name: "servicedns"
           mountPath: "/run/servicedns.podcert.ate.dev"
         # podidentity credential + trust bundles for actor-facing (upstream)
-        # mTLS. Envoy's ORIGINAL_DST actor cluster presents this credential
-        # bundle as its client cert when dialing the actor's atunnel ingress
-        # server on :443, and validates that server against the trust bundle.
+        # mTLS. Envoy presents this credential bundle as its client cert when
+        # opening CONNECT tunnels to the worker's atunnel on :8443, and
+        # validates that server against the trust bundle and the SPIFFE ID of
+        # the worker pod's namespace and ServiceAccount.
         # The issued SPIFFE identity is
         # spiffe://cluster.local/ns/ate-system/sa/atenet-router, which atunnel's
         # --atunnel-client-identity allows.
@@ -350,8 +438,4 @@ spec:
   - name: connect-tls
     port: 8444
     targetPort: 8444
-    protocol: TCP
-  - name: status
-    port: 4040
-    targetPort: status
     protocol: TCP

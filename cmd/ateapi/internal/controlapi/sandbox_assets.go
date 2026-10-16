@@ -17,11 +17,11 @@ package controlapi
 import (
 	"fmt"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
@@ -40,7 +40,7 @@ func resolveTemplateSandboxConfig(
 	if err != nil {
 		return nil, fmt.Errorf("while getting SandboxConfig %q: %w", name, err)
 	}
-	if class := sandboxClassString(templateSandbox.GetSandboxClass()); string(sc.Spec.SandboxClass) != class {
+	if class := templateSandbox.GetSandboxClass(); string(sc.Spec.SandboxClass) != class {
 		return nil, apierror.FailedPrecondition(
 			"SandboxConfig %q has class %q but sandbox_config.sandbox_class is %q", name, sc.Spec.SandboxClass, class)
 	}
@@ -49,15 +49,15 @@ func resolveTemplateSandboxConfig(
 
 // resolveSandboxAssets determines the sandbox binaries and pause image an actor
 // should boot with and projects them onto the ateletpb.SandboxAssets atelet
-// fetches: the SandboxConfig the ActorTemplate names via
+// fetches: the default version of the SandboxConfig the ActorTemplate names via
 // sandbox_config.config_name (required; enforced by CreateActorTemplate),
 // checked against the template's sandbox_class.
 func resolveSandboxAssets(
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	templateSandbox *ateapipb.SandboxConfig,
 ) (*ateletpb.SandboxAssets, error) {
-	if sandboxClassString(templateSandbox.GetSandboxClass()) == "" {
-		return nil, fmt.Errorf("ActorTemplate names unrecognized sandbox_class %v", templateSandbox.GetSandboxClass())
+	if templateSandbox.GetSandboxClass() == "" {
+		return nil, fmt.Errorf("ActorTemplate names no sandbox_config.sandbox_class")
 	}
 	if templateSandbox.GetConfigName() == "" {
 		return nil, fmt.Errorf("ActorTemplate names no sandbox_config.config_name")
@@ -67,18 +67,23 @@ func resolveSandboxAssets(
 	if err != nil {
 		return nil, err
 	}
-	return sandboxAssetsProto(sc), nil
+	ver, ok := sc.Spec.DefaultVersionConfig()
+	if !ok {
+		return nil, apierror.FailedPrecondition(
+			"SandboxConfig %q has no enabled version %q named by its defaultVersion", sc.Name, sc.Spec.DefaultVersion)
+	}
+	return sandboxAssetsProto(sc, ver), nil
 }
 
-// sandboxAssetsProto converts a resolved SandboxConfig into the proto atelet
-// consumes.
-func sandboxAssetsProto(sc *atev1alpha1.SandboxConfig) *ateletpb.SandboxAssets {
+// sandboxAssetsProto converts a version of a resolved SandboxConfig into the
+// proto atelet consumes.
+func sandboxAssetsProto(sc *atev1alpha1.SandboxConfig, ver *atev1alpha1.SandboxVersionConfig) *ateletpb.SandboxAssets {
 	out := &ateletpb.SandboxAssets{
 		SandboxClass: string(sc.Spec.SandboxClass),
-		PauseImage:   sc.Spec.PauseImage,
-		Assets:       make(map[string]*ateletpb.ArchAssets, len(sc.Spec.Assets)),
+		PauseImage:   ver.PauseImage,
+		Assets:       make(map[string]*ateletpb.ArchAssets, len(ver.Assets)),
 	}
-	for arch, files := range sc.Spec.Assets {
+	for arch, files := range ver.Assets {
 		archAssets := &ateletpb.ArchAssets{Files: make(map[string]*ateletpb.AssetFile, len(files))}
 		for name, f := range files {
 			archAssets.Files[name] = &ateletpb.AssetFile{Url: f.URL, Sha256: f.SHA256}

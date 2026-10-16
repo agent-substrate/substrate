@@ -23,7 +23,10 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/oidcdiscovery"
+	"go.ate.dev/substrate/internal/preview"
 )
 
 // ConfigPathEnv names the configuration document when --config is not given.
@@ -186,6 +189,12 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		return nil, &InvalidError{Value: v, Want: "a positive integer"}
 	}
 
+	envoyConcurrency := r.Int("e2e.envoyConcurrency")
+	if r.Supplied("e2e.envoyConcurrency") && envoyConcurrency < 1 {
+		v, _ := r.Value("e2e.envoyConcurrency")
+		return nil, &InvalidError{Value: v, Want: "a positive integer"}
+	}
+
 	kubeconfig, kubeconfigEnv := splitKubeconfig(r)
 
 	// One configured connection serves both pools; both empty selects the
@@ -196,21 +205,38 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		ownerConnectionString = readWriteConnectionString
 	}
 	instance, _ := r.Value("ateapi.postgres.cloudsql.instance")
+	actorJWTIssuer := r.String("actorJWT.issuer")
+	if actorJWTIssuer == "" {
+		actorJWTIssuer = installdefaults.ActorJWTIssuer(r.String("namespace"))
+	}
+	// kubectl-ate, ate-setup's demo steps and the e2e clients fall back to
+	// tokens minted from the client ServiceAccount, so making it the default
+	// bootstrap owner keeps them working with authorization on. The deploy
+	// warns whenever it is a bootstrap owner.
+	bootstrapOwners := r.String("ateapi.authz.bootstrapOwners")
+	if bootstrapOwners == "" {
+		bootstrapOwners = installdefaults.ClientPrincipal(r.String("namespace"))
+	}
 
 	cfg := &Config{
-		Root:               root,
-		Kind:               r.Bool("kindCluster.enabled"),
-		Namespace:          r.String("namespace"),
-		Kubeconfig:         kubeconfig,
-		Context:            r.String("context"),
-		ProjectID:          r.String("gcp.projectID"),
-		ClusterName:        r.String("gcp.clusterName"),
-		ClusterLocation:    r.String("gcp.clusterLocation"),
-		ExpectedJWTIssuer:  r.String("ateapi.expectedJWTIssuer"),
+		Root:              root,
+		Kind:              r.Bool("kindCluster.enabled"),
+		Namespace:         r.String("namespace"),
+		Kubeconfig:        kubeconfig,
+		Context:           r.String("context"),
+		ProjectID:         r.String("gcp.projectID"),
+		ClusterName:       r.String("gcp.clusterName"),
+		ClusterLocation:   r.String("gcp.clusterLocation"),
+		ExpectedJWTIssuer: r.String("ateapi.expectedJWTIssuer"),
+
+		APIExperimentalEnableAuthz: r.Bool("ateapi.authz.enabled"),
+		APIAuthzBootstrapOwners:    bootstrapOwners,
+
 		BucketName:         r.String("storage.bucketName"),
 		KODockerRepo:       r.String("ko.dockerRepo"),
 		KODefaultPlatforms: r.String("ko.defaultPlatforms"),
 		ActorJWTAlgorithm:  r.String("actorJWT.algorithm"),
+		ActorJWTIssuer:     actorJWTIssuer,
 		DockerBuildFlags:   strings.Fields(r.String("docker.buildFlags")),
 		Images: images.Source{
 			Repo: strings.TrimSuffix(r.String("images.repo"), "/"),
@@ -220,6 +246,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		PostgresSchema:       r.String("ateapi.postgres.schema"),
 		PostgresPoolMaxConns: r.String("ateapi.postgres.poolMaxConns"),
 		PostgresServerCAFile: r.String("ateapi.postgres.serverCAFile"),
+		PostgresStorageClass: r.String("ateapi.postgres.storageClass"),
 
 		PostgresReadWriteConnectionString: readWriteConnectionString,
 		PostgresOwnerConnectionString:     ownerConnectionString,
@@ -242,13 +269,18 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		RolloutTimeout:                 rolloutTimeout,
 		rolloutTimeoutSet:              r.Supplied("rolloutTimeout"),
 		PodcertWorkersPerSigner:        podcertWorkers,
+		EnvoyConcurrency:               envoyConcurrency,
 		ClusterSize:                    r.String("clusterSize"),
 		CordonControlPlane:             r.Bool("cordonControlPlane"),
+		FakeDataPlane:                  r.Bool("fakeDataPlane.enabled"),
+		IngressAuthMode:                r.String("ingressAuthMode"),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
 		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),
 		OtlpEndpoint:                   r.String("otlpEndpoint"),
+		APILogLevel:                    r.String("ateapi.logLevel"),
 		BenchmarkActorMemory:           r.String("benchmark.actorMemory"),
+		PreviewGates:                   splitList(r.String("preview")),
 		kubeconfigEnv:                  kubeconfigEnv,
 		shellEnv:                       env,
 		resolved:                       r,
@@ -258,6 +290,18 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// splitList splits a comma-separated value, dropping empty items, so an empty
+// value is no items rather than one empty one.
+func splitList(raw string) []string {
+	var out []string
+	for _, item := range strings.Split(raw, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // splitKubeconfig divides the setting into the path handed to client-go and the
@@ -360,11 +404,34 @@ func validateResolved(cfg *Config, r *Resolved) error {
 		return &InvalidError{Value: size, Want: ClusterSizeSize0 + " or " + ClusterSizeSize10}
 	}
 
+	authMode, _ := r.Value("ingressAuthMode")
+	switch cfg.IngressAuthMode {
+	case IngressAuthDeprecatedInsecure:
+	case IngressAuthStaticMTLS:
+		if cfg.Router != RouterEnvoy {
+			return &ConflictError{A: authMode, B: dataplane,
+				Why: IngressAuthStaticMTLS + " requires dataplane " + RouterEnvoy}
+		}
+	default:
+		return &InvalidError{Value: authMode, Want: IngressAuthDeprecatedInsecure + " or " + IngressAuthStaticMTLS}
+	}
+
+	switch cfg.APILogLevel {
+	case "", "debug", "info", "warn", "error":
+	default:
+		level, _ := r.Value("ateapi.logLevel")
+		return &InvalidError{Value: level, Want: "debug, info, warn, or error"}
+	}
+
 	switch cfg.ActorJWTAlgorithm {
 	case "ES256", "RS256":
 	default:
 		alg, _ := r.Value("actorJWT.algorithm")
 		return &InvalidError{Value: alg, Want: "ES256 or RS256"}
+	}
+	if err := oidcdiscovery.ValidateIssuer(cfg.ActorJWTIssuer); err != nil {
+		issuer, _ := r.Value("actorJWT.issuer")
+		return fmt.Errorf("%s: %w (from %s)", issuer.Setting.Key, err, issuer.From.Describe(issuer.Setting))
 	}
 	if cfg.AdditionalEgressExtprocService != "" {
 		extproc, _ := r.Value("atenet.egress.additionalExtprocService")
@@ -375,6 +442,12 @@ func validateResolved(cfg *Config, r *Resolved) error {
 			return &ConflictError{A: extproc, B: dataplane,
 				Why: "an additional ext_proc filter requires dataplane " + RouterEnvoy}
 		}
+	}
+	// A gate the components do not know makes each of them refuse to start, so
+	// catch it here rather than as a failed rollout.
+	if err := preview.Verify(cfg.PreviewGates...); err != nil {
+		gates, _ := r.Value("preview")
+		return fmt.Errorf("%w (from %s)", err, gates.From.Describe(gates.Setting))
 	}
 	// Parsed here so a malformed provider is rejected with the rest of the
 	// configuration rather than part-way through a deploy. Whether one is
@@ -387,6 +460,13 @@ func validateResolved(cfg *Config, r *Resolved) error {
 			provider, _ := r.Value("atenet.egress.credentialProvider")
 			return fmt.Errorf("%w (from %s)", err, provider.From.Describe(provider.Setting))
 		}
+	}
+	// ate-api-server exits on this combination, so catch it before deploying.
+	if cfg.APIExperimentalEnableAuthz && strings.Trim(cfg.APIAuthzBootstrapOwners, " ,") == "" {
+		enabled, _ := r.Value("ateapi.authz.enabled")
+		owners, _ := r.Value("ateapi.authz.bootstrapOwners")
+		return &ConflictError{A: enabled, B: owners,
+			Why: "enforced authorization needs at least one bootstrap owner"}
 	}
 	return nil
 }
