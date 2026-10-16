@@ -41,12 +41,31 @@ func SandboxResolvConf(nameserver string, podResolvConf []byte) []byte {
 	return []byte(out.String())
 }
 
+// SandboxHosts maps localhost to loopback and hostname to ip, the way a
+// container runtime fills in /etc/hosts.
+func SandboxHosts(hostname, ip string) []byte {
+	return []byte("# Agent Substrate-managed hosts file.\n" +
+		"127.0.0.1\tlocalhost\n" +
+		"::1\tlocalhost ip6-localhost ip6-loopback\n" +
+		ip + "\t" + hostname + "\n")
+}
+
 // WriteRootfsResolvConf installs content at /etc/resolv.conf inside rootfs.
+func WriteRootfsResolvConf(rootfs string, content []byte) error {
+	return writeRootfsEtcFile(rootfs, "resolv.conf", content)
+}
+
+// WriteRootfsHosts installs content at /etc/hosts inside rootfs.
+func WriteRootfsHosts(rootfs string, content []byte) error {
+	return writeRootfsEtcFile(rootfs, "hosts", content)
+}
+
+// writeRootfsEtcFile installs content at /etc/name inside rootfs.
 //
 // os.Root confines path traversal; unlinking prevents writes through existing links.
-func WriteRootfsResolvConf(rootfs string, content []byte) error {
+func writeRootfsEtcFile(rootfs, name string, content []byte) error {
 	if len(content) == 0 {
-		return fmt.Errorf("refusing to write an empty resolv.conf")
+		return fmt.Errorf("refusing to write an empty %s", name)
 	}
 	root, err := os.OpenRoot(rootfs)
 	if err != nil {
@@ -56,19 +75,20 @@ func WriteRootfsResolvConf(rootfs string, content []byte) error {
 	if err := root.Mkdir("etc", 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
 		return fmt.Errorf("creating %q: %w", filepath.Join(rootfs, "etc"), err)
 	}
-	if err := root.Remove("etc/resolv.conf"); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("removing existing resolv.conf: %w", err)
+	path := "etc/" + name
+	if err := root.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("removing existing %s: %w", name, err)
 	}
-	f, err := root.OpenFile("etc/resolv.conf", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := root.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
-		return fmt.Errorf("creating resolv.conf: %w", err)
+		return fmt.Errorf("creating %s: %w", name, err)
 	}
 	_, err = f.Write(content)
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
 	if err != nil {
-		return fmt.Errorf("writing resolv.conf: %w", err)
+		return fmt.Errorf("writing %s: %w", name, err)
 	}
 	return nil
 }

@@ -640,7 +640,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 }
 
 // buildActorContainers prepares each of the actor's containers for the shared
-// micro-VM: it builds the OCI spec from the request, injects guest DNS,
+// micro-VM: it builds the OCI spec from the request, injects guest DNS and hosts,
 // and records the bundle rootfs that backs the overlay's RO lower. No host disk is
 // mounted here — the merged overlays are assembled in stageMergedRootfs after the
 // sandbox state is clean. Both RunWorkload and RestoreWorkload go through here.
@@ -655,7 +655,7 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 		}
 		// Compose the bundle rootfs from the node's cached image layers (an
 		// overlay mounted in this pod's namespace; no-op for bundles without an
-		// overlay spec). Everything downstream — the resolv.conf write below,
+		// overlay spec). Everything downstream — the /etc writes below,
 		// the bind into virtiofsd's shared dir, the read-only remount — then
 		// sees the composed tree, with host-side writes landing in the bundle's
 		// private upper. The guest still builds its own writable upper on top.
@@ -663,9 +663,9 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 			return nil, fmt.Errorf("while composing rootfs for %q: %w", cn, err)
 		}
 		bundleRootfs := filepath.Join(bundle, "rootfs")
-		// Set guest DNS before serving the rootfs over virtio-fs, on boot and restore.
-		if err := writeActorResolvConf(bundleRootfs); err != nil {
-			return nil, fmt.Errorf("while writing guest resolv.conf for %q: %w", cn, err)
+		// Set guest DNS and hosts before serving the rootfs over virtio-fs, on boot and restore.
+		if err := writeActorEtcFiles(bundleRootfs); err != nil {
+			return nil, fmt.Errorf("while writing guest /etc files for %q: %w", cn, err)
 		}
 		ctrs[i] = actorContainer{
 			name:         cn,

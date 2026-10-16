@@ -21,13 +21,18 @@ import (
 	"os"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/ocispec"
 )
 
-// writeActorResolvConf points the guest resolver at its fixed gateway address.
-func writeActorResolvConf(rootfs string) error {
+// writeActorEtcFiles points the guest resolver at its fixed gateway address
+// and writes the guest's /etc/hosts.
+func writeActorEtcFiles(rootfs string) error {
 	pod, err := os.ReadFile("/etc/resolv.conf")
 	if err != nil {
 		return fmt.Errorf("reading the worker pod resolv.conf: %w", err)
 	}
-	return actornet.WriteRootfsResolvConf(rootfs, actornet.SandboxResolvConf(actornet.ActorVethGateway, pod))
+	if err := actornet.WriteRootfsResolvConf(rootfs, actornet.SandboxResolvConf(actornet.ActorVethGateway, pod)); err != nil {
+		return err
+	}
+	return actornet.WriteRootfsHosts(rootfs, actornet.SandboxHosts(ocispec.Hostname, actornet.ActorVethIP))
 }
