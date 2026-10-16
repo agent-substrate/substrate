@@ -41,7 +41,7 @@ fit together.`,
 		// Nobody types these commands often enough to want shell completion.
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
-	root.AddCommand(pkiCommand(), sinkCommand())
+	root.AddCommand(pkiCommand(), sinkCommand(), loadCommand())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
