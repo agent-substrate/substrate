@@ -5998,7 +5998,7 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 			SchemaVersion: "v1",
 			Attributes: []*ateapipb.AttributeEntry{
 				{Key: "architecture", Value: "amd64"},
-				{Key: "gvisor_asset_hash", Value: "hash-a"},
+				{Key: "sandbox_bundle_hash", Value: "hash-a"},
 			},
 		},
 	}
@@ -6008,7 +6008,7 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 			SchemaVersion: "v1",
 			Attributes: []*ateapipb.AttributeEntry{
 				{Key: "architecture", Value: "amd64"},
-				{Key: "gvisor_asset_hash", Value: "hash-b"},
+				{Key: "sandbox_bundle_hash", Value: "hash-b"},
 			},
 		},
 	}

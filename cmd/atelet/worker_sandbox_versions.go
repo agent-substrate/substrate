@@ -19,7 +19,7 @@ package main
 //   - resolve: find the SandboxConfig of the pod's WorkerPool
 //   - plan: pick the config's versions this node can run
 //   - build: hash each version's assets and pause image digests into its
-//     sandbox_runtime_hash, and probe what a snapshot taken on the runtime
+//     sandbox_bundle_hash, and probe what a snapshot taken on the runtime
 //     must find again: the host CPU identity for microVM, the runsc
 //     binary's CPU features for gVisor
 //   - write: replace the file in the worker directory if its content changed
@@ -196,7 +196,7 @@ func recordForArch(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConf
 }
 
 // buildFile returns the file content naming the runtimes of the versions in
-// plan. A version whose runtime hash equals an earlier one's is left out, so
+// plan. A version whose bundle hash equals an earlier one's is left out, so
 // the file lists each runtime once. The default version's failure fails the
 // sync, which leaves the existing file in place until a retry succeeds. A
 // restorable version whose attributes cannot be built is left out; when the
@@ -219,7 +219,7 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan) 
 	seen := make(map[string]bool, len(plan.versions))
 	var incomplete error
 	for _, v := range plan.versions {
-		h, err := versionRuntimeHash(v.rec)
+		h, err := versionBundleHash(v.rec)
 		if err == nil && seen[h] {
 			continue
 		}
@@ -256,13 +256,13 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan) 
 }
 
 // versionAttrs returns the attributes of one version's runtime, whose
-// sandbox_runtime_hash is hash: architecture and the hash for every class,
+// sandbox_bundle_hash is hash: architecture and the hash for every class,
 // the host CPU identity for a microVM runtime, and the runsc binary's
 // cpu_features for a gVisor one.
 func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class v1alpha1.SandboxClass, rec *sandboxAssetsRecord, hash string) (sandboxruntimes.Attributes, error) {
 	attrs := sandboxruntimes.Attributes{
-		hardware.AttrArchitecture:       runtime.GOARCH,
-		hardware.AttrSandboxRuntimeHash: hash,
+		hardware.AttrArchitecture:      runtime.GOARCH,
+		hardware.AttrSandboxBundleHash: hash,
 	}
 	switch class {
 	case v1alpha1.SandboxClassMicroVM:
@@ -394,11 +394,11 @@ func runRunscCPUFeatures(ctx context.Context, runscPath string) ([]string, error
 	return strings.Split(printed, ","), nil
 }
 
-// versionRuntimeHash returns the runtime hash of one version. The CRD
-// requires every pause image to be pinned by digest, which is the digest the
-// image cache resolves the ref to, so the hash needs no pull. An unpinned one
-// is errPermanent: only a spec change fixes it.
-func versionRuntimeHash(rec *sandboxAssetsRecord) (string, error) {
+// versionBundleHash returns the bundle hash of one version. The CRD requires
+// every pause image to be pinned by digest, which is the digest the image
+// cache resolves the ref to, so the hash needs no pull. An unpinned one is
+// errPermanent: only a spec change fixes it.
+func versionBundleHash(rec *sandboxAssetsRecord) (string, error) {
 	var pauseDigest string
 	if rec.PauseImage != "" {
 		ref, err := name.NewDigest(rec.PauseImage)
@@ -407,13 +407,14 @@ func versionRuntimeHash(rec *sandboxAssetsRecord) (string, error) {
 		}
 		pauseDigest = ref.DigestStr()
 	}
-	return runtimeHash(rec, pauseDigest), nil
+	return bundleHash(rec, pauseDigest), nil
 }
 
-// runtimeHash is the sandbox_runtime_hash of a version: a sha256 over one
-// sorted "key=value" line per asset digest and pause image digest. Version names and URLs are left out, so the same binaries under
-// another name or in another bucket are the same runtime.
-func runtimeHash(rec *sandboxAssetsRecord, pauseDigest string) string {
+// bundleHash is the sandbox_bundle_hash of a version: a sha256 over one
+// sorted "key=value" line per asset digest and pause image digest. Version
+// names and URLs are left out, so the same binaries under another name or in
+// another bucket are the same runtime.
+func bundleHash(rec *sandboxAssetsRecord, pauseDigest string) string {
 	lines := make([]string, 0, len(rec.Assets)+1)
 	for name, a := range rec.Assets {
 		lines = append(lines, "asset/"+name+"="+a.SHA256)
@@ -460,7 +461,7 @@ func (s *workerSandboxSyncer) write(ctx context.Context, uid, config string, wan
 		slog.InfoContext(ctx, "Wrote worker sandbox runtimes",
 			slog.String("pod_uid", uid),
 			slog.String("sandbox_config", config),
-			slog.String("default_runtime_hash", want.DefaultRuntime[hardware.AttrSandboxRuntimeHash]),
+			slog.String("default_bundle_hash", want.DefaultRuntime[hardware.AttrSandboxBundleHash]),
 			slog.Int("restorable_runtimes", len(want.RestorableRuntimes)))
 	}
 	return nil

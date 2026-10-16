@@ -30,10 +30,10 @@ const (
 	// AttrArchitecture is the CPU architecture ("amd64", "arm64", etc.).
 	AttrArchitecture = "architecture"
 
-	// AttrSandboxRuntimeHash identifies the sandbox runtime binaries: a
+	// AttrSandboxBundleHash identifies the sandbox runtime bundle: a
 	// sha256 over a SandboxConfig version's asset digests and pause image
 	// digest, computed by atelet.
-	AttrSandboxRuntimeHash = "sandbox_runtime_hash"
+	AttrSandboxBundleHash = "sandbox_bundle_hash"
 
 	// AttrCPUFeatures is the set of CPU features `runsc cpu-features` reports
 	// for a gVisor runtime, encoded by EncodeCPUFeatures as a hex bitmask over
