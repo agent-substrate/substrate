@@ -62,6 +62,7 @@ SANDBOX_CLASS="gvisor"
 # since a bigger guest drags more page cache into every memory snapshot. Raise
 # it for RAM-consuming suites.
 ACTOR_MEMORY="256Mi"
+SWEPERF_ACTOR_MEMORY="4Gi"
 # Actor CPU limit (ActorTemplate resources.limits.cpu). The scheduler books
 # it against the worker's CPU capacity, so it bounds how many actors a worker
 # hosts at once as much as the memory limit does.
@@ -171,6 +172,7 @@ substitute() {
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
+      -e "s|\${SWEPERF_ACTOR_MEMORY}|${SWEPERF_ACTOR_MEMORY}|g" \
       -e "s|\${ACTOR_CPU}|${ACTOR_CPU}|g" \
       -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
       -e "s|\${STORAGE_CLASS_NAME}|${STORAGE_CLASS_NAME}|g" \
@@ -372,9 +374,11 @@ while [[ "$#" -gt 0 ]]; do
     --actor-memory)
       shift
       ACTOR_MEMORY="$1"
+      SWEPERF_ACTOR_MEMORY="$1"
       ;;
     --actor-memory=*)
       ACTOR_MEMORY="${1#*=}"
+      SWEPERF_ACTOR_MEMORY="${1#*=}"
       ;;
     --actor-cpu)
       shift
