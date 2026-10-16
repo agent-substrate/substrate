@@ -16,7 +16,6 @@ package apivalidation
 
 import (
 	"context"
-	"fmt"
 
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -105,15 +104,6 @@ func ValidateCustom_AssetFile_Sha256(_ context.Context, _ operation.Operation, f
 	return nil
 }
 
-// ValidateCustom_PromoteSnapshotRequest_Atespace rejects the golden atespace:
-// golden actors are never paused, so a paused checkpoint is never promoted to
-// a golden snapshot.
-func ValidateCustom_PromoteSnapshotRequest_Atespace(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if *value == resources.GoldenActorAtespace {
-		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf("atespace %q holds golden actors, which are never paused", *value))}
-	}
-	return nil
-}
 
 func ValidateCustom_ObjectStorage_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return validateSnapshotURI(fldPath, *value)

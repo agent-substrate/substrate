@@ -559,7 +559,6 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 	}
 	cloneInTeamA := cloneTag("team-a", tag)
 	cloneInTeamB := cloneTag("team-b", tag)
-	cloneGolden := cloneTag("team-a", &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-v1"})
 	createWithoutTag := cloneTag("team-a", nil)
 
 	tests := []struct {
@@ -638,14 +637,13 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 		{"bootstrap owner deletes tag", "bootstrap-owner", deleteTag, codes.OK},
 
 		// Cloning from a tag needs editor on the tag's atespace, whatever its
-		// scope; golden tags and actors created without a tag are unaffected.
+		// scope. An actor created without an explicit tag only needs its template.
 		{"editor clones tag", "editor", cloneInTeamA, codes.OK},
 		{"viewer cannot clone tag", "viewer", cloneInTeamA, codes.PermissionDenied},
 		{"editor of another atespace cannot clone tag", "outsider", cloneInTeamB, codes.PermissionDenied},
 		{"viewer of tag's atespace cannot clone tag into another atespace", "outsider-with-viewer", cloneInTeamB, codes.PermissionDenied},
 		{"global owner clones tag into another atespace", "global-owner", cloneInTeamB, codes.OK},
 		{"bootstrap owner clones tag", "bootstrap-owner", cloneInTeamA, codes.OK},
-		{"editor clones golden tag", "editor", cloneGolden, codes.OK},
 		{"editor creates actor without a tag", "editor", createWithoutTag, codes.OK},
 
 		// Only the egress gateway mints actor credentials; not even owners.

@@ -3874,11 +3874,8 @@ func (*RestoreResponse) Descriptor() ([]byte, []int) {
 
 type PromoteSnapshotRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Golden actors are never paused, so the golden atespace is rejected.
-	//
 	// +k8s:required
 	// +k8s:format=k8s-short-name
-	// +k8s:customValidation # not the golden atespace
 	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name

@@ -342,7 +342,7 @@ snapshotConfig:
 <location>/atespaces/<atespace>/tags/<tag uid>
 ```
 
-The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot — the golden tag lives in the reserved `ate-golden` atespace — under `gs://my-bucket/secret-agent/atespaces/ate-golden/tags/<tag uid>`.
+The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot under `gs://my-bucket/secret-agent/atespaces/team-a/tags/<tag uid>`.
 
 An actor takes a series of snapshots over its life, so it gets a prefix of its
 own and each snapshot sits below it. A tag holds exactly one, so the tag's
@@ -414,7 +414,7 @@ An `ActorTemplate` references its golden tag with the `ObjectRef` in
 `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned
 and ignored on input. Parse a URI only against the scheme above.
 
-An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor lives in the reserved `ate-golden` atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
+An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor and tag live in the template's atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
 
 ```yaml
 # Read-only on team-a's snapshots for this template, and nothing else.
@@ -528,15 +528,28 @@ pause, suspend, and resume using their own snapshots.
 for these templates.
 
 When an `ActorTemplate` is created with golden snapshots enabled:
-1. Substrate creates and resumes a temporary golden actor in `ate-golden`.
-2. It waits for readiness (or the warm-up interval), then suspends the actor.
-3. It creates a published tag named after the template UID, copying the snapshot into tag-owned storage.
+1. Substrate creates and resumes a temporary golden actor in the template's atespace, using the same atespace-scoped policies and storage grants as ordinary actors.
+2. It waits for readiness plus a 20-second warmup, then suspends the actor at the template's `preferredFidelity`. The extra interval is zero when every container has a wakeup probe, since Resume already waits for readiness.
+3. It creates a published tag named after the template UID, copying the snapshot into tag-owned storage in the same atespace. The golden actor uses that name too.
 4. It deletes the golden actor and records the tag reference in the template status.
 
-`CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag and records that snapshot on the new actor. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume. The default does not populate the caller-owned `sourceTag` field. Deleting the template collects its golden tag and any unfinished golden actor.
+Golden actors follow ordinary lifecycle and ingress policies and appear in
+Actor lists. Leave these resources to the controller: modifying or deleting
+them can interrupt Golden creation, and deleting a published Golden tag
+invalidates the template's recorded reference. `DeleteActorTemplate` collects
+its Golden tag and any unfinished Golden actor.
+
+Golden capture follows `preferredFidelity`. MEMORY preserves processes and memory;
+VOLUMES preserves startup data in mounted volumes and starts new processes on
+restore. ROOTFS preserves a micro-VM's filesystem and also starts new processes.
+
+`CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag and records that snapshot on the new actor. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume. The default does not populate the caller-owned `sourceTag` field.
 
 ### Resumption Lifecycle
-Once a template is `Ready`, creating an actor logically (via `kubectl ate create actor`) allows it to be resumed instantly on any free worker in the referenced `WorkerPool`. Substrate bypasses the standard container boot and restores the process directly from its last saved state.
+CreateActor fixes the Actor's initial snapshot source at creation. Resume places
+it on an eligible worker. A MEMORY snapshot restores saved processes; VOLUMES and
+ROOTFS snapshots restore their persisted data and start new processes. An Actor
+created without a snapshot boots from its template's images.
 
 ### Eviction
 A worker pod can go away while it hosts running actors: when its `WorkerPool` rolls to a new worker image or pod template, as in an [upgrade](upgrade.md), or scales down, when its node is drained, or when its Spot VM is reclaimed.

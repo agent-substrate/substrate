@@ -203,49 +203,6 @@ func TestSuspendActorWorkflow_SuspendedReturnsAsIs(t *testing.T) {
 	}
 }
 
-// TestEnsureMarkedSuspending_GoldenActor verifies the golden check runs after
-// the state check and before the SUSPENDING skip: an async suspend of a golden
-// actor in a state no suspend takes reports that state, and an async retry of a
-// golden actor's suspend is refused rather than finished as a pause. None of
-// these cases writes the store.
-func TestEnsureMarkedSuspending_GoldenActor(t *testing.T) {
-	goldenRef := resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: "golden"}
-	tests := []struct {
-		name  string
-		mode  suspendMode
-		state ateapipb.ActorState
-		// wantErr is a substring of the error, "" for none.
-		wantErr string
-	}{
-		{name: "async of a crashed actor reports its state", mode: suspendAsync, state: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantErr: "got: ACTOR_STATE_CRASHED"},
-		{name: "async of a deleting actor reports its state", mode: suspendAsync, state: ateapipb.ActorState_ACTOR_STATE_DELETING, wantErr: "got: ACTOR_STATE_DELETING"},
-		{name: "async of a running actor is refused", mode: suspendAsync, state: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantErr: "cannot be paused"},
-		{name: "async retry of a suspending actor is refused", mode: suspendAsync, state: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, wantErr: "cannot be paused"},
-		{name: "sync retry of a suspending actor skips", mode: suspendSync, state: ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			w := &ActorWorkflow{}
-			actor := &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: goldenRef.Atespace, Name: goldenRef.Name},
-				Status:   &ateapipb.ActorStatus{State: tt.state},
-			}
-			got, err := w.ensureMarkedSuspending(context.Background(), goldenRef, actor, &ateapipb.ActorTemplate{}, tt.mode)
-			if tt.wantErr == "" {
-				if err != nil {
-					t.Fatalf("ensureMarkedSuspending() error = %v, want nil", err)
-				}
-				if got != actor {
-					t.Errorf("ensureMarkedSuspending() = %v, want the actor as it is", got)
-				}
-				return
-			}
-			if apierror.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("ensureMarkedSuspending() error = %v, want FailedPrecondition containing %q", err, tt.wantErr)
-			}
-		})
-	}
-}
 
 // TestSuspendActor_MarkedSuspending_StateMatrix verifies the suspend edge's
 // state gating against every actor state, in either mode: RUNNING takes the
@@ -860,36 +817,6 @@ func TestSuspendActor_Finalized_ReleasesOnlyOwnWorker(t *testing.T) {
 	}
 }
 
-// TestPreferredFidelity verifies golden actors always commit Full — new
-// actors resume the golden snapshot Full, so the template's preferredFidelity must not
-// thin it down to a data-only capture.
-func TestPreferredFidelity(t *testing.T) {
-	tmpl := func(fidelity ateapipb.SnapshotFidelity) *ateapipb.ActorTemplate {
-		return &ateapipb.ActorTemplate{
-			SnapshotConfig: &ateapipb.SnapshotConfig{PreferredFidelity: fidelity},
-		}
-	}
-	fullScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-	dataScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
-	tests := []struct {
-		name     string
-		atespace string
-		fidelity ateapipb.SnapshotFidelity
-		want     ateapipb.SnapshotFidelity
-	}{
-		{"golden actor ignores Data fidelity", resources.GoldenActorAtespace, dataScope, fullScope},
-		{"golden actor keeps Full fidelity", resources.GoldenActorAtespace, fullScope, fullScope},
-		{"regular actor uses Data fidelity", "team-a", dataScope, dataScope},
-		{"regular actor uses Full fidelity", "team-a", fullScope, fullScope},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := preferredFidelity(tc.atespace, tmpl(tc.fidelity)); got != tc.want {
-				t.Errorf("preferredFidelity(%q, fidelity=%s) = %s, want %s", tc.atespace, tc.fidelity, got, tc.want)
-			}
-		})
-	}
-}
 
 // TestSuspendActor_Finalized_MissingDurableSnapshotClearsAssignment verifies that if the
 // latest generation snapshot entry is missing when the suspend finalizes, the
@@ -1106,15 +1033,6 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 			status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING},
 			sync:   rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_DELETING}),
 			async:  rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_DELETING}),
-		},
-		{
-			// A golden actor commits MEMORY whatever the template prefers, and
-			// cannot be paused at all.
-			name:     "golden RUNNING",
-			atespace: resources.GoldenActorAtespace,
-			status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, AssignedNode: node, WorkerAssignment: wireTestAssignment()},
-			sync:     suspendOutcome{code: codes.OK, atelet: ateletCall{checkpoints: 1, fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, uploadMode: immediate, object: true}, state: suspended, generation: 1, snapshots: []snapshotOutcome{{1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", completed}}},
-			async:    rejected(suspendOutcome{state: ateapipb.ActorState_ACTOR_STATE_RUNNING, assignedNode: node, workerHeld: true}),
 		},
 	}
 

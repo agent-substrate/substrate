@@ -108,11 +108,6 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		if err != nil {
 			return nil, err
 		}
-		if inActor.GetSourceTag() == nil {
-			if err := validateGoldenSnapshotFidelity(sourceTag.GetStatus().GetSnapshot()); err != nil {
-				return nil, err
-			}
-		}
 	}
 
 	atespace := inActor.GetMetadata().GetAtespace()
