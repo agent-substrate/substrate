@@ -185,6 +185,63 @@ def test_type(test: dict[str, Any]) -> str:
     return test["type"]
 
 
+def _json_object(raw: str, what: str) -> dict[str, Any]:
+    """Parses raw as a JSON object, naming `what` in the error otherwise."""
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"{what} is not valid JSON: {e}") from e
+    if not isinstance(value, dict):
+        raise ValueError(f"{what} must be a JSON object")
+    return value
+
+
+def run_metadata() -> dict[str, Any]:
+    """Free-form run facts handed to the runner as --metadata.
+
+    Read per test, after apply_target_cluster has reset os.environ;
+    BENCHMARK_METADATA survives that reset because it is part of the startup
+    env (_ORIG_ENV).
+    """
+    md: dict[str, Any] = {
+        k.lower(): os.environ[k]
+        for k in ("CLUSTER_NAME", "CLUSTER_LOCATION", "PROJECT_ID")
+        if os.environ.get(k)
+    }
+    raw = os.environ.get("BENCHMARK_METADATA")
+    if raw:
+        md.update(_json_object(raw, "BENCHMARK_METADATA"))
+    return md
+
+
+def split_metadata_flag(test: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
+    """Separates a test's own --metadata from the rest of its flags.
+
+    Accepts `--metadata <json>` and `--metadata=<json>`. With more than one,
+    later keys win. Raises ValueError when the value is missing or is not a
+    JSON object, rather than dropping it.
+    """
+    name = test.get("name")
+    rest: list[Any] = []
+    md: dict[str, Any] = {}
+    flags = list(test.get("flags", []))
+    i = 0
+    while i < len(flags):
+        flag = str(flags[i])
+        if flag == "--metadata":
+            if i + 1 >= len(flags):
+                raise ValueError(f"test {name!r}: --metadata needs a JSON value")
+            raw, i = str(flags[i + 1]), i + 2
+        elif flag.startswith("--metadata="):
+            raw, i = flag.split("=", 1)[1], i + 1
+        else:
+            rest.append(flags[i])
+            i += 1
+            continue
+        md.update(_json_object(raw, f"test {name!r}: --metadata"))
+    return rest, md
+
+
 def wait_for_docker(timeout: int = 120) -> None:
     print("Waiting for DIND sidecar...", flush=True)
     start = time.time()
@@ -326,6 +383,9 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
                 f"(want one of {list(TEST_TYPES)})"
             )
         TYPES[ttype].validate(t)
+        if ttype == "locust":
+            # A malformed --metadata fails here rather than mid-sweep.
+            split_metadata_flag(t)
         isolate_block(t)
 
 
@@ -337,8 +397,21 @@ def substrate_args(test: dict[str, Any]) -> list[str]:
     return [*test.get("ateArgs", []), *isolate_install_args(test)]
 
 
+# ate-api-server enforces authorization, and the runner Job calls it with its
+# pod certificate as BENCHMARK_RUNNER_PRINCIPAL. Each test reinstalls
+# Substrate, so making the runner a bootstrap owner on every install grants it
+# global owner for exactly the life of that install. kubectl-ate's principal
+# stays an owner for the workload and teardown steps.
+BENCHMARK_RUNNER_PRINCIPAL = "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner"
+CLIENT_PRINCIPAL = "system:serviceaccount:ate-system:ate-client"
+
+
 def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
-    run(["hack/install-ate.sh", "--deploy-ate-system", *(str(a) for a in ate_args)])
+    env = {
+        **os.environ,
+        "ATE_API_AUTHZ_BOOTSTRAP_OWNERS": f"{CLIENT_PRINCIPAL},{BENCHMARK_RUNNER_PRINCIPAL}",
+    }
+    run(["hack/install-ate.sh", "--deploy-ate-system", *(str(a) for a in ate_args)], env=env)
 
 
 def teardown_substrate() -> None:
@@ -366,6 +439,7 @@ def deploy_workloads(
     wait_timeout_secs: int | str = "",
     worker_memory: str = "",
     fake_atelet_args: Iterable[str] = (),
+    actor_cpu: str = "",
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -379,6 +453,11 @@ def deploy_workloads(
     # minimum); RAM-consuming suites set actorMemory in tests.yaml.
     if actor_memory:
         cmd += ["--actor-memory", actor_memory]
+    # Empty keeps the default in workloads/deploy.sh (1 CPU). The scheduler
+    # books the limit against worker CPU capacity, so dense suites set
+    # actorCPU in tests.yaml to fit more actors per worker.
+    if actor_cpu:
+        cmd += ["--actor-cpu", actor_cpu]
     # Empty leaves the worker pods unsized; set workerMemory in tests.yaml to
     # control how many workers the scheduler packs onto a node.
     if worker_memory:
@@ -416,7 +495,14 @@ def run_test(
     mod = TYPES[test_type(test)]
     tmpl = mod.job_tmpl(manifests_dir)
     subs.update(mod.job_subs(test))
-    manifest = render_template(tmpl, subs, test.get("flags", []))
+    flags = list(test.get("flags", []))
+    # Only the locust runner knows --metadata. It keeps only the last one it
+    # is given, so a test's own --metadata is folded into a single merged
+    # flag; the test's keys win over the run's.
+    if test_type(test) == "locust":
+        flags, own = split_metadata_flag(test)
+        flags += ["--metadata", json.dumps({**run_metadata(), **own})]
+    manifest = render_template(tmpl, subs, flags)
     wait_for_no_active_runners()
     print(f"Submitting Job {job}", flush=True)
     subprocess.run(
@@ -498,6 +584,8 @@ def main() -> None:
     print(f"Running {len(tests)} test(s)", flush=True)
     try:
         validate_and_normalize_tests(tests)
+        # Checks BENCHMARK_METADATA only; cluster vars may not be set yet.
+        run_metadata()
     except ValueError as e:
         sys.exit(str(e))
 
@@ -566,6 +654,7 @@ def main() -> None:
                     test.get("workerWaitTimeout", ""),
                     test.get("workerMemory", ""),
                     isolate_workload_args(test),
+                    test.get("actorCPU", ""),
                 )
                 try:
                     status = run_test(

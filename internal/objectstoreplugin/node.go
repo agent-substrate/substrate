@@ -25,13 +25,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+	"slices"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/objectstorage"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -47,17 +47,23 @@ type NodePlugin struct {
 	objectstorev1.UnimplementedNodeProviderServer
 
 	gcsClient objectstorage.ObjectStorage
+	uploader  *objectstorage.Uploader
 	// root confines every local path a caller names.
 	root string
 }
 
 // NewNodePlugin returns a NodePlugin that reads and writes local files only
-// below root.
-func NewNodePlugin(gcsClient objectstorage.ObjectStorage, root string) (*NodePlugin, error) {
+// below root. All upload requests share uploadMemory bytes of reservations for
+// compression and backend buffers.
+func NewNodePlugin(gcsClient objectstorage.ObjectStorage, root string, uploadMemory int64) (*NodePlugin, error) {
 	if !filepath.IsAbs(root) {
 		return nil, fmt.Errorf("root %q is not an absolute path", root)
 	}
-	return &NodePlugin{gcsClient: gcsClient, root: filepath.Clean(root)}, nil
+	uploader, err := objectstorage.NewUploader(gcsClient, uploadMemory)
+	if err != nil {
+		return nil, err
+	}
+	return &NodePlugin{gcsClient: gcsClient, uploader: uploader, root: filepath.Clean(root)}, nil
 }
 
 // FetchSnapshot downloads the requested snapshot files into write_path.
@@ -119,37 +125,46 @@ func (p *NodePlugin) UploadSnapshot(ctx context.Context, req *objectstorev1.Uplo
 	}
 	defer root.Close()
 
+	upload := func(ctx context.Context, fileName string) error {
+		local, err := root.Open(fileName)
+		if err != nil {
+			return fmt.Errorf("while opening %s in snapshot directory: %w", fileName, err)
+		}
+		defer local.Close()
+		info, err := local.Stat()
+		if err != nil {
+			return fmt.Errorf("while inspecting %s in snapshot directory: %w", fileName, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("snapshot file %s is not a regular file", fileName)
+		}
+		if fileName == manifestFile {
+			return p.uploadManifest(ctx, uri, local)
+		}
+		objectURI, err := uri.ObjectURI(fileName + ".zstd")
+		if err != nil {
+			return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
+		}
+		if err := p.uploader.SendFile(ctx, objectURI, local); err != nil {
+			return fmt.Errorf("while uploading %s to GCS: %w", fileName, err)
+		}
+		return nil
+	}
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range req.GetFiles() {
-		g.Go(func() error {
-			local, err := root.Open(fileName)
-			if err != nil {
-				return fmt.Errorf("while opening %s in snapshot directory: %w", fileName, err)
-			}
-			defer local.Close()
-			info, err := local.Stat()
-			if err != nil {
-				return fmt.Errorf("while inspecting %s in snapshot directory: %w", fileName, err)
-			}
-			if !info.Mode().IsRegular() {
-				return fmt.Errorf("snapshot file %s is not a regular file", fileName)
-			}
-			if fileName == manifestFile {
-				return p.uploadManifest(gCtx, uri, local)
-			}
-
-			objectURI, err := uri.ObjectURI(fileName + ".zstd")
-			if err != nil {
-				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
-			}
-			if err := objectstorage.SendFileToGCSWithZstd(gCtx, p.gcsClient, objectURI, local); err != nil {
-				return fmt.Errorf("while uploading %s to GCS: %w", fileName, err)
-			}
-			return nil
-		})
+		if fileName != manifestFile {
+			g.Go(func() error { return upload(gCtx, fileName) })
+		}
 	}
 	if err := g.Wait(); err != nil {
 		return nil, toStatus(err)
+	}
+	// A manifest commits the snapshot only after every requested data file has
+	// succeeded. Use ctx: errgroup cancels gCtx when Wait returns.
+	if slices.Contains(req.GetFiles(), manifestFile) {
+		if err := upload(ctx, manifestFile); err != nil {
+			return nil, toStatus(err)
+		}
 	}
 	return &objectstorev1.UploadSnapshotResponse{}, nil
 }
@@ -172,15 +187,11 @@ func (p *NodePlugin) fetchManifest(ctx context.Context, uri resources.SnapshotUR
 
 // uploadManifest uploads the manifest from local uncompressed.
 func (p *NodePlugin) uploadManifest(ctx context.Context, uri resources.SnapshotURI, local *os.File) error {
-	manifest, err := io.ReadAll(local)
-	if err != nil {
-		return fmt.Errorf("while reading %s in snapshot directory: %w", manifestFile, err)
-	}
 	manifestURI, err := uri.ObjectURI(manifestFile)
 	if err != nil {
 		return fmt.Errorf("while addressing snapshot manifest in GCS: %w", err)
 	}
-	if err := objectstorage.SendBytesToGCS(ctx, p.gcsClient, manifestURI, manifest); err != nil {
+	if err := p.uploader.Send(ctx, manifestURI, local); err != nil {
 		return fmt.Errorf("while uploading snapshot manifest: %w", err)
 	}
 	return nil

@@ -23,10 +23,10 @@ import (
 	"testing"
 	"time"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	atefake "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
-	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	atefake "go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
+	"go.ate.dev/substrate/pkg/client/informers/externalversions"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
@@ -552,6 +552,24 @@ func TestSyncer_CreateWorker_DualStack(t *testing.T) {
 	mustReconcile(t, ctx, s, key)
 	if got, want := api.get(testPodUID).GetIps(), []string{"fd00::1", "10.0.0.1"}; !slices.Equal(got, want) {
 		t.Fatalf("worker ips = %q, want %q", got, want)
+	}
+}
+
+// atenet-router requires atunnel's certificate to carry the SPIFFE ID the
+// worker registers with.
+func TestSyncer_CreateWorker_SPIFFEID(t *testing.T) {
+	ctx := context.Background()
+	ns, podName, poolName := "ns-syncer-sa", "worker-unit-sa", "pool-sa"
+	api := newFakeControl()
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	pod := workerPod(ns, podName, poolName, testPodUID, "10.0.0.1")
+	pod.Spec.ServiceAccountName = "substrate-worker"
+	key := seedPod(t, pods, pod)
+
+	mustReconcile(t, ctx, s, key)
+	want := "spiffe://cluster.local/ns/ns-syncer-sa/sa/substrate-worker"
+	if got := api.get(testPodUID).GetWorkerSpiffeId(); got != want {
+		t.Fatalf("worker SPIFFE ID = %q, want %q", got, want)
 	}
 }
 

@@ -58,7 +58,7 @@ func AteletOTLPSocketPath() string {
 
 // WorkersDir is the parent of every per-worker directory, so listing it is how
 // a scraper with no prior knowledge discovers the node's workers. atelet
-// creates WorkerPath(podUID) once it writes the pod's sandbox versions file and
+// creates WorkerPath(podUID) once it writes the pod's sandbox runtimes file and
 // removes it when the pod is deleted; the worker also MkdirAlls it at boot. A
 // directory may exist before its worker listens on its socket.
 func WorkersDir() string {
@@ -76,11 +76,20 @@ func WorkerSocketPath(podUID string) string {
 	)
 }
 
-// SandboxVersionsFileName is the base name of the file in WorkerPath(podUID)
-// where atelet keeps the sandbox versions of a worker's pool, a
-// sandboxversions.File. A runtime it lists may not have its assets on the
+// SandboxRuntimesFileName is the base name of the file in WorkerPath(podUID)
+// where atelet keeps the sandbox runtimes of a worker's pool, a
+// sandboxruntimes.File. A runtime it lists may not have its assets on the
 // node yet.
-const SandboxVersionsFileName = "sandbox-versions.json"
+const SandboxRuntimesFileName = "sandbox-runtimes.json"
+
+// WorkerSandboxRuntimesPath is the path of the sandbox runtimes file atelet
+// writes for the worker pod with the given UID.
+func WorkerSandboxRuntimesPath(podUID string) string {
+	return filepath.Join(
+		WorkerPath(podUID),
+		SandboxRuntimesFileName,
+	)
+}
 
 // ActorNetNSName names an actor's sandbox network namespace.
 func ActorNetNSName(actorUID string) string {

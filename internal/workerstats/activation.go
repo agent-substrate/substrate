@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 // Activation is the usage state of one activation of an actor: one Run or

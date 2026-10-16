@@ -1958,6 +1958,14 @@ type WorkerServiceClient interface {
 	// on behalf of a particular actor.
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// RequestActorSuspend, naming the Worker its caller proved itself to be.
+	// The control plane mints only for the Worker that the Actor is assigned
+	// to, and only to an atelet on that Worker's node. A request from any
+	// other node or Worker gets NotFound; one from the assigned Worker with a
+	// stale actor_uid gets Aborted. Unlike MintWorkerActorJwt, a paused Actor
+	// gets NotFound, since it has no Worker to bind the certificate to.
 	MintWorkerActorCertificate(ctx context.Context, in *MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*MintWorkerActorCertificateResponse, error)
 	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
 	// acting on behalf of a particular actor: the JWT counterpart of
@@ -1990,18 +1998,16 @@ type WorkerServiceClient interface {
 	// retries a suspend it had already been granted therefore sees a failure
 	// rather than a repeat of its success.
 	RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error)
-	// ReportActorSnapshotState records which snapshots of an Actor the calling
-	// atelet holds on its node, and which of them are durable. Only atelet can
-	// observe when an upload finishes or a local copy is deleted, and the
-	// control plane needs both to decide where the Actor can resume.
+	// ReportActorSnapshotState reports an Actor's snapshot state on the caller's
+	// node. The control plane records two facts from it: an upload finished, and
+	// atelet detached the Actor from the node. Only atelet observes either.
 	//
-	// Only atelet should call this, with its own client certificate. The
-	// control plane serves it only for an Actor on the caller's node.
-	// Idempotent: each report carries the whole state and replaces the previous
-	// one. Returns ABORTED while another operation holds the Actor; retry.
-	//
-	// TODO(#2570): not served yet. Every call returns UNIMPLEMENTED until the
-	// handler lands.
+	// atelet calls this with its own client certificate, for an Actor on its
+	// node. Each report carries the whole state, so repeating one is safe.
+	// Returns ABORTED while another operation is changing the Actor; retry.
+	// Returns NOT_FOUND once the Actor is gone or no longer on the caller's
+	// node. Returns FAILED_PRECONDITION or INVALID_ARGUMENT when the report
+	// conflicts with the record; don't retry.
 	ReportActorSnapshotState(ctx context.Context, in *ReportActorSnapshotStateRequest, opts ...grpc.CallOption) (*ReportActorSnapshotStateResponse, error)
 }
 
@@ -2087,6 +2093,14 @@ type WorkerServiceServer interface {
 	// on behalf of a particular actor.
 	//
 	// SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// RequestActorSuspend, naming the Worker its caller proved itself to be.
+	// The control plane mints only for the Worker that the Actor is assigned
+	// to, and only to an atelet on that Worker's node. A request from any
+	// other node or Worker gets NotFound; one from the assigned Worker with a
+	// stale actor_uid gets Aborted. Unlike MintWorkerActorJwt, a paused Actor
+	// gets NotFound, since it has no Worker to bind the certificate to.
 	MintWorkerActorCertificate(context.Context, *MintWorkerActorCertificateRequest) (*MintWorkerActorCertificateResponse, error)
 	// MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
 	// acting on behalf of a particular actor: the JWT counterpart of
@@ -2119,18 +2133,16 @@ type WorkerServiceServer interface {
 	// retries a suspend it had already been granted therefore sees a failure
 	// rather than a repeat of its success.
 	RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error)
-	// ReportActorSnapshotState records which snapshots of an Actor the calling
-	// atelet holds on its node, and which of them are durable. Only atelet can
-	// observe when an upload finishes or a local copy is deleted, and the
-	// control plane needs both to decide where the Actor can resume.
+	// ReportActorSnapshotState reports an Actor's snapshot state on the caller's
+	// node. The control plane records two facts from it: an upload finished, and
+	// atelet detached the Actor from the node. Only atelet observes either.
 	//
-	// Only atelet should call this, with its own client certificate. The
-	// control plane serves it only for an Actor on the caller's node.
-	// Idempotent: each report carries the whole state and replaces the previous
-	// one. Returns ABORTED while another operation holds the Actor; retry.
-	//
-	// TODO(#2570): not served yet. Every call returns UNIMPLEMENTED until the
-	// handler lands.
+	// atelet calls this with its own client certificate, for an Actor on its
+	// node. Each report carries the whole state, so repeating one is safe.
+	// Returns ABORTED while another operation is changing the Actor; retry.
+	// Returns NOT_FOUND once the Actor is gone or no longer on the caller's
+	// node. Returns FAILED_PRECONDITION or INVALID_ARGUMENT when the report
+	// conflicts with the record; don't retry.
 	ReportActorSnapshotState(context.Context, *ReportActorSnapshotStateRequest) (*ReportActorSnapshotStateResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }

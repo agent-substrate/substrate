@@ -20,112 +20,33 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
+	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 )
 
-// TestHostingNodeAfterWorkerRelease drives each workflow that releases an
-// actor's worker before it rewrites the actor's status into the window
-// between the two, by failing the second write. The status still names the
-// worker there, and keeps doing so until the workflow is retried. The worker's
-// node must not count as hosting the actor in that window, nor once the worker
-// hosts another actor.
+// TestHostingNodeAfterWorkerRelease drives each of ReleaseWindowWorkflows into
+// the window between releasing the actor's worker and rewriting its status, by
+// failing the second write. The status still names the worker there, and keeps
+// doing so until the workflow is retried. The worker's node must not count as
+// hosting the actor in that window, nor once the worker hosts another actor.
 func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 	// The worker is the one wireTestAssignment names, so a pause or suspend
 	// reaches newWireCaptureWorkflow's fake atelet on its node.
 	wa := wireTestAssignment()
 	node := wa.GetNodeName()
-	gvisorTemplate := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
-	tests := []struct {
-		name  string
-		state ateapipb.ActorState
-		// snapshot, when set, is the actor's latest snapshot.
-		snapshot func(t *testing.T) *ateapipb.Snapshot
-		// workerClass is the worker's sandbox class. A template asks for
-		// gVisor, so "microvm" makes the worker ineligible.
-		workerClass string
-		// finalize runs the workflow or step that releases the worker and
-		// then records the actor's new state against st.
-		finalize func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, actor *ateapipb.Actor) error
-		// wantRetry is the code of the retried finalize against the real
-		// store.
-		wantRetry codes.Code
-		// wantFinalState and wantFinalNode are the actor's state and
-		// HostingNode once the retry commits.
-		wantFinalState ateapipb.ActorState
-		wantFinalNode  string
-	}{
-		{
-			name:  "pause",
-			state: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-			snapshot: func(*testing.T) *ateapipb.Snapshot {
-				// A pause in progress: node-local and not yet captured.
-				return newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-snap-1", "")
-			},
-			workerClass: "gvisor",
-			// The actor is seeded SUSPENDING, so the pause skips its mark step
-			// and its first actor update is the finalize commit.
-			finalize: func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapipb.Actor) error {
-				w, _ := newWireCaptureWorkflow(t, st)
-				_, err := w.PauseActor(ctx, actorRef)
-				return err
-			},
-			wantRetry:      codes.OK,
-			wantFinalState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			// Paused: the node holding the local snapshot.
-			wantFinalNode: node,
-		},
-		{
-			name:  "suspend",
-			state: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-			snapshot: func(t *testing.T) *ateapipb.Snapshot {
-				return newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
-			},
-			workerClass: "gvisor",
-			// As for the pause, the finalize commit is the first actor update.
-			finalize: func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapipb.Actor) error {
-				w, _ := newWireCaptureWorkflow(t, st)
-				_, err := w.SuspendActor(ctx, actorRef)
-				return err
-			},
-			wantRetry:      codes.OK,
-			wantFinalState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-		},
-		{
-			name:        "crash",
-			state:       ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			workerClass: "gvisor",
-			finalize: func(_ *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapipb.Actor) error {
-				return crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash")
-			},
-			wantRetry:      codes.OK,
-			wantFinalState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
-		},
-		{
-			// A resume that finds its worker ineligible releases it, then
-			// crashes the actor. The retry finds the worker no longer hosts
-			// the actor and crashes it.
-			name:        "resume onto an ineligible worker",
-			state:       ateapipb.ActorState_ACTOR_STATE_RESUMING,
-			workerClass: "microvm",
-			finalize: func(_ *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, actor *ateapipb.Actor) error {
-				_, err := (&ActorWorkflow{store: st, scheduler: scheduling.New(nil)}).validateAssignedWorker(ctx, actorRef, actor, gvisorTemplate)
-				return err
-			},
-			wantRetry:      codes.Aborted,
-			wantFinalState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
-		},
+	// wantFinalNode is HostingNode once the retry commits, by workflow name.
+	wantFinalNode := map[string]string{
+		// Paused: the node holding the local snapshot.
+		"pause": node,
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tc := range ReleaseWindowWorkflows() {
+		t.Run(tc.Name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
 			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation})
@@ -138,19 +59,19 @@ func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 				WorkerPod:       wa.GetWorkerPod(),
 				WorkerPodUid:    wa.GetWorkerPodUid(),
 				NodeName:        node,
-				SandboxClass:    tc.workerClass,
+				SandboxClass:    tc.WorkerClass,
 				Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
 			}); err != nil {
 				t.Fatalf("CreateWorker: %v", err)
 			}
 			status := &ateapipb.ActorStatus{
-				State:                  tc.state,
+				State:                  tc.State,
 				AssignedNode:           node,
 				WorkerAssignment:       wireTestAssignment(),
 				LastAssignedGeneration: 1,
 			}
-			if tc.snapshot != nil {
-				status.Snapshots = []*ateapipb.Snapshot{tc.snapshot(t)}
+			if tc.Snapshot != nil {
+				status.Snapshots = []*ateapipb.Snapshot{tc.Snapshot(t)}
 			}
 			created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
@@ -184,15 +105,15 @@ func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 			}
 
 			// The release commits; recording the new state fails.
-			if err := tc.finalize(t, ctx, conflictingUpdateStore{Interface: persistence}, actorRef, actor); err == nil {
+			if err := tc.Finalize(t, ctx, conflictingUpdateStore{Interface: persistence}, actorRef, actor); err == nil {
 				t.Fatal("finalize succeeded through a store that fails every actor update")
 			}
 			if _, err := persistence.GetWorkerAssignment(ctx, workerName, uid); !errors.Is(err, store.ErrNotFound) {
 				t.Fatalf("worker assignment after release: err %v, want ErrNotFound", err)
 			}
 			got, actor = hostingNode("released, status not finalized")
-			if actor.GetStatus().GetState() != tc.state || actor.GetStatus().GetWorkerAssignment() == nil {
-				t.Fatalf("actor after the failed update: state %v, worker assignment %v; want %v naming the worker", actor.GetStatus().GetState(), actor.GetStatus().GetWorkerAssignment(), tc.state)
+			if actor.GetStatus().GetState() != tc.State || actor.GetStatus().GetWorkerAssignment() == nil {
+				t.Fatalf("actor after the failed update: state %v, worker assignment %v; want %v naming the worker", actor.GetStatus().GetState(), actor.GetStatus().GetWorkerAssignment(), tc.State)
 			}
 			if got != "" {
 				t.Errorf("HostingNode after the worker was released = %q, want \"\"", got)
@@ -208,15 +129,15 @@ func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 			}
 
 			// A retry records the new state.
-			if err := tc.finalize(t, ctx, persistence, actorRef, actor); apierror.Code(err) != tc.wantRetry {
-				t.Fatalf("finalize retry: code %v, want %v (err: %v)", apierror.Code(err), tc.wantRetry, err)
+			if err := tc.Finalize(t, ctx, persistence, actorRef, actor); apierror.Code(err) != tc.WantRetry {
+				t.Fatalf("finalize retry: code %v, want %v (err: %v)", apierror.Code(err), tc.WantRetry, err)
 			}
 			got, actor = hostingNode("finalized")
-			if actor.GetStatus().GetState() != tc.wantFinalState {
-				t.Errorf("actor state once finalized = %v, want %v", actor.GetStatus().GetState(), tc.wantFinalState)
+			if actor.GetStatus().GetState() != tc.WantFinalState {
+				t.Errorf("actor state once finalized = %v, want %v", actor.GetStatus().GetState(), tc.WantFinalState)
 			}
-			if got != tc.wantFinalNode {
-				t.Errorf("HostingNode once finalized = %q, want %q", got, tc.wantFinalNode)
+			if want := wantFinalNode[tc.Name]; got != want {
+				t.Errorf("HostingNode once finalized = %q, want %q", got, want)
 			}
 		})
 	}

@@ -19,9 +19,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -142,7 +144,8 @@ func waitForWorkerRemoved(ctx context.Context, t *testing.T, clients *e2e.Client
 
 // TestGracefulWorkerTerminationSuspend exercises the case where a worker pod is
 // deleted (evicted), and while the container is in its SIGTERM shutdown phase,
-// we initiate a suspend. Suspend should succeed.
+// we initiate a suspend. Suspend either completes before worker deletion crashes
+// the actor, or reports that concurrent crash without overwriting it.
 func TestGracefulWorkerTerminationSuspend(t *testing.T) {
 	t.Parallel()
 	nsObj := e2e.CreateNamespace(t)
@@ -195,6 +198,10 @@ func TestGracefulWorkerTerminationSuspend(t *testing.T) {
 		t.Fatalf("running actor has no bound worker pod: ns=%q name=%q", podNS, podName)
 	}
 	t.Logf("Actor %q bound to worker pod %s/%s", actorID, podNS, podName)
+	previousSnapshotURI := durableSnapshotURI(running.GetStatus())
+	if previousSnapshotURI == "" {
+		t.Fatal("running actor has no completed durable snapshot")
+	}
 
 	// Evict the worker pod. The kubelet sends SIGTERM to worker, which propagates
 	// it into the sandbox; the container hangs for 30s.
@@ -207,10 +214,20 @@ func TestGracefulWorkerTerminationSuspend(t *testing.T) {
 
 	// Suspend the actor.
 	t.Logf("Suspending actor %q during termination", actorID)
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+	_, suspendErr := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-	}); err != nil {
-		t.Fatalf("failed to suspend Actor: %v", err)
+	})
+	wantState := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	switch status.Code(suspendErr) {
+	case codes.OK:
+	case codes.FailedPrecondition, codes.Aborted:
+		// Worker deletion can crash the actor before finalize reads it, or
+		// after that read but before its version-guarded update. Both must
+		// preserve the crash and report failure instead of returning success.
+		wantState = ateapipb.ActorState_ACTOR_STATE_CRASHED
+		t.Logf("Suspend reported concurrent worker deletion: %v", suspendErr)
+	default:
+		t.Fatalf("failed to suspend Actor: %v", suspendErr)
 	}
 
 	// The worker record must eventually be removed once the pod is gone.
@@ -218,8 +235,8 @@ func TestGracefulWorkerTerminationSuspend(t *testing.T) {
 		t.Fatalf("worker %s not removed after pod deletion: %v", podName, err)
 	}
 
-	// Verify the actor lands in ACTOR_STATE_SUSPENDED
-	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	// The RPC result and persisted state must agree after the worker is gone.
+	waitForActorState(ctx, t, clients, actorID, wantState)
 
 	// Verify the pod assignment was cleared.
 	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
@@ -230,5 +247,16 @@ func TestGracefulWorkerTerminationSuspend(t *testing.T) {
 	}
 	if pod := actor.GetStatus().GetWorkerAssignment().GetWorkerPod(); pod != "" {
 		t.Errorf("actor still bound to worker pod %q, expected empty", pod)
+	}
+	if got := durableSnapshotURI(actor.GetStatus()); got == "" {
+		t.Error("actor lost its completed durable snapshot")
+	} else if wantState == ateapipb.ActorState_ACTOR_STATE_CRASHED && got != previousSnapshotURI {
+		t.Errorf("crashed actor snapshot URI = %q, want previous snapshot %q", got, previousSnapshotURI)
+	}
+	if wantState == ateapipb.ActorState_ACTOR_STATE_CRASHED && actor.GetStatus().GetCrash().GetMessage() == "" {
+		t.Error("crashed actor lost its crash reason")
+	}
+	if wantState == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && actor.GetStatus().GetCrash() != nil {
+		t.Errorf("successful suspend retained a crash record: %v", actor.GetStatus().GetCrash())
 	}
 }

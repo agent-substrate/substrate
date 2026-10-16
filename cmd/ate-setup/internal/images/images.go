@@ -28,7 +28,7 @@ import (
 
 // ModulePath is this repository's module path. A ko:// reference is it joined
 // with a component's package.
-const ModulePath = "github.com/agent-substrate/substrate"
+const ModulePath = "go.ate.dev/substrate"
 
 // Components is every package the installer can deploy a published image for,
 // as an import path within the module.

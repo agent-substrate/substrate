@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -74,7 +74,7 @@ func TestMicroVMClockAfterDelayedRestore(t *testing.T) {
 	t.Logf("clock evidence host_utc_after_delay=%s", time.Now().UTC().Format(time.RFC3339Nano))
 
 	target, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
-		Name: "clock-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Name: "clock-origin", ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args: []string{"http", "--body=delayed restore clock"}, Port: 8080, TLSPort: 8443,
 	}, true)
 	logOriginCertificateValidity(t, ctx, target, rootCA, suspendBoundary)

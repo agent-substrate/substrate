@@ -17,7 +17,7 @@ package v1alpha1
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/agent-substrate/substrate/pkg/sandboxclass"
+	"go.ate.dev/substrate/pkg/sandboxclass"
 )
 
 // SandboxClass selects the sandbox runtime family. It is shared by WorkerPool

@@ -15,19 +15,21 @@
 package workerservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
-	"github.com/agent-substrate/substrate/internal/actoridjwt"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
+	"go.ate.dev/substrate/internal/actoridjwt"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/localjwtauthority"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 )
 
@@ -405,6 +407,65 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			_, err := s.MintWorkerActorJwt(tc.ctx, req)
 			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("MintWorkerActorJwt() code = %v, want %v (err: %v)", got, tc.want, err)
+			}
+		})
+	}
+}
+
+// TestNodeRefusalLogNamesCredential checks that each mint's node refusal logs
+// the credential that RPC mints.
+func TestNodeRefusalLogNamesCredential(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
+	csr, _ := generateTestCSR(t)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, newTestCAPool(t), testActorJWTIssuer, newTestJWTPool(t))
+	// The actor's worker runs on node-1.
+	otherNode := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-2"))
+	actorRef := &ateapipb.ObjectRef{Atespace: "team-a", Name: "my-actor"}
+
+	tests := []struct {
+		name string
+		mint func() error
+		want string
+	}{
+		{
+			name: "MintWorkerActorJwt",
+			mint: func() error {
+				_, err := s.MintWorkerActorJwt(otherNode, &ateapipb.MintWorkerActorJwtRequest{
+					Actor:     actorRef,
+					ActorUid:  actor.GetMetadata().GetUid(),
+					Audiences: []string{"snapshot-plugin"},
+				})
+				return err
+			},
+			want: "Refusing a worker-for-actor JWT for an actor the caller's node does not host",
+		},
+		{
+			name: "MintWorkerActorCertificate",
+			mint: func() error {
+				_, err := s.MintWorkerActorCertificate(otherNode, &ateapipb.MintWorkerActorCertificateRequest{
+					Actor:                     actorRef,
+					ActorUid:                  actor.GetMetadata().GetUid(),
+					CertificateSigningRequest: csr,
+					Worker:                    &ateapipb.ObjectRef{Name: "worker-1"},
+				})
+				return err
+			},
+			want: "Refusing a worker-for-actor certificate for an actor the caller's node does not host",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			buf.Reset()
+			if got := apierror.Code(tc.mint()); got != codes.NotFound {
+				t.Fatalf("code = %v, want %v", got, codes.NotFound)
+			}
+			if !strings.Contains(buf.String(), tc.want) {
+				t.Errorf("log = %q, want it to contain %q", buf.String(), tc.want)
 			}
 		})
 	}

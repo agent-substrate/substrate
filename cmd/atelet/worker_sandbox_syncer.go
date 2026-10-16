@@ -21,10 +21,10 @@ package main
 //     random delay when a pool or config change reaches every node at once
 //   - process: for each UID, sync the pod, or remove its worker directory
 //     once the pod is gone
-//   - finish: forget the UID, or retry it with backoff up to
-//     syncMaxRetries times
+//   - finish: forget the UID, or retry it with backoff, capped at
+//     syncMaxRetries while the pool's SandboxConfig is unresolved
 //
-// worker_sandbox_versions.go builds the sandbox config version file for each
+// worker_sandbox_versions.go builds the sandbox runtimes file for each
 // worker pod.
 
 import (
@@ -35,6 +35,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -44,9 +45,10 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	informersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/informers/externalversions/api/v1alpha1"
+	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	informersv1alpha1 "go.ate.dev/substrate/pkg/client/informers/externalversions/api/v1alpha1"
 )
 
 // podUIDIndex indexes this node's worker pods by UID, the syncer's queue key.
@@ -70,40 +72,70 @@ const orphanMinAge = time.Minute
 // for the file.
 const syncMaxJitter = 30 * time.Second
 
-// syncMaxRetries bounds how often one pod's failed sync is retried before it
-// is dropped. The pod is synced again only when its pool switches to another
-// SandboxConfig, the config's spec changes, or atelet restarts. The backoff
-// doubles from one second, so this covers a few minutes of informer lag or an
-// unresolved pool without retrying forever.
+// syncMaxRetries bounds how often one pod's errUnresolved sync is retried
+// before it is dropped. The backoff doubles from one second, so this covers a
+// few minutes of informer lag or an unresolved pool without retrying forever;
+// the informer events that end those also enqueue the pod again. Every other
+// failure is exempt and keeps retrying at the rate limiter's longest backoff:
+// an asset fetch or probe that fails for the default version, one that leaves
+// a restorable version out (errIncomplete), or a write to the worker
+// directory, since nothing enqueues the pod when those recover.
 const syncMaxRetries = 8
 
-// workerSandboxSyncer keeps a sandbox versions file in each local worker's
+// syncWorkers is how many goroutines drain the sync queue in run. More than
+// one keeps a slow asset fetch on one pod from blocking directory cleanup and
+// cached syncs for other pods on the node.
+const syncWorkers = 2
+
+// workerSandboxSyncer keeps a sandbox runtimes file in each local worker's
 // directory under workersDir: the runtimes of the enabled versions of the
 // SandboxConfig the worker's pool uses. It creates a worker's directory once
 // it writes the pod's file and removes it when the pod is gone.
 type workerSandboxSyncer struct {
 	resolver *workerSandboxResolver
 	// pods holds this node's worker pods, indexed by podUIDIndex.
-	pods cache.Indexer
-	// queue carries pod UIDs. One worker drains it, so a pod's file is never
-	// written and its directory removed at the same time.
+	pods   cache.Indexer
+	assets sandboxAssetFetcher
+	// queue carries pod UIDs. A workqueue never hands the same key to two
+	// workers at once, so a pod's file is never written and its directory
+	// removed at the same time.
 	queue      workqueue.TypedRateLimitingInterface[string]
 	workersDir string // nodepath.WorkersDir(); a temp dir in tests
 	minAge     time.Duration
 	maxJitter  time.Duration
+
+	// probeCPUIdentity is hardware.ProbeCPUIdentity. Overridable in tests.
+	probeCPUIdentity func() (vendor, model string, err error)
+	// runCPUFeatures is runRunscCPUFeatures. Overridable in tests.
+	runCPUFeatures func(ctx context.Context, runscPath string) ([]string, error)
+	// mu guards hostCPU and cpuFeatures across the syncWorkers in run:
+	// hostCPU is the probed host CPU identity, nil until a probe succeeds,
+	// and cpuFeatures the encoded cpu_features of each runsc binary by its
+	// gVisor asset's SHA256 digest. A binary is fetched and run once per
+	// digest, except that two workers meeting a digest before either has
+	// memoized it both probe it; the duplicate costs a fetch from the asset
+	// cache and a run of runsc, and both store the same mask.
+	mu          sync.Mutex
+	hostCPU     *cpuIdentity
+	cpuFeatures map[string]string
 }
 
-func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, workersDir string) *workerSandboxSyncer {
+func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, workersDir string) *workerSandboxSyncer {
 	return &workerSandboxSyncer{
 		resolver: resolver,
 		pods:     pods,
-		// Failures are informer lag and unresolved pools, both on the scale
-		// of seconds to minutes.
+		assets:   assets,
+		// Backoff doubles from 1s for informer lag and unresolved pools, and
+		// caps at 5m where uncapped retries for transient asset fetch or probe
+		// failures stay until they recover.
 		queue: workqueue.NewTypedRateLimitingQueue(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)),
-		workersDir: workersDir,
-		minAge:     orphanMinAge,
-		maxJitter:  syncMaxJitter,
+		workersDir:       workersDir,
+		minAge:           orphanMinAge,
+		maxJitter:        syncMaxJitter,
+		probeCPUIdentity: hardware.ProbeCPUIdentity,
+		runCPUFeatures:   runRunscCPUFeatures,
+		cpuFeatures:      make(map[string]string),
 	}
 }
 
@@ -115,7 +147,7 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 // The syncer never holds up atelet startup: until the informers sync, or
 // while a list/watch fails (e.g. Forbidden while an RBAC rollout lags the
 // binary), files wait and existing ones stay as they are.
-func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, workersDir string) (*workerSandboxSyncer, error) {
+func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string) (*workerSandboxSyncer, error) {
 	if err := pods.Informer().AddIndexers(cache.Indexers{podUIDIndex: func(obj any) ([]string, error) {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok {
@@ -129,7 +161,7 @@ func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInforme
 		workerPools: workerPools.Lister(),
 		configs:     configs.Lister(),
 	}
-	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), workersDir)
+	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), assets, workersDir)
 	if err := watch(ctx, "worker pod", pods.Informer(), s.podHandler()); err != nil {
 		return nil, err
 	}
@@ -140,14 +172,14 @@ func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInforme
 		return nil, err
 	}
 	go s.run(ctx, pods.Informer().HasSynced, workerPools.Informer().HasSynced, configs.Informer().HasSynced)
-	slog.InfoContext(ctx, "Worker sandbox versions syncer started")
+	slog.InfoContext(ctx, "Worker sandbox runtimes syncer started")
 	return s, nil
 }
 
 // watch registers handler on inf and logs inf's list/watch failures.
 func watch(ctx context.Context, kind string, inf cache.SharedIndexInformer, handler cache.ResourceEventHandler) error {
 	if err := inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
-		slog.WarnContext(ctx, kind+" list/watch failed; workers on this node cannot update their sandbox versions until it recovers", slog.Any("err", err))
+		slog.WarnContext(ctx, kind+" list/watch failed; workers on this node cannot update their sandbox runtimes until it recovers", slog.Any("err", err))
 	}); err != nil {
 		// Fails only on an already-started informer, where the default
 		// reflector logging applies.
@@ -282,13 +314,21 @@ func (s *workerSandboxSyncer) run(ctx context.Context, synced ...cache.InformerS
 		return
 	}
 	s.enqueueExistingDirs(ctx)
-	for {
-		uid, shutdown := s.queue.Get()
-		if shutdown {
-			return
-		}
-		s.process(ctx, uid)
+	var wg sync.WaitGroup
+	for range syncWorkers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				uid, shutdown := s.queue.Get()
+				if shutdown {
+					return
+				}
+				s.process(ctx, uid)
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 // process brings the directory of the pod with the given UID up to date:
@@ -326,24 +366,28 @@ func (s *workerSandboxSyncer) podByUID(uid string) (*corev1.Pod, error) {
 	return pod, nil
 }
 
-// finish forgets uid on success or errPermanent, and otherwise retries it with
-// backoff up to syncMaxRetries times. A sync that fails before it writes
-// leaves the existing file in place.
+// finish forgets uid on success or errPermanent, caps errUnresolved retries at
+// syncMaxRetries, and otherwise requeues with backoff without a retry cap. A
+// sync that fails before it writes leaves the existing file in place.
 func (s *workerSandboxSyncer) finish(ctx context.Context, uid string, err error) {
 	switch {
 	case err == nil:
 		s.queue.Forget(uid)
 	case errors.Is(err, errPermanent):
-		slog.WarnContext(ctx, "Cannot sync worker sandbox versions; not retrying until the pool's SandboxConfig changes or atelet restarts", slog.String("pod_uid", uid), slog.Any("err", err))
+		slog.WarnContext(ctx, "Cannot sync worker sandbox runtimes; not retrying until the pool's SandboxConfig changes or atelet restarts", slog.String("pod_uid", uid), slog.Any("err", err))
 		s.queue.Forget(uid)
 	case ctx.Err() != nil:
 		// Shutting down, not a sync failure.
-	case s.queue.NumRequeues(uid) < syncMaxRetries:
-		slog.WarnContext(ctx, "Could not sync worker sandbox versions; will retry",
+	case errors.Is(err, errIncomplete):
+		slog.WarnContext(ctx, "Worker sandbox runtimes file is missing a restorable version; will retry",
+			slog.String("pod_uid", uid), slog.Int("retries", s.queue.NumRequeues(uid)), slog.Any("err", err))
+		s.queue.AddRateLimited(uid)
+	case s.queue.NumRequeues(uid) < syncMaxRetries || !errors.Is(err, errUnresolved):
+		slog.WarnContext(ctx, "Could not sync worker sandbox runtimes; will retry",
 			slog.String("pod_uid", uid), slog.Int("retries", s.queue.NumRequeues(uid)), slog.Any("err", err))
 		s.queue.AddRateLimited(uid)
 	default:
-		slog.WarnContext(ctx, "Could not sync worker sandbox versions; giving up until the pool's SandboxConfig changes or atelet restarts",
+		slog.WarnContext(ctx, "Could not sync worker sandbox runtimes; giving up until the pool's SandboxConfig changes or atelet restarts",
 			slog.String("pod_uid", uid), slog.Int("retries", syncMaxRetries), slog.Any("err", err))
 		s.queue.Forget(uid)
 	}

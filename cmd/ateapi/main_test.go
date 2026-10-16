@@ -49,24 +49,20 @@ func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
 func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
 	oldRuntime, oldDDL := *postgresReadWriteConnectionString, *postgresOwnerConnectionString
 	oldRuntimeRole, oldDDLRole := *postgresReadWriteRole, *postgresOwnerRole
-	oldAuthz := *experimentalEnableAuthz
 	t.Cleanup(func() {
 		*postgresReadWriteConnectionString = oldRuntime
 		*postgresOwnerConnectionString = oldDDL
 		*postgresReadWriteRole = oldRuntimeRole
 		*postgresOwnerRole = oldDDLRole
-		*experimentalEnableAuthz = oldAuthz
 	})
 	*postgresReadWriteConnectionString = "@env"
 	*postgresOwnerConnectionString = "@env"
 	*postgresReadWriteRole = "@env"
 	*postgresOwnerRole = "@env"
-	*experimentalEnableAuthz = false
 	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-a")
 	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-a")
 	t.Setenv("ATE_API_POSTGRES_READ_WRITE_ROLE", "runtime-role")
 	t.Setenv("ATE_API_POSTGRES_OWNER_ROLE", "ddl-role")
-	t.Setenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ", "true")
 
 	if err := loadFlagsFromEnv(); err != nil {
 		t.Fatal(err)
@@ -74,9 +70,6 @@ func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
 	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" ||
 		*postgresReadWriteRole != "runtime-role" || *postgresOwnerRole != "ddl-role" {
 		t.Fatalf("resolved values = %q, %q, %q, %q", *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole)
-	}
-	if !*experimentalEnableAuthz {
-		t.Fatal("authorization environment flag was not resolved alongside PostgreSQL settings")
 	}
 	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-b")
 	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-b")

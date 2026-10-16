@@ -22,16 +22,16 @@ import (
 	"slices"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/hardware"
-	"github.com/agent-substrate/substrate/internal/preview"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/volume"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/volume"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
@@ -508,7 +508,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	if assignedWorker == nil {
 		pickedWorker, err := w.scheduler.Schedule(ctx, constraints)
 		if errors.Is(err, scheduling.ErrNoCapacity) && relaxable {
-			constraints.RequiredRuntime = nil
+			constraints.RequiredRuntime = hardware.Requirement{}
 			pickedWorker, err = w.scheduler.Schedule(ctx, constraints)
 		}
 		if err != nil {
@@ -521,10 +521,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 
 		assignedWorker = pickedWorker
 		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
-	} else if relaxable && !hardware.WorkerMatches(assignedWorker.GetStatus(), snapRuntime) {
+	} else if relaxable && !snapRuntime.WorkerMatches(assignedWorker.GetStatus()) {
 		// The stale claim only passed the relaxed check, so bind under it:
 		// admit asks the same question again under the row lock.
-		constraints.RequiredRuntime = nil
+		constraints.RequiredRuntime = hardware.Requirement{}
 	}
 
 	assignment := &ateapipb.ActorAssignment{
@@ -601,7 +601,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 // attempt re-runs scheduling.
 var errWorkerFilledUp = errors.New("picked worker no longer has room")
 
-func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime *ateapipb.SandboxRuntime) *ateapipb.WorkerAssignment {
+func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime hardware.Requirement) *ateapipb.WorkerAssignment {
 	return &ateapipb.WorkerAssignment{
 		Worker:          &ateapipb.ObjectRef{Name: w.GetMetadata().GetName()},
 		WorkerNamespace: w.GetWorkerNamespace(),
@@ -610,19 +610,21 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime *ateapipb.SandboxRunti
 		WorkerPodUid:    w.GetWorkerPodUid(),
 		WorkerPodIps:    slices.Clone(w.GetIps()),
 		NodeName:        w.GetNodeName(),
+		WorkerSpiffeId:  w.GetWorkerSpiffeId(),
 		// The runtime the actor is started or restored under. Snapshots taken
 		// during this assignment are stamped with it, so a worker that later
 		// changes its default does not relabel state captured on the old one.
 		//
-		// TODO: A restorable_runtimes match records the old runtime here, but
-		// resolveSandboxAssets still ships the SandboxConfig's default version
-		// and atelet restores with the assets in the request, so the restore
-		// runs on the new version: it fails, or the next checkpoint is stamped
-		// with a runtime that did not produce it. Resolve the assets for the
-		// matched version once SandboxConfig can name them, or treat a
-		// restorable-only match as incompatible until it can. Latent for now:
-		// worker reports no restorable_runtimes (internal/ateworker/register.go).
-		SandboxRuntime: proto.CloneOf(hardware.RuntimeFor(w.GetStatus(), snapRuntime)),
+		// TODO: Workers report restorable_runtimes, so a match on one records
+		// that older runtime here, but resolveSandboxAssets still ships the
+		// template's SandboxConfig default version and atelet restores with
+		// the assets in the request: the restore runs on the newer version and
+		// fails, or its next checkpoint is stamped with a runtime that did not
+		// produce it. A follow-up replaces the assets in Run and Restore with
+		// this sandbox_runtime, which atelet resolves to the matching version
+		// of the worker pool's SandboxConfig; until it lands, keep a config's
+		// default version the only enabled one.
+		SandboxRuntime: proto.CloneOf(snapRuntime.RuntimeFor(w.GetStatus())),
 	}
 }
 
@@ -659,7 +661,7 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 	}
 	c := scheduling.Constraints{
 		SandboxClass:    tmpl.GetSandboxConfig().GetSandboxClass(),
-		RequiredRuntime: requiredSnapshotRuntime(actor, tmpl),
+		RequiredRuntime: hardware.NewRequirement(requiredSnapshotRuntime(actor, tmpl)),
 		ActorSelector:   labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
 		RequiredNodes:   requiredNodes,
 		Limits:          limits.Proto(),
@@ -673,6 +675,10 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 // requiredSnapshotRuntime returns the SandboxRuntime stamped on the snapshot
 // that ResumeActor will restore guest state from, or nil when the resume does
 // not restore guest state (cold boot, VOLUMES fidelity, or replaced template).
+//
+// TODO: Once gVisor can restore ROOTFS snapshots, return nil for ROOTFS as
+// well: a rootfs upper is files tied to the image, not to the runtime, so only
+// MEMORY needs a runtime match. Until then ROOTFS is pinned like MEMORY.
 func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) *ateapipb.SandboxRuntime {
 	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
 		if localSnap.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
@@ -700,7 +706,7 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 // fidelity downgrade, and nothing invalidates the checkpoint files if the actor
 // boots elsewhere. Suspending the actor uploads it and lifts the pin.
 func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) bool {
-	if constraints.RequiredRuntime == nil {
+	if constraints.RequiredRuntime.Runtime() == nil {
 		return false
 	}
 	return findLatestLocalSnapshot(actor.GetStatus()) == nil
@@ -710,11 +716,11 @@ func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) 
 // relaxable — satisfies constraints with RequiredRuntime relaxed.
 func (w *ActorWorkflow) appliesWithFallback(worker *ateapipb.Worker, constraints scheduling.Constraints, relaxable bool) bool {
 	relaxed := constraints
-	relaxed.RequiredRuntime = nil
+	relaxed.RequiredRuntime = hardware.Requirement{}
 	if !w.scheduler.Applies(worker, relaxed) {
 		return false
 	}
-	return relaxable || hardware.WorkerMatches(worker.GetStatus(), constraints.RequiredRuntime)
+	return relaxable || constraints.RequiredRuntime.WorkerMatches(worker.GetStatus())
 }
 
 // ensureVolumesAttached attaches the actor's mounted external volumes to the
@@ -832,6 +838,10 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			if runtimeIncompatible {
 				logRuntimeFallback(ctx, actorRef, assignment, src.RequiredRuntime)
 			}
+			// TODO: Once gVisor can restore ROOTFS snapshots, drop an incompatible
+			// runtime to ROOTFS, not VOLUMES: only the memory layer is invalid. A
+			// replaced template still drops to VOLUMES, as the rootfs upper is
+			// only valid over the image it was written on.
 			scope = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(scope)

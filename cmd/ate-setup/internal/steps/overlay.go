@@ -24,9 +24,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kustomize"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 const (
@@ -147,6 +147,13 @@ func (e *Env) renderSystemManifests(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if e.Cfg.Router != config.RouterAgentgateway {
+		imageReference, err := e.dockerfileImage(ctx, envoyDataplaneImage, envoyDataplaneDockefile)
+		if err != nil {
+			return nil, err
+		}
+		manifest = e.patchEnvoyDataplaneImage(manifest, imageReference)
+	}
 	return e.ResolveManifestBytes(ctx, manifest)
 }
 
@@ -156,7 +163,16 @@ func (e *Env) renderAtenetRouterManifest(ctx context.Context) ([]byte, error) {
 	if e.Cfg.Router == config.RouterAgentgateway {
 		return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-router"))
 	}
-	return e.renderResolve(ctx, e.Cfg.Manifest("atenet-router.yaml"))
+	manifest, err := e.render(e.Cfg.Manifest("atenet-router.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	imageReference, err := e.dockerfileImage(ctx, envoyDataplaneImage, envoyDataplaneDockefile)
+	if err != nil {
+		return nil, err
+	}
+	manifest = e.patchEnvoyDataplaneImage(manifest, imageReference)
+	return e.ResolveManifestBytes(ctx, manifest)
 }
 
 // atenetEgressManifestPath returns the envoy egress gateway manifest.

@@ -22,14 +22,14 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/actoridjwt"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
+	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
+	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/actoridjwt"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -59,7 +59,7 @@ func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapipb.MintWorke
 	// The node check comes first so a node that does not host the actor gets
 	// NotFound whatever UID it sends, and cannot use the UID check to learn
 	// that the actor exists.
-	if err := s.checkActorOnNode(ctx, dbActor, caller.NodeName); err != nil {
+	if err := s.checkActorOnNode(ctx, dbActor, caller.NodeName, "JWT"); err != nil {
 		return nil, err
 	}
 	// A stale UID is Aborted, as in MintWorkerActorCertificate.
@@ -101,14 +101,14 @@ func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapipb.MintWorke
 // checkActorOnNode refuses a mint from an atelet whose node does not host the
 // actor, as RequestActorSuspend does. Authoritative state decides, never the
 // request. The refusal is NotFound, so a node learns nothing about actors it
-// does not host.
-func (s *Server) checkActorOnNode(ctx context.Context, actor *ateapipb.Actor, callerNode string) error {
+// does not host. credential names what the caller mints, for the refusal log.
+func (s *Server) checkActorOnNode(ctx context.Context, actor *ateapipb.Actor, callerNode, credential string) error {
 	hostingNode, err := controlapi.HostingNode(ctx, s.store, actor)
 	if err != nil {
 		return err
 	}
 	if hostingNode == "" || hostingNode != callerNode {
-		slog.WarnContext(ctx, "Refusing a worker-for-actor JWT for an actor the caller's node does not host",
+		slog.WarnContext(ctx, "Refusing a worker-for-actor "+credential+" for an actor the caller's node does not host",
 			slog.String("actor", resources.ActorRefFromActor(actor).String()),
 			slog.String("hosting_node", hostingNode),
 			slog.String("caller_node", callerNode))

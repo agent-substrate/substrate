@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -29,7 +30,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/agent-substrate/substrate/internal/localjwtauthority"
+	"go.ate.dev/substrate/internal/localjwtauthority"
 )
 
 func TestNewJWTPoolSecretWithFlagDefaults(t *testing.T) {
@@ -93,6 +94,9 @@ func poolState(t *testing.T, kc *fake.Clientset) ([]string, string) {
 	pool, err := localjwtauthority.Unmarshal(secret.Data["pool"])
 	if err != nil {
 		t.Fatal(err)
+	}
+	if jwks, err := pool.JWKS(); err != nil || !bytes.Equal(jwks, secret.Data["jwks"]) {
+		t.Errorf("jwks = %s, want the pool's public keys (%v)", secret.Data["jwks"], err)
 	}
 	var ids []string
 	for _, a := range pool.Authorities {

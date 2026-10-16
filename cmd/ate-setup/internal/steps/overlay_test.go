@@ -37,9 +37,9 @@ import (
 	kyaml "sigs.k8s.io/kustomize/kyaml/yaml"
 	"sigs.k8s.io/yaml"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 )
 
 // Splicing the provider selection into the real egress manifest replaces the
@@ -1134,9 +1134,9 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 	})
 }
 
-// A pre-built install renders the envoy egress manifest without building
-// anything: envoy-dataplane is pinned from the release like every ko image, so
-// neither docker nor KO_DOCKER_REPO is needed.
+// A pre-built install renders the envoy router, egress, and system manifests
+// without building anything: envoy-dataplane is pinned from the release like
+// every ko image, so neither docker nor KO_DOCKER_REPO is needed.
 func TestRenderAtenetEgressManifestPrebuilt(t *testing.T) {
 	const digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
 	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
@@ -1149,18 +1149,38 @@ func TestRenderAtenetEgressManifestPrebuilt(t *testing.T) {
 		}),
 	}
 
-	out, err := e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{})
-	if err != nil {
-		t.Fatalf("renderAtenetEgressManifest() error = %v", err)
-	}
 	want := "example.com/substrate/envoy-dataplane:v1.2.3@" + digest
-	if !strings.Contains(string(out), "image: "+want) {
-		t.Errorf("rendered manifest does not install %s:\n%s", want, out)
-	}
-	for _, leftover := range []string{"${ENVOY_DATAPLANE_IMAGE}", "ko://"} {
-		if strings.Contains(string(out), leftover) {
-			t.Errorf("rendered manifest still contains %q", leftover)
-		}
+	for _, tc := range []struct {
+		name   string
+		render func() ([]byte, error)
+	}{
+		{
+			name:   "egress",
+			render: func() ([]byte, error) { return e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{}) },
+		},
+		{
+			name:   "router",
+			render: func() ([]byte, error) { return e.renderAtenetRouterManifest(t.Context()) },
+		},
+		{
+			name:   "system",
+			render: func() ([]byte, error) { return e.renderSystemManifests(t.Context()) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := tc.render()
+			if err != nil {
+				t.Fatalf("render() error = %v", err)
+			}
+			if !strings.Contains(string(out), "image: "+want) {
+				t.Errorf("rendered manifest does not install %s:\n%s", want, out)
+			}
+			for _, leftover := range []string{"${ENVOY_DATAPLANE_IMAGE}", "ko://"} {
+				if strings.Contains(string(out), leftover) {
+					t.Errorf("rendered manifest still contains %q", leftover)
+				}
+			}
+		})
 	}
 	if !slices.Contains(looked, "example.com/substrate/envoy-dataplane:v1.2.3") {
 		t.Errorf("registry lookups = %v, want one for envoy-dataplane", looked)

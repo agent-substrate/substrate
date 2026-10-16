@@ -365,6 +365,9 @@ func TestGetFileToHitTouchesLastUse(t *testing.T) {
 }
 
 func TestGetFileToPublishedCopyIsWriteProtected(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions, so the write cannot fail")
+	}
 	s := newTestStore(t)
 	key := URIKey("gs://bucket/golden", "mem.img")
 	fetch, _ := countingFetcher("precious")

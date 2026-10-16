@@ -19,7 +19,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"github.com/agent-substrate/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/actorlock"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -32,12 +32,12 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 
-	"github.com/agent-substrate/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/workerstats"
+	"go.ate.dev/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/workerstats"
 )
 
 // The lifecycle RPCs that host and unhost actors need netlink, runsc, and

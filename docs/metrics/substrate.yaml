@@ -229,6 +229,14 @@ blind_spots:
   - area: podcertcontroller
     code: cmd/podcertcontroller
     brief: This component has no metrics.
+  - area: egress gateway access log
+    code: manifests/ate-install/atenet-egress.yaml
+    brief: >
+      The MITM and cleartext chains log only requests with status 400 or
+      above, gRPC requests with a grpc-status other than OK, any response
+      flag, and a 1% sample of the rest. The runtime keys
+      access_log.min_status and access_log.sample on the admin port restore
+      full logging while you debug.
   - area: GCP Secret Manager credential provider
     code: internal/plugins/gcp-secret-manager
     brief: >

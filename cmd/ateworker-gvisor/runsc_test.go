@@ -28,10 +28,10 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc/codes"
 
-	"github.com/agent-substrate/substrate/internal/actorlock"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 var testActorDirs = &ateworkerpb.ActorDirs{
@@ -152,6 +152,34 @@ func TestBuildArgs(t *testing.T) {
 				"-global2",
 				"-root", "/node/actors/test-actor-123/runsc-state",
 				"wait",
+				"my-container",
+			},
+		},
+		{
+			name:          "wait -restore",
+			command:       "wait",
+			containerName: "my-container",
+			extraArgs:     []string{"-restore"},
+			want: []string{
+				"-global1",
+				"-global2",
+				"-root", "/node/actors/test-actor-123/runsc-state",
+				"wait",
+				"-restore",
+				"my-container",
+			},
+		},
+		{
+			name:          "wait -fsrestore",
+			command:       "wait",
+			containerName: "my-container",
+			extraArgs:     []string{"-fsrestore"},
+			want: []string{
+				"-global1",
+				"-global2",
+				"-root", "/node/actors/test-actor-123/runsc-state",
+				"wait",
+				"-fsrestore",
 				"my-container",
 			},
 		},

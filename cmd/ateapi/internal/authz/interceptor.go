@@ -17,8 +17,8 @@ package authz
 import (
 	"context"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/principal"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/principal"
 	"google.golang.org/grpc"
 )
 

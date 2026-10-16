@@ -24,7 +24,7 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"google.golang.org/grpc"
 
-	"github.com/agent-substrate/substrate/internal/actorevent"
+	"go.ate.dev/substrate/internal/actorevent"
 )
 
 const logsExporterEnv = "OTEL_LOGS_EXPORTER"

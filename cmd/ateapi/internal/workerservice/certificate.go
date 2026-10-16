@@ -19,17 +19,18 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"path"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/substratex509"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
+	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/substratex509"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // MintWorkerActorCertificate mints a Substrate-issued SPIFFE certificate that asserts
@@ -40,22 +41,38 @@ func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapipb.M
 	}
 
 	// TODO(identity): This check should be handled by OpenFGA.
-	if _, err := ateletauth.Authenticate(ctx, s.ateletSPIFFEID); err != nil {
+	caller, err := ateletauth.Authenticate(ctx, s.ateletSPIFFEID)
+	if err != nil {
 		return nil, err
 	}
 
-	// TODO(authz): Authorization layer needs to check whether the caller has
-	// the mintActorCertificate permission/relation with this actor.    This
-	// could be an atelet (via the relationship of the atelet running the
-	// actor), or the egress gateway (via a cluster-level grant?)
+	// TODO(authz): The egress gateway may also need certificates for actors
+	// (via a cluster-level grant?).
 
-	// Verify that this actor exists in the store. It doesn't need to be
-	// running, since we may need to issue certificates during actor boot / resume.
 	dbActor, err := s.store.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("actor not found")
 	} else if err != nil {
 		return nil, fmt.Errorf("while retrieving actor: %w", err)
+	}
+	// Only the assigned worker may mint, via its node's atelet, checked before the
+	// UID so other callers get NotFound. Unlike MintWorkerActorJwt, a paused actor
+	// gets NotFound too: it has no worker to bind the certificate to.
+	if err := s.checkActorOnNode(ctx, dbActor, caller.NodeName, "certificate"); err != nil {
+		return nil, err
+	}
+	// The status must name the requesting worker. When it names one,
+	// checkActorOnNode has confirmed in the store's worker assignments that
+	// this worker holds the actor. When it names none (a paused actor, or a
+	// resume that has bound a worker but not yet recorded it), checkActorOnNode
+	// read assigned_node alone, and no worker runs the actor yet.
+	if assigned := dbActor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); assigned == "" || assigned != req.GetWorker().GetName() {
+		slog.WarnContext(ctx, "Refusing a worker-for-actor certificate for an actor not assigned to the calling worker",
+			slog.String("actor", resources.ActorRefFromActor(dbActor).String()),
+			slog.String("assigned_worker", assigned),
+			slog.String("caller_worker", req.GetWorker().GetName()),
+			slog.String("caller_node", caller.NodeName))
+		return nil, apierror.NotFound("actor not found")
 	}
 	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
 		return nil, apierror.Aborted("conflict; actor has been deleted and recreated")

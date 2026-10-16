@@ -16,7 +16,7 @@
 
 package main
 
-import "github.com/agent-substrate/substrate/internal/ateattr"
+import "go.ate.dev/substrate/internal/ateattr"
 
 // The phase names, suffixed onto the phaselog duration keys. Kept out of
 // ateattr on purpose: that package's SnapshotPhase* values are the

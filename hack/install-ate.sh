@@ -112,6 +112,8 @@ usage() {
   echo "                                         ports; static-mtls requires the certificate and --atenet-dataplane=envoy."
   echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
+  echo "  --ateapi-log-level LEVEL               ate-api-server log level: debug, info, warn, or error"
+  echo "                                         (default: keep the installed level, else info)"
   echo ""
   echo "Experiments:"
   echo ""
@@ -147,6 +149,7 @@ usage() {
   echo "  --create-podcertificate-controller-cas Create podcertificate controller CAs"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
   echo "  --create-api-authentication-config     Create the default ate-api-server authentication config"
+  echo "  --create-api-config                    Create the ate-api-server config file (log level from --ateapi-log-level)"
   echo ""
   echo "PostgreSQL configuration (a connection DSN or Cloud SQL instance selects"
   echo "an external database and skips the bundled instance):"
@@ -177,6 +180,13 @@ usage() {
   echo "                                         Use RS256 (a 4096-bit RSA key) for relying parties that don't support ES256. Has no effect once the pool exists."
   echo "  ACTOR_JWT_ISSUER                       iss claim of actor JWTs, verbatim. Relying parties fetch <issuer>/.well-known/openid-configuration."
   echo "                                         Default: https://idp.<namespace>.svc"
+  echo ""
+  echo "Authorization configuration:"
+  echo ""
+  echo "  ATE_API_EXPERIMENTAL_ENABLE_AUTHZ      false turns off ate-api-server's runtime authorization. Default: true"
+  echo "  ATE_API_AUTHZ_BOOTSTRAP_OWNERS         Comma-separated principals that are always global owners."
+  echo "                                         Default: kubectl-ate's, system:serviceaccount:<namespace>:ate-client"
+  echo "                                         See docs/authorization.md."
   echo ""
   echo "Benchmarks (see benchmarking/README.md for details and customization):"
   echo ""
@@ -346,6 +356,14 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       GLOBAL_FLAGS+=("--otlp-endpoint=${prescan_args[$((i + 1))]}")
       ;;
+    --ateapi-log-level=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
+    --ateapi-log-level)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --ateapi-log-level requires debug, info, warn, or error" >&2
+        exit 1
+      fi
+      GLOBAL_FLAGS+=("--ateapi-log-level=${prescan_args[$((i + 1))]}")
+      ;;
     --benchmark-worker-count=*) BENCHMARK_FLAGS+=("--worker-count=${prescan_args[i]#*=}") ;;
     --benchmark-worker-count)
       BENCHMARK_FLAGS+=("--worker-count=${prescan_args[i+1]:-1}")
@@ -389,12 +407,14 @@ while [[ "$#" -gt 0 ]]; do
     --cluster-size|--ingress-auth-mode) shift ;;
     --experimental-additional-egress-extproc-service) shift ;;
     --credential-provider) shift ;;
+    --ateapi-log-level) shift ;;
     --benchmark-worker-count|--benchmark-sandbox-class|--benchmark-actor-memory) shift ;;
     --atenet-dataplane=*|--podcert-workers-per-signer=*|--rollout-timeout=*|--otlp-endpoint=*) ;;
     --fake-data-plane|--fake-data-plane=*) ;;
     --cluster-size=*|--cordon-control-plane|--cordon-control-plane=*|--ingress-auth-mode=*) ;;
     --experimental-additional-egress-extproc-service=*) ;;
     --credential-provider=*) ;;
+    --ateapi-log-level=*) ;;
     --benchmark-worker-count=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;
     --preview) shift ;;
     --preview=*) ;;
@@ -426,6 +446,7 @@ while [[ "$#" -gt 0 ]]; do
     --create-podcertificate-controller-cas) ate_setup create podcertificate-controller-cas ;;
     --create-api-server-env-vars) ate_setup create api-server-env-vars ;;
     --create-api-authentication-config) ate_setup create api-authentication-config ;;
+    --create-api-config) ate_setup create api-config ;;
 
     # The one demo flag that is not just a demo name.
     --deploy-demo-counter-with-external-volume)

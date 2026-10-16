@@ -18,12 +18,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/actorevent"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/actorevent"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestActorStateChangeRecords drives each transition that commits a new state
@@ -38,6 +38,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 	tests := []struct {
 		name      string
 		seedState ateapipb.ActorState
+		seedOpts  []func(*ateapipb.Actor)
 		// transition runs the workflow step that commits the new state.
 		transition func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate)
 		wantOp     string
@@ -60,9 +61,28 @@ func TestActorStateChangeRecords(t *testing.T) {
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
 				markOnly(t, w, ref, actor, w.PauseActor)
 			},
-			wantOp:     ateattr.OperationPause,
+			wantOp:     ateattr.OperationSuspend,
 			wantState:  ateattr.ActorStateSuspending,
 			wantStored: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+		},
+		{
+			name:      "finalize pause marks the actor suspended",
+			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			seedOpts: []func(*ateapipb.Actor){
+				withPauseInProgress(),
+				func(a *ateapipb.Actor) {
+					a.Status.AssignedNode = "node-1"
+					a.Status.WorkerAssignment = wireTestAssignment()
+				},
+			},
+			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, _ *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
+				if _, err := w.PauseActor(context.Background(), ref); err != nil {
+					t.Fatalf("PauseActor: %v", err)
+				}
+			},
+			wantOp:     ateattr.OperationSuspend,
+			wantState:  ateattr.ActorStateSuspended,
+			wantStored: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 		},
 		{
 			name:      "delete marks the actor deleting",
@@ -96,7 +116,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 			}
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-			seedWorkflowActor(t, ctx, persistence, actorRef, tmplAtespace, tmplName, tt.seedState)
+			seedWorkflowActor(t, ctx, persistence, actorRef, tmplAtespace, tmplName, tt.seedState, tt.seedOpts...)
 			actor, err := persistence.GetActor(ctx, actorRef)
 			if err != nil {
 				t.Fatalf("get actor: %v", err)
@@ -106,7 +126,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 				t.Fatalf("get template: %v", err)
 			}
 
-			w := &ActorWorkflow{store: persistence}
+			w, _ := newWireCaptureWorkflow(t, persistence)
 			tt.transition(t, w, actorRef, actor, tmpl)
 
 			// The logs exporter is on, so the record goes to OTLP only.

@@ -26,8 +26,8 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
-	"github.com/agent-substrate/substrate/internal/preview"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/internal/preview"
 )
 
 // loadEnv isolates Load from the ambient environment.
@@ -46,6 +46,9 @@ func loadEnv(t *testing.T) {
 		"ACTOR_JWT_ISSUER",
 		"ANTHROPIC_API_KEY",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
+		"ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
+		"ATE_API_EXPERIMENTAL_ENABLE_AUTHZ",
+		"ATE_API_LOG_LEVEL",
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
 		"ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH",
 		"ATE_API_POSTGRES_CLOUDSQL_IP_TYPE",
@@ -554,6 +557,111 @@ func TestLoadExpectedJWTIssuer(t *testing.T) {
 	}
 	if cfg.ExpectedJWTIssuer != issuer {
 		t.Errorf("ExpectedJWTIssuer = %q, want %q", cfg.ExpectedJWTIssuer, issuer)
+	}
+}
+
+// An unset level stays empty, so that a deploy keeps the level an existing
+// install has rather than resetting it to the default.
+func TestLoadAPILogLevel(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		env     string
+		flag    string
+		want    string
+		wantErr bool
+	}{
+		{name: "unset", want: ""},
+		{name: "environment", env: "debug", want: "debug"},
+		{name: "flag beats environment", env: "debug", flag: "warn", want: "warn"},
+		{name: "unsupported", env: "verbose", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_API_LOG_LEVEL", tt.env)
+			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			BindFlags(fs)
+			if tt.flag != "" {
+				if err := fs.Set("ateapi-log-level", tt.flag); err != nil {
+					t.Fatalf("Set(--ateapi-log-level) error = %v", err)
+				}
+			}
+
+			cfg, err := LoadFlags(fs, LoadOptions{NoDevEnv: true})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("LoadFlags() with ATE_API_LOG_LEVEL=%q returned nil error", tt.env)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadFlags() error = %v", err)
+			}
+			if cfg.APILogLevel != tt.want {
+				t.Errorf("APILogLevel = %q, want %q", cfg.APILogLevel, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadAPIAuthz(t *testing.T) {
+	const (
+		clientOwner = "system:serviceaccount:ate-system:ate-client"
+		owners      = "alice@example.com,bob@example.com"
+	)
+	for _, tc := range []struct {
+		name        string
+		env         map[string]string
+		wantEnabled bool
+		wantOwners  string
+		wantErr     bool
+	}{
+		{
+			name:        "on by default, owned by the client ServiceAccount",
+			wantEnabled: true,
+			wantOwners:  clientOwner,
+		},
+		{
+			name:        "default owner follows the namespace",
+			env:         map[string]string{"ATE_NAMESPACE": "custom"},
+			wantEnabled: true,
+			wantOwners:  "system:serviceaccount:custom:ate-client",
+		},
+		{
+			name:        "explicit owners replace the default",
+			env:         map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": owners},
+			wantEnabled: true,
+			wantOwners:  owners,
+		},
+		{
+			name:       "turned off",
+			env:        map[string]string{"ATE_API_EXPERIMENTAL_ENABLE_AUTHZ": "false"},
+			wantOwners: clientOwner,
+		},
+		{
+			name:    "enabled with only separators",
+			env:     map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": " , "},
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			for name, value := range tc.env {
+				t.Setenv(name, value)
+			}
+			cfg, err := Load(Options{})
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "bootstrap owner") {
+					t.Fatalf("Load() error = %v, want the missing bootstrap owner error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.APIExperimentalEnableAuthz != tc.wantEnabled || cfg.APIAuthzBootstrapOwners != tc.wantOwners {
+				t.Errorf("authz = %v, %q, want %v, %q", cfg.APIExperimentalEnableAuthz, cfg.APIAuthzBootstrapOwners, tc.wantEnabled, tc.wantOwners)
+			}
+		})
 	}
 }
 

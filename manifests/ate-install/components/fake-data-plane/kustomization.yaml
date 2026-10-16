@@ -56,7 +56,7 @@ patches:
         path: /spec/template/spec/initContainers
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: ko://github.com/agent-substrate/substrate/cmd/benchmarking/isolate/fake-atelet
+        value: ko://go.ate.dev/substrate/cmd/benchmarking/isolate/fake-atelet
       # fake-atelet runs with its defaults. A benchmark tunes it through the
       # fake-atelet-tuning ConfigMap, which no install creates or resets.
       - op: remove

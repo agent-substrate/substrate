@@ -23,15 +23,15 @@ import (
 	"net"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
-	"github.com/agent-substrate/substrate/internal/ateworker/cgroup"
-	"github.com/agent-substrate/substrate/internal/atunnel"
-	"github.com/agent-substrate/substrate/internal/netns"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/sizing"
-	"github.com/agent-substrate/substrate/internal/workerstats"
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
+	"go.ate.dev/substrate/internal/atunnel/ingress"
+	"go.ate.dev/substrate/internal/netns"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sizing"
+	"go.ate.dev/substrate/internal/workerstats"
 )
 
 // hostedActor holds one actor's attribution, network, and runtime state.
@@ -234,7 +234,7 @@ func (s *AteWorkerService) sandboxNetNS(actorUID string) netns.Handle {
 }
 
 // sandboxDialer connects through the actor's gateway namespace.
-func (s *AteWorkerService) sandboxDialer(actorUID string) atunnel.DialFunc {
+func (s *AteWorkerService) sandboxDialer(actorUID string) ingress.DialFunc {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		s.actorsMu.RLock()
 		hosted := s.actors[actorUID]

@@ -16,6 +16,7 @@ package steps
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"maps"
@@ -25,9 +26,13 @@ import (
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/localjwtauthority"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/localjwtauthority"
 )
 
 // ate-api-server requires both connection strings and its schema in the
@@ -171,13 +176,16 @@ func TestNewJWTPoolSecretData(t *testing.T) {
 			if err != nil {
 				t.Fatalf("newJWTPoolSecretData() error = %v", err)
 			}
-			if diff := cmp.Diff([]string{"pool"}, slices.Sorted(maps.Keys(data))); diff != "" {
+			if diff := cmp.Diff([]string{"jwks", "pool"}, slices.Sorted(maps.Keys(data))); diff != "" {
 				t.Errorf("secret keys differ (-want +got):\n%s", diff)
 			}
 
 			pool, err := localjwtauthority.Unmarshal(data["pool"])
 			if err != nil {
 				t.Fatalf("Unmarshal() error = %v", err)
+			}
+			if jwks, err := pool.JWKS(); err != nil || !bytes.Equal(jwks, data["jwks"]) {
+				t.Errorf("jwks = %s, want the pool's public keys (%v)", data["jwks"], err)
 			}
 			if len(pool.Authorities) != 1 {
 				t.Fatalf("pool has %d authorities, want 1", len(pool.Authorities))
@@ -229,5 +237,51 @@ func TestEnsurePodCertificateCAs(t *testing.T) {
 		if _, err := pool.TrustAnchors(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestCreateJWTPoolPublishesKeysOfExistingPool(t *testing.T) {
+	poolBytes, _, err := localjwtauthority.GeneratePool("ES256", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantJWKS, err := localjwtauthority.PublicJWKS(poolBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name        string
+		data        map[string][]byte
+		wantUpdates int
+	}{
+		{"pool from before jwks", map[string][]byte{"pool": poolBytes}, 1},
+		{"pool with a stale jwks", map[string][]byte{"pool": poolBytes, "jwks": []byte(`{"keys":[]}`)}, 1},
+		{"pool with jwks", map[string][]byte{"pool": poolBytes, "jwks": wantJWKS}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kc := fake.NewSimpleClientset(&corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ate-system", Name: SecretActorIDJWTPool},
+				Data:       tc.data,
+			})
+			updates := 0
+			kc.PrependReactor("update", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+				updates++
+				return false, nil, nil
+			})
+			e := &Env{Kube: &kube.Client{Typed: kc}}
+			if err := e.createJWTPool(context.Background(), "ate-system", SecretActorIDJWTPool); err != nil {
+				t.Fatalf("createJWTPool: %v", err)
+			}
+			got, err := kc.CoreV1().Secrets("ate-system").Get(context.Background(), SecretActorIDJWTPool, metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got.Data["pool"], poolBytes) || !bytes.Equal(got.Data["jwks"], wantJWKS) {
+				t.Errorf("secret data = %v keys, want the same pool and its jwks", slices.Sorted(maps.Keys(got.Data)))
+			}
+			if updates != tc.wantUpdates {
+				t.Errorf("updates = %d, want %d", updates, tc.wantUpdates)
+			}
+		})
 	}
 }

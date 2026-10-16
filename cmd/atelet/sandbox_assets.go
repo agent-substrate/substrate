@@ -39,15 +39,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/atomicfile"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/objectstorage"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -184,13 +184,19 @@ func (s *Atelet) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsReco
 	return paths, nil
 }
 
+// runscAssetNames are the assets that carry the gVisor `runsc` binary, most
+// preferred first.
+var runscAssetNames = []string{gvisorAssetName, runscAssetName}
+
 // runscPathFor returns the local path of the gVisor `runsc` binary from a
 // fetched asset-path map, or "" if the runtime has none (e.g. micro-VM).
 func runscPathFor(paths map[string]string) string {
-	if p := paths[gvisorAssetName]; p != "" {
-		return p
+	for _, name := range runscAssetNames {
+		if p := paths[name]; p != "" {
+			return p
+		}
 	}
-	return paths[runscAssetName]
+	return ""
 }
 
 // fetchAsset downloads one content-addressed asset (verifying its sha256) into

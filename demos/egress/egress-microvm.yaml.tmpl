@@ -38,7 +38,7 @@ spec:
   replicas: 2
   sandboxClasses:
   - name: microvm
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateworker-microvm
+  workerImage: ko://go.ate.dev/substrate/cmd/ateworker-microvm
   # No template.resources, unlike the counter demo's micro-VM variant: an
   # unlimited worker container reports no capacity, which the scheduler reads as
   # unconstrained, and the pod requests nothing so it stays placeable next to

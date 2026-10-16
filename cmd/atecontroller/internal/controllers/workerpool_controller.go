@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -37,8 +38,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/installdefaults"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 const (
@@ -97,6 +99,7 @@ type WorkerPoolReconciler struct {
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=create;patch
 //+kubebuilder:rbac:groups=ate.dev,resources=sandboxconfigs,verbs=get;list;watch;patch
 //+kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
@@ -317,6 +320,11 @@ func (r *WorkerPoolReconciler) recordSandboxConfigEvents(wp *atev1alpha1.WorkerP
 }
 
 func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
+	if wp.Spec.Template == nil || wp.Spec.Template.ServiceAccountName == nil {
+		if err := r.applyWorkerServiceAccount(ctx, wp.Namespace); err != nil {
+			return err
+		}
+	}
 	depAC := buildDeploymentApplyConfig(wp, workerOTelSettings{
 		Endpoint:             r.OTelEndpoint,
 		MetricExportInterval: r.OTelMetricExportInterval,
@@ -327,6 +335,16 @@ func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alp
 	}, r.SystemNamespace, r.AteletServiceAccount, r.RouterServiceAccount, r.DNSEgressPolicy)
 	if err := r.Apply(ctx, depAC, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply Deployment: %w", err)
+	}
+	return nil
+}
+
+// applyWorkerServiceAccount creates the default ServiceAccount worker pods run
+// as. The pools in a namespace share it, so none of them owns it.
+func (r *WorkerPoolReconciler) applyWorkerServiceAccount(ctx context.Context, namespace string) error {
+	saAC := corev1ac.ServiceAccount(installdefaults.WorkerServiceAccount, namespace)
+	if err := r.Apply(ctx, saAC, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
+		return fmt.Errorf("failed to apply worker ServiceAccount: %w", err)
 	}
 	return nil
 }

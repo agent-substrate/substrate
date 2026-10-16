@@ -26,10 +26,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/objectstore"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/objectstore"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 )
 
@@ -95,7 +95,7 @@ func newActorCSR() ([]byte, error) {
 // egress gateway, as worker does before it starts the workload. Its time is
 // ate-api-server's, so it adds to the call's delay rather than running inside
 // it; a failure fails the call, as tunneled egress fails closed in worker.
-func (h *herder) mintActorCertificate(ctx context.Context, atespace, name, uid string, gateway *ateletpb.EgressGateway) error {
+func (h *herder) mintActorCertificate(ctx context.Context, workerPodUID, atespace, name, uid string, gateway *ateletpb.EgressGateway) error {
 	if h.minter == nil || gateway == nil {
 		return nil
 	}
@@ -103,6 +103,8 @@ func (h *herder) mintActorCertificate(ctx context.Context, atespace, name, uid s
 		Actor:                     &ateapipb.ObjectRef{Atespace: atespace, Name: name},
 		ActorUid:                  uid,
 		CertificateSigningRequest: h.csr,
+		// Workers are global-scoped and named by their pod UID.
+		Worker: &ateapipb.ObjectRef{Name: workerPodUID},
 	}); err != nil {
 		return fmt.Errorf("while minting the certificate of actor %s/%s: %w", atespace, name, err)
 	}
@@ -150,7 +152,7 @@ func (h *herder) writePlaceholder(ctx context.Context, start time.Time, d time.D
 }
 
 func (h *herder) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
-	if err := h.mintActorCertificate(ctx, req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetEgressGateway()); err != nil {
+	if err := h.mintActorCertificate(ctx, req.GetWorkerPodUid(), req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetEgressGateway()); err != nil {
 		return nil, err
 	}
 	if err := wait(ctx, time.Now(), h.delays.run); err != nil {
@@ -160,7 +162,7 @@ func (h *herder) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.R
 }
 
 func (h *herder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
-	if err := h.mintActorCertificate(ctx, req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetEgressGateway()); err != nil {
+	if err := h.mintActorCertificate(ctx, req.GetWorkerPodUid(), req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetEgressGateway()); err != nil {
 		return nil, err
 	}
 	if err := wait(ctx, time.Now(), h.delays.restore); err != nil {

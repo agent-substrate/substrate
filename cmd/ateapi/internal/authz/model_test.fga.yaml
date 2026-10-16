@@ -87,6 +87,9 @@ tuples:
   - user: user:sys-router
     relation: ingress_router
     object: global:root
+  - user: user:sys-atelet
+    relation: atelet
+    object: global:root
 
 tests:
   - name: 1. Global Superadmin & Viewer Propagation
@@ -420,6 +423,33 @@ tests:
           viewer: false
           can_list_actors: false
           can_get: false
+      - user: user:sys-atelet # atelet reads egress policies for the worker that enforces them
+        object: actor:runner-1
+        assertions:
+          can_get_egress_policy: true
+          can_get: false
+          can_update: false
+          can_delete: false
+          can_create_egress_policy: false
+          can_update_egress_policy: false
+          can_delete_egress_policy: false
+          can_mint_actor_jwt: false
+          can_mint_actor_certificate: false
+          can_resume: false
+          can_suspend: false
+      - user: user:sys-atelet
+        object: atespace:space-1
+        assertions:
+          viewer: false
+          can_get: false
+          can_list_actors: false
+          can_create_actor: false
+      - user: user:sys-atelet
+        object: global:root
+        assertions:
+          can_list_actors: false
+          can_list_workers: false
+          can_create_worker: false
       - user: user:sys-router # atenet-router resumes actors and lists them
         object: actor:runner-1
         assertions:
@@ -445,12 +475,14 @@ tests:
         assertions:
           egress_gateway: false
           ingress_router: false
+          atelet: false
       - user: user:carol # Global owner does not hold system roles
         object: global:root
         assertions:
           controller: false
           egress_gateway: false
           ingress_router: false
+          atelet: false
 
   - name: 8. Tag Operations (Inherited from Atespace)
     check:

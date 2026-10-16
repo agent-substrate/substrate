@@ -29,7 +29,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/ateclient"
 )
 
 // FieldManager identifies ate-setup's writes in managedFields.

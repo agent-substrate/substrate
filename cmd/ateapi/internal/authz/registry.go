@@ -17,9 +17,9 @@ package authz
 import (
 	"slices"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -338,10 +338,9 @@ var defaultRPCPermissions = map[string]rpcRule{
 
 	// WorkerService is served only to atelet, which each handler
 	// authenticates by its mTLS SPIFFE ID.
-	ateapipb.WorkerService_RegisterWorker_FullMethodName:      inHandler("ateletauth: caller is atelet on the Worker's node"),
-	ateapipb.WorkerService_RequestActorSuspend_FullMethodName: inHandler("ateletauth: caller is atelet on the node of the Worker hosting the Actor"),
-	// TODO: also require that the Actor runs on the caller's node.
-	ateapipb.WorkerService_MintWorkerActorCertificate_FullMethodName: inHandler("ateletauth: caller is atelet"),
+	ateapipb.WorkerService_RegisterWorker_FullMethodName:             inHandler("ateletauth: caller is atelet on the Worker's node"),
+	ateapipb.WorkerService_RequestActorSuspend_FullMethodName:        inHandler("ateletauth: caller is atelet on the node of the Worker hosting the Actor"),
+	ateapipb.WorkerService_MintWorkerActorCertificate_FullMethodName: inHandler("ateletauth: caller is atelet on the node of the Worker the Actor is assigned to"),
 	ateapipb.WorkerService_MintWorkerActorJwt_FullMethodName:         inHandler("ateletauth: caller is atelet on the node hosting the Actor"),
 	// TODO(#2570): not served yet; the handler must authenticate atelet on the
 	// node of the Worker hosting the Actor when it lands.

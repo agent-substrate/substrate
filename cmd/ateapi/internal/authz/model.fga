@@ -50,6 +50,7 @@ type global
     define controller: [user]
     define egress_gateway: [user]
     define ingress_router: [user]
+    define atelet: [user]
 
     define can_create_atespace: owner
     define can_list_atespaces: viewer
@@ -81,6 +82,7 @@ type atespace
     # System component roles, inherited from global only.
     define egress_gateway: egress_gateway from parent_global
     define ingress_router: ingress_router from parent_global
+    define atelet: atelet from parent_global
 
     # --- 2. Policy Governance ---
     define can_create_access_policy: owner
@@ -143,7 +145,15 @@ type actor
     define can_delete: editor from parent_atespace
 
     # Egress policy: one per actor, so its permissions live on the actor.
-    define can_get_egress_policy: viewer from parent_atespace or egress_gateway from parent_atespace
+    # atelet reads it on behalf of the worker hosting the actor, which
+    # enforces it.
+    #
+    # TODO(#1564): Every node's atelet shares one SPIFFE ID, so any atelet can read
+    # any actor's egress policy, and atelet does not check that the worker
+    # asking hosts the actor. Serve the read from WorkerService instead,
+    # authorizing atelet on the node hosting the actor as MintWorkerActorJwt
+    # does, have atelet check the requesting worker, and drop atelet here.
+    define can_get_egress_policy: viewer from parent_atespace or egress_gateway from parent_atespace or atelet from parent_atespace
     define can_create_egress_policy: editor from parent_atespace
     define can_update_egress_policy: editor from parent_atespace
     define can_delete_egress_policy: editor from parent_atespace

@@ -27,12 +27,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/testcert"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/testcert"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -83,7 +83,7 @@ func TestActorDirectAccess(t *testing.T) {
 func egressHTTPTarget() e2e.ServerPod {
 	return e2e.ServerPod{
 		Name:       "egresshttp",
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"http"},
 		Port:       80,
 		TargetPort: 8080,
@@ -198,7 +198,7 @@ func TestActorEgressMultiplexing(t *testing.T) {
 func egressHTTPSTarget(name, body string) e2e.ServerPod {
 	return e2e.ServiceDNSTLS(e2e.ServerPod{
 		Name:       name,
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"http", "--body=" + body},
 	})
 }
@@ -238,7 +238,7 @@ func TestActorEgressHTTPS(t *testing.T) {
 // serves nothing but /healthz, which is all this target is dialed for.
 var httpTarget = e2e.ServerPod{
 	Name:       "httptarget",
-	ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+	ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 	Args:       []string{"http"},
 	Port:       8080,
 }
@@ -590,7 +590,7 @@ func TestActorEgressHTTPSNonStandardPort(t *testing.T) {
 	const expectedBody = "https nonstandard origin"
 	target, address, _ := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
 		Name:       "https-origin",
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"http", "--body=" + expectedBody},
 		Port:       8080,
 		TLSPort:    8443,
