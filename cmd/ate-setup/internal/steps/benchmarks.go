@@ -21,8 +21,8 @@ import (
 	"os/exec"
 	"strconv"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 // The benchmark and micro-VM stacks are still driven by shell. They orchestrate
@@ -63,6 +63,9 @@ func (o BenchmarkOptions) Validate() error {
 // stack.
 func (e *Env) DeployBenchmarks(ctx context.Context, opts BenchmarkOptions) error {
 	if err := opts.Validate(); err != nil {
+		return err
+	}
+	if err := e.RequireControlPlane(ctx); err != nil {
 		return err
 	}
 	log.Stepf("deploy_benchmarks (worker_count=%d, sandbox_class=%s)", opts.WorkerCount, opts.SandboxClass)

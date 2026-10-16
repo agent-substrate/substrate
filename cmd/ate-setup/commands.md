@@ -30,9 +30,12 @@ a pre-scan pass, so they may appear anywhere on its command line.
 | `--cluster-size size0\|size10` | `--cluster-size size0\|size10` | Footprint profile (default `size0`). `size10` assumes a dedicated PostgreSQL node: it resizes the bundled StatefulSet and its `postgresql.conf`, pins the apiserver's connection pool, and raises the podcertificate-controller's API rate limits. `ATE_INSTALL_CLUSTER_SIZE` when the flag is absent |
 | `--ateapi-postgres-storage-class NAME` | `ATE_API_POSTGRES_STORAGE_CLASS=NAME` | StorageClass for the bundled PostgreSQL volume instead of the cluster default, such as `dynamic-rwo` on GKE so C4 and N4 nodes can attach it. An existing install must delete the postgres StatefulSet and its claim first |
 | `--cordon-control-plane` | `--cordon-control-plane` | Keep the control plane off the worker nodes. Assumes a small shared pool labeled and tainted `ate.dev/workloadType=ate-control-plane:NoSchedule`, across which each workload's replicas are spread, and a one-node pool labeled and tainted `ate.dev/workloadType=ate-postgres:NoSchedule` for postgres alone. `ATE_INSTALL_CORDON_CONTROL_PLANE=true` when the flag is absent |
+| `--fake-data-plane` | `--fake-data-plane` | Install the fake data plane for control-plane benchmarks: fake-atelet takes atelet's place in its DaemonSet, taking its objectstore-plugin's storage settings, ate-controller is scaled to zero, and fake-workersync honors every WorkerPool with fake Workers on the fake-atelet nodes. Reaches `deploy ate-system`, `deploy atelet`, and `deploy ate-controller`; only `deploy ate-system` switches a cluster between the real and fake data planes, and the other two refuse a data plane other than the installed one. `deploy ate-system --fake-data-plane` refuses a cluster whose WorkerPools have worker pods. fake-atelet runs with its defaults; a benchmark tunes it through the optional `fake-atelet-tuning` ConfigMap, whose `FAKE_ATELET_*` variables set its flags, and which no install creates or resets. Actors do not exist; never use it on a cluster that serves real actors. `ATE_INSTALL_FAKE_DATA_PLANE=true` when the flag is absent |
 | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | External processor authorization filter |
 | `--credential-provider JSON` | `--credential-provider JSON`, or `ATE_CREDENTIAL_PROVIDER` | Required by `deploy ate-system` and `deploy atenet`. A JSON object: `{"name":"k8s.io"}` deploys and uses the bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only the egress gateway; `{"enabled":false}` turns egress credential injection off; `{"name":"<provider>","address":"<host>:<port>"}` uses a provider you deploy yourself. See [`docs/egress-credential-injection.md`](../../docs/egress-credential-injection.md) |
+| `--ateapi-log-level LEVEL` | `--ateapi-log-level LEVEL`, or `ATE_API_LOG_LEVEL=LEVEL` | ate-api-server log level: `debug`, `info`, `warn`, or `error`. Written to the `ate-api-config` ConfigMap on every deploy when set; unset keeps the installed level (`info` on a new install). The server picks up a change without restarting |
 | `--otlp-endpoint URL` | `--otlp-endpoint URL`, or `ATE_OTLP_ENDPOINT=URL` | Send control plane telemetry to `URL` instead of the cluster default (see [`benchmarking/telemetry/README.md`](../../benchmarking/telemetry/README.md)) |
+| `--preview GATES` | `--preview GATES`, or `ATE_PREVIEW=GATES` | Preview gates passed as `--preview` to every substrate component: comma-separated gate names, or `ALL` for all. `ATE_PREVIEW` or `config.preview` when the flag is absent. An explicit `--preview=''` turns them all off, even when `ATE_PREVIEW` is set |
 | `--context NAME` | `KUBECTL_CONTEXT=NAME` | Kubeconfig context; still defaults to `KUBECTL_CONTEXT` |
 | `--kubeconfig PATH` | `KUBECONFIG=PATH` | Explicit kubeconfig path |
 | `--no-dev-env` | `NO_DEV_ENV=1` | Skip `.ate-dev-env.sh` at the repository root |
@@ -42,6 +45,19 @@ a pre-scan pass, so they may appear anywhere on its command line.
 
 Both have an environment equivalent, read when the flag is absent:
 `ATE_IMAGE_REPO` and `ATE_IMAGE_TAG`.
+
+Kind deployments check that Docker is available and the resolved kubeconfig
+context exists before doing any install work. If the context is missing, the
+error explains how to export kubeconfig for an existing cluster or create the
+cluster and local registry with `hack/create-kind-cluster.sh`. That script
+replaces an existing cluster with the same name.
+
+Deploy the control plane before deploying demos or benchmarks. These commands
+check for `deployment/ate-controller` in the configured system namespace before
+creating workload resources. An existing Deployment passes this check; normal
+rollout waits still diagnose workloads that cannot become ready. The shell shim
+runs actions in argument order, so put `--deploy-ate-system` before demo or
+benchmark deployment flags when combining them on one command line.
 
 ## Installing a release
 
@@ -107,9 +123,9 @@ a running cluster.
 | `publish worker-images` | (no shell equivalent) |
 | `publish release-images` | (no shell equivalent) |
 
-`publish worker-images` builds and pushes the ateom worker images for the
+`publish worker-images` builds and pushes the worker images for the
 checked-out build and prints their refs; a WorkerPool points `spec.workerImage`
-to a build to use the ateom.
+to a build to use the ateworker.
 
 `publish release-images` builds and pushes every image a pre-built install
 needs, all tagged with the build version; see [Installing a
@@ -138,6 +154,7 @@ Individual secrets and config that `deploy ate-system` creates automatically.
 | `create podcertificate-controller-cas` | `--create-podcertificate-controller-cas` |
 | `create api-server-env-vars` | `--create-api-server-env-vars` |
 | `create api-authentication-config` | `--create-api-authentication-config` |
+| `create api-config` | `--create-api-config` |
 
 ## Setup
 
@@ -179,7 +196,7 @@ See
 | `ate-setup` | `hack/install-ate.sh` | Description |
 |---|---|---|
 | `deploy demo counter` | `--deploy-demo-counter` | A counter actor exercising snapshot, resume, and atenet ingress |
-| `deploy demo counter --with-external-volume [--storage-class NAME]` | `--deploy-demo-counter-with-external-volume` (`STORAGE_CLASS=NAME`) | The same, plus an external volume and a pre-seeded file to validate. Run `setup csi` first and name the class it created, e.g. `csi-nfs-sc`; defaults to `standard` |
+| `deploy demo counter --with-external-volume [--storage-class NAME]` | `--deploy-demo-counter-with-external-volume` (`STORAGE_CLASS=NAME`) | The same, plus an external volume and a pre-seeded file to validate (requires `--preview=ExternalVolumes`). Run `setup csi` first and name the class it created, e.g. `csi-nfs-sc`; defaults to `standard` |
 | `deploy demo counter-microvm` | `--deploy-demo-counter-microvm` | The counter demo on micro-VM workers. Run `hack/install-microvm-deps.sh --install` first |
 | `deploy demo egress` | `--deploy-demo-egress` | Egress policy enforcement through atenet; the actors trust the egress gateway's CA |
 | `deploy demo egress-microvm` | `--deploy-demo-egress-microvm` | The same on micro-VM workers. Run `hack/install-microvm-deps.sh --install` first |

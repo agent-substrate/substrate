@@ -1,6 +1,6 @@
 # Running the microVM runtime locally
 
-The microVM sandbox class (`ateom-microvm`: a Kata guest on Cloud Hypervisor)
+The microVM sandbox class (`ateworker-microvm`: a Kata guest on Cloud Hypervisor)
 needs `/dev/kvm`, which takes some extra setup compared to the default gVisor
 path. This guide covers just that delta: getting a KVM-capable Docker
 environment — on Linux, or on Apple Silicon macOS via
@@ -77,8 +77,8 @@ Expected:
 NAMESPACE                  NAME                                 DESIRED  READY  AVAILABLE
 ate-demo-counter-microvm   workerpool.ate.dev/counter-microvm   1        1      1
 
-ATESPACE                   NAME              SANDBOX CLASS           GOLDEN SNAPSHOT                        ERROR   AGE
-ate-demo-counter-microvm   counter-microvm   SANDBOX_CLASS_MICROVM   b9f6bd93-3c5a-4b64-9d5e-2f8a1c7d0e42           1m
+ATESPACE                   NAME              SANDBOX CLASS   GOLDEN SNAPSHOT                        ERROR   AGE
+ate-demo-counter-microvm   counter-microvm   microvm         b9f6bd93-3c5a-4b64-9d5e-2f8a1c7d0e42           1m
 ```
 
 The template is ready once the GOLDEN SNAPSHOT column is non-empty (the

@@ -23,9 +23,9 @@ def add_sweperf_arguments(parser: LocustArgumentParser) -> None:
     parser.add_argument(
         "--sweperf-template",
         type=str,
-        default="swebench-astropy-7336",
+        default="sweperf-astropy-7336",
         env_var="LOCUST_SWEPERF_TEMPLATE",
-        help="ActorTemplate name for the sweperf workload (default: swebench-astropy-7336)",
+        help="ActorTemplate name for the sweperf workload (default: sweperf-astropy-7336)",
         include_in_web_ui=True,
     )
     parser.add_argument(

@@ -43,7 +43,7 @@ func TestWorkerPoolValidation(t *testing.T) {
 		},
 		Spec: WorkerPoolSpec{
 			Replicas:       1,
-			WorkerImage:    "ateom:latest",
+			WorkerImage:    "worker:latest",
 			SandboxClasses: []WorkerPoolSandboxClass{{Name: SandboxClassGvisor}},
 		},
 	}
@@ -302,7 +302,7 @@ func TestWorkerPoolReservedMetadataUpdate(t *testing.T) {
 		},
 		Spec: WorkerPoolSpec{
 			Replicas:       1,
-			WorkerImage:    "example.com/ateom:latest",
+			WorkerImage:    "example.com/worker:latest",
 			SandboxClasses: []WorkerPoolSandboxClass{{Name: SandboxClassGvisor}},
 		},
 	}
@@ -353,7 +353,7 @@ func TestWorkerPoolSandboxClassesUpdate(t *testing.T) {
 				},
 				Spec: WorkerPoolSpec{
 					Replicas:       1,
-					WorkerImage:    "example.com/ateom:latest",
+					WorkerImage:    "example.com/worker:latest",
 					SandboxClasses: []WorkerPoolSandboxClass{{Name: SandboxClassGvisor}},
 				},
 			}

@@ -20,7 +20,7 @@ import (
 	fmt "fmt"
 	http "net/http"
 
-	apiv1alpha1 "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/typed/api/v1alpha1"
+	apiv1alpha1 "go.ate.dev/substrate/pkg/client/clientset/versioned/typed/api/v1alpha1"
 	discovery "k8s.io/client-go/discovery"
 	rest "k8s.io/client-go/rest"
 	flowcontrol "k8s.io/client-go/util/flowcontrol"

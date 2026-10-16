@@ -18,11 +18,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 type tarEntry struct {
@@ -31,6 +33,9 @@ type tarEntry struct {
 	mode     int64
 	body     string
 	linkname string
+	modTime  time.Time
+	devmajor int64
+	devminor int64
 }
 
 func defaultMode(typeflag byte) int64 {
@@ -59,6 +64,9 @@ func buildTar(t *testing.T, entries []tarEntry) []byte {
 			Mode:     mode,
 			Size:     int64(len(e.body)),
 			Linkname: e.linkname,
+			ModTime:  e.modTime,
+			Devmajor: e.devmajor,
+			Devminor: e.devminor,
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			t.Fatalf("tar.WriteHeader(%+v): %v", hdr, err)
@@ -482,6 +490,71 @@ func TestUnpackLayer_ReadOnlyDir(t *testing.T) {
 	}
 }
 
+// Files and directories keep the mtimes their tar entries record, so Python can
+// trust the .pyc files shipped in an image. A directory keeps its mtime although
+// its children are written after it, read-only directories included, and a link
+// entry never re-stamps its target.
+func TestUnpackLayer_RestoresModTimes(t *testing.T) {
+	var (
+		fileTime  = time.Date(2025, 9, 10, 9, 37, 24, 0, time.UTC)
+		dirTime   = time.Date(2025, 9, 10, 9, 30, 0, 0, time.UTC)
+		subTime   = time.Date(2024, 2, 29, 12, 0, 0, 0, time.UTC)
+		staleTime = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+		linkTime  = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	)
+	entries := []tarEntry{
+		{name: "app/", typeflag: tar.TypeDir, modTime: staleTime},
+		{name: "app/main.py", typeflag: tar.TypeReg, body: "print()\n", modTime: fileTime},
+		{name: "app/sub/", typeflag: tar.TypeDir, modTime: subTime},
+		{name: "app/sub/mod.py", typeflag: tar.TypeReg, body: "x = 1\n", modTime: fileTime},
+		// Chtimes would follow a symlink, and a hardlink shares the target's
+		// inode: either way, the target must keep its own mtime.
+		{name: "app/sym", typeflag: tar.TypeSymlink, linkname: "main.py", modTime: linkTime},
+		{name: "app/hard", typeflag: tar.TypeLink, linkname: "app/main.py", modTime: linkTime},
+		// A repeated dir entry: the last one's mtime wins, as its mode does.
+		{name: "app/", typeflag: tar.TypeDir, modTime: dirTime},
+		{name: "ro/", typeflag: tar.TypeDir, mode: 0o555, modTime: dirTime},
+		{name: "ro/bin", typeflag: tar.TypeReg, mode: 0o755, body: "bin", modTime: fileTime},
+	}
+	dir, _, err := runUnpack(t, entries)
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
+	}
+	// Plain os.RemoveAll (t.TempDir's cleanup) can't delete under a 0555 dir.
+	t.Cleanup(func() {
+		if err := RemoveAllWritable(filepath.Join(dir, "ro")); err != nil {
+			t.Errorf("RemoveAllWritable(ro): %v", err)
+		}
+	})
+
+	for _, tc := range []struct {
+		path string
+		want time.Time
+	}{
+		{path: "app/main.py", want: fileTime},
+		{path: "app/sub/mod.py", want: fileTime},
+		{path: "app/hard", want: fileTime},
+		{path: "app/sub", want: subTime},
+		{path: "app", want: dirTime},
+		{path: "ro/bin", want: fileTime},
+		{path: "ro", want: dirTime},
+	} {
+		fi, err := os.Lstat(filepath.Join(dir, tc.path))
+		if err != nil {
+			t.Errorf("lstat %s: %v", tc.path, err)
+			continue
+		}
+		if got := fi.ModTime(); !got.Equal(tc.want) {
+			t.Errorf("%s mtime = %v, want %v", tc.path, got.UTC(), tc.want)
+		}
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "ro")); err != nil {
+		t.Errorf("stat ro: %v", err)
+	} else if fi.Mode().Perm() != 0o555 {
+		t.Errorf("ro mode = %v, want the image's 0555 preserved", fi.Mode().Perm())
+	}
+}
+
 func TestUnpackLayer_PathTraversal(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -559,25 +632,47 @@ func TestUnpackLayer_HardlinkEscape(t *testing.T) {
 	}
 }
 
-func TestUnpackLayer_RejectSpecialFiles(t *testing.T) {
-	tests := []struct {
-		name     string
-		typeflag byte
-	}{
-		{name: "char device", typeflag: tar.TypeChar},
-		{name: "block device", typeflag: tar.TypeBlock},
-		{name: "fifo", typeflag: tar.TypeFifo},
+func TestUnpackLayer_SkipsDeviceNodes(t *testing.T) {
+	dir, wh, err := runUnpack(t, []tarEntry{
+		{name: "dev/", typeflag: tar.TypeDir},
+		{name: "dev/console", typeflag: tar.TypeChar, devmajor: 5, devminor: 1},
+		{name: "dev/sda", typeflag: tar.TypeBlock, devmajor: 8},
+		{name: "dev/zero", typeflag: tar.TypeChar},
+		// Undeclared parent of a skipped device node must not be created or
+		// recorded in ImplicitDirs.
+		{name: "undeclared/tty0", typeflag: tar.TypeChar, devmajor: 4},
+		// A device node at an existing path removes the prior entry (including
+		// a declared directory subtree) without breaking the mode-restore pass.
+		{name: "dev/replaced", typeflag: tar.TypeReg, body: "stale"},
+		{name: "dev/replaced", typeflag: tar.TypeChar, devmajor: 1, devminor: 3},
+		{name: "dev/subdir/", typeflag: tar.TypeDir},
+		{name: "dev/subdir/nested/", typeflag: tar.TypeDir},
+		{name: "dev/subdir", typeflag: tar.TypeChar, devmajor: 1, devminor: 5},
+		{name: "etc/hostname", typeflag: tar.TypeReg, body: "x"},
+	})
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := runUnpack(t, []tarEntry{{name: "weird", typeflag: tc.typeflag}})
-			if err == nil {
-				t.Fatalf("unpackLayer succeeded, want unhandled-typeflag error")
-			}
-			if !strings.Contains(err.Error(), "unhandled tar entry typeflag") {
-				t.Errorf("error = %q, want it to mention 'unhandled tar entry typeflag'", err.Error())
-			}
-		})
+	for _, name := range []string{"dev/console", "dev/sda", "dev/zero", "undeclared", "undeclared/tty0", "dev/replaced", "dev/subdir"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Lstat(%q) = %v, want not exist", name, err)
+		}
+	}
+	if want := []string{"etc"}; !slices.Equal(wh.ImplicitDirs, want) {
+		t.Errorf("ImplicitDirs = %v, want %v", wh.ImplicitDirs, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "etc/hostname")); err != nil {
+		t.Errorf("entry after device nodes not extracted: %v", err)
+	}
+}
+
+func TestUnpackLayer_RejectFifo(t *testing.T) {
+	_, _, err := runUnpack(t, []tarEntry{{name: "weird", typeflag: tar.TypeFifo}})
+	if err == nil {
+		t.Fatalf("unpackLayer succeeded, want unhandled-typeflag error")
+	}
+	if want := `unhandled tar entry typeflag "6" at "weird"`; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), want)
 	}
 }
 

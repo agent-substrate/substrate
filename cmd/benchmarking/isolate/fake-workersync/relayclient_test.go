@@ -26,10 +26,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/benchmarking/isolate/internal/fakeworker"
-	"github.com/agent-substrate/substrate/cmd/benchmarking/isolate/internal/fakeworker/fakeworkertest"
-	"github.com/agent-substrate/substrate/internal/credbundle"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
+	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker/fakeworkertest"
+	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -39,7 +39,7 @@ import (
 
 const (
 	testAteletID     = "spiffe://cluster.local/ns/ate-system/sa/atelet"
-	testWorkerSyncID = "spiffe://cluster.local/ns/benchmark-workloads/sa/fake-workersync"
+	testWorkerSyncID = "spiffe://cluster.local/ns/ate-system/sa/fake-workersync"
 )
 
 // stubRelay is a stand-in fake-atelet relay: it records each report and

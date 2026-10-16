@@ -24,12 +24,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/protoredact"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/protoredact"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -171,9 +171,9 @@ func TestInternalServerUnaryInterceptorCodes(t *testing.T) {
 		},
 		{
 			name:       "upstream status becomes Internal without its details",
-			handlerErr: fmt.Errorf("while calling ateom: %w", statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil)),
+			handlerErr: fmt.Errorf("while calling worker: %w", statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil)),
 			wantCode:   codes.Internal,
-			wantMsg:    "while calling ateom: rpc error: code = DataLoss desc = boom",
+			wantMsg:    "while calling worker: rpc error: code = DataLoss desc = boom",
 		},
 		{
 			name:       "wrapped upstream status becomes Internal",
@@ -359,7 +359,7 @@ func TestServerUnaryInterceptorRequestLogMasksEnvValues(t *testing.T) {
 			Containers: []*ateletpb.Container{
 				{
 					Name: "main",
-					Env: []*ateletpb.EnvEntry{
+					Env: []*ateletpb.EnvVar{
 						{Name: "API_KEY", Value: "sk-secret"},
 						{Name: "PLAIN", Value: "not-a-secret"},
 					},
@@ -368,7 +368,7 @@ func TestServerUnaryInterceptorRequestLogMasksEnvValues(t *testing.T) {
 		},
 	}
 
-	_, err := ServerUnaryInterceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: "/atelet.AteomHerder/Run"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	_, err := ServerUnaryInterceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: "/atelet.Atelet/Run"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return &ateletpb.RunResponse{}, nil
 	})
 	if err != nil {
@@ -396,9 +396,9 @@ func TestServerUnaryInterceptorResponseLogMasksActorJWT(t *testing.T) {
 	log := captureDefaultLog(t)
 
 	const token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhY3RvciJ9.c2lnbmF0dXJl"
-	resp := &ateapipb.MintActorJWTResponse{ActorJwt: token}
+	resp := &ateapipb.MintActorJwtResponse{ActorJwt: token}
 
-	got, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJWTRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJWT"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	got, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJwtRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJwt"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return resp, nil
 	})
 	if err != nil {
@@ -412,7 +412,7 @@ func TestServerUnaryInterceptorResponseLogMasksActorJWT(t *testing.T) {
 	if !strings.Contains(gotLog, `"actor_jwt":"`+protoredact.Placeholder+`"`) {
 		t.Fatalf("log does not show the redacted actor_jwt: %s", gotLog)
 	}
-	if got.(*ateapipb.MintActorJWTResponse).GetActorJwt() != token {
+	if got.(*ateapipb.MintActorJwtResponse).GetActorJwt() != token {
 		t.Fatalf("interceptor mutated the response returned to the client")
 	}
 }
@@ -445,7 +445,7 @@ func TestInternalServerUnaryInterceptorLogMasksBytesFields(t *testing.T) {
 
 func TestServerUnaryInterceptorLogsNilResponseOnHandlerError(t *testing.T) {
 	log := captureDefaultLog(t)
-	_, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJWTRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJWT"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	_, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJwtRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJwt"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return nil, apierror.PermissionDenied("no")
 	})
 	if status.Code(err) != codes.PermissionDenied {

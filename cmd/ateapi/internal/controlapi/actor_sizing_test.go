@@ -17,7 +17,7 @@ package controlapi
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestActorResourceLimits covers the actor-side extraction: the CPU/memory limits

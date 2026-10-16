@@ -21,9 +21,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podcertificate"
-	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/rendezvous"
-	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
+	"go.ate.dev/substrate/cmd/podcertcontroller/internal/podcertificate"
+	"go.ate.dev/substrate/cmd/podcertcontroller/internal/rendezvous"
+	"go.ate.dev/substrate/internal/clustertrustbundle"
 	certsv1 "k8s.io/api/certificates/v1"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"

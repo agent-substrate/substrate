@@ -17,8 +17,8 @@ package steps
 import (
 	"context"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TemplateRef identifies a demo's ActorTemplate. Actors are deleted by matching
@@ -39,8 +39,7 @@ func listAllActors(ctx context.Context, client *ateclient.Client) ([]*ateapipb.A
 	for {
 		// An empty Atespace lists across all atespaces.
 		resp, err := client.ListActors(ctx, &ateapipb.ListActorsRequest{
-			PageSize:  1000,
-			PageToken: pageToken,
+			Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
 		})
 		if err != nil {
 			return nil, err

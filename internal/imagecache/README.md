@@ -37,13 +37,13 @@ What it buys, concretely:
 
 The design is shaped by an existing substrate boundary: **atelet runs as
 plain root with every Linux capability dropped** ("atelet does no mounts" —
-see `manifests/ate-install/atelet.yaml`), while the **ateom worker pods are
+see `manifests/ate-install/atelet.yaml`), while the **worker pods are
 privileged** and own all mounts on the node. The module is split accordingly:
 
 | Half | Runs in | Files | Needs |
 |---|---|---|---|
 | Store: pull, parse, unpack, record | atelet | `imagecache.go`, `unpack.go`, `spec.go` (portable) | nothing but file I/O |
-| Consumer: finalize, mount, unmount | ateom-gvisor / ateom-microvm | `bundle_linux.go` (`//go:build linux`) | `CAP_MKNOD`, `CAP_SYS_ADMIN` |
+| Consumer: finalize, mount, unmount | ateworker-gvisor / ateworker-microvm | `bundle_linux.go` (`//go:build linux`) | `CAP_MKNOD`, `CAP_SYS_ADMIN` |
 
 The two halves communicate through the filesystem only: the shared cache
 directory (on the `/var/lib/ate` hostPath, so the same absolute
@@ -99,10 +99,12 @@ layer diffIDs in order — layers shared by N images exist once.
    confinement (path traversal and symlink/hardlink escapes are refused),
    "later entry wins" within a layer, read-only-dir handling that works
    without `CAP_DAC_OVERRIDE`, and creation of parent directories that the
-   layer tar omits (they may exist only in lower layers). Whiteout entries
-   (`.wh.*`) are **not** written into the tree — overlayfs whiteouts are
-   char devices atelet cannot create — they are recorded in
-   `whiteouts.json` for the consumer to materialize.
+   layer tar omits (they may exist only in lower layers). Character and
+   block device nodes are skipped (atelet runs without `CAP_MKNOD` and the
+   runtime mounts `/dev`). Whiteout entries (`.wh.*`) are **not** written
+   into the tree — overlayfs whiteouts are char devices atelet cannot
+   create — they are recorded in `whiteouts.json` for the consumer to
+   materialize.
 5. **Record**: the image config + diffID list is written under the
    requested digest (and the per-platform child digest for multi-arch refs).
 
@@ -112,7 +114,7 @@ directories bottom-first plus any `ExtraDirs` (in-rootfs bind-mount targets,
 e.g. the actor identity mount at `/run/ate`), and creates the empty
 bundle-local `rootfs/`, `upper/`, and `work/` directories.
 
-## Compose path (ateom: `SetupBundleRootfs`)
+## Compose path (ateworker: `SetupBundleRootfs`)
 
 Called immediately before `runsc create`/`runsc restore` (gVisor) and before
 staging the virtio-fs lower (micro-VM):
@@ -120,7 +122,7 @@ staging the virtio-fs lower (micro-VM):
 1. **`FinalizeLayer`** for each referenced layer — materializes the recorded
    whiteouts as 0:0 char devices (`mknod`) and opaque dirs as
    `trusted.overlay.opaque=y` xattrs. Once per layer node-wide; idempotent
-   and safe under concurrent ateom pods (`EEXIST` tolerated, marker written
+   and safe under concurrent worker pods (`EEXIST` tolerated, marker written
    last). Paths from `whiteouts.json` are re-validated, so a crafted file
    cannot escape the layer tree.
 2. **Mount** an overlay at `<bundle>/rootfs`: `lowerdir` is the layer chain
@@ -162,8 +164,8 @@ keeps building its own tmpfs upper, as before.
 
 **Teardown**: `UnmountAllUnder(bundleDir)` lazily detaches every mount below
 an actor's bundle directory (via `/proc/self/mountinfo`) before atelet wipes
-it — called from the checkpoint cleanup path in ateom-gvisor and
-`teardownActor` in ateom-microvm.
+it — called from the checkpoint cleanup path in ateworker-gvisor and
+`teardownActor` in ateworker-microvm.
 
 ## Garbage collection
 
@@ -196,9 +198,9 @@ percentage as `df` reports it.
 
 1. **Root set** (`Store.InUse`): scan every bundle's
    `rootfs-overlay.json` under the actors dir (`WithActorsDir`).
-   Overlay mounts live in the ateom pods' mount namespaces, so atelet
+   Overlay mounts live in the worker pods' mount namespaces, so atelet
    cannot see them in its own `/proc/mounts`; the bundle specs are
-   written by atelet itself before any ateom is asked to mount and
+   written by atelet itself before any ateworker is asked to mount and
    removed only after unmount, so they are the authoritative "actively
    mounted" set. A spec roots its image digest, each layer dir it
    names, and its *exact* layer set — the last also roots the

@@ -26,12 +26,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // testActorSPIFFEID is the identity filter state the CONNECT chain shares.
-const testActorSPIFFEID = "spiffe://substrate-actor.local/ateom-for-actor/default/my-actor"
+const testActorSPIFFEID = "spiffe://substrate-actor.local/worker-for-actor/default/my-actor"
 
 // testDialed is the IP:port the test actor's kernel dialed for a callout on
 // leg: the default port of the protocol that leg carries.
@@ -52,14 +52,14 @@ func sampleEffects() *ateapipb.HttpRuleEffects {
 // the authorization header, which only the MITM leg can honor.
 func credentialInjectionPolicySample(pattern string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Https: &ateapipb.HTTPSRule{Hostnames: []string{pattern}, Effects: sampleEffects()},
+		Https: &ateapipb.HttpsRule{Hostnames: []string{pattern}, Effects: sampleEffects()},
 	}}}
 }
 
 // cleartextInjectionPolicy is the same replacement on an http rule.
 func cleartextInjectionPolicy(pattern string) *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-		Http: &ateapipb.HTTPRule{Hostnames: []string{pattern}, Effects: sampleEffects()},
+		Http: &ateapipb.HttpRule{Hostnames: []string{pattern}, Effects: sampleEffects()},
 	}}}
 }
 
@@ -410,7 +410,7 @@ func TestRequestLegPolicyLookup(t *testing.T) {
 // could be allowed through it, and warms the cache for the requests inside.
 func TestConnectLegRequiresAPolicy(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
-	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/ateom-for-actor/default/my-actor", actorCertOptions{})
+	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/default/my-actor", actorCertOptions{})
 
 	tests := []struct {
 		name   string

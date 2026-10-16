@@ -1,4 +1,4 @@
-module github.com/agent-substrate/substrate
+module go.ate.dev/substrate
 
 go 1.27.0
 
@@ -62,8 +62,10 @@ require (
 	go.opentelemetry.io/otel/trace v1.45.0
 	go.opentelemetry.io/proto/otlp v1.11.0
 	golang.org/x/net v0.60.0
+	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
+	golang.org/x/time v0.15.0
 	google.golang.org/api v0.274.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d
 	google.golang.org/grpc v1.83.2
@@ -242,10 +244,8 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20260718201538-764159d718ef // indirect
-	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/term v0.46.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
 	gonum.org/v1/gonum v0.17.0 // indirect
 	google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 // indirect

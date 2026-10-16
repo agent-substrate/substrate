@@ -22,11 +22,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestListTags checks the atespace scoping and the paging of the
@@ -63,7 +63,7 @@ func TestListTags(t *testing.T) {
 			if resp.GetNextPageToken() == "" {
 				return got
 			}
-			req.PageToken = resp.GetNextPageToken()
+			req.Options = &ateapipb.ListOptions{PageSize: req.GetOptions().GetPageSize(), PageToken: resp.GetNextPageToken()}
 		}
 	}
 
@@ -84,7 +84,7 @@ func TestListTags(t *testing.T) {
 		},
 		{
 			name: "one tag per page",
-			req:  &ateapipb.ListTagsRequest{PageSize: 1},
+			req:  &ateapipb.ListTagsRequest{Options: &ateapipb.ListOptions{PageSize: 1}},
 			want: []string{otherAtespace + "/v1", testAtespace + "/v1", testAtespace + "/v2"},
 		},
 		{
@@ -101,7 +101,7 @@ func TestListTags(t *testing.T) {
 		})
 	}
 
-	_, err := svc.ListTags(ctx, &ateapipb.ListTagsRequest{PageToken: "not-a-token"})
+	_, err := svc.ListTags(ctx, &ateapipb.ListTagsRequest{Options: &ateapipb.ListOptions{PageToken: "not-a-token"}})
 	if code := apierror.Code(err); code != codes.InvalidArgument {
 		t.Errorf("ListTags(bad page_token) error = %v (code %v), want code InvalidArgument", err, code)
 	}

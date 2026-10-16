@@ -22,19 +22,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // Env builds an Env with no cluster connection. The render paths only read
 // configuration, so they can be exercised without a kubeconfig.
 func Env(t *testing.T) *steps.Env {
 	t.Helper()
-	// Pin VERSION so rendering does not depend on whatever tags (e.g.
-	// archive/*) happen to be in the local git checkout.
-	t.Setenv("VERSION", "v0.0.0-test")
 	root, err := config.RepoRoot()
 	if err != nil {
 		t.Fatalf("RepoRoot: %v", err)

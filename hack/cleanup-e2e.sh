@@ -18,7 +18,7 @@ set -o errexit -o nounset -o pipefail
 
 # Deletes the namespaces a failed e2e run left behind.
 #
-# A failed suite keeps its namespaces so the worker pods — and the ateom logs
+# A failed suite keeps its namespaces so the worker pods — and the worker logs
 # inside them, which is where an actor failure is actually explained — survive
 # long enough to read (see RetainNamespaces in internal/e2e/namespace.go).
 # Nothing reclaims them afterwards, and each holds a WorkerPool's worth of

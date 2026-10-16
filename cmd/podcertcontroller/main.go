@@ -31,17 +31,18 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podcertificate"
-	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podidentitysigner"
-	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/postgressigner"
-	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/rendezvous"
-	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/servicednssigner"
-	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/signercontroller"
-	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/cmd/podcertcontroller/internal/podcertificate"
+	"go.ate.dev/substrate/cmd/podcertcontroller/internal/podidentitysigner"
+	"go.ate.dev/substrate/cmd/podcertcontroller/internal/postgressigner"
+	"go.ate.dev/substrate/cmd/podcertcontroller/internal/rendezvous"
+	"go.ate.dev/substrate/cmd/podcertcontroller/internal/servicednssigner"
+	"go.ate.dev/substrate/cmd/podcertcontroller/internal/signercontroller"
+	"go.ate.dev/substrate/internal/clustertrustbundle"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/version"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -108,7 +109,8 @@ var (
 		"Burst queries allowed against the Kubernetes API. 0 keeps the client-go default.",
 	)
 
-	showVersion = pflag.Bool("version", false, "Print version and exit.")
+	showVersion  = pflag.Bool("version", false, "Print version and exit.")
+	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 )
 
 func main() {
@@ -120,6 +122,10 @@ func main() {
 		return
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	if err := preview.Init(*previewFlags...); err != nil {
+		slog.ErrorContext(ctx, "Invalid --preview", slog.Any("err", err))
+		os.Exit(1)
+	}
 	slog.InfoContext(ctx, "podcertcontroller starting", slog.String("version", version.Version))
 
 	var kconfig *rest.Config
@@ -193,7 +199,7 @@ func main() {
 		slog.ErrorContext(ctx, "Error loading podidentity.podcert.ate.dev/identity CA pool state", slog.Any("err", err))
 		os.Exit(1)
 	}
-	podIdentitySignerController := signercontroller.New(clock.RealClock{}, podidentitysigner.NewImpl(kc, podIdentityCAPool, pcrClient), hasher, pcrClient, trustBundles)
+	podIdentitySignerController := signercontroller.New(clock.RealClock{}, podidentitysigner.NewImpl(podIdentityCAPool, pcrClient), hasher, pcrClient, trustBundles)
 	postgresCAPool, err := localca.NewRefreshingPool(*postgresCAPoolFile)
 	if err != nil {
 		slog.ErrorContext(ctx, "Error loading PostgreSQL CA pool state", slog.Any("err", err))

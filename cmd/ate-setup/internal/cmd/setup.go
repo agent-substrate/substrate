@@ -17,7 +17,7 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
 )
 
 var setupCmd = &cobra.Command{

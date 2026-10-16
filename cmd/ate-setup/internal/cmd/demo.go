@@ -19,10 +19,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/demos"
 	// Registers every bundled demo; see the package doc.
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/all"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/all"
 )
 
 // demoArg is the short name a demo is addressed by on the command line:
@@ -56,6 +56,9 @@ func init() {
 			Short: demo.Description(),
 			Args:  cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
+				if err := env.RequireControlPlane(cmd.Context()); err != nil {
+					return err
+				}
 				return demo.Deploy(cmd.Context(), env)
 			},
 		}

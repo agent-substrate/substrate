@@ -55,7 +55,7 @@ SUFFIX="$(date +%s)"
 ACTOR_BUSY="busy-${SUFFIX}"    # occupies the only worker
 ACTOR_PARKED="parked-${SUFFIX}" # its request parks, then survives the drain
 LOCAL_HTTP_PORT="${LOCAL_HTTP_PORT:-18080}"
-LOCAL_METRICS_PORT="${LOCAL_METRICS_PORT:-19090}"
+LOCAL_HEALTH_PORT="${LOCAL_HEALTH_PORT:-19091}"
 # Xs must be the trailing characters: BSD (macOS) mktemp rejects suffixes.
 LOG_FILE="$(mktemp /tmp/atenet-drain-check-log.XXXXXX)"
 CURL_OUT="$(mktemp /tmp/atenet-drain-check-out.XXXXXX)"
@@ -101,10 +101,10 @@ run_kubectl_ate get actor-template "${DEMO_POOL}" -a "${ATESPACE}" -o json 2>/de
 if run_kubectl_ate get workers 2>/dev/null | awk 'NR>1 && $4=="ASSIGNED"' | grep -q .; then
   fail "workers on the ${DEMO_POOL} pool are ASSIGNED; the check scales the pool to 1 and would crash running actors — suspend them first"
 fi
-for port in "${LOCAL_HTTP_PORT}" "${LOCAL_METRICS_PORT}"; do
+for port in "${LOCAL_HTTP_PORT}" "${LOCAL_HEALTH_PORT}"; do
   if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
     exec 3>&- 3<&-
-    fail "local port ${port} is already in use (a stale port-forward?); free it or set LOCAL_HTTP_PORT/LOCAL_METRICS_PORT"
+    fail "local port ${port} is already in use (a stale port-forward?); free it or set LOCAL_HTTP_PORT/LOCAL_HEALTH_PORT"
   fi
 done
 
@@ -137,12 +137,12 @@ run_kubectl logs -n "${ROUTER_NS}" "${POD}" -c atenet-router -f > "${LOG_FILE}" 
 BG_PIDS+=($!)
 run_kubectl port-forward -n "${ROUTER_NS}" svc/atenet-router "${LOCAL_HTTP_PORT}:80" >/dev/null 2>&1 &
 BG_PIDS+=($!)
-run_kubectl port-forward -n "${ROUTER_NS}" "${POD}" "${LOCAL_METRICS_PORT}:9090" >/dev/null 2>&1 &
+run_kubectl port-forward -n "${ROUTER_NS}" "${POD}" "${LOCAL_HEALTH_PORT}:9091" >/dev/null 2>&1 &
 BG_PIDS+=($!)
 sleep 3
 
-readyz() { curl -s -o /dev/null -w '%{http_code}' "localhost:${LOCAL_METRICS_PORT}/readyz"; }
-healthz() { curl -s -o /dev/null -w '%{http_code}' "localhost:${LOCAL_METRICS_PORT}/healthz"; }
+readyz() { curl -s -o /dev/null -w '%{http_code}' "localhost:${LOCAL_HEALTH_PORT}/readyz"; }
+healthz() { curl -s -o /dev/null -w '%{http_code}' "localhost:${LOCAL_HEALTH_PORT}/healthz"; }
 
 # The port-forwards need a moment to come up; retry before judging.
 for i in $(seq 1 20); do

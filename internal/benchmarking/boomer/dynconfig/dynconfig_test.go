@@ -41,7 +41,7 @@ func TestParseValid(t *testing.T) {
 		"durdir_template": "glutton-durdir-data",
 		"cpu_cores": 2,
 		"cpu_duty_cycle": 0.1,
-		"sweperf_template": "swebench-astropy-7336",
+		"sweperf_template": "sweperf-astropy-7336",
 		"sweperf_total_steps": 21,
 		"sweperf_num_cycles": 4,
 		"sweperf_poll_interval_ms": 100,
@@ -49,7 +49,8 @@ func TestParseValid(t *testing.T) {
 		"agentsession_script_file": "/etc/agentsession/script.yaml",
 		"total_actors": 50,
 		"spawn_concurrency": 5,
-		"actor_deadline": 60.0
+		"actor_deadline": 60.0,
+		"target_rps": 2500.5
 	}`)
 
 	cfg, err := Parse(jsonBlob, Config{})
@@ -93,8 +94,8 @@ func TestParseValid(t *testing.T) {
 	if cfg.CPUDutyCycle != 0.1 {
 		t.Errorf("CPUDutyCycle: got %f, want 0.1", cfg.CPUDutyCycle)
 	}
-	if cfg.SweperfTemplate != "swebench-astropy-7336" {
-		t.Errorf("SweperfTemplate: got %q, want swebench-astropy-7336", cfg.SweperfTemplate)
+	if cfg.SweperfTemplate != "sweperf-astropy-7336" {
+		t.Errorf("SweperfTemplate: got %q, want sweperf-astropy-7336", cfg.SweperfTemplate)
 	}
 	if cfg.SweperfTotalSteps != 21 {
 		t.Errorf("SweperfTotalSteps: got %d, want 21", cfg.SweperfTotalSteps)
@@ -119,6 +120,9 @@ func TestParseValid(t *testing.T) {
 	}
 	if cfg.ActorDeadline != 60*time.Second {
 		t.Errorf("ActorDeadline: got %v, want 60s", cfg.ActorDeadline)
+	}
+	if cfg.TargetRPS != 2500.5 {
+		t.Errorf("TargetRPS: got %v, want 2500.5", cfg.TargetRPS)
 	}
 }
 
@@ -198,6 +202,10 @@ func TestParseInvalidValues(t *testing.T) {
 		{
 			name: "negative sweperf num cycles",
 			json: `{"sweperf_num_cycles": -1}`,
+		},
+		{
+			name: "negative target rps",
+			json: `{"target_rps": -1}`,
 		},
 		{
 			name: "negative sweperf poll interval",

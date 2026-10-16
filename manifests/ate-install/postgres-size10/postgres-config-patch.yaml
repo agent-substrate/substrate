@@ -46,9 +46,9 @@ data:
     wal_buffers = 64MB
     huge_pages = try
 
-    # 2 ate-api-server replicas at pool_max_conns=64 + 3-conn watch pool each
-    # = 134 steady-state; 300 leaves room to double replicas and for psql /
-    # monitoring / migrations.
+    # 2 ate-api-server replicas at pool_max_conns=64 + 3-conn watch pool +
+    # 1-conn readiness pool each = 136 steady-state; 300 leaves room to double
+    # replicas and for psql / monitoring / migrations.
     max_connections = 300
 
     # 1 GB max_wal_size (the compiled default) forces a checkpoint every few

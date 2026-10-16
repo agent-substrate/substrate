@@ -31,10 +31,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/trustbundle"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 	certsv1 "k8s.io/api/certificates/v1"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -108,26 +108,22 @@ func (s *ctbStore) remove(t *testing.T) {
 	}
 }
 
-func trustVolumeSpec(relPath string) *ateletpb.SystemInfoVolume {
-	return &ateletpb.SystemInfoVolume{
+func trustVolumeSpec(relPath string) *ateletpb.SystemInfoVolumeSource {
+	return &ateletpb.SystemInfoVolumeSource{
 		DataSources: []*ateletpb.SystemInfoDataSource{
-			{DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
-				TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{trustbundle.EgressName}, Path: relPath},
-			}},
+			{TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{trustbundle.EgressName}, Path: relPath}},
 		},
 	}
 }
 
-func metadataVolumeSpec() *ateletpb.SystemInfoVolume {
-	return &ateletpb.SystemInfoVolume{
+func metadataVolumeSpec() *ateletpb.SystemInfoVolumeSource {
+	return &ateletpb.SystemInfoVolumeSource{
 		DataSources: []*ateletpb.SystemInfoDataSource{
-			{DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
-				ActorMetadata: &ateletpb.ActorMetadataDataSource{
-					Items: []*ateletpb.ActorMetadataItem{
-						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
-						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
-						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
-					},
+			{ActorMetadata: &ateletpb.ActorMetadataDataSource{
+				Items: []*ateletpb.ActorMetadataItem{
+					{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
+					{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
+					{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
 				},
 			}},
 		},
@@ -399,7 +395,7 @@ func TestSystemInfoVolumeRefresher_RotationLeavesUnchangedFilesAlone(t *testing.
 	store.set(t, certA)
 	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	root := filepath.Join(t.TempDir(), "system-info", "vol1")
-	spec := &ateletpb.SystemInfoVolume{
+	spec := &ateletpb.SystemInfoVolumeSource{
 		DataSources: append(metadataVolumeSpec().GetDataSources(), trustVolumeSpec("trust/ca.pem").GetDataSources()...),
 	}
 	if _, err := r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, []*systemInfoVolume{{Name: "vol1", Root: root, Spec: spec}}); err != nil {
@@ -687,9 +683,9 @@ func TestSystemInfoVolumeRefresher_FailedReplacementDropsRegistration(t *testing
 
 func TestSystemInfoVolumesFor(t *testing.T) {
 	spec := &ateletpb.WorkloadSpec{Volumes: []*ateletpb.Volume{
-		{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
-		{Name: "trust", Source: &ateletpb.Volume_SystemInfo{SystemInfo: trustVolumeSpec("ca.pem")}},
-		{Name: "meta", Source: &ateletpb.Volume_SystemInfo{SystemInfo: metadataVolumeSpec()}},
+		{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
+		{Name: "trust", SystemInfo: trustVolumeSpec("ca.pem")},
+		{Name: "meta", SystemInfo: metadataVolumeSpec()},
 	}}
 	got := systemInfoVolumesFor("uid-1", spec)
 	if len(got) != 2 || got[0].Name != "trust" || got[1].Name != "meta" {

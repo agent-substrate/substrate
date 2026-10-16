@@ -23,7 +23,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/serverboot"
 )
 
 // defaultDrainCompleteFile is where the drain sequence leaves its completion
