@@ -1609,6 +1609,19 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	if mountErr != nil {
 		return nil, mountErr
 	}
+	// If the restore fails after mounting external volumes, unmount them so a
+	// retried Restore's resetActorDirs can remove the empty mountpoint
+	// directories without hitting EBUSY/ENOTEMPTY.
+	defer func() {
+		if err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			if uerr := s.unmountExternalVolumes(cleanupCtx, actorUID, req.GetSpec().GetVolumes()); uerr != nil {
+				slog.WarnContext(cleanupCtx, "Failed to unmount external volumes after Restore failure",
+					slog.Any("actor", actorRef), slog.Any("err", uerr))
+			}
+		}
+	}()
 
 	checkpointDir := ateletpath.RestoreStateDir(actorUID)
 	localDir := ateletpath.LocalSnapshotDir(actorUID, req.GetSnapshot().GetSnapshotUuid())
@@ -1765,8 +1778,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	})
 	dWorker = time.Since(tWorker)
 	if err != nil {
-		// TODO: classify the errors returned by Worker and crash the actor if needed.
-		return nil, fmt.Errorf("while calling worker RestoreWorkload: %w", err)
+		return nil, workerRestoreError(ctx, err)
 	}
 
 	// Record the sandbox binaries actually running the guest on-node so a
@@ -1797,6 +1809,26 @@ func (s *Atelet) DetachActor(ctx context.Context, req *ateletpb.DetachActorReque
 		return nil, err
 	}
 	return &ateletpb.DetachActorResponse{State: state}, nil
+}
+
+// workerRestoreError translates a failed worker RestoreWorkload call into the
+// error Atelet.Restore reports to the control plane. When atelet's own context
+// ended, wrap ctx.Err() so the server reports the context status. When the
+// worker reports codes.Unavailable (or a worker-side Canceled/DeadlineExceeded
+// while atelet's context is still live), the worker rolled back the restore
+// before the workload served any traffic, so report apierror.Unavailable to let
+// the control plane keep the actor in ACTOR_STATE_RESUMING and retry. All other
+// worker errors reach the control plane as codes.Internal, crashing the actor.
+func workerRestoreError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("while calling worker RestoreWorkload: %w: %w", err, ctx.Err())
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.Canceled, codes.DeadlineExceeded:
+		return apierror.Unavailable("while calling worker RestoreWorkload: %w", err)
+	default:
+		return fmt.Errorf("while calling worker RestoreWorkload: %w", err)
+	}
 }
 
 // Terminate terminates any running workload on worker, unmounts external volumes,

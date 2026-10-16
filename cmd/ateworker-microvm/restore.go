@@ -257,6 +257,26 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if retErr != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			if cleanupErr := s.tunnel.Deactivate(cleanupCtx, p.attribution()); cleanupErr != nil {
+				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Restore failure", slog.Any("err", cleanupErr))
+			}
+			// Sweep any per-sandbox host-side mounts and state after the VMM and
+			// virtiofsd defers below have stopped the processes, then remove the
+			// extracted upper dir and detach the bundle rootfs overlays (mirroring
+			// teardownActor).
+			s.cleanupSandboxState(cleanupCtx, actorUID)
+			if err := os.RemoveAll(rootfsUpperDir(p.actorDirs)); err != nil {
+				slog.WarnContext(cleanupCtx, "Failed to remove rootfs upper dir after Restore failure", slog.String("actorUID", actorUID), slog.Any("err", err))
+			}
+			if err := imagecache.UnmountAllUnder(p.actorDirs.GetOciBundleDir()); err != nil {
+				slog.WarnContext(cleanupCtx, "Failed to unmount bundle rootfs overlays after Restore failure", slog.Any("err", err))
+			}
+		}
+	}()
 	s.cleanupSandboxState(ctx, actorUID)
 
 	// Repoint the snapshot's per-actor paths to this actor's: its VMDir
@@ -339,20 +359,6 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// fd-backed, so CH needs fresh tap FDs (net_fds) on restore. The caller
 	// unhosts on failure, once the defers here have stopped the actor's
 	// processes.
-	defer func() {
-		if retErr != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			if cleanupErr := s.tunnel.Deactivate(cleanupCtx, p.attribution()); cleanupErr != nil {
-				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Restore failure", slog.Any("err", cleanupErr))
-			}
-			// Detach any bundle rootfs overlays mounted by buildActorContainers
-			// before the failure, mirroring teardownActor's cleanup.
-			if err := imagecache.UnmountAllUnder(p.actorDirs.GetOciBundleDir()); err != nil {
-				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure", slog.Any("err", err))
-			}
-		}
-	}()
 	netDevs, err := ch.SnapshotNetDevices(restoreDir)
 	if err != nil {
 		return fmt.Errorf("while reading snapshot net devices: %w", err)
@@ -420,7 +426,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	maybeDropStagedMemoryImage(ctx, restoreDir, memMode, preserveRestoreDir)
 	dropActorSnapshotCacheAsync(restoreDir, memMode == ch.MemRestoreEager)
 	if err := client.Resume(ctx); err != nil {
-		return fmt.Errorf("while resuming restored guest: %w", err)
+		return restoreGuestReadyError(ctx, "resuming restored guest", err)
 	}
 	tResume := time.Now()
 
@@ -429,7 +435,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// fails the restore. A failing restore closes the connection on its way out.
 	guestAC, err := dialAgentRetry(ctx, kata.VsockSocketPath(actorUID), 15*time.Second)
 	if err != nil {
-		return fmt.Errorf("while dialing kata-agent after resume: %w", err)
+		return restoreGuestReadyError(ctx, "dialing kata-agent after resume", err)
 	}
 	defer func() {
 		if retErr != nil {
@@ -455,7 +461,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// CRNG on its own with no host round-trip, no per-restore RPC, and no post-Resume
 	// race. At that point this agent-driven reseed can be dropped.
 	if err := reseedGuestCRNG(ctx, guestAC); err != nil {
-		return fmt.Errorf("while reseeding guest CRNG: %w", err)
+		return restoreGuestReadyError(ctx, "reseeding guest CRNG", err)
 	}
 	tReseeded := time.Now()
 
@@ -550,6 +556,20 @@ func maybeDropStagedMemoryImage(ctx context.Context, restoreDir, memMode string,
 		return
 	}
 	dropStagedMemoryImage(ctx, restoreDir)
+}
+
+// restoreGuestReadyError classifies a failure to resume the restored micro-VM or
+// reach its kata-agent before the workload serves any traffic. Because the
+// restoreMemoryFidelity and RestoreWorkload defers tear down the VMM, virtiofsd,
+// rootfs mounts, network, and hosted-actor slot on the way out, the failed
+// attempt leaves no state behind and is safe for the caller to retry (re-staging
+// the snapshot if it was dropped above). When the caller's own context ended,
+// wrap ctx.Err() so the server reports the context status instead.
+func restoreGuestReadyError(ctx context.Context, step string, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("while %s: %v: %w", step, err, ctx.Err())
+	}
+	return apierror.Unavailable("while %s: %w", step, err)
 }
 
 // rewriteSnapshotPaths repoints the snapshot config.json's per-actor paths from

@@ -42,6 +42,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
@@ -2944,5 +2945,107 @@ func TestCheckpointSkipsStaleCommitAndKeepsNewerLocal(t *testing.T) {
 	}
 	if _, err := os.Stat(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-2")); !os.IsNotExist(err) {
 		t.Errorf("stale local snapshot pause-snap-2: stat = %v, want pruned", err)
+	}
+}
+
+func TestWorkerRestoreError(t *testing.T) {
+	canceledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	for _, tc := range []struct {
+		name     string
+		ctx      context.Context
+		err      error
+		wantCode codes.Code
+	}{
+		{
+			name:     "worker Unavailable maps to apierror.Unavailable",
+			ctx:      t.Context(),
+			err:      status.Error(codes.Unavailable, "while reseeding guest CRNG: context deadline exceeded"),
+			wantCode: codes.Unavailable,
+		},
+		{
+			name:     "worker DeadlineExceeded with live caller context maps to apierror.Unavailable",
+			ctx:      t.Context(),
+			err:      status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
+			wantCode: codes.Unavailable,
+		},
+		{
+			name:     "worker Canceled with live caller context maps to apierror.Unavailable",
+			ctx:      t.Context(),
+			err:      status.Error(codes.Canceled, "context canceled"),
+			wantCode: codes.Unavailable,
+		},
+		{
+			name:     "worker Internal maps to codes.Internal",
+			ctx:      t.Context(),
+			err:      status.Error(codes.Internal, "corrupt snapshot config"),
+			wantCode: codes.Internal,
+		},
+		{
+			name:     "caller context canceled reports Canceled",
+			ctx:      canceledCtx,
+			err:      status.Error(codes.Internal, "worker aborted"),
+			wantCode: codes.Canceled,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := workerRestoreError(tc.ctx, tc.err)
+			if code := apierror.Code(got); code != tc.wantCode {
+				t.Errorf("apierror.Code(workerRestoreError()) = %v, want %v (err: %v)", code, tc.wantCode, got)
+			}
+			if !errors.Is(got, tc.err) {
+				t.Errorf("workerRestoreError() = %v, want it to wrap %v", got, tc.err)
+			}
+		})
+	}
+}
+
+func TestRestoreFailureUnmountsExternalVolumesAndAllowsRetry(t *testing.T) {
+	a := runPluginActor(t)
+	snap := a.snapshot("pause-snap-1", 1)
+	if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	volPlugin := &fakeWorkerPlugin{}
+	a.s.volumePlugins = map[string]volume.VolumePluginWorkerPlane{
+		"mock-driver": volPlugin,
+	}
+	a.spec.Volumes = []*ateletpb.Volume{{
+		Name: "ext-vol",
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "vol-123",
+			VolumeType:      "mock-driver",
+		},
+	}}
+
+	restoreReq := &ateletpb.RestoreRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              pluginActorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		WorkerPodUid:          pluginWorkerPodUID,
+		SandboxRuntime:        runtimeFor(t, a.rec),
+		Spec:                  a.spec,
+		Snapshot:              snap,
+	}
+
+	a.worker.restoreErr = status.Error(codes.Unavailable, "while reseeding guest CRNG: context deadline exceeded")
+	_, err := a.s.Restore(t.Context(), restoreReq)
+	if got := apierror.Code(err); got != codes.Unavailable {
+		t.Fatalf("first Restore code = %v, want %v (err: %v)", got, codes.Unavailable, err)
+	}
+	if len(volPlugin.unmounted) != 1 || volPlugin.unmounted[0] != "vol-123" {
+		t.Fatalf("unmounted volumes after failed Restore = %v, want [vol-123]", volPlugin.unmounted)
+	}
+
+	a.worker.restoreErr = nil
+	if _, err := a.s.Restore(t.Context(), restoreReq); err != nil {
+		t.Fatalf("second Restore after transient Unavailable failed: %v", err)
+	}
+	if len(volPlugin.mountCalls) != 2 {
+		t.Errorf("mountCalls = %d, want 2 (initial attempt + retry)", len(volPlugin.mountCalls))
 	}
 }
