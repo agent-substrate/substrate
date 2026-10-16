@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -462,5 +463,25 @@ func TestEnsureSandboxAssetsConcurrentSameActor(t *testing.T) {
 	}
 	if len(siblings) != 2 {
 		t.Errorf("sandbox assets dir holds %d entries, want the 2 assets only", len(siblings))
+	}
+}
+
+// TestStageAssetFetchErrorWrappingErrExistIsNotStaged pins that only an
+// existing destination counts as staged by a concurrent call: a fetcher
+// failing with an error that happens to wrap ErrExist still fails the
+// stage, rather than reporting success with nothing at the destination.
+func TestStageAssetFetchErrorWrappingErrExistIsNotStaged(t *testing.T) {
+	root := t.TempDir()
+	s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{err: fmt.Errorf("object already there: %w", fs.ErrExist)}}
+	entry := assetEntry{URL: "gs://bucket/runsc", SHA256: strings.Repeat("d", 64)}
+	dst := filepath.Join(root, "actor", "runsc")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.stageAsset(t.Context(), entry, dst); err == nil {
+		t.Fatal("stageAsset reported success with nothing staged")
+	}
+	if _, err := os.Lstat(dst); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("destination exists after a failed fetch (lstat err = %v)", err)
 	}
 }

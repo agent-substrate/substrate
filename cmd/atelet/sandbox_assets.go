@@ -274,6 +274,11 @@ func stagedMeanwhile(ctx context.Context, dst string, err error) bool {
 	if !errors.Is(err, fs.ErrExist) {
 		return false
 	}
+	// A fetcher's own error reaches here wrapped too, and could wrap
+	// ErrExist for reasons of its own; only an existing dst means staged.
+	if _, lerr := os.Lstat(dst); lerr != nil {
+		return false
+	}
 	slog.DebugContext(ctx, "Sandbox asset staged by a concurrent call", slog.String("path", dst))
 	return true
 }
