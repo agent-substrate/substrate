@@ -1084,6 +1084,9 @@ func TestValidateTerminateRequest(t *testing.T) {
 	}, {
 		name: "unset spec is allowed",
 		obj:  valid(func(r *ateletpb.TerminateRequest) { r.Spec = nil }),
+	}, {
+		name: "keep_local_snapshots is allowed",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.KeepLocalSnapshots = true }),
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

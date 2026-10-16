@@ -349,11 +349,17 @@ func mustReadActor(t *testing.T, ctx context.Context, st store.Interface, actorR
 }
 
 // workerDeletedDuringReleaseStore runs the DeleteWorker workflow's release of
-// an actor right after a finalize step frees the actor's worker. That workflow
-// takes no actor lease, so its crash can land between the step's read of the
-// actor and its write.
+// an actor right after a finalize step frees the actor's worker, so its crash
+// lands between the step's read of the actor and its write. In production the
+// release takes the actor's lease, which pause and suspend hold through their
+// finalize steps, so it waits for them instead; AcquireLease is bypassed here
+// to keep the finalize step's own version guard against the crash covered.
 type workerDeletedDuringReleaseStore struct {
 	store.Interface
+}
+
+func (s workerDeletedDuringReleaseStore) AcquireLease(ctx context.Context, _ string) (*store.Lease, error) {
+	return store.NewLease(ctx, func() {}), nil
 }
 
 func (s workerDeletedDuringReleaseStore) ReleaseActorFromWorker(ctx context.Context, workerName, actorUID string) (*ateapipb.Worker, error) {
@@ -369,7 +375,7 @@ func (s workerDeletedDuringReleaseStore) ReleaseActorFromWorker(ctx context.Cont
 	if err != nil {
 		return nil, err
 	}
-	if err := NewWorkerWorkflow(s.Interface).releaseBoundActor(ctx, worker, assignment); err != nil {
+	if err := NewWorkerWorkflow(s, nil).releaseBoundActor(ctx, worker, assignment, &nodeReclaim{}); err != nil {
 		return nil, err
 	}
 	return released, nil

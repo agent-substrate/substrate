@@ -103,7 +103,7 @@ func NewRPCService(
 		actorIDCAPool:         actorIDCAPool,
 	}
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
-	s.workerWorkflow = NewWorkerWorkflow(impl)
+	s.workerWorkflow = NewWorkerWorkflow(impl, dialer)
 	return s
 }
 

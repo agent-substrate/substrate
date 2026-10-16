@@ -1341,9 +1341,17 @@ type TerminateRequest struct {
 	// actors with a fallback spec.
 	//
 	// +k8s:optional
-	Spec          *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	// When true and atelet holds a local snapshot for the actor, keep the
+	// actor's local snapshots, snapshot state, and staged sandbox assets on the
+	// node, resetting only the runtime directories. When false, or when atelet
+	// holds no local snapshot for the actor, forget the actor's snapshot state,
+	// prune its local checkpoints, and remove the actor's directory.
+	//
+	// +k8s:optional
+	KeepLocalSnapshots bool `protobuf:"varint,8,opt,name=keep_local_snapshots,json=keepLocalSnapshots,proto3" json:"keep_local_snapshots,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *TerminateRequest) Reset() {
@@ -1423,6 +1431,13 @@ func (x *TerminateRequest) GetSpec() *WorkloadSpec {
 		return x.Spec
 	}
 	return nil
+}
+
+func (x *TerminateRequest) GetKeepLocalSnapshots() bool {
+	if x != nil {
+		return x.KeepLocalSnapshots
+	}
+	return false
 }
 
 type TerminateResponse struct {
@@ -4193,7 +4208,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\tactor_uid\x18\x05 \x01(\tR\bactorUid\x12>\n" +
 	"\x1bcertificate_signing_request\x18\x01 \x01(\fR\x19certificateSigningRequest\"M\n" +
 	"\x1cMintActorCertificateResponse\x12-\n" +
-	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xa2\x02\n" +
+	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xd4\x02\n" +
 	"\x10TerminateRequest\x12$\n" +
 	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -4202,7 +4217,8 @@ const file_atelet_proto_rawDesc = "" +
 	"\tactor_uid\x18\x04 \x01(\tR\bactorUid\x126\n" +
 	"\x17actor_template_atespace\x18\x05 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
-	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\"\x13\n" +
+	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x120\n" +
+	"\x14keep_local_snapshots\x18\b \x01(\bR\x12keepLocalSnapshots\"\x13\n" +
 	"\x11TerminateResponse\"\xb1\x04\n" +
 	"\n" +
 	"RunRequest\x12$\n" +

@@ -481,16 +481,15 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				}
 				fresh = uri
 				objects.PutSnapshot(t, fresh, "manifest.json")
-				// The worker's pod goes away with the commit still outstanding, so
-				// the suspend never gets to finish.
-				if _, err := NewWorkerWorkflow(persistence).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
-					t.Errorf("DeleteWorker: %v", err)
-					return err
-				}
 				return status.Error(codes.Unavailable, "worker pod is gone")
 			}
 			if _, err := actorWorkflow.SuspendActor(ctx, actorRef); apierror.Code(err) != codes.Unavailable {
 				t.Fatalf("SuspendActor err = %v, want Unavailable from the failed checkpoint", err)
+			}
+			// SuspendActor failed mid-checkpoint and released the actor's lease,
+			// leaving the actor in SUSPENDING; DeleteWorker then crashes it.
+			if _, err := NewWorkerWorkflow(persistence, nil).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker: %v", err)
 			}
 
 			// The actor is CRASHED; DeleteActor deletes the in-progress snapshot
@@ -507,6 +506,50 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 			}
 			if left := objects.Prefix(t, fresh.OwnerPrefix()); len(left) != 0 {
 				t.Errorf("deleting the actor left %v under its own prefix, want everything it wrote collected", left)
+			}
+		})
+	}
+}
+
+// TestDeleteAndRevertSendKeepLocalSnapshotsFalse verifies that DeleteActor and
+// RevertActor send Terminate with keep_local_snapshots=false so any local
+// snapshot on the assigned node is discarded along with the actor's directory.
+func TestDeleteAndRevertSendKeepLocalSnapshotsFalse(t *testing.T) {
+	for _, op := range []string{"delete", "revert"} {
+		t.Run(op, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+
+			atelet := &capturingTerminator{}
+			w := NewActorWorkflow(persistence, nil, newNodeAteletDialer(t, atelet), nil, nil, nil, nil, "", nil, nil)
+
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status: &ateapipb.ActorStatus{
+					State:        ateapipb.ActorState_ACTOR_STATE_CRASHED,
+					AssignedNode: "node-1",
+				},
+			})
+
+			var err error
+			if op == "delete" {
+				_, err = w.DeleteActor(ctx, actorRef, false, store.DeletePreconditions{})
+			} else {
+				_, err = w.RevertActor(ctx, actorRef)
+			}
+			if err != nil {
+				t.Fatalf("%s failed: %v", op, err)
+			}
+
+			got := atelet.requests()
+			if len(got) != 1 {
+				t.Fatalf("atelet received %d Terminate calls, want 1", len(got))
+			}
+			if got[0].GetKeepLocalSnapshots() {
+				t.Errorf("%s sent Terminate with keep_local_snapshots=true, want false", op)
 			}
 		})
 	}

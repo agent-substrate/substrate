@@ -82,6 +82,10 @@ type fakeWorker struct {
 	// fidelities records the fidelity each checkpoint or restore arrived
 	// with, by RPC name.
 	fidelities map[string]ateworkerpb.SnapshotFidelity
+	// terminations counts TerminateWorkload calls.
+	terminations atomic.Int32
+	// terminateErr, when non-nil, is returned by TerminateWorkload.
+	terminateErr error
 }
 
 func (f *fakeWorker) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFidelity) {
@@ -138,7 +142,11 @@ func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.Restore
 }
 
 func (f *fakeWorker) TerminateWorkload(_ context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
+	f.terminations.Add(1)
 	f.recordActorDirs("TerminateWorkload", req.GetActorDirs())
+	if f.terminateErr != nil {
+		return nil, f.terminateErr
+	}
 	return &ateworkerpb.TerminateWorkloadResponse{}, nil
 }
 
@@ -1084,6 +1092,456 @@ func TestTerminateWithoutWorkerPodUID(t *testing.T) {
 	if _, err := os.Stat(ateletpath.ActorPath(actorUID)); !os.IsNotExist(err) {
 		t.Errorf("actor dir survived terminate: %v", err)
 	}
+}
+
+// A deleted worker pod takes its worker with it and leaves the actor's state on
+// the node — gigabytes of it for a durdir actor. The worker delete reclaims it
+// with a Terminate that still names that worker, so one that refuses to run
+// without a live worker leaves the state until the actor is deleted or
+// reverted. Both ways the sandbox can be absent are covered: the pod's socket
+// gone with it, and an actor that never started one.
+func TestTerminateReclaimsStateWithoutALiveSandbox(t *testing.T) {
+	const (
+		atespace     = "ate-demo"
+		actorName    = "counter"
+		actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
+		workerPodUID = "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
+	)
+
+	tests := []struct {
+		name string
+		// setup arranges the absence under test and reports it.
+		setup func(t *testing.T)
+	}{
+		{
+			name: "worker socket gone with its pod",
+			setup: func(t *testing.T) {
+				orig := workerSocketPath
+				missing := filepath.Join(t.TempDir(), "worker.sock")
+				workerSocketPath = func(string) string { return missing }
+				t.Cleanup(func() { workerSocketPath = orig })
+				// A sandbox record whose asset is not in the cache would fail
+				// ensureSandboxAssets (anonGCSClient is nil) if Terminate read
+				// the record before checking whether the worker socket exists.
+				if err := writeSandboxRecord(actorUID, &sandboxAssetsRecord{
+					SandboxClass: "gvisor",
+					PauseImage:   testPauseImage,
+					Assets:       map[string]assetEntry{runscAssetName: {URL: "gs://test-bucket/runsc", SHA256: strings.Repeat("a", 64)}},
+				}); err != nil {
+					t.Fatalf("writing sandbox record: %v", err)
+				}
+			},
+		},
+		{
+			// The record is written at Run/Restore: without one, no sandbox
+			// was ever started for this actor here, so there is nothing to
+			// tear down and no runsc to tear it down with.
+			name: "worker reachable but the actor has no sandbox record",
+			setup: func(t *testing.T) {
+				serveFakeWorker(t, &fakeWorker{})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			ctx := t.Context()
+			tt.setup(t)
+
+			// The three directories that each hold a full copy of a durdir
+			// actor's payload, which is what makes one actor cost 3 GiB.
+			stateDirs := []string{
+				ateletpath.DurableDirVolumeMountsDir(actorUID),
+				ateletpath.CheckpointStateDir(actorUID),
+				ateletpath.RestoreStateDir(actorUID),
+			}
+			for _, dir := range stateDirs {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatalf("seeding %s: %v", dir, err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "payload"), []byte("actor state"), 0o600); err != nil {
+					t.Fatalf("seeding %s: %v", dir, err)
+				}
+			}
+			snapshotDir := ateletpath.LocalSnapshotDir(actorUID, "pause-snap-1")
+			if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
+				t.Fatalf("seeding %s: %v", snapshotDir, err)
+			}
+
+			s := &Atelet{
+				workerDialer:      newWorkerDialer(1),
+				sandboxAssetCache: newTestAssetCache(t),
+				systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+				snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+			}
+			if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				WorkerPodUid:          workerPodUID,
+				Spec:                  &ateletpb.WorkloadSpec{},
+			}); err != nil {
+				t.Fatalf("Terminate: %v", err)
+			}
+
+			// Terminate removes the actor's directory outright rather than
+			// emptying the state dirs in place, so the seeded payloads go
+			// with it and the whole tree is the assertion.
+			if actorDir := ateletpath.ActorPath(actorUID); !isGone(actorDir) {
+				entries, _ := os.ReadDir(actorDir)
+				t.Errorf("%s survived terminate with %d entries, want the actor's state reclaimed", actorDir, len(entries))
+			}
+			if localDir := ateletpath.LocalCheckpointsDir(actorUID); !isGone(localDir) {
+				t.Errorf("%s survived terminate, want the local snapshots pruned", localDir)
+			}
+		})
+	}
+}
+
+// TestTerminateCanBeRetried pins that a repeated Terminate succeeds. The control
+// plane retries a Terminate until one does, so a Terminate that cannot succeed
+// twice strands the actor in DELETING with its state on the node.
+func TestTerminateCanBeRetried(t *testing.T) {
+	const (
+		atespace     = "ate-demo"
+		actorName    = "counter"
+		actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
+		workerPodUID = "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
+	)
+
+	for _, tt := range []struct {
+		name string
+		// failFirst fails the first Terminate after its worker teardown, the way
+		// a volume that has not finished unmounting does.
+		failFirst bool
+		// wantTeardowns is how many TerminateWorkload calls worker sees. A retry
+		// tears down again only while the sandbox record survives.
+		wantTeardowns int32
+	}{
+		{name: "after a terminate that succeeded", wantTeardowns: 1},
+		{name: "after a terminate that failed past the teardown", failFirst: true, wantTeardowns: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			ctx := t.Context()
+
+			worker := &fakeWorker{}
+			serveFakeWorker(t, worker)
+
+			host := imageVolumeTestRegistry(t)
+			image := host + "/actor:v1"
+			pinnedImage := pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+
+			runsc := []byte("runsc binary")
+			s := &Atelet{
+				workerDialer:      newWorkerDialer(1),
+				imageCache:        newImageVolumeStore(t),
+				sandboxAssetCache: newTestAssetCache(t),
+				anonGCSClient:     fakeObjectStorage{data: runsc},
+				systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+				snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+			}
+			spec := &ateletpb.WorkloadSpec{
+				Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
+			}
+			sandboxAssets := &ateletpb.SandboxAssets{
+				SandboxClass: "gvisor",
+				PauseImage:   pinnedImage,
+				Assets: map[string]*ateletpb.ArchAssets{
+					runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+						runscAssetName: {
+							Url:    "gs://test-bucket/runsc",
+							Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
+						},
+					}},
+				},
+			}
+			advertiseRuntime(t, s, sandboxAssets)
+			if _, err := s.Run(ctx, &ateletpb.RunRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				WorkerPodUid:          workerPodUID,
+				SandboxAssets:         sandboxAssets, SandboxRuntime: runtimeFor(t, sandboxAssets),
+				Spec: spec,
+			}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			// A populated volume directory, which resetActorDirs refuses to
+			// delete through.
+			straggler := filepath.Join(ateletpath.ExternalVolumeHostPath(actorUID, "data"), "file")
+			if tt.failFirst {
+				if err := os.MkdirAll(filepath.Dir(straggler), 0o755); err != nil {
+					t.Fatalf("seeding %s: %v", straggler, err)
+				}
+				if err := os.WriteFile(straggler, []byte("still mounted"), 0o600); err != nil {
+					t.Fatalf("seeding %s: %v", straggler, err)
+				}
+			}
+
+			req := &ateletpb.TerminateRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				WorkerPodUid:          workerPodUID,
+				Spec:                  spec,
+			}
+			_, err := s.Terminate(ctx, req)
+			if tt.failFirst {
+				if err == nil {
+					t.Fatal("first Terminate succeeded through a populated volume directory")
+				}
+				// The unmount finishes before the retry.
+				if err := os.Remove(straggler); err != nil {
+					t.Fatalf("removing %s: %v", straggler, err)
+				}
+			} else if err != nil {
+				t.Fatalf("first Terminate: %v", err)
+			}
+
+			if _, err := s.Terminate(ctx, req); err != nil {
+				t.Fatalf("retried Terminate: %v", err)
+			}
+			if got := worker.terminations.Load(); got != tt.wantTeardowns {
+				t.Errorf("worker saw %d TerminateWorkload calls, want %d", got, tt.wantTeardowns)
+			}
+			if actorDir := ateletpath.ActorPath(actorUID); !isGone(actorDir) {
+				t.Errorf("%s survived the retried terminate, want it removed", actorDir)
+			}
+		})
+	}
+}
+
+// TestTerminateKeepLocalSnapshots checks that Terminate with
+// KeepLocalSnapshots=true resets runtime directories while preserving the
+// actor's local snapshots, snapshot tracker state, and staged sandbox assets
+// when the node holds a local snapshot, and removes the whole actor directory
+// when it does not.
+func TestTerminateKeepLocalSnapshots(t *testing.T) {
+	t.Run("tracked local snapshot kept and runtime dirs reset", func(t *testing.T) {
+		a := runPluginActor(t)
+		snap := a.snapshot("pause-snap-1", 1)
+		if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+
+		// Seed runtime state that a subsequent failed or interrupted activation
+		// leaves behind before the worker pod is deleted.
+		durableFile := filepath.Join(ateletpath.DurableDirVolumeMountPoint(pluginActorUID, "work"), "payload")
+		if err := os.MkdirAll(filepath.Dir(durableFile), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(durableFile, []byte("runtime-payload"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := a.s.Terminate(t.Context(), &ateletpb.TerminateRequest{
+			Atespace:              "ate-demo",
+			ActorName:             "counter",
+			ActorUid:              pluginActorUID,
+			ActorTemplateAtespace: "default",
+			ActorTemplateName:     "counter",
+			WorkerPodUid:          pluginWorkerPodUID,
+			Spec:                  a.spec,
+			KeepLocalSnapshots:    true,
+		}); err != nil {
+			t.Fatalf("Terminate(KeepLocalSnapshots=true): %v", err)
+		}
+
+		if !isGone(durableFile) {
+			t.Errorf("runtime durable-dir payload %s survived Terminate(KeepLocalSnapshots=true)", durableFile)
+		}
+		snapshotFile := filepath.Join(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-1"), "checkpoint.img")
+		if _, err := os.Stat(snapshotFile); err != nil {
+			t.Errorf("local snapshot file %s removed by Terminate(KeepLocalSnapshots=true): %v", snapshotFile, err)
+		}
+		if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(pluginActorUID)); err != nil {
+			t.Errorf("snapshot-state.json removed by Terminate(KeepLocalSnapshots=true): %v", err)
+		}
+		if _, err := os.Stat(ateletpath.ActorSandboxAssetsFile(pluginActorUID)); err != nil {
+			t.Errorf("sandbox-assets.json removed by Terminate(KeepLocalSnapshots=true): %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(ateletpath.SandboxAssetsDir(pluginActorUID), runscAssetName)); err != nil {
+			t.Errorf("staged sandbox asset removed by Terminate(KeepLocalSnapshots=true): %v", err)
+		}
+		if got := a.s.snapshots.State(pluginActorUID).GetLatestLocal().GetSnapshot().GetSnapshotUuid(); got != "pause-snap-1" {
+			t.Errorf("latest_local after Terminate(KeepLocalSnapshots=true) = %q, want pause-snap-1", got)
+		}
+
+		// The preserved local snapshot remains restorable on this node.
+		a.restoreLocal(t, "pause-snap-1", 1)
+	})
+
+	t.Run("untracked on-disk local checkpoint kept", func(t *testing.T) {
+		useTempNodeDirs(t)
+		const (
+			actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
+			workerPodUID = "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
+		)
+		serveFakeWorker(t, &fakeWorker{})
+
+		snapshotFile := filepath.Join(ateletpath.LocalSnapshotDir(actorUID, "pause-snap-1"), "checkpoint.img")
+		if err := os.MkdirAll(filepath.Dir(snapshotFile), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(snapshotFile, []byte("guest-memory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		durableFile := filepath.Join(ateletpath.DurableDirVolumeMountPoint(actorUID, "work"), "payload")
+		if err := os.MkdirAll(filepath.Dir(durableFile), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(durableFile, []byte("runtime-payload"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		s := &Atelet{
+			workerDialer:      newWorkerDialer(1),
+			sandboxAssetCache: newTestAssetCache(t),
+			systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+			snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+		}
+		if _, err := s.Terminate(t.Context(), &ateletpb.TerminateRequest{
+			Atespace:           "ate-demo",
+			ActorName:          "counter",
+			ActorUid:           actorUID,
+			WorkerPodUid:       workerPodUID,
+			Spec:               &ateletpb.WorkloadSpec{},
+			KeepLocalSnapshots: true,
+		}); err != nil {
+			t.Fatalf("Terminate(KeepLocalSnapshots=true): %v", err)
+		}
+
+		if !isGone(durableFile) {
+			t.Errorf("runtime durable-dir payload %s survived Terminate(KeepLocalSnapshots=true)", durableFile)
+		}
+		if _, err := os.Stat(snapshotFile); err != nil {
+			t.Errorf("untracked local snapshot %s removed by Terminate(KeepLocalSnapshots=true): %v", snapshotFile, err)
+		}
+	})
+
+	t.Run("unreadable local-checkpoint dir fails closed and keeps actor dir", func(t *testing.T) {
+		useTempNodeDirs(t)
+		const (
+			actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
+			workerPodUID = "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
+		)
+		serveFakeWorker(t, &fakeWorker{})
+
+		// A regular file at local-checkpoint/ makes ReadDir return ENOTDIR,
+		// exercising the fail-closed non-ErrNotExist branch of hasLocalSnapshots.
+		localCheckpointsPath := ateletpath.LocalCheckpointsDir(actorUID)
+		if err := os.MkdirAll(filepath.Dir(localCheckpointsPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(localCheckpointsPath, []byte("not-a-dir"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		durableFile := filepath.Join(ateletpath.DurableDirVolumeMountPoint(actorUID, "work"), "payload")
+		if err := os.MkdirAll(filepath.Dir(durableFile), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(durableFile, []byte("runtime-payload"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		s := &Atelet{
+			workerDialer:      newWorkerDialer(1),
+			sandboxAssetCache: newTestAssetCache(t),
+			systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+			snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+		}
+		if _, err := s.Terminate(t.Context(), &ateletpb.TerminateRequest{
+			Atespace:           "ate-demo",
+			ActorName:          "counter",
+			ActorUid:           actorUID,
+			WorkerPodUid:       workerPodUID,
+			Spec:               &ateletpb.WorkloadSpec{},
+			KeepLocalSnapshots: true,
+		}); err != nil {
+			t.Fatalf("Terminate(KeepLocalSnapshots=true): %v", err)
+		}
+
+		if !isGone(durableFile) {
+			t.Errorf("runtime durable-dir payload %s survived Terminate(KeepLocalSnapshots=true)", durableFile)
+		}
+		if _, err := os.Stat(ateletpath.ActorPath(actorUID)); err != nil {
+			t.Errorf("actor dir removed when ReadDir on local-checkpoint failed: %v", err)
+		}
+	})
+
+	t.Run("no local snapshot removes entire actor dir", func(t *testing.T) {
+		a := runPluginActor(t)
+		if _, err := a.s.Terminate(t.Context(), &ateletpb.TerminateRequest{
+			Atespace:              "ate-demo",
+			ActorName:             "counter",
+			ActorUid:              pluginActorUID,
+			ActorTemplateAtespace: "default",
+			ActorTemplateName:     "counter",
+			WorkerPodUid:          pluginWorkerPodUID,
+			Spec:                  a.spec,
+			KeepLocalSnapshots:    true,
+		}); err != nil {
+			t.Fatalf("Terminate(KeepLocalSnapshots=true): %v", err)
+		}
+		if actorDir := ateletpath.ActorPath(pluginActorUID); !isGone(actorDir) {
+			t.Errorf("%s survived Terminate(KeepLocalSnapshots=true) with no local snapshot", actorDir)
+		}
+	})
+}
+
+// TestTerminateWorkerFailurePreservesState checks that when a live worker
+// returns Internal from TerminateWorkload, Terminate fails without resetting
+// actor directories or pruning local snapshots.
+func TestTerminateWorkerFailurePreservesState(t *testing.T) {
+	a := runPluginActor(t)
+	snap := a.snapshot("pause-snap-1", 1)
+	if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	durableFile := filepath.Join(ateletpath.DurableDirVolumeMountPoint(pluginActorUID, "work"), "payload")
+	if err := os.MkdirAll(filepath.Dir(durableFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(durableFile, []byte("runtime-payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	a.worker.terminateErr = apierror.Internal("sandbox busy")
+	_, err := a.s.Terminate(t.Context(), &ateletpb.TerminateRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              pluginActorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		WorkerPodUid:          pluginWorkerPodUID,
+		Spec:                  a.spec,
+	})
+	if got := apierror.Code(err); got != codes.Internal {
+		t.Fatalf("Terminate error = %v (code %v), want Internal", err, got)
+	}
+	if _, err := os.Stat(durableFile); err != nil {
+		t.Errorf("durable-dir payload removed after failed TerminateWorkload: %v", err)
+	}
+	snapshotFile := filepath.Join(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-1"), "checkpoint.img")
+	if _, err := os.Stat(snapshotFile); err != nil {
+		t.Errorf("local snapshot removed after failed TerminateWorkload: %v", err)
+	}
+}
+
+// isGone reports whether path does not exist.
+func isGone(path string) bool {
+	_, err := os.Stat(path)
+	return os.IsNotExist(err)
 }
 
 // pluginActorUID is the actor runPluginActor runs.
