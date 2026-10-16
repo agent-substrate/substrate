@@ -156,17 +156,17 @@ func TestDialForAteletOnNodeTarget(t *testing.T) {
 		{
 			name:       "IPv4 atelet",
 			ateletIP:   "10.244.1.7",
-			wantTarget: "10.244.1.7:8085",
+			wantTarget: "10.244.1.7:21998",
 		},
 		{
 			name:       "IPv6 atelet is bracketed",
 			ateletIP:   "fd00:10:244::7",
-			wantTarget: "[fd00:10:244::7]:8085",
+			wantTarget: "[fd00:10:244::7]:21998",
 		},
 		{
 			name:       "IPv6 loopback is bracketed",
 			ateletIP:   "::1",
-			wantTarget: "[::1]:8085",
+			wantTarget: "[::1]:21998",
 		},
 	}
 
@@ -387,7 +387,7 @@ func TestDialForAteletOnNode(t *testing.T) {
 		if fresh == old {
 			t.Fatal("DialForAteletOnNode returned the stale connection after the IP changed")
 		}
-		if got, want := fresh.Target(), "10.0.0.9:8085"; got != want {
+		if got, want := fresh.Target(), "10.0.0.9:21998"; got != want {
 			t.Errorf("dial target = %q, want %q", got, want)
 		}
 		if got := old.GetState(); got != connectivity.Shutdown {

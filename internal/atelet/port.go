@@ -16,5 +16,5 @@ package atelet
 
 const (
 	// DefaultPort is the port atelet's gRPC server listens on.
-	DefaultPort = 8085
+	DefaultPort = 21998
 )

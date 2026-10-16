@@ -271,8 +271,8 @@ spec:
             name: ate-otel-config
         ports:
         - name: grpc
-          containerPort: 8085
-          hostPort: 8085
+          containerPort: 21998
+          hostPort: 21998
         - name: prometheus
           containerPort: 9090
           protocol: TCP
