@@ -1196,6 +1196,8 @@ func actorRoutingFilterStateFilter(captureAuthority bool) *hcmv3.HttpFilter {
 		authority := "%REQ(" + extproc.AuthorityHeader + ")%"
 		values = append(values,
 			filterStateValue(extproc.ConnectAuthorityFilterStateKey, "envoy.string", authority, once),
+			// ParseTargetActor only accepts atespace/name labels, so the actor
+			// never contains "|" and the first "|" splits the key unambiguously.
 			filterStateValue(connectPoolFilterStateKey, "envoy.hashable_string", actor+"|"+authority, once))
 	}
 	return setFilterStateHTTPFilter(values...)
