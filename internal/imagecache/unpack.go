@@ -242,7 +242,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			}
 
 			// Stream directly from tarReader to target file to avoid buffering in memory.
-			fileMode := tarMode(hdr)
+			fileMode := tarutil.Mode(hdr)
 			outFile, err := root.OpenFile(name, os.O_CREATE|os.O_RDWR|os.O_TRUNC, mode)
 			if err != nil {
 				return nil, fmt.Errorf("while creating file %q: %w", name, err)
@@ -380,7 +380,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				return nil, err
 			}
 			if target.Mode().IsRegular() {
-				if err := restoreSetIDBits(ctx, root, name, target.Mode()&tarModeBits); err != nil {
+				if err := restoreSetIDBits(ctx, root, name, target.Mode()&tarutil.ModeBits); err != nil {
 					return nil, err
 				}
 			}
@@ -456,7 +456,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i].name) > len(dirs[j].name) })
 	for _, d := range dirs {
 		name, hdr := d.name, d.hdr
-		mode := tarMode(hdr)
+		mode := tarutil.Mode(hdr)
 		if err := root.Chmod(name, mode); err != nil {
 			return nil, fmt.Errorf("while restoring mode %v on directory %q: %w", mode, name, err)
 		}
@@ -543,17 +543,6 @@ func dirPaths(root *os.Root, dir string) (map[dirInode]string, error) {
 	return paths, err
 }
 
-// tarMode returns the mode an unpacked entry takes from its tar header: the
-// permission bits plus setuid, setgid and sticky, as containerd and moby apply
-// them. Without the sticky bit /tmp would be 0777 instead of 1777 in the
-// actor, letting any user delete another's files there.
-func tarMode(hdr *tar.Header) os.FileMode {
-	return hdr.FileInfo().Mode() & tarModeBits
-}
-
-// tarModeBits are the mode bits an unpacked entry takes from its tar header.
-const tarModeBits = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
-
 // restoreSetIDBits puts back the setuid and setgid bits of want on name, a
 // regular file whose owner was just applied: changing a non-directory's owner
 // clears them, so they can only be set after the chown.
@@ -584,7 +573,7 @@ func restoreSetIDBits(ctx context.Context, root *os.Root, name string, want os.F
 	if fi, err = root.Lstat(name); err != nil {
 		return fmt.Errorf("while checking mode of %q: %w", name, err)
 	}
-	if got := fi.Mode() & tarModeBits; got != want {
+	if got := fi.Mode() & tarutil.ModeBits; got != want {
 		slog.WarnContext(ctx, "Image file lost its setuid or setgid bit on unpack: atelet lacks CAP_FOWNER and CAP_FSETID",
 			slog.String("name", name), slog.String("want", want.String()), slog.String("got", got.String()))
 	}
