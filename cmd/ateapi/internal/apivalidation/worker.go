@@ -18,8 +18,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -132,6 +132,11 @@ func ValidateCustom_SandboxRuntime_SandboxClass(_ context.Context, _ operation.O
 // This is needed because DV doesn't have a standard format for IP addresses yet.
 func ValidateCustom_Worker_Ips(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
 	return validateDualStackIPs(fldPath, value)
+}
+
+// This is needed because DV doesn't have a format for SPIFFE IDs.
+func ValidateCustom_Worker_WorkerSpiffeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSPIFFEID(fldPath, *value)
 }
 
 // epoch only moves forward: a lower value would make Actors placed during the

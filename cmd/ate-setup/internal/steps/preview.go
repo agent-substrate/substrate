@@ -25,7 +25,7 @@ import (
 
 // substrateImagePrefix marks a container as running a substrate binary. Every
 // such binary accepts --preview.
-const substrateImagePrefix = "ko://github.com/agent-substrate/substrate/cmd/"
+const substrateImagePrefix = "ko://go.ate.dev/substrate/cmd/"
 
 const previewFlag = "--preview"
 

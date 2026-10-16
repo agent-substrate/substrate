@@ -22,8 +22,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/tarutil"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/tarutil"
 )
 
 func TestHasDurableVolumes(t *testing.T) {

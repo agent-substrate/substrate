@@ -21,9 +21,9 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/atomicfile"
-	"github.com/agent-substrate/substrate/internal/nodepath"
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
+	"go.ate.dev/substrate/internal/nodepath"
 )
 
 // saveLocked writes what atelet tracks of the actor to its snapshot state

@@ -38,13 +38,13 @@ func TestArgsAlwaysRequestBaseImportPaths(t *testing.T) {
 	}{
 		{"resolve", r.args("resolve", "-f", "manifests/ate-install")},
 		{"resolve from stdin", r.args("resolve", "-f", "-")},
-		{"build", r.args("build", "github.com/agent-substrate/substrate/cmd/ateworker-gvisor")},
+		{"build", r.args("build", "go.ate.dev/substrate/cmd/ateworker-gvisor")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if !slices.Contains(tc.args, "--base-import-paths") {
 				t.Errorf("args = %v, want --base-import-paths", tc.args)
 			}
-			if !slices.Contains(tc.args, "--ldflags=-X=github.com/agent-substrate/substrate/internal/version.Version=v0.0.0-test") {
+			if !slices.Contains(tc.args, "--ldflags=-X=go.ate.dev/substrate/internal/version.Version=v0.0.0-test") {
 				t.Errorf("args = %v, want the version stamp", tc.args)
 			}
 		})

@@ -406,6 +406,30 @@ data:
               # resolves and what both routes verify the origin against.
               access_log:
               - name: envoy.access_loggers.file
+                # Every actor request lands here, so log the ones that went
+                # wrong, including gRPC errors sent with HTTP 200, and a sample
+                # of the rest. The runtime keys let an operator turn full
+                # logging back on at the admin port:
+                # /runtime_modify?access_log.min_status=0.
+                filter:
+                  or_filter:
+                    filters:
+                    - status_code_filter:
+                        comparison:
+                          op: GE
+                          value: {default_value: 400, runtime_key: access_log.min_status}
+                    - response_flag_filter: {}
+                    - and_filter:
+                        filters:
+                        - header_filter:
+                            header:
+                              name: content-type
+                              string_match: {prefix: application/grpc}
+                        - grpc_status_filter: {exclude: true, statuses: [OK]}
+                    - runtime_filter:
+                        runtime_key: access_log.sample
+                        percent_sampled: {numerator: 1, denominator: HUNDRED}
+                        use_independent_randomness: true
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog
                   path: /dev/stdout
@@ -641,6 +665,30 @@ data:
               stream_idle_timeout: 0s
               access_log:
               - name: envoy.access_loggers.file
+                # Every actor request lands here, so log the ones that went
+                # wrong, including gRPC errors sent with HTTP 200, and a sample
+                # of the rest. The runtime keys let an operator turn full
+                # logging back on at the admin port:
+                # /runtime_modify?access_log.min_status=0.
+                filter:
+                  or_filter:
+                    filters:
+                    - status_code_filter:
+                        comparison:
+                          op: GE
+                          value: {default_value: 400, runtime_key: access_log.min_status}
+                    - response_flag_filter: {}
+                    - and_filter:
+                        filters:
+                        - header_filter:
+                            header:
+                              name: content-type
+                              string_match: {prefix: application/grpc}
+                        - grpc_status_filter: {exclude: true, statuses: [OK]}
+                    - runtime_filter:
+                        runtime_key: access_log.sample
+                        percent_sampled: {numerator: 1, denominator: HUNDRED}
+                        use_independent_randomness: true
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog
                   path: /dev/stdout
@@ -1228,7 +1276,7 @@ spec:
         # staying two CONTAINERS is what keeps the MITM signing key off the
         # data plane and gives the minter the separate memory limit the header
         # of this file depends on.
-        image: ko://github.com/agent-substrate/substrate/cmd/atenet
+        image: ko://go.ate.dev/substrate/cmd/atenet
         restartPolicy: Always
         args:
         - "sdsmint"
@@ -1396,7 +1444,7 @@ spec:
       # Envoy calls it over localhost to
       # authenticate actor identity against the ate API on every CONNECT.
       - name: ext-proc
-        image: ko://github.com/agent-substrate/substrate/cmd/atenet
+        image: ko://go.ate.dev/substrate/cmd/atenet
         args:
         - router
         - --mode=egress

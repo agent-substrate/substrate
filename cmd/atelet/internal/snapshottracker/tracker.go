@@ -20,8 +20,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/agent-substrate/substrate/internal/actorlock"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/clock"
 )

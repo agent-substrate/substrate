@@ -19,9 +19,10 @@ import (
 	"fmt"
 	"net/netip"
 
-	"github.com/agent-substrate/substrate/internal/preview"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -118,4 +119,13 @@ func validateDualStackIPs(fldPath *field.Path, ips []string) field.ErrorList {
 		*seen = true
 	}
 	return errs
+}
+
+// validateSPIFFEID checks that id is a SPIFFE ID. Presence and length are
+// enforced by tags.
+func validateSPIFFEID(fldPath *field.Path, id string) field.ErrorList {
+	if _, err := spiffeid.FromString(id); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, id, err.Error())}
+	}
+	return nil
 }

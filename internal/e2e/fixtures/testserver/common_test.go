@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/testcert"
+	"go.ate.dev/substrate/internal/testcert"
 )
 
 type originCertificate struct {

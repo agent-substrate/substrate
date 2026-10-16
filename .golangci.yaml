@@ -43,7 +43,7 @@ linters:
             - "!**/cmd/ateworker-*/**"
             - "!**/internal/ateworker/**"
           deny:
-            - pkg: github.com/agent-substrate/substrate/internal/ateworker
+            - pkg: go.ate.dev/substrate/internal/ateworker
               desc: only the ateworker binaries may import internal/ateworker
 
     errcheck:

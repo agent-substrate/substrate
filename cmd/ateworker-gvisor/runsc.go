@@ -28,10 +28,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/sizing"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sizing"
 )
 
 type runsc struct {
@@ -296,16 +296,32 @@ func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error
 	return nil
 }
 
-// cmdWait blocks until the given container's process exits. Used during
-// graceful shutdown to confirm the actor has stopped before ateworker exits.
-func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
-	slog.InfoContext(ctx, "About to run runsc wait", slog.String("container", containerName))
-
-	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("wait", containerName)...)
+// runWait runs `runsc wait [extraArgs...] <container>` and blocks until the
+// waited-on condition completes.
+func (r *runsc) runWait(ctx context.Context, containerName string, extraArgs ...string) error {
+	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("wait", containerName, extraArgs...)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("while running `runsc wait`: %w", err)
 	}
 	return nil
+}
+
+// cmdWait blocks until the given container's process exits. Used during
+// graceful shutdown to confirm the actor has stopped before ateworker exits.
+func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
+	slog.InfoContext(ctx, "About to run runsc wait", slog.String("container", containerName))
+	return r.runWait(ctx, containerName)
+}
+
+// cmdWaitRestore blocks until background page loading from `runsc restore -background` completes.
+func (r *runsc) cmdWaitRestore(ctx context.Context, containerName string) error {
+	return r.runWait(ctx, containerName, "-restore")
+}
+
+// cmdWaitFSRestore blocks until background filesystem page loading from
+// `--fs-restore-image-path` completes for the given container.
+func (r *runsc) cmdWaitFSRestore(ctx context.Context, containerName string) error {
+	return r.runWait(ctx, containerName, "-fsrestore")
 }

@@ -28,8 +28,8 @@ import (
 	"sigs.k8s.io/kustomize/kyaml/kio"
 	"sigs.k8s.io/kustomize/kyaml/yaml"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 )
 
 // containerArgs maps "<kind>/<name>/<container>" to the container's args.
@@ -78,7 +78,7 @@ kind: ConfigMap
 metadata:
   name: cfg
 data:
-  image: ko://github.com/agent-substrate/substrate/cmd/ateapi
+  image: ko://go.ate.dev/substrate/cmd/ateapi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -89,18 +89,18 @@ spec:
     spec:
       initContainers:
       - name: sidecar
-        image: ko://github.com/agent-substrate/substrate/cmd/atenet
+        image: ko://go.ate.dev/substrate/cmd/atenet
         restartPolicy: Always
         args:
         - "sdsmint"
       containers:
       - name: api
-        image: ko://github.com/agent-substrate/substrate/cmd/ateapi
+        image: ko://go.ate.dev/substrate/cmd/ateapi
         args:
         - --port=8080  # keep me
         - --preview=Stale
       - name: bare
-        image: ko://github.com/agent-substrate/substrate/cmd/atelet
+        image: ko://go.ate.dev/substrate/cmd/atelet
       - name: envoy
         image: ${ENVOY_DATAPLANE_IMAGE}
         args:
@@ -113,7 +113,7 @@ metadata:
 spec:
   containers:
   - name: ctl
-    image: ko://github.com/agent-substrate/substrate/cmd/atecontroller
+    image: ko://go.ate.dev/substrate/cmd/atecontroller
 `
 
 func TestInjectPreviewArg(t *testing.T) {
@@ -147,7 +147,7 @@ func TestInjectPreviewArg(t *testing.T) {
 			}
 			// Everything else survives: comments, placeholders, and the
 			// ConfigMap that merely mentions a substrate image.
-			for _, s := range []string{"# keep me", "${ENVOY_DATAPLANE_IMAGE}", "kind: ConfigMap", "image: ko://github.com/agent-substrate/substrate/cmd/ateapi\n---"} {
+			for _, s := range []string{"# keep me", "${ENVOY_DATAPLANE_IMAGE}", "kind: ConfigMap", "image: ko://go.ate.dev/substrate/cmd/ateapi\n---"} {
 				if !strings.Contains(string(out), s) {
 					t.Errorf("output lost %q:\n%s", s, out)
 				}

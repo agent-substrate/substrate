@@ -31,15 +31,15 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/objectstore"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
-	"github.com/agent-substrate/substrate/internal/pluginsocket"
-	"github.com/agent-substrate/substrate/internal/preview"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/objectstore"
+	"go.ate.dev/substrate/internal/objectstoreplugin"
+	"go.ate.dev/substrate/internal/pluginsocket"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/pkg/objectstorage"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -58,6 +58,7 @@ func main() {
 	flags := pflag.NewFlagSet(mode, pflag.ExitOnError)
 	socket := flags.String("socket", "", "Unix socket to serve on, or to check in healthcheck mode")
 	root := flags.String("root", nodepath.BasePath, "node mode: the only directory tree local snapshot and asset files may be read from or written to")
+	uploadMemory := flags.String("upload-memory-budget", resource.NewQuantity(objectstorage.DefaultUploadMemory, resource.BinarySI).String(), "node mode: shared memory reservations for snapshot compression and upload buffers, as a Kubernetes quantity; uploads wait for capacity")
 	assetStagingDir := flags.String("asset-staging-dir", "/var/lib/objectstore-plugin/asset-staging", "node mode: directory sandbox assets are downloaded into and verified before they are copied below --root; must not be below --root or readable by the caller")
 	assetStagingCapacity := flags.String("asset-staging-capacity", "8Gi", "node mode: the most sandbox asset downloads in --asset-staging-dir may hold at once, as a Kubernetes quantity; downloads wait for space, and an asset larger than this is refused")
 	timeout := flags.Duration("timeout", 5*time.Second, "healthcheck mode: how long to wait for the plugin to report that it is serving")
@@ -98,9 +99,13 @@ func main() {
 		if err != nil {
 			serverboot.Fatal(ctx, "Failed to set up the object storage backend", err)
 		}
-		plugin, err := objectstoreplugin.NewNodePlugin(objects, *root)
+		uploadCapacity, err := parseCapacity(*uploadMemory)
 		if err != nil {
-			serverboot.Fatal(ctx, "Invalid --root", err)
+			serverboot.Fatal(ctx, "Invalid --upload-memory-budget", err)
+		}
+		plugin, err := objectstoreplugin.NewNodePlugin(objects, *root, uploadCapacity)
+		if err != nil {
+			serverboot.Fatal(ctx, "Invalid node upload configuration", err)
 		}
 		objectstorev1.RegisterNodeProviderServer(srv, plugin)
 		capacity, err := parseCapacity(*assetStagingCapacity)

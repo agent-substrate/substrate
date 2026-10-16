@@ -15,8 +15,8 @@
 package controlapi
 
 import (
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // fidelityToAtelet maps the public fidelity ladder onto the identical atelet
@@ -33,4 +33,40 @@ func fidelityToAtelet(in ateapipb.SnapshotFidelity) ateletpb.SnapshotFidelity {
 	default:
 		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 	}
+}
+
+// fidelityFromAtelet maps atelet's fidelity enum back onto the identical
+// public one. Anything else comes back UNSPECIFIED.
+func fidelityFromAtelet(in ateletpb.SnapshotFidelity) ateapipb.SnapshotFidelity {
+	switch in {
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	default:
+		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+	}
+}
+
+// snapshotReportFromAtelet converts a snapshot atelet reports into the form
+// ReportActorSnapshotState takes, which carries the snapshot's fields inline.
+// A report that names no snapshot converts to nil.
+func snapshotReportFromAtelet(r *ateletpb.SnapshotReport) *ateapipb.SnapshotReport {
+	if r.GetSnapshot() == nil {
+		return nil
+	}
+	snap := r.GetSnapshot()
+	out := &ateapipb.SnapshotReport{
+		Uuid:                snap.GetSnapshotUuid(),
+		Generation:          snap.GetGeneration(),
+		Fidelity:            fidelityFromAtelet(snap.GetFidelity()),
+		LocalCommitTime:     r.GetLocalCommitTime(),
+		DurableCompleteTime: r.GetDurableCompleteTime(),
+	}
+	if obj := snap.GetObject(); obj != nil {
+		out.Object = &ateapipb.ObjectSnapshot{SnapshotUri: obj.GetSnapshotUri()}
+	}
+	return out
 }

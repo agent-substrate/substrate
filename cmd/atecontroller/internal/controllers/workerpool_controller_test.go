@@ -43,10 +43,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/testenv"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/testenv"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 var (
@@ -390,6 +390,66 @@ func sampleWorkerPoolPodTemplate() *atev1alpha1.WorkerPoolPodTemplate {
 	}
 }
 
+// TestWorkerPoolRunsWorkersAsWorkerServiceAccount checks that a pool naming no
+// ServiceAccount runs its workers as the default one, which the controller
+// creates.
+func TestWorkerPoolRunsWorkersAsWorkerServiceAccount(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	wp := makeWorkerPool("test-worker-sa", "default", 1, "worker:v1")
+	if err := k8sClient.Create(ctx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	deleteOnCleanup(t, wp)
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		if err != nil {
+			return false, nil
+		}
+		return dep.Spec.Template.Spec.ServiceAccountName == installdefaults.WorkerServiceAccount, nil
+	})
+	// Applied before the Deployment, so it exists by now.
+	sa := &corev1.ServiceAccount{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: installdefaults.WorkerServiceAccount, Namespace: wp.Namespace}, sa); err != nil {
+		t.Fatalf("get worker ServiceAccount: %v", err)
+	}
+	// Pools share it, so deleting one must not delete it.
+	if len(sa.OwnerReferences) != 0 {
+		t.Errorf("worker ServiceAccount has owners %v, want none", sa.OwnerReferences)
+	}
+}
+
+// TestWorkerPoolWithServiceAccountSkipsDefault checks that a pool naming its own
+// ServiceAccount does not get the default one created.
+func TestWorkerPoolWithServiceAccountSkipsDefault(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	// A namespace of its own, so no other pool creates the default account.
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "test-custom-worker-sa"}}
+	if err := client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns)); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+	wp := makeWorkerPool("test-custom-sa", ns.Name, 1, "worker:v1")
+	wp.Spec.Template = &atev1alpha1.WorkerPoolPodTemplate{ServiceAccountName: ptr.To("substrate-worker")}
+	if err := k8sClient.Create(ctx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	deleteOnCleanup(t, wp)
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		if err != nil {
+			return false, nil
+		}
+		return dep.Spec.Template.Spec.ServiceAccountName == "substrate-worker", nil
+	})
+	err := k8sClient.Get(ctx, types.NamespacedName{Name: installdefaults.WorkerServiceAccount, Namespace: ns.Name}, &corev1.ServiceAccount{})
+	if !k8errors.IsNotFound(err) {
+		t.Errorf("get default worker ServiceAccount: %v, want NotFound", err)
+	}
+}
+
 // TestWorkerPoolPodTemplatePropagation verifies that template fields propagate
 // to the managed Deployment pod template.
 func TestWorkerPoolPodTemplatePropagation(t *testing.T) {
@@ -547,7 +607,7 @@ func TestWorkerPoolPodTemplateClearAll(t *testing.T) {
 			len(podSpec.Tolerations) == 1 &&
 			podSpec.Tolerations[0].Key == sandboxClassTaintKey &&
 			podSpec.PriorityClassName == "" &&
-			podSpec.ServiceAccountName == "default" &&
+			podSpec.ServiceAccountName == "ateworker" &&
 			(podSpec.Affinity == nil || podSpec.Affinity.NodeAffinity == nil) &&
 			len(container.Resources.Limits) == 0 &&
 			len(container.Resources.Requests) == 0, nil

@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -185,7 +185,7 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 	dataplane := e2e.CurrentAtenetDataplane()
 	_, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
 		Name:       "passthrough-origin",
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"http"},
 		Port:       80,
 		TargetPort: 8080,

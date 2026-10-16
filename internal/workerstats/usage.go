@@ -24,11 +24,11 @@ import (
 	"go.opentelemetry.io/otel/log/noop"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 
-	"github.com/agent-substrate/substrate/internal/actorevent"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/contextlogging"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/actorevent"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/contextlogging"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // Pool is the WorkerPool of the worker's pod.

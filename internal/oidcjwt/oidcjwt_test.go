@@ -36,7 +36,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/actoridjwt"
+	"go.ate.dev/substrate/internal/actoridjwt"
 )
 
 const testAudience = "ate-api"

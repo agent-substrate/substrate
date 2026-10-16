@@ -37,25 +37,25 @@ import (
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
-	"github.com/agent-substrate/substrate/internal/actorlock"
-	"github.com/agent-substrate/substrate/internal/actorlog"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
-	"github.com/agent-substrate/substrate/internal/ateworker/cgroup"
-	"github.com/agent-substrate/substrate/internal/ateworker/pid1"
-	"github.com/agent-substrate/substrate/internal/ateworker/register"
-	"github.com/agent-substrate/substrate/internal/ateworker/tunnel"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/otlprelay"
-	"github.com/agent-substrate/substrate/internal/preview"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/version"
-	"github.com/agent-substrate/substrate/internal/workerstats"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/actorlog"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
+	"go.ate.dev/substrate/internal/ateworker/pid1"
+	"go.ate.dev/substrate/internal/ateworker/register"
+	"go.ate.dev/substrate/internal/ateworker/tunnel"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/otlprelay"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/version"
+	"go.ate.dev/substrate/internal/workerstats"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
@@ -182,7 +182,7 @@ func do(ctx context.Context) error {
 	if err := resources.ValidateWorkerPodUID(*podUID); err != nil {
 		return fmt.Errorf("in resources.ValidateWorkerPodUID: %w", err)
 	}
-	// atelet owns the directory and the sandbox versions file in it; only the
+	// atelet owns the directory and the sandbox runtimes file in it; only the
 	// socket below is this process's. Both outlive a container restart.
 	if err := os.MkdirAll(ateworkerDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateworkerDir, err)
@@ -272,11 +272,12 @@ func do(ctx context.Context) error {
 		svr.GracefulStop()
 	}()
 
-	// Report what this worker can supply. Nothing else tells the control plane,
-	// which places no Actor here until it lands, so a worker that cannot report
-	// is one that will sit idle forever. Report retries every failure it can
-	// outlast, including the window before the Worker record exists; anything
-	// that reaches here is a misconfiguration no restart-in-place will fix.
+	// Report what this worker can supply and the sandbox runtimes it can run.
+	// Nothing else tells the control plane, which places no Actor here until it
+	// lands, so a worker that cannot report is one that will sit idle forever.
+	// Report retries every failure it can outlast, including the window before
+	// the Worker record exists; anything that reaches here is a misconfiguration
+	// no restart-in-place will fix.
 	go func() {
 		err := register.Report(ctx, register.ReportConfig{
 			SocketPath:           nodepath.WorkerSupportSocket,
@@ -285,9 +286,10 @@ func do(ctx context.Context) error {
 			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 			Actors:               *maxActors,
 			SandboxClass:         string(atev1alpha1.SandboxClassMicroVM),
+			RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
 		})
 		if err != nil && ctx.Err() == nil {
-			serverboot.Fatal(ctx, "Failed to report worker capacity", err)
+			serverboot.Fatal(ctx, "Failed to register worker", err)
 		}
 	}()
 

@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 )
 
 func TestUniformWaitStaysInRange(t *testing.T) {

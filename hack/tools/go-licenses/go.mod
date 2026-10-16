@@ -1,4 +1,4 @@
-module github.com/agent-substrate/substrate/hack/tools/go-licenses
+module go.ate.dev/substrate/hack/tools/go-licenses
 
 go 1.27.0
 

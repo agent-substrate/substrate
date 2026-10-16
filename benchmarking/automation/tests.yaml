@@ -35,6 +35,10 @@
 #   actorMemory    Optional (default "256Mi", the smallest size microvm
 #                  admits). Memory limit on the benchmark ActorTemplates;
 #                  raise it for suites that exercise glutton's WriteRAM path.
+#   actorCPU       Optional (default "1"). CPU limit on the benchmark
+#                  ActorTemplates. The scheduler books it against each
+#                  worker's CPU capacity, so it caps the actors a worker
+#                  hosts at once; lower it for dense suites.
 #   workerMemory   Optional (default unset: the worker pods have no requests
 #                  or limits). Memory request and limit on each WorkerPool
 #                  pod. Use it to fix how many workers share a node: one per

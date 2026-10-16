@@ -24,7 +24,7 @@ workerSelector:
     workload: sandbox
 containers:
 - name: sandbox
-  image: ko://github.com/agent-substrate/substrate/demos/sandbox
+  image: ko://go.ate.dev/substrate/demos/sandbox
   command: ["/ko-app/sandbox"]
   env:
   - name: PORT

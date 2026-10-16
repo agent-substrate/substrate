@@ -22,9 +22,9 @@ import (
 	sync "sync"
 	time "time"
 
-	versioned "github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
-	api "github.com/agent-substrate/substrate/pkg/client/informers/externalversions/api"
-	internalinterfaces "github.com/agent-substrate/substrate/pkg/client/informers/externalversions/internalinterfaces"
+	versioned "go.ate.dev/substrate/pkg/client/clientset/versioned"
+	api "go.ate.dev/substrate/pkg/client/informers/externalversions/api"
+	internalinterfaces "go.ate.dev/substrate/pkg/client/informers/externalversions/internalinterfaces"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"

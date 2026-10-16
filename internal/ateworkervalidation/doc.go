@@ -22,7 +22,7 @@
 // work.
 //
 // +k8s:validation-gen=TypesWithSuffix=Request
-// +k8s:validation-gen-input=github.com/agent-substrate/substrate/internal/proto/ateworkerpb
+// +k8s:validation-gen-input=go.ate.dev/substrate/internal/proto/ateworkerpb
 // +k8s:validation-gen-scheme-registry=nil
 // +k8s:validation-gen-deep-equal-func=ateDeepEqual
 package ateworkervalidation

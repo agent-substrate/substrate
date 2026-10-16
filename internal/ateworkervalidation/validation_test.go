@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"google.golang.org/grpc/codes"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )

@@ -22,7 +22,7 @@ package ateworkervalidation
 import (
 	context "context"
 
-	ateworkerpb "github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	ateworkerpb "go.ate.dev/substrate/internal/proto/ateworkerpb"
 	operation "k8s.io/apimachinery/pkg/api/operation"
 	safe "k8s.io/apimachinery/pkg/api/safe"
 	validate "k8s.io/apimachinery/pkg/api/validate"

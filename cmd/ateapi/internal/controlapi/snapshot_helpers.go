@@ -15,7 +15,7 @@
 package controlapi
 
 import (
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // findSnapshotByGeneration returns the Snapshot in snapshots with the given

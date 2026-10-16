@@ -89,7 +89,7 @@ spec:
       # starts only once the startup probe sees the plugin serving.
       initContainers:
       - name: objectstore-plugin
-        image: ko://github.com/agent-substrate/substrate/cmd/objectstore-plugin
+        image: ko://go.ate.dev/substrate/cmd/objectstore-plugin
         restartPolicy: Always
         args:
         - control
@@ -126,9 +126,10 @@ spec:
           mountPath: /run/objectstore-plugin
       containers:
       - name: ate-api-server
-        image: ko://github.com/agent-substrate/substrate/cmd/ateapi
+        image: ko://go.ate.dev/substrate/cmd/ateapi
         args:
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+          - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
           - --authentication-config=/etc/ateapi/authentication/authentication.yaml
           - --postgres-read-write-connection-string=@env
           - --postgres-owner-connection-string=@env
@@ -203,6 +204,9 @@ spec:
           mountPath: "/run/actor-id-jwt-pool"
         - name: "actor-id-ca-pool"
           mountPath: "/run/actor-id-ca-pool"
+          readOnly: true
+        - name: "api-config"
+          mountPath: "/run/apiconfig.ate.dev"
           readOnly: true
         - name: "authentication-config"
           mountPath: "/etc/ateapi/authentication"
@@ -315,6 +319,9 @@ spec:
               items:
               - key: "pool"
                 path: "pool.json"
+      - name: "api-config"
+        configMap:
+          name: "ate-api-config"
       - name: "authentication-config"
         configMap:
           name: "ate-api-authentication"

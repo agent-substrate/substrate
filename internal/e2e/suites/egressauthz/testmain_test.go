@@ -18,7 +18,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/e2e"
 )
 
 // Setup runs before the suite. The probe is created on first use, in the

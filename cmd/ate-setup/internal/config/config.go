@@ -32,9 +32,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/validation"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/pkg/postgressetup"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/pkg/postgressetup"
 )
 
 // Enumerated values for the install-shaping flags.
@@ -121,6 +121,13 @@ type Config struct {
 	// the coordinates above and OpenID discovery, for clusters whose issuer
 	// follows neither form.
 	ExpectedJWTIssuer string
+
+	// APIExperimentalEnableAuthz turns on ate-api-server's runtime
+	// authorization (ATE_API_EXPERIMENTAL_ENABLE_AUTHZ).
+	APIExperimentalEnableAuthz bool
+	// APIAuthzBootstrapOwners is the comma-separated principal list granted
+	// owner on global:root (ATE_API_AUTHZ_BOOTSTRAP_OWNERS).
+	APIAuthzBootstrapOwners string
 
 	// ActorJWTAlgorithm is the signing algorithm of the key in a new actor JWT
 	// pool (ACTOR_JWT_ALGORITHM): ES256 or RS256.
@@ -222,9 +229,16 @@ type Config struct {
 	// OtlpEndpoint is where the control plane ships telemetry
 	// (ATE_OTLP_ENDPOINT). Benchmark actors are pointed at it too.
 	OtlpEndpoint string
+
 	// PreviewGates is the --preview value (ATE_PREVIEW) every substrate
 	// component is deployed with: gate names, or "ALL" for all of them.
 	PreviewGates []string
+
+	// APILogLevel is the ate-api-server log level: debug, info, warn, or
+	// error. Empty means none was asked for, which keeps the level an
+	// existing install already has.
+	APILogLevel string
+
 	// BenchmarkActorMemory is the memory limit for benchmark actors
 	// (BENCHMARK_ACTOR_MEMORY). Empty leaves the workload default in place.
 	BenchmarkActorMemory string

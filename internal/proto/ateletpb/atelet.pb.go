@@ -366,12 +366,14 @@ type VersionedSandboxCompat struct {
 	// +k8s:maxLength=64
 	SchemaVersion string `protobuf:"bytes,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	// Key-value compatibility attributes defined by this schema version, covering
-	// both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
-	// features after masking (e.g. "architecture", "cpu_features").
+	// both runtime assets (e.g. "sandbox_runtime_hash") and effective guest
+	// hardware features after masking (e.g. "architecture", "cpu_features").
 	// Matched against a snapshot under the same schema_version: every attribute
-	// on the snapshot must be present on the worker with an equal value; keys
-	// only the worker has are ignored. Bump schema_version when a key's meaning
-	// changes or older snapshots must no longer match.
+	// on the snapshot must be present on the worker with an equal value (except
+	// "cpu_features", where the snapshot's hexadecimal bitmask must be a bitwise
+	// subset of the worker's); keys only the worker has are ignored. Bump
+	// schema_version when a key's meaning changes or older snapshots must no
+	// longer match.
 	// Order as sent does not matter: ate-api-server sorts attributes by key
 	// before recording them.
 	//
@@ -431,7 +433,7 @@ func (x *VersionedSandboxCompat) GetAttributes() []*AttributeEntry {
 // AttributeEntry is a single key-value compatibility attribute.
 type AttributeEntry struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Attribute name (e.g. "architecture", "cpu_features", "gvisor_asset_hash").
+	// Attribute name (e.g. "architecture", "cpu_features", "sandbox_runtime_hash").
 	//
 	// +k8s:required
 	// +k8s:maxLength=128
@@ -3291,7 +3293,7 @@ func (x *SnapshotReport) GetDurableCompleteTime() *timestamppb.Timestamp {
 }
 
 // ActorSnapshotState is what atelet holds for one actor on this node.
-// Returned by Checkpoint, PromoteSnapshot.
+// Returned by Checkpoint, PromoteSnapshot, DetachActor.
 type ActorSnapshotState struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The snapshot atelet restores the actor from locally. Unset when the
@@ -3980,6 +3982,120 @@ func (x *PromoteSnapshotResponse) GetState() *ActorSnapshotState {
 	return nil
 }
 
+type DetachActorRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Golden actors are accepted: an IMMEDIATE checkpoint keeps a local copy.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	ActorName string `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-uuid
+	ActorUid      string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DetachActorRequest) Reset() {
+	*x = DetachActorRequest{}
+	mi := &file_atelet_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DetachActorRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DetachActorRequest) ProtoMessage() {}
+
+func (x *DetachActorRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_atelet_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DetachActorRequest.ProtoReflect.Descriptor instead.
+func (*DetachActorRequest) Descriptor() ([]byte, []int) {
+	return file_atelet_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *DetachActorRequest) GetAtespace() string {
+	if x != nil {
+		return x.Atespace
+	}
+	return ""
+}
+
+func (x *DetachActorRequest) GetActorName() string {
+	if x != nil {
+		return x.ActorName
+	}
+	return ""
+}
+
+func (x *DetachActorRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
+type DetachActorResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The actor's state once detached: latest_local is unset, and latest_durable
+	// is its latest snapshot, if atelet knows one.
+	State         *ActorSnapshotState `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DetachActorResponse) Reset() {
+	*x = DetachActorResponse{}
+	mi := &file_atelet_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DetachActorResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DetachActorResponse) ProtoMessage() {}
+
+func (x *DetachActorResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_atelet_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DetachActorResponse.ProtoReflect.Descriptor instead.
+func (*DetachActorResponse) Descriptor() ([]byte, []int) {
+	return file_atelet_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *DetachActorResponse) GetState() *ActorSnapshotState {
+	if x != nil {
+		return x.State
+	}
+	return nil
+}
+
 var File_atelet_proto protoreflect.FileDescriptor
 
 const file_atelet_proto_rawDesc = "" +
@@ -4221,6 +4337,13 @@ const file_atelet_proto_rawDesc = "" +
 	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12,\n" +
 	"\bsnapshot\x18\x06 \x01(\v2\x10.atelet.SnapshotR\bsnapshot\"K\n" +
 	"\x17PromoteSnapshotResponse\x120\n" +
+	"\x05state\x18\x01 \x01(\v2\x1a.atelet.ActorSnapshotStateR\x05state\"l\n" +
+	"\x12DetachActorRequest\x12\x1a\n" +
+	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
+	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\"G\n" +
+	"\x13DetachActorResponse\x120\n" +
 	"\x05state\x18\x01 \x01(\v2\x1a.atelet.ActorSnapshotStateR\x05state*\x9a\x01\n" +
 	"\x12ActorMetadataField\x12$\n" +
 	" ACTOR_METADATA_FIELD_UNSPECIFIED\x10\x00\x12\x1d\n" +
@@ -4241,14 +4364,15 @@ const file_atelet_proto_rawDesc = "" +
 	"\x14MintActorCertificate\x12#.atelet.MintActorCertificateRequest\x1a$.atelet.MintActorCertificateResponse\"\x00\x12Q\n" +
 	"\x0eRegisterWorker\x12\x1d.atelet.RegisterWorkerRequest\x1a\x1e.atelet.RegisterWorkerResponse\"\x00\x12`\n" +
 	"\x13RequestActorSuspend\x12\".atelet.RequestActorSuspendRequest\x1a#.atelet.RequestActorSuspendResponse\"\x00\x12c\n" +
-	"\x14GetActorEgressPolicy\x12#.atelet.GetActorEgressPolicyRequest\x1a$.atelet.GetActorEgressPolicyResponse\"\x002\xd9\x02\n" +
+	"\x14GetActorEgressPolicy\x12#.atelet.GetActorEgressPolicyRequest\x1a$.atelet.GetActorEgressPolicyResponse\"\x002\xa3\x03\n" +
 	"\x06Atelet\x120\n" +
 	"\x03Run\x12\x12.atelet.RunRequest\x1a\x13.atelet.RunResponse\"\x00\x12E\n" +
 	"\n" +
 	"Checkpoint\x12\x19.atelet.CheckpointRequest\x1a\x1a.atelet.CheckpointResponse\"\x00\x12<\n" +
 	"\aRestore\x12\x16.atelet.RestoreRequest\x1a\x17.atelet.RestoreResponse\"\x00\x12T\n" +
-	"\x0fPromoteSnapshot\x12\x1e.atelet.PromoteSnapshotRequest\x1a\x1f.atelet.PromoteSnapshotResponse\"\x00\x12B\n" +
-	"\tTerminate\x12\x18.atelet.TerminateRequest\x1a\x19.atelet.TerminateResponse\"\x00B>Z<github.com/agent-substrate/substrate/internal/proto/ateletpbb\x06proto3"
+	"\x0fPromoteSnapshot\x12\x1e.atelet.PromoteSnapshotRequest\x1a\x1f.atelet.PromoteSnapshotResponse\"\x00\x12H\n" +
+	"\vDetachActor\x12\x1a.atelet.DetachActorRequest\x1a\x1b.atelet.DetachActorResponse\"\x00\x12B\n" +
+	"\tTerminate\x12\x18.atelet.TerminateRequest\x1a\x19.atelet.TerminateResponse\"\x00B.Z,go.ate.dev/substrate/internal/proto/ateletpbb\x06proto3"
 
 var (
 	file_atelet_proto_rawDescOnce sync.Once
@@ -4263,7 +4387,7 @@ func file_atelet_proto_rawDescGZIP() []byte {
 }
 
 var file_atelet_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_atelet_proto_msgTypes = make([]protoimpl.MessageInfo, 60)
+var file_atelet_proto_msgTypes = make([]protoimpl.MessageInfo, 62)
 var file_atelet_proto_goTypes = []any{
 	(ActorMetadataField)(0),              // 0: atelet.ActorMetadataField
 	(SnapshotFidelity)(0),                // 1: atelet.SnapshotFidelity
@@ -4324,11 +4448,13 @@ var file_atelet_proto_goTypes = []any{
 	(*RestoreResponse)(nil),              // 56: atelet.RestoreResponse
 	(*PromoteSnapshotRequest)(nil),       // 57: atelet.PromoteSnapshotRequest
 	(*PromoteSnapshotResponse)(nil),      // 58: atelet.PromoteSnapshotResponse
-	nil,                                  // 59: atelet.ArchAssets.FilesEntry
-	nil,                                  // 60: atelet.SandboxAssets.AssetsEntry
-	nil,                                  // 61: atelet.ExternalVolumeSource.VolumeContextEntry
-	nil,                                  // 62: atelet.ExternalVolumeSource.PublishContextEntry
-	(*timestamppb.Timestamp)(nil),        // 63: google.protobuf.Timestamp
+	(*DetachActorRequest)(nil),           // 59: atelet.DetachActorRequest
+	(*DetachActorResponse)(nil),          // 60: atelet.DetachActorResponse
+	nil,                                  // 61: atelet.ArchAssets.FilesEntry
+	nil,                                  // 62: atelet.SandboxAssets.AssetsEntry
+	nil,                                  // 63: atelet.ExternalVolumeSource.VolumeContextEntry
+	nil,                                  // 64: atelet.ExternalVolumeSource.PublishContextEntry
+	(*timestamppb.Timestamp)(nil),        // 65: google.protobuf.Timestamp
 }
 var file_atelet_proto_depIdxs = []int32{
 	7,  // 0: atelet.RegisterWorkerRequest.capacity:type_name -> atelet.WorkerResources
@@ -4349,12 +4475,12 @@ var file_atelet_proto_depIdxs = []int32{
 	29, // 15: atelet.RunRequest.spec:type_name -> atelet.WorkloadSpec
 	28, // 16: atelet.RunRequest.sandbox_assets:type_name -> atelet.SandboxAssets
 	25, // 17: atelet.RunRequest.egress_gateway:type_name -> atelet.EgressGateway
-	59, // 18: atelet.ArchAssets.files:type_name -> atelet.ArchAssets.FilesEntry
-	60, // 19: atelet.SandboxAssets.assets:type_name -> atelet.SandboxAssets.AssetsEntry
+	61, // 18: atelet.ArchAssets.files:type_name -> atelet.ArchAssets.FilesEntry
+	62, // 19: atelet.SandboxAssets.assets:type_name -> atelet.SandboxAssets.AssetsEntry
 	40, // 20: atelet.WorkloadSpec.containers:type_name -> atelet.Container
 	38, // 21: atelet.WorkloadSpec.volumes:type_name -> atelet.Volume
-	61, // 22: atelet.ExternalVolumeSource.volume_context:type_name -> atelet.ExternalVolumeSource.VolumeContextEntry
-	62, // 23: atelet.ExternalVolumeSource.publish_context:type_name -> atelet.ExternalVolumeSource.PublishContextEntry
+	63, // 22: atelet.ExternalVolumeSource.volume_context:type_name -> atelet.ExternalVolumeSource.VolumeContextEntry
+	64, // 23: atelet.ExternalVolumeSource.publish_context:type_name -> atelet.ExternalVolumeSource.PublishContextEntry
 	0,  // 24: atelet.ActorMetadataItem.field:type_name -> atelet.ActorMetadataField
 	33, // 25: atelet.ActorMetadataDataSource.items:type_name -> atelet.ActorMetadataItem
 	34, // 26: atelet.SystemInfoDataSource.actor_metadata:type_name -> atelet.ActorMetadataDataSource
@@ -4374,12 +4500,12 @@ var file_atelet_proto_depIdxs = []int32{
 	1,  // 40: atelet.Snapshot.fidelity:type_name -> atelet.SnapshotFidelity
 	48, // 41: atelet.Snapshot.object:type_name -> atelet.ObjectStorage
 	49, // 42: atelet.SnapshotReport.snapshot:type_name -> atelet.Snapshot
-	63, // 43: atelet.SnapshotReport.local_commit_time:type_name -> google.protobuf.Timestamp
-	63, // 44: atelet.SnapshotReport.durable_complete_time:type_name -> google.protobuf.Timestamp
+	65, // 43: atelet.SnapshotReport.local_commit_time:type_name -> google.protobuf.Timestamp
+	65, // 44: atelet.SnapshotReport.durable_complete_time:type_name -> google.protobuf.Timestamp
 	50, // 45: atelet.ActorSnapshotState.latest_local:type_name -> atelet.SnapshotReport
 	50, // 46: atelet.ActorSnapshotState.uploading:type_name -> atelet.SnapshotReport
 	50, // 47: atelet.ActorSnapshotState.latest_durable:type_name -> atelet.SnapshotReport
-	63, // 48: atelet.ActorSnapshotState.upload_due_time:type_name -> google.protobuf.Timestamp
+	65, // 48: atelet.ActorSnapshotState.upload_due_time:type_name -> google.protobuf.Timestamp
 	2,  // 49: atelet.UploadConfig.mode:type_name -> atelet.UploadMode
 	29, // 50: atelet.CheckpointRequest.spec:type_name -> atelet.WorkloadSpec
 	49, // 51: atelet.CheckpointRequest.snapshot:type_name -> atelet.Snapshot
@@ -4391,31 +4517,34 @@ var file_atelet_proto_depIdxs = []int32{
 	28, // 57: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
 	49, // 58: atelet.PromoteSnapshotRequest.snapshot:type_name -> atelet.Snapshot
 	51, // 59: atelet.PromoteSnapshotResponse.state:type_name -> atelet.ActorSnapshotState
-	26, // 60: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
-	27, // 61: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
-	20, // 62: atelet.WorkerSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
-	3,  // 63: atelet.WorkerSupport.RegisterWorker:input_type -> atelet.RegisterWorkerRequest
-	11, // 64: atelet.WorkerSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
-	13, // 65: atelet.WorkerSupport.GetActorEgressPolicy:input_type -> atelet.GetActorEgressPolicyRequest
-	24, // 66: atelet.Atelet.Run:input_type -> atelet.RunRequest
-	53, // 67: atelet.Atelet.Checkpoint:input_type -> atelet.CheckpointRequest
-	55, // 68: atelet.Atelet.Restore:input_type -> atelet.RestoreRequest
-	57, // 69: atelet.Atelet.PromoteSnapshot:input_type -> atelet.PromoteSnapshotRequest
-	22, // 70: atelet.Atelet.Terminate:input_type -> atelet.TerminateRequest
-	21, // 71: atelet.WorkerSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
-	10, // 72: atelet.WorkerSupport.RegisterWorker:output_type -> atelet.RegisterWorkerResponse
-	12, // 73: atelet.WorkerSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
-	14, // 74: atelet.WorkerSupport.GetActorEgressPolicy:output_type -> atelet.GetActorEgressPolicyResponse
-	47, // 75: atelet.Atelet.Run:output_type -> atelet.RunResponse
-	54, // 76: atelet.Atelet.Checkpoint:output_type -> atelet.CheckpointResponse
-	56, // 77: atelet.Atelet.Restore:output_type -> atelet.RestoreResponse
-	58, // 78: atelet.Atelet.PromoteSnapshot:output_type -> atelet.PromoteSnapshotResponse
-	23, // 79: atelet.Atelet.Terminate:output_type -> atelet.TerminateResponse
-	71, // [71:80] is the sub-list for method output_type
-	62, // [62:71] is the sub-list for method input_type
-	62, // [62:62] is the sub-list for extension type_name
-	62, // [62:62] is the sub-list for extension extendee
-	0,  // [0:62] is the sub-list for field type_name
+	51, // 60: atelet.DetachActorResponse.state:type_name -> atelet.ActorSnapshotState
+	26, // 61: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
+	27, // 62: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
+	20, // 63: atelet.WorkerSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
+	3,  // 64: atelet.WorkerSupport.RegisterWorker:input_type -> atelet.RegisterWorkerRequest
+	11, // 65: atelet.WorkerSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
+	13, // 66: atelet.WorkerSupport.GetActorEgressPolicy:input_type -> atelet.GetActorEgressPolicyRequest
+	24, // 67: atelet.Atelet.Run:input_type -> atelet.RunRequest
+	53, // 68: atelet.Atelet.Checkpoint:input_type -> atelet.CheckpointRequest
+	55, // 69: atelet.Atelet.Restore:input_type -> atelet.RestoreRequest
+	57, // 70: atelet.Atelet.PromoteSnapshot:input_type -> atelet.PromoteSnapshotRequest
+	59, // 71: atelet.Atelet.DetachActor:input_type -> atelet.DetachActorRequest
+	22, // 72: atelet.Atelet.Terminate:input_type -> atelet.TerminateRequest
+	21, // 73: atelet.WorkerSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
+	10, // 74: atelet.WorkerSupport.RegisterWorker:output_type -> atelet.RegisterWorkerResponse
+	12, // 75: atelet.WorkerSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
+	14, // 76: atelet.WorkerSupport.GetActorEgressPolicy:output_type -> atelet.GetActorEgressPolicyResponse
+	47, // 77: atelet.Atelet.Run:output_type -> atelet.RunResponse
+	54, // 78: atelet.Atelet.Checkpoint:output_type -> atelet.CheckpointResponse
+	56, // 79: atelet.Atelet.Restore:output_type -> atelet.RestoreResponse
+	58, // 80: atelet.Atelet.PromoteSnapshot:output_type -> atelet.PromoteSnapshotResponse
+	60, // 81: atelet.Atelet.DetachActor:output_type -> atelet.DetachActorResponse
+	23, // 82: atelet.Atelet.Terminate:output_type -> atelet.TerminateResponse
+	73, // [73:83] is the sub-list for method output_type
+	63, // [63:73] is the sub-list for method input_type
+	63, // [63:63] is the sub-list for extension type_name
+	63, // [63:63] is the sub-list for extension extendee
+	0,  // [0:63] is the sub-list for field type_name
 }
 
 func init() { file_atelet_proto_init() }
@@ -4431,7 +4560,7 @@ func file_atelet_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_atelet_proto_rawDesc), len(file_atelet_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   60,
+			NumMessages:   62,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

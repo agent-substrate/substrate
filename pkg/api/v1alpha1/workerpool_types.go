@@ -77,8 +77,8 @@ type WorkerPoolPodTemplate struct {
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
 	// ServiceAccountName for the worker pods. The ServiceAccount must exist
-	// in the WorkerPool's namespace. When omitted, the pods use the
-	// namespace's default ServiceAccount.
+	// in the WorkerPool's namespace. When omitted, the pods run as the
+	// "ateworker" ServiceAccount, which the controller creates.
 	//
 	// +optional
 	// +kubebuilder:validation:MinLength=1

@@ -30,7 +30,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/agent-substrate/substrate/internal/localjwtauthority"
+	"go.ate.dev/substrate/internal/localjwtauthority"
 )
 
 func TestNewJWTPoolSecretWithFlagDefaults(t *testing.T) {

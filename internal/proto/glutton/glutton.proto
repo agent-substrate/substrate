@@ -16,7 +16,7 @@ syntax = "proto3";
 
 package glutton;
 
-option go_package = "github.com/agent-substrate/substrate/internal/proto/glutton";
+option go_package = "go.ate.dev/substrate/internal/proto/glutton";
 
 // A glutton is a single small piece of a larger benchmarking suite. It is designed to be instantiated
 // multiple times, with each piece configured to do different units of work.

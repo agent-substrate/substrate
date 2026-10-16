@@ -21,7 +21,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 )
 
 // These tests pin the egress manifests to the Go constants the handler

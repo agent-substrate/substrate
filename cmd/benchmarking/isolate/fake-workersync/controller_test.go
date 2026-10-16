@@ -25,9 +25,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/benchmarking/isolate/internal/fakeworker"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

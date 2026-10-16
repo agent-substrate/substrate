@@ -37,7 +37,7 @@ workerSelector:
     workload: ate-e2e-security
 containers:
 - name: probe
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
   volumeMounts:
   # The probe expects its identity files under /run/ate. The mount also makes

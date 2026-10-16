@@ -20,8 +20,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 // Every RPC with a request body rejects an empty one before touching any

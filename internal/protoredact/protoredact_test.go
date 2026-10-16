@@ -23,14 +23,15 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/proto/glutton"
-	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
-	"github.com/agent-substrate/substrate/internal/protoredact"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/proto/glutton"
+	"go.ate.dev/substrate/internal/proto/grpcechopb"
+	"go.ate.dev/substrate/internal/protoredact"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateconfigpb"
+	"go.ate.dev/substrate/pkg/proto/credproviderpb"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -380,6 +381,7 @@ var ourProtoFiles = []protoreflect.FileDescriptor{
 	ateapipb.File_ateapi_proto,
 	ateletpb.File_atelet_proto,
 	ateworkerpb.File_ateworker_proto,
+	ateconfigpb.File_apiconfig_proto,
 	credproviderpb.File_credprovider_proto,
 	glutton.File_glutton_proto,
 	grpcechopb.File_grpcecho_proto,

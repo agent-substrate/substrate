@@ -17,8 +17,8 @@ package apivalidation
 import (
 	"context"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -136,6 +136,11 @@ func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.O
 // This is needed because DV doesn't have a standard format for IP addresses yet.
 func ValidateCustom_WorkerAssignment_WorkerPodIps(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
 	return validateDualStackIPs(fldPath, value)
+}
+
+// This is needed because DV doesn't have a format for SPIFFE IDs.
+func ValidateCustom_WorkerAssignment_WorkerSpiffeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSPIFFEID(fldPath, *value)
 }
 
 func ValidateCustom_ExternalVolume_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {

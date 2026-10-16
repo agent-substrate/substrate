@@ -25,9 +25,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet/dns"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 // actorResolvConf writes the resolver bind source outside the actor's rootfs.
@@ -40,7 +39,7 @@ func actorResolvConf(actorDirs *ateworkerpb.ActorDirs) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", fmt.Errorf("creating the actor directory: %w", err)
 	}
-	if err := os.WriteFile(path, dns.SandboxResolvConf(actornet.ActorVethGateway, pod), 0o644); err != nil {
+	if err := os.WriteFile(path, actornet.SandboxResolvConf(actornet.ActorVethGateway, pod), 0o644); err != nil {
 		return "", fmt.Errorf("writing the actor resolv.conf: %w", err)
 	}
 	return path, nil
