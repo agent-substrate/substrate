@@ -240,6 +240,9 @@ spec:
         # - CHOWN: unpacking image layers into the image cache gives each entry
         #   the owner its layer tar records, so image content owned by a
         #   non-root user (a home directory, say) is theirs inside the actor.
+        #   Removing that content gives each directory back to root first:
+        #   unlinking from a sticky directory another user owns takes owning
+        #   it or FOWNER, and DAC_OVERRIDE does not cover it.
         # - DAC_OVERRIDE: emptying a directory a non-root actor created in its
         #   0777 durable dir (owned by the actor's uid, typically 0755, so root
         #   has no write access to it and resetActorDirs would fail after every

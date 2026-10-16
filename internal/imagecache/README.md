@@ -43,7 +43,7 @@ privileged** and own all mounts on the node. The module is split accordingly:
 
 | Half | Runs in | Files | Needs |
 |---|---|---|---|
-| Store: pull, parse, unpack, record | atelet | `imagecache.go`, `unpack.go`, `spec.go` (portable) | file I/O; `CAP_CHOWN` to apply layer owners, `CAP_DAC_OVERRIDE` to hardlink, size and remove content owned by other users |
+| Store: pull, parse, unpack, record | atelet | `imagecache.go`, `unpack.go`, `spec.go` (portable) | file I/O; `CAP_CHOWN` to apply layer owners and to take back directories before removing them, `CAP_DAC_OVERRIDE` to hardlink, size and remove content owned by other users |
 | Consumer: finalize, mount, unmount | ateworker-gvisor / ateworker-microvm | `bundle_linux.go` (`//go:build linux`) | `CAP_MKNOD`, `CAP_SYS_ADMIN` |
 
 The two halves communicate through the filesystem only: the shared cache
