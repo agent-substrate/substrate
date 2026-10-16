@@ -40,8 +40,8 @@ var requiredBetaAPIs = []string{
 
 var requiredNodeSysctls = map[string]string{
 	"net.ipv4.neigh.default.gc_thresh1": "4096",
-	"net.ipv4.neigh.default.gc_thresh2": "8192",
-	"net.ipv4.neigh.default.gc_thresh3": "16384",
+	"net.ipv4.neigh.default.gc_thresh2": "16384",
+	"net.ipv4.neigh.default.gc_thresh3": "32768",
 	"fs.inotify.max_user_instances":     "65536",
 	"fs.inotify.max_user_watches":       "1048576",
 }
@@ -342,7 +342,7 @@ func createClusterIdempotent(ctx context.Context, cfg *Config) error {
 	if !nodeSysctlsConfigured(cluster) {
 		slog.Warn("Cluster has no node pool with high-density node sysctls; create cluster only sets them on a cluster it creates",
 			slog.String("cluster", cfg.ClusterName),
-			slog.String("remedy", "apply the substrate-sysctl-tuner DaemonSet or run gcloud container node-pools update --system-config-from-file (see tools/setup-gcp/README.md)"))
+			slog.String("remedy", "run gcloud container node-pools update --system-config-from-file (see tools/setup-gcp/README.md; this warning is expected to remain if using the in-place DaemonSet)"))
 	}
 
 	return nil

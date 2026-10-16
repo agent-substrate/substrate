@@ -143,8 +143,8 @@ one of the options below.
   linuxConfig:
     sysctls:
       net.ipv4.neigh.default.gc_thresh1: '4096'
-      net.ipv4.neigh.default.gc_thresh2: '8192'
-      net.ipv4.neigh.default.gc_thresh3: '16384'
+      net.ipv4.neigh.default.gc_thresh2: '16384'
+      net.ipv4.neigh.default.gc_thresh3: '32768'
       fs.inotify.max_user_instances: '65536'
       fs.inotify.max_user_watches: '1048576'
   ```
@@ -168,7 +168,6 @@ one of the options below.
           app: substrate-sysctl-tuner
       spec:
         hostNetwork: true
-        hostPID: true
         tolerations:
         - operator: Exists
         containers:
@@ -181,8 +180,8 @@ one of the options below.
           - -ce
           - |
             sysctl -w net.ipv4.neigh.default.gc_thresh1=4096
-            sysctl -w net.ipv4.neigh.default.gc_thresh2=8192
-            sysctl -w net.ipv4.neigh.default.gc_thresh3=16384
+            sysctl -w net.ipv4.neigh.default.gc_thresh2=16384
+            sysctl -w net.ipv4.neigh.default.gc_thresh3=32768
             sysctl -w fs.inotify.max_user_instances=65536
             sysctl -w fs.inotify.max_user_watches=1048576
             sleep infinity
