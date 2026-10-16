@@ -1599,7 +1599,7 @@ func (s *Atelet) downloadExternalCheckpoint(ctx context.Context, snapshotURI str
 // different users. Chmod, because MkdirAll applies the umask. A restore then
 // re-applies the mode the snapshot recorded.
 func prepareDurableDirVolume(path string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
+	if err := os.MkdirAll(path, 0o777); err != nil {
 		return fmt.Errorf("while creating %q: %w", path, err)
 	}
 	if err := os.Chmod(path, 0o777); err != nil {
