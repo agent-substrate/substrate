@@ -71,18 +71,13 @@ func TestActorStateChangeRecords(t *testing.T) {
 			seedOpts: []func(*ateapipb.Actor){
 				withPauseInProgress(),
 				func(a *ateapipb.Actor) {
-					a.Status.AssignedNode = "node1"
-					a.Status.WorkerAssignment = &ateapipb.WorkerAssignment{
-						Worker:          &ateapipb.ObjectRef{Name: "worker-gone"},
-						WorkerNamespace: "default",
-						WorkerPool:      "pool1",
-						WorkerPod:       "worker-pod-1",
-					}
+					a.Status.AssignedNode = "node-1"
+					a.Status.WorkerAssignment = wireTestAssignment()
 				},
 			},
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, _ *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
-				if _, err := w.ensureSuspendedFinalized(context.Background(), ref, suspendAsync); err != nil {
-					t.Fatalf("ensureSuspendedFinalized: %v", err)
+				if _, err := w.PauseActor(context.Background(), ref); err != nil {
+					t.Fatalf("PauseActor: %v", err)
 				}
 			},
 			wantOp:     ateattr.OperationSuspend,
@@ -131,7 +126,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 				t.Fatalf("get template: %v", err)
 			}
 
-			w := &ActorWorkflow{store: persistence}
+			w, _ := newWireCaptureWorkflow(t, persistence)
 			tt.transition(t, w, actorRef, actor, tmpl)
 
 			// The logs exporter is on, so the record goes to OTLP only.
