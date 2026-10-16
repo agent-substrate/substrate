@@ -15,8 +15,8 @@
 package dns
 
 import (
-	"github.com/agent-substrate/substrate/internal/egresspolicy"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/egresspolicy"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // evaluator decides whether a DNS hostname is allowed by an EgressPolicy's

@@ -18,12 +18,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/actorevent"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/actorevent"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestActorStateChangeRecords drives each transition that commits a new state
@@ -71,18 +71,13 @@ func TestActorStateChangeRecords(t *testing.T) {
 			seedOpts: []func(*ateapipb.Actor){
 				withPauseInProgress(),
 				func(a *ateapipb.Actor) {
-					a.Status.AssignedNode = "node1"
-					a.Status.WorkerAssignment = &ateapipb.WorkerAssignment{
-						Worker:          &ateapipb.ObjectRef{Name: "worker-gone"},
-						WorkerNamespace: "default",
-						WorkerPool:      "pool1",
-						WorkerPod:       "worker-pod-1",
-					}
+					a.Status.AssignedNode = "node-1"
+					a.Status.WorkerAssignment = wireTestAssignment()
 				},
 			},
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, _ *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
-				if _, err := w.ensurePausedFinalized(context.Background(), ref); err != nil {
-					t.Fatalf("ensurePausedFinalized: %v", err)
+				if _, err := w.PauseActor(context.Background(), ref); err != nil {
+					t.Fatalf("PauseActor: %v", err)
 				}
 			},
 			wantOp:     ateattr.OperationSuspend,
@@ -131,7 +126,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 				t.Fatalf("get template: %v", err)
 			}
 
-			w := &ActorWorkflow{store: persistence}
+			w, _ := newWireCaptureWorkflow(t, persistence)
 			tt.transition(t, w, actorRef, actor, tmpl)
 
 			// The logs exporter is on, so the record goes to OTLP only.

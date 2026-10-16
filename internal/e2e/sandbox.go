@@ -178,7 +178,7 @@ func RenderFixtureManifest(t *testing.T, relPath, bucket, name string) string {
 func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string) {
 	inline = map[string]string{
 		"${BUCKET_NAME}":  bucket,
-		"${WORKER_IMAGE}": "ko://github.com/agent-substrate/substrate/cmd/ateworker-gvisor",
+		"${WORKER_IMAGE}": "ko://go.ate.dev/substrate/cmd/ateworker-gvisor",
 		// The manifest-side half of FixtureName: it suffixes the fixture's
 		// namespace, and with it the snapshot prefix underneath.
 		"${FIXTURE_SUFFIX}": "-" + name,
@@ -193,7 +193,7 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 		return inline, blocks
 	}
 
-	inline["${WORKER_IMAGE}"] = "ko://github.com/agent-substrate/substrate/cmd/ateworker-microvm"
+	inline["${WORKER_IMAGE}"] = "ko://go.ate.dev/substrate/cmd/ateworker-microvm"
 	inline["${FIXTURE_SUFFIX}"] = "-" + SandboxClassMicroVM + "-" + name
 	// The micro-VM ActorTemplates name the cluster-wide SandboxConfig
 	// hack/install-microvm-deps.sh installs (configName: microvm), so a

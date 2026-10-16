@@ -22,7 +22,7 @@ package main
 import (
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 // ociBundlePath is the container's OCI bundle.

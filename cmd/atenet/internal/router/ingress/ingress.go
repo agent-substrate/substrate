@@ -36,10 +36,10 @@ import (
 	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/internal/atenet"
-	atunnelingress "github.com/agent-substrate/substrate/internal/atunnel/ingress"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/atenet"
+	atunnelingress "go.ate.dev/substrate/internal/atunnel/ingress"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // defaultActorPort is the actor's port when a request names no other one.

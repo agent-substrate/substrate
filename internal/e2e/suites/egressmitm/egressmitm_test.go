@@ -31,9 +31,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const probeTemplate = "probe"
@@ -199,7 +199,7 @@ func TestActorEgressMITMTrust(t *testing.T) {
 func originSpec(name string) e2e.ServerPod {
 	return e2e.ServiceDNSTLS(e2e.ServerPod{
 		Name:       name,
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"http"},
 	})
 }

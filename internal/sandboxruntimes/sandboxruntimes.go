@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package sandboxversions reads and writes a worker's sandbox versions file,
+// Package sandboxruntimes reads and writes a worker's sandbox runtimes file,
 // which atelet keeps in the worker's directory (nodepath.WorkerPath) as
-// nodepath.SandboxVersionsFileName.
-package sandboxversions
+// nodepath.SandboxRuntimesFileName.
+package sandboxruntimes
 
 import (
 	"bytes"
@@ -25,11 +25,10 @@ import (
 	"path/filepath"
 )
 
-// File is the content of a worker's sandbox versions file: the sandbox
+// File is the content of a worker's sandbox runtimes file: the sandbox
 // runtimes the worker can run, as the compatibility attributes atelet computed
-// for them. The worker adds each runtime's attributes to the ones it probes
-// itself and registers the result as RegisterWorkerRequest's default_runtime
-// and restorable_runtimes.
+// for them. The worker registers DefaultRuntime and RestorableRuntimes as
+// RegisterWorkerRequest's default_runtime and restorable_runtimes.
 type File struct {
 	// DefaultRuntime is the runtime new and cold-booted actors start under,
 	// from the default version of the pool's SandboxConfig.
@@ -46,7 +45,7 @@ type Attributes map[string]string
 
 // tempPrefix starts the name of every temporary file Write renames into
 // place. It is dot-prefixed so a directory listing does not show one.
-const tempPrefix = ".sandbox-versions-"
+const tempPrefix = ".sandbox-runtimes-"
 
 // Write atomically replaces the file at path with v, unless it already holds
 // the same content. It reports whether it wrote.

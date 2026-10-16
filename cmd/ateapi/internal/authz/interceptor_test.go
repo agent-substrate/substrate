@@ -19,9 +19,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/principal"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/principal"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
@@ -688,12 +688,14 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		controllerID = "spiffe://cluster.local/ns/ate-system/sa/ate-controller"
 		egressID     = "spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
 		routerID     = "spiffe://cluster.local/ns/ate-system/sa/atenet-router"
+		ateletID     = "spiffe://cluster.local/ns/ate-system/sa/atelet"
 		otherID      = "spiffe://cluster.local/ns/ate-system/sa/other"
 	)
 	authorizer, _, err := New(ctx, pool, fgaServer, nil, SystemPrincipals{
 		ControllerSPIFFEID:    controllerID,
 		EgressGatewaySPIFFEID: egressID,
 		IngressRouterSPIFFEID: routerID,
+		AteletSPIFFEID:        ateletID,
 	})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
@@ -779,11 +781,22 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"ingress router cannot mint actor JWT", mtls(routerID), mintJWT, codes.PermissionDenied},
 		{"controller cannot mint actor certificate", mtls(controllerID), mintCert, codes.PermissionDenied},
 
+		// atelet reads egress policies for the worker that enforces them, and
+		// nothing else.
+		{"atelet gets egress policy", mtls(ateletID), getEgress, codes.OK},
+		{"atelet cannot update egress policy", mtls(ateletID), updateEgress, codes.PermissionDenied},
+		{"atelet cannot get actor", mtls(ateletID), getActor, codes.PermissionDenied},
+		{"atelet cannot list actors", mtls(ateletID), listAllActors, codes.PermissionDenied},
+		{"atelet cannot resume actor", mtls(ateletID), resume, codes.PermissionDenied},
+		{"atelet cannot mint actor JWT", mtls(ateletID), mintJWT, codes.PermissionDenied},
+		{"atelet cannot get worker", mtls(ateletID), getWorker, codes.PermissionDenied},
+
 		// A bearer token whose subject is a granted SPIFFE ID gets nothing.
 		{"jwt with controller ID cannot create worker", jwt(controllerID), createWorker, codes.PermissionDenied},
 		{"jwt with egress ID cannot get actor", jwt(egressID), getActor, codes.PermissionDenied},
 		{"jwt with egress ID cannot mint actor JWT", jwt(egressID), mintJWT, codes.PermissionDenied},
 		{"jwt with router ID cannot resume actor", jwt(routerID), resume, codes.PermissionDenied},
+		{"jwt with atelet ID cannot get egress policy", jwt(ateletID), getEgress, codes.PermissionDenied},
 
 		// Other SPIFFE IDs get nothing.
 		{"other mTLS identity cannot resume actor", mtls(otherID), resume, codes.PermissionDenied},

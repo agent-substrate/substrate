@@ -22,7 +22,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/agent-substrate/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/preview"
 
 	"github.com/spf13/pflag"
 )

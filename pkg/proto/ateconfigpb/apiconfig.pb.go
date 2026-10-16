@@ -134,7 +134,7 @@ const file_apiconfig_proto_rawDesc = "" +
 	"\alogging\x18\x01 \x01(\v2\x17.ateconfigpb.APILoggingR\alogging\"\"\n" +
 	"\n" +
 	"APILogging\x12\x14\n" +
-	"\x05level\x18\x01 \x01(\tR\x05levelB<Z:github.com/agent-substrate/substrate/pkg/proto/ateconfigpbb\x06proto3"
+	"\x05level\x18\x01 \x01(\tR\x05levelB,Z*go.ate.dev/substrate/pkg/proto/ateconfigpbb\x06proto3"
 
 var (
 	file_apiconfig_proto_rawDescOnce sync.Once

@@ -18,7 +18,7 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/apierror"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"

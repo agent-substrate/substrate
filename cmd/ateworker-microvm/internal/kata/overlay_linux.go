@@ -38,9 +38,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb"
-	"github.com/agent-substrate/substrate/internal/ocispec"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb"
+	"go.ate.dev/substrate/internal/ocispec"
 	"golang.org/x/sys/unix"
 )
 

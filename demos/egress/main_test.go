@@ -34,8 +34,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 
-	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
-	"github.com/agent-substrate/substrate/internal/testcert"
+	"go.ate.dev/substrate/internal/proto/grpcechopb"
+	"go.ate.dev/substrate/internal/testcert"
 )
 
 func TestFetch(t *testing.T) {

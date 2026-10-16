@@ -16,7 +16,7 @@
 
 package main
 
-import "github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+import "go.ate.dev/substrate/internal/proto/ateworkerpb"
 
 // The fidelity ladder, lowest to highest, each level including the ones
 // below it: VOLUMES holds the durable volumes, ROOTFS adds each container's

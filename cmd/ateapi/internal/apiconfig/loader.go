@@ -19,7 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateconfigpb"
+	"go.ate.dev/substrate/pkg/proto/ateconfigpb"
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 )

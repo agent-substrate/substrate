@@ -17,15 +17,16 @@ package controlapi
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 )
@@ -125,6 +126,7 @@ func TestPauseActor_Finalized_AlreadyCrashed(t *testing.T) {
 	updateDuringCheckpoint(t, atelet, st, actorRef, func(s *ateapipb.ActorStatus) {
 		s.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		s.Crash = originalCrash
+		s.WorkerAssignment = nil
 	})
 
 	if _, err := w.PauseActor(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
@@ -406,6 +408,10 @@ func TestPauseActor_MarkedPausing_StateMatrix(t *testing.T) {
 		}
 		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Errorf("state %v: code = %v, want FailedPrecondition (err: %v)", seedState, got, err)
+		}
+		// Only a sync suspend accepts a paused actor, so a pause must not offer it.
+		if strings.Contains(err.Error(), "node-local snapshot") {
+			t.Errorf("state %v: err = %v, want no mention of a node-local snapshot", seedState, err)
 		}
 		if got := stored.GetStatus().GetState(); got != seedState {
 			t.Errorf("state %v: stored state = %v, want it untouched", seedState, got)

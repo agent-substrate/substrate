@@ -20,11 +20,11 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/apivalidation"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/substratex509"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/atelet/internal/apivalidation"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/substratex509"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
@@ -106,10 +106,10 @@ func verifyClientOnSameNode(node *substratex509.PodIdentity) func(tls.Connection
 // worker says its capacity and sandbox runtimes are, in one
 // WorkerService.RegisterWorker call so capacity and runtimes land atomically.
 //
-// It returns the control plane's error unwrapped so the caller retries: a
-// worker reports once, so an accepted call is the only thing that puts
-// capacity and runtimes on the Worker, and a Worker record the syncer has not
-// created yet is the ordinary reason for a first attempt to fail.
+// It returns the control plane's error unwrapped so the caller retries: an
+// accepted call is the only thing that puts capacity and the current runtimes
+// on the Worker, and a Worker record the syncer has not created yet is the
+// ordinary reason for a first attempt to fail.
 func (s *workerSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.RegisterWorkerRequest) (*ateletpb.RegisterWorkerResponse, error) {
 	// Identity comes only from the mTLS certificate, never from the request:
 	// a worker can report its own capacity and runtimes and no one else's.

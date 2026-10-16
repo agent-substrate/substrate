@@ -80,6 +80,13 @@ func ActorJWTIssuer(namespace string) string {
 	}).String()
 }
 
+// ClientPrincipal returns the principal ID ate-api-server sees for a bearer
+// token minted from ClientServiceAccount in namespace: the Kubernetes
+// ServiceAccount username in the token's subject.
+func ClientPrincipal(namespace string) string {
+	return "system:serviceaccount:" + namespace + ":" + ClientServiceAccount
+}
+
 // SPIFFEID returns the SPIFFE ID that Pod certificates for serviceAccount in
 // namespace carry. Peers authenticate by comparing against this exact string.
 func SPIFFEID(namespace, serviceAccount string) string {

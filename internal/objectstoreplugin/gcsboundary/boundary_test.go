@@ -20,8 +20,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/oauth2/google/downscope"
 
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin/actorscope"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 func prefix(t *testing.T, uri string) resources.StoragePrefix {

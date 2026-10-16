@@ -23,8 +23,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const fsCheckpointManifest = "fscheckpoint.pb"
@@ -69,4 +69,26 @@ func fsRestoreArgs(checkpointDir string) ([]string, error) {
 		return nil, fmt.Errorf("while checking filesystem checkpoint manifest %q: %w", manifestPath, err)
 	}
 	return []string{"--fs-restore-image-path", fsDir}, nil
+}
+
+// fsRestoreContainers returns the container names that own the master mount of
+// at least one durable-dir volume (the first container to mount each volume),
+// in order. Only those containers register an entry in runsc's fsRestore
+// waitMap for `runsc wait -fsrestore <container>`.
+func fsRestoreContainers(containers []*ateworkerpb.Container) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, c := range containers {
+		ownsMount := false
+		for _, m := range c.GetDurableDirVolumeMounts() {
+			if !seen[m.GetVolumeName()] {
+				seen[m.GetVolumeName()] = true
+				ownsMount = true
+			}
+		}
+		if ownsMount {
+			out = append(out, c.GetName())
+		}
+	}
+	return out
 }

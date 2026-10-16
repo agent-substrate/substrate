@@ -256,9 +256,9 @@ and Performance:
       SandboxConfigs) as Kubernetes objects allows platform teams to apply
       familiar RBAC, auditing, and policy enforcement to the underlying
       infrastructure, while workload definitions (ActorTemplates) are managed
-      through the substrate API instead, which authenticates callers itself
-      but does not yet implement authorization (see
-      [authentication.md](authentication.md)).
+      through the substrate API instead, which authenticates and authorizes
+      callers itself (see [authentication.md](authentication.md) and
+      [authorization.md](authorization.md)).
 
 ### Resource Model
 

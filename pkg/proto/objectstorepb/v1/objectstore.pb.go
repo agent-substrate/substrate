@@ -591,7 +591,7 @@ const file_objectstore_proto_rawDesc = "" +
 	"\fCopySnapshot\x12#.objectstore.v1.CopySnapshotRequest\x1a$.objectstore.v1.CopySnapshotResponse\"\x002f\n" +
 	"\rAssetProvider\x12U\n" +
 	"\n" +
-	"FetchAsset\x12!.objectstore.v1.FetchAssetRequest\x1a\".objectstore.v1.FetchAssetResponse\"\x00BOZMgithub.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1;objectstorev1b\x06proto3"
+	"FetchAsset\x12!.objectstore.v1.FetchAssetRequest\x1a\".objectstore.v1.FetchAssetResponse\"\x00B?Z=go.ate.dev/substrate/pkg/proto/objectstorepb/v1;objectstorev1b\x06proto3"
 
 var (
 	file_objectstore_proto_rawDescOnce sync.Once

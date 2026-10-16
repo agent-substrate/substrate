@@ -19,7 +19,7 @@ package ateapi;
 import "google/protobuf/descriptor.proto";
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
+option go_package = "go.ate.dev/substrate/pkg/proto/ateapipb";
 
 // Control is the primary RPC interface for Agentic Substrate.
 service Control {
@@ -2435,14 +2435,15 @@ message VersionedSandboxCompat {
   string schema_version = 1;
 
   // Key-value compatibility attributes defined by this schema version, covering
-  // both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
-  // features after masking (e.g. "architecture", "cpu_features").
+  // both runtime assets (e.g. "sandbox_runtime_hash") and effective guest
+  // hardware features after masking (e.g. "architecture", "cpu_features").
   // Matched against a snapshot under the same schema_version: every attribute
-  // on the snapshot must be present on the worker with an equal value; keys
-  // only the worker has are ignored, so a worker can gain keys under one
-  // schema_version without invalidating older snapshots. Removing or
-  // recomputing a key is a new schema_version, under which older snapshots
-  // no longer match.
+  // on the snapshot must be present on the worker with an equal value (except
+  // "cpu_features", where the snapshot's hexadecimal bitmask must be a bitwise
+  // subset of the worker's); keys only the worker has are ignored, so a worker
+  // can gain keys under one schema_version without invalidating older
+  // snapshots. Removing or recomputing a key is a new schema_version, under
+  // which older snapshots no longer match.
   // Order as sent does not matter: ate-api-server sorts attributes by key
   // before recording them.
   //
@@ -2455,7 +2456,7 @@ message VersionedSandboxCompat {
 
 // AttributeEntry is a single key-value compatibility attribute.
 message AttributeEntry {
-  // Attribute name (e.g. "architecture", "cpu_features", "gvisor_asset_hash").
+  // Attribute name (e.g. "architecture", "cpu_features", "sandbox_runtime_hash").
   //
   // +k8s:required
   // +k8s:maxLength=128

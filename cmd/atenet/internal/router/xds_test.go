@@ -49,9 +49,9 @@ import (
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
-	atunnelingress "github.com/agent-substrate/substrate/internal/atunnel/ingress"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
+	atunnelingress "go.ate.dev/substrate/internal/atunnel/ingress"
 )
 
 func TestActorRoutingFilterStateFilter(t *testing.T) {

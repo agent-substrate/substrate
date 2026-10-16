@@ -23,8 +23,8 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/agent-substrate/substrate/internal/preview"
-	"github.com/agent-substrate/substrate/internal/version"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/version"
 )
 
 var (

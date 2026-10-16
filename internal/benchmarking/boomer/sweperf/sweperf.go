@@ -36,13 +36,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
-	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -62,7 +62,7 @@ const (
 // environment supplies a value.
 const (
 	sweperfUserClass         = "SweperfUser"
-	defaultSweperfTemplate   = "swebench-astropy-7336"
+	defaultSweperfTemplate   = "sweperf-astropy-7336"
 	defaultSweperfTotalSteps = 21
 	defaultSweperfNumCycles  = 4
 	// defaultSweperfPollInterval trades CycleCEL-to-ack accuracy against

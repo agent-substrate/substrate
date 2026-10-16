@@ -33,31 +33,31 @@ import (
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
-	"github.com/agent-substrate/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
-	"github.com/agent-substrate/substrate/internal/actorlock"
-	"github.com/agent-substrate/substrate/internal/actorlog"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
-	"github.com/agent-substrate/substrate/internal/ateworker/cgroup"
-	"github.com/agent-substrate/substrate/internal/ateworker/phaselog"
-	"github.com/agent-substrate/substrate/internal/ateworker/pid1"
-	"github.com/agent-substrate/substrate/internal/ateworker/register"
-	"github.com/agent-substrate/substrate/internal/ateworker/tunnel"
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/otlprelay"
-	"github.com/agent-substrate/substrate/internal/preview"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/sizing"
-	"github.com/agent-substrate/substrate/internal/version"
-	"github.com/agent-substrate/substrate/internal/wakeupprobe"
-	"github.com/agent-substrate/substrate/internal/workerstats"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
+	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/actorlog"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
+	"go.ate.dev/substrate/internal/ateworker/phaselog"
+	"go.ate.dev/substrate/internal/ateworker/pid1"
+	"go.ate.dev/substrate/internal/ateworker/register"
+	"go.ate.dev/substrate/internal/ateworker/tunnel"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/otlprelay"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/sizing"
+	"go.ate.dev/substrate/internal/version"
+	"go.ate.dev/substrate/internal/wakeupprobe"
+	"go.ate.dev/substrate/internal/workerstats"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -194,7 +194,7 @@ func do(ctx context.Context) error {
 	if err := resources.ValidateWorkerPodUID(*podUID); err != nil {
 		return fmt.Errorf("in resources.ValidateWorkerPodUID: %w", err)
 	}
-	// atelet owns the directory and the sandbox versions file in it; only the
+	// atelet owns the directory and the sandbox runtimes file in it; only the
 	// socket below is this process's. Both outlive a container restart.
 	if err := os.MkdirAll(ateworkerDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateworkerDir, err)
@@ -202,8 +202,12 @@ func do(ctx context.Context) error {
 
 	// Prepare the pod cgroup so runsc can create per-actor-container leaves under
 	// it with real accounting.
-	if _, err := cgroup.Delegate(ctx); err != nil {
+	cgroupDelegated, err := cgroup.Delegate(ctx)
+	if err != nil {
 		return fmt.Errorf("while setting up cgroup delegation: %w", err)
+	}
+	if cgroupDelegated {
+		removeStaleCheckpointCgroups(ctx, defaultCgroupRoot)
 	}
 
 	// Clean up any old socket.
@@ -233,6 +237,7 @@ func do(ctx context.Context) error {
 		return err
 	}
 	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags)
+	ateworkerService.cgroupDelegated = cgroupDelegated
 	// The controller sets both from the downward API.
 	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
@@ -267,11 +272,12 @@ func do(ctx context.Context) error {
 		svr.GracefulStop()
 	}()
 
-	// Report what this worker can supply. Nothing else tells the control plane,
-	// which places no Actor here until it lands, so a worker that cannot report
-	// is one that will sit idle forever. Report retries every failure it can
-	// outlast, including the window before the Worker record exists; anything
-	// that reaches here is a misconfiguration no restart-in-place will fix.
+	// Report what this worker can supply and the sandbox runtimes it can run.
+	// Nothing else tells the control plane, which places no Actor here until it
+	// lands, so a worker that cannot report is one that will sit idle forever.
+	// Report retries every failure it can outlast, including the window before
+	// the Worker record exists; anything that reaches here is a misconfiguration
+	// no restart-in-place will fix.
 	go func() {
 		err := register.Report(ctx, register.ReportConfig{
 			SocketPath:           nodepath.WorkerSupportSocket,
@@ -280,9 +286,10 @@ func do(ctx context.Context) error {
 			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 			Actors:               *maxActors,
 			SandboxClass:         string(atev1alpha1.SandboxClassGvisor),
+			RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
 		})
 		if err != nil && ctx.Err() == nil {
-			serverboot.Fatal(ctx, "Failed to report worker capacity", err)
+			serverboot.Fatal(ctx, "Failed to register worker", err)
 		}
 	}()
 
@@ -339,6 +346,10 @@ type AteWorkerService struct {
 	// own cgroup scope, which cgroup.Delegate prepares. A field rather
 	// than a constant so tests can point GetWorkloadStats at a fixture tree.
 	cgroupRoot string
+
+	// cgroupDelegated is set when the worker's cgroup is delegated (false on
+	// privileged workers that inherit the host cgroup namespace).
+	cgroupDelegated bool
 
 	// readSandboxCgroup overrides cgroupstats.Read when set. Only tests set it:
 	// it is the seam that lets them interleave a lifecycle transition with the
@@ -781,52 +792,69 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	containers := req.GetSpec().GetContainers()
 	durablePaths := durableFSCheckpointPaths(containers)
+
+	// Cleanup the containers after checkpointing. This also unhosts the actor,
+	// before the snapshot listing below can fail.
+	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
+	terminate := func() error {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		err := s.terminateWorkload(cleanupCtx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), containers)
+		if err != nil {
+			slog.WarnContext(cleanupCtx, "failed to terminate workload after checkpoint",
+				slog.String("actor", attribution.Ref.String()),
+				slog.String("actorUID", attribution.UID),
+				slog.Any("err", err))
+		}
+		timing.teardown = lap(&tLast)
+		s.recordFinalIfEnded(cleanupCtx, hosted)
+		return err
+	}
+
+	var checkpointFn func(context.Context) error
 	switch fidelity {
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		if len(durablePaths) == 0 {
 			return nil, fmt.Errorf("no durable-dir volumes found for VOLUMES snapshot")
 		}
-		err := rcmd.cmdFsCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
-		timing.durableDir = lap(&tLast)
-		if err != nil {
-			return nil, fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
+		checkpointFn = func(ctx context.Context) error {
+			err := rcmd.cmdFsCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
+			timing.durableDir = lap(&tLast)
+			if err != nil {
+				return fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
+			}
+			return nil
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Checkpoint pause container (root of the sandbox), splitting durable-dir
 		// volumes into <checkpointPath>/fs when present.
-		sandbox, sbErr := openSandboxProcess(req.GetActorDirs())
-		if sbErr != nil {
-			slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", sbErr))
-		} else {
-			defer sandbox.Close()
-		}
-		err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
-		if err != nil {
-			timing.checkpoint = lap(&tLast)
-			return nil, fmt.Errorf("while checkpointing pause: %w", err)
-		}
-		// the checkpoint stops the sandbox, runsc delete fails until it is reaped
-		if sandbox != nil {
-			if err := sandbox.waitGone(sandboxExitTimeout); err != nil {
-				slog.WarnContext(ctx, "Sandbox did not go away after checkpoint", slog.Any("err", err))
+		checkpointFn = func(ctx context.Context) error {
+			sandbox, sbErr := openSandboxProcess(req.GetActorDirs())
+			if sbErr != nil {
+				slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", sbErr))
+			} else {
+				defer sandbox.Close()
 			}
+			err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
+			if err != nil {
+				timing.checkpoint = lap(&tLast)
+				return fmt.Errorf("while checkpointing pause: %w", err)
+			}
+			// the checkpoint stops the sandbox, runsc delete fails until it is reaped
+			if sandbox != nil {
+				if err := sandbox.waitGone(sandboxExitTimeout); err != nil {
+					slog.WarnContext(ctx, "Sandbox did not go away after checkpoint", slog.Any("err", err))
+				}
+			}
+			timing.checkpoint = lap(&tLast)
+			return nil
 		}
-		timing.checkpoint = lap(&tLast)
 	default:
 		return nil, fmt.Errorf("unsupported snapshot fidelity: %v", fidelity)
 	}
-
-	// Cleanup the containers after checkpointing. This also unhosts the actor,
-	// before the snapshot listing below can fail.
-	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
-	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
-		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
-			slog.String("actor", attribution.Ref.String()),
-			slog.String("actorUID", attribution.UID),
-			slog.Any("err", err))
+	if err := checkpointIsolated(ctx, s.cgroupDelegated, s.cgroupRoot, req.GetActorUid(), req.GetActorDirs(), checkpointFn, terminate); err != nil {
+		return nil, err
 	}
-	timing.teardown = lap(&tLast)
-	s.recordFinalIfEnded(ctx, hosted)
 
 	// Report exactly the files runsc wrote so atelet ships precisely this set
 	// (checkpoint.img plus any pages images and fs/ durable-dir files), rather
@@ -1119,6 +1147,21 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err != nil {
 		return nil, err
 	}
+	dropActorCheckpointCacheAsync(hosted.ctx, req.GetActorUid(), checkpointDir, req.GetPreserveRestoreDir(), func(waitCtx context.Context) error {
+		if fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+			if err := rcmd.cmdWaitRestore(waitCtx, ocispec.PauseContainer); err != nil {
+				return err
+			}
+		}
+		if len(restoreArgs) > 0 {
+			for _, ctr := range fsRestoreContainers(containers) {
+				if err := rcmd.cmdWaitFSRestore(waitCtx, ctr); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
 	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(containers)})

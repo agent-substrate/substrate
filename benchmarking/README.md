@@ -20,6 +20,19 @@ scenario ladder, read [observability.md](observability.md).
 > export BUCKET_NAME="ate-snapshots"
 > ```
 
+> [!IMPORTANT]
+> The ate-api-server checks every call against
+> [authorization](../docs/authorization.md), and Locust calls it as the
+> `benchmarking/default` ServiceAccount. Install Substrate with that identity
+> as a bootstrap owner, alongside the default `ate-client` owner, or every
+> benchmark call is denied:
+> ```bash
+> ATE_API_AUTHZ_BOOTSTRAP_OWNERS=system:serviceaccount:ate-system:ate-client,spiffe://cluster.local/ns/benchmarking/sa/default \
+>   ./hack/install-ate.sh --deploy-ate-system
+> ```
+> The nightly automation sets this itself; see
+> [automation/README.md](automation/README.md).
+
 Note that deploying the benchmarks does not run them. You must visit Locust's
 web UI to start a test.
 
@@ -160,6 +173,33 @@ resuming between cycles to measure the cost of actor state transitions under a r
 agent workload. One task is four cycles by default. Each task runs on a fresh actor: once
 the last cycle finishes, the actor is deleted and the user creates a new one for the next
 task.
+
+#### Sweperf Tasks
+
+Each task is one entry (name, digest-pinned image, step count) in
+`workloads/manifests/sweperf/sweperf-images.json`. Its ActorTemplate, `sweperf-<name>`,
+is generated into `workloads/manifests/sweperf/generated/` and checked in. To add or change
+a task, edit the catalog and regenerate:
+
+```bash
+SWEPERF=benchmarking/workloads/manifests/sweperf
+python3 -m venv "${SWEPERF}/venv" && "${SWEPERF}/venv/bin/pip" install -r "${SWEPERF}/requirements.txt"
+"${SWEPERF}/venv/bin/python" "${SWEPERF}/generate_sweperf_templates.py" '*'
+"${SWEPERF}/venv/bin/python" "${SWEPERF}/generate_sweperf_templates.py" --check   # fail if generated/ is missing or stale
+hack/verify/benchmarking-python.sh   # unit tests, as CI runs them
+```
+
+Deploy a task and the sweperf user class:
+
+```bash
+WORKLOAD_TEMPLATES=sweperf-django-11099 ./benchmarking/workloads/deploy.sh --deploy
+./benchmarking/locust/deploy.sh --deploy --user-class sweperf
+```
+
+Then start the run with `--sweperf-template sweperf-django-11099` and
+`--sweperf-total-steps 15`, set in the Locust web UI or through `LOCUST_SWEPERF_TEMPLATE`
+and `LOCUST_SWEPERF_TOTAL_STEPS`. The client takes the step count from that option, not
+from the template, so it must match the catalog.
 
 #### Sweperf Reported Metrics
 
@@ -567,6 +607,22 @@ map holds the raw facts and the derived numbers side by side.
   whole cluster, so a separate infrastructure pool is not counted. They are
   recorded so the ratios below can be re-derived later, or recomputed against
   a different denominator.
+* `kubernetes_version`: the worker nodes' Kubernetes version (kubelet version).
+* `worker_actor_capacity`, `worker_memory_limit_gb` (GiB): the capacity each
+  worker pod declares, its ateworker `--max-actors` (1000 when unset) and its
+  container memory limit (null when unset, as the node bounds it instead).
+  `sandbox_class`: `gvisor` or `microvm`, from the worker image. A mixed pool
+  gives a sorted comma-joined list for each. An unreadable value is skipped
+  without affecting the others, and logged once.
+* `multi_actor_worker`: `true` when `actors_per_pod_p50` is above 1.
+* `run_start`, `run_end`: Unix seconds bracketing the run, for finding its
+  server-side metrics after the cluster is deleted.
+* `metadata_<key>`: one per key of the free-form `--metadata '<json>'` object,
+  for facts only the caller knows. Non-string values are stored as JSON, and
+  null values are skipped. The orchestrator passes `cluster_name`,
+  `cluster_location` and `project_id` from the target cluster, plus any keys in
+  the `BENCHMARK_METADATA` environment variable (a JSON object) and in the
+  test's own `--metadata` flag, whose keys win on conflict.
 * `actors_per_node`, `actors_per_vcpu`, `actors_per_gb_ram`: the most actors
   Locust reported running, over the matching capacity. The `-u` flag only
   stands in when no sample was read.
@@ -592,7 +648,9 @@ comparing numbers across runs:
   count rather than a resident one.
 * **The denominators are read once, after the run.** A cluster that autoscaled
   mid-run is measured at its final size, so the ratio pairs a peak from one
-  moment with a capacity from another.
+  moment with a capacity from another. The same holds for every worker and
+  node fact above, including `kubernetes_version` and the worker capacity, and
+  so for `multi_actor_worker`, which is derived from `actors_per_pod`.
 * **The peak assumes every actor is alive at once.** A workload that creates
   and deletes actors as it goes never holds them all at the same time, so its
   real density is lower than reported.

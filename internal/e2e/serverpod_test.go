@@ -80,14 +80,14 @@ func renderServerPodDocs(t *testing.T, spec ServerPod) (*corev1.Pod, *corev1.Ser
 func TestRenderServerPod_GRPCProbe(t *testing.T) {
 	pod, service := renderServerPodDocs(t, ServerPod{
 		Name:       "grpcecho",
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"grpc"},
 		Port:       50051,
 		GRPCProbe:  true,
 	})
 
 	container := pod.Spec.Containers[0]
-	if got, want := container.Image, "ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver"; got != want {
+	if got, want := container.Image, "ko://go.ate.dev/substrate/internal/e2e/fixtures/testserver"; got != want {
 		t.Errorf("container image = %q, want %q", got, want)
 	}
 	// Args carry the subcommand ahead of the --listen the template appends. The
@@ -137,7 +137,7 @@ func TestRenderServerPod_GRPCProbe(t *testing.T) {
 func TestRenderServerPod_HTTPProbe(t *testing.T) {
 	pod, _ := renderServerPodDocs(t, ServerPod{
 		Name:       "httporigin",
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"http"},
 		Port:       8080,
 	})
@@ -170,7 +170,7 @@ func TestRenderServerPod(t *testing.T) {
 		name: "maps a privileged published port to an unprivileged listener",
 		spec: ServerPod{
 			Name:       "egresshttp",
-			ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+			ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 			Args:       []string{"http"},
 			Port:       80,
 			TargetPort: 8080,
@@ -181,7 +181,7 @@ func TestRenderServerPod(t *testing.T) {
 		name: "defaults the listener to Port when TargetPort is unset",
 		spec: ServerPod{
 			Name:       "httporigin",
-			ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+			ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 			Args:       []string{"http"},
 			Port:       8080,
 		},
@@ -227,7 +227,7 @@ func TestRenderServerPod(t *testing.T) {
 func TestRenderServerPod_Volumes(t *testing.T) {
 	pod, _ := renderServerPodDocs(t, ServerPod{
 		Name:       "egressprobe",
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"egressprobe"},
 		Port:       8080,
 		VolumeMounts: []corev1.VolumeMount{
@@ -319,7 +319,7 @@ func TestRenderServerPod_TLSPort(t *testing.T) {
 func TestServiceDNSTLS(t *testing.T) {
 	base := ServerPod{
 		Name:         "wss-origin",
-		ImportPath:   "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		ImportPath:   "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:         []string{"websocket", "--echo"},
 		HealthPath:   "/readyz",
 		Volumes:      []corev1.Volume{{Name: "extra", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},

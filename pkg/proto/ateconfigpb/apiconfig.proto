@@ -16,7 +16,7 @@ syntax = "proto3";
 
 package ateconfigpb;
 
-option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateconfigpb";
+option go_package = "go.ate.dev/substrate/pkg/proto/ateconfigpb";
 
 // The unified configuration object for ate-api-server.
 message APIConfig {

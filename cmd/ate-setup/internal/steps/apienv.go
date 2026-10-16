@@ -22,11 +22,13 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/internal/installdefaults"
 )
 
 // envHashAnnotation carries a digest of the apiserver's environment on the pod
@@ -145,6 +147,27 @@ func (e *Env) UpdateAPIServerEnvVars(ctx context.Context) error {
 		return err
 	}
 	return e.annotateAPIServerEnvHash(ctx)
+}
+
+// sharedBootstrapOwnerWarning returns a warning when enforced authorization
+// makes the shared client ServiceAccount a bootstrap owner, and "" otherwise.
+// It is the default so demos, benchmarks and e2e work, but everyone who can
+// mint its token, including every kubectl-ate user without --token-file, is
+// then a global owner.
+func sharedBootstrapOwnerWarning(enabled bool, bootstrapOwners, namespace string) string {
+	if !enabled {
+		return ""
+	}
+	shared := installdefaults.ClientPrincipal(namespace)
+	for owner := range strings.SplitSeq(bootstrapOwners, ",") {
+		if strings.TrimSpace(owner) == shared {
+			return fmt.Sprintf("%s is a bootstrap owner, so anyone who can mint a token for it is a global owner of this install. "+
+				"It is the default so the demos, benchmarks and e2e tests work; for a shared or production install, "+
+				"set --ateapi-authz-bootstrap-owners (ATE_API_AUTHZ_BOOTSTRAP_OWNERS) to your operators' own principals. "+
+				"See docs/authorization.md.", shared)
+		}
+	}
+	return ""
 }
 
 // buildAPIServerEnvVars is the Secret payload. ate-api-server takes both
@@ -292,7 +315,67 @@ func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, manifest []byte) er
 	if err := stampAPIServerEnvHash(objs, hash); err != nil {
 		return err
 	}
+	if err := setAPIServerAuthzArgs(objs, e.Cfg.APIExperimentalEnableAuthz, e.Cfg.APIAuthzBootstrapOwners); err != nil {
+		return err
+	}
+	if msg := sharedBootstrapOwnerWarning(e.Cfg.APIExperimentalEnableAuthz, e.Cfg.APIAuthzBootstrapOwners, e.Namespace()); msg != "" {
+		log.Warnf("%s", msg)
+	}
 	return e.Kube.Apply(ctx, objs)
+}
+
+// apiServerAuthzFlags are the ate-api-server flags setAPIServerAuthzArgs owns.
+var apiServerAuthzFlags = []string{"--experimental-enable-authz", "--authz-bootstrap-owners"}
+
+// setAPIServerAuthzArgs sets ate-api-server's authorization flags on its
+// container in objs, replacing any the manifest already carries. A changed
+// flag changes the pod template, so it rolls the Deployment.
+//
+// The bootstrap owners are passed even with enforcement off: access policy
+// RPCs are checked either way, so without them nobody could set up policies
+// before turning enforcement on.
+func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, enabled bool, bootstrapOwners string) error {
+	var dep *unstructured.Unstructured
+	for _, obj := range objs {
+		if obj.GetKind() == "Deployment" && obj.GetName() == "ate-api-server" {
+			dep = obj
+			break
+		}
+	}
+	if dep == nil {
+		return fmt.Errorf("the manifest has no deployment/ate-api-server to set authorization flags on")
+	}
+	containers, found, err := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found {
+		return fmt.Errorf("%s has no containers", kube.Describe(dep))
+	}
+	for i, c := range containers {
+		container, ok := c.(map[string]any)
+		if !ok || container["name"] != "ate-api-server" {
+			continue
+		}
+		args, _, err := unstructured.NestedStringSlice(container, "args")
+		if err != nil {
+			return fmt.Errorf("%s: %w", kube.Describe(dep), err)
+		}
+		args = slices.DeleteFunc(args, func(arg string) bool {
+			return slices.ContainsFunc(apiServerAuthzFlags, func(flag string) bool {
+				return arg == flag || strings.HasPrefix(arg, flag+"=")
+			})
+		})
+		if enabled {
+			args = append(args, "--experimental-enable-authz=true")
+		}
+		if strings.Trim(bootstrapOwners, " ,") != "" {
+			args = append(args, "--authz-bootstrap-owners="+bootstrapOwners)
+		}
+		if err := unstructured.SetNestedStringSlice(container, args, "args"); err != nil {
+			return fmt.Errorf("%s: %w", kube.Describe(dep), err)
+		}
+		containers[i] = container
+		return unstructured.SetNestedSlice(dep.Object, containers, "spec", "template", "spec", "containers")
+	}
+	return fmt.Errorf("%s has no ate-api-server container", kube.Describe(dep))
 }
 
 // stampAPIServerEnvHash sets the digest on the ate-api-server Deployment's pod

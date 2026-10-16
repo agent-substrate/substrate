@@ -127,6 +127,27 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		}
 	}
 
+	// replaceExisting removes whatever is at name ("later entry wins" within a
+	// layer) and drops any deferred dir mode/mtime restore for name and its
+	// subtree so the restore pass does not chmod a removed directory.
+	replaceExisting := func(name, before string) error {
+		if _, err := root.Lstat(name); err == nil {
+			if err := root.RemoveAll(name); err != nil {
+				return fmt.Errorf("while replacing existing path at %q before %s: %w", name, before, err)
+			}
+			prefix := name + "/"
+			for d := range dirModes {
+				if d == name || strings.HasPrefix(d, prefix) {
+					delete(dirModes, d)
+					delete(dirModTimes, d)
+				}
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("while checking existing path at %q before %s: %w", name, before, err)
+		}
+		return nil
+	}
+
 	tarReader := tar.NewReader(tarData)
 	for {
 		hdr, err := tarReader.Next()
@@ -160,6 +181,16 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			continue
 		}
 
+		// Skip device nodes like rootless containerd does: an image must never
+		// grant device access, and the runtime provides /dev.
+		if hdr.Typeflag == tar.TypeChar || hdr.Typeflag == tar.TypeBlock {
+			if err := replaceExisting(name, "device node"); err != nil {
+				return nil, err
+			}
+			slog.DebugContext(ctx, "Skipping device node in image layer", slog.String("name", name))
+			continue
+		}
+
 		mode := hdr.FileInfo().Mode().Perm()
 
 		// A layer tar routinely omits entries for parent directories that
@@ -181,12 +212,8 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			// 1. If it's a symlink, we don't write through it (security vulnerability / incorrectness).
 			// 2. If it's a hardlink, we unlink it instead of truncating the shared inode.
 			// 3. If it's a directory, we recursively remove it so we can write the file.
-			if _, err := root.Lstat(name); err == nil {
-				if err := root.RemoveAll(name); err != nil {
-					return nil, fmt.Errorf("while replacing existing path at %q before regular file: %w", name, err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return nil, fmt.Errorf("while checking existing path at %q before regular file: %w", name, err)
+			if err := replaceExisting(name, "regular file"); err != nil {
+				return nil, err
 			}
 
 			// Stream directly from tarReader to target file to avoid buffering in memory.
@@ -236,15 +263,13 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 						continue
 					}
 				}
-				// Root.RemoveAll removes the symlink entry itself; it does NOT
-				// traverse and remove the directory the symlink points to.
-				// That's the desired semantic here — replace this path's
-				// entry without touching whatever the prior symlink targeted.
-				if err := root.RemoveAll(name); err != nil {
-					return nil, fmt.Errorf("while replacing existing path at %q before symlink: %w", name, err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return nil, fmt.Errorf("while checking existing path at %q before symlink: %w", name, err)
+			}
+			// Root.RemoveAll removes the symlink entry itself; it does NOT
+			// traverse and remove the directory the symlink points to.
+			// That's the desired semantic here — replace this path's
+			// entry without touching whatever the prior symlink targeted.
+			if err := replaceExisting(name, "symlink"); err != nil {
+				return nil, err
 			}
 			if err := root.Symlink(hdr.Linkname, name); err != nil {
 				return nil, fmt.Errorf("while creating symlink src=%q target=%q: %w", name, hdr.Linkname, err)
@@ -261,12 +286,8 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				return nil, fmt.Errorf("invalid hardlink target for %q: empty", name)
 			}
 			// Same "later entry wins" handling as TypeSymlink: replace existing entry.
-			if _, err := root.Lstat(name); err == nil {
-				if err := root.RemoveAll(name); err != nil {
-					return nil, fmt.Errorf("while replacing existing path at %q before hardlink: %w", name, err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return nil, fmt.Errorf("while checking existing path at %q before hardlink: %w", name, err)
+			if err := replaceExisting(name, "hardlink"); err != nil {
+				return nil, err
 			}
 			if err := root.Link(linkname, name); err != nil {
 				return nil, fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
@@ -276,8 +297,8 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 
 		default:
 			tfStr := string([]byte{hdr.Typeflag})
-			slog.ErrorContext(ctx, "Unhandled tar entry typeflag", slog.String("typeflag", tfStr), slog.Any("hdr", hdr))
-			return nil, fmt.Errorf("unhandled tar entry typeflag %q", tfStr)
+			slog.ErrorContext(ctx, "Unhandled tar entry typeflag", slog.String("typeflag", tfStr), slog.String("name", name), slog.Any("hdr", hdr))
+			return nil, fmt.Errorf("unhandled tar entry typeflag %q at %q", tfStr, name)
 		}
 	}
 

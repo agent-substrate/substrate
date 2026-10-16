@@ -25,9 +25,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/actorlock"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 func TestAdmitActorEnforcesTheCeilingConcurrently(t *testing.T) {

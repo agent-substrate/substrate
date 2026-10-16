@@ -1,4 +1,4 @@
-module github.com/agent-substrate/substrate/hack/tools/setup-envtest
+module go.ate.dev/substrate/hack/tools/setup-envtest
 
 go 1.27.0
 

@@ -24,7 +24,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/installdefaults"
 )
 
 // ValueKind is the type of a setting's value.
@@ -172,6 +172,17 @@ var Registry = []Setting{
 		Key: "ateapi.expectedJWTIssuer", Env: "EXPECTED_JWT_ISSUER", Flag: "ateapi-expected-jwt-issuer",
 		Kind:  KindString,
 		Usage: "Service account token issuer ate-api-server trusts, overriding derivation and discovery",
+	},
+	{
+		Key: "ateapi.authz.enabled", Env: "ATE_API_EXPERIMENTAL_ENABLE_AUTHZ",
+		Flag: "ateapi-experimental-enable-authz", Kind: KindBool, Default: "true",
+		Usage: "Enforce ate-api-server's runtime authorization",
+	},
+	{
+		Key: "ateapi.authz.bootstrapOwners", Env: "ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
+		Flag: "ateapi-authz-bootstrap-owners", Kind: KindString,
+		Usage: "Comma-separated principals that always hold owner on global:root when authorization is enforced. " +
+			"Unset means kubectl-ate's ServiceAccount, system:serviceaccount:<namespace>:ate-client",
 	},
 	{
 		// The egress gateway's credential provider, as a JSON object. Upstream

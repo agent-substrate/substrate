@@ -26,8 +26,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateletdial"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/ateletdial"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // BrokerCertificateSource owns atunnel's actor private key and obtains the
