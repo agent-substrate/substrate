@@ -103,7 +103,7 @@ kubectl -n ate-system rollout status ds/atelet
 
 - **Progress:** `Waiting for daemon set "atelet" rollout to finish: 2 out of 5 new pods have been updated...`, then `... 4 of 5 updated pods are available...`.
 - **Done:** `daemon set "atelet" successfully rolled out`.
-- **Stuck:** the `N out of M` count does not move for more than about 6 minutes. A new atelet pod that cannot start stops the roll and leaves its node without atelet; if you cannot fix it quickly, [roll back step 2](#roll-back-step-2). A pod stuck in ContainerCreating usually means podcertificate-controller is not running. If `deploy atelet` times out, the roll still goes on; keep watching.
+- **Stuck:** the `N out of M` count does not move for more than about 6 minutes. A new atelet pod that cannot start stops the roll and leaves its node without atelet; if you cannot fix it quickly, [roll back step 2](#roll-back-step-2). If its log says the image cache has a layout version this atelet does not support, [rebuild the node's image cache](#rebuild-a-nodes-image-cache). A pod stuck in ContainerCreating usually means podcertificate-controller is not running. If `deploy atelet` times out, the roll still goes on; keep watching.
 - **Actors:** running actors keep running. A node's atelet is down for a few seconds while it restarts.
 
 ### Step 3. Move each WorkerPool to the new worker image
@@ -321,6 +321,8 @@ Only workers already on the new image are replaced, and their actors get `SIGTER
 ```bash
 go run ./cmd/ate-setup deploy atelet --config ~/ate-upgrade/old.yaml --rollout-timeout 1h
 ```
+
+If the new release changed the image cache layout, the old atelet refuses the cache the new one wrote and does not start; [rebuild the node's image cache](#rebuild-a-nodes-image-cache) on each node where that happens.
 
 #### Roll back step 1
 
