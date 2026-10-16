@@ -64,6 +64,10 @@ var ownershipEntries = []tarEntry{
 	// A setuid-free file owned by a non-root user and another group.
 	{name: "srv/", typeflag: tar.TypeDir},
 	{name: "srv/app.conf", typeflag: tar.TypeReg, mode: 0o640, body: "conf", uid: 1000, gid: 2000},
+	// Directory setgid and sticky bits survive the chown that follows the
+	// chmod: the kernel clears them only on non-directories.
+	{name: "tmp/", typeflag: tar.TypeDir, mode: 0o1777},
+	{name: "srv/team/", typeflag: tar.TypeDir, mode: 0o2775, uid: 1000, gid: 100},
 	// A symlink's own owner differs from its target's: lchown, not chown.
 	{name: "home/agent/rc", typeflag: tar.TypeSymlink, linkname: ".bashrc", uid: 1002, gid: 1002},
 	// A read-only directory owned by another user still receives its child.
@@ -99,6 +103,8 @@ func TestUnpackLayer_AppliesOwnership(t *testing.T) {
 	assertOwner(t, filepath.Join(dir, "home/agent"), 1000, 1000, os.ModeDir|0o700)
 	assertOwner(t, filepath.Join(dir, "home/agent/.bashrc"), 1000, 1000, 0o644)
 	assertOwner(t, filepath.Join(dir, "srv/app.conf"), 1000, 2000, 0o640)
+	assertOwner(t, filepath.Join(dir, "tmp"), 0, 0, os.ModeDir|os.ModeSticky|0o777)
+	assertOwner(t, filepath.Join(dir, "srv/team"), 1000, 100, os.ModeDir|os.ModeSetgid|0o775)
 	assertOwner(t, filepath.Join(dir, "home/agent/rc"), 1002, 1002, os.ModeSymlink|0o777)
 	assertOwner(t, filepath.Join(dir, "opt/app"), 1001, 1001, os.ModeDir|0o555)
 	assertOwner(t, filepath.Join(dir, "opt/app/bin"), 1001, 1001, 0o755)
