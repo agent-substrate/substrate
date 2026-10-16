@@ -615,14 +615,15 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime hardware.Requirement) 
 		// during this assignment are stamped with it, so a worker that later
 		// changes its default does not relabel state captured on the old one.
 		//
-		// TODO: A restorable_runtimes match records the old runtime here, but
-		// resolveSandboxAssets still ships the SandboxConfig's default version
-		// and atelet restores with the assets in the request, so the restore
-		// runs on the new version: it fails, or the next checkpoint is stamped
-		// with a runtime that did not produce it. Resolve the assets for the
-		// matched version once SandboxConfig can name them, or treat a
-		// restorable-only match as incompatible until it can. Latent for now:
-		// worker reports no restorable_runtimes (internal/ateworker/register.go).
+		// TODO: Workers report restorable_runtimes, so a match on one records
+		// that older runtime here, but resolveSandboxAssets still ships the
+		// template's SandboxConfig default version and atelet restores with
+		// the assets in the request: the restore runs on the newer version and
+		// fails, or its next checkpoint is stamped with a runtime that did not
+		// produce it. A follow-up replaces the assets in Run and Restore with
+		// this sandbox_runtime, which atelet resolves to the matching version
+		// of the worker pool's SandboxConfig; until it lands, keep a config's
+		// default version the only enabled one.
 		SandboxRuntime: proto.CloneOf(snapRuntime.RuntimeFor(w.GetStatus())),
 	}
 }

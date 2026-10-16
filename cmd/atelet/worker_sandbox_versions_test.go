@@ -194,12 +194,16 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", "abc")
 
 	tests := []struct {
-		name          string
-		objs          []any
-		pod           *corev1.Pod
-		wantConfig    string
-		wantErr       bool
-		wantPermanent bool
+		name       string
+		objs       []any
+		pod        *corev1.Pod
+		wantConfig string
+		wantErr    bool
+		// wantPermanent and wantUnresolved are the error's class, which
+		// decides whether finish drops it, caps its retries, or retries it
+		// without a cap.
+		wantPermanent  bool
+		wantUnresolved bool
 	}{{
 		name:       "the config the pool resolved for the pool's class",
 		objs:       []any{resolvedPool("pool", "gvisor-default"), cfg},
@@ -212,15 +216,17 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 		wantErr:       true,
 		wantPermanent: true,
 	}, {
-		name:    "pool not found",
-		objs:    []any{cfg},
-		pod:     workerPod("pod-a", "pool"),
-		wantErr: true,
+		name:           "pool not found",
+		objs:           []any{cfg},
+		pod:            workerPod("pod-a", "pool"),
+		wantErr:        true,
+		wantUnresolved: true,
 	}, {
-		name:    "pool has not resolved a config",
-		objs:    []any{resolvedPool("pool", ""), cfg},
-		pod:     workerPod("pod-a", "pool"),
-		wantErr: true,
+		name:           "pool has not resolved a config",
+		objs:           []any{resolvedPool("pool", ""), cfg},
+		pod:            workerPod("pod-a", "pool"),
+		wantErr:        true,
+		wantUnresolved: true,
 	}, {
 		// A pending config is one the atecontroller has claimed but not yet
 		// confirmed exists and is not being deleted.
@@ -230,8 +236,9 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 			pool.Status.SandboxClasses[0].PendingConfigRef = &v1alpha1.SandboxConfigReference{Name: "gvisor-default"}
 			return pool
 		}(), cfg},
-		pod:     workerPod("pod-a", "pool"),
-		wantErr: true,
+		pod:            workerPod("pod-a", "pool"),
+		wantErr:        true,
+		wantUnresolved: true,
 	}, {
 		// The class comes from the pool's spec, not from the status entry.
 		name: "status resolved another class than the pool's",
@@ -240,13 +247,15 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 			pool.Spec.SandboxClasses[0].Name = v1alpha1.SandboxClassMicroVM
 			return pool
 		}(), cfg},
-		pod:     workerPod("pod-a", "pool"),
-		wantErr: true,
+		pod:            workerPod("pod-a", "pool"),
+		wantErr:        true,
+		wantUnresolved: true,
 	}, {
-		name:    "config not found",
-		objs:    []any{resolvedPool("pool", "gvisor-missing"), cfg},
-		pod:     workerPod("pod-a", "pool"),
-		wantErr: true,
+		name:           "config not found",
+		objs:           []any{resolvedPool("pool", "gvisor-missing"), cfg},
+		pod:            workerPod("pod-a", "pool"),
+		wantErr:        true,
+		wantUnresolved: true,
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -257,6 +266,9 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 			}
 			if errors.Is(err, errPermanent) != tt.wantPermanent {
 				t.Errorf("resolve() error = %v, want permanent %v", err, tt.wantPermanent)
+			}
+			if errors.Is(err, errUnresolved) != tt.wantUnresolved {
+				t.Errorf("resolve() error = %v, want unresolved %v", err, tt.wantUnresolved)
 			}
 			if err != nil {
 				return

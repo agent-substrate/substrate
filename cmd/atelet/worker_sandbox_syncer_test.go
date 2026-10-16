@@ -429,6 +429,23 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		objs:         []any{workerPod("pod-a", "pool"), multiVersionConfig()},
 		priorRetries: syncMaxRetries,
 	}, {
+		// A transient failure on the default version leaves the existing file
+		// in place and requeues without the syncMaxRetries cap, since no
+		// informer event enqueues the pod when an asset fetch recovers.
+		name:     "transient failure on default version keeps existing file and requeues past syncMaxRetries",
+		objs:     []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		existing: stale,
+		assets: &fakeAssetFetcher{
+			fn: func(context.Context, *sandboxAssetsRecord) (map[string]string, error) {
+				return nil, errors.New("temporary download failure on default version")
+			},
+		},
+		priorRetries:  syncMaxRetries,
+		want:          stale,
+		wantDir:       true,
+		wantUntouched: true,
+		wantRetries:   syncMaxRetries + 1,
+	}, {
 		// A transient failure on a restorable version writes the default
 		// runtime right away and requeues without the syncMaxRetries cap.
 		name: "incomplete restorable version writes partial file and requeues past syncMaxRetries",

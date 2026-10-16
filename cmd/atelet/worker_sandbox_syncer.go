@@ -21,8 +21,8 @@ package main
 //     random delay when a pool or config change reaches every node at once
 //   - process: for each UID, sync the pod, or remove its worker directory
 //     once the pod is gone
-//   - finish: forget the UID, or retry it with backoff up to
-//     syncMaxRetries times
+//   - finish: forget the UID, or retry it with backoff, capped at
+//     syncMaxRetries while the pool's SandboxConfig is unresolved
 //
 // worker_sandbox_versions.go builds the sandbox runtimes file for each
 // worker pod.
@@ -72,14 +72,14 @@ const orphanMinAge = time.Minute
 // for the file.
 const syncMaxJitter = 30 * time.Second
 
-// syncMaxRetries bounds how often one pod's failed sync is retried before it
-// is dropped. The pod is synced again only when its pool switches to another
-// SandboxConfig, the config's spec changes, or atelet restarts. The backoff
-// doubles from one second, so this covers a few minutes of informer lag or an
-// unresolved pool without retrying forever; the events that end those also
-// enqueue the pod again. An errIncomplete sync is exempt: nothing enqueues
-// the pod when a restorable version's asset fetch or probe recovers, so it
-// keeps retrying at the rate limiter's longest backoff.
+// syncMaxRetries bounds how often one pod's errUnresolved sync is retried
+// before it is dropped. The backoff doubles from one second, so this covers a
+// few minutes of informer lag or an unresolved pool without retrying forever;
+// the informer events that end those also enqueue the pod again. Every other
+// failure is exempt and keeps retrying at the rate limiter's longest backoff:
+// an asset fetch or probe that fails for the default version, one that leaves
+// a restorable version out (errIncomplete), or a write to the worker
+// directory, since nothing enqueues the pod when those recover.
 const syncMaxRetries = 8
 
 // syncWorkers is how many goroutines drain the sync queue in run. More than
@@ -125,8 +125,9 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 		resolver: resolver,
 		pods:     pods,
 		assets:   assets,
-		// Failures are informer lag and unresolved pools, both on the scale
-		// of seconds to minutes.
+		// Backoff doubles from 1s for informer lag and unresolved pools, and
+		// caps at 5m where uncapped retries for transient asset fetch or probe
+		// failures stay until they recover.
 		queue: workqueue.NewTypedRateLimitingQueue(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)),
 		workersDir:       workersDir,
@@ -365,10 +366,9 @@ func (s *workerSandboxSyncer) podByUID(uid string) (*corev1.Pod, error) {
 	return pod, nil
 }
 
-// finish forgets uid on success or errPermanent, requeues errIncomplete
-// without the retry cap, and otherwise retries with backoff up to
-// syncMaxRetries times. A sync that fails before it writes leaves the
-// existing file in place.
+// finish forgets uid on success or errPermanent, caps errUnresolved retries at
+// syncMaxRetries, and otherwise requeues with backoff without a retry cap. A
+// sync that fails before it writes leaves the existing file in place.
 func (s *workerSandboxSyncer) finish(ctx context.Context, uid string, err error) {
 	switch {
 	case err == nil:
@@ -382,7 +382,7 @@ func (s *workerSandboxSyncer) finish(ctx context.Context, uid string, err error)
 		slog.WarnContext(ctx, "Worker sandbox runtimes file is missing a restorable version; will retry",
 			slog.String("pod_uid", uid), slog.Int("retries", s.queue.NumRequeues(uid)), slog.Any("err", err))
 		s.queue.AddRateLimited(uid)
-	case s.queue.NumRequeues(uid) < syncMaxRetries:
+	case s.queue.NumRequeues(uid) < syncMaxRetries || !errors.Is(err, errUnresolved):
 		slog.WarnContext(ctx, "Could not sync worker sandbox runtimes; will retry",
 			slog.String("pod_uid", uid), slog.Int("retries", s.queue.NumRequeues(uid)), slog.Any("err", err))
 		s.queue.AddRateLimited(uid)

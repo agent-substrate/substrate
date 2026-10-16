@@ -71,6 +71,12 @@ var errPermanent = errors.New("permanent failure")
 // added once the transient failure clears.
 var errIncomplete = errors.New("incomplete sandbox runtimes")
 
+// errUnresolved marks a resolve failure caused by informer lag or a WorkerPool
+// that has not resolved a SandboxConfig yet. Because the informer events that
+// end those states also enqueue the pod again, finish caps errUnresolved
+// retries at syncMaxRetries.
+var errUnresolved = errors.New("unresolved sandbox config")
+
 // sandboxPlan is what one worker's sandbox runtimes file is built from.
 type sandboxPlan struct {
 	config       string
@@ -117,15 +123,15 @@ func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (*v1alpha1.SandboxConfi
 	}
 	pool, err := r.workerPools.WorkerPools(pod.Namespace).Get(poolName)
 	if err != nil {
-		return nil, fmt.Errorf("while getting WorkerPool %s/%s: %w", pod.Namespace, poolName, err)
+		return nil, fmt.Errorf("%w: while getting WorkerPool %s/%s: %w", errUnresolved, pod.Namespace, poolName, err)
 	}
 	configName := poolConfigName(pool)
 	if configName == "" {
-		return nil, fmt.Errorf("WorkerPool %s/%s has not resolved a SandboxConfig for sandbox class %q", pod.Namespace, poolName, pool.Spec.DefaultSandboxClass())
+		return nil, fmt.Errorf("%w: WorkerPool %s/%s has not resolved a SandboxConfig for sandbox class %q", errUnresolved, pod.Namespace, poolName, pool.Spec.DefaultSandboxClass())
 	}
 	cfg, err := r.configs.Get(configName)
 	if err != nil {
-		return nil, fmt.Errorf("while getting SandboxConfig %q: %w", configName, err)
+		return nil, fmt.Errorf("%w: while getting SandboxConfig %q: %w", errUnresolved, configName, err)
 	}
 	return cfg, nil
 }

@@ -264,3 +264,70 @@ CPU revision	: 1
 		})
 	}
 }
+
+// FuzzCPUFeatures checks, from real `runsc cpu-features` output and whatever
+// the fuzzer derives from it, that a feature list round-trips through
+// EncodeCPUFeatures and DecodeCPUFeatures, that the encoding is canonical,
+// and that subsetOf agrees with set inclusion on the names.
+func FuzzCPUFeatures(f *testing.F) {
+	const (
+		broadwellCSV      = "fpu,vme,de,pse,tsc,msr,pae,mce,cx8,apic,sep,mtrr,pge,mca,cmov,pat,pse36,clflush,mmx,fxsr,sse,sse2,ss,ht,syscall,nx,pdpe1gb,rdtscp,lm,pni,pclmulqdq,ssse3,fma,cx16,pcid,sse4_1,sse4_2,x2apic,movbe,popcnt,aes,xsave,osxsave,avx,f16c,rdrand,hypervisor,lahf_lm,abm,3dnowprefetch,fsgsbase,tsc_adjust,bmi1,hle,avx2,smep,bmi2,erms,invpcid,rtm,rdseed,adx,smap,xsaveopt,md_clear,arch_capabilities"
+		sapphireRapidsCSV = "fpu,vme,de,pse,tsc,msr,pae,mce,cx8,apic,sep,mtrr,pge,mca,cmov,pat,pse36,clflush,mmx,fxsr,sse,sse2,ss,ht,syscall,nx,pdpe1gb,rdtscp,lm,pni,pclmulqdq,ssse3,fma,cx16,pcid,sse4_1,sse4_2,x2apic,movbe,popcnt,tsc_deadline_timer,aes,xsave,osxsave,avx,f16c,rdrand,hypervisor,lahf_lm,abm,3dnowprefetch,fsgsbase,tsc_adjust,bmi1,hle,avx2,smep,bmi2,erms,invpcid,rtm,avx512f,avx512dq,rdseed,adx,smap,clfushopt,clwb,avx512cd,sha_ni,avx512bw,avx512vl,xsaveopt,xsavec,xgetbv1,xsaves,avx512vbmi,umip,pku,ospke,waitpkg,avx512_vbmi2,gfni,vaes,vpclmulqdq,avx512_vnni,avx512_bitalg,avx512_vpopcntdq,la57,rdpid,cldemote,movdiri,movdir64b,fsrm,md_clear,serialize,tsxldtrk,amx_bf16,avx512_fp16,amx_tile,amx_int8,spec_ctrl,intel_stibp,flush_l1d,arch_capabilities,spec_ctrl_ssbd,avx_vnni,avx512_bf16"
+		amdMilanCSV       = "fpu,vme,de,pse,tsc,msr,pae,mce,cx8,apic,sep,mtrr,pge,mca,cmov,pat,pse36,clflush,mmx,fxsr,sse,sse2,ht,syscall,nx,mmxext,fxsr_opt,pdpe1gb,rdtscp,lm,pni,pclmulqdq,ssse3,fma,cx16,pcid,sse4_1,sse4_2,x2apic,movbe,popcnt,aes,xsave,osxsave,avx,f16c,rdrand,hypervisor,lahf_lm,cmp_legacy,svm,cr8_legacy,abm,sse4a,misalignsse,3dnowprefetch,osvw,topoext,perfctr_core,fsgsbase,tsc_adjust,bmi1,avx2,smep,bmi2,erms,invpcid,rdseed,adx,smap,clfushopt,clwb,sha_ni,xsaveopt,xsavec,xgetbv1,xsaves,umip,pku,ospke,vaes,vpclmulqdq,rdpid,fsrm"
+		neoverseN1CSV     = "fp,asimd,evtstrm,aes,pmull,sha1,sha2,crc32,atomics,fphp,asimdhp,cpuid,asimdrdm,lrcpc,dcpop,asimddp"
+		neoverseV2CSV     = "fp,asimd,evtstrm,aes,pmull,sha1,sha2,crc32,atomics,fphp,asimdhp,cpuid,asimdrdm,jscvt,fcma,lrcpc,dcpop,sha3,sm3,sm4,asimddp,sha512,sve,asimdfhm"
+	)
+	// A seed the tables cannot encode would only exercise the early return
+	// below, so a table change that drops one of these names fails here
+	// rather than quietly weakening the corpus.
+	for _, seed := range []struct{ arch, csv string }{
+		{"amd64", broadwellCSV}, {"amd64", sapphireRapidsCSV}, {"amd64", amdMilanCSV},
+		{"arm64", neoverseN1CSV}, {"arm64", neoverseV2CSV},
+	} {
+		if _, err := EncodeCPUFeatures(seed.arch, strings.Split(seed.csv, ",")); err != nil {
+			f.Fatalf("seed does not encode: %v", err)
+		}
+	}
+	f.Add("amd64", broadwellCSV, sapphireRapidsCSV)
+	f.Add("amd64", sapphireRapidsCSV, broadwellCSV)
+	f.Add("amd64", broadwellCSV, amdMilanCSV)
+	f.Add("arm64", neoverseN1CSV, neoverseV2CSV)
+	f.Add("arm64", neoverseV2CSV, neoverseN1CSV)
+	// Linux-synthesized flags runsc never prints; encoding rejects them.
+	f.Add("amd64", "fpu,sse2,constant_tsc,rep_good,nopl", broadwellCSV)
+
+	f.Fuzz(func(t *testing.T, arch, snapCSV, workerCSV string) {
+		snapRaw, workerRaw := strings.Split(snapCSV, ","), strings.Split(workerCSV, ",")
+		snapMask, snapErr := EncodeCPUFeatures(arch, snapRaw)
+		workerMask, workerErr := EncodeCPUFeatures(arch, workerRaw)
+		if snapErr != nil || workerErr != nil {
+			return
+		}
+		decoded, err := DecodeCPUFeatures(arch, snapMask)
+		if err != nil {
+			t.Fatalf("DecodeCPUFeatures(%q, %q) failed: %v", arch, snapMask, err)
+		}
+		if reencoded, err := EncodeCPUFeatures(arch, decoded); err != nil || reencoded != snapMask {
+			t.Fatalf("round-trip EncodeCPUFeatures(%q, %v) = (%q, %v), want %q", arch, decoded, reencoded, err, snapMask)
+		}
+		workerDecoded, err := DecodeCPUFeatures(arch, workerMask)
+		if err != nil {
+			t.Fatalf("DecodeCPUFeatures(%q, %q) failed: %v", arch, workerMask, err)
+		}
+		wantSubset := true
+		for _, feat := range decoded {
+			if !slices.Contains(workerDecoded, feat) {
+				wantSubset = false
+				break
+			}
+		}
+		mSnap, okSnap := parseFeatureMask(snapMask)
+		mWorker, okWorker := parseFeatureMask(workerMask)
+		if !okSnap || !okWorker || mSnap.String() != snapMask || mWorker.String() != workerMask {
+			t.Fatalf("non-canonical mask produced: snap=%q worker=%q", snapMask, workerMask)
+		}
+		if got := mSnap.subsetOf(mWorker); got != wantSubset {
+			t.Fatalf("subsetOf(%q, %q) = %v, want %v", snapMask, workerMask, got, wantSubset)
+		}
+	})
+}

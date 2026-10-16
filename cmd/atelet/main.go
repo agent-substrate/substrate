@@ -395,7 +395,7 @@ func main() {
 		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
 	}
 	// Keep a sandbox runtimes file in each local worker's directory: the
-	// runtime hashes of the enabled versions of its pool's SandboxConfig,
+	// runtimes of the enabled versions of its pool's SandboxConfig,
 	// rewritten when the config changes.
 	if _, err := startWorkerSandboxSyncer(ctx,
 		workerPodFactory.Core().V1().Pods(),
