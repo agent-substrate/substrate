@@ -119,7 +119,9 @@ func writeCgroupPID(dir string, pid int) error {
 	return nil
 }
 
-// restore moves the sentry back into its pause leaf on checkpoint failure.
+// restore moves the sentry back into its pause leaf on checkpoint failure. It
+// returns nil once the sentry has exited; any other failure leaves the sentry
+// alive in the checkpoint cgroup, so the caller must terminate it.
 func (c *checkpointCgroup) restore() error {
 	if c == nil {
 		return nil
@@ -128,7 +130,7 @@ func (c *checkpointCgroup) restore() error {
 		return nil
 	}
 	err := movePID(c.leaf, c.pid)
-	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, unix.ESRCH) {
+	if errors.Is(err, unix.ESRCH) {
 		return nil
 	}
 	return err

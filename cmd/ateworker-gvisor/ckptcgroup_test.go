@@ -167,8 +167,13 @@ func TestCheckpointCgroupRestoreAfterLeafGone(t *testing.T) {
 	if err := os.RemoveAll(f.leaf); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.restore(); err != nil {
-		t.Errorf("restore with the leaf gone = %v, want nil", err)
+	// The sentry is still alive in the checkpoint cgroup with nowhere to go
+	// back to; the caller must terminate it rather than leave it unlimited.
+	if err := c.restore(); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("restore with the leaf gone = %v, want ErrNotExist", err)
+	}
+	if got := mustRead(t, filepath.Join(c.dir, "cgroup.procs")); got != "101" {
+		t.Errorf("checkpoint cgroup.procs = %q, want the live sentry 101", got)
 	}
 }
 
@@ -321,6 +326,37 @@ func TestCheckpointIsolated(t *testing.T) {
 		}
 		if !terminated {
 			t.Error("terminate was not called when restore failed; sentry would stay in unlimited cgroup")
+		}
+		if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
+			t.Errorf("checkpoint cgroup left behind: stat err = %v", err)
+		}
+	})
+
+	t.Run("terminates workload if checkpoint fails and the pause leaf is gone", func(t *testing.T) {
+		f := newCkptFixture(t, "101")
+		ckptDir := checkpointCgroupDir(f.root, testActorUID)
+		var terminated bool
+
+		err := checkpointIsolated(
+			context.Background(),
+			true, f.root, testActorUID, f.actorDirs,
+			func(context.Context) error {
+				if err := os.RemoveAll(f.leaf); err != nil {
+					t.Fatal(err)
+				}
+				return errors.New("checkpoint boom")
+			},
+			func() error {
+				terminated = true
+				_ = os.Remove(filepath.Join(ckptDir, "cpu.max"))
+				return os.Remove(filepath.Join(ckptDir, "cgroup.procs"))
+			},
+		)
+		if err == nil {
+			t.Fatal("checkpointIsolated succeeded on checkpoint error")
+		}
+		if !terminated {
+			t.Error("terminate was not called with the pause leaf gone; sentry would stay in unlimited cgroup")
 		}
 		if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
 			t.Errorf("checkpoint cgroup left behind: stat err = %v", err)
