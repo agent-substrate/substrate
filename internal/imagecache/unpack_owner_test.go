@@ -233,15 +233,15 @@ func testUnpackLayerDirectoryAliasesTakeLatestHeader(t *testing.T) {
 	late := time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC)
 	entries := []tarEntry{
 		{name: "cc/", typeflag: tar.TypeDir},
-		// "a/b" is shorter than "cc/b", "alias/d" longer than "cc/d", so
-		// the restore pass meets the later header first in one pair and
-		// second in the other.
+		// The later header is on the longer name for b ("cc/b" against
+		// "a/b") and on the shorter name for d ("cc/d" against "alias/d"),
+		// so neither name order picks it.
 		{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
 		{name: "alias", typeflag: tar.TypeSymlink, linkname: "cc"},
 		{name: "a/b/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: early},
 		{name: "cc/b/", typeflag: tar.TypeDir, mode: 0o705, uid: 1001, gid: 1001, modTime: late},
-		{name: "cc/d/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: early},
-		{name: "alias/d/", typeflag: tar.TypeDir, mode: 0o1705, uid: 1001, gid: 1001, modTime: late},
+		{name: "alias/d/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: early},
+		{name: "cc/d/", typeflag: tar.TypeDir, mode: 0o1705, uid: 1001, gid: 1001, modTime: late},
 	}
 	dir, _, err := runUnpack(t, entries)
 	if err != nil {
