@@ -570,17 +570,12 @@ func validateRunscPath(actorUID string, actorDirs *ateworkerpb.ActorDirs, p stri
 	if len(errs) == 0 {
 		errs = resources.ValidateRuntimeAssetPath(root, p, field.NewPath("runsc_path"))
 	}
-	if len(errs) > 0 {
-		return resources.ToAPIError(errs)
-	}
-	return nil
+	return resources.ToAPIError(errs)
 }
 
 func validateActorDirs(actorDirs *ateworkerpb.ActorDirs) error {
-	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
-		return apierror.InvalidArgument("%v", errs.ToAggregate())
-	}
-	return nil
+	errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs"))
+	return resources.ToAPIError(errs)
 }
 
 // supportedFidelities are the snapshot fidelities this runtime serves. gVisor
@@ -594,10 +589,8 @@ var supportedFidelities = []ateworkerpb.SnapshotFidelity{
 // validateFidelity rejects a checkpoint or restore request whose fidelity
 // this runtime cannot serve.
 func validateFidelity(fidelity ateworkerpb.SnapshotFidelity) error {
-	if errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity")); len(errs) > 0 {
-		return apierror.InvalidArgument("%v", errs.ToAggregate())
-	}
-	return nil
+	errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity"))
+	return resources.ToAPIError(errs)
 }
 
 func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.RunWorkloadRequest) (resp *ateworkerpb.RunWorkloadResponse, retErr error) {

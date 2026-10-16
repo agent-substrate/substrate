@@ -52,8 +52,11 @@ func ToGRPCStatusError(errs field.ErrorList) error {
 }
 
 // ToAPIError turns validation errors into the InvalidArgument error an RPC
-// handler responds with. Callers check len(errs) > 0 first.
+// handler responds with, or nil if errs is empty.
 func ToAPIError(errs field.ErrorList) error {
+	if len(errs) == 0 {
+		return nil
+	}
 	return apierror.InvalidArgument("%v", errs.ToAggregate())
 }
 

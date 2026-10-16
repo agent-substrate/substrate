@@ -416,10 +416,8 @@ func (s *AteWorkerService) beginRPC(actorUID, name string, cancel context.Cancel
 
 // validateActorDirs rejects a request whose actor directories are unusable.
 func validateActorDirs(actorDirs *ateworkerpb.ActorDirs) error {
-	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
-		return apierror.InvalidArgument("%v", errs.ToAggregate())
-	}
-	return nil
+	errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs"))
+	return resources.ToAPIError(errs)
 }
 
 // supportedFidelities are the snapshot fidelities this runtime serves: the
@@ -433,10 +431,8 @@ var supportedFidelities = []ateworkerpb.SnapshotFidelity{
 // validateFidelity rejects a checkpoint or restore request whose fidelity
 // this runtime cannot serve.
 func validateFidelity(fidelity ateworkerpb.SnapshotFidelity) error {
-	if errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity")); len(errs) > 0 {
-		return apierror.InvalidArgument("%v", errs.ToAggregate())
-	}
-	return nil
+	errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity"))
+	return resources.ToAPIError(errs)
 }
 
 // validateRuntimeAssetPaths ensures we only run assets from the actor's own
@@ -453,10 +449,7 @@ func validateRuntimeAssetPaths(actorUID string, actorDirs *ateworkerpb.ActorDirs
 	for name, p := range paths {
 		errs = append(errs, resources.ValidateRuntimeAssetPath(root, p, field.NewPath("runtime_asset_paths").Key(name))...)
 	}
-	if len(errs) > 0 {
-		return resources.ToAPIError(errs)
-	}
-	return nil
+	return resources.ToAPIError(errs)
 }
 
 // rejectIfDraining returns a codes.Unavailable error if ateworker has begun graceful

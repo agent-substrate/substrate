@@ -561,7 +561,7 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorR
 
 func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJwtRequest) (*ateapipb.MintActorJwtResponse, error) {
 	if errs := apivalidation.ValidateMintActorJWTRequest(ctx, req); len(errs) > 0 {
-		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
+		return nil, resources.ToAPIError(errs)
 	}
 
 	// With authz enforced, the interceptor requires can_mint_actor_jwt on the
@@ -615,7 +615,7 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 
 func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.MintActorCertificateRequest) (*ateapipb.MintActorCertificateResponse, error) {
 	if errs := apivalidation.ValidateMintActorCertificateRequest(ctx, req); len(errs) > 0 {
-		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
+		return nil, resources.ToAPIError(errs)
 	}
 
 	// With authz enforced, the interceptor requires can_mint_actor_certificate

@@ -51,6 +51,26 @@ func TestToAPIError(t *testing.T) {
 	}
 }
 
+func TestToAPIErrorEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		errs field.ErrorList
+	}{
+		{
+			name: "nil",
+			errs: nil,
+		},
+		{
+			name: "empty",
+			errs: field.ErrorList{},
+		},
+	} {
+		if err := ToAPIError(tc.errs); err != nil {
+			t.Errorf("%s: ToAPIError = %v, want nil", tc.name, err)
+		}
+	}
+}
+
 func TestDeepEqual(t *testing.T) {
 	// Proto messages carry internal state that reflect.DeepEqual would
 	// compare; proto.Equal compares only field values.
