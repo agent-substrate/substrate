@@ -1429,3 +1429,49 @@ func TestLoadImageSource(t *testing.T) {
 		})
 	}
 }
+
+// The apiserver's pool limit comes from the installer: 20, 64 on size10 with
+// the bundled PostgreSQL, and a supplied value wins over the size profile.
+// Zero is refused here rather than by a crash-looping apiserver.
+func TestLoadPostgresPoolMaxConns(t *testing.T) {
+	for _, tc := range []struct {
+		name, size, limit, want string
+		env                     map[string]string
+		wantSet, wantErr        bool
+	}{
+		{name: "default", want: DefaultPostgresPoolMaxConns},
+		{name: "size10", size: ClusterSizeSize10, want: Size10PostgresPoolMaxConns},
+		{name: "supplied on size10", size: ClusterSizeSize10, limit: "40", want: "40", wantSet: true},
+		{name: "size10 with an external database", size: ClusterSizeSize10, want: DefaultPostgresPoolMaxConns,
+			env: map[string]string{"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": "postgresql://someone@db.example:5432/atepg"}},
+		{name: "size10 with Cloud SQL", size: ClusterSizeSize10, want: DefaultPostgresPoolMaxConns,
+			env: map[string]string{"ATE_API_POSTGRES_CLOUDSQL_INSTANCE": "p:r:i"}},
+		{name: "zero", limit: "0", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			if tc.size != "" {
+				t.Setenv("ATE_INSTALL_CLUSTER_SIZE", tc.size)
+			}
+			if tc.limit != "" {
+				t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", tc.limit)
+			}
+			for name, value := range tc.env {
+				t.Setenv(name, value)
+			}
+			cfg, err := Load(Options{})
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "a positive integer") {
+					t.Fatalf("Load() error = %v, want a positive integer", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.PostgresPoolMaxConns != tc.want || cfg.PostgresPoolMaxConnsSet != tc.wantSet {
+				t.Errorf("PostgresPoolMaxConns = %q set=%v, want %q set=%v", cfg.PostgresPoolMaxConns, cfg.PostgresPoolMaxConnsSet, tc.want, tc.wantSet)
+			}
+		})
+	}
+}
