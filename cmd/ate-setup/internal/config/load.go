@@ -175,6 +175,18 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		applyKindDefaults(r)
 	}
 
+	// size10 provisions PostgreSQL for a larger pool. Written into the
+	// resolved set, like the Kind defaults, so the report and the record
+	// show the limit the install applies.
+	poolMaxConnsSet := r.Supplied("ateapi.postgres.poolMaxConns")
+	if !poolMaxConnsSet && r.String("clusterSize") == ClusterSizeSize10 {
+		r.set("ateapi.postgres.poolMaxConns", Size10PostgresPoolMaxConns, OriginSizeProfile)
+	}
+	if r.Int("ateapi.postgres.poolMaxConns") < 1 {
+		v, _ := r.Value("ateapi.postgres.poolMaxConns")
+		return nil, &InvalidError{Value: v, Want: "a positive integer"}
+	}
+
 	rolloutTimeout := r.Duration("rolloutTimeout")
 	if r.Supplied("rolloutTimeout") && rolloutTimeout <= 0 {
 		// kubectl reads --timeout=0 as "wait forever"; ate-setup does not offer
@@ -245,8 +257,10 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		Router:               r.String("atenet.dataplane"),
 		PostgresSchema:       r.String("ateapi.postgres.schema"),
 		PostgresPoolMaxConns: r.String("ateapi.postgres.poolMaxConns"),
-		PostgresServerCAFile: r.String("ateapi.postgres.serverCAFile"),
-		PostgresStorageClass: r.String("ateapi.postgres.storageClass"),
+		// Whether the limit was chosen rather than defaulted; see the roles.
+		PostgresPoolMaxConnsSet: poolMaxConnsSet,
+		PostgresServerCAFile:    r.String("ateapi.postgres.serverCAFile"),
+		PostgresStorageClass:    r.String("ateapi.postgres.storageClass"),
 
 		PostgresReadWriteConnectionString: readWriteConnectionString,
 		PostgresOwnerConnectionString:     ownerConnectionString,

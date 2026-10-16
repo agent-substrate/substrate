@@ -166,7 +166,7 @@ usage() {
   echo "  ATE_API_POSTGRES_CLOUDSQL_GSA          GSA email backing Workload Identity + the IAM database user"
   echo "  ATE_API_POSTGRES_CLOUDSQL_IP_TYPE      private (default) | public | psc"
   echo "  ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH     true (default) | false (password-over-proxy escape hatch)"
-  echo "  ATE_API_POSTGRES_POOL_MAX_CONNS        pgxpool max connections per ateapi replica (default: max(4, NumCPU))"
+  echo "  ATE_API_POSTGRES_POOL_MAX_CONNS        pgxpool max connections per ateapi replica (default: 20; 64 with --cluster-size size10)"
   echo "  ATE_API_POSTGRES_SERVER_CA_FILE        PEM file to mount for verify-ca DSNs (non-Cloud-SQL databases)"
   echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: substrate)"
   echo ""

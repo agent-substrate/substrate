@@ -109,7 +109,7 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		if !e.Cfg.PostgresOwnerRoleSet && recorded["ATE_API_POSTGRES_OWNER_ROLE"] != "" {
 			ownerRole = recorded["ATE_API_POSTGRES_OWNER_ROLE"]
 		}
-		if poolMaxConns == "" {
+		if !e.Cfg.PostgresPoolMaxConnsSet && recorded["ATE_API_POSTGRES_POOL_MAX_CONNS"] != "" {
 			poolMaxConns = recorded["ATE_API_POSTGRES_POOL_MAX_CONNS"]
 		}
 		if e.Cfg.PostgresSchema == "" {

@@ -159,7 +159,7 @@ Optional environment variables:
   (default `substrate`). If you override it, create the named schema with
   the owner role as owner and target it in the grants in section 2.
 - `ATE_API_POSTGRES_POOL_MAX_CONNS` — connections in the read/write pool
-  (default: `max(4, NumCPU)`). It does not affect the owner and watch pools, which are
+  (default: 20 per replica). It does not affect the owner and watch pools, which are
   capped at 2 and 3 connections.
 
 Changing the installed configuration rolls ate-api-server: the install script
