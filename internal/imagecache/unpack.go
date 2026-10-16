@@ -114,23 +114,11 @@ func validateTarName(name string) (cleaned string, skip bool, err error) {
 func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteoutSet, error) {
 	wh := &whiteoutSet{Version: 1}
 
-	// Directories are created root-owned and owner-writable during extraction
-	// (so their children can be written even when the image marks them
-	// read-only, e.g. ko ships /ko-app as 0555, or gives them to another
-	// user), and their real modes, mtimes and owners are restored afterwards,
-	// so writing into them needs no CAP_DAC_OVERRIDE. The mtime is restored
-	// then because creating child entries updates it. Headers are kept by the
-	// directory they were written to, not by name, so the restore pass applies
-	// the last one written to each directory, whatever name it was written
-	// under.
-	//
-	// Entries take their owner as they are written. Wherever
-	// fs.protected_hardlinks=1, the common default, the kernel refuses a
-	// hardlink to another user's entry unless the caller holds CAP_FOWNER or
-	// the target is a regular file it could read and write, which
-	// CAP_DAC_OVERRIDE grants (a regular file another user owns never keeps
-	// setuid or setgid in atelet, see restoreSetIDBits). Other targets
-	// (symlinks, fifos) are given to root before the link is made.
+	// Directories are created root-owned and owner-writable, so their children
+	// can be written whatever mode or owner the image gives them, and get
+	// their real mode, mtime and owner in the restore pass below. Headers are
+	// kept by directory, not by name: each directory takes the last header
+	// written to it under any name.
 	dirHdrs := map[dirInode]*dirHdr{}
 
 	// Ancestors an entry needed vs. directories the tar declared: the
@@ -357,9 +345,14 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			if err := replaceExisting(name, "hardlink"); err != nil {
 				return nil, err
 			}
+			// With fs.protected_hardlinks=1, linking to another user's entry
+			// takes CAP_FOWNER unless it is a regular file the caller can
+			// read and write (one another user owns never keeps setuid or
+			// setgid here, see restoreSetIDBits). A symlink, the only other
+			// entry a hardlink can target here, is given to root first.
 			// The chown below gives the shared inode this header's owner.
 			if os.Geteuid() == 0 {
-				if fi, err := root.Lstat(linkname); err == nil && !fi.Mode().IsRegular() && !fi.IsDir() {
+				if fi, err := root.Lstat(linkname); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 					if err := root.Lchown(linkname, 0, 0); err != nil {
 						return nil, fmt.Errorf("while giving hardlink target %q to root: %w", linkname, err)
 					}
@@ -393,28 +386,14 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		}
 	}
 
-	// Restore the image's intended directory modes, mtimes and owners now that
-	// every child exists. Deepest paths first: a child's path is longer than
-	// its parent's, so length-descending order restores a directory before its
-	// ancestors, and restoring a parent to a non-traversable mode or owner
-	// can't block restoring its children. A name through a symlink can break
-	// that order; only an unprivileged unpack then fails, as root's
-	// CAP_DAC_OVERRIDE searches any directory.
-	//
-	// Chmod and the mtime come before chown, unlike tarutil's restore: once a
-	// directory belongs to another uid, changing its mode or setting its times
-	// needs CAP_FOWNER, which atelet does not hold. Chown leaves a directory's
-	// mode alone, setgid and sticky included.
-	//
-	// Headers are kept by the directory they were written to, and
-	// replaceExisting dropped those of every directory it removed. Names that
-	// a symlink makes aliases ("a -> cc" makes "a/b" and "cc/b" one directory)
-	// record one directory, which is restored once, with the header written
-	// last to it: a second chmod after the first chown would also need
-	// CAP_FOWNER. The restore goes through the latest name written to the
-	// directory that still resolves to it. When a later symlink has pointed
-	// every such name elsewhere, outside the layer or into a loop, the
-	// directory is found by walking the tree without following symlinks.
+	// Restore directory modes, mtimes and owners now that every child exists.
+	// Deepest (longest name) first, so a parent's restored mode or owner can't
+	// block restoring its children. Chmod and the mtime go before chown: once
+	// a directory belongs to another uid, changing its mode or times needs
+	// CAP_FOWNER, which atelet does not hold. Chown keeps a directory's setgid
+	// and sticky bits. Each directory is restored once, through the latest
+	// name written to it that still resolves to it, else through a walk that
+	// does not follow symlinks.
 	type dirRestore struct {
 		name string
 		hdr  *tar.Header
@@ -425,8 +404,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		name := ""
 		for i := len(dh.names) - 1; i >= 0 && name == ""; i-- {
 			// Any error means the name does not reach the directory (it may
-			// lead outside the layer or into a loop); the walk below looks
-			// for a directory no name reaches.
+			// lead outside the layer or into a loop).
 			fi, err := root.Lstat(dh.names[i])
 			if err != nil || !fi.IsDir() {
 				continue
@@ -554,17 +532,10 @@ func dirPaths(root *os.Root, dir string) (map[dirInode]string, error) {
 }
 
 // restoreSetIDBits puts back the setuid and setgid bits of want on name, a
-// regular file whose owner was just applied: changing a non-directory's owner
-// clears them, so they can only be set after the chown.
-//
-// Setting them then takes the file's owner or CAP_FOWNER, and keeping setgid
-// for a group the caller is not in takes CAP_FSETID. atelet runs as root
-// holding neither, so it restores setuid only on files root owns (sudo, su,
-// passwd) and setgid only on files whose group is also root's; a file another
-// user owns, or one setgid to another group (crontab, chage), loses the bit.
-// That is logged rather than failing the unpack, which would reject common
-// base images; the file keeps its other mode bits and runs without the
-// elevated identity.
+// regular file whose owner was just applied: chown clears them, so they go
+// after it. atelet lacks CAP_FOWNER and CAP_FSETID, so a file another user
+// owns, or one setgid to a group other than root's, loses the bit; that is
+// logged rather than failing the unpack, which would reject common base images.
 func restoreSetIDBits(ctx context.Context, root *os.Root, name string, want os.FileMode) error {
 	const setID = os.ModeSetuid | os.ModeSetgid
 	if want&setID == 0 {
