@@ -30,6 +30,7 @@ import (
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/principal"
 	"go.ate.dev/substrate/internal/resources"
 )
 
@@ -169,17 +170,15 @@ func (e *Env) UpdateAPIServerEnvVars(ctx context.Context) error {
 // It is the default so demos, benchmarks and e2e work, but everyone who can
 // mint its token, including every kubectl-ate user without --token-file, is
 // then a global owner.
-func sharedBootstrapOwnerWarning(bootstrapOwners, namespace string) string {
+func sharedBootstrapOwnerWarning(bootstrapOwners []string, namespace string) string {
 	shared := installdefaults.ClientPrincipal(namespace)
-	for owner := range strings.SplitSeq(bootstrapOwners, ",") {
-		if strings.TrimSpace(owner) == shared {
-			return fmt.Sprintf("%s is a bootstrap owner, so anyone who can mint a token for it is a global owner of this install. "+
-				"It is the default so the demos, benchmarks and e2e tests work; for a shared or production install, "+
-				"set --ateapi-authz-bootstrap-owners (ATE_API_AUTHZ_BOOTSTRAP_OWNERS) to your operators' own principals. "+
-				"See docs/authorization.md.", shared)
-		}
+	if !slices.Contains(bootstrapOwners, shared) {
+		return ""
 	}
-	return ""
+	return fmt.Sprintf("%s is a bootstrap owner, so anyone who can mint a token for it is a global owner of this install. "+
+		"It is the default so the demos, benchmarks and e2e tests work; for a shared or production install, "+
+		"set --ateapi-authz-bootstrap-owners (ATE_API_AUTHZ_BOOTSTRAP_OWNERS) to your operators' own principals. "+
+		"See docs/authorization.md.", shared)
 }
 
 // clusterSnapshotLocation validates location and returns it as ate-api-server's
@@ -367,7 +366,7 @@ const apiServerAuthzFlag = "--authz-bootstrap-owners"
 // setAPIServerAuthzArgs sets ate-api-server's bootstrap owners flag on its
 // container in objs, replacing any the manifest already carries. A changed
 // flag changes the pod template, so it rolls the Deployment.
-func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, bootstrapOwners string) error {
+func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, bootstrapOwners []string) error {
 	var dep *unstructured.Unstructured
 	for _, obj := range objs {
 		if obj.GetKind() == "Deployment" && obj.GetName() == "ate-api-server" {
@@ -394,8 +393,8 @@ func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, bootstrapOwners st
 		args = slices.DeleteFunc(args, func(arg string) bool {
 			return arg == apiServerAuthzFlag || strings.HasPrefix(arg, apiServerAuthzFlag+"=")
 		})
-		if strings.Trim(bootstrapOwners, " ,") != "" {
-			args = append(args, apiServerAuthzFlag+"="+bootstrapOwners)
+		if len(bootstrapOwners) > 0 {
+			args = append(args, apiServerAuthzFlag+"="+principal.FormatList(bootstrapOwners))
 		}
 		if err := unstructured.SetNestedStringSlice(container, args, "args"); err != nil {
 			return fmt.Errorf("%s: %w", kube.Describe(dep), err)
