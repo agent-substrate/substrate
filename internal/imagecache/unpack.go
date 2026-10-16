@@ -232,16 +232,28 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			}
 
 			// Stream directly from tarReader to target file to avoid buffering in memory.
+			fileMode := tarMode(hdr)
 			outFile, err := root.OpenFile(name, os.O_CREATE|os.O_RDWR|os.O_TRUNC, mode)
 			if err != nil {
 				return nil, fmt.Errorf("while creating file %q: %w", name, err)
 			}
 
 			_, err = io.Copy(outFile, tarReader)
+			if err == nil {
+				// OpenFile's mode passed through atelet's umask, which strips
+				// group and other write (0664 lands as 0644), and carries no
+				// setuid, setgid or sticky bit. Set the header's mode exactly
+				// while root still owns the file.
+				if err = outFile.Chmod(fileMode); err != nil {
+					err = fmt.Errorf("while setting mode %v on %q: %w", fileMode, name, err)
+				}
+			} else {
+				err = fmt.Errorf("while writing contents of %q from tar stream: %w", name, err)
+			}
 			closeErr := outFile.Close()
 
 			if err != nil {
-				return nil, fmt.Errorf("while writing contents of %q from tar stream: %w", name, err)
+				return nil, err
 			}
 			if closeErr != nil {
 				return nil, fmt.Errorf("while closing file %q: %w", name, closeErr)
@@ -252,6 +264,9 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				return nil, err
 			}
 			if err := tarutil.Lchown(root, name, hdr); err != nil {
+				return nil, err
+			}
+			if err := restoreSetIDBits(ctx, root, name, fileMode); err != nil {
 				return nil, err
 			}
 
@@ -318,8 +333,20 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			if err := root.Link(linkname, name); err != nil {
 				return nil, fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
 			}
+			// The link shares its target's inode, so the chown below clears the
+			// setuid and setgid bits the target entry set; keep its mode to
+			// put them back.
+			target, err := root.Lstat(name)
+			if err != nil {
+				return nil, fmt.Errorf("while checking hardlink %q: %w", name, err)
+			}
 			if err := tarutil.Lchown(root, name, hdr); err != nil {
 				return nil, err
+			}
+			if target.Mode().IsRegular() {
+				if err := restoreSetIDBits(ctx, root, name, target.Mode()&tarModeBits); err != nil {
+					return nil, err
+				}
 			}
 			// No mtime to restore: the link shares the target's inode, which
 			// already has the target entry's mtime.
@@ -410,7 +437,47 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 // them. Without the sticky bit /tmp would be 0777 instead of 1777 in the
 // actor, letting any user delete another's files there.
 func tarMode(hdr *tar.Header) os.FileMode {
-	return hdr.FileInfo().Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+	return hdr.FileInfo().Mode() & tarModeBits
+}
+
+// tarModeBits are the mode bits an unpacked entry takes from its tar header.
+const tarModeBits = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+
+// restoreSetIDBits puts back the setuid and setgid bits of want on name, a
+// regular file whose owner was just applied: changing a non-directory's owner
+// clears them, so they can only be set after the chown.
+//
+// Setting them then takes the file's owner or CAP_FOWNER, and keeping setgid
+// for a group the caller is not in takes CAP_FSETID. atelet runs as root
+// holding neither, so it restores setuid only on files root owns (sudo, su,
+// passwd) and setgid only on files whose group is also root's; a file another
+// user owns, or one setgid to another group (crontab, chage), loses the bit.
+// That is logged rather than failing the unpack, which would reject common
+// base images; the file keeps its other mode bits and runs without the
+// elevated identity.
+func restoreSetIDBits(ctx context.Context, root *os.Root, name string, want os.FileMode) error {
+	const setID = os.ModeSetuid | os.ModeSetgid
+	if want&setID == 0 {
+		return nil
+	}
+	fi, err := root.Lstat(name)
+	if err != nil {
+		return fmt.Errorf("while checking mode of %q: %w", name, err)
+	}
+	if fi.Mode()&setID == want&setID {
+		return nil
+	}
+	if err := root.Chmod(name, want); err != nil && !errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("while restoring mode %v on %q: %w", want, name, err)
+	}
+	if fi, err = root.Lstat(name); err != nil {
+		return fmt.Errorf("while checking mode of %q: %w", name, err)
+	}
+	if got := fi.Mode() & tarModeBits; got != want {
+		slog.WarnContext(ctx, "Image file lost its setuid or setgid bit on unpack: atelet lacks CAP_FOWNER and CAP_FSETID",
+			slog.String("name", name), slog.String("want", want.String()), slog.String("got", got.String()))
+	}
+	return nil
 }
 
 // restoreModTime sets the atime and mtime of an unpacked path to the mtime its

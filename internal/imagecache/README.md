@@ -103,7 +103,12 @@ layer diffIDs in order — layers shared by N images exist once.
    layer tar omits (they may exist only in lower layers). Every entry keeps
    the numeric owner its tar header records, as containerd and moby apply
    it; run as root, a failed chown fails the unpack, and an unprivileged
-   process (unit tests, local tooling) leaves the tree owned by itself. A
+   process (unit tests, local tooling) leaves the tree owned by itself.
+   Entries keep their tar mode exactly, whatever atelet's umask, with
+   setgid and sticky on directories. Changing a file's owner clears its
+   setuid and setgid bits, and without `CAP_FOWNER` and `CAP_FSETID`
+   atelet can put them back only on files root owns (setuid) whose group
+   is root's (setgid); elsewhere the bit is dropped and logged. A
    root atelet inside a user namespace (rootless or userns-remapped nodes)
    can only give files to uids and gids the namespace maps, so a layer
    with an owner outside that range fails to unpack, as it does under

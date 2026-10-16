@@ -19,6 +19,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -151,4 +153,73 @@ func TestUnpackLayer_UnprivilegedKeepsUnpackingUser(t *testing.T) {
 	if err := RemoveAllWritable(filepath.Join(dir, "opt")); err != nil {
 		t.Errorf("RemoveAllWritable: %v", err)
 	}
+}
+
+// hasEffectiveCap reports whether this process holds capability bit in its
+// effective set, read from /proc/self/status.
+func hasEffectiveCap(t *testing.T, bit uint) bool {
+	t.Helper()
+	b, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		t.Skipf("reading capabilities: %v", err)
+	}
+	for line := range strings.SplitSeq(string(b), "\n") {
+		if v, ok := strings.CutPrefix(line, "CapEff:"); ok {
+			caps, err := strconv.ParseUint(strings.TrimSpace(v), 16, 64)
+			if err != nil {
+				t.Fatalf("parsing CapEff %q: %v", v, err)
+			}
+			return caps&(1<<bit) != 0
+		}
+	}
+	t.Fatalf("no CapEff in /proc/self/status")
+	return false
+}
+
+// TestUnpackLayer_AppliesModesWithOwners checks that files keep their tar
+// mode once given to their owners: group write survives the umask, and
+// setuid and setgid, which the kernel clears on chown, are put back where the
+// process's capabilities allow. atelet holds only CAP_CHOWN and
+// CAP_DAC_OVERRIDE (run this under setpriv to check that set); with them a
+// setuid-root binary keeps its bit, while one another user owns, or one setgid
+// to a group root is not in, loses it without failing the unpack.
+func TestUnpackLayer_AppliesModesWithOwners(t *testing.T) {
+	roottest.Require(t, "giving files to other uids requires CAP_CHOWN")
+	const capFowner, capFsetid = 3, 4
+	fowner, fsetid := hasEffectiveCap(t, capFowner), hasEffectiveCap(t, capFsetid)
+
+	old := syscall.Umask(0o022)
+	t.Cleanup(func() { syscall.Umask(old) })
+
+	entries := []tarEntry{
+		{name: "srv/", typeflag: tar.TypeDir},
+		{name: "srv/shared.txt", typeflag: tar.TypeReg, mode: 0o664, body: "s", uid: 1000, gid: 100},
+		{name: "srv/run.sh", typeflag: tar.TypeReg, mode: 0o775, body: "r", uid: 1000, gid: 100},
+		{name: "usr/", typeflag: tar.TypeDir},
+		{name: "usr/bin/", typeflag: tar.TypeDir},
+		{name: "usr/bin/sudo", typeflag: tar.TypeReg, mode: 0o4755, body: "sudo"},
+		{name: "usr/bin/sudoedit", typeflag: tar.TypeLink, linkname: "usr/bin/sudo"},
+		{name: "usr/bin/newgrp", typeflag: tar.TypeReg, mode: 0o6755, body: "newgrp"},
+		{name: "usr/bin/crontab", typeflag: tar.TypeReg, mode: 0o2755, body: "crontab", gid: 54321},
+		{name: "opt/", typeflag: tar.TypeDir},
+		{name: "opt/tool", typeflag: tar.TypeReg, mode: 0o4755, body: "tool", uid: 1000, gid: 1000},
+	}
+	dir, _, err := runUnpack(t, entries)
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
+	}
+
+	ifCap := func(held bool, bit os.FileMode) os.FileMode {
+		if held {
+			return bit
+		}
+		return 0
+	}
+	assertOwner(t, filepath.Join(dir, "srv/shared.txt"), 1000, 100, 0o664)
+	assertOwner(t, filepath.Join(dir, "srv/run.sh"), 1000, 100, 0o775)
+	assertOwner(t, filepath.Join(dir, "usr/bin/sudo"), 0, 0, os.ModeSetuid|0o755)
+	assertOwner(t, filepath.Join(dir, "usr/bin/sudoedit"), 0, 0, os.ModeSetuid|0o755)
+	assertOwner(t, filepath.Join(dir, "usr/bin/newgrp"), 0, 0, os.ModeSetuid|os.ModeSetgid|0o755)
+	assertOwner(t, filepath.Join(dir, "usr/bin/crontab"), 0, 54321, ifCap(fsetid, os.ModeSetgid)|0o755)
+	assertOwner(t, filepath.Join(dir, "opt/tool"), 1000, 1000, ifCap(fowner, os.ModeSetuid)|0o755)
 }

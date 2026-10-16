@@ -24,6 +24,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -606,6 +607,46 @@ func TestUnpackLayer_KeepsSpecialDirBits(t *testing.T) {
 		}
 		if fi.Mode() != mode {
 			t.Errorf("%s mode = %v, want %v", name, fi.Mode(), mode)
+		}
+	}
+}
+
+// Files keep the mode their tar entries record whatever the umask: a
+// group-writable file must not lose group write, and setuid and setgid survive
+// on files and on hardlinks to them. TestUnpackLayer_AppliesOwnership covers
+// the same bits once the files are given to other owners.
+func TestUnpackLayer_KeepsFileModes(t *testing.T) {
+	old := syscall.Umask(0o022)
+	t.Cleanup(func() { syscall.Umask(old) })
+
+	entries := []tarEntry{
+		{name: "srv/", typeflag: tar.TypeDir},
+		{name: "srv/shared.txt", typeflag: tar.TypeReg, mode: 0o664, body: "s"},
+		{name: "srv/run.sh", typeflag: tar.TypeReg, mode: 0o775, body: "r"},
+		{name: "srv/open", typeflag: tar.TypeReg, mode: 0o666, body: "o"},
+		{name: "bin/", typeflag: tar.TypeDir},
+		{name: "bin/su", typeflag: tar.TypeReg, mode: 0o4755, body: "su"},
+		{name: "bin/su2", typeflag: tar.TypeLink, linkname: "bin/su"},
+		{name: "bin/wall", typeflag: tar.TypeReg, mode: 0o2755, body: "wall"},
+	}
+	dir, _, err := runUnpack(t, entries)
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
+	}
+	for name, want := range map[string]os.FileMode{
+		"srv/shared.txt": 0o664,
+		"srv/run.sh":     0o775,
+		"srv/open":       0o666,
+		"bin/su":         os.ModeSetuid | 0o755,
+		"bin/su2":        os.ModeSetuid | 0o755,
+		"bin/wall":       os.ModeSetgid | 0o755,
+	} {
+		fi, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("lstat %s: %v", name, err)
+		}
+		if fi.Mode() != want {
+			t.Errorf("%s mode = %v, want %v", name, fi.Mode(), want)
 		}
 	}
 }
