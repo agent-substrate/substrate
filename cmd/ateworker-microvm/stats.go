@@ -398,10 +398,11 @@ func (s *AteWorkerService) sampleGuest(ctx context.Context, h *hostedActor) (*at
 // every container answered, so a deadline never yields a partial sum.
 //
 // The loop as a whole is bounded by ctx — the caller's RPC deadline — with
-// ateworkervalidation.MaxContainers * statsCallTimeout as the ceiling when the
-// caller set none, since validation caps the spec before anything boots.
-// statsCallTimeout is per call so that one hung container read cannot eat
-// the budget the remaining containers still need.
+// the WorkloadSpec.containers bound (ten, its +k8s:maxItems tag) times
+// statsCallTimeout as the ceiling when the caller set none, since validation
+// caps the spec before anything boots. statsCallTimeout is per call so that
+// one hung container read cannot eat the budget the remaining containers
+// still need.
 func sumContainerStats(ctx context.Context, target *guestStatsTarget) (agentstats.Sample, map[string]uint64, error) {
 	var (
 		total   agentstats.Sample

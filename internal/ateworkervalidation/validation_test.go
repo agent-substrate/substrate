@@ -29,6 +29,9 @@ import (
 // Every request is validated down to its leaves: identity, paths, the spec's
 // containers, their probes and mounts, and the egress gateway.
 
+// maxContainers is the +k8s:maxItems bound on WorkloadSpec.containers.
+const maxContainers = 10
+
 func fullSpec() *ateworkerpb.WorkloadSpec {
 	return &ateworkerpb.WorkloadSpec{Containers: []*ateworkerpb.Container{{
 		Name:                   "main",
@@ -371,7 +374,7 @@ func TestValidateWorkloadSpec(t *testing.T) {
 		name: "valid: at the containers bound",
 		obj: func() *ateworkerpb.WorkloadSpec {
 			spec := &ateworkerpb.WorkloadSpec{}
-			for i := range MaxContainers {
+			for i := range maxContainers {
 				spec.Containers = append(spec.Containers, container(fmt.Sprintf("c-%d", i)))
 			}
 			return spec
@@ -383,12 +386,12 @@ func TestValidateWorkloadSpec(t *testing.T) {
 		name: "over the containers bound",
 		obj: func() *ateworkerpb.WorkloadSpec {
 			spec := &ateworkerpb.WorkloadSpec{}
-			for i := range MaxContainers + 1 {
+			for i := range maxContainers + 1 {
 				spec.Containers = append(spec.Containers, container(fmt.Sprintf("c-%d", i)))
 			}
 			return spec
 		}(),
-		want: field.ErrorList{field.TooMany(field.NewPath("containers"), MaxContainers+1, MaxContainers).WithOrigin("maxItems")},
+		want: field.ErrorList{field.TooMany(field.NewPath("containers"), maxContainers+1, maxContainers).WithOrigin("maxItems")},
 	}, {
 		name: "duplicate container name",
 		obj:  &ateworkerpb.WorkloadSpec{Containers: []*ateworkerpb.Container{container("app"), container("app")}},

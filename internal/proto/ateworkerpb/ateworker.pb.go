@@ -460,7 +460,7 @@ type RunWorkloadRequest struct {
 	// +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
 	RunscPath string `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
 	// +k8s:required
-	// +k8s:customValidation # at least one container; only Terminate's fallback spec may have none
+	// +k8s:subfield(containers)=+k8s:required # a container to start; only Terminate's fallback spec may have none
 	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
 	// atelet fetched it to (content-addressed, like runsc_path). The names are
@@ -667,7 +667,7 @@ type WorkloadSpec struct {
 	// template is gone, as on atelet's own WorkloadSpec.
 	//
 	// +k8s:optional
-	// +k8s:maxItems=10 # matches the template's containers bound; ateworkervalidation.MaxContainers
+	// +k8s:maxItems=10 # matches the template's containers bound
 	// +k8s:listType=map
 	// +k8s:listMapKey=name
 	Containers    []*Container `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
@@ -1617,7 +1617,7 @@ type RestoreWorkloadRequest struct {
 	// +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
 	RunscPath string `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
 	// +k8s:required
-	// +k8s:customValidation # at least one container; only Terminate's fallback spec may have none
+	// +k8s:subfield(containers)=+k8s:required # a container to start; only Terminate's fallback spec may have none
 	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.

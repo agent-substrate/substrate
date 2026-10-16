@@ -1441,10 +1441,28 @@ func Validate_RestoreWorkloadRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_RestoreWorkloadRequest_Spec(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
+			func() { // cohort = "containers"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "containers",
+					func(o *ateworkerpb.WorkloadSpec) []*ateworkerpb.Container { return o.Containers }, ateDeepEqual, validate.RequiredSlice).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "containers",
+					func(o *ateworkerpb.WorkloadSpec) []*ateworkerpb.Container { return o.Containers }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj []*ateworkerpb.Container) field.ErrorList {
+						return validate.MaxItems(ctx, op, fldPath, obj, oldObj, 10)
+					}).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "containers",
+					func(o *ateworkerpb.WorkloadSpec) []*ateworkerpb.Container { return o.Containers }, ateDeepEqual, validate.OptionalSlice).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			// call the type's validation function
 			errs = append(errs, Validate_WorkloadSpec(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -1907,10 +1925,28 @@ func Validate_RunWorkloadRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_RunWorkloadRequest_Spec(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
+			func() { // cohort = "containers"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "containers",
+					func(o *ateworkerpb.WorkloadSpec) []*ateworkerpb.Container { return o.Containers }, ateDeepEqual, validate.RequiredSlice).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "containers",
+					func(o *ateworkerpb.WorkloadSpec) []*ateworkerpb.Container { return o.Containers }, ateDeepEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj []*ateworkerpb.Container) field.ErrorList {
+						return validate.MaxItems(ctx, op, fldPath, obj, oldObj, 10)
+					}).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "containers",
+					func(o *ateworkerpb.WorkloadSpec) []*ateworkerpb.Container { return o.Containers }, ateDeepEqual, validate.OptionalSlice).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			// call the type's validation function
 			errs = append(errs, Validate_WorkloadSpec(ctx, op, fldPath, obj, oldObj)...)
 			return

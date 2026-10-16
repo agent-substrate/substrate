@@ -205,7 +205,7 @@ message RunWorkloadRequest {
   string runsc_path = 6;
 
   // +k8s:required
-  // +k8s:customValidation # at least one container; only Terminate's fallback spec may have none
+  // +k8s:subfield(containers)=+k8s:required # a container to start; only Terminate's fallback spec may have none
   WorkloadSpec spec = 7;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
@@ -258,7 +258,7 @@ message WorkloadSpec {
   // template is gone, as on atelet's own WorkloadSpec.
   //
   // +k8s:optional
-  // +k8s:maxItems=10 # matches the template's containers bound; ateworkervalidation.MaxContainers
+  // +k8s:maxItems=10 # matches the template's containers bound
   // +k8s:listType=map
   // +k8s:listMapKey=name
   repeated Container containers = 1;
@@ -548,7 +548,7 @@ message RestoreWorkloadRequest {
   string runsc_path = 6;
 
   // +k8s:required
-  // +k8s:customValidation # at least one container; only Terminate's fallback spec may have none
+  // +k8s:subfield(containers)=+k8s:required # a container to start; only Terminate's fallback spec may have none
   WorkloadSpec spec = 7;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
