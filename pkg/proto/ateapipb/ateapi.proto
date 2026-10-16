@@ -233,7 +233,7 @@ service Control {
   }
 
   // Delete an ActorTemplate together with its golden actor and golden
-  // tag in the reserved ate-golden atespace.
+  // tag in the template's atespace.
   rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {
     option (method).resource = "ActorTemplate";
   }

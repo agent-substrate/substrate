@@ -39,16 +39,6 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 		return nil, resources.ToAPIError(errs)
 	}
 
-	// A golden actor may be suspended, but only by the template controller:
-	// the suspend is what commits its snapshot, and the controller runs it once
-	// the warmup window it set has elapsed. A golden actor boots and waits, so
-	// it looks idle from the moment it starts, and honoring its own request
-	// would commit the snapshot before that window ends -- leaving every actor
-	// restored from the template to start from a workload that never warmed up.
-	if req.GetActor().GetAtespace() == resources.GoldenActorAtespace {
-		return nil, apierror.FailedPrecondition("actors in atespace %q are golden actors, which cannot request their own suspend", resources.GoldenActorAtespace)
-	}
-
 	workerName := req.GetWorker().GetName()
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 

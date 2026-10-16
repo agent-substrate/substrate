@@ -911,10 +911,6 @@ func TestValidatePromoteSnapshotRequest(t *testing.T) {
 		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Atespace = "../escape" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		name: "golden atespace",
-		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Atespace = resources.GoldenActorAtespace }),
-		want: field.ErrorList{field.Forbidden(field.NewPath("atespace"), "")},
-	}, {
 		name: "invalid actor_name: uppercase",
 		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.ActorName = "UPPER" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("actor_name"), nil, "").WithOrigin("format=k8s-short-name")},
