@@ -61,7 +61,6 @@ const (
 	RelationCanUseTemplate          = "can_use_template"
 	RelationCanUpdate               = "can_update"
 	RelationCanDelete               = "can_delete"
-	RelationCanPause                = "can_pause"
 	RelationCanResume               = "can_resume"
 	RelationCanSuspend              = "can_suspend"
 	RelationCanRevert               = "can_revert"
