@@ -289,7 +289,7 @@ func TestActorEgressPendingPlaintextHeadersDoNotBlockMITM(t *testing.T) {
 	}
 }
 
-// TestActorDNSRequiresPolicy: the sandbox's DNS relay refuses the queries of an
+// TestActorDNSRequiresPolicy: the sandbox's DNS relay denies the queries of an
 // actor with no EgressPolicy or for a host outside its policy, and answers them
 // once a rule in the policy matches the host, without a restart.
 func TestActorDNSRequiresPolicy(t *testing.T) {
@@ -306,10 +306,10 @@ func TestActorDNSRequiresPolicy(t *testing.T) {
 	waitForActorRoute(t, ctx, router, actorRef)
 
 	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, notTransient)
-	if status != http.StatusBadGateway || !isRefusedLookup(string(body), name) {
-		t.Fatalf("fetch of %s by an actor with no policy returned HTTP %d, want its lookup refused; body: %s", url, status, body)
+	if status != http.StatusBadGateway || !isDeniedLookup(string(body), name) {
+		t.Fatalf("fetch of %s by an actor with no policy returned HTTP %d, want its lookup denied; body: %s", url, status, body)
 	}
-	t.Logf("lookup was refused as expected: %s", body)
+	t.Logf("lookup was denied as expected: %s", body)
 
 	// The relay fetches the policy again within seconds, so the retries below
 	// see it. A wildcard rule covering the target namespace's Services allows
@@ -323,16 +323,16 @@ func TestActorDNSRequiresPolicy(t *testing.T) {
 
 	const unlisted = "unlisted.example.com"
 	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "http://"+unlisted+"/healthz", notTransient)
-	if status != http.StatusBadGateway || !isRefusedLookup(string(body), unlisted) {
-		t.Fatalf("fetch of unlisted host %s returned HTTP %d, want its lookup refused; body: %s", unlisted, status, body)
+	if status != http.StatusBadGateway || !isDeniedLookup(string(body), unlisted) {
+		t.Fatalf("fetch of unlisted host %s returned HTTP %d, want its lookup denied; body: %s", unlisted, status, body)
 	}
 }
 
-// isRefusedLookup reports whether body is the egress demo's report of a lookup
-// of name that the resolver refused. Go's resolver reports a REFUSED answer as
-// "server misbehaving".
-func isRefusedLookup(body, name string) bool {
-	return strings.Contains(body, "lookup "+name) && strings.Contains(body, "server misbehaving")
+// isDeniedLookup reports whether body is the egress demo's report of a lookup
+// of name that the DNS relay denied. The relay answers NXDOMAIN, which Go's
+// resolver reports as "no such host".
+func isDeniedLookup(body, name string) bool {
+	return strings.Contains(body, "lookup "+name) && strings.Contains(body, "no such host")
 }
 
 // hostnamePolicyActor creates an actor whose policy allows HTTPS to
