@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -50,12 +51,22 @@ type sandboxAssetFetcher interface {
 	ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error)
 }
 
+// pruneItem is the queue item that asks the worker to remove the pins of
+// runtimes no local worker advertises as its default any more. It shares
+// the queue with the hashes so pinning and unpinning never interleave.
+const pruneItem = "prune-pins"
+
 // runtimePrewarmer fetches the default runtime of each worker on this node
 // into the asset and image caches before any actor asks for it, so the
 // fetch inside the first Run/Restore on the node is a cache hit instead of
 // a download+extract on the critical path. The worker sandbox syncer hands
 // it the default runtime hash of every worker it plans; the index holds
 // the record to fetch.
+//
+// The assets are linked into a pin directory per runtime and left there
+// (see ateletpath.SandboxAssetPinsDir): the cache never evicts a linked
+// entry, so a default runtime stays cached while no actor runs it. The
+// pin goes when no worker advertises the runtime as its default any more.
 //
 // Prewarming is purely a latency optimization: every failure is logged and
 // left to the on-demand fetch in ensureSandboxAssets and the pull inside
@@ -108,7 +119,8 @@ func newRuntimePrewarmer(index *runtimeIndex, assets sandboxAssetFetcher, images
 
 // enqueue asks for the runtime advertised under hash to be prewarmed,
 // unless it already was. The syncer calls it as it plans a worker, after
-// registering the hash in the index.
+// registering the hash in the index and planning it as the worker's
+// default, which keeps the pin from a prune until the worker's file says.
 func (p *runtimePrewarmer) enqueue(hash string) {
 	p.mu.Lock()
 	already := p.prewarmed[hash]
@@ -125,6 +137,14 @@ func (p *runtimePrewarmer) markPrewarmed(hash string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.prewarmed[hash] = true
+}
+
+// prune asks for the pins of runtimes no worker advertises as its default
+// any more to be removed. The syncer calls it when a worker's advertised
+// runtimes change or a worker goes, and once its initial pass is complete,
+// which also clears pins a previous atelet left.
+func (p *runtimePrewarmer) prune() {
+	p.queue.Add(pruneItem)
 }
 
 // run drains the queue until ctx ends.
@@ -151,9 +171,16 @@ func (p *runtimePrewarmer) wait() {
 }
 
 // process prewarms the runtime under hash, requeueing with backoff on
-// failure.
+// failure, or prunes the pins when asked to.
 func (p *runtimePrewarmer) process(ctx context.Context, hash string) {
 	defer p.queue.Done(hash)
+	if hash == pruneItem {
+		if err := p.prunePins(ctx); err != nil {
+			slog.WarnContext(ctx, "Could not prune sandbox asset pins; will retry on the next change", slog.Any("err", err))
+		}
+		p.queue.Forget(hash)
+		return
+	}
 	rt, ok := p.index.lookup(hash)
 	if !ok {
 		// The syncer registers before it enqueues, and the index never
@@ -189,14 +216,12 @@ func (p *runtimePrewarmer) process(ctx context.Context, hash string) {
 	p.queue.Forget(hash)
 }
 
-// prewarm fetches the runtime's assets into the asset cache and its pause
-// image into the image cache. Racing an on-demand ensureSandboxAssets for
-// the same assets is safe: the asset cache runs one download per asset and
-// serves every caller from it, and the image cache collapses concurrent
-// pulls of one digest.
-//
-// Prewarm has no actor to link the assets into, so it stages them into a
-// scratch directory it removes again; the cache keeps the entries.
+// prewarm fetches the runtime's assets into the asset cache, linked into
+// the runtime's pin directory, and its pause image into the image cache.
+// Racing an on-demand ensureSandboxAssets for the same assets is safe: the
+// asset cache runs one download per asset and serves every caller from it,
+// and the image cache collapses concurrent pulls of one digest. A pin left
+// half-filled by a crash is completed, not rebuilt: what is staged stays.
 func (p *runtimePrewarmer) prewarm(ctx context.Context, hash string, rt *indexedRuntime) error {
 	ctx, cancel := context.WithTimeout(ctx, p.attemptTimeout)
 	defer cancel()
@@ -205,13 +230,7 @@ func (p *runtimePrewarmer) prewarm(ctx context.Context, hash string, rt *indexed
 	var assetErr, imageErr error
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		scratch, err := os.MkdirTemp(ateletpath.SandboxAssetScratchDir, "prewarm-")
-		if err != nil {
-			assetErr = fmt.Errorf("while creating prewarm scratch dir: %w", err)
-			return
-		}
-		defer func() { _ = os.RemoveAll(scratch) }()
-		_, assetErr = p.assets.ensureSandboxAssets(ctx, rt.rec, scratch)
+		_, assetErr = p.assets.ensureSandboxAssets(ctx, rt.rec, ateletpath.SandboxAssetPinDir(hash))
 	})
 	if rt.rec.PauseImage != "" {
 		wg.Go(func() {
@@ -232,4 +251,43 @@ func (p *runtimePrewarmer) prewarm(ctx context.Context, hash string, rt *indexed
 		slog.String("pause_image", rt.rec.PauseImage),
 		slog.Duration("duration", time.Since(t)))
 	return nil
+}
+
+// prunePins removes the pin of every runtime no worker advertises as its
+// default any more, and none is about to, so its assets become ordinary
+// eviction candidates. A pruned runtime is prewarmed again if a worker
+// advertises it later. It runs on the queue's worker, so it never races a
+// prewarm filling a pin.
+func (p *runtimePrewarmer) prunePins(ctx context.Context) error {
+	keep := map[string]string{} // pin dir name -> hash
+	for hash := range p.index.defaultHashes() {
+		keep[filepath.Base(ateletpath.SandboxAssetPinDir(hash))] = hash
+	}
+	p.mu.Lock()
+	pinned := map[string]string{} // pin dir name -> hash, for the ones to forget
+	for hash := range p.prewarmed {
+		pinned[filepath.Base(ateletpath.SandboxAssetPinDir(hash))] = hash
+	}
+	p.mu.Unlock()
+	entries, err := os.ReadDir(ateletpath.SandboxAssetPinsDir)
+	if err != nil {
+		return fmt.Errorf("while listing sandbox asset pins: %w", err)
+	}
+	var errs []error
+	for _, e := range entries {
+		if _, ok := keep[e.Name()]; ok {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(ateletpath.SandboxAssetPinsDir, e.Name())); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if hash, ok := pinned[e.Name()]; ok {
+			p.mu.Lock()
+			delete(p.prewarmed, hash)
+			p.mu.Unlock()
+		}
+		slog.InfoContext(ctx, "Unpinned a sandbox runtime no local worker advertises as its default", slog.String("pin", e.Name()))
+	}
+	return errors.Join(errs...)
 }

@@ -264,6 +264,18 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to open sandbox asset cache", err)
 	}
+	if err := validateSandboxAssetCacheGCFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid sandbox asset cache GC flags", err)
+	}
+	sandboxAssetCacheInstruments, err := newSandboxAssetCacheInstruments(otel.Meter("atelet"), sandboxAssetCache)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create sandbox asset cache metrics", err)
+	}
+	if *sandboxAssetCacheMaxBytes == 0 {
+		slog.WarnContext(ctx, "Sandbox asset cache has no budget; it only grows", slog.String("flag", "--sandbox-asset-cache-max-bytes"))
+	} else if *sandboxAssetCacheGCPeriod > 0 {
+		go newSandboxAssetCacheGC(sandboxAssetCache, sandboxAssetCacheInstruments).Run(ctx)
+	}
 
 	// Sandbox assets go through the object-store plugin; a gs:// asset it
 	// cannot serve, such as one in the public gs://gvisor bucket, is read
@@ -438,7 +450,7 @@ func main() {
 		ateFactory.Api().V1alpha1().WorkerPools(),
 		ateFactory.Api().V1alpha1().SandboxConfigs(),
 		wmService,
-		nodepath.WorkersDir(), runtimes, prewarmer.enqueue)
+		nodepath.WorkersDir(), runtimes, prewarmer)
 	if err != nil {
 		// Without the syncer no runtime is ever indexed, so no actor could run.
 		serverboot.Fatal(ctx, "Failed to start the worker sandbox runtimes syncer", err)

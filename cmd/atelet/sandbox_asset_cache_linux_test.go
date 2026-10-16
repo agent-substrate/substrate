@@ -64,7 +64,7 @@ func TestCanHardLinkRejectsAnotherMount(t *testing.T) {
 }
 
 func TestOpenSandboxAssetCacheRejectsAnotherMount(t *testing.T) {
-	useTempAssetScratch(t)
+	useTempAssetPins(t)
 	orig := nodepath.ActorsDir
 	nodepath.ActorsDir = filepath.Join(otherMount(t), "actors")
 	t.Cleanup(func() { nodepath.ActorsDir = orig })

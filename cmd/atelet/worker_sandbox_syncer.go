@@ -100,9 +100,16 @@ type workerSandboxSyncer struct {
 	// what the pod advertises once it is.
 	index *runtimeIndex
 	// prewarm, if set, is handed the default runtime hash of every pod
-	// whose file was written, so its assets are fetched before an actor
-	// asks for them.
-	prewarm func(hash string)
+	// whose file was written, so its assets are fetched and pinned before
+	// an actor asks for them, and is asked to prune its pins whenever what
+	// the node's workers advertise may have changed.
+	prewarm runtimePrewarm
+	// initial holds the UIDs of the pods present when the caches first
+	// synced and not yet processed once. No prune reaches the prewarmer
+	// until it is empty: until then the index may lack defaults of workers
+	// already on the node, and pruning would drop their pins.
+	initialMu sync.Mutex
+	initial   map[string]struct{}
 	// pods holds this node's worker pods, indexed by podUIDIndex.
 	pods   cache.Indexer
 	assets sandboxAssetFetcher
@@ -133,7 +140,7 @@ type workerSandboxSyncer struct {
 	cpuFeatures map[string]string
 }
 
-func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm func(hash string)) *workerSandboxSyncer {
+func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm) *workerSandboxSyncer {
 	return &workerSandboxSyncer{
 		resolver:   resolver,
 		pods:       pods,
@@ -155,6 +162,14 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 	}
 }
 
+// runtimePrewarm is what the syncer asks of the runtime prewarmer: fetch
+// and pin a default runtime, and drop the pins of runtimes that are no
+// worker's default any more.
+type runtimePrewarm interface {
+	enqueue(hash string)
+	prune()
+}
+
 // startWorkerSandboxSyncer wires a syncer to the given informers, which the
 // caller starts, and runs it until ctx ends. pods must hold only this node's
 // worker pods and must not have started yet. Worker directories live under
@@ -167,7 +182,7 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 // or a list/watch fails (e.g. Forbidden while an RBAC rollout lags the
 // binary), existing files and index entries stay as they are and only
 // changes wait.
-func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm func(hash string)) (*workerSandboxSyncer, error) {
+func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm) (*workerSandboxSyncer, error) {
 	if err := pods.Informer().AddIndexers(cache.Indexers{podUIDIndex: func(obj any) ([]string, error) {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok {
@@ -362,6 +377,7 @@ func (s *workerSandboxSyncer) run(ctx context.Context, synced ...cache.InformerS
 	if !cache.WaitForCacheSync(ctx.Done(), synced...) {
 		return
 	}
+	s.markInitial()
 	s.enqueueExistingDirs(ctx)
 	var wg sync.WaitGroup
 	for range syncWorkers {
@@ -374,10 +390,69 @@ func (s *workerSandboxSyncer) run(ctx context.Context, synced ...cache.InformerS
 					return
 				}
 				s.process(ctx, uid)
+				s.markProcessed(uid)
 			}
 		}()
 	}
 	wg.Wait()
+}
+
+// markInitial records the pods in the cache at first sync as the ones the
+// initial pass must cover before the prewarmer first prunes its pins. Every
+// one of them is already on the queue: the initial list replayed each as an
+// Add. With none, the pins can be pruned at once.
+func (s *workerSandboxSyncer) markInitial() {
+	s.initialMu.Lock()
+	defer s.initialMu.Unlock()
+	s.initial = map[string]struct{}{}
+	for _, obj := range s.pods.List() {
+		if pod, ok := obj.(*corev1.Pod); ok {
+			s.initial[string(pod.UID)] = struct{}{}
+		}
+	}
+	if len(s.initial) == 0 {
+		s.pruneAfterInitialPass()
+	}
+}
+
+// markProcessed takes uid off the initial pass, pruning on the last. A pod
+// whose sync failed counts: it keeps retrying in the background, and its
+// pin, if any, is kept by whatever its file still advertises once it does.
+func (s *workerSandboxSyncer) markProcessed(uid string) {
+	s.initialMu.Lock()
+	defer s.initialMu.Unlock()
+	if _, ok := s.initial[uid]; !ok {
+		return
+	}
+	delete(s.initial, uid)
+	if len(s.initial) == 0 {
+		s.pruneAfterInitialPass()
+	}
+}
+
+// pruneAfterInitialPass has the prewarmer prune: the index now holds what
+// every worker already on the node advertises, so a pin a previous atelet
+// left for anything else can go. Called with initialMu held, once.
+func (s *workerSandboxSyncer) pruneAfterInitialPass() {
+	if s.prewarm != nil {
+		s.prewarm.prune()
+	}
+}
+
+// pruneSoon has the prewarmer prune, unless the initial pass is still
+// running: the index then lacks the defaults of the pods not yet processed,
+// and a prune would drop the pins a previous atelet left for them. The
+// pass's own prune covers every request dropped here.
+func (s *workerSandboxSyncer) pruneSoon() {
+	if s.prewarm == nil {
+		return
+	}
+	s.initialMu.Lock()
+	defer s.initialMu.Unlock()
+	if len(s.initial) > 0 {
+		return
+	}
+	s.prewarm.prune()
 }
 
 // process brings the directory of the pod with the given UID up to date:
@@ -444,6 +519,7 @@ func (s *workerSandboxSyncer) finish(ctx context.Context, uid string, err error)
 
 func (s *workerSandboxSyncer) removeDir(ctx context.Context, uid string) error {
 	s.index.forget(uid)
+	s.pruneSoon()
 	if err := os.RemoveAll(s.podDir(uid)); err != nil {
 		return fmt.Errorf("while removing worker directory: %w", err)
 	}

@@ -111,6 +111,49 @@ func TestRuntimeIndex(t *testing.T) {
 	}
 }
 
+// TestRuntimeIndexPlannedDefaults pins the lifetime of a planned default:
+// held from the plan until the pod's file advertises a default or the pod
+// goes, replaced by a re-plan, and kept across a file that lacks one.
+func TestRuntimeIndexPlannedDefaults(t *testing.T) {
+	const (
+		shaA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		shaB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	x := newRuntimeIndex()
+	v1, v2 := hashedTestVersion(t, "v1", true, shaA), hashedTestVersion(t, "v2", true, shaB)
+	gvisor := v1alpha1.SandboxClassGvisor
+	held := func(hash string) bool { return x.defaultHashes()[hash] }
+
+	x.plan("pod-1", []string{v1.hash})
+	if !held(v1.hash) {
+		t.Fatal("a planned default is not held")
+	}
+	// The config moved on before the file was written: the old plan goes.
+	x.plan("pod-1", []string{v2.hash})
+	if held(v1.hash) || !held(v2.hash) {
+		t.Errorf("after a re-plan: held(v1)=%v held(v2)=%v, want only v2", held(v1.hash), held(v2.hash))
+	}
+	// A partial file without the default keeps the plan for the retry.
+	x.register("pod-1", advertisedClass{class: gvisor, config: "config-x", hashed: []hashedVersion{hashedTestVersion(t, "v1", false, shaA)}})
+	if !held(v2.hash) {
+		t.Error("a file lacking the default dropped the plan")
+	}
+	// The file with the default takes over from the plan.
+	x.register("pod-1", advertisedClass{class: gvisor, config: "config-x", hashed: []hashedVersion{v2}})
+	if !held(v2.hash) {
+		t.Error("the advertised default is not held")
+	}
+	if _, ok := x.planned["pod-1"]; ok {
+		t.Error("the plan outlived the file that advertises its default")
+	}
+	// A pod deleted mid-sync takes its plan with it.
+	x.plan("pod-2", []string{v1.hash})
+	x.forget("pod-2")
+	if held(v1.hash) {
+		t.Error("the plan of a gone pod is still held")
+	}
+}
+
 // TestRuntimeIndexRegisterRuntimes pins the early registration the syncer
 // does from an event handler: the hashes resolve, and no worker's entry
 // appears or changes until its file is written.
