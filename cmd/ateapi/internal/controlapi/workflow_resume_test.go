@@ -1823,10 +1823,10 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
-			ExternalVolumes: []*ateapipb.ExternalVolume{
+			ExternalVolumes: &ateapipb.ExternalVolumes{Volumes: []*ateapipb.ExternalVolumeStatus{
 				{Name: "mounted", StorageVolumeId: "storage-mounted", VolumeType: "mock"},
 				{Name: "unmounted", StorageVolumeId: "storage-unmounted", VolumeType: "mock"},
-			},
+			}},
 		},
 	})
 	actor, err := persistence.GetActor(ctx, actorRef)
@@ -1844,8 +1844,8 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 	worker := &ateapipb.Worker{NodeName: "node-1"}
 	tmpl := &ateapipb.ActorTemplate{
 		Volumes: []*ateapipb.Volume{
-			{Name: "mounted", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
-			{Name: "unmounted", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
+			{Name: "mounted", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}}},
+			{Name: "unmounted", External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}}},
 		},
 		Containers: []*ateapipb.Container{
 			{Name: "main", Image: "img", VolumeMounts: []*ateapipb.VolumeMount{{Name: "mounted", MountPath: "/data"}}},
@@ -1889,8 +1889,8 @@ func (p *createCountingVolumePlugin) CreateVolume(ctx context.Context, req volum
 func TestEnsureVolumesCreated(t *testing.T) {
 	tmpl := &ateapipb.ActorTemplate{
 		Volumes: []*ateapipb.Volume{{
-			Name:                   "data",
-			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"},
+			Name:     "data",
+			External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
 		}},
 	}
 	tests := []struct {
@@ -1911,7 +1911,7 @@ func TestEnsureVolumesCreated(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 				Status: &ateapipb.ActorStatus{
 					State:           tt.state,
-					ExternalVolumes: []*ateapipb.ExternalVolume{{Name: "data", VolumeType: "mock"}},
+					ExternalVolumes: &ateapipb.ExternalVolumes{Volumes: []*ateapipb.ExternalVolumeStatus{{Name: "data", VolumeType: "mock"}}},
 				},
 			})
 			actor, err := persistence.GetActor(ctx, actorRef)
@@ -1939,7 +1939,7 @@ func TestEnsureVolumesCreated(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
-			if provisioned := stored.GetStatus().GetExternalVolumes()[0].GetStorageVolumeId() != ""; provisioned != (tt.wantCreates > 0) {
+			if provisioned := stored.GetStatus().GetExternalVolumes().GetVolumes()[0].GetStorageVolumeId() != ""; provisioned != (tt.wantCreates > 0) {
 				t.Errorf("stored volume provisioned = %t, want %t", provisioned, tt.wantCreates > 0)
 			}
 		})

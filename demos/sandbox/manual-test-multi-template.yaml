@@ -47,10 +47,12 @@ snapshotConfig:
   storageLocation: gs://ate-snapshots/ate-manual-test-multi/
 volumes:
 - name: vol-hostpath
-  externalVolumeTemplate:
-    capacity: 1Gi
-    storageClassName: csi-hostpath-sc
+  external:
+    template:
+      capacity: 1Gi
+      storageClassName: csi-hostpath-sc
 - name: vol-nfs
-  externalVolumeTemplate:
-    capacity: 1Gi
-    storageClassName: csi-nfs-sc
+  external:
+    template:
+      capacity: 1Gi
+      storageClassName: csi-nfs-sc
