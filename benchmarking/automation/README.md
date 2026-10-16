@@ -23,7 +23,9 @@ the router capacity benchmark — see
    `ateArgs`) + `benchmarking/workloads/deploy.sh
    --deploy --sandbox-class <class>` (these build & push substrate / workload
    images via `ko` as part of their deploy steps — there's no separate
-   image build step). For a `microvm` test the orchestrator also
+   image build step). The install sets `ATE_API_AUTHZ_BOOTSTRAP_OWNERS` to
+   the `ate-client` and `benchmarking/benchmark-runner` ServiceAccounts so the
+   runner's calls pass [authorization](../../docs/authorization.md). For a `microvm` test the orchestrator also
    runs `hack/install-microvm-deps.sh --install` between the two, which
    stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
    store bucket and applies the cluster-wide `microvm` SandboxConfig.
@@ -38,6 +40,10 @@ the router capacity benchmark — see
    - Submits a Job using the just-built image for the test's type
      (`runner-job.yaml.tmpl` for locust,
      `nighthawk-ingress-runner-job.yaml.tmpl` for nighthawk-ingress).
+     A locust Job also gets `--metadata` with the target cluster's name,
+     location and project, merged with the `BENCHMARK_METADATA` environment
+     variable (a JSON object) if set. A `--metadata` in the test's own
+     `flags` is merged in too, its keys winning on conflict.
    - Polls until complete/failed/timeout; tails logs; deletes the Job.
    - Tears down workloads + micro-VM deps (if any) + substrate.
    - If not the last test, redeploys them so the next run starts clean.
@@ -46,7 +52,7 @@ the router capacity benchmark — see
 
 Each entry in `tests.yaml` may set `sandboxClass: gvisor | microvm` (default
 `gvisor`). This controls both `spec.sandboxClasses[0].name` on the benchmark WorkerPool
-and its `workerImage` (`ateom-gvisor` vs `ateom-microvm`).
+and its `workerImage` (`ateworker-gvisor` vs `ateworker-microvm`).
 
 For `microvm` tests the target cluster must have KVM-capable nodes and the
 object store bucket named in its `.ate-dev-env.sh` must be writable by the

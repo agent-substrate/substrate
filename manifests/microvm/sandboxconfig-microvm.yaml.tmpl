@@ -26,7 +26,7 @@
 # object-store plugin - NOT baked into the worker image. ${BUCKET_SCHEME} is
 # that store's URL scheme (s3 on kind, gs on GKE): the plugin serves only its
 # own backend's scheme. The assets must stay outside any snapshot location,
-# which the plugin refuses to serve as assets. ateom boots cloud-hypervisor
+# which the plugin refuses to serve as assets. ateworker boots cloud-hypervisor
 # itself and gives the actor an overlay rootfs (virtio-fs RO lower +
 # guest-tmpfs upper), so it fetches virtiofsd too.
 #

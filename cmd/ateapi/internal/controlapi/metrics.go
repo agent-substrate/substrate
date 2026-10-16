@@ -19,10 +19,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"k8s.io/apimachinery/pkg/labels"
@@ -98,10 +98,10 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		}
 		for _, w := range ws {
 			state := workerState(w)
-			// CreateWorker does not validate the class, thus a worker can have an
-			// empty one. Report it as unknown, not as the pool's class: the
-			// scheduler puts no actor on a worker that offers no class, thus the
-			// pool's series must not count it as free capacity.
+			// CreateWorker accepts an empty class, as the field is optional.
+			// Report it as unknown, not as the pool's class: the scheduler puts
+			// no actor on a worker that offers no class, thus the pool's series
+			// must not count it as free capacity.
 			class := ateattr.NormalizeSandboxClass(w.GetSandboxClass())
 			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, class}]++
 		}
@@ -161,7 +161,7 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 	lifecycleOpDuration, err := meter.Float64Histogram(
 		lifecycleOpDurationMetric,
 		metric.WithUnit("s"),
-		metric.WithDescription("Duration of an actor lifecycle operation (create, resume, suspend, pause, delete) handled by ateapi."),
+		metric.WithDescription("Duration of an actor lifecycle operation (create, resume, suspend, delete, revert) handled by ateapi."),
 		metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2.5, 5, 10, 30),
 	)
 	if err != nil {

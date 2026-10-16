@@ -27,10 +27,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	"google.golang.org/grpc"
 
-	"github.com/agent-substrate/substrate/internal/actorevent"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/contextlogging"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/actorevent"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/contextlogging"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestResolveLogsExporter pins the logs names on top of the shared rules: otlp
@@ -107,7 +107,7 @@ func emittedResource(t *testing.T, relayCapable bool, conn *grpc.ClientConn) map
 	t.Helper()
 	proc := withCaptureProcessor(t)
 	lp, err := newLoggerProvider(context.Background(), LoggingOptions{
-		ServiceName:  "ateom-gvisor",
+		ServiceName:  "ateworker-gvisor",
 		Exporter:     Exporters{ExporterOTLP: true},
 		ExporterConn: conn,
 		RelayCapable: relayCapable,

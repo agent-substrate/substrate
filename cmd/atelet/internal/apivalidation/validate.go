@@ -18,8 +18,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -65,6 +65,11 @@ func ValidatePromoteSnapshotRequest(ctx context.Context, req *ateletpb.PromoteSn
 	return Validate_PromoteSnapshotRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateDetachActorRequest runs the generated validation for req.
+func ValidateDetachActorRequest(ctx context.Context, req *ateletpb.DetachActorRequest) field.ErrorList {
+	return Validate_DetachActorRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 // ValidateRegisterWorkerRequest runs the generated validation for req.
 func ValidateRegisterWorkerRequest(ctx context.Context, req *ateletpb.RegisterWorkerRequest) field.ErrorList {
 	return Validate_RegisterWorkerRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
@@ -85,6 +90,10 @@ func ValidateCustom_SandboxAssets_SandboxClass(_ context.Context, _ operation.Op
 	return resources.ValidateSandboxClass(fldPath, *value)
 }
 
+func ValidateCustom_SandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateSandboxClass(fldPath, *value)
+}
+
 func ValidateCustom_SandboxAssets_PauseImage(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidatePinnedImage(fldPath, *value)
 }
@@ -102,15 +111,6 @@ func ValidateCustom_AssetFile_Sha256(_ context.Context, _ operation.Operation, f
 func ValidateCustom_PromoteSnapshotRequest_Atespace(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if *value == resources.GoldenActorAtespace {
 		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf("atespace %q holds golden actors, which are never paused", *value))}
-	}
-	return nil
-}
-
-// ValidateCustom_CheckpointRequest requires snapshot.object when
-// upload_config.mode is UPLOAD_MODE_IMMEDIATE.
-func ValidateCustom_CheckpointRequest(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.CheckpointRequest) field.ErrorList {
-	if value.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE && value.GetSnapshot() != nil && value.GetSnapshot().GetObject() == nil {
-		return field.ErrorList{field.Required(fldPath.Child("snapshot", "object"), "required when upload_config.mode is UPLOAD_MODE_IMMEDIATE")}
 	}
 	return nil
 }

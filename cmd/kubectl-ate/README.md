@@ -288,7 +288,7 @@ kubectl ate delete egress-policy <actor-name> -a <atespace> --uid <uid> --versio
 
 ### Logs
 
-`kubectl ate logs` requires a resource-type subcommand; running `kubectl ate logs <actor-name>` on its own prints help. The only supported resource type is `actors`:
+`kubectl ate logs` requires a resource-type subcommand. The only supported resource type is `actor`:
 
 ```bash
 # Print the logs an actor has produced on its current worker.
@@ -322,7 +322,9 @@ kubectl ate admin make-ca-pool \
 # Generate a new JWT authority pool and push it to a Kubernetes Secret. The
 # key is ES256 (--alg RS256, a 4096-bit RSA key, for relying parties that don't
 # support ES256) and its ID defaults to the base64url SHA-256 of the public
-# key's PKIX encoding (--key-id to override).
+# key's PKIX encoding (--key-id to override). The Secret holds the pool under
+# "pool" and its public keys as a JWK set under "jwks", for verifiers that
+# must not see the signing keys. Every command below keeps the two in step.
 kubectl ate admin make-jwt-pool \
   --name actor-id-jwt-pool \
   --secret-namespace ate-system

@@ -19,20 +19,23 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // HostingNode is the node that holds the actor, and "" when no node does. The
 // actor's state decides which status field to trust, since both can outlive
-// the hosting they record: a revert releases the worker but keeps the
-// assignment until it finalizes, and a crash clears the worker but keeps
-// assigned_node as a record of the last node. The rules:
+// the hosting they record: pause, suspend, crash and revert release the
+// worker (delete its row in the store's worker assignments) before they clear
+// status.worker_assignment, and a crash keeps status.assigned_node as a record
+// of the last node. The rules:
 //   - SUSPENDED or SUSPENDING with no worker and a local-only latest
 //     snapshot, the shape of a paused actor: assigned_node, the node holding
 //     that snapshot.
-//   - RESUMING, RUNNING and SUSPENDING with a worker assigned: the worker's
-//     node, or "" if the worker is gone from the store.
+//   - RESUMING, RUNNING and SUSPENDING with status.worker_assignment set: the
+//     worker's node, but only while the store's worker assignment row binds
+//     that worker to this actor's UID; "" once it is released or the worker
+//     is gone.
 //   - Anything else: "".
 //
 // WorkerService uses it to refuse a node that asks for credentials for an
@@ -56,6 +59,17 @@ func HostingNode(ctx context.Context, st store.Interface, actor *ateapipb.Actor)
 		return "", nil
 	}
 	workerName := assignment.GetWorker().GetName()
+	// The worker assignment, not the actor's status, binds the worker to the
+	// actor. The status keeps naming the worker after a release until the
+	// workflow that released it records the new state, and by then the worker
+	// may host another actor.
+	hosted, err := workerHostsActor(ctx, st, workerName, actor.GetMetadata().GetUid())
+	if err != nil {
+		return "", err
+	}
+	if !hosted {
+		return "", nil
+	}
 	worker, err := st.GetWorker(ctx, workerName)
 	if errors.Is(err, store.ErrNotFound) {
 		return "", nil

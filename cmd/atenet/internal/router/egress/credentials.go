@@ -25,11 +25,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/internal/egresspolicy"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/egresspolicy"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 )
 
 // mapCredentialProviderError converts a FetchSecret failure into a
@@ -157,7 +157,7 @@ func (h *Handler) providerCredential(ctx context.Context, ref resources.ActorRef
 		}
 	}
 
-	// Atunnel connected to us with an ateom-for-actor SPIFFE ID; translate it
+	// Atunnel connected to us with a worker-for-actor SPIFFE ID; translate it
 	// to a pure actor SPIFFE ID for plugins to make decisions on.
 	resp, err := h.provider.FetchSecret(ctx, &credproviderpb.FetchSecretRequest{
 		Uri:           uri,

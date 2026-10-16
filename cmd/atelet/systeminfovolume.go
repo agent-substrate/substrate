@@ -26,11 +26,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/volumepath"
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/trustbundle"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/volumepath"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
@@ -166,7 +166,7 @@ func (r *systemInfoVolumeRefresher) DeregisterOwned(owner *registeredActor) {
 }
 
 // collectData builds the volume's contents keyed by volume-relative path.
-func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID string, si *ateletpb.SystemInfoVolume) (payload map[string][]byte, err error) {
+func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID string, si *ateletpb.SystemInfoVolumeSource) (payload map[string][]byte, err error) {
 	payload = map[string][]byte{}
 	for _, dataSource := range si.GetDataSources() {
 		switch {
@@ -213,7 +213,7 @@ func (r *systemInfoVolumeRefresher) write(ref resources.ActorRef, actorUID strin
 type systemInfoVolume struct {
 	Name string
 	Root string
-	Spec *ateletpb.SystemInfoVolume
+	Spec *ateletpb.SystemInfoVolumeSource
 }
 
 // apply writes payload into the volume and reports whether any file changed.
@@ -258,7 +258,7 @@ func writeSystemInfoFile(root *os.Root, relPath string, data []byte) (bool, erro
 	return true, nil
 }
 
-// writeFileAtomicRoot is writeFileAtomic confined to root. The fixed temp
+// writeFileAtomicRoot is atomicfile.Write confined to root. The fixed temp
 // name is safe because writers of an actor's volumes serialize on its lock.
 func writeFileAtomicRoot(root *os.Root, relPath string, data []byte, perm os.FileMode) error {
 	dir, base := filepath.Dir(relPath), filepath.Base(relPath)
@@ -382,7 +382,7 @@ func (r *systemInfoVolumeRefresher) refreshBundle(ctx context.Context, bundleNam
 }
 
 // projectsBundle reports whether the volume spec projects the named bundle.
-func projectsBundle(si *ateletpb.SystemInfoVolume, bundleName string) bool {
+func projectsBundle(si *ateletpb.SystemInfoVolumeSource, bundleName string) bool {
 	for _, ds := range si.GetDataSources() {
 		if tb := ds.GetTrustBundle(); tb != nil && slices.Contains(tb.GetNames(), bundleName) {
 			return true

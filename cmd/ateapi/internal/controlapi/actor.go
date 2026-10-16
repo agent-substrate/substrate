@@ -25,15 +25,16 @@ import (
 	"slices"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/actoridjwt"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/substratex509"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
+	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/actoridjwt"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/substratex509"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
@@ -92,6 +93,8 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	if tagRef == nil {
 		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
 	} else {
+		// NOTE: whether the ExternalVolumes gate is enabled or not, we do not
+		// support cloning from a tag that has external volumes.
 		for _, volume := range template.GetVolumes() {
 			if volume.GetExternalVolumeTemplate() != nil {
 				// TODO: Permit cloning after CSI volume snapshots are supported.
@@ -116,9 +119,17 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	name := inActor.GetMetadata().GetName()
 
 	// Volume creation is completed asynchronously after the actor is recorded.
-	initVols, err := initialActorVolumes(ctx, s.storageClassLister, template)
-	if err != nil {
+	var initVols []*ateapipb.ExternalVolume
+	if iv, err := initialExternalVolumes(ctx, s.storageClassLister, template); err != nil {
 		return nil, err
+	} else if preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
+		initVols = iv
+	} else if len(iv) > 0 {
+		errs := field.ErrorList{
+			field.Forbidden(field.NewPath("actor", "actor_template"),
+				"ActorTemplates with external volumes require the ExternalVolumes preview gate to be enabled on the server and the client to opt in to preview features (kubectl ate --preview, or the "+preview.Header+" header)"),
+		}
+		return nil, resources.ToAPIError(errs)
 	}
 
 	// Verify that the result is properly valid before storing it.
@@ -550,13 +561,11 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorR
 
 func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJwtRequest) (*ateapipb.MintActorJwtResponse, error) {
 	if errs := apivalidation.ValidateMintActorJWTRequest(ctx, req); len(errs) > 0 {
-		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
+		return nil, resources.ToAPIError(errs)
 	}
 
-	// TODO(authz): Authorization layer needs to check whether the caller has
-	// the mintActorJWT permission/relation with this actor.  This could be an
-	// atelet (via the relationship of the atelet running the actor), or the
-	// egress gateway (via a cluster-level grant?)
+	// With authz enforced, the interceptor requires can_mint_actor_jwt on the
+	// actor, which only the egress gateway holds.
 
 	// Verify that this actor exists in the store.  It doesn't need to be
 	// running, since we may need to issue JWTs during actor boot / resume.
@@ -606,13 +615,11 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 
 func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.MintActorCertificateRequest) (*ateapipb.MintActorCertificateResponse, error) {
 	if errs := apivalidation.ValidateMintActorCertificateRequest(ctx, req); len(errs) > 0 {
-		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
+		return nil, resources.ToAPIError(errs)
 	}
 
-	// TODO(authz): Authorization layer needs to check whether the caller has
-	// the mintActorCertificate permission/relation with this actor.    This
-	// could be an atelet (via the relationship of the atelet running the
-	// actor), or the egress gateway (via a cluster-level grant?)
+	// With authz enforced, the interceptor requires can_mint_actor_certificate
+	// on the actor, which only the egress gateway holds.
 
 	// Check that the caller authenticated with a client certificate --- we
 	// should not allow bootstrapping a proof-of-possession credential from a

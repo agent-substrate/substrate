@@ -30,11 +30,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/cmd"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/cmd"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/demos"
 	// Registers every bundled demo, so demos.All() is the real list.
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/all"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/all"
 )
 
 // stubGo is a `go` that records the arguments of every `go run ./cmd/ate-setup`
@@ -226,6 +226,10 @@ func TestShimTranslatesFlags(t *testing.T) {
 		args: []string{"--cluster-size=size10", "--deploy-ate-apiserver"},
 		want: []string{"--cluster-size=size10 deploy apiserver"},
 	}, {
+		name: "--ateapi-log-level is forwarded in either value form",
+		args: []string{"--ateapi-log-level", "debug", "--deploy-ate-apiserver", "--ateapi-log-level=warn"},
+		want: []string{"--ateapi-log-level=debug --ateapi-log-level=warn deploy apiserver"},
+	}, {
 		name: "--credential-provider is forwarded with a separate value",
 		args: []string{"--deploy-atenet", "--credential-provider", `{"name":"custom","address":"cred.ate-system.svc:50051"}`},
 		want: []string{`--credential-provider={"name":"custom","address":"cred.ate-system.svc:50051"} deploy atenet`},
@@ -251,6 +255,7 @@ func TestShimTranslatesFlags(t *testing.T) {
 			"--create-podcertificate-controller-cas",
 			"--create-api-server-env-vars",
 			"--create-api-authentication-config",
+			"--create-api-config",
 		},
 		want: []string{
 			"create jwt-authority-pool",
@@ -260,6 +265,7 @@ func TestShimTranslatesFlags(t *testing.T) {
 			"create podcertificate-controller-cas",
 			"create api-server-env-vars",
 			"create api-authentication-config",
+			"create api-config",
 		},
 	}, {
 		name: "delete flags",

@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,7 +60,7 @@ func CreateSubstrateCounterTemplate(ctx context.Context, t *testing.T, clients *
 }
 
 // CreateSubstrateTemplateFrom creates a per-test WorkerPool CRD plus a
-// substrate ActorTemplate copying the resolved runtime (sandbox config, ateom
+// substrate ActorTemplate copying the resolved runtime (sandbox config, worker
 // image, container images, sandbox size) from the installed fixture src. It
 // registers cleanup of the template (which does not ride the k8s namespace GC
 // the CRD templates did) and blocks until the golden snapshot exists.
@@ -107,9 +107,7 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 		Metadata:       &ateapipb.ResourceMetadata{Atespace: opts.Atespace, Name: opts.Name},
 		WorkerSelector: &ateapipb.Selector{MatchLabels: opts.Labels},
 		Containers:     srcTmpl.GetContainers(),
-		// The source's limits size the sandbox. Copying them matters most on
-		// micro-VM, where an ActorTemplate that declares none boots the guest
-		// at ateom's default guest size (2GiB) instead of the demo's 512Mi.
+		// The source's limits size the sandbox, and the API requires them.
 		Resources: srcTmpl.GetResources(),
 		// The source carries the sandbox_class/config_name pair for the
 		// class under test.

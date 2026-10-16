@@ -26,9 +26,9 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const (
@@ -177,11 +177,11 @@ func TestRecordPhasesSkipsZeroPhases(t *testing.T) {
 		snapshotOp{fidelity: ateattr.SnapshotFidelityMemory},
 		phase{ateattr.SnapshotPhaseManifestFetch, 50 * time.Millisecond},
 		phase{ateattr.SnapshotPhaseDownload, 2 * time.Second},
-		phase{ateattr.SnapshotPhaseAteomRestore, 0},
+		phase{ateattr.SnapshotPhaseWorkerRestore, 0},
 		phase{ateattr.SnapshotPhaseTotal, 2 * time.Second})
 
 	byPhase := phaseValues(t, collectHistogram(t, reader, restoreDurationMetric))
-	if _, ok := byPhase[ateattr.SnapshotPhaseAteomRestore]; ok {
+	if _, ok := byPhase[ateattr.SnapshotPhaseWorkerRestore]; ok {
 		t.Error("a phase that never started was recorded as a zero observation")
 	}
 	if len(byPhase) != 3 {

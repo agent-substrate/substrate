@@ -16,6 +16,14 @@ package installdefaults
 
 import "testing"
 
+// ate-api-server matches bootstrap owners on this exact string, which is the
+// username Kubernetes puts in a ServiceAccount token's subject.
+func TestClientPrincipal(t *testing.T) {
+	if got, want := ClientPrincipal("ate-system"), "system:serviceaccount:ate-system:ate-client"; got != want {
+		t.Errorf("ClientPrincipal(ate-system) = %q, want %q", got, want)
+	}
+}
+
 func TestAteletSPIFFEID(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -47,7 +55,7 @@ func TestAteletSPIFFEID(t *testing.T) {
 }
 
 func TestRouterSPIFFEID(t *testing.T) {
-	// Matches the --atunnel-client-identity default the ateom binaries ship
+	// Matches the --atunnel-client-identity default the worker binaries ship
 	// with, which is what actor ingress authenticates the router against.
 	const want = "spiffe://cluster.local/ns/ate-system/sa/atenet-router"
 	if got := RouterSPIFFEID(SystemNamespace); got != want {

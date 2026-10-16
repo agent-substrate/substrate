@@ -19,7 +19,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/e2e"
 )
 
 // egressWebSocketResponse mirrors observations returned by the actor. The
@@ -41,7 +41,7 @@ type egressWebSocketMessage struct {
 func TestActorEgressWebSocket(t *testing.T) {
 	ctx := t.Context()
 	_, address, _ := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
-		Name: "ws-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Name: "ws-origin", ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args: []string{"websocket", "--echo"}, Port: 80, TargetPort: 8080, HealthPath: "/readyz",
 	}, false)
 	_, router, actorRef := prepareProtocolActor(t, ctx, "ws")
@@ -69,7 +69,7 @@ func TestActorEgressWebSocket(t *testing.T) {
 func TestActorEgressSecureWebSocket(t *testing.T) {
 	ctx := t.Context()
 	_, address, _ := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
-		Name: "wss-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Name: "wss-origin", ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args: []string{"websocket", "--echo"}, Port: 80, TargetPort: 8080, TLSPort: 443, HealthPath: "/readyz",
 	}, true)
 	_, router, actorRef := prepareProtocolActor(t, ctx, "wss")

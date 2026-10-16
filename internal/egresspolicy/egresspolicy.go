@@ -33,7 +33,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/validate/content"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // Destination is what a request is going to, as far as the leg evaluating it
@@ -442,7 +442,7 @@ func lowerASCII(s string) string {
 }
 
 // DNSEgressPolicyEnforceInAtunnel is the --dns-egress-policy mode that
-// enforces an Actor's EgressPolicy on DNS queries in the ateom DNS relay.
+// enforces an Actor's EgressPolicy on DNS queries in the worker DNS relay.
 const DNSEgressPolicyEnforceInAtunnel = "enforce-in-atunnel"
 
 // ValidateDNSEgressPolicy checks the --dns-egress-policy flag value.

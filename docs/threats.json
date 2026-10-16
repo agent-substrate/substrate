@@ -28,7 +28,7 @@
     "priority": "Critical",
     "threat": "Access to the internal network allows arbitrary actions to be performed on ate-apiserver, atelet, substrate backend database, etc.",
     "mitigating_invariants": "All system components must have basic mutual authentication and authorization, and communicate over TLS. All clients (including end users and actors) must be authenticated and authorized.  Unauthenticated traffic must be rejected. Where possible, use firewalls to block access from ranges that have no business communicating with Substrate components.",
-    "suggested_concrete_mitigations": "mTLS or other secure channel (e.g. UDS) between networked system components (ate-apiserver, atelet, ateom, etc); each atelet has a unique identity cryptographically tied to the node identity. The ingress gateway should check client permissions before resuming actors or forwarding traffic to actors. The only component authorized to connect directly to the backend database should be ate-apiserver. Use Kubernetes NetworkPolicy to block access to the Substrate API and other core components by default.",
+    "suggested_concrete_mitigations": "mTLS or other secure channel (e.g. UDS) between networked system components (ate-apiserver, atelet, ateworker, etc); each atelet has a unique identity cryptographically tied to the node identity. The ingress gateway should check client permissions before resuming actors or forwarding traffic to actors. The only component authorized to connect directly to the backend database should be ate-apiserver. Use Kubernetes NetworkPolicy to block access to the Substrate API and other core components by default.",
     "notes": ""
   },
   {
@@ -132,7 +132,7 @@
     "priority": "Critical",
     "threat": "Malicious actor gains access to other actors via network",
     "mitigating_invariants": "Network policies must deny ingress and egress by default, and selectively allow access to specific actors only when necessary. Network policies must be synchronized with actor lifecycle.",
-    "suggested_concrete_mitigations": "Implement default-deny network policy that blocks any cross-communication between actors (this could be implemented by ateom instead of Kubernetes, to speed up policy updates when actor groups do need to communicate).",
+    "suggested_concrete_mitigations": "Implement default-deny network policy that blocks any cross-communication between actors (this could be implemented by ateworker instead of Kubernetes, to speed up policy updates when actor groups do need to communicate).",
     "notes": ""
   },
   {
@@ -146,7 +146,7 @@
   {
     "threat_id": "T-19",
     "priority": "Critical",
-    "threat": "Malicious actor gains access to the underlying Worker Pod or node via local Substrate services (atelet, ateom, etc).",
+    "threat": "Malicious actor gains access to the underlying Worker Pod or node via local Substrate services (atelet, ateworker, etc).",
     "mitigating_invariants": "Actor access to system services must be denied or explicitly scoped to the actor. Local services must run with the fewest privileges possible to limit the ability for an actor to escalate privilege.",
     "suggested_concrete_mitigations": "Limit actor access to system services. Ensure system services are aware of actor identity, and authenticate and authorize actors when access is required.",
     "notes": ""

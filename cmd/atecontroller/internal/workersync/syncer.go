@@ -24,8 +24,9 @@ import (
 	"slices"
 	"time"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/installdefaults"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
@@ -266,7 +267,7 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 	if pod.DeletionTimestamp != nil {
 		// The pod has entered Terminating: mark the worker DRAINING so the
 		// scheduler stops routing new actors to it. We deliberately do NOT touch
-		// the bound actor here — inside the pod ateom has received SIGTERM and is
+		// the bound actor here — inside the pod worker has received SIGTERM and is
 		// gracefully shutting the actor down. Actor cleanup happens on the Pod
 		// Deleted event.
 		return s.markWorkerDraining(ctx, key)
@@ -280,14 +281,14 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 	return s.createOrUpdateWorker(ctx, key, pod)
 }
 
-// ateomContainer is the name of the worker pod's ateom container.
-const ateomContainer = "ateom"
+// workerContainer is the name of the worker pod's worker container.
+const workerContainer = "worker"
 
-// podEpoch counts the runs of the pod's ateom container: 1 for its first run
+// podEpoch counts the runs of the pod's worker container: 1 for its first run
 // and one more for each restart. 0 until kubelet reports the container.
 func podEpoch(pod *corev1.Pod) int64 {
 	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.Name == ateomContainer {
+		if cs.Name == workerContainer {
 			return int64(cs.RestartCount) + 1
 		}
 	}
@@ -297,7 +298,7 @@ func podEpoch(pod *corev1.Pod) int64 {
 // createOrUpdateWorker registers the pod's Worker, or brings the registered
 // one in line with the pod. A Worker is registered UNAVAILABLE and marked
 // available only while its pod is Ready, and only once its epoch matches the
-// ateom running, so nothing is placed on it under the epoch of an ateom that
+// worker running, so nothing is placed on it under the epoch of a worker that
 // has since restarted.
 func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod) error {
 	poolName := pod.Labels[workerPodLabel]
@@ -333,11 +334,12 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			Ips:             podIPs(pod),
 			WorkerPodUid:    string(pod.UID),
 			NodeName:        pod.Spec.NodeName,
+			WorkerSpiffeId:  workerSPIFFEID(pod),
 			SandboxClass:    string(pool.Spec.DefaultSandboxClass()),
 			Labels:          pool.GetLabels(),
 			Epoch:           podEpoch(pod),
 			// Capacity is the Worker's to report, not the syncer's to infer
-			// from the pod: it is what the ateom can actually supply. Until
+			// from the pod: it is what the worker can actually supply. Until
 			// that report lands, CreateWorker's reified ceiling holds the
 			// Worker to a single Actor.
 		}
@@ -374,7 +376,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 	// new pod, which arrives under a new key.
 	var changed bool
 	if epoch := podEpoch(pod); epoch > w.GetEpoch() {
-		slog.InfoContext(ctx, "Syncer: updating worker (ateom restarted)",
+		slog.InfoContext(ctx, "Syncer: updating worker (worker restarted)",
 			append(key.logAttrs(), slog.Int64("epoch", epoch))...)
 		w.Epoch = epoch
 		changed = true
@@ -475,6 +477,11 @@ func podIPs(pod *corev1.Pod) []string {
 		ips = append(ips, ip.IP)
 	}
 	return ips
+}
+
+// workerSPIFFEID returns the SPIFFE ID the podidentity signer issues to pod.
+func workerSPIFFEID(pod *corev1.Pod) string {
+	return installdefaults.SPIFFEID(pod.Namespace, pod.Spec.ServiceAccountName)
 }
 
 // markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler

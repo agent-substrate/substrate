@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -28,9 +29,10 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
 )
 
 // prewarmMaxJitter spreads the fleet's asset downloads after a SandboxConfig
@@ -63,17 +65,17 @@ const prewarmMaxRetries = 8
 // down what that call writes into.
 var prewarmFinished = func(string, error) {}
 
-// sandboxAssetFetcher is the one slice of AteomHerder the prewarmer needs.
+// sandboxAssetFetcher is the one slice of Atelet the prewarmer needs.
 // Prewarming through the same method as the Run/Restore path keeps the two
 // fetches from ever diverging on cache layout or validation.
 type sandboxAssetFetcher interface {
-	ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error)
+	ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error)
 }
 
-// sandboxPrewarmer downloads SandboxConfig assets into the node's
-// content-addressed static-files cache before any actor asks for them, so the
-// fetch inside the first Run/Restore on the node is a cache hit instead of a
-// download+extract on the critical path.
+// sandboxPrewarmer downloads SandboxConfig assets into the node's asset
+// cache before any actor asks for them, so the fetch inside the first
+// Run/Restore on the node is a cache hit instead of a download+extract on
+// the critical path.
 type sandboxPrewarmer struct {
 	assets sandboxAssetFetcher
 	images *imagecache.Store
@@ -117,7 +119,7 @@ func newSandboxPrewarmer(assets sandboxAssetFetcher, images *imagecache.Store, l
 // is logged and left to the on-demand fetch in ensureSandboxAssets and the
 // pull inside prepareOCIBundles, which remain the correctness path.
 //
-// TODO: the static-files cache is never pruned, and prewarming every config
+// TODO: the asset cache is never pruned, and prewarming every config
 // revision makes stale releases accumulate faster. Add a GC that removes
 // assets referenced by no current SandboxConfig and no on-node actor record.
 func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInformer, assets sandboxAssetFetcher, images *imagecache.Store, microvmCapable bool) (*sandboxPrewarmer, error) {
@@ -254,11 +256,14 @@ func (p *sandboxPrewarmer) process(ctx context.Context, name string) {
 	p.queue.Forget(name)
 }
 
-// prewarm fetches every asset of one SandboxConfig into the static-files
-// cache and its pause image into the image cache. Racing an on-demand
-// ensureSandboxAssets for the same assets is safe: both paths install
-// content-addressed files via atomic rename, and the image cache collapses
-// concurrent pulls of one digest.
+// prewarm fetches every asset of one SandboxConfig into the asset cache
+// and its pause image into the image cache. Racing an on-demand
+// ensureSandboxAssets for the same assets is safe: the asset cache runs one
+// download per asset and serves every caller from it, and the image cache
+// collapses concurrent pulls of one digest.
+//
+// Prewarm has no actor to link the assets into, so it stages them into a
+// scratch directory it removes again; the cache keeps the entries.
 func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxConfig) error {
 	ctx, cancel := context.WithTimeout(ctx, prewarmTimeout)
 	defer cancel()
@@ -295,7 +300,13 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 		assetErr = nil
 	case assetErr == nil:
 		wg.Go(func() {
-			_, assetErr = p.assets.ensureSandboxAssets(ctx, rec)
+			scratch, err := os.MkdirTemp(ateletpath.SandboxAssetScratchDir, "prewarm-")
+			if err != nil {
+				assetErr = fmt.Errorf("while creating prewarm scratch dir: %w", err)
+				return
+			}
+			defer func() { _ = os.RemoveAll(scratch) }()
+			_, assetErr = p.assets.ensureSandboxAssets(ctx, rec, scratch)
 		})
 	}
 	wg.Wait()

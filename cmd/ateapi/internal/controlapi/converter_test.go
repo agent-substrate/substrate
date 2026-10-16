@@ -16,9 +16,14 @@ package controlapi
 
 import (
 	"testing"
+	"time"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
+	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestFidelityToAtelet pins the level-by-level mapping onto the atelet enum:
@@ -61,6 +66,83 @@ func TestFidelityToAtelet(t *testing.T) {
 			result := fidelityToAtelet(tt.in)
 			if result != tt.expected {
 				t.Errorf("fidelityToAtelet(%v) = %v, want %v", tt.in, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestFidelityFromAtelet verifies each atelet fidelity maps back to the same
+// public level, and anything else to UNSPECIFIED.
+func TestFidelityFromAtelet(t *testing.T) {
+	tests := []struct {
+		name string
+		in   ateletpb.SnapshotFidelity
+		want ateapipb.SnapshotFidelity
+	}{
+		{"memory", ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		{"rootfs", ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS},
+		{"volumes", ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+		{"unspecified stays unspecified", ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
+		{"value outside the enum", ateletpb.SnapshotFidelity(99), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := fidelityFromAtelet(tt.in); got != tt.want {
+				t.Errorf("fidelityFromAtelet(%v) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSnapshotReportFromAtelet(t *testing.T) {
+	committed := timestamppb.New(time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC))
+	uploaded := timestamppb.New(time.Date(2026, 10, 14, 12, 5, 0, 0, time.UTC))
+	tests := []struct {
+		name string
+		in   *ateletpb.SnapshotReport
+		want *ateapipb.SnapshotReport
+	}{{
+		name: "every field",
+		in: &ateletpb.SnapshotReport{
+			Snapshot: &ateletpb.Snapshot{
+				SnapshotUuid: "snap-2",
+				Generation:   2,
+				Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				Object:       &ateletpb.ObjectStorage{SnapshotUri: "gs://snapshots/snap-2"},
+			},
+			LocalCommitTime:     committed,
+			DurableCompleteTime: uploaded,
+		},
+		want: &ateapipb.SnapshotReport{
+			Uuid:                "snap-2",
+			Generation:          2,
+			Fidelity:            ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			Object:              &ateapipb.ObjectSnapshot{SnapshotUri: "gs://snapshots/snap-2"},
+			LocalCommitTime:     committed,
+			DurableCompleteTime: uploaded,
+		},
+	}, {
+		name: "a local snapshot has no object",
+		in: &ateletpb.SnapshotReport{
+			Snapshot:        &ateletpb.Snapshot{SnapshotUuid: "snap-3", Generation: 3, Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+			LocalCommitTime: committed,
+		},
+		want: &ateapipb.SnapshotReport{
+			Uuid:            "snap-3",
+			Generation:      3,
+			Fidelity:        ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			LocalCommitTime: committed,
+		},
+	}, {
+		name: "a report that names no snapshot converts to nil",
+		in:   &ateletpb.SnapshotReport{LocalCommitTime: committed},
+	}, {
+		name: "nil stays nil",
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if diff := cmp.Diff(tt.want, snapshotReportFromAtelet(tt.in), protocmp.Transform()); diff != "" {
+				t.Errorf("snapshotReportFromAtelet mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

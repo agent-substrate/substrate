@@ -20,7 +20,7 @@
 package main
 
 import (
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/cmd"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/cmd"
 )
 
 func main() {

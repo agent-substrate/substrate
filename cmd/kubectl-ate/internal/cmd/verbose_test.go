@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
@@ -278,12 +278,32 @@ func TestTopWorkersRunner_VerboseSurfacesMetricsIssues(t *testing.T) {
 		}
 		got := errOut.String()
 		for _, want := range []string{
-			`Container "ateom" not found in pod metrics for ns-1/pod-1; summing all 1 container(s)`,
+			`Container "worker" not found in pod metrics for ns-1/pod-1; summing all 1 container(s)`,
 			"No pod metrics returned for worker pod ns-1/pod-2",
 		} {
 			if !strings.Contains(got, want) {
 				t.Errorf("stderr = %q, want substring %q", got, want)
 			}
+		}
+	})
+}
+
+func TestWarnSharedIdentity(t *testing.T) {
+	t.Run("warns without a token file", func(t *testing.T) {
+		var buf bytes.Buffer
+		warnSharedIdentity(&buf, "")
+		got := buf.String()
+		for _, want := range []string{"Warning:", "ate-client", "shared identity", "--token-file"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("warning %q does not mention %q", got, want)
+			}
+		}
+	})
+	t.Run("silent with a token file", func(t *testing.T) {
+		var buf bytes.Buffer
+		warnSharedIdentity(&buf, "/path/to/token")
+		if got := buf.String(); got != "" {
+			t.Errorf("warning = %q, want none", got)
 		}
 	})
 }

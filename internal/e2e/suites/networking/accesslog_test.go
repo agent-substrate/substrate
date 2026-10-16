@@ -17,7 +17,7 @@ package networking
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 func TestAccessLogField(t *testing.T) {
@@ -107,19 +107,19 @@ func TestProtocolGatewayAccessLogMatches(t *testing.T) {
 		{
 			name:      "envoy success",
 			container: "envoy",
-			line:      `authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/ateom-for-actor/networking-e2e/ws-1"`,
+			line:      `authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/worker-for-actor/networking-e2e/ws-1"`,
 			want:      true,
 		},
 		{
 			name:      "envoy wrong actor identity",
 			container: "envoy",
-			line:      `authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/ateom-for-actor/networking-e2e/ws-2"`,
+			line:      `authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/worker-for-actor/networking-e2e/ws-2"`,
 			want:      false,
 		},
 		{
 			name:      "envoy wrong atespace identity",
 			container: "envoy",
-			line:      `authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/ateom-for-actor/other/ws-1"`,
+			line:      `authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/worker-for-actor/other/ws-1"`,
 			want:      false,
 		},
 		{

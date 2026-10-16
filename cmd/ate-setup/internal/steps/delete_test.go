@@ -36,10 +36,10 @@ import (
 	ktesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/util/retry"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/internal/clustertrustbundle"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // fakeSandboxConfigs is an in-memory dynamic.ResourceInterface implementing

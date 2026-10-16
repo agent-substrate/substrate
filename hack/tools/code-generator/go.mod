@@ -1,4 +1,4 @@
-module github.com/agent-substrate/substrate/hack/tools/code-generator
+module go.ate.dev/substrate/hack/tools/code-generator
 
 go 1.27.0
 

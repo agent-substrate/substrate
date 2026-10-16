@@ -23,11 +23,11 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"google.golang.org/protobuf/testing/protocmp"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 )
 
@@ -57,7 +57,7 @@ func setRequest(actors int32) *ateapipb.RegisterWorkerRequest {
 }
 
 // The point of the whole path: a Worker moves from what it reported before to
-// what its ateom reports now.
+// what its worker reports now.
 func TestRegisterWorker(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
@@ -238,7 +238,7 @@ func TestRegisterWorker_OtherNodeIsNotFound(t *testing.T) {
 	}
 }
 
-// Re-sending the same capacity is not an update. An ateom reports once, but it
+// Re-sending the same capacity is not an update. A worker reports once, but it
 // retries until accepted and reports again if it restarts, so a repeat must not
 // churn the Worker's version.
 func TestRegisterWorker_UnchangedDoesNotWrite(t *testing.T) {

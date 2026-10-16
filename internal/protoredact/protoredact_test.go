@@ -23,14 +23,15 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/proto/glutton"
-	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
-	"github.com/agent-substrate/substrate/internal/protoredact"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/proto/glutton"
+	"go.ate.dev/substrate/internal/proto/grpcechopb"
+	"go.ate.dev/substrate/internal/protoredact"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateconfigpb"
+	"go.ate.dev/substrate/pkg/proto/credproviderpb"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -54,7 +55,7 @@ func TestRedactedRecursesIntoRealMapFields(t *testing.T) {
 		},
 		Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{
 			Name: "main",
-			Env:  []*ateletpb.EnvEntry{{Name: "API_KEY", Value: "sk-secret"}},
+			Env:  []*ateletpb.EnvVar{{Name: "API_KEY", Value: "sk-secret"}},
 		}}},
 	}
 	redacted, _ := protoredact.Redacted(run)
@@ -303,7 +304,7 @@ func TestRedactedReturnsMessagesWithNothingToMaskWithoutCopying(t *testing.T) {
 		&ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Name: "c", Image: "img"}}},
 		&ateapipb.ListActorTemplatesResponse{ActorTemplates: []*ateapipb.ActorTemplate{{Containers: []*ateapipb.Container{{Name: "c"}}}}},
 		&ateapipb.MintActorJwtResponse{},
-		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvEntry{{Name: "K"}}}}}},
+		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvVar{{Name: "K"}}}}}},
 	} {
 		if protoredact.NeedsRedaction(m) {
 			t.Errorf("%T: NeedsRedaction should be false", m)
@@ -317,7 +318,7 @@ func TestRedactedReturnsMessagesWithNothingToMaskWithoutCopying(t *testing.T) {
 		&ateapipb.MintActorJwtResponse{ActorJwt: "t"},
 		&ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Env: []*ateapipb.EnvVar{{Name: "K", Value: "v"}}}}},
 		&ateapipb.ListActorTemplatesResponse{ActorTemplates: []*ateapipb.ActorTemplate{{}, {Containers: []*ateapipb.Container{{}, {Env: []*ateapipb.EnvVar{{Name: "K", Value: "v"}}}}}}},
-		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvEntry{{Name: "K", Value: "v"}}}}}},
+		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvVar{{Name: "K", Value: "v"}}}}}},
 	} {
 		if !protoredact.NeedsRedaction(m) {
 			t.Errorf("%T: NeedsRedaction should be true", m)
@@ -355,7 +356,7 @@ func TestNeedsRedactionIsSafeUnderConcurrentFirstUse(t *testing.T) {
 		&ateapipb.ListActorsResponse{},
 		&ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Env: []*ateapipb.EnvVar{{Name: "K", Value: "v"}}}}},
 		&ateapipb.Worker{},
-		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvEntry{{Name: "K", Value: "v"}}}}}},
+		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvVar{{Name: "K", Value: "v"}}}}}},
 	}
 	want := []bool{true, false, true, false, true}
 	var wg sync.WaitGroup
@@ -379,7 +380,8 @@ func TestNeedsRedactionIsSafeUnderConcurrentFirstUse(t *testing.T) {
 var ourProtoFiles = []protoreflect.FileDescriptor{
 	ateapipb.File_ateapi_proto,
 	ateletpb.File_atelet_proto,
-	ateompb.File_ateom_proto,
+	ateworkerpb.File_ateworker_proto,
+	ateconfigpb.File_apiconfig_proto,
 	credproviderpb.File_credprovider_proto,
 	glutton.File_glutton_proto,
 	grpcechopb.File_grpcecho_proto,
@@ -417,10 +419,10 @@ func TestDebugRedactFieldsArePinned(t *testing.T) {
 	want := map[string]bool{
 		"ateapi.EnvVar.value":                            true,
 		"ateapi.MintActorJwtResponse.actor_jwt":          true,
-		"ateapi.MintAteomActorJwtResponse.actor_jwt":     true,
+		"ateapi.MintWorkerActorJwtResponse.actor_jwt":    true,
 		"atelet.AssetFile.url":                           true,
-		"atelet.EnvEntry.value":                          true,
-		"ateom.ContainerSpec.env":                        true,
+		"atelet.EnvVar.value":                            true,
+		"ateworker.ContainerSpec.env":                    true,
 		"credprovider.FetchSecretResponse.opaque_bytes":  true,
 		"objectstore.v1.FetchAssetRequest.asset_uri":     true,
 		"objectstore.v1.FetchSnapshotRequest.actor_jwt":  true,

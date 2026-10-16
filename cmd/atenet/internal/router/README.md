@@ -95,10 +95,13 @@ the request legs match `ports` against it; a dataplane that does not share it
 gets no port enforcement.
 
 The CONNECT leg decides per connection: it refuses an actor without a policy
-with rules, and for the rest hands the inner listener the port the actor
-dialed, as `envoy.upstream.dynamic_port`, and the policy's SNI rules for that
-port, as `dev.ate.policy.egress`. At the ClientHello the egress-policy module
-reads those rules and picks the chain: `egress_tls_mitm` under an `https`
+with rules, and for the rest computes hash of the policy SNI's rules for the
+destination port, stores policy in the thread local store using hash as the
+key and hands the inner listener the port the actor dialed, as
+`envoy.upstream.dynamic_port` and the hash of the policy' as
+`dev.ate.policy.egress.hash`. At the ClientHello the egress-policy module
+reads the hash, and fetches egress policy from the thrad local store,
+applies SNI rules and picks the chain: `egress_tls_mitm` under an `https`
 rule, `egress_passthrough` under a `tls_passthrough` rule, and `denied`, which
 matches no chain and closes the connection, when neither covers the SNI. The
 passthrough chain resolves the SNI and relays the bytes to it on the dialed

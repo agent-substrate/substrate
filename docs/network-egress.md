@@ -10,7 +10,7 @@ Agent Substrate enforces that all outbound traffic from an actor, except traffic
 
 At present, actor TCP traffic exits the sandbox through [`atunnel`](./glossary.md#components) and is forwarded on to the PEP. The exception is DNS: TCP and UDP traffic to port 53 on the sandbox's gateway bypasses the PEP and is answered by the sandbox's DNS relay, which forwards a query to the worker pod's resolvers only when the queried hostname matches a host or host wildcard in the actor's egress policy; queries from an actor without a policy, or for a hostname not matched by any rule, are refused. All other protocols are blocked. `atunnel` is configured with the PEP's network address and port at startup and uses that address to open an mTLS HTTP/1.1 CONNECT tunnel to the PEP. The CONNECT request target and `Host` header are both set to the original destination IP and port that `atunnel` derived from the actor's TCP connection. Actor networking is currently IPv4-only.
 
-Before traffic reaches the egress PEP, ateom rejects packets destined for the IPv4 link-local range `169.254.0.0/16` or the IPv6 link-local range `fe80::/10`. The internal actor network `169.254.17.0/30` is exempt because it carries traffic for the actor gateway, DNS relay, ingress, and wakeup probes. Localhost traffic remains inside the actor sandbox and does not traverse the PEP. Access to non-link-local destinations remains controlled by substrate egress policy and, at the `WorkerPool` boundary, Kubernetes NetworkPolicy.
+Before traffic reaches the egress PEP, ateworker rejects packets destined for the IPv4 link-local range `169.254.0.0/16` or the IPv6 link-local range `fe80::/10`. The internal actor network `169.254.17.0/30` is exempt because it carries traffic for the actor gateway, DNS relay, ingress, and wakeup probes. Localhost traffic remains inside the actor sandbox and does not traverse the PEP. Access to non-link-local destinations remains controlled by substrate egress policy and, at the `WorkerPool` boundary, Kubernetes NetworkPolicy.
 
 ## Trust Boundary
 
@@ -31,7 +31,7 @@ The PEP MUST require and verify the client certificate before accepting a CONNEC
 ```text
 CURRENT CONNECT EGRESS PATH (one tunnel per actor TCP connection except destination port 53)
 
-  Actor sandbox                 Worker pod / ateom                  Egress PEP                     Authorized upstream
+  Actor sandbox                 Worker pod / ateworker                  Egress PEP                     Authorized upstream
   +------------------+          +--------------------------+        +-------------------------+    +------------------+
   | Actor process    |          | nftables                 |        | mTLS listener           |    | Target selected  |
   | (untrusted)      |          | TCP REDIRECT             |        | + CONNECT terminator    |    | under policy     |

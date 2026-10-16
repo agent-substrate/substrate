@@ -39,6 +39,7 @@ import (
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	streamaccesslogv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
+	setfilterstatecommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
 	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
@@ -48,9 +49,9 @@ import (
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
-	"github.com/agent-substrate/substrate/internal/atunnel"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
+	atunnelingress "go.ate.dev/substrate/internal/atunnel/ingress"
 )
 
 func TestActorRoutingFilterStateFilter(t *testing.T) {
@@ -800,13 +801,12 @@ func rotateProjectedVolume(t *testing.T, dir, newTsDir, oldTsDir string, bundle 
 // likewise never picked up.
 func TestUpstreamTransportSocket_DeliversCertsOverSds(t *testing.T) {
 	const (
-		credPath     = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
-		trustPath    = "/run/podidentity.podcert.ate.dev/trust-bundle.pem"
-		spiffePrefix = "spiffe://cluster.local/"
+		credPath  = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+		trustPath = "/run/podidentity.podcert.ate.dev/trust-bundle.pem"
 	)
 
 	server := NewXdsServer(18000)
-	server.SetUpstreamTls(credPath, trustPath, spiffePrefix)
+	server.SetUpstreamTls(credPath, trustPath)
 
 	ts := server.buildUpstreamTransportSocket()
 	if ts == nil {
@@ -849,10 +849,8 @@ func TestUpstreamTransportSocket_DeliversCertsOverSds(t *testing.T) {
 		t.Error("Expected the trust bundle SDS config to use the ADS config source")
 	}
 
-	// The SPIFFE SAN matcher has to survive the move into the combined
-	// context's default half. Losing it silently downgrades validation to a
-	// SAN check against the dialed pod IP, which the SPIFFE-only atunnel
-	// server cert never carries.
+	// The trust-domain matcher has to survive the move into the combined
+	// context: it still holds if the per-request filter is ever skipped.
 	sans := combined.GetDefaultValidationContext().GetMatchTypedSubjectAltNames()
 	if len(sans) != 1 {
 		t.Fatalf("Expected 1 SAN matcher, got %d", len(sans))
@@ -860,8 +858,80 @@ func TestUpstreamTransportSocket_DeliversCertsOverSds(t *testing.T) {
 	if got := sans[0].GetSanType(); got != tlsv3.SubjectAltNameMatcher_URI {
 		t.Errorf("Expected a URI SAN matcher, got %v", got)
 	}
-	if got := sans[0].GetMatcher().GetPrefix(); got != spiffePrefix {
-		t.Errorf("Expected SAN prefix '%s', got '%s'", spiffePrefix, got)
+	if got, want := sans[0].GetMatcher().GetPrefix(), "spiffe://cluster.local/"; got != want {
+		t.Errorf("Expected SAN prefix '%s', got '%s'", want, got)
+	}
+}
+
+// TestXdsServer_WorkerIdentityFilter checks every ext_proc HCM requires the
+// routed worker's identity from atunnel, on both the HTTPS and CONNECT paths.
+func TestXdsServer_WorkerIdentityFilter(t *testing.T) {
+	hcmFilters := func(t *testing.T, l *listenerv3.Listener) []*hcmv3.HttpFilter {
+		t.Helper()
+		hcm := &hcmv3.HttpConnectionManager{}
+		if err := l.GetFilterChains()[0].GetFilters()[0].GetTypedConfig().UnmarshalTo(hcm); err != nil {
+			t.Fatalf("listener %s: unmarshal HCM: %v", l.GetName(), err)
+		}
+		return hcm.GetHttpFilters()
+	}
+	setsUpstreamSANs := func(t *testing.T, f *hcmv3.HttpFilter) *setfilterstatecommonv3.FilterStateValue {
+		t.Helper()
+		if f.GetName() != "envoy.filters.http.set_filter_state" {
+			return nil
+		}
+		config := &setfilterstatev3.Config{}
+		if err := f.GetTypedConfig().UnmarshalTo(config); err != nil {
+			t.Fatalf("unmarshal set_filter_state: %v", err)
+		}
+		for _, v := range config.GetOnRequestHeaders() {
+			if v.GetObjectKey() == "envoy.network.upstream_subject_alt_names" {
+				return v
+			}
+		}
+		return nil
+	}
+
+	for _, upstreamConnect := range []bool{false, true} {
+		server := NewXdsServer(18000)
+		server.SetConfig(8085, 50053, "127.0.0.1")
+		server.SetConnectPorts(8081, 0)
+		server.SetUpstreamTls("/run/bundle.pem", "/run/trust.pem")
+		server.SetUpstreamConnect(upstreamConnect)
+		listeners := snapshotListeners(t, server)
+		for _, name := range []string{IngressHTTPListener, MainInternalName} {
+			filters := hcmFilters(t, listeners[name])
+			n := len(filters)
+			if n < 2 || filters[n-1].GetName() != "envoy.filters.http.router" {
+				t.Fatalf("upstreamConnect=%v listener %s: filters do not end with the router", upstreamConnect, name)
+			}
+			// Last before the router, so ext_proc has written the metadata.
+			v := setsUpstreamSANs(t, filters[n-2])
+			if v == nil {
+				t.Fatalf("upstreamConnect=%v listener %s: filter before the router does not set the upstream SANs", upstreamConnect, name)
+			}
+			if got, want := v.GetFormatString().GetTextFormatSource().GetInlineString(), "%DYNAMIC_METADATA(envoy.filters.listener.original_dst:worker_spiffe_id)%"; got != want {
+				t.Errorf("upstreamConnect=%v listener %s: upstream SANs = %q, want %q", upstreamConnect, name, got, want)
+			}
+			// ONCE carries it to the tunnel's own connection to atunnel.
+			if got := v.GetSharedWithUpstream(); got != setfilterstatecommonv3.FilterStateValue_ONCE {
+				t.Errorf("upstreamConnect=%v listener %s: shared with upstream = %v, want ONCE", upstreamConnect, name, got)
+			}
+			// A factory key would make set_filter_state build a plain string
+			// that Envoy never reads as the SAN list.
+			if got := v.GetFactoryKey(); got != "" {
+				t.Errorf("upstreamConnect=%v listener %s: factory key = %q, want none", upstreamConnect, name, got)
+			}
+		}
+	}
+
+	// Without a trust bundle nothing is verified, so there is nothing to narrow.
+	server := NewXdsServer(18000)
+	server.SetConfig(8085, 50053, "127.0.0.1")
+	server.SetUpstreamTls("/run/bundle.pem", "")
+	for _, f := range hcmFilters(t, snapshotListeners(t, server)[IngressHTTPListener]) {
+		if setsUpstreamSANs(t, f) != nil {
+			t.Error("upstream SANs set although atunnel's certificate is not verified")
+		}
 	}
 }
 
@@ -878,7 +948,7 @@ func TestXdsServer_UpdateSnapshot_UpstreamSecrets(t *testing.T) {
 	t.Run("PublishedWhenConfigured", func(t *testing.T) {
 		server := NewXdsServer(18000)
 		server.SetConfig(8085, 50053, "127.0.0.1")
-		server.SetUpstreamTls(credPath, trustPath, "spiffe://cluster.local/")
+		server.SetUpstreamTls(credPath, trustPath)
 
 		secrets := snapshotSecrets(t, server)
 		if len(secrets) != 2 {
@@ -925,7 +995,7 @@ func TestXdsServer_UpdateSnapshot_UpstreamSecrets(t *testing.T) {
 	t.Run("TrustSecretOmittedWithoutTrustBundle", func(t *testing.T) {
 		server := NewXdsServer(18000)
 		server.SetConfig(8085, 50053, "127.0.0.1")
-		server.SetUpstreamTls(credPath, "", "")
+		server.SetUpstreamTls(credPath, "")
 
 		secrets := snapshotSecrets(t, server)
 		if len(secrets) != 1 {
@@ -953,7 +1023,7 @@ func TestUpstreamCertSecret_ProjectedVolumeRotation(t *testing.T) {
 	writeProjectedVolume(t, dir, tsDirA, bundleA)
 
 	server := NewXdsServer(18000)
-	server.SetUpstreamTls(credPath, "", "")
+	server.SetUpstreamTls(credPath, "")
 	tlsCert := server.buildUpstreamCertSecret().GetTlsCertificate()
 
 	chainPath := tlsCert.GetCertificateChain().GetFilename()
@@ -1172,7 +1242,7 @@ func TestXdsServer_BuildOriginalDstCluster_UsesMetadataKey(t *testing.T) {
 // TestXdsServer_ActorClusterProtocolOptions pins where downstream-protocol
 // mirroring is allowed: only on the mTLS atunnel leg, where atunnel guards
 // HTTP/1.1-only actors by downgrading non-gRPC HTTP/2 (see
-// atunnel.protocolMirrorTransport). The legacy plaintext cluster dials the
+// atunnelingress.protocolMirrorTransport). The legacy plaintext cluster dials the
 // actor directly with no such guard, so it must carry no protocol options at
 // all — Envoy's implicit HTTP/1.1.
 func TestXdsServer_ActorClusterProtocolOptions(t *testing.T) {
@@ -1182,7 +1252,7 @@ func TestXdsServer_ActorClusterProtocolOptions(t *testing.T) {
 		t.Errorf("legacy plaintext actor cluster has protocol options %v, want none (implicit HTTP/1.1)", opts)
 	}
 
-	x.SetUpstreamTls("/run/bundle.pem", "/run/trust.pem", "spiffe://ate.dev/")
+	x.SetUpstreamTls("/run/bundle.pem", "/run/trust.pem")
 	cluster := x.buildOriginalDstCluster()
 	ts := cluster.GetTransportSocket()
 	if ts == nil {
@@ -1229,7 +1299,7 @@ func TestXdsServer_BuildRoutesWritesTargetPortHeader(t *testing.T) {
 		t.Fatalf("route adds request headers %v, want exactly one", headers)
 	}
 	header := headers[0]
-	if got, want := header.GetHeader().GetKey(), atunnel.TargetPortHeader; got != want {
+	if got, want := header.GetHeader().GetKey(), atunnelingress.TargetPortHeader; got != want {
 		t.Errorf("header key = %q, want %q", got, want)
 	}
 	if got, want := header.GetHeader().GetValue(), "%DYNAMIC_METADATA(envoy.filters.listener.original_dst:port)%"; got != want {
@@ -1455,7 +1525,7 @@ func downstreamTLS(t *testing.T, raw any) *tlsv3.DownstreamTlsContext {
 // listener always offers h2 before http/1.1: gRPC over TLS requires a
 // negotiated "h2", and the offer is unconditional because atunnel downgrades
 // every non-gRPC request to HTTP/1.1 on the actor leg (see
-// atunnel.protocolMirrorTransport and TestProtocolMirrorTransport), so an
+// atunnelingress.protocolMirrorTransport and TestProtocolMirrorTransport), so an
 // HTTP/1.1-only actor cannot tell what the client negotiated at the edge. The
 // CONNECT-TLS listener stays ALPN-free: its clients speak HTTP/1.1 CONNECT,
 // and an h2 offer there would move them onto extended CONNECT the tunnel path

@@ -16,7 +16,7 @@ syntax = "proto3";
 
 package objectstore.v1;
 
-option go_package = "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1;objectstorev1";
+option go_package = "go.ate.dev/substrate/pkg/proto/objectstorepb/v1;objectstorev1";
 
 // NodeProvider is the plugin API an object storage platform implements
 // on every node. atelet calls it to move actor snapshots between the node and

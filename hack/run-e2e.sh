@@ -46,6 +46,7 @@ Common E2E Flags (passed after -args):
   --kube-config    Path to kubeconfig file
   --kube-context   Kubernetes context to use
   --storage-class  StorageClass to use for external volume tests (default: csi-nfs-sc)
+  --preview        Preview gates the cluster was installed with ("ALL" for all)
 
 Common Go Test Flags (passed before -args):
   -run <regexp>    Run only tests matching regexp

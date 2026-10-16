@@ -39,6 +39,14 @@ containers:
     httpGet:
       path: /api
       port: 80
+# Sandbox size: room for a few kernels and their data next to the Jupyter
+# server.
+resources:
+  limits:
+  - name: cpu
+    quantity: "2"
+  - name: memory
+    quantity: 4Gi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/ate-demo-jupyter/

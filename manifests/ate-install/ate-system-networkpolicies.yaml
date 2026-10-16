@@ -19,7 +19,7 @@
 # so a port is reachable exactly when some policy here (or another one that
 # selects the pod, such as k8s-credential-provider's) admits it. Ports that no
 # policy admits -- the router's /statusz port (4040), the bundled postgres from
-# anything but ate-api-server, atelet's AteomHerder from anything but
+# anything but ate-api-server, atelet's Atelet from anything but
 # ate-api-server -- are reachable only through `kubectl port-forward`, which
 # NetworkPolicy does not filter.
 #

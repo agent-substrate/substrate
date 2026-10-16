@@ -20,11 +20,12 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // DeleteWorker executes the workflow to deregister a Worker. The caller reaches
@@ -36,6 +37,7 @@ import (
 // already did. An absent Worker is NOT_FOUND rather than success; idempotency
 // belongs to the caller, which knows whether that is the state it wanted.
 func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error) {
+	ctx = preview.ContextWithOptIn(ctx)
 	worker, err := w.loadWorkerForDelete(ctx, name)
 	if err != nil {
 		return nil, err
@@ -207,9 +209,6 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 		opName = ateattr.OperationResume
 	case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
 		opName = ateattr.OperationSuspend
-		if latestSnapshotIsPendingLocal(actor.GetStatus()) {
-			opName = ateattr.OperationPause
-		}
 	case ateapipb.ActorState_ACTOR_STATE_REVERTING:
 		opName = ateattr.OperationRevert
 	case ateapipb.ActorState_ACTOR_STATE_DELETING:

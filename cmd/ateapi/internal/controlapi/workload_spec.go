@@ -17,13 +17,13 @@ package controlapi
 import (
 	"fmt"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // toAteletResources resolves a container's declared limits into the scalars
-// atelet and the ateoms consume; everything downstream compares numbers.
+// atelet and the workers consume; everything downstream compares numbers.
 // Returns nil when the container declares no limits, so the OCI spec stays
 // untouched for templates that do not use them.
 func toAteletResources(r *ateapipb.Resources) (*ateletpb.ResourceLimits, error) {
@@ -58,11 +58,11 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 		case vol.GetDurableDir() != nil:
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name:       vol.GetName(),
-				DurableDir: &ateletpb.DurableDirVolume{},
+				DurableDir: &ateletpb.DurableDirVolumeSource{},
 			})
 
 		case vol.GetSystemInfo() != nil:
-			ateletSystemInfo := &ateletpb.SystemInfoVolume{}
+			ateletSystemInfo := &ateletpb.SystemInfoVolumeSource{}
 			for _, dataSource := range vol.GetSystemInfo().GetDataSources() {
 				switch {
 				case dataSource.GetActorMetadata() != nil:
@@ -109,6 +109,8 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 
 	// TODO: order may be important for nested mounts. Also need to think about
 	// nested mount support in general.
+	// This function is called from several places, so we do NOT check the
+	// ExternalVolumes gate here.  Callers must check it, if appropriate.
 	if err := appendExternalVolumes(workloadSpec, actorTemplate, actor, volumePublishContexts); err != nil {
 		return nil, err
 	}
@@ -128,7 +130,7 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 			Resources:       ctrResources,
 		}
 		for _, env := range ctr.GetEnv() {
-			ateletCtr.Env = append(ateletCtr.Env, &ateletpb.EnvEntry{
+			ateletCtr.Env = append(ateletCtr.Env, &ateletpb.EnvVar{
 				Name:  env.GetName(),
 				Value: env.GetValue(),
 			})

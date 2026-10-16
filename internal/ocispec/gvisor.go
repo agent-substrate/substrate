@@ -18,9 +18,9 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/sizing"
 )
 
 // PauseContainer is the name of the sandbox root container. The underscore
@@ -34,7 +34,7 @@ const resolvConf = "/etc/resolv.conf"
 // GVisorOptions describes the gVisor-specific context of one actor container.
 type GVisorOptions struct {
 	ActorUID      string
-	ActorDirs     *ateompb.ActorDirs
+	ActorDirs     *ateworkerpb.ActorDirs
 	ContainerName string
 	// DurableVolumes are declared on the sandbox (pause) spec only.
 	DurableVolumes []string

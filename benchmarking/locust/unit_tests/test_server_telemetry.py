@@ -47,7 +47,7 @@ def ranges(packing, node=(), pod=(), active=()):
     regex (and would also sum the pause container) gets nothing back. Node PSI
     only answers when kept to nodes hosting a worker pod.
     """
-    pod_slice = ('{pod=~"benchmark-ateom.*", container="", '
+    pod_slice = ('{pod=~"benchmark-worker.*", container="", '
                  'id=~".*[/-]pod[^/]+(\\\\.slice)?"}')
     worker_nodes = "and on (instance) sum by (instance) (rate("
 
@@ -238,7 +238,7 @@ class ServerTelemetryTest(unittest.TestCase):
                 "values": [[100, "1.0"], [105, "1.0"]]}
         quiet = [{"metric": {"instance": f"node-{n}"},
                   "values": [[100, "0.0"], [105, "0.0"]]} for n in "ab"]
-        pods = [{"metric": {"pod": f"benchmark-ateom-{p}"},
+        pods = [{"metric": {"pod": f"benchmark-worker-{p}"},
                  "values": [[100, "0.5"], [105, "0.5"]]} for p in "ab"]
         mock_range.side_effect = ranges(
             [partial, full, idle], node=quiet, pod=pods,
@@ -452,7 +452,7 @@ class ServerTelemetryTest(unittest.TestCase):
               "values": [[100, "1.0"], [105, "1.0"], [110, "5.0"]]}],
             node=[{"metric": {"instance": "node-a"},
                    "values": [[100, "0.5"], [110, "9.0"]]}],
-            pod=[{"metric": {"pod": "benchmark-ateom-a"},
+            pod=[{"metric": {"pod": "benchmark-worker-a"},
                   "values": [[100, "0.5"], [110, "9.0"]]}],
         )
         mock_instant.return_value = []

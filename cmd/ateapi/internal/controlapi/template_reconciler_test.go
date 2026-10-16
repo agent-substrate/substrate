@@ -25,15 +25,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"k8s.io/apimachinery/pkg/api/operation"
 )
 
 // fakeTemplateStore is an in-memory templateReconcilerStore.
@@ -786,7 +785,7 @@ func TestFail_TruncatesErrorMessage(t *testing.T) {
 	if !utf8.ValidString(msg) {
 		t.Error("error_message is not valid UTF-8")
 	}
-	op := operation.Operation{Type: operation.Update}
+	op := apivalidation.MakeUpdateOp(ctx)
 	if errs := apivalidation.Validate_GoldenSnapshotStatus(ctx, op, nil, golden, &ateapipb.GoldenSnapshotStatus{}); len(errs) != 0 {
 		t.Errorf("stored status fails validation: %v", errs)
 	}

@@ -33,7 +33,7 @@ import (
 const MaxRunLength = 8
 
 // DefaultMaxActors is how many actors a fake Worker holds, the default of
-// ateom's --max-actors, which no WorkerPool field sets for a real worker.
+// worker's --max-actors, which no WorkerPool field sets for a real worker.
 const DefaultMaxActors = 1000
 
 // MaxActorsAnnotation, on a WorkerPool, overrides DefaultMaxActors for that
