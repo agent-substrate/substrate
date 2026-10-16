@@ -579,67 +579,76 @@ func TestConcurrentEnsureImageAndEvict(t *testing.T) {
 }
 
 // A pull whose ensureLayer joins a flight that retireLayer is leading runs
-// no closure of its own and returns after the rename: the dir it names is
-// gone. ensureLayer must notice and unpack the layer again.
+// no closure of its own and gets the retirement's result: a renamed-away
+// dir, or the retirement's own error with the dir still in place. Either
+// way ensureLayer must run its own flight and return a usable dir.
 //
-// The retirement is played by a flight on the layer's key that renames the
-// dir aside and waits, as retireLayer does. ensureLayer is started while
-// that flight is open, so it joins; the pause before the release only makes
-// the join certain, a late start would lead a flight and pass regardless.
-func TestEnsureLayerUnpacksAgainAfterJoiningARetirement(t *testing.T) {
-	_, host := newTestRegistry(t)
-	ref := host + "/test/join:latest"
-	layer := layerFromEntries(t, []tarEntry{
-		{name: "f", typeflag: tar.TypeReg, mode: 0o644, body: "x"},
-	})
-	pushImage(t, ref, v1.Config{}, layer)
-	store := newTestStore(t)
-	mustEnsure(t, store, ref)
-	diffID, err := layer.DiffID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := store.layerDir(diffID)
-
-	open := make(chan struct{})
-	release := make(chan struct{})
-	flight := make(chan error, 1)
-	go func() {
-		_, err, _ := store.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
-			if err := os.Rename(dir, filepath.Join(store.layersDir(), retiredPrefix+"join-test")); err != nil {
-				return nil, err
+// The retirement is played by a flight on the layer's key that returns
+// retirementFlight as retireLayer does and waits. ensureLayer is started
+// while that flight is open, so it joins; the pause before the release only
+// makes the join certain, a late start would lead a flight and pass anyway.
+func TestEnsureLayerRunsItsOwnFlightAfterJoiningARetirement(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		rename    bool
+		flightErr error
+	}{
+		{name: "retired", rename: true},
+		{name: "failed retirement", flightErr: errors.New("rename failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, host := newTestRegistry(t)
+			ref := host + "/test/join:latest"
+			layer := layerFromEntries(t, []tarEntry{
+				{name: "f", typeflag: tar.TypeReg, mode: 0o644, body: "x"},
+			})
+			pushImage(t, ref, v1.Config{}, layer)
+			store := newTestStore(t)
+			mustEnsure(t, store, ref)
+			diffID, err := layer.DiffID()
+			if err != nil {
+				t.Fatal(err)
 			}
-			close(open)
-			<-release
-			return nil, nil
+			dir := store.layerDir(diffID)
+
+			open := make(chan struct{})
+			release := make(chan struct{})
+			go func() {
+				_, _, _ = store.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
+					if tc.rename {
+						if err := os.Rename(dir, filepath.Join(store.layersDir(), retiredPrefix+"join-test")); err != nil {
+							t.Error(err)
+						}
+					}
+					close(open)
+					<-release
+					return retirementFlight{}, tc.flightErr
+				})
+			}()
+			<-open
+
+			type result struct {
+				dir string
+				err error
+			}
+			got := make(chan result, 1)
+			go func() {
+				d, err := store.ensureLayer(context.Background(), diffID, layer)
+				got <- result{d, err}
+			}()
+			time.Sleep(50 * time.Millisecond)
+			close(release)
+
+			r := <-got
+			if r.err != nil {
+				t.Fatalf("ensureLayer after a joined retirement: %v", r.err)
+			}
+			if r.dir != dir {
+				t.Fatalf("ensureLayer dir = %q, want %q", r.dir, dir)
+			}
+			if _, err := os.Stat(filepath.Join(dir, layerFSDirName, "f")); err != nil {
+				t.Fatalf("returned layer dir is not usable: %v", err)
+			}
 		})
-		flight <- err
-	}()
-	<-open
-
-	type result struct {
-		dir string
-		err error
-	}
-	got := make(chan result, 1)
-	go func() {
-		d, err := store.ensureLayer(context.Background(), diffID, layer)
-		got <- result{d, err}
-	}()
-	time.Sleep(50 * time.Millisecond)
-	close(release)
-	if err := <-flight; err != nil {
-		t.Fatalf("retirement flight: %v", err)
-	}
-
-	r := <-got
-	if r.err != nil {
-		t.Fatalf("ensureLayer after a joined retirement: %v", r.err)
-	}
-	if r.dir != dir {
-		t.Fatalf("ensureLayer dir = %q, want %q", r.dir, dir)
-	}
-	if _, err := os.Stat(filepath.Join(dir, layerFSDirName, "f")); err != nil {
-		t.Fatalf("returned layer dir is not usable: %v", err)
 	}
 }

@@ -60,6 +60,11 @@ const (
 // retireLayer; the retire/reuse interlock depends on both using it.
 func layerFlightKey(hex string) string { return "sha256:" + hex }
 
+// retirementFlight is the value a retireLayer flight returns, with or
+// without an error. A pull whose ensureLayer joined that flight gets it
+// back and knows the result is a retirement's, not its layer's state.
+type retirementFlight struct{}
+
 // isLayerDirName reports whether name is a well-formed sha256 layer
 // directory name. Callers enumerate directories and read hexes out of
 // records, so they can encounter anything an operator (or a corrupt
@@ -109,30 +114,34 @@ func (s *Store) retireLayer(hex string, cutoff time.Time) (string, retireStatus,
 	status := retireGone
 	ran := false
 	_, err, _ = s.layerSF.Do(layerFlightKey(hex), func() (any, error) {
-		ran = true
-		fi, err := os.Stat(dir)
-		if errors.Is(err, os.ErrNotExist) {
-			status = retireGone
-			return nil, nil
-		} else if err != nil {
-			status = retireVetoed
-			return nil, err
-		}
-		// A concurrent ensureLayer touched the dir if it reused this layer
-		// since the pre-flight stat.
-		if fi.ModTime().After(cutoff) {
-			slog.Info(logMsgLayerRetireVetoed, slog.String("diffid", hex), slog.Time("last_used", fi.ModTime()))
-			status = retireVetoed
-			return nil, nil
-		}
-		dst := filepath.Join(s.layersDir(), fmt.Sprintf("%s%s-%d", retiredPrefix, hex[:12], time.Now().UnixNano()))
-		if err := os.Rename(dir, dst); err != nil {
-			status = retireVetoed
-			return nil, fmt.Errorf("while retiring layer %s: %w", hex, err)
-		}
-		retired = dst
-		status = retireRetired
-		return nil, nil
+		// Every outcome carries retirementFlight, so a pull that joined
+		// this flight runs its own instead of reading this result.
+		return retirementFlight{}, func() error {
+			ran = true
+			fi, err := os.Stat(dir)
+			if errors.Is(err, os.ErrNotExist) {
+				status = retireGone
+				return nil
+			} else if err != nil {
+				status = retireVetoed
+				return err
+			}
+			// A concurrent ensureLayer touched the dir if it reused this
+			// layer since the pre-flight stat.
+			if fi.ModTime().After(cutoff) {
+				slog.Info(logMsgLayerRetireVetoed, slog.String("diffid", hex), slog.Time("last_used", fi.ModTime()))
+				status = retireVetoed
+				return nil
+			}
+			dst := filepath.Join(s.layersDir(), fmt.Sprintf("%s%s-%d", retiredPrefix, hex[:12], time.Now().UnixNano()))
+			if err := os.Rename(dir, dst); err != nil {
+				status = retireVetoed
+				return fmt.Errorf("while retiring layer %s: %w", hex, err)
+			}
+			retired = dst
+			status = retireRetired
+			return nil
+		}()
 	})
 	if !ran {
 		// Our closure never executed: Do joined a flight already in progress
