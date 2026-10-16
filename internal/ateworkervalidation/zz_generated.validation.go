@@ -895,7 +895,7 @@ func Validate_ContainerSpec(
 	{ // field ateworkerpb.ContainerSpec.Resources
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateworkerpb.Resources,
+			obj, oldObj *ateworkerpb.ResourceRequirements,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -912,11 +912,11 @@ func Validate_ContainerSpec(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ResourceRequirements(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.ContainerSpec) *ateworkerpb.Resources {
+			func(oldObj *ateworkerpb.ContainerSpec) *ateworkerpb.ResourceRequirements {
 				return oldObj.Resources
 			})
 		errs = append(errs, fn(fldPath.Child("resources"), obj.Resources, oldVal, oldObj != nil)...)
@@ -1091,13 +1091,52 @@ func Validate_HttpGetAction(
 	return errs
 }
 
-// Validate_ResourceList validates an instance of ResourceList according
+// Validate_ResourceRequirements validates an instance of ResourceRequirements according
 // to declarative validation rules in the API schema.
-func Validate_ResourceList(
+func Validate_ResourceRequirements(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateworkerpb.ResourceList) (errs field.ErrorList) {
+	obj, oldObj *ateworkerpb.ResourceRequirements) (errs field.ErrorList) {
 
-	{ // field ateworkerpb.ResourceList.CpuMillicores
+	{ // field ateworkerpb.ResourceRequirements.Limits
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateworkerpb.Resources,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateworkerpb.ResourceRequirements) *ateworkerpb.Resources {
+				return oldObj.Limits
+			})
+		errs = append(errs, fn(fldPath.Child("limits"), obj.Limits, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_Resources validates an instance of Resources according
+// to declarative validation rules in the API schema.
+func Validate_Resources(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateworkerpb.Resources) (errs field.ErrorList) {
+
+	{ // field ateworkerpb.Resources.CpuMillicores
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *int64,
@@ -1125,13 +1164,13 @@ func Validate_ResourceList(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.ResourceList) *int64 {
+			func(oldObj *ateworkerpb.Resources) *int64 {
 				return &oldObj.CpuMillicores
 			})
 		errs = append(errs, fn(fldPath.Child("cpu_millicores"), &obj.CpuMillicores, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateworkerpb.ResourceList.MemoryBytes
+	{ // field ateworkerpb.Resources.MemoryBytes
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *int64,
@@ -1156,49 +1195,10 @@ func Validate_ResourceList(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.ResourceList) *int64 {
+			func(oldObj *ateworkerpb.Resources) *int64 {
 				return &oldObj.MemoryBytes
 			})
 		errs = append(errs, fn(fldPath.Child("memory_bytes"), &obj.MemoryBytes, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
-// Validate_Resources validates an instance of Resources according
-// to declarative validation rules in the API schema.
-func Validate_Resources(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateworkerpb.Resources) (errs field.ErrorList) {
-
-	{ // field ateworkerpb.Resources.Limits
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateworkerpb.ResourceList,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// call the type's validation function
-			errs = append(errs, Validate_ResourceList(ctx, op, fldPath, obj, oldObj)...)
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.Resources) *ateworkerpb.ResourceList {
-				return oldObj.Limits
-			})
-		errs = append(errs, fn(fldPath.Child("limits"), obj.Limits, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -1564,7 +1564,7 @@ func Validate_RestoreWorkloadRequest(
 	{ // field ateworkerpb.RestoreWorkloadRequest.Resources
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateworkerpb.Resources,
+			obj, oldObj *ateworkerpb.ResourceRequirements,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -1581,11 +1581,11 @@ func Validate_RestoreWorkloadRequest(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ResourceRequirements(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.RestoreWorkloadRequest) *ateworkerpb.Resources {
+			func(oldObj *ateworkerpb.RestoreWorkloadRequest) *ateworkerpb.ResourceRequirements {
 				return oldObj.Resources
 			})
 		errs = append(errs, fn(fldPath.Child("resources"), obj.Resources, oldVal, oldObj != nil)...)
@@ -1978,7 +1978,7 @@ func Validate_RunWorkloadRequest(
 	{ // field ateworkerpb.RunWorkloadRequest.Resources
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateworkerpb.Resources,
+			obj, oldObj *ateworkerpb.ResourceRequirements,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -1995,11 +1995,11 @@ func Validate_RunWorkloadRequest(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ResourceRequirements(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.RunWorkloadRequest) *ateworkerpb.Resources {
+			func(oldObj *ateworkerpb.RunWorkloadRequest) *ateworkerpb.ResourceRequirements {
 				return oldObj.Resources
 			})
 		errs = append(errs, fn(fldPath.Child("resources"), obj.Resources, oldVal, oldObj != nil)...)

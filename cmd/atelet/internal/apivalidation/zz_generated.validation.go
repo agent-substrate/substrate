@@ -934,7 +934,7 @@ func Validate_Container(
 	{ // field ateletpb.Container.Resources
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.Resources,
+			obj, oldObj *ateletpb.ResourceRequirements,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -951,11 +951,11 @@ func Validate_Container(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ResourceRequirements(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.Container) *ateletpb.Resources {
+			func(oldObj *ateletpb.Container) *ateletpb.ResourceRequirements {
 				return oldObj.Resources
 			})
 		errs = append(errs, fn(fldPath.Child("resources"), obj.Resources, oldVal, oldObj != nil)...)
@@ -2265,13 +2265,52 @@ func Validate_RequestActorSuspendRequest(
 	return errs
 }
 
-// Validate_ResourceList validates an instance of ResourceList according
+// Validate_ResourceRequirements validates an instance of ResourceRequirements according
 // to declarative validation rules in the API schema.
-func Validate_ResourceList(
+func Validate_ResourceRequirements(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateletpb.ResourceList) (errs field.ErrorList) {
+	obj, oldObj *ateletpb.ResourceRequirements) (errs field.ErrorList) {
 
-	{ // field ateletpb.ResourceList.CpuMillicores
+	{ // field ateletpb.ResourceRequirements.Limits
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.Resources,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.ResourceRequirements) *ateletpb.Resources {
+				return oldObj.Limits
+			})
+		errs = append(errs, fn(fldPath.Child("limits"), obj.Limits, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_Resources validates an instance of Resources according
+// to declarative validation rules in the API schema.
+func Validate_Resources(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.Resources) (errs field.ErrorList) {
+
+	{ // field ateletpb.Resources.CpuMillicores
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *int64,
@@ -2299,13 +2338,13 @@ func Validate_ResourceList(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.ResourceList) *int64 {
+			func(oldObj *ateletpb.Resources) *int64 {
 				return &oldObj.CpuMillicores
 			})
 		errs = append(errs, fn(fldPath.Child("cpu_millicores"), &obj.CpuMillicores, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.ResourceList.MemoryBytes
+	{ // field ateletpb.Resources.MemoryBytes
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *int64,
@@ -2330,49 +2369,10 @@ func Validate_ResourceList(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.ResourceList) *int64 {
+			func(oldObj *ateletpb.Resources) *int64 {
 				return &oldObj.MemoryBytes
 			})
 		errs = append(errs, fn(fldPath.Child("memory_bytes"), &obj.MemoryBytes, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
-// Validate_Resources validates an instance of Resources according
-// to declarative validation rules in the API schema.
-func Validate_Resources(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateletpb.Resources) (errs field.ErrorList) {
-
-	{ // field ateletpb.Resources.Limits
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateletpb.ResourceList,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// call the type's validation function
-			errs = append(errs, Validate_ResourceList(ctx, op, fldPath, obj, oldObj)...)
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.Resources) *ateletpb.ResourceList {
-				return oldObj.Limits
-			})
-		errs = append(errs, fn(fldPath.Child("limits"), obj.Limits, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -2669,7 +2669,7 @@ func Validate_RestoreRequest(
 	{ // field ateletpb.RestoreRequest.Resources
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.Resources,
+			obj, oldObj *ateletpb.ResourceRequirements,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -2686,11 +2686,11 @@ func Validate_RestoreRequest(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ResourceRequirements(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.RestoreRequest) *ateletpb.Resources {
+			func(oldObj *ateletpb.RestoreRequest) *ateletpb.ResourceRequirements {
 				return oldObj.Resources
 			})
 		errs = append(errs, fn(fldPath.Child("resources"), obj.Resources, oldVal, oldObj != nil)...)
@@ -2990,7 +2990,7 @@ func Validate_RunRequest(
 	{ // field ateletpb.RunRequest.Resources
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.Resources,
+			obj, oldObj *ateletpb.ResourceRequirements,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -3007,11 +3007,11 @@ func Validate_RunRequest(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ResourceRequirements(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.RunRequest) *ateletpb.Resources {
+			func(oldObj *ateletpb.RunRequest) *ateletpb.ResourceRequirements {
 				return oldObj.Resources
 			})
 		errs = append(errs, fn(fldPath.Child("resources"), obj.Resources, oldVal, oldObj != nil)...)
@@ -4255,7 +4255,7 @@ func Validate_WorkerResources(
 	{ // field ateletpb.WorkerResources.Resources
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.Resources,
+			obj, oldObj *ateletpb.ResourceRequirements,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -4272,11 +4272,11 @@ func Validate_WorkerResources(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ResourceRequirements(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.WorkerResources) *ateletpb.Resources {
+			func(oldObj *ateletpb.WorkerResources) *ateletpb.ResourceRequirements {
 				return oldObj.Resources
 			})
 		errs = append(errs, fn(fldPath.Child("resources"), obj.Resources, oldVal, oldObj != nil)...)

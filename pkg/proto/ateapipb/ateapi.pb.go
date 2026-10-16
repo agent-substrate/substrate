@@ -2713,7 +2713,7 @@ type ActorTemplate struct {
 	//
 	// +k8s:required
 	// +k8s:customValidation # cpu and memory limits are both set
-	Resources *Resources `protobuf:"bytes,6,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources *ResourceRequirements `protobuf:"bytes,6,opt,name=resources,proto3" json:"resources,omitempty"`
 	// +k8s:optional
 	Status        *ActorTemplateStatus `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2785,7 +2785,7 @@ func (x *ActorTemplate) GetSnapshotConfig() *SnapshotConfig {
 	return nil
 }
 
-func (x *ActorTemplate) GetResources() *Resources {
+func (x *ActorTemplate) GetResources() *ResourceRequirements {
 	if x != nil {
 		return x.Resources
 	}
@@ -2799,30 +2799,31 @@ func (x *ActorTemplate) GetStatus() *ActorTemplateStatus {
 	return nil
 }
 
-type Resources struct {
+// ResourceRequirements are the compute resources a workload may use.
+type ResourceRequirements struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// limits is the maximum amount of compute resources allowed.
 	//
 	// +k8s:optional
-	Limits        *ResourceList `protobuf:"bytes,1,opt,name=limits,proto3" json:"limits,omitempty"`
+	Limits        *Resources `protobuf:"bytes,1,opt,name=limits,proto3" json:"limits,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Resources) Reset() {
-	*x = Resources{}
+func (x *ResourceRequirements) Reset() {
+	*x = ResourceRequirements{}
 	mi := &file_ateapi_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Resources) String() string {
+func (x *ResourceRequirements) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Resources) ProtoMessage() {}
+func (*ResourceRequirements) ProtoMessage() {}
 
-func (x *Resources) ProtoReflect() protoreflect.Message {
+func (x *ResourceRequirements) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2834,20 +2835,20 @@ func (x *Resources) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Resources.ProtoReflect.Descriptor instead.
-func (*Resources) Descriptor() ([]byte, []int) {
+// Deprecated: Use ResourceRequirements.ProtoReflect.Descriptor instead.
+func (*ResourceRequirements) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{26}
 }
 
-func (x *Resources) GetLimits() *ResourceList {
+func (x *ResourceRequirements) GetLimits() *Resources {
 	if x != nil {
 		return x.Limits
 	}
 	return nil
 }
 
-// ResourceList is an amount of each compute resource.
-type ResourceList struct {
+// Resources is an amount of each compute resource.
+type Resources struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
 	//
@@ -2864,20 +2865,20 @@ type ResourceList struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ResourceList) Reset() {
-	*x = ResourceList{}
+func (x *Resources) Reset() {
+	*x = Resources{}
 	mi := &file_ateapi_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ResourceList) String() string {
+func (x *Resources) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ResourceList) ProtoMessage() {}
+func (*Resources) ProtoMessage() {}
 
-func (x *ResourceList) ProtoReflect() protoreflect.Message {
+func (x *Resources) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2889,19 +2890,19 @@ func (x *ResourceList) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ResourceList.ProtoReflect.Descriptor instead.
-func (*ResourceList) Descriptor() ([]byte, []int) {
+// Deprecated: Use Resources.ProtoReflect.Descriptor instead.
+func (*Resources) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{27}
 }
 
-func (x *ResourceList) GetCpuMillicores() int64 {
+func (x *Resources) GetCpuMillicores() int64 {
 	if x != nil {
 		return x.CpuMillicores
 	}
 	return 0
 }
 
-func (x *ResourceList) GetMemoryBytes() int64 {
+func (x *Resources) GetMemoryBytes() int64 {
 	if x != nil {
 		return x.MemoryBytes
 	}
@@ -3226,7 +3227,7 @@ type Container struct {
 	// actor's sandbox. A limit of 0 leaves that resource unlimited.
 	//
 	// +k8s:optional
-	Resources     *Resources `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources     *ResourceRequirements `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3317,7 +3318,7 @@ func (x *Container) GetSecurityContext() *SecurityContext {
 	return nil
 }
 
-func (x *Container) GetResources() *Resources {
+func (x *Container) GetResources() *ResourceRequirements {
 	if x != nil {
 		return x.Resources
 	}
@@ -7748,7 +7749,7 @@ type WorkerResources struct {
 	// Resources are compared against the Actor's resources for placement.
 	//
 	// +k8s:optional
-	Resources *Resources `protobuf:"bytes,1,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources *ResourceRequirements `protobuf:"bytes,1,opt,name=resources,proto3" json:"resources,omitempty"`
 	// A count of Actors.  Workers can use this to limit the number of Actors
 	// that can be placed on them, constraining the costs of other things that
 	// are not captured in the resources above, but which still have costs -
@@ -7791,7 +7792,7 @@ func (*WorkerResources) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{107}
 }
 
-func (x *WorkerResources) GetResources() *Resources {
+func (x *WorkerResources) GetResources() *ResourceRequirements {
 	if x != nil {
 		return x.Resources
 	}
@@ -7829,7 +7830,7 @@ type ActorAssignment struct {
 	// The resources allocated to the Actor when it was assigned.
 	//
 	// +k8s:optional
-	Resources *Resources `protobuf:"bytes,4,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources *ResourceRequirements `protobuf:"bytes,4,opt,name=resources,proto3" json:"resources,omitempty"`
 	// worker_epoch is the Worker's epoch when the Actor was bound.
 	//
 	// +k8s:optional
@@ -7890,7 +7891,7 @@ func (x *ActorAssignment) GetActorUid() string {
 	return ""
 }
 
-func (x *ActorAssignment) GetResources() *Resources {
+func (x *ActorAssignment) GetResources() *ResourceRequirements {
 	if x != nil {
 		return x.Resources
 	}
@@ -9708,7 +9709,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata:\x11\x82\xb5\x18\r\x18\x02\"\tAtespaces\";\n" +
 	"\tObjectRef\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\x9c\x03\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\xa7\x03\n" +
 	"\rActorTemplate\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x129\n" +
 	"\x0fworker_selector\x18\x02 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x121\n" +
@@ -9716,12 +9717,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"containers\x18\x03 \x03(\v2\x11.ateapi.ContainerR\n" +
 	"containers\x12(\n" +
 	"\avolumes\x18\x04 \x03(\v2\x0e.ateapi.VolumeR\avolumes\x12?\n" +
-	"\x0fsnapshot_config\x18\x05 \x01(\v2\x16.ateapi.SnapshotConfigR\x0esnapshotConfig\x12/\n" +
-	"\tresources\x18\x06 \x01(\v2\x11.ateapi.ResourcesR\tresources\x123\n" +
-	"\x06status\x18\a \x01(\v2\x1b.ateapi.ActorTemplateStatusR\x06status:\x16\x82\xb5\x18\x12\x18\x01\"\x0eActorTemplates\"9\n" +
-	"\tResources\x12,\n" +
-	"\x06limits\x18\x01 \x01(\v2\x14.ateapi.ResourceListR\x06limits\"X\n" +
-	"\fResourceList\x12%\n" +
+	"\x0fsnapshot_config\x18\x05 \x01(\v2\x16.ateapi.SnapshotConfigR\x0esnapshotConfig\x12:\n" +
+	"\tresources\x18\x06 \x01(\v2\x1c.ateapi.ResourceRequirementsR\tresources\x123\n" +
+	"\x06status\x18\a \x01(\v2\x1b.ateapi.ActorTemplateStatusR\x06status:\x16\x82\xb5\x18\x12\x18\x01\"\x0eActorTemplates\"A\n" +
+	"\x14ResourceRequirements\x12)\n" +
+	"\x06limits\x18\x01 \x01(\v2\x11.ateapi.ResourcesR\x06limits\"U\n" +
+	"\tResources\x12%\n" +
 	"\x0ecpu_millicores\x18\x01 \x01(\x03R\rcpuMillicores\x12!\n" +
 	"\fmemory_bytes\x18\x02 \x01(\x03R\vmemoryBytes\"\xae\x01\n" +
 	"\x14GoldenSnapshotStatus\x120\n" +
@@ -9736,7 +9737,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x12preferred_fidelity\x18\x02 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\x11preferredFidelity\x12R\n" +
 	"\x16golden_snapshot_config\x18\x03 \x01(\v2\x1c.ateapi.GoldenSnapshotConfigR\x14goldenSnapshotConfig\"F\n" +
 	"\x14GoldenSnapshotConfig\x12.\n" +
-	"\x04mode\x18\x01 \x01(\x0e2\x1a.ateapi.GoldenSnapshotModeR\x04mode\"\xec\x02\n" +
+	"\x04mode\x18\x01 \x01(\x0e2\x1a.ateapi.GoldenSnapshotModeR\x04mode\"\xf7\x02\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x18\n" +
@@ -9745,8 +9746,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x03env\x18\x05 \x03(\v2\x0e.ateapi.EnvVarR\x03env\x126\n" +
 	"\fwakeup_probe\x18\x06 \x01(\v2\x13.ateapi.WakeupProbeR\vwakeupProbe\x128\n" +
 	"\rvolume_mounts\x18\a \x03(\v2\x13.ateapi.VolumeMountR\fvolumeMounts\x12B\n" +
-	"\x10security_context\x18\b \x01(\v2\x17.ateapi.SecurityContextR\x0fsecurityContext\x12/\n" +
-	"\tresources\x18\t \x01(\v2\x11.ateapi.ResourcesR\tresources\"K\n" +
+	"\x10security_context\x18\b \x01(\v2\x17.ateapi.SecurityContextR\x0fsecurityContext\x12:\n" +
+	"\tresources\x18\t \x01(\v2\x1c.ateapi.ResourceRequirementsR\tresources\"K\n" +
 	"\x0fSecurityContext\x128\n" +
 	"\fcapabilities\x18\x01 \x01(\v2\x14.ateapi.CapabilitiesR\fcapabilities\"4\n" +
 	"\fCapabilities\x12\x10\n" +
@@ -9967,15 +9968,15 @@ const file_ateapi_proto_rawDesc = "" +
 	"attributes\"8\n" +
 	"\x0eAttributeEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"Z\n" +
-	"\x0fWorkerResources\x12/\n" +
-	"\tresources\x18\x01 \x01(\v2\x11.ateapi.ResourcesR\tresources\x12\x16\n" +
-	"\x06actors\x18\x02 \x01(\x05R\x06actors\"\x81\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"e\n" +
+	"\x0fWorkerResources\x12:\n" +
+	"\tresources\x18\x01 \x01(\v2\x1c.ateapi.ResourceRequirementsR\tresources\x12\x16\n" +
+	"\x06actors\x18\x02 \x01(\x05R\x06actors\"\x8c\x02\n" +
 	"\x0fActorAssignment\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12'\n" +
 	"\x05actor\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
-	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12/\n" +
-	"\tresources\x18\x04 \x01(\v2\x11.ateapi.ResourcesR\tresources\x12!\n" +
+	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12:\n" +
+	"\tresources\x18\x04 \x01(\v2\x1c.ateapi.ResourceRequirementsR\tresources\x12!\n" +
 	"\fworker_epoch\x18\x05 \x01(\x03R\vworkerEpoch:\x1e\x82\xb5\x18\x1a\n" +
 	"\x06Worker\"\x10ActorAssignments\"\x81\x02\n" +
 	"\x15RegisterWorkerRequest\x12)\n" +
@@ -10268,8 +10269,8 @@ var file_ateapi_proto_goTypes = []any{
 	(*Atespace)(nil),                           // 33: ateapi.Atespace
 	(*ObjectRef)(nil),                          // 34: ateapi.ObjectRef
 	(*ActorTemplate)(nil),                      // 35: ateapi.ActorTemplate
-	(*Resources)(nil),                          // 36: ateapi.Resources
-	(*ResourceList)(nil),                       // 37: ateapi.ResourceList
+	(*ResourceRequirements)(nil),               // 36: ateapi.ResourceRequirements
+	(*Resources)(nil),                          // 37: ateapi.Resources
 	(*GoldenSnapshotStatus)(nil),               // 38: ateapi.GoldenSnapshotStatus
 	(*ActorTemplateStatus)(nil),                // 39: ateapi.ActorTemplateStatus
 	(*SnapshotConfig)(nil),                     // 40: ateapi.SnapshotConfig
@@ -10432,9 +10433,9 @@ var file_ateapi_proto_depIdxs = []int32{
 	42,  // 45: ateapi.ActorTemplate.containers:type_name -> ateapi.Container
 	48,  // 46: ateapi.ActorTemplate.volumes:type_name -> ateapi.Volume
 	40,  // 47: ateapi.ActorTemplate.snapshot_config:type_name -> ateapi.SnapshotConfig
-	36,  // 48: ateapi.ActorTemplate.resources:type_name -> ateapi.Resources
+	36,  // 48: ateapi.ActorTemplate.resources:type_name -> ateapi.ResourceRequirements
 	39,  // 49: ateapi.ActorTemplate.status:type_name -> ateapi.ActorTemplateStatus
-	37,  // 50: ateapi.Resources.limits:type_name -> ateapi.ResourceList
+	37,  // 50: ateapi.ResourceRequirements.limits:type_name -> ateapi.Resources
 	34,  // 51: ateapi.GoldenSnapshotStatus.golden_tag:type_name -> ateapi.ObjectRef
 	147, // 52: ateapi.GoldenSnapshotStatus.snapshot_time:type_name -> google.protobuf.Timestamp
 	38,  // 53: ateapi.ActorTemplateStatus.golden_snapshot_status:type_name -> ateapi.GoldenSnapshotStatus
@@ -10445,7 +10446,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	46,  // 58: ateapi.Container.wakeup_probe:type_name -> ateapi.WakeupProbe
 	58,  // 59: ateapi.Container.volume_mounts:type_name -> ateapi.VolumeMount
 	43,  // 60: ateapi.Container.security_context:type_name -> ateapi.SecurityContext
-	36,  // 61: ateapi.Container.resources:type_name -> ateapi.Resources
+	36,  // 61: ateapi.Container.resources:type_name -> ateapi.ResourceRequirements
 	44,  // 62: ateapi.SecurityContext.capabilities:type_name -> ateapi.Capabilities
 	47,  // 63: ateapi.WakeupProbe.http_get:type_name -> ateapi.HttpGetAction
 	51,  // 64: ateapi.Volume.durable_dir:type_name -> ateapi.DurableDirVolumeSource
@@ -10528,10 +10529,10 @@ var file_ateapi_proto_depIdxs = []int32{
 	114, // 141: ateapi.WorkerStatus.restorable_runtimes:type_name -> ateapi.SandboxRuntime
 	115, // 142: ateapi.SandboxRuntime.version:type_name -> ateapi.VersionedSandboxCompat
 	116, // 143: ateapi.VersionedSandboxCompat.attributes:type_name -> ateapi.AttributeEntry
-	36,  // 144: ateapi.WorkerResources.resources:type_name -> ateapi.Resources
+	36,  // 144: ateapi.WorkerResources.resources:type_name -> ateapi.ResourceRequirements
 	14,  // 145: ateapi.ActorAssignment.metadata:type_name -> ateapi.ResourceMetadata
 	34,  // 146: ateapi.ActorAssignment.actor:type_name -> ateapi.ObjectRef
-	36,  // 147: ateapi.ActorAssignment.resources:type_name -> ateapi.Resources
+	36,  // 147: ateapi.ActorAssignment.resources:type_name -> ateapi.ResourceRequirements
 	34,  // 148: ateapi.RegisterWorkerRequest.worker:type_name -> ateapi.ObjectRef
 	117, // 149: ateapi.RegisterWorkerRequest.capacity:type_name -> ateapi.WorkerResources
 	114, // 150: ateapi.RegisterWorkerRequest.default_runtime:type_name -> ateapi.SandboxRuntime

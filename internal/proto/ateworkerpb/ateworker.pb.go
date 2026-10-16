@@ -498,7 +498,7 @@ type RunWorkloadRequest struct {
 	// runtime default (unlimited for gVisor, the worker's own default for the micro-VM).
 	//
 	// +k8s:optional
-	Resources *Resources `protobuf:"bytes,10,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources *ResourceRequirements `protobuf:"bytes,10,opt,name=resources,proto3" json:"resources,omitempty"`
 	// +k8s:required
 	ActorDirs     *ActorDirs `protobuf:"bytes,12,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -598,7 +598,7 @@ func (x *RunWorkloadRequest) GetEgressGateway() *EgressGateway {
 	return nil
 }
 
-func (x *RunWorkloadRequest) GetResources() *Resources {
+func (x *RunWorkloadRequest) GetResources() *ResourceRequirements {
 	if x != nil {
 		return x.Resources
 	}
@@ -868,7 +868,7 @@ type ContainerSpec struct {
 	// resources are the container's own declared limits, if any.
 	//
 	// +k8s:optional
-	Resources     *Resources `protobuf:"bytes,4,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources     *ResourceRequirements `protobuf:"bytes,4,opt,name=resources,proto3" json:"resources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -924,38 +924,38 @@ func (x *ContainerSpec) GetCapabilities() []string {
 	return nil
 }
 
-func (x *ContainerSpec) GetResources() *Resources {
+func (x *ContainerSpec) GetResources() *ResourceRequirements {
 	if x != nil {
 		return x.Resources
 	}
 	return nil
 }
 
-// Resources mirrors atelet's Resources.
-type Resources struct {
+// ResourceRequirements mirrors atelet's ResourceRequirements.
+type ResourceRequirements struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// limits is the maximum amount of compute resources allowed.
 	//
 	// +k8s:optional
-	Limits        *ResourceList `protobuf:"bytes,1,opt,name=limits,proto3" json:"limits,omitempty"`
+	Limits        *Resources `protobuf:"bytes,1,opt,name=limits,proto3" json:"limits,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Resources) Reset() {
-	*x = Resources{}
+func (x *ResourceRequirements) Reset() {
+	*x = ResourceRequirements{}
 	mi := &file_ateworker_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Resources) String() string {
+func (x *ResourceRequirements) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Resources) ProtoMessage() {}
+func (*ResourceRequirements) ProtoMessage() {}
 
-func (x *Resources) ProtoReflect() protoreflect.Message {
+func (x *ResourceRequirements) ProtoReflect() protoreflect.Message {
 	mi := &file_ateworker_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -967,20 +967,20 @@ func (x *Resources) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Resources.ProtoReflect.Descriptor instead.
-func (*Resources) Descriptor() ([]byte, []int) {
+// Deprecated: Use ResourceRequirements.ProtoReflect.Descriptor instead.
+func (*ResourceRequirements) Descriptor() ([]byte, []int) {
 	return file_ateworker_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *Resources) GetLimits() *ResourceList {
+func (x *ResourceRequirements) GetLimits() *Resources {
 	if x != nil {
 		return x.Limits
 	}
 	return nil
 }
 
-// ResourceList is an amount of each compute resource.
-type ResourceList struct {
+// Resources is an amount of each compute resource.
+type Resources struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
 	//
@@ -997,20 +997,20 @@ type ResourceList struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ResourceList) Reset() {
-	*x = ResourceList{}
+func (x *Resources) Reset() {
+	*x = Resources{}
 	mi := &file_ateworker_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ResourceList) String() string {
+func (x *Resources) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ResourceList) ProtoMessage() {}
+func (*Resources) ProtoMessage() {}
 
-func (x *ResourceList) ProtoReflect() protoreflect.Message {
+func (x *Resources) ProtoReflect() protoreflect.Message {
 	mi := &file_ateworker_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1022,19 +1022,19 @@ func (x *ResourceList) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ResourceList.ProtoReflect.Descriptor instead.
-func (*ResourceList) Descriptor() ([]byte, []int) {
+// Deprecated: Use Resources.ProtoReflect.Descriptor instead.
+func (*Resources) Descriptor() ([]byte, []int) {
 	return file_ateworker_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *ResourceList) GetCpuMillicores() int64 {
+func (x *Resources) GetCpuMillicores() int64 {
 	if x != nil {
 		return x.CpuMillicores
 	}
 	return 0
 }
 
-func (x *ResourceList) GetMemoryBytes() int64 {
+func (x *Resources) GetMemoryBytes() int64 {
 	if x != nil {
 		return x.MemoryBytes
 	}
@@ -1499,7 +1499,7 @@ type RestoreWorkloadRequest struct {
 	// these are ignored. Zero means "unset": keep the runtime default.
 	//
 	// +k8s:optional
-	Resources *Resources `protobuf:"bytes,11,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources *ResourceRequirements `protobuf:"bytes,11,opt,name=resources,proto3" json:"resources,omitempty"`
 	// +k8s:required
 	ActorDirs *ActorDirs `protobuf:"bytes,13,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	// actor_dirs.restore_dir is a preserved local snapshot, not a scratch copy:
@@ -1611,7 +1611,7 @@ func (x *RestoreWorkloadRequest) GetEgressGateway() *EgressGateway {
 	return nil
 }
 
-func (x *RestoreWorkloadRequest) GetResources() *Resources {
+func (x *RestoreWorkloadRequest) GetResources() *ResourceRequirements {
 	if x != nil {
 		return x.Resources
 	}
@@ -2052,7 +2052,7 @@ const file_ateworker_proto_rawDesc = "" +
 	"\x04spec\x18\a \x01(\v2\x17.ateworker.WorkloadSpecR\x04spec\x123\n" +
 	"\n" +
 	"actor_dirs\x18\b \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\"\x1b\n" +
-	"\x19TerminateWorkloadResponse\"\x8e\x05\n" +
+	"\x19TerminateWorkloadResponse\"\x99\x05\n" +
 	"\x12RunWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2064,9 +2064,9 @@ const file_ateworker_proto_rawDesc = "" +
 	"runsc_path\x18\x06 \x01(\tR\trunscPath\x12+\n" +
 	"\x04spec\x18\a \x01(\v2\x17.ateworker.WorkloadSpecR\x04spec\x12d\n" +
 	"\x13runtime_asset_paths\x18\b \x03(\v24.ateworker.RunWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12D\n" +
-	"\x0eegress_gateway\x18\t \x01(\v2\x18.ateworker.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x122\n" +
+	"\x0eegress_gateway\x18\t \x01(\v2\x18.ateworker.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12=\n" +
 	"\tresources\x18\n" +
-	" \x01(\v2\x14.ateworker.ResourcesR\tresources\x123\n" +
+	" \x01(\v2\x1f.ateworker.ResourceRequirementsR\tresources\x123\n" +
 	"\n" +
 	"actor_dirs\x18\f \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
@@ -2086,15 +2086,15 @@ const file_ateworker_proto_rawDesc = "" +
 	"\x16external_volume_mounts\x18\x04 \x03(\v2\x16.ateworker.VolumeMountR\x14externalVolumeMounts\x12Q\n" +
 	"\x19system_info_volume_mounts\x18\x05 \x03(\v2\x16.ateworker.VolumeMountR\x16systemInfoVolumeMounts\x12F\n" +
 	"\x13image_volume_mounts\x18\x06 \x03(\v2\x16.ateworker.VolumeMountR\x11imageVolumeMounts\x12?\n" +
-	"\x0econtainer_spec\x18\a \x01(\v2\x18.ateworker.ContainerSpecR\rcontainerSpec\"\x92\x01\n" +
+	"\x0econtainer_spec\x18\a \x01(\v2\x18.ateworker.ContainerSpecR\rcontainerSpec\"\x9d\x01\n" +
 	"\rContainerSpec\x12\x12\n" +
 	"\x04args\x18\x01 \x03(\tR\x04args\x12\x15\n" +
 	"\x03env\x18\x02 \x03(\tB\x03\x80\x01\x01R\x03env\x12\"\n" +
-	"\fcapabilities\x18\x03 \x03(\tR\fcapabilities\x122\n" +
-	"\tresources\x18\x04 \x01(\v2\x14.ateworker.ResourcesR\tresources\"<\n" +
-	"\tResources\x12/\n" +
-	"\x06limits\x18\x01 \x01(\v2\x17.ateworker.ResourceListR\x06limits\"X\n" +
-	"\fResourceList\x12%\n" +
+	"\fcapabilities\x18\x03 \x03(\tR\fcapabilities\x12=\n" +
+	"\tresources\x18\x04 \x01(\v2\x1f.ateworker.ResourceRequirementsR\tresources\"D\n" +
+	"\x14ResourceRequirements\x12,\n" +
+	"\x06limits\x18\x01 \x01(\v2\x14.ateworker.ResourcesR\x06limits\"U\n" +
+	"\tResources\x12%\n" +
 	"\x0ecpu_millicores\x18\x01 \x01(\x03R\rcpuMillicores\x12!\n" +
 	"\fmemory_bytes\x18\x02 \x01(\x03R\vmemoryBytes\"@\n" +
 	"\vVolumeMount\x12\x12\n" +
@@ -2123,7 +2123,7 @@ const file_ateworker_proto_rawDesc = "" +
 	"actor_dirs\x18\t \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\"s\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
 	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\x12.\n" +
-	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\x81\x06\n" +
+	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\x8c\x06\n" +
 	"\x16RestoreWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2137,8 +2137,8 @@ const file_ateworker_proto_rawDesc = "" +
 	"\x13runtime_asset_paths\x18\b \x03(\v28.ateworker.RestoreWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x127\n" +
 	"\bfidelity\x18\t \x01(\x0e2\x1b.ateworker.SnapshotFidelityR\bfidelity\x12D\n" +
 	"\x0eegress_gateway\x18\n" +
-	" \x01(\v2\x18.ateworker.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x122\n" +
-	"\tresources\x18\v \x01(\v2\x14.ateworker.ResourcesR\tresources\x123\n" +
+	" \x01(\v2\x18.ateworker.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12=\n" +
+	"\tresources\x18\v \x01(\v2\x1f.ateworker.ResourceRequirementsR\tresources\x123\n" +
 	"\n" +
 	"actor_dirs\x18\r \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x120\n" +
 	"\x14preserve_restore_dir\x18\x0e \x01(\bR\x12preserveRestoreDir\x1aD\n" +
@@ -2212,8 +2212,8 @@ var file_ateworker_proto_goTypes = []any{
 	(*WorkloadSpec)(nil),                   // 7: ateworker.WorkloadSpec
 	(*Container)(nil),                      // 8: ateworker.Container
 	(*ContainerSpec)(nil),                  // 9: ateworker.ContainerSpec
-	(*Resources)(nil),                      // 10: ateworker.Resources
-	(*ResourceList)(nil),                   // 11: ateworker.ResourceList
+	(*ResourceRequirements)(nil),           // 10: ateworker.ResourceRequirements
+	(*Resources)(nil),                      // 11: ateworker.Resources
 	(*VolumeMount)(nil),                    // 12: ateworker.VolumeMount
 	(*WakeupProbe)(nil),                    // 13: ateworker.WakeupProbe
 	(*HttpGetAction)(nil),                  // 14: ateworker.HttpGetAction
@@ -2236,7 +2236,7 @@ var file_ateworker_proto_depIdxs = []int32{
 	7,  // 2: ateworker.RunWorkloadRequest.spec:type_name -> ateworker.WorkloadSpec
 	25, // 3: ateworker.RunWorkloadRequest.runtime_asset_paths:type_name -> ateworker.RunWorkloadRequest.RuntimeAssetPathsEntry
 	6,  // 4: ateworker.RunWorkloadRequest.egress_gateway:type_name -> ateworker.EgressGateway
-	10, // 5: ateworker.RunWorkloadRequest.resources:type_name -> ateworker.Resources
+	10, // 5: ateworker.RunWorkloadRequest.resources:type_name -> ateworker.ResourceRequirements
 	2,  // 6: ateworker.RunWorkloadRequest.actor_dirs:type_name -> ateworker.ActorDirs
 	8,  // 7: ateworker.WorkloadSpec.containers:type_name -> ateworker.Container
 	13, // 8: ateworker.Container.wakeup_probe:type_name -> ateworker.WakeupProbe
@@ -2245,8 +2245,8 @@ var file_ateworker_proto_depIdxs = []int32{
 	12, // 11: ateworker.Container.system_info_volume_mounts:type_name -> ateworker.VolumeMount
 	12, // 12: ateworker.Container.image_volume_mounts:type_name -> ateworker.VolumeMount
 	9,  // 13: ateworker.Container.container_spec:type_name -> ateworker.ContainerSpec
-	10, // 14: ateworker.ContainerSpec.resources:type_name -> ateworker.Resources
-	11, // 15: ateworker.Resources.limits:type_name -> ateworker.ResourceList
+	10, // 14: ateworker.ContainerSpec.resources:type_name -> ateworker.ResourceRequirements
+	11, // 15: ateworker.ResourceRequirements.limits:type_name -> ateworker.Resources
 	14, // 16: ateworker.WakeupProbe.http_get:type_name -> ateworker.HttpGetAction
 	7,  // 17: ateworker.CheckpointWorkloadRequest.spec:type_name -> ateworker.WorkloadSpec
 	0,  // 18: ateworker.CheckpointWorkloadRequest.fidelity:type_name -> ateworker.SnapshotFidelity
@@ -2255,7 +2255,7 @@ var file_ateworker_proto_depIdxs = []int32{
 	26, // 21: ateworker.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateworker.RestoreWorkloadRequest.RuntimeAssetPathsEntry
 	0,  // 22: ateworker.RestoreWorkloadRequest.fidelity:type_name -> ateworker.SnapshotFidelity
 	6,  // 23: ateworker.RestoreWorkloadRequest.egress_gateway:type_name -> ateworker.EgressGateway
-	10, // 24: ateworker.RestoreWorkloadRequest.resources:type_name -> ateworker.Resources
+	10, // 24: ateworker.RestoreWorkloadRequest.resources:type_name -> ateworker.ResourceRequirements
 	2,  // 25: ateworker.RestoreWorkloadRequest.actor_dirs:type_name -> ateworker.ActorDirs
 	1,  // 26: ateworker.WorkloadStatsSample.source:type_name -> ateworker.StatsSource
 	21, // 27: ateworker.GetWorkloadStatsResponse.sample:type_name -> ateworker.WorkloadStatsSample
