@@ -19,12 +19,15 @@ package model
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/bufbuild/protocompile"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
 
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
@@ -221,6 +224,11 @@ type Field struct {
 	// declares no `optional` field today, so this is always false for
 	// every field this model currently produces.
 	Proto3Optional bool
+
+	// Redacted is true for a field with the debug_redact option, which holds
+	// a secret. For example, true for EnvVar.value
+	// (`string value = 2 [ debug_redact = true ];`).
+	Redacted bool
 }
 
 // Enum is one enum declared in the file, top-level or nested.
@@ -484,6 +492,7 @@ func buildField(fd protoreflect.FileDescriptor, field protoreflect.FieldDescript
 		Comment:  comment(fd, field),
 		Repeated: field.IsList(),
 		Kind:     field.Kind(),
+		Redacted: field.Options().(*descriptorpb.FieldOptions).GetDebugRedact(),
 	}
 
 	switch {
@@ -577,6 +586,98 @@ func parentFullName(d protoreflect.Descriptor) protoreflect.FullName {
 
 func comment(fd protoreflect.FileDescriptor, d protoreflect.Descriptor) string {
 	return strings.TrimSpace(fd.SourceLocations().ByDescriptor(d).LeadingComments)
+}
+
+// PublicDoc returns the part of a doc comment meant for readers of the API:
+// the comment without its internal notes, written between "(--" and "--)",
+// and without its lines starting with a "+k8s:" or "+ate:" directive.
+func PublicDoc(comment string) string {
+	lines := strings.Split(internalNote.ReplaceAllString(comment, ""), "\n")
+	lines = slices.DeleteFunc(lines, isDirective)
+	lines = collapseBlankRuns(lines)
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// internalNote matches an internal note in a doc comment, which may span
+// lines. For example, "(-- The bound is a guardrail. --)".
+var internalNote = regexp.MustCompile(`(?s)\(--.*?--\)`)
+
+// Summary returns the first paragraph of comment's PublicDoc: the short
+// description shown where the whole doc doesn't fit, such as a table.
+func Summary(comment string) string {
+	lines := strings.Split(PublicDoc(comment), "\n")
+	if i := slices.IndexFunc(lines, isBlank); i >= 0 {
+		lines = lines[:i]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// isDirective reports whether line is a validation-gen directive, e.g.
+// "+k8s:required", or one of our own metadata tags, e.g. "+ate:preview".
+func isDirective(line string) bool {
+	line = strings.TrimSpace(line)
+	return strings.HasPrefix(line, "+k8s:") || strings.HasPrefix(line, "+ate:")
+}
+
+// collapseBlankRuns replaces each run of consecutive blank lines with one.
+func collapseBlankRuns(lines []string) []string {
+	var out []string
+	for i, line := range lines {
+		if i > 0 && isBlank(line) && isBlank(lines[i-1]) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func isBlank(line string) bool {
+	return strings.TrimSpace(line) == ""
+}
+
+// Verb is a standard method's verb, which its name starts with (style
+// guide section #3).
+type Verb string
+
+const (
+	VerbGet    Verb = "Get"
+	VerbList   Verb = "List"
+	VerbCreate Verb = "Create"
+	VerbUpdate Verb = "Update"
+	VerbDelete Verb = "Delete"
+)
+
+// StandardVerbs lists every standard verb.
+var StandardVerbs = []Verb{VerbGet, VerbList, VerbCreate, VerbUpdate, VerbDelete}
+
+// ParseStandardMethod parses methodName as a standard method on resource:
+// the verb, then one of resource's parents (none for a top-level
+// resource), then resource as ResourceNameFor names it. It returns the
+// verb and the parent ("" for a top-level resource). ok is false for a
+// custom method, and for a standard method named any other way.
+func ParseStandardMethod(methodName protoreflect.Name, resource Message) (v Verb, parent string, ok bool) {
+	parents := resource.ResourceAnnotation.Parents
+	if len(parents) == 0 {
+		parents = []string{""}
+	}
+	for _, p := range parents {
+		for _, sv := range StandardVerbs {
+			if string(methodName) == string(sv)+p+ResourceNameFor(sv, resource) {
+				return sv, p, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+// ResourceNameFor is how a method with verb v names resource: by its
+// plural for List, and by its name otherwise. For example, "Actors" in
+// ListActors, but "Actor" in GetActor.
+func ResourceNameFor(v Verb, resource Message) string {
+	if v == VerbList {
+		return resource.ResourceAnnotation.Plural
+	}
+	return resource.Name
 }
 
 // Resource pairs a resource message with every method (across services)

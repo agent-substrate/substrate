@@ -24,7 +24,7 @@ import (
 var StandardMethodReturnsResource = Rule{
 	Name:        "standard-method-returns-resource",
 	Description: "A Get/Create/Update/Delete method's response is the resource itself, not a wrapper message.",
-	Check:       forEachStandardMethod(checkReturnsResource, verbGet, verbCreate, verbUpdate, verbDelete),
+	Check:       forEachStandardMethod(checkReturnsResource, model.VerbGet, model.VerbCreate, model.VerbUpdate, model.VerbDelete),
 }
 
 func checkReturnsResource(m method) []Finding {
@@ -38,7 +38,7 @@ var GetRequestShape = Rule{
 	Name: "get-request-shape",
 	Description: "A Get method's request has exactly one field, of type ObjectRef and named after the resource's snake_case type name, identifying the resource. " +
 		`For a subresource, it has the parent's ObjectRef, named after the parent (none for Global), plus a string "name" field - nothing else.`,
-	Check: forEachStandardMethod(checkGetRequest, verbGet),
+	Check: forEachStandardMethod(checkGetRequest, model.VerbGet),
 }
 
 func checkGetRequest(m method) []Finding {
@@ -50,13 +50,13 @@ var ListMethodShape = Rule{
 	Description: "A List method's request has a ListOptions options field, plus an atespace field for an atespace-scoped top-level resource, " +
 		"or for a subresource an ObjectRef field named after the parent (none for Global). Its response has a repeated field of the resource, " +
 		"named after the resource's plural, plus a next_page_token field - nothing else.",
-	Check: forEachStandardMethod(checkListMethod, verbList),
+	Check: forEachStandardMethod(checkListMethod, model.VerbList),
 }
 
 var ListResponseNameMatchesMethod = Rule{
 	Name:        "list-response-name-matches-method",
 	Description: `Every "List*" method's response message is named "{MethodName}Response".`,
-	Check:       forEachStandardMethod(checkListResponseName, verbList),
+	Check:       forEachStandardMethod(checkListResponseName, model.VerbList),
 }
 
 func checkListMethod(m method) []Finding {
@@ -77,7 +77,7 @@ var CreateRequestShape = Rule{
 	Name: "create-request-shape",
 	Description: "A Create method's request has exactly one field, of the resource's own type and named after its snake_case type name, plus an optional CreateOptions field named \"options\" - nothing else. " +
 		"For a subresource, it also has the parent's ObjectRef, named after the parent (none for Global).",
-	Check: forEachStandardMethod(checkCreateRequest, verbCreate),
+	Check: forEachStandardMethod(checkCreateRequest, model.VerbCreate),
 }
 
 func checkCreateRequest(m method) []Finding {
@@ -88,7 +88,7 @@ var UpdateRequestShape = Rule{
 	Name: "update-request-shape",
 	Description: "An Update method's request has exactly one field, of the resource's own type and named after its snake_case type name - nothing else. " +
 		"For a subresource, it also has the parent's ObjectRef, named after the parent (none for Global).",
-	Check: forEachStandardMethod(checkUpdateRequest, verbUpdate),
+	Check: forEachStandardMethod(checkUpdateRequest, model.VerbUpdate),
 }
 
 func checkUpdateRequest(m method) []Finding {
@@ -99,7 +99,7 @@ var DeleteRequestShape = Rule{
 	Name: "delete-request-shape",
 	Description: "A Delete method's request has exactly one ObjectRef field, named after the resource's snake_case type name, plus an optional DeleteOptions field named \"options\" - nothing else. " +
 		`For a subresource, the parent's ObjectRef, named after the parent (none for Global), plus a string "name" field replace the resource's ObjectRef.`,
-	Check: forEachStandardMethod(checkDeleteRequest, verbDelete),
+	Check: forEachStandardMethod(checkDeleteRequest, model.VerbDelete),
 }
 
 func checkDeleteRequest(m method) []Finding {
@@ -126,7 +126,7 @@ func checkDeleteOptionsShape(api *model.API) ([]Finding, error) {
 var SingletonNoList = Rule{
 	Name:        "singleton-no-list",
 	Description: "A singleton resource has no List method.",
-	Check:       forEachStandardMethod(checkSingletonList, verbList),
+	Check:       forEachStandardMethod(checkSingletonList, model.VerbList),
 }
 
 func checkSingletonList(m method) []Finding {

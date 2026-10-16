@@ -1,0 +1,259 @@
+{{- /*
+   Copyright 2026 Google LLC
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/ -}}
+<!doctype html>
+{{.Notice}}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Substrate API Reference</title>
+<style>{{.Style}}</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">Substrate API Reference</div>
+  <div class="search-wrap">
+    <input id="search-input" type="text" placeholder="Search resources, methods, messages, enums…" autocomplete="off" spellcheck="false">
+    <div id="search-results" class="search-results" hidden></div>
+  </div>
+</header>
+<div class="layout">
+  <nav class="sidebar">
+    <details open>
+      <summary>Resources <span class="count">{{len .Resources}}</span></summary>
+      {{template "resourceTree" .ResourceTree}}
+    </details>
+    <details>
+      <summary>Messages <span class="count">{{len .OtherMessages}}</span></summary>
+      <ul>
+        {{range .OtherMessages}}<li><a href="#{{msgAnchor .FullName}}">{{.Name}}</a></li>
+        {{end}}
+      </ul>
+    </details>
+    <details>
+      <summary>Enums <span class="count">{{len .API.Enums}}</span></summary>
+      <ul>
+        {{range .API.Enums}}<li><a href="#{{enumAnchor .FullName}}">{{.Name}}</a></li>
+        {{end}}
+      </ul>
+    </details>
+  </nav>
+  <main class="content">
+
+    {{range .Resources}}
+    <section id="{{.Anchor}}" class="group resource-page" hidden>
+      <section class="page-section single">
+        <div class="section-main">
+          <h1 class="resource-title">{{.Page.Message.Name}}</h1>
+          <p class="resource-labels">
+            {{if .Page.Scope}}<span class="tag">{{.Page.Scope}}</span>{{end}}
+            {{if .Page.Parent}}<span class="tag">subresource of {{if .ParentAnchor}}<a class="mono" href="#{{.ParentAnchor}}">{{.Page.Parent}}</a>{{else}}<span class="mono">{{.Page.Parent}}</span>{{end}}</span>{{end}}
+            {{if .Page.Singleton}}<span class="tag">singleton</span>{{end}}
+          </p>
+          {{if .Page.Message.Comment}}<div class="description">{{fullDoc .Page.Message.Comment}}</div>{{end}}
+          {{if .Subresources}}
+          <p class="section-label">Subresources</p>
+          <ul class="subresource-list">
+            {{range .Subresources}}<li><a class="mono" href="#{{.Anchor}}">{{.Name}}</a>{{if .Singleton}} <span class="tag">singleton</span>{{end}}</li>
+            {{end}}
+          </ul>
+          {{end}}
+          {{if .Methods}}
+          <p class="section-label">Methods</p>
+          <table class="methods-table">
+            <thead><tr><th>Method</th><th>Description</th><th>Request</th><th>Response</th></tr></thead>
+            <tbody>
+              {{range .Methods}}
+              <tr>
+                <td class="mono"><a href="#{{methodAnchor .ServiceFullName .Name}}">{{.Name}}</a></td>
+                <td>{{summaryDoc .Comment}}</td>
+                <td class="mono"><a href="#{{.InputAnchor}}">{{.InputName.Name}}</a></td>
+                <td class="mono"><a href="#{{.OutputAnchor}}">{{.OutputName.Name}}</a></td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{end}}
+        </div>
+      </section>
+
+      <section class="page-section" id="{{.FieldsAnchor}}">
+        <div class="section-main">
+          <h2 class="section-title">Fields</h2>
+          {{if .Attrs}}
+          {{range .Attrs}}{{template "attrRow" .}}{{end}}
+          {{else}}
+          <p class="empty-note">No fields.</p>
+          {{end}}
+        </div>
+        <div class="section-rail">
+          <div class="rail-sticky">
+            <div class="rail-card definition">
+              <h2>Example</h2>
+              <pre>{{codeLines (highlightJSON .Example)}}</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {{if .Methods}}<h1>Methods</h1>{{end}}
+      {{range .Methods}}
+      <section class="page-section method-section" id="{{methodAnchor .ServiceFullName .Name}}">
+        <div class="section-main">
+          <h2 class="method-title mono">{{.Name}}</h2>
+          {{if .Comment}}<div class="description">{{fullDoc .Comment}}</div>{{end}}
+          <div class="attr-group">
+            <h3 class="group-title">Request <span class="group-type mono">(<a href="#{{.InputAnchor}}">{{.InputName.Name}}</a>)</span></h3>
+            {{range .Params}}{{template "attrRow" .}}{{else}}<p class="empty-note">No fields.</p>{{end}}
+          </div>
+          <div class="attr-group">
+            <h3 class="group-title">Response <span class="group-type mono">(<a href="#{{.OutputAnchor}}">{{.OutputName.Name}}</a>)</span></h3>
+            {{if .ReturnsResource}}<p class="description">The <a href="#{{.OutputAnchor}}">{{.OutputName.Name}}</a> resource.</p>
+            {{else}}{{range .Response}}{{template "attrRow" .}}{{else}}<p class="empty-note">No fields.</p>{{end}}{{end}}
+          </div>
+        </div>
+        <div class="section-rail">
+          <div class="rail-sticky">
+            <div class="rail-card definition">
+              <h2 class="mono">{{.Name}}</h2>
+              <pre>{{template "rpcSource" .}}</pre>
+            </div>
+            {{range .Sources}}
+            <div class="rail-card definition">
+              <h2 class="mono">{{.Name}}</h2>
+              <pre>{{template "messageSource" .}}</pre>
+            </div>
+            {{end}}
+          </div>
+        </div>
+      </section>
+      {{end}}
+
+    </section>
+    {{end}}
+
+    <section class="group">
+      <h1>Messages</h1>
+      {{range .OtherMessages}}
+      <article id="{{msgAnchor .FullName}}" class="card">
+        <h2 class="mono">{{.Name}}</h2>
+        {{if .ParentFullName}}<p class="parent-note">Nested in <a class="mono" href="#{{typeAnchor .ParentFullName}}">{{.ParentFullName}}</a></p>{{end}}
+        {{if .Comment}}<div class="comment">{{fullDoc .Comment}}</div>{{end}}
+        {{if .Fields}}
+        <table>
+          <thead><tr><th>Field</th><th>Description</th><th>Type</th></tr></thead>
+          <tbody>
+            {{range .Fields}}
+            <tr>
+              <td class="mono">{{.Name}}{{if .OneofName}} <span class="tag">oneof {{.OneofName}}</span>{{end}}{{if .Proto3Optional}} <span class="tag">optional</span>{{end}}</td>
+              <td>{{fullDoc .Comment}}</td>
+              <td class="mono">{{template "fieldType" .}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        {{else}}
+        <p class="empty-note">No fields.</p>
+        {{end}}
+      </article>
+      {{end}}
+    </section>
+
+    <section class="group">
+      <h1>Enums</h1>
+      {{range .API.Enums}}
+      <article id="{{enumAnchor .FullName}}" class="card">
+        <h2 class="mono">{{.Name}}</h2>
+        {{if .ParentFullName}}<p class="parent-note">Nested in <a class="mono" href="#{{typeAnchor .ParentFullName}}">{{.ParentFullName}}</a></p>{{end}}
+        {{if .Comment}}<div class="comment">{{fullDoc .Comment}}</div>{{end}}
+        <table>
+          <thead><tr><th>Value</th><th>Description</th><th>Number</th></tr></thead>
+          <tbody>
+            {{range .Values}}
+            <tr>
+              <td class="mono">{{.Name}}</td>
+              <td>{{fullDoc .Comment}}</td>
+              <td class="mono">{{.Number}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </article>
+      {{end}}
+    </section>
+
+  </main>
+</div>
+<script id="apitool-index" type="application/json">{{.Index}}</script>
+<script>{{.Script}}</script>
+</body>
+</html>
+
+{{/* attrRow renders one attrNode as a name and type row with its
+     description below, and a toggle revealing its Children, if any. */}}
+
+{{define "attrRow"}}
+<div class="attr-row">
+  <div class="attr-head">
+    <span class="attr-name">{{.Path}}{{if .Field.OneofName}} <span class="tag">oneof {{.Field.OneofName}}</span>{{end}}{{if .Field.Proto3Optional}} <span class="tag">optional</span>{{end}}</span>
+    <span class="attr-type">{{template "fieldType" .Field}}</span>
+  </div>
+  {{if .Field.Comment}}<div class="attr-desc">{{fullDoc .Field.Comment}}</div>{{end}}
+  {{if .Children}}
+  {{$cid := nextAttrID}}
+  <button class="expand-toggle" type="button" aria-expanded="false" aria-controls="{{$cid}}"><span class="sign">+</span> Show fields</button>
+  <div class="attr-children" id="{{$cid}}" hidden>
+    {{range .Children}}{{template "attrRow" .}}{{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{/* fieldType renders a model.Field's type, linked to its documentation
+     when this API declares it. */}}
+
+{{define "fieldType"}}{{$anchor := fieldAnchor .}}{{if $anchor}}<a href="#{{$anchor}}">{{.TypeDisplay}}</a>{{else}}{{.TypeDisplay}}{{end}}{{end}}
+
+{{/* rpcSource renders a methodView's rpc declaration, and messageSource a
+     model.Message's declaration, as proto source: one span per line, as
+     codeLines lays out code. */}}
+
+{{define "rpcSource" -}}
+<span class="line" style="--indent: 0"><span class="tok-keyword">rpc</span> {{.Name}}<span class="tok-punct">(</span><a class="tok-type" href="#{{.InputAnchor}}">{{.InputName.Name}}</a><span class="tok-punct">)</span> <span class="tok-keyword">returns</span> <span class="tok-punct">(</span><a class="tok-type" href="#{{.OutputAnchor}}">{{.OutputName.Name}}</a><span class="tok-punct">);</span></span>
+{{- end}}
+
+{{define "messageSource" -}}
+<span class="line" style="--indent: 0"><span class="tok-keyword">message</span> {{.Name}} <span class="tok-punct">{</span></span>
+{{- range .Fields}}<span class="line" style="--indent: 2">  {{template "fieldSource" .}}</span>{{end -}}
+<span class="line" style="--indent: 0"><span class="tok-punct">}</span></span>
+{{- end}}
+
+{{define "fieldSource" -}}
+{{if .Proto3Optional}}<span class="tok-keyword">optional</span> {{end -}}
+{{$anchor := fieldAnchor .}}{{if $anchor}}<a class="tok-type" href="#{{$anchor}}">{{.TypeDisplay}}</a>{{else}}<span class="tok-type">{{.TypeDisplay}}</span>{{end}} {{.Name}} <span class="tok-punct">=</span> <span class="tok-number">{{.Number}}</span>
+{{- if .Redacted}} <span class="tok-punct">[</span>debug_redact <span class="tok-punct">=</span> <span class="tok-keyword">true</span><span class="tok-punct">]</span>{{end -}}
+<span class="tok-punct">;</span>
+{{- end}}
+
+{{/* resourceTree renders the sidebar's resource hierarchy: each node links
+     to its resource page, with its subresources' pages nested under it. */}}
+
+{{define "resourceTree"}}
+<ul>
+  {{range .}}<li><a href="#{{.Anchor}}">{{.Label}}</a>{{if .Children}}{{template "resourceTree" .Children}}{{end}}</li>
+  {{end}}
+</ul>
+{{end}}

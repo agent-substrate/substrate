@@ -27,9 +27,9 @@ import (
 // method is a standard method with everything a rule needs resolved: its
 // resource, how its name reads against that resource, and its messages.
 type method struct {
-	// verb is the standard verb the name starts with. For example, verbGet
+	// verb is the standard verb the name starts with. For example, model.VerbGet
 	// for GetActorEgressPolicy.
-	verb verb
+	verb model.Verb
 	// parent is the parent the name names after the verb, for a
 	// subresource method, or "" for a top-level resource's. For example,
 	// "Actor" for GetActorEgressPolicy, or "Global" for
@@ -61,7 +61,7 @@ func subjectOf(m model.Method) protoreflect.FullName {
 
 // forEachStandardMethod returns a Rule.Check running check on every
 // standard method whose verb is one of verbs.
-func forEachStandardMethod(check func(method) []Finding, verbs ...verb) func(*model.API) ([]Finding, error) {
+func forEachStandardMethod(check func(method) []Finding, verbs ...model.Verb) func(*model.API) ([]Finding, error) {
 	return func(api *model.API) ([]Finding, error) {
 		resources, err := model.Resources(api)
 		if err != nil {
@@ -76,7 +76,7 @@ func forEachStandardMethod(check func(method) []Finding, verbs ...verb) func(*mo
 				if !ok {
 					continue
 				}
-				v, parent, ok := parseStandardMethod(rpc.Name, r.Message)
+				v, parent, ok := model.ParseStandardMethod(rpc.Name, r.Message)
 				if !ok {
 					return nil, fmt.Errorf("%s: a method named with %s is a standard method - %s, or name it with a custom verb", subjectOf(rpc), prefix, wantStandardName(prefix, r.Message))
 				}
@@ -178,58 +178,13 @@ func forEachEnum(check func(model.Enum) []Finding) func(*model.API) ([]Finding, 
 	}
 }
 
-// verb is a standard method's verb, which its name starts with (style
-// guide section #3).
-type verb string
-
-const (
-	verbGet    verb = "Get"
-	verbList   verb = "List"
-	verbCreate verb = "Create"
-	verbUpdate verb = "Update"
-	verbDelete verb = "Delete"
-)
-
-// standardVerbs lists every standard verb.
-var standardVerbs = []verb{verbGet, verbList, verbCreate, verbUpdate, verbDelete}
-
-// parseStandardMethod parses methodName as a standard method on resource:
-// the verb, then one of resource's parents (none for a top-level
-// resource), then resource as resourceNameFor names it. It returns the
-// verb and the parent ("" for a top-level resource). ok is false for a
-// custom method, and for a standard method named any other way.
-func parseStandardMethod(methodName protoreflect.Name, resource model.Message) (v verb, parent string, ok bool) {
-	parents := resource.ResourceAnnotation.Parents
-	if len(parents) == 0 {
-		parents = []string{""}
-	}
-	for _, p := range parents {
-		for _, sv := range standardVerbs {
-			if string(methodName) == string(sv)+p+resourceNameFor(sv, resource) {
-				return sv, p, true
-			}
-		}
-	}
-	return "", "", false
-}
-
 // wantStandardName describes how a standard method with verb v on resource
 // is named. For example, "want Get, then one of the parents Global/Atespace,
 // then AccessPolicy".
-func wantStandardName(v verb, resource model.Message) string {
+func wantStandardName(v model.Verb, resource model.Message) string {
 	parents := resource.ResourceAnnotation.Parents
 	if len(parents) == 0 {
-		return fmt.Sprintf("want %s, then %s", v, resourceNameFor(v, resource))
+		return fmt.Sprintf("want %s, then %s", v, model.ResourceNameFor(v, resource))
 	}
-	return fmt.Sprintf("want %s, then one of the parents %s, then %s", v, strings.Join(parents, "/"), resourceNameFor(v, resource))
-}
-
-// resourceNameFor is how a method with verb v names resource: by its
-// plural for List, and by its name otherwise. For example, "Actors" in
-// ListActors, but "Actor" in GetActor.
-func resourceNameFor(v verb, resource model.Message) string {
-	if v == verbList {
-		return resource.ResourceAnnotation.Plural
-	}
-	return resource.Name
+	return fmt.Sprintf("want %s, then one of the parents %s, then %s", v, strings.Join(parents, "/"), model.ResourceNameFor(v, resource))
 }

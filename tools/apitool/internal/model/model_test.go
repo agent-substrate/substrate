@@ -205,6 +205,25 @@ message Widget {
 	}
 }
 
+func TestBuild_DebugRedact(t *testing.T) {
+	got := buildAPI(t, `
+message Widget {
+  string token = 1 [debug_redact = true];
+}
+`)
+
+	want := &model.API{
+		Messages: []model.Message{
+			{FullName: "fixture.Widget", Name: "Widget", Fields: []model.Field{
+				{Name: "token", Number: 1, Kind: protoreflect.StringKind, TypeDisplay: "string", Redacted: true},
+			}},
+		},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("API mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestBuild_Annotations(t *testing.T) {
 	api, err := model.Build(t.Context(), ateapipb.Source)
 	if err != nil {
@@ -370,6 +389,35 @@ func TestResources_Invalid(t *testing.T) {
 	}
 }
 
+func TestParseStandardMethod(t *testing.T) {
+	actor := model.Message{Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapipb.Scope_SCOPE_ATESPACE, Plural: "Actors"}}
+	accessPolicy := model.Message{Name: "AccessPolicy", ResourceAnnotation: &model.ResourceAnnotation{Parents: []string{"Global", "Atespace"}, Plural: "AccessPolicies"}}
+	tests := []struct {
+		name       string
+		methodName protoreflect.Name
+		resource   model.Message
+		wantVerb   model.Verb
+		wantParent string
+		wantOK     bool
+	}{
+		{name: "top-level get", methodName: "GetActor", resource: actor, wantVerb: model.VerbGet, wantOK: true},
+		{name: "top-level list by plural", methodName: "ListActors", resource: actor, wantVerb: model.VerbList, wantOK: true},
+		{name: "list by singular", methodName: "ListActor", resource: actor},
+		{name: "subresource get", methodName: "GetAtespaceAccessPolicy", resource: accessPolicy, wantVerb: model.VerbGet, wantParent: "Atespace", wantOK: true},
+		{name: "subresource list", methodName: "ListGlobalAccessPolicies", resource: accessPolicy, wantVerb: model.VerbList, wantParent: "Global", wantOK: true},
+		{name: "subresource without its parent", methodName: "GetAccessPolicy", resource: accessPolicy},
+		{name: "custom method", methodName: "SuspendActor", resource: actor},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v, parent, ok := model.ParseStandardMethod(tc.methodName, tc.resource)
+			if v != tc.wantVerb || parent != tc.wantParent || ok != tc.wantOK {
+				t.Errorf("ParseStandardMethod(%q) = (%q, %q, %t), want (%q, %q, %t)", tc.methodName, v, parent, ok, tc.wantVerb, tc.wantParent, tc.wantOK)
+			}
+		})
+	}
+}
+
 func TestScopeToService(t *testing.T) {
 	control := model.Service{Name: "Control", Methods: []model.Method{
 		{Name: "GetActorEgressPolicy", ServiceName: "Control", InputName: "test.GetActorEgressPolicyRequest", OutputName: "test.EgressPolicy", Resource: "EgressPolicy"},
@@ -391,5 +439,141 @@ func TestScopeToService(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("ScopeToService() mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPublicDoc(t *testing.T) {
+	tests := []struct {
+		name    string
+		comment string
+		want    string
+	}{
+		{
+			name:    "no directives",
+			comment: "atespace is the namespace the resource belongs to.",
+			want:    "atespace is the namespace the resource belongs to.",
+		},
+		{
+			name: "trailing directives are removed",
+			comment: "atespace is the namespace the resource belongs to.\n" +
+				"\n" +
+				"+k8s:optional\n" +
+				"+k8s:format=k8s-short-name\n" +
+				"+k8s:immutable",
+			want: "atespace is the namespace the resource belongs to.",
+		},
+		{
+			name: "directive with a trailing comment is removed whole",
+			comment: "content_scope is what the snapshot captured.\n" +
+				"\n" +
+				"+k8s:optional\n" +
+				"+k8s:minimum=1\n" +
+				"+k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum",
+			want: "content_scope is what the snapshot captured.",
+		},
+		{
+			name: "ate directives are removed",
+			comment: "volumes are the actor's volumes.\n" +
+				"\n" +
+				"+ate:preview=ExternalVolumes\n" +
+				"+k8s:optional",
+			want: "volumes are the actor's volumes.",
+		},
+		{
+			name: "prose merely mentioning +k8s: is kept",
+			comment: "Atespaced resources should add `+k8s:subfield(atespace)=+k8s:required`\n" +
+				"Non-atespaced resources should add `+k8s:subfield(atespace)=+k8s:forbidden`\n" +
+				"+k8s:optional",
+			want: "Atespaced resources should add `+k8s:subfield(atespace)=+k8s:required`\n" +
+				"Non-atespaced resources should add `+k8s:subfield(atespace)=+k8s:forbidden`",
+		},
+		{
+			name: "indented directive is still recognized",
+			comment: "field does X.\n" +
+				"  +k8s:optional",
+			want: "field does X.",
+		},
+		{
+			name:    "only directives leaves an empty comment",
+			comment: "+k8s:optional\n+k8s:immutable",
+			want:    "",
+		},
+		{
+			name:    "empty comment stays empty",
+			comment: "",
+			want:    "",
+		},
+		{
+			name: "removed directives collapse surrounding blank lines to one",
+			comment: "First paragraph.\n" +
+				"\n" +
+				"+k8s:optional\n" +
+				"\n" +
+				"Second paragraph.",
+			want: "First paragraph.\n\nSecond paragraph.",
+		},
+		{
+			name:    "internal note on its own lines is removed",
+			comment: "First paragraph.\n\n(-- An internal\nnote. --)\n\nSecond paragraph.",
+			want:    "First paragraph.\n\nSecond paragraph.",
+		},
+		{
+			name:    "internal note inside a paragraph is removed",
+			comment: "Bounded at 64. (-- A guardrail. --)\n\n+k8s:maxProperties=64",
+			want:    "Bounded at 64.",
+		},
+		{
+			name:    "unclosed internal note is kept",
+			comment: "First paragraph. (-- unclosed",
+			want:    "First paragraph. (-- unclosed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := model.PublicDoc(tt.comment); got != tt.want {
+				t.Errorf("PublicDoc(%q) = %q, want %q", tt.comment, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSummary(t *testing.T) {
+	tests := []struct {
+		name    string
+		comment string
+		want    string
+	}{
+		{
+			name:    "one paragraph",
+			comment: "Get an Actor.",
+			want:    "Get an Actor.",
+		},
+		{
+			name:    "first paragraph spanning lines",
+			comment: "Suspend an actor\nto a new snapshot.\n\nA running actor is checkpointed.",
+			want:    "Suspend an actor\nto a new snapshot.",
+		},
+		{
+			name:    "paragraphs split by a whitespace-only line",
+			comment: "Summary.\n \nDetails.",
+			want:    "Summary.",
+		},
+		{
+			name:    "internal notes and directives are not part of it",
+			comment: "(-- Internal. --)\nSummary.\n\n+k8s:optional",
+			want:    "Summary.",
+		},
+		{
+			name:    "empty comment",
+			comment: "",
+			want:    "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := model.Summary(tt.comment); got != tt.want {
+				t.Errorf("Summary(%q) = %q, want %q", tt.comment, got, tt.want)
+			}
+		})
 	}
 }

@@ -103,3 +103,12 @@ function codegen::validation() {
     done
 }
 codegen::validation
+
+function codegen::api_reference() {
+    echo "Generating API reference"
+    (
+        cd tools/apitool || exit 1
+        go run . generate-docs --out ../../docs/api-reference.html
+    )
+}
+codegen::api_reference
