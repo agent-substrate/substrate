@@ -440,12 +440,18 @@ func validateFidelity(fidelity ateworkerpb.SnapshotFidelity) error {
 }
 
 // validateRuntimeAssetPaths ensures we only run assets from the actor's own
-// sandbox assets dir, where atelet staged them. actorDirs must have passed
+// sandbox assets dir, where atelet staged them. The dir is derived from the
+// actor UID here and the request's sandbox_assets_dir must match it, so a
+// request cannot name a root of its own choosing. actorDirs must have passed
 // validateActorDirs.
-func validateRuntimeAssetPaths(actorDirs *ateworkerpb.ActorDirs, paths map[string]string) error {
+func validateRuntimeAssetPaths(actorUID string, actorDirs *ateworkerpb.ActorDirs, paths map[string]string) error {
+	root := actorDirs.GetSandboxAssetsDir()
+	if errs := resources.ValidateSandboxAssetsDir(actorUID, root, field.NewPath("actor_dirs", "sandbox_assets_dir")); len(errs) > 0 {
+		return resources.ToAPIError(errs)
+	}
 	var errs field.ErrorList
 	for name, p := range paths {
-		errs = append(errs, resources.ValidateRuntimeAssetPath(actorDirs.GetSandboxAssetsDir(), p, field.NewPath("runtime_asset_paths").Key(name))...)
+		errs = append(errs, resources.ValidateRuntimeAssetPath(root, p, field.NewPath("runtime_asset_paths").Key(name))...)
 	}
 	if len(errs) > 0 {
 		return resources.ToAPIError(errs)

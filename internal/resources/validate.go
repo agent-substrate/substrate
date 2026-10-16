@@ -29,6 +29,7 @@ import (
 
 	"github.com/distribution/reference"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/volumepath"
 	"go.ate.dev/substrate/pkg/sandboxclass"
@@ -186,6 +187,21 @@ func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorLi
 	}
 	if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() {
 		return field.ErrorList{field.Invalid(fldPath, p, "must be a regular file")}
+	}
+	return nil
+}
+
+// ValidateSandboxAssetsDir requires dir, the sandbox_assets_dir a request
+// names, to be the actor's own, nodepath.ActorSandboxAssetsDir(actorUID), so
+// a request cannot point a worker at binaries staged for another actor or
+// anywhere else on the node. The actor UID is checked first: it becomes a
+// path element, and must be a plain label rather than a traversal.
+func ValidateSandboxAssetsDir(actorUID, dir string, fldPath *field.Path) field.ErrorList {
+	if errs := content.IsDNS1123Label(actorUID); len(errs) > 0 {
+		return field.ErrorList{field.Invalid(fldPath, dir, fmt.Sprintf("actor_uid %q is not a valid label: %s", actorUID, strings.Join(errs, "; ")))}
+	}
+	if want := nodepath.ActorSandboxAssetsDir(actorUID); dir != want {
+		return field.ErrorList{field.Invalid(fldPath, dir, fmt.Sprintf("must be the actor's own sandbox assets dir %s", want))}
 	}
 	return nil
 }

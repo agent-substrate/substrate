@@ -1262,6 +1262,12 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
+	// A restore may bring another runtime than the one staged here before,
+	// so the assets dir is emptied for it; Run swaps a staged set in
+	// instead (see commitSandboxAssets).
+	if err := resetSandboxAssetsDir(actorUID); err != nil {
+		return nil, err
+	}
 	// The record below is written last, so until then it describes the
 	// previous activation; a failed restore must not leave this one's
 	// asset links behind for a later Terminate to take for that record's.
@@ -1903,14 +1909,6 @@ func resetActorDirs(actorUID string) error {
 	if err := resetDir("restore-state dir", ateletpath.RestoreStateDir(actorUID), os.RemoveAll, 0o700); err != nil {
 		return err
 	}
-	// Hard links into the asset cache; removing them never touches the
-	// cached bytes, and an activation that has ended (Checkpoint resets
-	// too) stops pinning them. Not the staging dir beside it: Run fills
-	// that before this reset and swaps it in after. Owner-only, like the
-	// bundle dir: the worker runs the binaries from here as root.
-	if err := resetDir("sandbox assets dir", ateletpath.SandboxAssetsDir(actorUID), os.RemoveAll, 0o700); err != nil {
-		return err
-	}
 	if err := resetDir("durable-dir volumes mount dir", ateletpath.DurableDirVolumeMountsDir(actorUID), os.RemoveAll, 0o755); err != nil {
 		return err
 	}
@@ -1940,9 +1938,21 @@ func resetActorDirs(actorUID string) error {
 	return nil
 }
 
-// commitSandboxAssets moves the set Run staged at staging into the actor's
-// sandbox assets dir, which resetActorDirs has just emptied, and rewrites
-// paths, which point under staging, to their final location.
+// resetSandboxAssetsDir empties the actor's sandbox assets dir for Restore
+// to stage into. Not part of resetActorDirs: the links an activation holds
+// stay while the actor remains resumable on this node, through Checkpoint
+// and its local snapshot, and keep its binaries in the cache meanwhile;
+// Run replaces them through its staging swap. The entries are hard links
+// into the asset cache, so removing them never touches the cached bytes.
+// Owner-only, like the bundle dir: the worker runs the binaries from here
+// as root.
+func resetSandboxAssetsDir(actorUID string) error {
+	return resetDir("sandbox assets dir", ateletpath.SandboxAssetsDir(actorUID), os.RemoveAll, 0o700)
+}
+
+// commitSandboxAssets replaces the actor's sandbox assets dir with the set
+// Run staged at staging, and rewrites paths, which point under staging, to
+// their final location.
 func commitSandboxAssets(actorUID, staging string, paths map[string]string) error {
 	final := ateletpath.SandboxAssetsDir(actorUID)
 	if err := os.RemoveAll(final); err != nil {

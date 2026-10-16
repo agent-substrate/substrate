@@ -560,10 +560,17 @@ func containerNames(containers []*ateworkerpb.Container) []string {
 
 // validateActorDirs rejects a request whose actor directories are unusable.
 // validateRunscPath ensures we only execute runsc from the actor's own
-// sandbox assets dir, where atelet staged it. actorDirs must have passed
+// sandbox assets dir, where atelet staged it. The dir is derived from the
+// actor UID here and the request's sandbox_assets_dir must match it, so a
+// request cannot name a root of its own choosing. actorDirs must have passed
 // validateActorDirs.
-func validateRunscPath(actorDirs *ateworkerpb.ActorDirs, p string) error {
-	if errs := resources.ValidateRuntimeAssetPath(actorDirs.GetSandboxAssetsDir(), p, field.NewPath("runsc_path")); len(errs) > 0 {
+func validateRunscPath(actorUID string, actorDirs *ateworkerpb.ActorDirs, p string) error {
+	root := actorDirs.GetSandboxAssetsDir()
+	errs := resources.ValidateSandboxAssetsDir(actorUID, root, field.NewPath("actor_dirs", "sandbox_assets_dir"))
+	if len(errs) == 0 {
+		errs = resources.ValidateRuntimeAssetPath(root, p, field.NewPath("runsc_path"))
+	}
+	if len(errs) > 0 {
 		return resources.ToAPIError(errs)
 	}
 	return nil
@@ -597,7 +604,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
-	if err := validateRunscPath(req.GetActorDirs(), req.GetRunscPath()); err != nil {
+	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -735,7 +742,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return nil, err
 	}
-	if err := validateRunscPath(req.GetActorDirs(), req.GetRunscPath()); err != nil {
+	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -964,7 +971,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return nil, err
 	}
-	if err := validateRunscPath(req.GetActorDirs(), req.GetRunscPath()); err != nil {
+	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -1176,7 +1183,7 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
-	if err := validateRunscPath(req.GetActorDirs(), req.GetRunscPath()); err != nil {
+	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {

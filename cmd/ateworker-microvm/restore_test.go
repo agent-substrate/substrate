@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
@@ -483,5 +484,44 @@ func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
 		if got := apierror.Code(call()); got != codes.InvalidArgument {
 			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
 		}
+	}
+}
+
+// TestValidateRuntimeAssetPathsRequiresTheActorsOwnDir pins that the root
+// the asset paths are checked against is derived from the actor UID, not
+// taken from the request.
+func TestValidateRuntimeAssetPathsRequiresTheActorsOwnDir(t *testing.T) {
+	orig := nodepath.ActorsDir
+	nodepath.ActorsDir = t.TempDir()
+	t.Cleanup(func() { nodepath.ActorsDir = orig })
+	stage := func(t *testing.T, actorUID string) string {
+		t.Helper()
+		dir := nodepath.ActorSandboxAssetsDir(actorUID)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, assetCH), nil, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	own, other := stage(t, "actor-a"), stage(t, "actor-b")
+	for _, tc := range []struct {
+		name    string
+		dir     string
+		asset   string
+		wantErr bool
+	}{
+		{"asset in the actor's own dir", own, filepath.Join(own, assetCH), false},
+		{"asset outside the actor's dir", own, "/bin/sh", true},
+		{"another actor's dir named as the root", other, filepath.Join(other, assetCH), true},
+		{"the root named as the root", "/", "/bin/sh", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRuntimeAssetPaths("actor-a", &ateworkerpb.ActorDirs{SandboxAssetsDir: tc.dir}, map[string]string{assetCH: tc.asset})
+			if (err != nil) != tc.wantErr {
+				t.Errorf("validateRuntimeAssetPaths(actor-a, %q, %q) = %v, wantErr %v", tc.dir, tc.asset, err, tc.wantErr)
+			}
+		})
 	}
 }

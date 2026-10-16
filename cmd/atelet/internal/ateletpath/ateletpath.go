@@ -82,12 +82,10 @@ func ActorSnapshotStateFile(actorUID string) string {
 
 // SandboxAssetsDir holds the actor's sandbox runtime assets, one entry per
 // asset name, each a hard link (or a directory of hard links, for a gVisor
-// release) from SandboxAssetCacheDir. The worker runs binaries from here only.
+// release) from SandboxAssetCacheDir. The worker runs binaries from here
+// only, and derives the same path itself to check a request against.
 func SandboxAssetsDir(actorUID string) string {
-	return filepath.Join(
-		ActorPath(actorUID),
-		"sandbox-assets",
-	)
+	return nodepath.ActorSandboxAssetsDir(actorUID)
 }
 
 // SandboxAssetsStagingDir is where Run stages an activation's assets before

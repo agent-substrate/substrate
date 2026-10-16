@@ -137,7 +137,7 @@ func isSandboxProcess(id, cmdline, exe string) bool {
 		return false
 	}
 	if strings.HasPrefix(exe, nodepath.ActorsDir+"/") {
-		return strings.HasPrefix(exe, filepath.Join(nodepath.ActorsDir, id)+"/")
+		return strings.HasPrefix(exe, nodepath.ActorSandboxAssetsDir(id)+"/")
 	}
 	argv0 := strings.SplitN(cmdline, "\x00", 2)[0]
 	return strings.Contains(argv0, "cloud-hypervisor") || strings.Contains(argv0, "virtiofsd")

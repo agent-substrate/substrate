@@ -270,10 +270,10 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 	if _, err := os.Stat(snapshotFile); err != nil {
 		t.Fatalf("pause did not write the local snapshot: %v", err)
 	}
-	// A paused actor runs nothing, so it holds no links that would pin its
-	// assets in the cache.
-	if entries, err := os.ReadDir(ateletpath.SandboxAssetsDir(actorUID)); err != nil || len(entries) != 0 {
-		t.Errorf("paused actor still holds %d staged assets (%v), want none", len(entries), err)
+	// A paused actor stays resumable on this node, so it keeps its staged
+	// assets, and with them its binaries in the cache.
+	if _, err := os.Stat(filepath.Join(ateletpath.SandboxAssetsDir(actorUID), runscAssetName)); err != nil {
+		t.Errorf("paused actor lost its staged runsc: %v", err)
 	}
 	st := resp.GetState()
 	if got := st.GetLatestLocal(); got.GetSnapshot().GetSnapshotUuid() != snapshotName || got.GetLocalCommitTime() == nil {
@@ -633,9 +633,16 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			} else {
 				// Past the reset, the record still describes the previous
 				// activation (or nothing), so no links of this one may
-				// remain for a later Terminate to take for that record's.
-				if entries, err := os.ReadDir(ateletpath.SandboxAssetsDir(actorUID)); err == nil && len(entries) != 0 {
-					t.Errorf("failed activation left %d staged assets behind", len(entries))
+				// remain for a later Terminate to take for that record's:
+				// at most the previous activation's own, untouched.
+				entries, err := os.ReadDir(ateletpath.SandboxAssetsDir(actorUID))
+				if err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+				for _, e := range entries {
+					if got, err := os.ReadFile(liveAsset); e.Name() != "runsc" || err != nil || string(got) != "live runsc" {
+						t.Errorf("failed activation left %q behind in the assets dir", e.Name())
+					}
 				}
 				if _, err := os.Stat(projectedPath); !os.IsNotExist(err) {
 					t.Fatalf("reset did not delete prior projection: stat error = %v", err)

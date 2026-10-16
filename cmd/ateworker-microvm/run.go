@@ -239,7 +239,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
-	if err := validateRuntimeAssetPaths(req.GetActorDirs(), req.GetRuntimeAssetPaths()); err != nil {
+	if err := validateRuntimeAssetPaths(req.GetActorUid(), req.GetActorDirs(), req.GetRuntimeAssetPaths()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {

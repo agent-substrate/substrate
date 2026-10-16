@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -652,4 +653,30 @@ func TestValidateHostPort(t *testing.T) {
 		{name: "named port", value: "egress.example:https", wantErr: true},
 		{name: "unbracketed ipv6", value: "fd00::1:443", wantErr: true},
 	})
+}
+
+func TestValidateSandboxAssetsDir(t *testing.T) {
+	orig := nodepath.ActorsDir
+	nodepath.ActorsDir = "/node/actors"
+	t.Cleanup(func() { nodepath.ActorsDir = orig })
+	for _, tc := range []struct {
+		name     string
+		actorUID string
+		dir      string
+		wantErr  bool
+	}{
+		{"the actor's own dir", "actor-a", "/node/actors/actor-a/sandbox-assets", false},
+		{"another actor's dir", "actor-a", "/node/actors/actor-b/sandbox-assets", true},
+		{"a dir elsewhere", "actor-a", "/usr/bin", true},
+		{"the root", "actor-a", "/", true},
+		{"a traversing uid", "../etc", "/node/etc/sandbox-assets", true},
+		{"an empty uid", "", "/node/actors/sandbox-assets", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ValidateSandboxAssetsDir(tc.actorUID, tc.dir, field.NewPath("actor_dirs", "sandbox_assets_dir"))
+			if (len(errs) > 0) != tc.wantErr {
+				t.Errorf("ValidateSandboxAssetsDir(%q, %q) = %v, wantErr %v", tc.actorUID, tc.dir, errs, tc.wantErr)
+			}
+		})
+	}
 }
