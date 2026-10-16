@@ -312,8 +312,12 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
   gap gets ±20% jitter so sessions don't move in lockstep.
 * `--resume-mode implicit|explicit` — implicit (default) lets the parked
   first request wake the actor; explicit issues ResumeActor before traffic.
-* `--lifecycle-mode suspend|pause` — durable suspend (default) or node-local
-  pause between steps.
+* `--lifecycle-mode suspend|pause|none` — durable suspend (default),
+  node-local pause between steps, or `none` to keep actors resident in memory
+  between steps without hibernating.
+* `--agentsession-snapshot-steps` — comma-separated 1-based step numbers after
+  which the actor is hibernated (for example, `3,10,20,30,40,50,61`); between
+  all other steps the actor stays resident.
 
 #### Writing an agent-session script
 

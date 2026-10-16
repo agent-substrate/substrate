@@ -248,6 +248,7 @@ const (
 
 	LifecycleModeSuspend = "suspend"
 	LifecycleModePause   = "pause"
+	LifecycleModeNone    = "none"
 )
 
 // Lifecycle is how a class takes its actors off a worker and brings them
@@ -261,8 +262,8 @@ func (l Lifecycle) Validate() error {
 	if l.ResumeMode != "" && l.ResumeMode != ResumeModeExplicit && l.ResumeMode != ResumeModeImplicit {
 		return fmt.Errorf("invalid resume_mode %q: must be %q or %q", l.ResumeMode, ResumeModeExplicit, ResumeModeImplicit)
 	}
-	if l.LifecycleMode != "" && l.LifecycleMode != LifecycleModeSuspend && l.LifecycleMode != LifecycleModePause {
-		return fmt.Errorf("invalid lifecycle_mode %q: must be %q or %q", l.LifecycleMode, LifecycleModeSuspend, LifecycleModePause)
+	if l.LifecycleMode != "" && l.LifecycleMode != LifecycleModeSuspend && l.LifecycleMode != LifecycleModePause && l.LifecycleMode != LifecycleModeNone {
+		return fmt.Errorf("invalid lifecycle_mode %q: must be %q, %q, or %q", l.LifecycleMode, LifecycleModeSuspend, LifecycleModePause, LifecycleModeNone)
 	}
 	return nil
 }

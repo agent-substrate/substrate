@@ -78,6 +78,7 @@ _FLAGS = {
     "--agentsession-script": str,
     "--agentsession-script-file": str,
     "--agentsession-think-scale": float,
+    "--agentsession-snapshot-steps": str,
     "--total-actors": int,
     "--spawn-concurrency": int,
     "--actor-deadline": float,

@@ -151,11 +151,13 @@ func (r *taskRuntime) iterate() {
 		return
 	}
 
-	if err := actor.resume(ctx); err != nil {
-		if actor.noteFailure(err) {
-			user.replaceActor(ctx, actor)
+	if !actor.actorRunning || dynconfig.Get[gluttonKnobs](r.cfg.Dyn).LifecycleMode != dynconfig.LifecycleModeNone {
+		if err := actor.resume(ctx); err != nil {
+			if actor.noteFailure(err) {
+				user.replaceActor(ctx, actor)
+			}
+			return
 		}
-		return
 	}
 	// Fill before the first suspend so every snapshot from cycle one on
 	// carries the full working set; glutton keeps the allocations across
@@ -250,7 +252,11 @@ func (r *taskRuntime) shutdown(ctx context.Context) {
 		u := val.(*gluttonUser)
 		for _, a := range u.actors {
 			if a.actorRunning {
-				_ = a.hibernate(ctx)
+				if dynconfig.Get[gluttonKnobs](r.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModePause {
+					_ = a.pause(ctx)
+				} else {
+					_ = a.suspend(ctx)
+				}
 			}
 			a.delete(ctx)
 		}
@@ -448,13 +454,18 @@ func (u *gluttonActor) resume(ctx context.Context) error {
 }
 
 // hibernate takes the actor off its worker by whichever operation the
-// lifecycle mode selects: PauseActor keeps the snapshot on the node, while
-// SuspendActor writes it to durable storage.
+// lifecycle mode selects: PauseActor keeps the snapshot on the node,
+// SuspendActor writes it to durable storage, and LifecycleModeNone leaves
+// the actor running on its worker.
 func (u *gluttonActor) hibernate(ctx context.Context) error {
-	if dynconfig.Get[gluttonKnobs](u.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModePause {
+	switch dynconfig.Get[gluttonKnobs](u.cfg.Dyn).LifecycleMode {
+	case dynconfig.LifecycleModeNone:
+		return nil
+	case dynconfig.LifecycleModePause:
 		return u.pause(ctx)
+	default:
+		return u.suspend(ctx)
 	}
-	return u.suspend(ctx)
 }
 
 func (u *gluttonActor) pause(ctx context.Context) error {

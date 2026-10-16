@@ -73,6 +73,36 @@ func TestGluttonIterate_PauseMode(t *testing.T) {
 	}
 }
 
+func TestGluttonIterate_NoneMode(t *testing.T) {
+	srv := &fake.Server{}
+	fakeCtrl := &fakeControlClient{}
+	cfg := newTestConfig(t, srv, &userclass.Config{
+		APIStub:  fakeCtrl,
+		Atespace: "bench-test",
+		Dyn: dynconfig.Static(gluttonKnobs{
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeNone},
+		}),
+	})
+
+	rt := &taskRuntime{cfg: cfg}
+	rt.iterate()
+	rt.iterate()
+
+	calls := fakeCtrl.recordedCalls()
+	if slices.Contains(calls, "SuspendActor") || slices.Contains(calls, "PauseActor") {
+		t.Errorf("did not expect SuspendActor or PauseActor during iterate in none mode, got: %v", calls)
+	}
+	if got := countCalls(calls, "ResumeActor"); got != 1 {
+		t.Errorf("ResumeActor count across 2 iterations = %d, want 1 (first activation only); calls = %v", got, calls)
+	}
+
+	rt.shutdown(context.Background())
+	afterShutdown := fakeCtrl.recordedCalls()
+	if len(afterShutdown) < 2 || afterShutdown[len(afterShutdown)-2] != "SuspendActor" || afterShutdown[len(afterShutdown)-1] != "DeleteActor" {
+		t.Errorf("shutdown in none mode must end with [SuspendActor, DeleteActor], got %v", afterShutdown)
+	}
+}
+
 func TestGluttonShutdown_PauseModeRunningActor(t *testing.T) {
 	srv := &fake.Server{}
 	fakeCtrl := &fakeControlClient{}

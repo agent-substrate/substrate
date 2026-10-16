@@ -30,22 +30,27 @@ func TestKnobsCodec(t *testing.T) {
 		"resume_mode": "explicit", "lifecycle_mode": "pause",
 		"agentsession_script": "coding-session",
 		"agentsession_script_file": "/etc/agentsession/script.yaml",
-		"agentsession_think_scale": 0.5
+		"agentsession_think_scale": 0.5,
+		"agentsession_snapshot_steps": "3,10,20,30,40,50,61"
 	}`)); err != nil {
 		t.Fatalf("Apply(valid): %v", err)
 	}
 	want := knobs{
-		Lifecycle:  dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit, LifecycleMode: dynconfig.LifecycleModePause},
-		Script:     "coding-session",
-		ScriptFile: "/etc/agentsession/script.yaml",
-		ThinkScale: 0.5,
+		Lifecycle:     dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit, LifecycleMode: dynconfig.LifecycleModePause},
+		Script:        "coding-session",
+		ScriptFile:    "/etc/agentsession/script.yaml",
+		ThinkScale:    0.5,
+		SnapshotSteps: "3,10,20,30,40,50,61",
 	}
 	if got := dynconfig.Get[knobs](h); got != want {
 		t.Errorf("decoded =\n %+v, want\n %+v", got, want)
 	}
 	for name, payload := range map[string]string{
-		"negative think scale": `{"agentsession_think_scale": -1}`,
-		"invalid resume mode":  `{"resume_mode": "invalid_mode"}`,
+		"negative think scale":                    `{"agentsession_think_scale": -1}`,
+		"invalid resume mode":                     `{"resume_mode": "invalid_mode"}`,
+		"invalid snapshot steps entry":            `{"agentsession_snapshot_steps": "3,zero,10"}`,
+		"non-positive snapshot steps entry":       `{"agentsession_snapshot_steps": "0,10"}`,
+		"snapshot steps with lifecycle mode none": `{"lifecycle_mode": "none", "agentsession_snapshot_steps": "3,10"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, _, err := h.Apply([]byte(payload)); err == nil {

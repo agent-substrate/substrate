@@ -36,6 +36,7 @@ import (
 	"log/slog"
 	mathrand "math/rand/v2"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -112,6 +113,9 @@ type knobs struct {
 	ScriptFile string `json:"agentsession_script_file"`
 	// ThinkScale multiplies the script's per-step think times; 0 reads as 1.
 	ThinkScale float64 `json:"agentsession_think_scale"`
+	// SnapshotSteps is a comma-separated list of 1-based step numbers
+	// after which the actor is hibernated; "" hibernates after every step.
+	SnapshotSteps string `json:"agentsession_snapshot_steps"`
 }
 
 var knobsCodec = dynconfig.Typed[knobs]{
@@ -122,8 +126,31 @@ var knobsCodec = dynconfig.Typed[knobs]{
 		if k.ThinkScale < 0 {
 			return fmt.Errorf("agentsession_think_scale cannot be negative: %f", k.ThinkScale)
 		}
+		if steps, err := parseSnapshotSteps(k.SnapshotSteps); err != nil {
+			return err
+		} else if len(steps) > 0 && k.LifecycleMode == dynconfig.LifecycleModeNone {
+			return fmt.Errorf("agentsession_snapshot_steps cannot be used with lifecycle_mode %q", dynconfig.LifecycleModeNone)
+		}
 		return nil
 	},
+}
+
+// parseSnapshotSteps parses a comma-separated list of 1-based step numbers
+// (for example, "3,10,20,30,40,50,61") into a set. An empty string returns
+// nil, nil (meaning hibernate after every step).
+func parseSnapshotSteps(raw string) (map[int]bool, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	steps := make(map[int]bool)
+	for _, entry := range strings.Split(raw, ",") {
+		n, err := strconv.Atoi(strings.TrimSpace(entry))
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid agentsession_snapshot_steps entry %q: must be a positive 1-based step number", entry)
+		}
+		steps[n] = true
+	}
+	return steps, nil
 }
 
 func initAgentSession(cfg *userclass.Config) (taskFn func(), shutdown func(context.Context)) {
@@ -381,6 +408,10 @@ func (r *runtime) startUser(ctx context.Context, loaded *loadedScript) (*session
 	if err := r.checkTemplateMemory(ctx, loaded.Script); err != nil {
 		return nil, err
 	}
+	dyn := dynconfig.Get[knobs](r.cfg.Dyn)
+	if err := checkSnapshotSteps(dyn, loaded.Script); err != nil {
+		return nil, err
+	}
 	u := &sessionUser{
 		cfg:       r.cfg,
 		actorName: "agent-" + uuid.NewString(),
@@ -403,10 +434,31 @@ func (r *runtime) startUser(ctx context.Context, loaded *loadedScript) (*session
 		u.suspendAndDelete(ctx)
 		return nil, fmt.Errorf("waitServing: %w", err)
 	}
-	// Park the fresh actor; step 01 wakes it like any other step. A failed
-	// park is re-driven at the top of the first step.
-	u.hibernate(ctx)
+	u.awake = true
+	// Park the fresh actor so step 01 wakes it like any other step, unless
+	// the session stays resident (--lifecycle-mode none or
+	// --agentsession-snapshot-steps). A failed park is re-driven at the top
+	// of the first step.
+	if u.shouldHibernateAtStart(dyn) {
+		u.hibernate(ctx)
+	}
 	return u, nil
+}
+
+// checkSnapshotSteps refuses to start a session when --agentsession-snapshot-steps
+// names a 1-based step number beyond the loaded script's length, so a typo
+// (or 61 against a shorter script) does not silently run resident.
+func checkSnapshotSteps(dyn knobs, script *Script) error {
+	steps, err := parseSnapshotSteps(dyn.SnapshotSteps)
+	if err != nil {
+		return err
+	}
+	for step := range steps {
+		if step > len(script.Steps) {
+			return fmt.Errorf("agentsession_snapshot_steps entry %d exceeds script %q length (%d steps)", step, script.Name, len(script.Steps))
+		}
+	}
+	return nil
 }
 
 // shutdownConcurrency bounds how many sessions suspendAndDelete at once.
@@ -449,6 +501,9 @@ type sessionUser struct {
 	steps []Step
 	// ingestBuf is the runtime's shared read-only ingest payload.
 	ingestBuf []byte
+	// awake is true when the actor is resident (RUNNING) rather than
+	// suspended or paused. Zero value (false) means parked.
+	awake bool
 	// hibernatePending is set by a failed Pause/Suspend: the actor is
 	// stranded RUNNING or SUSPENDING. Waking it from there would misreport
 	// WakeFirstTouch, so runStep finishes the hibernate first.
@@ -526,6 +581,30 @@ func (u *sessionUser) ref() *ateapipb.ObjectRef {
 	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
 }
 
+// shouldHibernateAtStart reports whether a freshly started session should be
+// parked before step 1. In resident mode (LifecycleModeNone) or when
+// snapshot steps are configured, the actor stays awake after waitServing.
+func (u *sessionUser) shouldHibernateAtStart(dyn knobs) bool {
+	if dyn.LifecycleMode == dynconfig.LifecycleModeNone {
+		return false
+	}
+	steps, err := parseSnapshotSteps(dyn.SnapshotSteps)
+	return err != nil || len(steps) == 0
+}
+
+// shouldHibernateAfterStep reports whether the actor should be parked after
+// completing the current step (1-based index u.stepIndex+1).
+func (u *sessionUser) shouldHibernateAfterStep(dyn knobs) bool {
+	if dyn.LifecycleMode == dynconfig.LifecycleModeNone {
+		return false
+	}
+	steps, err := parseSnapshotSteps(dyn.SnapshotSteps)
+	if err != nil || len(steps) == 0 {
+		return true
+	}
+	return steps[u.stepIndex+1]
+}
+
 // runStep wakes the actor, executes the step's ops in order, and suspends
 // it again, reporting whether everything succeeded. The wake is measured by
 // a dedicated ping sent ahead of the step's ops and recorded as
@@ -543,7 +622,9 @@ func (u *sessionUser) runStep(ctx context.Context, step Step) bool {
 		return false
 	}
 
-	if dynconfig.Get[knobs](u.cfg.Dyn).ResumeMode == dynconfig.ResumeModeExplicit {
+	dyn := dynconfig.Get[knobs](u.cfg.Dyn)
+	wasParked := !u.awake && dyn.LifecycleMode != dynconfig.LifecycleModeNone
+	if wasParked && dyn.ResumeMode == dynconfig.ResumeModeExplicit {
 		if err := u.resume(ctx); err != nil {
 			u.noteFailure(err)
 			return false
@@ -553,15 +634,22 @@ func (u *sessionUser) runStep(ctx context.Context, step Step) bool {
 	wakeStart := time.Now()
 	if err := u.execOp(ctx, ping()); err != nil {
 		u.noteFailure(err)
-		bmetrics.RecordFailure("http", "WakeFirstTouch", agentSessionUserClass, time.Since(wakeStart), err.Error())
+		if wasParked {
+			bmetrics.RecordFailure("http", "WakeFirstTouch", agentSessionUserClass, time.Since(wakeStart), err.Error())
+		}
 		slog.Warn("agent session wake failed",
 			slog.String("actor", u.actorName),
 			slog.String("step", step.Name),
 			slog.String("err", err.Error()))
-		u.hibernate(ctx)
+		if wasParked || u.shouldHibernateAfterStep(dyn) {
+			u.hibernate(ctx)
+		}
 		return false
 	}
-	bmetrics.RecordSuccess("http", "WakeFirstTouch", agentSessionUserClass, time.Since(wakeStart), 0)
+	u.awake = true
+	if wasParked {
+		bmetrics.RecordSuccess("http", "WakeFirstTouch", agentSessionUserClass, time.Since(wakeStart), 0)
+	}
 
 	metricName := "Step_" + step.Name
 	stepStart := time.Now()
@@ -574,14 +662,18 @@ func (u *sessionUser) runStep(ctx context.Context, step Step) bool {
 				slog.String("step", step.Name),
 				slog.Int("op", i),
 				slog.String("err", err.Error()))
-			u.hibernate(ctx)
+			if wasParked || u.shouldHibernateAfterStep(dyn) {
+				u.hibernate(ctx)
+			}
 			return false
 		}
 	}
 	u.noteSuccess()
 	bmetrics.RecordSuccess("http", metricName, agentSessionUserClass, time.Since(stepStart), 0)
 
-	u.hibernate(ctx)
+	if u.shouldHibernateAfterStep(dyn) {
+		u.hibernate(ctx)
+	}
 	return true
 }
 
@@ -774,11 +866,17 @@ func (u *sessionUser) resume(ctx context.Context) error {
 }
 
 // hibernate suspends (or pauses, per LifecycleMode) the actor at the end of
-// a step. A failure leaves hibernatePending set so the next step re-drives
+// a step. In LifecycleModeNone the actor stays resident and hibernate is a
+// no-op. A failure leaves hibernatePending set so the next step re-drives
 // it instead of waking a stranded actor.
 func (u *sessionUser) hibernate(ctx context.Context) {
+	mode := dynconfig.Get[knobs](u.cfg.Dyn).LifecycleMode
+	if mode == dynconfig.LifecycleModeNone {
+		u.hibernatePending = false
+		return
+	}
 	var err error
-	if dynconfig.Get[knobs](u.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModePause {
+	if mode == dynconfig.LifecycleModePause {
 		err = u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
 			_, err := u.cfg.APIStub.PauseActor(callCtx, &ateapipb.PauseActorRequest{Actor: u.ref()}, grpc.Trailer(tr))
 			return err
@@ -792,7 +890,9 @@ func (u *sessionUser) hibernate(ctx context.Context) {
 	u.hibernatePending = err != nil
 	if err != nil {
 		u.noteFailure(err)
+		return
 	}
+	u.awake = false
 }
 
 // suspendAndDelete releases the actor and its worker. Suspend first: a

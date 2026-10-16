@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
@@ -863,5 +864,142 @@ func TestDwell(t *testing.T) {
 	cancel()
 	if err := u.execOp(ctx, op{kind: opDwell, millis: 10_000}); !errors.Is(err, context.Canceled) {
 		t.Errorf("canceled dwell returned %v, want context.Canceled", err)
+	}
+}
+
+// wakeFirstTouchCount returns the cumulative WakeFirstTouch count (success +
+// failure) recorded in Prometheus so far.
+func wakeFirstTouchCount(t *testing.T) float64 {
+	t.Helper()
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total float64
+	for _, mf := range mfs {
+		if mf.GetName() != "locust_requests_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			var isWake bool
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "name" && lp.GetValue() == "WakeFirstTouch" {
+					isWake = true
+				}
+			}
+			if isWake {
+				total += m.GetCounter().GetValue()
+			}
+		}
+	}
+	return total
+}
+
+// TestLifecycleModeNone: in resident mode, startUser and runStep never park
+// or explicitly resume the actor, never record WakeFirstTouch, and
+// suspendAndDelete still suspends before deleting on teardown.
+func TestLifecycleModeNone(t *testing.T) {
+	ctl := &fakeControlClient{templateMemory: "1Gi"}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{
+		Lifecycle: dynconfig.Lifecycle{
+			LifecycleMode: dynconfig.LifecycleModeNone,
+			ResumeMode:    dynconfig.ResumeModeExplicit,
+		},
+	})
+	rt := &runtime{cfg: u.cfg}
+	loaded, err := rt.loadScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := rt.startUser(context.Background(), loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !session.awake {
+		t.Error("session.awake = false after startUser in LifecycleModeNone")
+	}
+	wakesBefore := wakeFirstTouchCount(t)
+	for range 3 {
+		if !session.runStep(context.Background(), pingStep) {
+			t.Fatal("runStep = false in LifecycleModeNone")
+		}
+	}
+	if got := wakeFirstTouchCount(t) - wakesBefore; got != 0 {
+		t.Errorf("WakeFirstTouch recorded %v times in LifecycleModeNone, want 0", got)
+	}
+	for _, call := range []string{"SuspendActor", "PauseActor", "ResumeActor"} {
+		if got := countCalls(ctl.recordedCalls(), call); got != 0 {
+			t.Errorf("%s called %d times in LifecycleModeNone, want 0; calls = %v", call, got, ctl.recordedCalls())
+		}
+	}
+
+	session.suspendAndDelete(context.Background())
+	if got := countCalls(ctl.recordedCalls(), "SuspendActor"); got != 1 {
+		t.Errorf("SuspendActor on teardown = %d, want 1", got)
+	}
+	if got := countCalls(ctl.recordedCalls(), "DeleteActor"); got != 1 {
+		t.Errorf("DeleteActor on teardown = %d, want 1", got)
+	}
+}
+
+// TestSnapshotSteps: when SnapshotSteps is set, the actor stays
+// resident at start and between non-snapshot steps, parking only after the
+// configured 1-based step numbers and recording WakeFirstTouch only on the
+// steps that actually wake from a parked state. A step number past the
+// script length is rejected in startUser before CreateActor.
+func TestSnapshotSteps(t *testing.T) {
+	ctl := &fakeControlClient{templateMemory: "1Gi"}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{
+		Lifecycle: dynconfig.Lifecycle{
+			LifecycleMode: dynconfig.LifecycleModePause,
+			ResumeMode:    dynconfig.ResumeModeExplicit,
+		},
+		SnapshotSteps: "2,4",
+	})
+	rt := &runtime{cfg: u.cfg}
+	loaded, err := rt.loadScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := rt.startUser(context.Background(), loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countCalls(ctl.recordedCalls(), "PauseActor"); got != 0 {
+		t.Fatalf("PauseActor after startUser = %d, want 0", got)
+	}
+
+	// Run 4 steps (1-based 1..4). Only steps 2 and 4 should park; only step 3
+	// starts from a parked actor, so only step 3 should issue ResumeActor and
+	// record WakeFirstTouch.
+	wakesBefore := wakeFirstTouchCount(t)
+	for i := range 4 {
+		session.stepIndex = i
+		if !session.runStep(context.Background(), pingStep) {
+			t.Fatalf("step %d failed", i+1)
+		}
+	}
+	if got := countCalls(ctl.recordedCalls(), "PauseActor"); got != 2 {
+		t.Errorf("PauseActor calls across 4 steps = %d, want 2 (steps 2 and 4); calls = %v", got, ctl.recordedCalls())
+	}
+	if got := countCalls(ctl.recordedCalls(), "ResumeActor"); got != 1 {
+		t.Errorf("ResumeActor calls across 4 steps = %d, want 1 (at step 3 after step 2 parked); calls = %v", got, ctl.recordedCalls())
+	}
+	if got := wakeFirstTouchCount(t) - wakesBefore; got != 1 {
+		t.Errorf("WakeFirstTouch recorded %v times across 4 steps, want 1 (at step 3 after step 2 parked)", got)
+	}
+
+	// A step number beyond len(loaded.Steps) is rejected before CreateActor.
+	badCtl := &fakeControlClient{templateMemory: "1Gi"}
+	badUser := newTestUser(t, &fake.Server{}, badCtl, knobs{
+		Lifecycle:     dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause},
+		SnapshotSteps: "2,99",
+	})
+	badRT := &runtime{cfg: badUser.cfg}
+	if _, err := badRT.startUser(context.Background(), loaded); err == nil || !strings.Contains(err.Error(), "exceeds script") {
+		t.Errorf("startUser with out-of-range snapshot step = %v, want error mentioning 'exceeds script'", err)
+	}
+	if got := countCalls(badCtl.recordedCalls(), "CreateActor"); got != 0 {
+		t.Errorf("CreateActor called %d times on out-of-range snapshot step, want 0", got)
 	}
 }

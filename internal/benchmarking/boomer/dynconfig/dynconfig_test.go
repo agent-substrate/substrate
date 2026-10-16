@@ -72,13 +72,13 @@ func TestApplyDecodesOverDefaults(t *testing.T) {
 	}
 	mustApply(t, h, `{
 		"min_wait_time": 0.5, "max_wait_time": 2,
-		"resume_mode": "implicit",
+		"resume_mode": "implicit", "lifecycle_mode": "none",
 		"test_workers": 3,
 		"someone_elses_key": "ignored"
 	}`)
 	want := knobs{
 		WaitTime:  WaitTime{MinWait: Seconds(500 * time.Millisecond), MaxWait: Seconds(2 * time.Second)},
-		Lifecycle: Lifecycle{ResumeMode: ResumeModeImplicit},
+		Lifecycle: Lifecycle{ResumeMode: ResumeModeImplicit, LifecycleMode: LifecycleModeNone},
 		Template:  "stock",
 		Workers:   3,
 	}
