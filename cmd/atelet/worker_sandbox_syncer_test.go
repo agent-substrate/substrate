@@ -167,7 +167,7 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	s := newWorkerSandboxSyncer(&workerSandboxResolver{
 		workerPools: listersv1alpha1.NewWorkerPoolLister(pools),
 		configs:     listersv1alpha1.NewSandboxConfigLister(configs),
-	}, pods, newTestAssetFetcher(), t.TempDir(), newRuntimeIndex())
+	}, pods, newTestAssetFetcher(), t.TempDir(), newRuntimeIndex(), nil)
 	s.scratchDir = t.TempDir() // the runsc probe stages the binary there
 	s.probeCPUIdentity = func() (string, string, error) { return testCPUVendor, testCPUModel, nil }
 	s.runCPUFeatures = func(context.Context, string) ([]string, error) { return testCPUFeatures(), nil }
@@ -833,7 +833,7 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 				ateFactory.Api().V1alpha1().WorkerPools(),
 				ateFactory.Api().V1alpha1().SandboxConfigs(),
 				newScriptAssetFetcher(t),
-				dir, newRuntimeIndex())
+				dir, newRuntimeIndex(), nil)
 			if err != nil {
 				t.Fatalf("startWorkerSandboxSyncer() error = %v", err)
 			}

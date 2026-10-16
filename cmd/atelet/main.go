@@ -390,9 +390,8 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to load atelet Pod identity", fmt.Errorf("credential bundle has no Pod identity"))
 	}
 
-	// SandboxConfigs feed the asset prewarmer and workerSandboxSyncer.
-	// WorkerPools tell the syncer which SandboxConfig each local worker's pool
-	// uses.
+	// SandboxConfigs and WorkerPools feed the workerSandboxSyncer: the pools
+	// tell it which SandboxConfig each local worker uses.
 	//
 	// Startup does not wait on these factories: the runtime index was loaded
 	// from disk above, so the workers already on this node resolve at once,
@@ -410,16 +409,12 @@ func main() {
 			o.FieldSelector = "spec.nodeName=" + ateletIdentity.NodeName
 			o.LabelSelector = workerPoolLabel
 		}))
-	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
-	// Run/Restore on this node hits the cache. Best-effort: on failure the
-	// on-demand fetch in ensureSandboxAssets still covers correctness.
-	//
-	// TODO: remove once the worker sandbox syncer fetches assets through
-	// cmd/atelet/internal/filecache.
-	sandboxConfigInformer := ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
-	if _, err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
-		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
-	}
+	// Pre-download each local worker's default runtime, as the syncer plans
+	// the worker, so the first Run/Restore on this node hits the cache.
+	// Best-effort: on failure the on-demand fetch in ensureSandboxAssets
+	// still covers correctness.
+	prewarmer := newRuntimePrewarmer(runtimes, wmService, imageCache)
+	go prewarmer.run(ctx)
 	// Keep a sandbox runtimes file in each local worker's directory: the
 	// runtimes of the enabled versions of its pool's SandboxConfig,
 	// rewritten when the config changes.
@@ -428,7 +423,7 @@ func main() {
 		ateFactory.Api().V1alpha1().WorkerPools(),
 		ateFactory.Api().V1alpha1().SandboxConfigs(),
 		wmService,
-		nodepath.WorkersDir(), runtimes)
+		nodepath.WorkersDir(), runtimes, prewarmer.enqueue)
 	if err != nil {
 		// Without the syncer no runtime is ever indexed, so no actor could run.
 		serverboot.Fatal(ctx, "Failed to start the worker sandbox runtimes syncer", err)

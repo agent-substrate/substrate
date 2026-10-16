@@ -262,9 +262,9 @@ func hashVersions(ctx context.Context, plan *sandboxPlan) ([]hashedVersion, erro
 //
 // Listing a runtime does not promise its assets are on the node: probing
 // fetches a gVisor version's runsc the first time this atelet sees it, but
-// not its pause image, and nothing of a microVM version. The prewarmer
-// fetches each config's default version, and Run/Restore fetch any other
-// version on demand.
+// not its pause image, and nothing of a microVM version. The syncer has
+// the default runtime prewarmed once the file is written, and Run/Restore
+// fetch any other version on demand.
 func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, hashed []hashedVersion) (*sandboxruntimes.File, error) {
 	out := &sandboxruntimes.File{}
 	seen := make(map[string]bool, len(hashed))
@@ -364,9 +364,9 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 	if ok {
 		return mask, nil
 	}
-	// A download that hangs would hold a sync worker; prewarmTimeout bounds
-	// the fetch for the same reason it bounds prewarming.
-	ctx, cancel := context.WithTimeout(ctx, prewarmTimeout)
+	// A download that hangs would hold a sync worker; prewarmAttemptTimeout
+	// bounds the fetch for the same reason it bounds prewarming.
+	ctx, cancel := context.WithTimeout(ctx, prewarmAttemptTimeout)
 	defer cancel()
 	// The probe has no actor to stage the binary for: it links it into a
 	// scratch dir it removes again, and the cache keeps the entry.
@@ -481,6 +481,8 @@ func bundleHash(rec *sandboxAssetsRecord, pauseDigest string) string {
 //   - build: probe what a snapshot taken on each runtime must find again
 //   - write: replace the file if its content changed, then record what
 //     the worker now advertises in the index
+//   - prewarm: have the default runtime's assets fetched, off this
+//     goroutine, so the file never waits on a download
 //
 // A file missing restorable runtimes for a transient reason is written all
 // the same, and the errIncomplete from build is returned so finish retries.
@@ -511,6 +513,13 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 	// today; a pool that runs several will yield one plan per class here.
 	if err := s.index.register(string(pod.UID), advertisedClass{class: plan.sandboxClass, config: plan.config, hashed: writtenVersions(hashed, want)}); err != nil {
 		return err
+	}
+	if s.prewarm != nil {
+		for _, v := range hashed {
+			if v.isDefault {
+				s.prewarm(v.hash)
+			}
+		}
 	}
 	return buildErr
 }
