@@ -674,16 +674,13 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 // ensureLayer makes the unpacked tree for diffID present in the pool,
 // collapsing concurrent requests for the same layer across images.
 //
-// retireLayer shares the layer's flight. A call that joins a flight instead
-// of leading it runs no closure and learns nothing about what the flight
-// did: after a retirement the dir is gone. So the dir is checked after every
-// flight, and a missing one is unpacked again in a flight of its own, which
-// the finished retirement cannot touch and a later pass sees as fresh.
+// a joined retireLayer flight returns retirementFlight, which says nothing
+// about this layer, so we then run a flight of our own
 func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {
 	dir := s.layerDir(diffID)
-	const maxFlights = 2
+	const maxFlights = 3
 	for flight := 1; ; flight++ {
-		_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
+		v, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
 			if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
 				// Refresh the dir mtime inside the flight: retireLayer re-checks
 				// the mtime in this same flight, so a layer reused here can
@@ -697,16 +694,16 @@ func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer)
 			}
 			return nil, s.unpackLayerToPool(ctx, diffID, layer)
 		})
-		if err != nil {
-			return "", err
-		}
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
+		if _, retirement := v.(retirementFlight); !retirement {
+			if err != nil {
+				return "", err
+			}
 			return dir, nil
 		}
 		if flight == maxFlights {
-			return "", fmt.Errorf("layer %s missing after %d flights", diffID, flight)
+			return "", fmt.Errorf("layer %s: joined %d retirement flights in a row", diffID, flight)
 		}
-		slog.InfoContext(ctx, "Image cache layer retired under a pull; unpacking it again", slog.String("diffid", diffID.String()))
+		slog.InfoContext(ctx, "Image cache pull joined a retirement of its layer; running its own flight", slog.String("diffid", diffID.String()))
 	}
 }
 
