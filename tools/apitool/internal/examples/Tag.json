@@ -1,0 +1,47 @@
+{
+  "metadata": {
+    "atespace": "prod",
+    "name": "e2f4a6b8-1c3d-4e5f-8a7b-9c0d1e2f3a4b",
+    "uid": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
+    "version": "3",
+    "createTime": "2026-08-13T10:00:00Z",
+    "updateTime": "2026-08-13T10:01:15Z"
+  },
+  "status": {
+    "snapshot": {
+      "uuid": "5d2c7e1a-9b3f-4c8d-a6e2-0f1b2c3d4e5f",
+      "generation": 3,
+      "owner": "SNAPSHOT_OWNER_TAG",
+      "fidelity": "SNAPSHOT_FIDELITY_MEMORY",
+      "actorTemplateUid": "4d5e6f7a-8b9c-4d0e-9f2a-3b4c5d6e7f8a",
+      "durableSnapshot": {
+        "status": "SNAPSHOT_STORAGE_STATUS_COMPLETED",
+        "object": {
+          "snapshotUri": "gs://substrate-snapshots/atespaces/prod/tags/2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+        }
+      },
+      "sandboxRuntime": {
+        "sandboxClass": "gvisor",
+        "version": {
+          "schemaVersion": "v1",
+          "attributes": [
+            {
+              "key": "architecture",
+              "value": "amd64"
+            },
+            {
+              "key": "sandbox_bundle_hash",
+              "value": "b5bb9d8014a0f9b1d61e21e796d78dcc"
+            }
+          ]
+        }
+      }
+    },
+    "actorTemplateUid": "4d5e6f7a-8b9c-4d0e-9f2a-3b4c5d6e7f8a"
+  },
+  "scope": "TAG_SCOPE_ATESPACE",
+  "sourceActor": {
+    "atespace": "prod",
+    "name": "c0a8012e-4b7d-4f3a-9e21-6d5f8a9b0c1d"
+  }
+}
