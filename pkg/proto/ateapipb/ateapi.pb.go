@@ -2801,15 +2801,10 @@ func (x *ActorTemplate) GetStatus() *ActorTemplateStatus {
 
 type Resources struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// limits is the maximum amount of compute resources allowed. Only "cpu"
-	// and "memory" are supported, each at most once, and each quantity must be
-	// greater than zero; the cpu limit must be less than 1000 cores.
+	// limits is the maximum amount of compute resources allowed.
 	//
 	// +k8s:optional
-	// +k8s:maxItems=2
-	// +k8s:listType=map
-	// +k8s:listMapKey=name
-	Limits        []*Limits `protobuf:"bytes,1,rep,name=limits,proto3" json:"limits,omitempty"`
+	Limits        *ResourceList `protobuf:"bytes,1,opt,name=limits,proto3" json:"limits,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2844,43 +2839,45 @@ func (*Resources) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{26}
 }
 
-func (x *Resources) GetLimits() []*Limits {
+func (x *Resources) GetLimits() *ResourceList {
 	if x != nil {
 		return x.Limits
 	}
 	return nil
 }
 
-// +k8s:customValidation # names, quantity parse/positivity, cpu bound
-type Limits struct {
+// ResourceList is an amount of each compute resource.
+type ResourceList struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:required
-	// +k8s:maxLength=16 # the Limits hook restricts values to cpu/memory
-	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
-	// "2Gi").
+	// cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
 	//
-	// +k8s:required
-	// +k8s:maxLength=32 # the Limits hook requires a parseable quantity
-	Quantity      string `protobuf:"bytes,2,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	// +k8s:optional
+	// +k8s:minimum=0
+	// +k8s:maximum=999999 # less than 1000 cores
+	CpuMillicores int64 `protobuf:"varint,1,opt,name=cpu_millicores,json=cpuMillicores,proto3" json:"cpu_millicores,omitempty"`
+	// memory_bytes is memory in bytes. 0 means none.
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	MemoryBytes   int64 `protobuf:"varint,2,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Limits) Reset() {
-	*x = Limits{}
+func (x *ResourceList) Reset() {
+	*x = ResourceList{}
 	mi := &file_ateapi_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Limits) String() string {
+func (x *ResourceList) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Limits) ProtoMessage() {}
+func (*ResourceList) ProtoMessage() {}
 
-func (x *Limits) ProtoReflect() protoreflect.Message {
+func (x *ResourceList) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2892,23 +2889,23 @@ func (x *Limits) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Limits.ProtoReflect.Descriptor instead.
-func (*Limits) Descriptor() ([]byte, []int) {
+// Deprecated: Use ResourceList.ProtoReflect.Descriptor instead.
+func (*ResourceList) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{27}
 }
 
-func (x *Limits) GetName() string {
+func (x *ResourceList) GetCpuMillicores() int64 {
 	if x != nil {
-		return x.Name
+		return x.CpuMillicores
 	}
-	return ""
+	return 0
 }
 
-func (x *Limits) GetQuantity() string {
+func (x *ResourceList) GetMemoryBytes() int64 {
 	if x != nil {
-		return x.Quantity
+		return x.MemoryBytes
 	}
-	return ""
+	return 0
 }
 
 type GoldenSnapshotStatus struct {
@@ -3226,7 +3223,7 @@ type Container struct {
 	// +k8s:optional
 	SecurityContext *SecurityContext `protobuf:"bytes,8,opt,name=security_context,json=securityContext,proto3" json:"security_context,omitempty"`
 	// resources carries this container's compute limits, enforced inside the
-	// actor's sandbox. Only cpu and memory limits are supported.
+	// actor's sandbox. A limit of 0 leaves that resource unlimited.
 	//
 	// +k8s:optional
 	Resources     *Resources `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
@@ -3881,13 +3878,11 @@ func (*DurableDirVolumeSource) Descriptor() ([]byte, []int) {
 // lives only as long as the actor.
 type ExternalVolumeTemplate struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// capacity of the volume to create, in Kubernetes resource.Quantity string
-	// form (e.g. "10Gi"). Required.
+	// capacity_bytes is the size of the volume to create, in bytes. Required.
 	//
 	// +k8s:required
-	// +k8s:maxLength=32 # matches Limits.quantity's bound
-	// +k8s:customValidation # must parse as a resource.Quantity
-	Capacity string `protobuf:"bytes,1,opt,name=capacity,proto3" json:"capacity,omitempty"`
+	// +k8s:minimum=1
+	CapacityBytes int64 `protobuf:"varint,1,opt,name=capacity_bytes,json=capacityBytes,proto3" json:"capacity_bytes,omitempty"`
 	// storage_class_name names the cluster-scoped Kubernetes StorageClass to
 	// create the volume from. Required.
 	//
@@ -3928,11 +3923,11 @@ func (*ExternalVolumeTemplate) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{42}
 }
 
-func (x *ExternalVolumeTemplate) GetCapacity() string {
+func (x *ExternalVolumeTemplate) GetCapacityBytes() int64 {
 	if x != nil {
-		return x.Capacity
+		return x.CapacityBytes
 	}
-	return ""
+	return 0
 }
 
 func (x *ExternalVolumeTemplate) GetStorageClassName() string {
@@ -7750,8 +7745,7 @@ func (x *AttributeEntry) GetValue() string {
 // WorkerResources represents a set of resources.
 type WorkerResources struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Resources match the Actor's definition of resources.
-	// They are matched by name and used for placement.
+	// Resources are compared against the Actor's resources for placement.
 	//
 	// +k8s:optional
 	Resources *Resources `protobuf:"bytes,1,opt,name=resources,proto3" json:"resources,omitempty"`
@@ -9724,12 +9718,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\avolumes\x18\x04 \x03(\v2\x0e.ateapi.VolumeR\avolumes\x12?\n" +
 	"\x0fsnapshot_config\x18\x05 \x01(\v2\x16.ateapi.SnapshotConfigR\x0esnapshotConfig\x12/\n" +
 	"\tresources\x18\x06 \x01(\v2\x11.ateapi.ResourcesR\tresources\x123\n" +
-	"\x06status\x18\a \x01(\v2\x1b.ateapi.ActorTemplateStatusR\x06status:\x16\x82\xb5\x18\x12\x18\x01\"\x0eActorTemplates\"3\n" +
-	"\tResources\x12&\n" +
-	"\x06limits\x18\x01 \x03(\v2\x0e.ateapi.LimitsR\x06limits\"8\n" +
-	"\x06Limits\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
-	"\bquantity\x18\x02 \x01(\tR\bquantity\"\xae\x01\n" +
+	"\x06status\x18\a \x01(\v2\x1b.ateapi.ActorTemplateStatusR\x06status:\x16\x82\xb5\x18\x12\x18\x01\"\x0eActorTemplates\"9\n" +
+	"\tResources\x12,\n" +
+	"\x06limits\x18\x01 \x01(\v2\x14.ateapi.ResourceListR\x06limits\"X\n" +
+	"\fResourceList\x12%\n" +
+	"\x0ecpu_millicores\x18\x01 \x01(\x03R\rcpuMillicores\x12!\n" +
+	"\fmemory_bytes\x18\x02 \x01(\x03R\vmemoryBytes\"\xae\x01\n" +
 	"\x14GoldenSnapshotStatus\x120\n" +
 	"\n" +
 	"golden_tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\tgoldenTag\x12?\n" +
@@ -9779,9 +9773,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\btemplate\x18\x01 \x01(\v2\x1e.ateapi.ExternalVolumeTemplateR\btemplate\"1\n" +
 	"\x11ImageVolumeSource\x12\x1c\n" +
 	"\treference\x18\x01 \x01(\tR\treference\"\x18\n" +
-	"\x16DurableDirVolumeSource\"b\n" +
-	"\x16ExternalVolumeTemplate\x12\x1a\n" +
-	"\bcapacity\x18\x01 \x01(\tR\bcapacity\x12,\n" +
+	"\x16DurableDirVolumeSource\"m\n" +
+	"\x16ExternalVolumeTemplate\x12%\n" +
+	"\x0ecapacity_bytes\x18\x01 \x01(\x03R\rcapacityBytes\x12,\n" +
 	"\x12storage_class_name\x18\x02 \x01(\tR\x10storageClassName\"Y\n" +
 	"\x16SystemInfoVolumeSource\x12?\n" +
 	"\fdata_sources\x18\x01 \x03(\v2\x1c.ateapi.SystemInfoDataSourceR\vdataSources\"\xa0\x01\n" +
@@ -10275,7 +10269,7 @@ var file_ateapi_proto_goTypes = []any{
 	(*ObjectRef)(nil),                          // 34: ateapi.ObjectRef
 	(*ActorTemplate)(nil),                      // 35: ateapi.ActorTemplate
 	(*Resources)(nil),                          // 36: ateapi.Resources
-	(*Limits)(nil),                             // 37: ateapi.Limits
+	(*ResourceList)(nil),                       // 37: ateapi.ResourceList
 	(*GoldenSnapshotStatus)(nil),               // 38: ateapi.GoldenSnapshotStatus
 	(*ActorTemplateStatus)(nil),                // 39: ateapi.ActorTemplateStatus
 	(*SnapshotConfig)(nil),                     // 40: ateapi.SnapshotConfig
@@ -10440,7 +10434,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	40,  // 47: ateapi.ActorTemplate.snapshot_config:type_name -> ateapi.SnapshotConfig
 	36,  // 48: ateapi.ActorTemplate.resources:type_name -> ateapi.Resources
 	39,  // 49: ateapi.ActorTemplate.status:type_name -> ateapi.ActorTemplateStatus
-	37,  // 50: ateapi.Resources.limits:type_name -> ateapi.Limits
+	37,  // 50: ateapi.Resources.limits:type_name -> ateapi.ResourceList
 	34,  // 51: ateapi.GoldenSnapshotStatus.golden_tag:type_name -> ateapi.ObjectRef
 	147, // 52: ateapi.GoldenSnapshotStatus.snapshot_time:type_name -> google.protobuf.Timestamp
 	38,  // 53: ateapi.ActorTemplateStatus.golden_snapshot_status:type_name -> ateapi.GoldenSnapshotStatus
