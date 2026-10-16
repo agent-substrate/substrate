@@ -339,8 +339,8 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	//
 	// Chmod and the mtime come before chown, unlike tarutil's restore: once a
 	// directory belongs to another uid, changing its mode or setting its times
-	// needs CAP_FOWNER, which atelet does not hold. The mode is permission bits
-	// only, which chown leaves alone.
+	// needs CAP_FOWNER, which atelet does not hold. Chown leaves a directory's
+	// mode alone, setgid and sticky included.
 	dirs := make([]string, 0, len(dirHdrs))
 	for name := range dirHdrs {
 		dirs = append(dirs, name)
@@ -363,7 +363,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			continue
 		}
 		hdr := dirHdrs[name]
-		mode := hdr.FileInfo().Mode().Perm()
+		mode := tarMode(hdr)
 		if err := root.Chmod(name, mode); err != nil {
 			return nil, fmt.Errorf("while restoring mode %v on directory %q: %w", mode, name, err)
 		}
@@ -403,6 +403,14 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	sort.Strings(wh.ImplicitDirs)
 
 	return wh, nil
+}
+
+// tarMode returns the mode an unpacked entry takes from its tar header: the
+// permission bits plus setuid, setgid and sticky, as containerd and moby apply
+// them. Without the sticky bit /tmp would be 0777 instead of 1777 in the
+// actor, letting any user delete another's files there.
+func tarMode(hdr *tar.Header) os.FileMode {
+	return hdr.FileInfo().Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
 }
 
 // restoreModTime sets the atime and mtime of an unpacked path to the mtime its

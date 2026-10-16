@@ -21,6 +21,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -572,6 +573,40 @@ func TestUnpackLayer_ReadOnlyDir(t *testing.T) {
 	// t.TempDir's cleanup succeed, which plain os.RemoveAll could not on 0555).
 	if err := RemoveAllWritable(filepath.Join(dir, "ko-app")); err != nil {
 		t.Errorf("RemoveAllWritable on restored read-only dir: %v", err)
+	}
+}
+
+// Directories keep the setgid and sticky bits their tar entries record, not
+// only the permission bits: /tmp must stay 1777 so users cannot delete each
+// other's files, and a setgid directory must keep giving new files its group.
+// Implicit-dir repair also copies a lower layer's /tmp mode up into the actor.
+func TestUnpackLayer_KeepsSpecialDirBits(t *testing.T) {
+	entries := []tarEntry{
+		{name: "tmp/", typeflag: tar.TypeDir, mode: 0o1777},
+		{name: "tmp/x", typeflag: tar.TypeReg, mode: 0o644, body: "x"},
+		{name: "srv/", typeflag: tar.TypeDir},
+		{name: "srv/team/", typeflag: tar.TypeDir, mode: 0o2775},
+	}
+	dir, _, err := runUnpack(t, entries)
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
+	}
+	want := map[string]os.FileMode{
+		"tmp": os.ModeDir | os.ModeSticky | 0o777,
+	}
+	// Only Linux's setgid-directory semantics are pinned: on BSDs new files
+	// take the parent's group regardless of the bit.
+	if runtime.GOOS == "linux" {
+		want["srv/team"] = os.ModeDir | os.ModeSetgid | 0o775
+	}
+	for name, mode := range want {
+		fi, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("lstat %s: %v", name, err)
+		}
+		if fi.Mode() != mode {
+			t.Errorf("%s mode = %v, want %v", name, fi.Mode(), mode)
+		}
 	}
 }
 
