@@ -20,12 +20,15 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/containerd/ttrpc"
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateworker/phaselog"
@@ -66,19 +69,64 @@ func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
 	return ch.MemRestoreEager
 }
 
+const reseedAttempts = 3
+
+var (
+	reseedAttemptTimeout = 5 * time.Second
+	reseedRetryInterval  = 100 * time.Millisecond
+)
+
+type randomDevReseeder interface {
+	ReseedRandomDev(ctx context.Context, data []byte) error
+}
+
 // reseedGuestCRNG mixes fresh, per-restore entropy into the restored guest's kernel
 // CRNG through the kata-agent (see the call site in restoreMemoryFidelity for why a restore
 // needs this). The nonce is a throwaway; its only job is to differ between restores so
 // that clones of one snapshot diverge instead of producing identical randomness. The
 // caller owns ac: it stays open for log forwarding and guest stats.
-func reseedGuestCRNG(ctx context.Context, ac *kata.AgentClient) error {
+//
+// Under concurrent restores on the same node, a freshly unpaused guest can take more than
+// a single 5s attempt to schedule its kata-agent and complete the ReseedRandomDev RPC even
+// after the vsock handshake succeeds, so transient failures are retried up to 3 times (15s
+// total budget, matching dialAgentRetry) over the multiplexed ttrpc connection.
+func reseedGuestCRNG(ctx context.Context, ac randomDevReseeder) error {
 	nonce, err := newReseedNonce()
 	if err != nil {
 		return err
 	}
-	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	return ac.ReseedRandomDev(rctx, nonce)
+	var lastErr error
+	for attempt := 1; attempt <= reseedAttempts; attempt++ {
+		rctx, cancel := context.WithTimeout(ctx, reseedAttemptTimeout)
+		err := ac.ReseedRandomDev(rctx, nonce)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// Once a ttrpc client is closed, every subsequent call on it fails
+		// immediately with ttrpc.ErrClosed; stop here and preserve any prior
+		// error that triggered the close.
+		if errors.Is(err, ttrpc.ErrClosed) {
+			if lastErr != nil {
+				return lastErr
+			}
+			return err
+		}
+		lastErr = err
+		if attempt < reseedAttempts {
+			slog.WarnContext(ctx, "Failed to reseed guest CRNG; retrying",
+				slog.Int("attempt", attempt), slog.Any("err", err))
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(reseedRetryInterval):
+			}
+		}
+	}
+	return lastErr
 }
 
 // newReseedNonce returns 32 bytes of fresh entropy to mix into the guest CRNG.

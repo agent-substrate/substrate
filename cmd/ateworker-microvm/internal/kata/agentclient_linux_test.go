@@ -22,6 +22,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,5 +102,30 @@ func TestReseedRandomDevReturnsAgentError(t *testing.T) {
 	defer cancel()
 	if err := ac.ReseedRandomDev(ctx, []byte("nonce")); err == nil {
 		t.Fatal("ReseedRandomDev returned nil for an agent error, want the error")
+	}
+}
+
+func TestReseedRandomDevSucceedsOnSameClientAfterStreamTimeout(t *testing.T) {
+	unblockFirst := make(chan struct{})
+	t.Cleanup(func() { close(unblockFirst) })
+
+	var calls atomic.Int32
+	ac := startFakeAgent(t, func(*agentpb.ReseedRandomDevRequest) error {
+		if calls.Add(1) == 1 {
+			<-unblockFirst
+		}
+		return nil
+	})
+
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel1()
+	if err := ac.ReseedRandomDev(ctx1, []byte("nonce-1")); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first ReseedRandomDev error = %v, want context.DeadlineExceeded", err)
+	}
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	if err := ac.ReseedRandomDev(ctx2, []byte("nonce-2")); err != nil {
+		t.Fatalf("second ReseedRandomDev on same client failed: %v", err)
 	}
 }

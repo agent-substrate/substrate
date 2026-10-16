@@ -20,11 +20,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
+	"github.com/containerd/ttrpc"
 	"google.golang.org/grpc/codes"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
@@ -405,6 +408,108 @@ func TestNewReseedNonce(t *testing.T) {
 	if bytes.Equal(a, b) {
 		t.Fatal("two nonces are identical; reseed would not make clones diverge")
 	}
+}
+
+type fakeReseeder func(ctx context.Context, data []byte) error
+
+func (f fakeReseeder) ReseedRandomDev(ctx context.Context, data []byte) error {
+	return f(ctx, data)
+}
+
+func TestReseedGuestCRNG(t *testing.T) {
+	origTimeout, origInterval := reseedAttemptTimeout, reseedRetryInterval
+	reseedAttemptTimeout = 50 * time.Millisecond
+	reseedRetryInterval = 5 * time.Millisecond
+	t.Cleanup(func() {
+		reseedAttemptTimeout = origTimeout
+		reseedRetryInterval = origInterval
+	})
+
+	t.Run("succeeds on first attempt", func(t *testing.T) {
+		var calls int
+		var gotNonce []byte
+		err := reseedGuestCRNG(t.Context(), fakeReseeder(func(_ context.Context, data []byte) error {
+			calls++
+			gotNonce = append([]byte(nil), data...)
+			return nil
+		}))
+		if err != nil {
+			t.Fatalf("reseedGuestCRNG: %v", err)
+		}
+		if calls != 1 {
+			t.Errorf("calls = %d, want 1", calls)
+		}
+		if len(gotNonce) != 32 {
+			t.Errorf("nonce length = %d, want 32", len(gotNonce))
+		}
+	})
+
+	t.Run("retries transient timeout and succeeds", func(t *testing.T) {
+		var calls int
+		err := reseedGuestCRNG(t.Context(), fakeReseeder(func(ctx context.Context, _ []byte) error {
+			calls++
+			if calls < reseedAttempts {
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			return nil
+		}))
+		if err != nil {
+			t.Fatalf("reseedGuestCRNG: %v", err)
+		}
+		if calls != reseedAttempts {
+			t.Errorf("calls = %d, want %d", calls, reseedAttempts)
+		}
+	})
+
+	t.Run("returns error after exhausting attempts", func(t *testing.T) {
+		wantErr := errors.New("agent busy")
+		var calls int
+		err := reseedGuestCRNG(t.Context(), fakeReseeder(func(_ context.Context, _ []byte) error {
+			calls++
+			return wantErr
+		}))
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("reseedGuestCRNG error = %v, want %v", err, wantErr)
+		}
+		if calls != reseedAttempts {
+			t.Errorf("calls = %d, want %d", calls, reseedAttempts)
+		}
+	})
+
+	t.Run("stops retrying when caller context is canceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		var calls int
+		err := reseedGuestCRNG(ctx, fakeReseeder(func(_ context.Context, _ []byte) error {
+			calls++
+			cancel()
+			return errors.New("transient failure")
+		}))
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("reseedGuestCRNG error = %v, want context.Canceled", err)
+		}
+		if calls != 1 {
+			t.Errorf("calls = %d, want 1 (no retry after caller context canceled)", calls)
+		}
+	})
+
+	t.Run("stops retrying on closed ttrpc client and preserves prior error", func(t *testing.T) {
+		firstErr := errors.New("attempt 1 timed out")
+		var calls int
+		err := reseedGuestCRNG(t.Context(), fakeReseeder(func(_ context.Context, _ []byte) error {
+			calls++
+			if calls == 1 {
+				return firstErr
+			}
+			return ttrpc.ErrClosed
+		}))
+		if !errors.Is(err, firstErr) {
+			t.Fatalf("reseedGuestCRNG error = %v, want preserved %v", err, firstErr)
+		}
+		if calls != 2 {
+			t.Errorf("calls = %d, want 2 (no third attempt after ttrpc.ErrClosed)", calls)
+		}
+	})
 }
 
 func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
