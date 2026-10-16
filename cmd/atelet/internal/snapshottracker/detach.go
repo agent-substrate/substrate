@@ -16,8 +16,11 @@ package snapshottracker
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
 
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
@@ -97,10 +100,23 @@ func (t *Tracker) backgroundDetach(actorUID string, finish func() (*ateletpb.Act
 	}
 }
 
+// removeSandboxAssets deletes the actor's sandbox asset links. The asset cache
+// counts an entry as in use while any link to it remains, so the links of an
+// actor that has left the node would keep their bytes from being evicted. A
+// missing directory is not an error, so retries are safe.
+func removeSandboxAssets(actorUID string) error {
+	dir := ateletpath.SandboxAssetsDir(actorUID)
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("while removing sandbox assets dir %s: %w", dir, err)
+	}
+	return nil
+}
+
 // finishDetach runs op, a detach of the actor's latest local snapshot: it
 // uploads the snapshot unless already durable, then deletes the actor's local
-// snapshots. background reports whether a worker runs it, rather than a Detach
-// call. A detach Forget abandons leaves the actor alone, and fails.
+// snapshots and sandbox asset links. background reports whether a worker runs
+// it, rather than a Detach call. A detach Forget abandons leaves the actor
+// alone, and fails.
 func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp, alreadyDurable, background bool) (*ateletpb.ActorSnapshotState, error) {
 	defer close(op.done)
 	uploaded := false
@@ -121,10 +137,10 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 	// The upload is recorded before anything is deleted, and LatestLocal is
 	// cleared only once its files are gone. After a crash or a failed prune in
 	// between, the detach is retried, finds the snapshot durable, and only
-	// prunes. Until then LatestLocal can name a half-deleted copy, which is
+	// deletes. Until then LatestLocal can name a half-deleted copy, which is
 	// safe because the snapshot is durable: Restore reads snapshot.object
-	// when the local copy is unusable. The prune runs with op in progress
-	// (before op.done is closed), so Run, Restore, and Checkpoint wait for it.
+	// when the local copy is unusable. The deletions run with op in progress
+	// (before op.done is closed), so Run, Restore, and Checkpoint wait for them.
 	// TODO: Notify ateapi of the upcoming detach before deleting the actor's
 	// local snapshots, so it stops sending Restores that rely on them.
 	if err == nil {
@@ -133,6 +149,9 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 	}
 	if err == nil {
 		err = PruneLocalCheckpoints(ctx, actorUID)
+	}
+	if err == nil {
+		err = removeSandboxAssets(actorUID)
 	}
 	if abErr := t.updateOp(actorUID, op, err, func(a *actorSnapshots) {
 		switch {
