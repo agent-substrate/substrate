@@ -23,9 +23,9 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/actorevent"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/actorevent"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 var testPool = Pool{Namespace: "team-a", Name: "default"}

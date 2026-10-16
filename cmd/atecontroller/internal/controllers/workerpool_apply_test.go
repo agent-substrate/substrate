@@ -30,13 +30,13 @@ import (
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	"k8s.io/utils/ptr"
 
-	"github.com/agent-substrate/substrate/internal/deviceplugin"
-	"github.com/agent-substrate/substrate/internal/egresspolicy"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/preview"
-	"github.com/agent-substrate/substrate/internal/workercapacity"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/internal/deviceplugin"
+	"go.ate.dev/substrate/internal/egresspolicy"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/workercapacity"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 func TestBuildDeploymentApplyConfig(t *testing.T) {
@@ -905,7 +905,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 		sandboxClassTolerationAC(atev1alpha1.SandboxClassGvisor),
 	}
 	podSpecAC.WithPriorityClassName("")
-	podSpecAC.WithServiceAccountName("default")
+	podSpecAC.WithServiceAccountName("ateworker")
 	podSpecAC.WithAffinity(corev1ac.Affinity())
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 	if mutatePodSpec != nil {

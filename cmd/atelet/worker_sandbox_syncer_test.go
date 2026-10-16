@@ -19,7 +19,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,12 +35,72 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
-	"github.com/agent-substrate/substrate/internal/sandboxversions"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	atefake "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
-	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"go.ate.dev/substrate/internal/sandboxruntimes"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	atefake "go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
+	"go.ate.dev/substrate/pkg/client/informers/externalversions"
+	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
 )
+
+const (
+	testCPUVendor = "GenuineIntel"
+	testCPUModel  = "6:143"
+)
+
+// testCPUFeatures are the first two CPU feature names for runtime.GOARCH,
+// which encode to bit 0 | bit 1 = "3" on both amd64 and arm64.
+func testCPUFeatures() []string {
+	switch runtime.GOARCH {
+	case "arm64":
+		return []string{"fp", "asimd"}
+	default:
+		return []string{"pni", "pclmulqdq"}
+	}
+}
+
+type fakeAssetFetcher struct {
+	fn func(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error)
+}
+
+func (f *fakeAssetFetcher) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+	return f.fn(ctx, rec)
+}
+
+// newTestAssetFetcher returns a sandboxAssetFetcher that maps every asset of
+// a record to a path under its digest without fetching anything, for syncers
+// whose runsc probe is faked.
+func newTestAssetFetcher() sandboxAssetFetcher {
+	return &fakeAssetFetcher{
+		fn: func(_ context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+			paths := make(map[string]string, len(rec.Assets))
+			for name, a := range rec.Assets {
+				paths[name] = "/cache/" + a.SHA256 + "/" + name
+			}
+			return paths, nil
+		},
+	}
+}
+
+// newScriptAssetFetcher returns a sandboxAssetFetcher that backs every asset
+// with an executable script printing testCPUFeatures(), for a syncer that
+// runs the real runsc probe.
+func newScriptAssetFetcher(t *testing.T) sandboxAssetFetcher {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "runsc")
+	body := "#!/bin/sh\necho " + strings.Join(testCPUFeatures(), ",") + "\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return &fakeAssetFetcher{
+		fn: func(_ context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+			paths := make(map[string]string, len(rec.Assets))
+			for name := range rec.Assets {
+				paths[name] = script
+			}
+			return paths, nil
+		},
+	}
+}
 
 // workerPod is a worker pod on this node with the given UID, in pool when
 // pool is not "".
@@ -53,18 +115,26 @@ func workerPod(uid, pool string) *corev1.Pod {
 // resolvedPool is a gVisor WorkerPool whose class resolved to config, or has
 // not resolved when config is "".
 func resolvedPool(name, config string) *v1alpha1.WorkerPool {
+	return resolvedPoolOf(v1alpha1.SandboxClassGvisor, name, config)
+}
+
+// resolvedPoolOf is a WorkerPool of the given sandbox class whose class
+// resolved to config, or has not resolved when config is "".
+func resolvedPoolOf(class v1alpha1.SandboxClass, name, config string) *v1alpha1.WorkerPool {
 	pool := &v1alpha1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Namespace: "workers", Name: name}}
-	pool.Spec.SandboxClasses = []v1alpha1.WorkerPoolSandboxClass{{Name: v1alpha1.SandboxClassGvisor}}
-	class := v1alpha1.WorkerPoolSandboxClassStatus{Name: v1alpha1.SandboxClassGvisor}
+	pool.Spec.SandboxClasses = []v1alpha1.WorkerPoolSandboxClass{{Name: class}}
+	status := v1alpha1.WorkerPoolSandboxClassStatus{Name: class}
 	if config != "" {
-		class.ConfigRef = &v1alpha1.SandboxConfigReference{Name: config}
+		status.ConfigRef = &v1alpha1.SandboxConfigReference{Name: config}
 	}
-	pool.Status.SandboxClasses = []v1alpha1.WorkerPoolSandboxClassStatus{class}
+	pool.Status.SandboxClasses = []v1alpha1.WorkerPoolSandboxClassStatus{status}
 	return pool
 }
 
 // newTestSyncer serves objs from synced caches and keeps worker directories
-// under a temp dir.
+// under a temp dir. Its probes are faked: the host CPU is
+// testCPUVendor/testCPUModel and every runsc reports testCPUFeatures();
+// TestRunRunscCPUFeatures covers the real probe.
 func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	t.Helper()
 	newIndexer := func() cache.Indexer {
@@ -94,7 +164,9 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	s := newWorkerSandboxSyncer(&workerSandboxResolver{
 		workerPools: listersv1alpha1.NewWorkerPoolLister(pools),
 		configs:     listersv1alpha1.NewSandboxConfigLister(configs),
-	}, pods, t.TempDir())
+	}, pods, newTestAssetFetcher(), t.TempDir())
+	s.probeCPUIdentity = func() (string, string, error) { return testCPUVendor, testCPUModel, nil }
+	s.runCPUFeatures = func(context.Context, string) ([]string, error) { return testCPUFeatures(), nil }
 	// Tests that check the jitter set it.
 	s.maxJitter = 0
 	return s
@@ -297,11 +369,13 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		name string
 		objs []any
 		// existing is written to pod-a's file before processing, when set.
-		existing *sandboxversions.File
+		existing *sandboxruntimes.File
+		// assets overrides s.assets when set.
+		assets sandboxAssetFetcher
 		// priorRetries is how often pod-a has been retried before.
 		priorRetries int
 		// want is the file afterwards; nil means no file.
-		want    *sandboxversions.File
+		want    *sandboxruntimes.File
 		wantDir bool
 		// wantUntouched is whether the existing file must not be rewritten.
 		wantUntouched bool
@@ -355,12 +429,49 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		objs:         []any{workerPod("pod-a", "pool"), multiVersionConfig()},
 		priorRetries: syncMaxRetries,
 	}, {
+		// A transient failure on the default version leaves the existing file
+		// in place and requeues without the syncMaxRetries cap, since no
+		// informer event enqueues the pod when an asset fetch recovers.
+		name:     "transient failure on default version keeps existing file and requeues past syncMaxRetries",
+		objs:     []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		existing: stale,
+		assets: &fakeAssetFetcher{
+			fn: func(context.Context, *sandboxAssetsRecord) (map[string]string, error) {
+				return nil, errors.New("temporary download failure on default version")
+			},
+		},
+		priorRetries:  syncMaxRetries,
+		want:          stale,
+		wantDir:       true,
+		wantUntouched: true,
+		wantRetries:   syncMaxRetries + 1,
+	}, {
+		// A transient failure on a restorable version writes the default
+		// runtime right away and requeues without the syncMaxRetries cap.
+		name: "incomplete restorable version writes partial file and requeues past syncMaxRetries",
+		objs: []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		assets: &fakeAssetFetcher{
+			fn: func(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+				if rec.Assets[gvisorAssetName].SHA256 != "sha-v2" {
+					return nil, errors.New("temporary download failure on restorable version")
+				}
+				return newTestAssetFetcher().ensureSandboxAssets(ctx, rec)
+			},
+		},
+		priorRetries: syncMaxRetries,
+		want:         &sandboxruntimes.File{DefaultRuntime: wantRuntime("v2")},
+		wantDir:      true,
+		wantRetries:  syncMaxRetries + 1,
+	}, {
 		name: "pod of no pool is not retried",
 		objs: []any{workerPod("pod-a", ""), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newTestSyncer(t, tt.objs...)
+			if tt.assets != nil {
+				s.assets = tt.assets
+			}
 			limiter := workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)
 			for range tt.priorRetries {
 				limiter.When("pod-a")
@@ -371,13 +482,13 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 				if err := os.MkdirAll(dir, 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := sandboxversions.Write(s.versionsFile("pod-a"), tt.existing); err != nil {
+				if _, err := sandboxruntimes.Write(s.runtimesFile("pod-a"), tt.existing); err != nil {
 					t.Fatal(err)
 				}
 			}
 			var fileBefore time.Time
 			if _, err := os.Stat(dir); err == nil {
-				file, err := os.Stat(s.versionsFile("pod-a"))
+				file, err := os.Stat(s.runtimesFile("pod-a"))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -393,7 +504,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 			if _, err := os.Stat(dir); (err == nil) != tt.wantDir {
 				t.Errorf("directory exists = %v (%v), want %v", err == nil, err, tt.wantDir)
 			}
-			got, err := sandboxversions.Read(s.versionsFile("pod-a"))
+			got, err := sandboxruntimes.Read(s.runtimesFile("pod-a"))
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				t.Fatal(err)
 			}
@@ -401,7 +512,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 				t.Errorf("file mismatch (-want +got):\n%s", diff)
 			}
 			if tt.wantUntouched {
-				if after, err := os.Stat(s.versionsFile("pod-a")); err != nil || !after.ModTime().Equal(fileBefore) {
+				if after, err := os.Stat(s.runtimesFile("pod-a")); err != nil || !after.ModTime().Equal(fileBefore) {
 					t.Errorf("an equal file was rewritten (mtime %v -> %v, %v)", fileBefore, after.ModTime(), err)
 				}
 			}
@@ -559,7 +670,7 @@ func TestWorkerSandboxSyncerRun(t *testing.T) {
 			// A pod Add event queued before the caches sync.
 			s.queue.Add("pod-live")
 			matches := func() bool {
-				return exists(s.podDir("pod-gone")) == tt.wantOrphan && exists(s.versionsFile("pod-live")) == tt.wantFile
+				return exists(s.podDir("pod-gone")) == tt.wantOrphan && exists(s.runtimesFile("pod-live")) == tt.wantFile
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -576,7 +687,7 @@ func TestWorkerSandboxSyncerRun(t *testing.T) {
 				time.Sleep(300 * time.Millisecond)
 				if !matches() {
 					t.Errorf("before every cache synced: pod-gone directory exists = %v, pod-live file exists = %v; want %v, %v",
-						exists(s.podDir("pod-gone")), exists(s.versionsFile("pod-live")), tt.wantOrphan, tt.wantFile)
+						exists(s.podDir("pod-gone")), exists(s.runtimesFile("pod-live")), tt.wantOrphan, tt.wantFile)
 				}
 			}
 
@@ -654,6 +765,7 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 				podFactory.Core().V1().Pods(),
 				ateFactory.Api().V1alpha1().WorkerPools(),
 				ateFactory.Api().V1alpha1().SandboxConfigs(),
+				newScriptAssetFetcher(t),
 				dir)
 			if err != nil {
 				t.Fatalf("startWorkerSandboxSyncer() error = %v", err)
@@ -662,7 +774,7 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 			podFactory.Start(ctx.Done())
 
 			for _, pod := range tt.pods {
-				waitFor(t, "the file of "+string(pod.UID), func() bool { return exists(s.versionsFile(string(pod.UID))) })
+				waitFor(t, "the file of "+string(pod.UID), func() bool { return exists(s.runtimesFile(string(pod.UID))) })
 			}
 			if tt.change != nil {
 				if err := tt.change(ctx, kube); err != nil {
@@ -670,7 +782,7 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 				}
 			}
 			for _, uid := range tt.wantFiles {
-				waitFor(t, "the file of "+uid, func() bool { return exists(s.versionsFile(uid)) })
+				waitFor(t, "the file of "+uid, func() bool { return exists(s.runtimesFile(uid)) })
 			}
 			for _, uid := range tt.wantNoDirs {
 				waitFor(t, "the directory of "+uid+" to be removed", func() bool { return !exists(s.podDir(uid)) })

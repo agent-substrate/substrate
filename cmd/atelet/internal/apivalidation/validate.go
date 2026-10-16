@@ -18,8 +18,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -63,6 +63,11 @@ func ValidateRestoreRequest(ctx context.Context, req *ateletpb.RestoreRequest) f
 // ValidatePromoteSnapshotRequest runs the generated validation for req.
 func ValidatePromoteSnapshotRequest(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) field.ErrorList {
 	return Validate_PromoteSnapshotRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+// ValidateDetachActorRequest runs the generated validation for req.
+func ValidateDetachActorRequest(ctx context.Context, req *ateletpb.DetachActorRequest) field.ErrorList {
+	return Validate_DetachActorRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
 // ValidateRegisterWorkerRequest runs the generated validation for req.

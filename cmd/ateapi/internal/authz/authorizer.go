@@ -18,10 +18,10 @@ import (
 	"context"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/principal"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/principal"
 )
 
 // Authorizer is the read-only policy decision point that evaluates runtime

@@ -18,14 +18,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/pkg/postgressetup"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/pkg/postgressetup"
 )
 
 // The digest exists to turn an envFrom change into a rollout, so what matters
@@ -608,5 +609,144 @@ spec:
 	}
 	if err := stampAPIServerEnvHash(objs[1:], "digest"); err == nil {
 		t.Errorf("stampAPIServerEnvHash() without ate-api-server error = nil, want an error")
+	}
+}
+
+// Authorization reaches ate-api-server as flags on its container, so a change
+// rolls the Deployment, and the envvars ConfigMap carries none of it.
+func TestSetAPIServerAuthzArgs(t *testing.T) {
+	const manifest = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-api-server
+  namespace: ate-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: objectstore-plugin
+        args: ["--keep"]
+      - name: ate-api-server
+        args:
+        - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
+        - --authz-bootstrap-owners=stale
+        - --experimental-enable-authz
+`
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		owners  string
+		want    []string
+	}{
+		{
+			name:    "enforced",
+			enabled: true,
+			owners:  "alice,bob",
+			want: []string{
+				"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto",
+				"--experimental-enable-authz=true",
+				"--authz-bootstrap-owners=alice,bob",
+			},
+		},
+		{
+			// Owners stay, so access policies can be set up before enforcement is on.
+			name:   "off keeps the owners",
+			owners: "alice",
+			want: []string{
+				"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto",
+				"--authz-bootstrap-owners=alice",
+			},
+		},
+		{
+			name: "off with no owners",
+			want: []string{"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objs, err := kube.DecodeManifestBytes([]byte(manifest))
+			if err != nil {
+				t.Fatalf("DecodeManifestBytes() error = %v", err)
+			}
+			if err := setAPIServerAuthzArgs(objs, tc.enabled, tc.owners); err != nil {
+				t.Fatalf("setAPIServerAuthzArgs() error = %v", err)
+			}
+			containers, _, _ := unstructured.NestedSlice(objs[0].Object, "spec", "template", "spec", "containers")
+			argsOf := func(i int) []string {
+				args, _, _ := unstructured.NestedStringSlice(containers[i].(map[string]any), "args")
+				return args
+			}
+			if diff := cmp.Diff(tc.want, argsOf(1)); diff != "" {
+				t.Errorf("ate-api-server args (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff([]string{"--keep"}, argsOf(0)); diff != "" {
+				t.Errorf("other container's args changed (-want +got):\n%s", diff)
+			}
+		})
+	}
+
+	objs, err := kube.DecodeManifestBytes([]byte("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ate-controller\n"))
+	if err != nil {
+		t.Fatalf("DecodeManifestBytes() error = %v", err)
+	}
+	if err := setAPIServerAuthzArgs(objs, true, "alice"); err == nil {
+		t.Error("setAPIServerAuthzArgs() without deployment/ate-api-server error = nil, want an error")
+	}
+}
+
+func TestCreateAPIServerEnvVarsOmitsAuthz(t *testing.T) {
+	e := &Env{Cfg: &config.Config{
+		PostgresReadWriteRole:      config.DefaultPostgresReadWriteRole,
+		PostgresOwnerRole:          config.DefaultPostgresOwnerRole,
+		APIExperimentalEnableAuthz: true,
+		APIAuthzBootstrapOwners:    "system:serviceaccount:ate-system:ate-client",
+	}, Kube: fakeKube(t,
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+		apiServerEnvVarsConfigMap(map[string]string{}),
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: NamespaceAteSystem, Name: SecretAPIEnvVars}},
+	)}
+	if err := e.CreateAPIServerEnvVars(t.Context()); err != nil {
+		t.Fatalf("CreateAPIServerEnvVars() error = %v", err)
+	}
+	cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
+	if err != nil || cm == nil {
+		t.Fatalf("GetConfigMap() = %v, %v", cm, err)
+	}
+	for _, key := range []string{"ATE_API_EXPERIMENTAL_ENABLE_AUTHZ", "ATE_API_AUTHZ_BOOTSTRAP_OWNERS"} {
+		if v, ok := cm.Data[key]; ok {
+			t.Errorf("ConfigMap carries %s=%q; authorization is passed as flags", key, v)
+		}
+	}
+}
+
+// The shared client ServiceAccount as a bootstrap owner makes everyone who can
+// mint its token a global owner, so the install says so whenever it is listed.
+func TestSharedBootstrapOwnerWarning(t *testing.T) {
+	const shared = "system:serviceaccount:ate-system:ate-client"
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		owners  string
+		warn    bool
+	}{
+		{name: "default owner", enabled: true, owners: shared, warn: true},
+		{name: "listed among others", enabled: true, owners: "alice, " + shared + " ,bob", warn: true},
+		{name: "own principals only", enabled: true, owners: "alice,bob", warn: false},
+		{name: "another namespace's client", enabled: true, owners: "system:serviceaccount:other:ate-client", warn: false},
+		{name: "prefix is not a match", enabled: true, owners: shared + "-x", warn: false},
+		{name: "authorization off", enabled: false, owners: shared, warn: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sharedBootstrapOwnerWarning(tc.enabled, tc.owners, "ate-system")
+			if (got != "") != tc.warn {
+				t.Fatalf("sharedBootstrapOwnerWarning(%v, %q) = %q, want warning: %v", tc.enabled, tc.owners, got, tc.warn)
+			}
+			if tc.warn {
+				for _, want := range []string{shared, "--ateapi-authz-bootstrap-owners", "ATE_API_AUTHZ_BOOTSTRAP_OWNERS"} {
+					if !strings.Contains(got, want) {
+						t.Errorf("warning %q does not name %q", got, want)
+					}
+				}
+			}
+		})
 	}
 }

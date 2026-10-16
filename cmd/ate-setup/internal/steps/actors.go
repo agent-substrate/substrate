@@ -17,8 +17,8 @@ package steps
 import (
 	"context"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TemplateRef identifies a demo's ActorTemplate. Actors are deleted by matching

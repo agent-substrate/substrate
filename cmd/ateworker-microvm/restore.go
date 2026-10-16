@@ -27,19 +27,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateworker/phaselog"
-	"github.com/agent-substrate/substrate/internal/workerstats"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateworker/phaselog"
+	"go.ate.dev/substrate/internal/workerstats"
 
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/ateworker/actornet"
 
-	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/ch"
-	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/sizing"
-	"github.com/agent-substrate/substrate/internal/wakeupprobe"
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sizing"
+	"go.ate.dev/substrate/internal/wakeupprobe"
 )
 
 // restoreMemMode picks how cloud-hypervisor should load guest RAM, from what the VMM
@@ -405,10 +405,8 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// page cache before resuming the VM so guest RAM and snapshot page cache do
 	// not overlap during Resume and wakeup probe gating.
 	//
-	// Dropping ahead of Resume means a Resume, agent dial, or wakeup failure leaves
-	// restore-state empty; atelet re-downloads with O_TRUNC and resetActorDirs
-	// wipes the directory on retry, so this costs a re-download on retry rather
-	// than correctness.
+	// When the restore dir is not preserved, dropping ahead of Resume means a
+	// failure after this point costs a re-download of the snapshot on retry.
 	maybeDropStagedMemoryImage(ctx, restoreDir, memMode, preserveRestoreDir)
 	dropActorSnapshotCacheAsync(restoreDir, memMode == ch.MemRestoreEager)
 	if err := client.Resume(ctx); err != nil {

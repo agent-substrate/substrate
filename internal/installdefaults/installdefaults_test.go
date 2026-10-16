@@ -16,6 +16,14 @@ package installdefaults
 
 import "testing"
 
+// ate-api-server matches bootstrap owners on this exact string, which is the
+// username Kubernetes puts in a ServiceAccount token's subject.
+func TestClientPrincipal(t *testing.T) {
+	if got, want := ClientPrincipal("ate-system"), "system:serviceaccount:ate-system:ate-client"; got != want {
+		t.Errorf("ClientPrincipal(ate-system) = %q, want %q", got, want)
+	}
+}
+
 func TestAteletSPIFFEID(t *testing.T) {
 	tests := []struct {
 		name      string

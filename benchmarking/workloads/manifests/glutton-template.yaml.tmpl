@@ -24,7 +24,7 @@ workerSelector:
     workload: benchmark-worker
 containers:
 - name: glutton
-  image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
+  image: ko://go.ate.dev/substrate/cmd/benchmarking/glutton
   # Port 80 is the only inbound port nftables forwards from the worker pod
   # into the actor sandbox (see cmd/ateworker-gvisor/main.go). HTTP/1.1 mode
   # lets the atenet router (which forwards HTTP/1.1 upstream) reach Ping.
@@ -58,9 +58,9 @@ containers:
 resources:
   limits:
   - name: cpu
-    quantity: "1"
+    quantity: "${ACTOR_CPU}"
   - name: memory
-    quantity: ${ACTOR_MEMORY}
+    quantity: "${ACTOR_MEMORY}"
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton/

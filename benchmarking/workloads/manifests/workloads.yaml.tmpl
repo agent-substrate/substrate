@@ -35,7 +35,7 @@ spec:
   replicas: ${WORKER_COUNT}
   sandboxClasses:
   - name: ${SANDBOX_CLASS}
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateworker-${SANDBOX_CLASS}
+  workerImage: ko://go.ate.dev/substrate/cmd/ateworker-${SANDBOX_CLASS}
   template:
     # Lets gvisor and microvm workers share a node tainted ate.dev/sandboxClass=shared.
     tolerations:

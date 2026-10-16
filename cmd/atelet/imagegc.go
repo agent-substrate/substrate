@@ -35,9 +35,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/nodepath"
 	"golang.org/x/sys/unix"
 )
 

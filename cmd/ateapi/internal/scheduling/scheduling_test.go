@@ -19,8 +19,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -331,7 +332,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
 				worker("w-amd", "gvisor", "node-b", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64"))),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64")},
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
 			wantPod:     "w-amd",
 		},
 		{
@@ -340,7 +341,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-upgraded", "gvisor", "node-a", tierTwo,
 					withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64", "old")},
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
 			wantPod:     "w-upgraded",
 		},
 		{
@@ -348,7 +349,7 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64")},
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
 		},
 	}
 
@@ -458,20 +459,20 @@ func TestApplies(t *testing.T) {
 		{
 			name:        "matches required runtime via default runtime",
 			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "amd64", "old"))),
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64", "old")},
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
 			want:        true,
 		},
 		{
 			name: "matches required runtime via restorable runtimes",
 			worker: worker("w", "gvisor", "node-a", nil,
 				withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64", "old")},
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
 			want:        true,
 		},
 		{
 			name:        "skips worker when required runtime does not match",
 			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: sandboxRuntime("gvisor", "amd64")},
+			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
 			want:        false,
 		},
 	}

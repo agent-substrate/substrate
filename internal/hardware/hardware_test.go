@@ -18,7 +18,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 func TestProbeHost(t *testing.T) {
@@ -44,28 +44,28 @@ func TestMatches(t *testing.T) {
 	}
 	amd64GVisor := runtimeWith("gvisor", "v1",
 		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
-		&ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"},
+		&ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
 	)
 	amd64GVisorReordered := runtimeWith("gvisor", "v1",
-		&ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"},
+		&ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
 		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
 	)
 	arm64GVisor := runtimeWith("gvisor", "v1",
 		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "arm64"},
-		&ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"},
+		&ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
 	)
 	amd64MicroVM := runtimeWith("microvm", "v1",
 		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
-		&ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"},
+		&ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
 	)
 	amd64GVisorV2 := runtimeWith("gvisor", "v2",
 		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
-		&ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"},
+		&ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
 	)
 	amd64GVisorExtraAttr := runtimeWith("gvisor", "v1",
 		&ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
-		&ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"},
-		&ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: "abc"},
+		&ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
+		&ateapipb.AttributeEntry{Key: AttrSandboxRuntimeHash, Value: "sha256:abc"},
 	)
 
 	tests := []struct {
@@ -100,8 +100,24 @@ func TestMatchesCompat(t *testing.T) {
 	}
 	amd64 := &ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "amd64"}
 	arm64 := &ateapipb.AttributeEntry{Key: AttrArchitecture, Value: "arm64"}
-	cpu := &ateapipb.AttributeEntry{Key: "cpu_features", Value: "GenuineIntel"}
-	hash := &ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: "abc"}
+	hash := &ateapipb.AttributeEntry{Key: AttrSandboxRuntimeHash, Value: "sha256:abc"}
+	cpuBits := func(val string) *ateapipb.AttributeEntry {
+		return &ateapipb.AttributeEntry{Key: AttrCPUFeatures, Value: val}
+	}
+
+	// Build >64-bit masks so the subset check spans mask words.
+	highSnap, err := EncodeCPUFeatures("amd64", []string{"pni", "avx2", "avx512_bf16"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	highWorkerSuperset, err := EncodeCPUFeatures("amd64", []string{"pni", "sse2", "avx2", "avx_vnni", "avx512_bf16"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	highWorkerMissingOne, err := EncodeCPUFeatures("amd64", []string{"pni", "sse2", "avx2", "avx_vnni"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name         string
@@ -109,10 +125,19 @@ func TestMatchesCompat(t *testing.T) {
 		want         bool
 	}{
 		{"equal", compat("v1", amd64), compat("v1", amd64), true},
-		{"key only the worker has is ignored", compat("v1", amd64, cpu), compat("v1", amd64), true},
-		{"key only the snapshot has fails", compat("v1", amd64), compat("v1", amd64, cpu), false},
-		{"key only the snapshot has fails even at equal count", compat("v1", amd64, cpu), compat("v1", amd64, hash), false},
+		{"key only the worker has is ignored", compat("v1", amd64, cpuBits("7")), compat("v1", amd64), true},
+		{"key only the snapshot has fails", compat("v1", amd64), compat("v1", amd64, cpuBits("7")), false},
+		{"key only the snapshot has fails even at equal count", compat("v1", amd64, cpuBits("7")), compat("v1", amd64, hash), false},
 		{"value differs", compat("v1", arm64), compat("v1", amd64), false},
+		{"cpu_features exact match", compat("v1", amd64, cpuBits(highSnap)), compat("v1", amd64, cpuBits(highSnap)), true},
+		{"cpu_features worker is superset of snapshot", compat("v1", amd64, cpuBits(highWorkerSuperset)), compat("v1", amd64, cpuBits(highSnap)), true},
+		{"cpu_features worker missing a snapshot feature bit", compat("v1", amd64, cpuBits(highWorkerMissingOne)), compat("v1", amd64, cpuBits(highSnap)), false},
+		{"cpu_features empty snapshot set matches any worker", compat("v1", amd64, cpuBits("7")), compat("v1", amd64, cpuBits("0")), true},
+		{"cpu_features empty worker set matches nothing", compat("v1", amd64, cpuBits("0")), compat("v1", amd64, cpuBits("7")), false},
+		{"cpu_features invalid worker bitmask fails", compat("v1", amd64, cpuBits("not-a-number")), compat("v1", amd64, cpuBits("7")), false},
+		{"cpu_features invalid snapshot bitmask fails", compat("v1", amd64, cpuBits("7")), compat("v1", amd64, cpuBits("-1")), false},
+		{"cpu_features non-canonical bitmask fails", compat("v1", amd64, cpuBits("07")), compat("v1", amd64, cpuBits("7")), false},
+		{"cpu_features uppercase hex fails", compat("v1", amd64, cpuBits("1F")), compat("v1", amd64, cpuBits("7")), false},
 		{"schema version differs", compat("v2", amd64), compat("v1", amd64), false},
 		{"both schema versions empty", compat("", amd64), compat("", amd64), false},
 		{"no attributes on either", compat("v1"), compat("v1"), true},
@@ -128,6 +153,60 @@ func TestMatchesCompat(t *testing.T) {
 				t.Errorf("MatchesCompat() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A Requirement is prepared once and asked of many workers, so what it keeps
+// of the snapshot must hold across comparisons, and the zero value must
+// require nothing.
+func TestRequirement(t *testing.T) {
+	rt := func(cpu string) *ateapipb.SandboxRuntime {
+		return &ateapipb.SandboxRuntime{
+			SandboxClass: "gvisor",
+			Version: &ateapipb.VersionedSandboxCompat{
+				SchemaVersion: SchemaVersionV1,
+				Attributes: []*ateapipb.AttributeEntry{
+					{Key: AttrArchitecture, Value: "amd64"},
+					{Key: AttrCPUFeatures, Value: cpu},
+				},
+			},
+		}
+	}
+	snap := rt("7")
+	req := NewRequirement(snap)
+	if req.Runtime() != snap {
+		t.Errorf("Runtime() = %v, want the prepared runtime", req.Runtime())
+	}
+	for _, tc := range []struct {
+		name   string
+		worker *ateapipb.SandboxRuntime
+		want   bool
+	}{
+		{"worker superset", rt("f"), true},
+		{"worker missing a bit", rt("3"), false},
+		{"worker mask invalid", rt("zz"), false},
+		{"worker superset after misses", rt("7"), true},
+	} {
+		if got := req.Matches(tc.worker); got != tc.want {
+			t.Errorf("%s: Matches() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	status := &ateapipb.WorkerStatus{DefaultRuntime: rt("3"), RestorableRuntimes: []*ateapipb.SandboxRuntime{rt("f")}}
+	if got := req.MatchingRuntime(status); got != status.RestorableRuntimes[0] {
+		t.Errorf("MatchingRuntime() = %v, want the restorable superset", got)
+	}
+
+	// A snapshot mask that does not parse is remembered as matching nothing.
+	if NewRequirement(rt("zz")).Matches(rt("f")) {
+		t.Error("Matches() with an invalid snapshot mask = true, want false")
+	}
+
+	var none Requirement
+	if none.Runtime() != nil || !none.Matches(nil) || !none.WorkerMatches(nil) {
+		t.Error("the zero Requirement must require nothing")
+	}
+	if got := none.RuntimeFor(status); got != status.DefaultRuntime {
+		t.Errorf("zero Requirement RuntimeFor() = %v, want DefaultRuntime", got)
 	}
 }
 

@@ -33,11 +33,11 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/atunnel"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/atenet"
+	atunnelingress "go.ate.dev/substrate/internal/atunnel/ingress"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 type mockClient struct {
@@ -66,7 +66,7 @@ func TestHandleRequestHeadersAcceptsMixedCaseRoutingHeaders(t *testing.T) {
 				t.Errorf("atespace = %q, want %q", got, want)
 			}
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
-				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
+				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
 			}}, nil
 		},
 	}
@@ -158,7 +158,7 @@ func TestHandleRequestHeadersConnectAttributeOverridesInnerHeader(t *testing.T) 
 		resumeFn: func(_ context.Context, in *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			gotActorRef = in.GetActor().GetAtespace() + "/" + in.GetActor().GetName()
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
-				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
+				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
 			}}, nil
 		},
 	}
@@ -207,6 +207,15 @@ func dynamicMetadataPort(dynamicMetadata *structpb.Struct) string {
 	return dynamicMetadata.GetFields()[OriginalDstMetadataKey].GetStructValue().GetFields()[OriginalDstPortKey].GetStringValue()
 }
 
+// testWorkerSPIFFEID is the SPIFFE ID the test assignments give their worker.
+const testWorkerSPIFFEID = "spiffe://cluster.local/ns/workers/sa/substrate-worker"
+
+// dynamicMetadataWorkerSPIFFEID extracts the SPIFFE ID HandleRequestHeaders
+// requires of atunnel.
+func dynamicMetadataWorkerSPIFFEID(dynamicMetadata *structpb.Struct) string {
+	return dynamicMetadata.GetFields()[OriginalDstMetadataKey].GetStructValue().GetFields()[WorkerSPIFFEIDKey].GetStringValue()
+}
+
 func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 	const secret = "do-not-log-me"
@@ -219,7 +228,7 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 
 	h := New(&mockClient{
 		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}}}}, nil
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}}}}, nil
 		},
 	}, ParkedRequestConfig{}, nil)
 
@@ -325,7 +334,7 @@ func TestHandleRequestHeaders(t *testing.T) {
 			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
 			resumeResp: &ateapipb.ResumeActorResponse{
 				Actor: &ateapipb.Actor{
-					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"invalid-ip"}}},
+					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"invalid-ip"}}},
 				},
 			},
 			expectErr:      true,
@@ -345,11 +354,23 @@ func TestHandleRequestHeaders(t *testing.T) {
 			expectedStatus: envoy_type.StatusCode_InternalServerError,
 		},
 		{
+			name:      "No worker SPIFFE ID from resume returns 500",
+			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
+			resumeResp: &ateapipb.ResumeActorResponse{
+				Actor: &ateapipb.Actor{
+					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
+				},
+			},
+			expectErr:      true,
+			expectedErrStr: `actor team-a/123e4567-e89b-12d3-a456-426614174000 routing failed`,
+			expectedStatus: envoy_type.StatusCode_InternalServerError,
+		},
+		{
 			name:      "successful resume ignores host and port for actor routing",
 			authority: "127.0.0.1:44681",
 			resumeResp: &ateapipb.ResumeActorResponse{
 				Actor: &ateapipb.Actor{
-					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
+					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
 				},
 			},
 			expectErr:          false,
@@ -361,7 +382,7 @@ func TestHandleRequestHeaders(t *testing.T) {
 			authority: "127.0.0.1:44681",
 			resumeResp: &ateapipb.ResumeActorResponse{
 				Actor: &ateapipb.Actor{
-					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"fd00::52", "10.0.0.52"}}},
+					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"fd00::52", "10.0.0.52"}}},
 				},
 			},
 			expectErr:          false,
@@ -441,7 +462,7 @@ func TestHandleRequestHeaders(t *testing.T) {
 			for _, headerOption := range mutation.GetSetHeaders() {
 				gotMutations[strings.ToLower(headerOption.Header.Key)] = string(headerOption.Header.RawValue)
 			}
-			if _, ok := gotMutations[strings.ToLower(atunnel.TargetPortHeader)]; ok {
+			if _, ok := gotMutations[strings.ToLower(atunnelingress.TargetPortHeader)]; ok {
 				t.Errorf("target port must be emitted only as dynamic metadata")
 			}
 			if got, want := gotMutations[strings.ToLower(atenet.TargetActorHeader)], "team-a/"+testUUID; got != want {
@@ -453,6 +474,9 @@ func TestHandleRequestHeaders(t *testing.T) {
 			if got := dynamicMetadataPort(res.DynamicMetadata); got != tc.expectedTargetPort {
 				t.Errorf("dynamic metadata port = %q, want %q", got, tc.expectedTargetPort)
 			}
+			if got, want := dynamicMetadataWorkerSPIFFEID(res.DynamicMetadata), testWorkerSPIFFEID; got != want {
+				t.Errorf("dynamic metadata worker SPIFFE ID = %q, want %q", got, want)
+			}
 		})
 	}
 }
@@ -463,14 +487,14 @@ func TestHandleRequestHeaders(t *testing.T) {
 // produces the same "<workerIP>:443" original-dst mutation as an ordinary
 // request (the router only ever dials the worker's atunnel server), and
 // reports the arbitrary port itself in dynamic metadata for Envoy to write to
-// atunnel.TargetPortHeader.
+// atunnelingress.TargetPortHeader.
 func TestHandleRequestHeadersHandlesConnectMethod(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 	authority := testUUID + ".team-a.actors.resources.substrate.ate.dev:9090"
 
 	clientMock := &mockClient{
 		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}}}}, nil
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}}}}, nil
 		},
 	}
 	h := New(clientMock, ParkedRequestConfig{}, nil)
@@ -503,7 +527,7 @@ func TestHandleRequestHeadersUsesRetainedConnectAuthorityForPort(t *testing.T) {
 	clientMock := &mockClient{
 		resumeFn: func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
-				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
+				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
 			}}, nil
 		},
 	}
@@ -655,7 +679,7 @@ func TestHandleRequestHeadersConnectRequiresOuterTargetActor(t *testing.T) {
 					atomic.AddInt32(&resumeCalls, 1)
 					gotActorRef = in.GetActor().GetAtespace() + "/" + in.GetActor().GetName()
 					return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
-						Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
+						Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
 					}}, nil
 				},
 			}
@@ -720,7 +744,7 @@ func TestHandleRequestHeaders_FullLotServesRunningActor(t *testing.T) {
 				Actor: &ateapipb.Actor{
 					Status: &ateapipb.ActorStatus{
 						State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
-						WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.1"}},
+						WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.1"}},
 					},
 				},
 			}, nil

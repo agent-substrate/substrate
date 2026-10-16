@@ -33,7 +33,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/agent-substrate/substrate/internal/ateapiauth"
+	"go.ate.dev/substrate/internal/ateapiauth"
 )
 
 // credentialURIScheme is the only scheme a credential URI may carry.

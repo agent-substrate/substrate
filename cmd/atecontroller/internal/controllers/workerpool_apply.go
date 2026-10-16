@@ -26,12 +26,12 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
-	"github.com/agent-substrate/substrate/internal/deviceplugin"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/preview"
-	"github.com/agent-substrate/substrate/internal/workercapacity"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/internal/deviceplugin"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/workercapacity"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // workerOTelResourceAttributes mirrors atelet.yaml; service.instance.id is the pod
@@ -551,7 +551,7 @@ func applyWorkerPoolPodTemplate(
 	podSpecAC.NodeSelector = map[string]string{}
 	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{}
 	podSpecAC.WithPriorityClassName("")
-	podSpecAC.WithServiceAccountName("default")
+	podSpecAC.WithServiceAccountName(installdefaults.WorkerServiceAccount)
 	podSpecAC.WithAffinity(corev1ac.Affinity())
 	resourcesAC := corev1ac.ResourceRequirements()
 	containerAC.WithResources(resourcesAC)

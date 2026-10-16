@@ -72,7 +72,7 @@ func (s *closeErrorStore) GetObject(ctx context.Context, bucket, object string) 
 
 func TestFetchFromGCSWithZstdCloseError(t *testing.T) {
 	var compressed bytes.Buffer
-	if _, err := writeContent(&compressed, bytes.NewBufferString("snapshot payload")); err != nil {
+	if _, err := writeContent(context.Background(), &compressed, bytes.NewBufferString("snapshot payload"), 2); err != nil {
 		t.Fatal(err)
 	}
 	closeErr := errors.New("object reader close failed")
@@ -253,7 +253,7 @@ func TestSparseVersionRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if _, _, err := writeSparseZstd(&buf, f); err != nil {
+	if _, _, err := writeSparseZstd(context.Background(), &buf, f, 2); err != nil {
 		t.Fatalf("writeSparseZstd: %v", err)
 	}
 	f.Close()
@@ -307,7 +307,7 @@ func TestWriteSparseZstdSkipsHoles(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	logical, dataBytes, err := writeSparseZstd(&buf, src)
+	logical, dataBytes, err := writeSparseZstd(context.Background(), &buf, src, 2)
 	if err != nil {
 		t.Fatalf("writeSparseZstd: %v", err)
 	}
@@ -328,8 +328,7 @@ func TestPlainZstdBackwardCompatRoundTrip(t *testing.T) {
 	store := newMemStore()
 	ctx := context.Background()
 	const gsURL = "gs://bucket/snap/config.json.zstd"
-	// SendBytesToGCS is uncompressed; use sendZstd with a non-file reader to
-	// hit the plain-zstd branch (no magic).
+	// Use a non-file reader to hit the plain-zstd branch (no magic).
 	if err := sendZstd(ctx, store, gsURL, bytes.NewReader(want)); err != nil {
 		t.Fatalf("upload: %v", err)
 	}
@@ -451,7 +450,7 @@ func TestWriteDecodeContentRoundTrip(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		wres, err := writeContent(&buf, src)
+		wres, err := writeContent(context.Background(), &buf, src, 2)
 		if err != nil {
 			t.Fatalf("writeContent: %v", err)
 		}
@@ -495,7 +494,7 @@ func TestWriteDecodeContentRoundTrip(t *testing.T) {
 	t.Run("plain reader", func(t *testing.T) {
 		want := bytes.Repeat([]byte("substrate payload\n"), 1000)
 		var buf bytes.Buffer
-		wres, err := writeContent(&buf, bytes.NewReader(want))
+		wres, err := writeContent(context.Background(), &buf, bytes.NewReader(want), 2)
 		if err != nil {
 			t.Fatalf("writeContent: %v", err)
 		}

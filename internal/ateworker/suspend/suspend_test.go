@@ -32,7 +32,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/util/wait"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // capturingAtelet stands in for the node-local atelet. It records every

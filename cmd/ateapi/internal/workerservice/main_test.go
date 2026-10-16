@@ -17,7 +17,7 @@ package workerservice
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 )
 
 func TestMain(m *testing.M) {

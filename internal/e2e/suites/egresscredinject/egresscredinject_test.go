@@ -31,9 +31,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -48,7 +48,7 @@ var probeNamespace string
 // the egress gateway trusts once hack/setup-e2e-egress-tls-kind.sh has run.
 var echoServer = e2e.ServiceDNSTLS(e2e.ServerPod{
 	Name:       "echo",
-	ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+	ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 	Args:       []string{"http"},
 })
 

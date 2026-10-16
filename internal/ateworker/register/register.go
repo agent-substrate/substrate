@@ -13,8 +13,8 @@
 // limitations under the License.
 
 // Package register registers a worker with the control plane through the
-// node-local atelet, reporting its compute capacity and the sandbox runtime
-// its actors start under.
+// node-local atelet, reporting its compute capacity and the sandbox runtimes
+// of its pool, and provides file-watching helpers shared by worker binaries.
 package register
 
 import (
@@ -22,26 +22,33 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateletdial"
-	"github.com/agent-substrate/substrate/internal/hardware"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/workercapacity"
+	"go.ate.dev/substrate/internal/ateletdial"
+	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sandboxruntimes"
+	"go.ate.dev/substrate/internal/workercapacity"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/resource"
-
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
 
 const (
 	reportTimeout        = 10 * time.Second
 	initialReportBackoff = 500 * time.Millisecond
 	maxReportBackoff     = 30 * time.Second
+	resyncInterval       = 5 * time.Minute
 )
 
 // FromFiles combines the downward API compute limits with the worker's own
@@ -68,17 +75,36 @@ func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 	}
 }
 
-// defaultRuntime is the runtime actors hosted by this worker start under: its
-// sandbox class on this host's hardware.
-//
-// TODO: Report the pool's SandboxConfig so atelet can complete the identity
-// with the digests of the default version's assets and list its other
-// enabled versions as restorable_runtimes.
-func defaultRuntime(sandboxClass string) *ateletpb.SandboxRuntime {
+// buildRuntime converts the compatibility attributes atelet wrote for one
+// SandboxConfig version into a SandboxRuntime of sandboxClass.
+func buildRuntime(sandboxClass string, attrs sandboxruntimes.Attributes) *ateletpb.SandboxRuntime {
+	entries := make([]*ateletpb.AttributeEntry, 0, len(attrs))
+	for _, k := range slices.Sorted(maps.Keys(attrs)) {
+		entries = append(entries, &ateletpb.AttributeEntry{
+			Key:   k,
+			Value: attrs[k],
+		})
+	}
 	return &ateletpb.SandboxRuntime{
 		SandboxClass: sandboxClass,
-		Version:      hardware.ProbeHost(),
+		Version: &ateletpb.VersionedSandboxCompat{
+			SchemaVersion: hardware.SchemaVersionV1,
+			Attributes:    entries,
+		},
 	}
+}
+
+// buildRequest builds the RegisterWorkerRequest for capacity and the runtimes
+// in f under sandboxClass.
+func buildRequest(capacity *ateletpb.WorkerResources, sandboxClass string, f *sandboxruntimes.File) *ateletpb.RegisterWorkerRequest {
+	req := &ateletpb.RegisterWorkerRequest{
+		Capacity:       capacity,
+		DefaultRuntime: buildRuntime(sandboxClass, f.DefaultRuntime),
+	}
+	for _, attrs := range f.RestorableRuntimes {
+		req.RestorableRuntimes = append(req.RestorableRuntimes, buildRuntime(sandboxClass, attrs))
+	}
+	return req
 }
 
 // cpuMemory is the Resources for those two dimensions. A zero dimension is
@@ -113,7 +139,7 @@ func readLimit(path string) int64 {
 }
 
 // ReportConfig configures how a worker reaches the node-local atelet and what
-// capacity and sandbox runtime class it registers with.
+// it registers with.
 type ReportConfig struct {
 	SocketPath           string
 	CredentialBundlePath string
@@ -126,60 +152,146 @@ type ReportConfig struct {
 	Actors int
 	// SandboxClass is the class this worker implements ("gvisor", "microvm").
 	SandboxClass string
+	// RuntimesFile is the sandbox runtimes file atelet keeps for this worker
+	// (nodepath.WorkerSandboxRuntimesPath).
+	RuntimesFile string
 }
 
-// Report tells the node-local atelet what this worker can supply and the
-// runtime its actors start under, retrying until it is accepted or ctx ends.
+// Report keeps the worker registered with the node-local atelet until ctx
+// ends: its capacity, and the runtimes in its sandbox runtimes file, which it
+// reads at startup and again whenever atelet rewrites it. It returns early
+// only on a configuration error, which no retry would fix.
 //
-// Retrying is what makes a single report durable: atelet only accepts once the
+// Retrying is what makes a report durable: atelet only accepts once the
 // control plane has recorded it, and the Worker record may not exist yet when
 // a worker first comes up. Nothing else reports this, so giving up would leave
 // the Worker holding no capacity and hosting nothing.
 func Report(ctx context.Context, cfg ReportConfig) error {
 	if cfg.SandboxClass == "" {
-		// The control plane refuses a runtime without a class, and retrying
-		// would not change that.
-		return errors.New("capacity report: SandboxClass is required")
+		// The control plane refuses a runtime without a class.
+		return errors.New("register worker: SandboxClass is required")
+	}
+	if cfg.RuntimesFile == "" {
+		return errors.New("register worker: RuntimesFile is required")
 	}
 	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath, cfg.AteletSPIFFEID)
 	if err != nil {
-		return fmt.Errorf("capacity report: %w", err)
+		return fmt.Errorf("register worker: %w", err)
 	}
-	req := &ateletpb.RegisterWorkerRequest{
-		Capacity:       FromFiles(cfg.Actors),
-		DefaultRuntime: defaultRuntime(cfg.SandboxClass),
-	}
-	err = retryReport(ctx, func() error {
-		return reportOnce(ctx, cfg.SocketPath, tlsConfig, req)
-	}, initialReportBackoff)
-	if err != nil {
-		return err
-	}
-	slog.InfoContext(ctx, "Registered worker capacity and sandbox runtime",
-		slog.Any("capacity", req.GetCapacity()),
-		slog.Any("default_runtime", req.GetDefaultRuntime()))
-	return nil
+	changes := WatchFilePath(ctx, cfg.RuntimesFile)
+	r := newReconciler(
+		cfg,
+		FromFiles(cfg.Actors),
+		func() (*sandboxruntimes.File, error) { return sandboxruntimes.Read(cfg.RuntimesFile) },
+		func(ctx context.Context, req *ateletpb.RegisterWorkerRequest) error {
+			return reportOnce(ctx, cfg.SocketPath, tlsConfig, req)
+		},
+	)
+	return r.run(ctx, changes)
 }
 
-// retryReport calls send until it succeeds or ctx ends, backing off between
-// attempts. send is a parameter so the loop can be exercised without a socket
-// or certificates.
-func retryReport(ctx context.Context, send func() error, backoff time.Duration) error {
+// reconciler registers the worker with the runtimes in its sandbox runtimes
+// file whenever they differ from the ones it last registered.
+type reconciler struct {
+	cfg            ReportConfig
+	capacity       *ateletpb.WorkerResources
+	read           func() (*sandboxruntimes.File, error)
+	register       func(context.Context, *ateletpb.RegisterWorkerRequest) error
+	initialBackoff time.Duration
+	maxBackoff     time.Duration
+	resync         time.Duration
+	after          func(time.Duration) <-chan time.Time
+	// registered is the last request accepted by atelet, nil until the first
+	// registration succeeds.
+	registered *ateletpb.RegisterWorkerRequest
+}
+
+func newReconciler(
+	cfg ReportConfig,
+	capacity *ateletpb.WorkerResources,
+	read func() (*sandboxruntimes.File, error),
+	register func(context.Context, *ateletpb.RegisterWorkerRequest) error,
+) *reconciler {
+	return &reconciler{
+		cfg:            cfg,
+		capacity:       capacity,
+		read:           read,
+		register:       register,
+		initialBackoff: initialReportBackoff,
+		maxBackoff:     maxReportBackoff,
+		resync:         resyncInterval,
+		after:          time.After,
+	}
+}
+
+// run syncs at startup, on every change to the file, with backoff after a
+// transient failure, and periodically at resyncInterval, until ctx ends.
+// Change signals are ignored while backing off so periodic polling or rapid
+// writes cannot bypass the backoff delay when atelet or ateapi is down.
+func (r *reconciler) run(ctx context.Context, changes <-chan struct{}) error {
+	backoff := r.initialBackoff
 	for {
-		err := send()
-		if err == nil {
-			return nil
+		wait := r.resync
+		onChange := changes
+		if r.sync(ctx) {
+			wait = backoff
+			backoff = min(backoff*2, r.maxBackoff)
+			onChange = nil
+		} else {
+			backoff = r.initialBackoff
 		}
-		slog.WarnContext(ctx, "Retrying worker capacity report", slog.Duration("in", backoff), slog.Any("err", err))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(backoff):
+		case _, ok := <-onChange:
+			if !ok {
+				changes = nil
+			}
+		case <-r.after(wait):
 		}
-		backoff = min(backoff*2, maxReportBackoff)
 	}
 }
 
+// sync reads the file and registers if needed. It reports whether the caller
+// should retry with backoff.
+func (r *reconciler) sync(ctx context.Context) (retry bool) {
+	desired, err := r.read()
+	if errors.Is(err, fs.ErrNotExist) {
+		if r.registered == nil {
+			slog.InfoContext(ctx, "Waiting for the sandbox runtimes file, which atelet writes; see its logs if this persists",
+				slog.String("path", r.cfg.RuntimesFile))
+		}
+		return false
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "Ignoring an unreadable sandbox runtimes file", slog.String("path", r.cfg.RuntimesFile), slog.Any("err", err))
+		return false
+	}
+	if len(desired.DefaultRuntime) == 0 {
+		slog.WarnContext(ctx, "Ignoring a sandbox runtimes file with no default runtime", slog.String("path", r.cfg.RuntimesFile))
+		return false
+	}
+	req := buildRequest(r.capacity, r.cfg.SandboxClass, desired)
+	if proto.Equal(req, r.registered) {
+		return false
+	}
+	if err := r.register(ctx, req); err != nil {
+		if status.Code(err) == codes.InvalidArgument {
+			slog.ErrorContext(ctx, "Worker registration rejected as invalid; waiting for sandbox runtimes file to change", slog.Any("err", err))
+			return false
+		}
+		slog.WarnContext(ctx, "Could not register worker; will retry", slog.Any("err", err))
+		return true
+	}
+	r.registered = req
+	slog.InfoContext(ctx, "Registered worker capacity and sandbox runtimes",
+		slog.Any("capacity", req.GetCapacity()),
+		slog.Any("default_runtime", req.GetDefaultRuntime()),
+		slog.Any("restorable_runtimes", req.GetRestorableRuntimes()))
+	return false
+}
+
+// reportOnce dials atelet and sends one RegisterWorker.
 func reportOnce(ctx context.Context, socketPath string, tlsConfig *tls.Config, req *ateletpb.RegisterWorkerRequest) error {
 	conn, err := ateletdial.Dial(socketPath, tlsConfig)
 	if err != nil {

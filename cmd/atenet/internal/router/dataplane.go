@@ -24,8 +24,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
-	"github.com/agent-substrate/substrate/internal/credbundle"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/internal/credbundle"
 )
 
 type dataplaneHealthCheck struct {
@@ -122,7 +122,7 @@ func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.Pa
 	if s.cfg.IngressAuth.mode() == IngressAuthDeprecatedInsecure {
 		slog.WarnContext(ctx, "Ingress client authentication is optional: any client that presents no certificate, or uses a plaintext listener, can reach any actor. Set --ingress-auth-mode=static-mtls to require mTLS")
 	}
-	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath, s.cfg.UpstreamSpiffePrefix)
+	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath)
 	xdsSrv.SetUpstreamConnect(s.cfg.UpstreamConnect)
 
 	// The snapshot is a pure function of the configuration applied above, so it

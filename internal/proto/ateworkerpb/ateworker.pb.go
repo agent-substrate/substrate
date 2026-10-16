@@ -2166,7 +2166,7 @@ const file_ateworker_proto_rawDesc = "" +
 	"\x0fRestoreWorkload\x12!.ateworker.RestoreWorkloadRequest\x1a\".ateworker.RestoreWorkloadResponse\"\x00\x12]\n" +
 	"\x10GetWorkloadStats\x12\".ateworker.GetWorkloadStatsRequest\x1a#.ateworker.GetWorkloadStatsResponse\"\x00\x12o\n" +
 	"\x16GetActiveWorkloadStats\x12(.ateworker.GetActiveWorkloadStatsRequest\x1a).ateworker.GetActiveWorkloadStatsResponse\"\x00\x12`\n" +
-	"\x11TerminateWorkload\x12#.ateworker.TerminateWorkloadRequest\x1a$.ateworker.TerminateWorkloadResponse\"\x00BAZ?github.com/agent-substrate/substrate/internal/proto/ateworkerpbb\x06proto3"
+	"\x11TerminateWorkload\x12#.ateworker.TerminateWorkloadRequest\x1a$.ateworker.TerminateWorkloadResponse\"\x00B1Z/go.ate.dev/substrate/internal/proto/ateworkerpbb\x06proto3"
 
 var (
 	file_ateworker_proto_rawDescOnce sync.Once

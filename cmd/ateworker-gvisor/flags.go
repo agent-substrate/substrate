@@ -26,9 +26,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 
-	"github.com/fsnotify/fsnotify"
+	"go.ate.dev/substrate/internal/ateworker/register"
 )
 
 // commandFlags holds per-command flags for a single command.
@@ -126,24 +127,12 @@ func newFlagStore(ctx context.Context, path string) (*flagStore, error) {
 		return nil, err
 	}
 
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return nil, fmt.Errorf("while creating fsnotify watcher for %q: %w", cleanPath, err)
-	}
-
-	// Watch the parent directory so both in-place writes and atomic file
-	// replacements (renames) are detected.
-	dir := filepath.Dir(cleanPath)
-	if err := watcher.Add(dir); err != nil {
-		_ = watcher.Close()
-		return nil, fmt.Errorf("while watching directory %q for %q: %w", dir, cleanPath, err)
-	}
-
+	changes := register.WatchFilePath(ctx, cleanPath)
 	store := &flagStore{
 		path: cleanPath,
 		cfg:  cfg,
 	}
-	go store.watchLoop(ctx, watcher)
+	go store.watchLoop(ctx, changes)
 	return store, nil
 }
 
@@ -155,39 +144,18 @@ func (s *flagStore) get() *flagConfig {
 	return cfg
 }
 
-func (s *flagStore) watchLoop(ctx context.Context, watcher *fsnotify.Watcher) {
-	defer func() {
-		if err := watcher.Close(); err != nil {
-			slog.Warn("Failed to close flags config watcher", slog.String("path", s.path), slog.Any("err", err))
-		}
-	}()
+func (s *flagStore) watchLoop(ctx context.Context, changes <-chan struct{}) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case event, ok := <-watcher.Events:
+		case _, ok := <-changes:
 			if !ok {
 				return
 			}
-			if s.isConfigEvent(event) {
-				s.reload()
-			}
-		case err, ok := <-watcher.Errors:
-			if !ok {
-				return
-			}
-			slog.Error("Error watching flags configuration file",
-				slog.String("path", s.path),
-				slog.Any("err", err))
+			s.reload()
 		}
 	}
-}
-
-func (s *flagStore) isConfigEvent(event fsnotify.Event) bool {
-	if filepath.Clean(event.Name) != s.path {
-		return false
-	}
-	return event.Has(fsnotify.Write) || event.Has(fsnotify.Create)
 }
 
 func (s *flagStore) reload() {
@@ -206,7 +174,12 @@ func (s *flagStore) reload() {
 	}
 
 	s.mu.Lock()
-	s.cfg = cfg
+	unchanged := reflect.DeepEqual(s.cfg, cfg)
+	if !unchanged {
+		s.cfg = cfg
+	}
 	s.mu.Unlock()
-	slog.Info("Reloaded flags configuration", slog.String("path", s.path))
+	if !unchanged {
+		slog.Info("Reloaded flags configuration", slog.String("path", s.path))
+	}
 }

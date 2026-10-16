@@ -22,10 +22,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/errgroup"
@@ -109,7 +109,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	g.Go(func() error {
 		var err error
 		if img, err = imageCache.EnsureImage(gctx, ref); err != nil {
-			return fmt.Errorf("in imageCache.EnsureImage: %w", err)
+			return fmt.Errorf("in imageCache.EnsureImage(%q): %w", ref, err)
 		}
 		return nil
 	})
@@ -163,9 +163,10 @@ func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volu
 	g, gctx := errgroup.WithContext(ctx)
 	for i, vol := range wanted {
 		g.Go(func() error {
-			img, err := imageCache.EnsureImage(gctx, vol.GetImage().GetReference())
+			volRef := vol.GetImage().GetReference()
+			img, err := imageCache.EnsureImage(gctx, volRef)
 			if err != nil {
-				return fmt.Errorf("in imageCache.EnsureImage for volume %q: %w", vol.GetName(), err)
+				return fmt.Errorf("in imageCache.EnsureImage(%q) for volume %q: %w", volRef, vol.GetName(), err)
 			}
 			out[i] = imagecache.ImageVolumeOverlay{
 				Name:        vol.GetName(),

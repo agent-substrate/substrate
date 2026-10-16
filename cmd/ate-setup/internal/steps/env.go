@@ -26,12 +26,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/ko"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kustomize"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/ko"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 // Timeouts carried over from the --timeout values in the shell installer.
@@ -80,6 +80,11 @@ type Env struct {
 	// work on a machine with no container registry credentials configured, and
 	// the build-from-source resolver fails at construction without them.
 	resolver imageResolver
+
+	// dockerfileImages caches resolved Dockerfile image references by image
+	// name so a multi-manifest deploy (e.g., router + egress) builds or pins
+	// each Dockerfile image once.
+	dockerfileImages map[string]string
 }
 
 // Namespace is the namespace the control plane is installed into. It is
@@ -163,22 +168,35 @@ func (e *Env) koRunner() (*ko.Runner, error) {
 // That only works if the release published it there, which
 // `ate-setup publish release-images` does.
 func (e *Env) dockerfileImage(ctx context.Context, name, contextDir string) (string, error) {
-	if !e.Cfg.Images.IsPrebuilt() {
-		return images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, name, e.Cfg.Path(contextDir), e.Cfg.KODefaultPlatforms, e.Cfg.DockerBuildFlags)
+	if ref, ok := e.dockerfileImages[name]; ok {
+		return ref, nil
 	}
-	resolver, err := e.imageResolver()
+	var ref string
+	var err error
+	if !e.Cfg.Images.IsPrebuilt() {
+		ref, err = images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, name, e.Cfg.Path(contextDir), e.Cfg.KODefaultPlatforms, e.Cfg.DockerBuildFlags)
+	} else {
+		resolver, rErr := e.imageResolver()
+		if rErr != nil {
+			return "", rErr
+		}
+		prebuilt, ok := resolver.(*images.Prebuilt)
+		if !ok {
+			return "", fmt.Errorf("image resolver is %T, not a pre-built resolver", resolver)
+		}
+		ref, err = prebuilt.Pin(ctx, name)
+		if err != nil {
+			return "", fmt.Errorf("%s is built from a Dockerfile, not with ko, so a release has to publish it "+
+				"alongside the other images (ate-setup publish release-images): %w", name, err)
+		}
+	}
 	if err != nil {
 		return "", err
 	}
-	prebuilt, ok := resolver.(*images.Prebuilt)
-	if !ok {
-		return "", fmt.Errorf("image resolver is %T, not a pre-built resolver", resolver)
+	if e.dockerfileImages == nil {
+		e.dockerfileImages = make(map[string]string)
 	}
-	ref, err := prebuilt.Pin(ctx, name)
-	if err != nil {
-		return "", fmt.Errorf("%s is built from a Dockerfile, not with ko, so a release has to publish it "+
-			"alongside the other images (ate-setup publish release-images): %w", name, err)
-	}
+	e.dockerfileImages[name] = ref
 	return ref, nil
 }
 

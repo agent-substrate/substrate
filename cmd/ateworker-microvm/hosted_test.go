@@ -21,8 +21,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // Re-admitting an actor that is already hosted keeps its slot, so it succeeds

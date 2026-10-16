@@ -27,8 +27,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -285,7 +285,10 @@ func (m *recordingMinter) mints() []*ateapipb.MintWorkerActorCertificateRequest 
 	return slices.Clone(m.reqs)
 }
 
-const testActorUID = "0f9c1d2e-3b4a-4c5d-8e6f-7a8b9c0d1e2f"
+const (
+	testActorUID     = "0f9c1d2e-3b4a-4c5d-8e6f-7a8b9c0d1e2f"
+	testWorkerPodUID = "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a"
+)
 
 var testGateway = &ateletpb.EgressGateway{Address: "atenet-egress.ate-system.svc:443"}
 
@@ -293,11 +296,11 @@ var testGateway = &ateletpb.EgressGateway{Address: "atenet-egress.ate-system.svc
 func activations(h *herder, gateway *ateletpb.EgressGateway) map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
 		"Run": func(ctx context.Context) error {
-			_, err := h.Run(ctx, &ateletpb.RunRequest{Atespace: "team-a", ActorName: "sleep-1", ActorUid: testActorUID, EgressGateway: gateway})
+			_, err := h.Run(ctx, &ateletpb.RunRequest{WorkerPodUid: testWorkerPodUID, Atespace: "team-a", ActorName: "sleep-1", ActorUid: testActorUID, EgressGateway: gateway})
 			return err
 		},
 		"Restore": func(ctx context.Context) error {
-			_, err := h.Restore(ctx, &ateletpb.RestoreRequest{Atespace: "team-a", ActorName: "sleep-1", ActorUid: testActorUID, EgressGateway: gateway})
+			_, err := h.Restore(ctx, &ateletpb.RestoreRequest{WorkerPodUid: testWorkerPodUID, Atespace: "team-a", ActorName: "sleep-1", ActorUid: testActorUID, EgressGateway: gateway})
 			return err
 		},
 	}
@@ -329,6 +332,10 @@ func TestHerderMintsActorCertificateOnActivation(t *testing.T) {
 			want := &ateapipb.ObjectRef{Atespace: "team-a", Name: "sleep-1"}
 			if !proto.Equal(got[0].GetActor(), want) || got[0].GetActorUid() != testActorUID {
 				t.Errorf("%s minted for %v/%q, want %v/%q", name, got[0].GetActor(), got[0].GetActorUid(), want, testActorUID)
+			}
+			// The control plane mints only for the worker hosting the actor.
+			if got, want := got[0].GetWorker(), (&ateapipb.ObjectRef{Name: testWorkerPodUID}); !proto.Equal(got, want) {
+				t.Errorf("%s minted as worker %v, want %v", name, got, want)
 			}
 			// ate-api-server parses the CSR and checks its signature.
 			csr, err := x509.ParseCertificateRequest(got[0].GetCertificateSigningRequest())

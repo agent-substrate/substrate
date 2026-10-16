@@ -14,7 +14,7 @@
 
 package resources
 
-import "github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+import "go.ate.dev/substrate/pkg/proto/ateapipb"
 
 // ActorAttribution is what telemetry about an actor is attributed to: an
 // ActorRef plus the two things a ref does not carry, the server-assigned uid and

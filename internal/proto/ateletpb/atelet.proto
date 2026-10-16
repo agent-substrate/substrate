@@ -18,7 +18,7 @@ package atelet;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
+option go_package = "go.ate.dev/substrate/internal/proto/ateletpb";
 
 // WorkerSupport provides callouts for worker implementations.
 //
@@ -110,12 +110,14 @@ message VersionedSandboxCompat {
   string schema_version = 1;
 
   // Key-value compatibility attributes defined by this schema version, covering
-  // both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
-  // features after masking (e.g. "architecture", "cpu_features").
+  // both runtime assets (e.g. "sandbox_runtime_hash") and effective guest
+  // hardware features after masking (e.g. "architecture", "cpu_features").
   // Matched against a snapshot under the same schema_version: every attribute
-  // on the snapshot must be present on the worker with an equal value; keys
-  // only the worker has are ignored. Bump schema_version when a key's meaning
-  // changes or older snapshots must no longer match.
+  // on the snapshot must be present on the worker with an equal value (except
+  // "cpu_features", where the snapshot's hexadecimal bitmask must be a bitwise
+  // subset of the worker's); keys only the worker has are ignored. Bump
+  // schema_version when a key's meaning changes or older snapshots must no
+  // longer match.
   // Order as sent does not matter: ate-api-server sorts attributes by key
   // before recording them.
   //
@@ -128,7 +130,7 @@ message VersionedSandboxCompat {
 
 // AttributeEntry is a single key-value compatibility attribute.
 message AttributeEntry {
-  // Attribute name (e.g. "architecture", "cpu_features", "gvisor_asset_hash").
+  // Attribute name (e.g. "architecture", "cpu_features", "sandbox_runtime_hash").
   //
   // +k8s:required
   // +k8s:maxLength=128
@@ -341,6 +343,17 @@ service Atelet {
   // the upload and does not check whether the actor is running. Its only
   // caller, the suspend of a paused actor, relies on the deletion.
   rpc PromoteSnapshot(PromoteSnapshotRequest) returns (PromoteSnapshotResponse) {}
+
+  // DetachActor makes the actor's latest local snapshot durable, then deletes
+  // the actor's local snapshots on this node, so it can resume on any node.
+  // atelet also detaches a suspended actor on its own after its detach delay.
+  // Waits for an operation already in progress on the actor, such as an
+  // upload or a detach. Does nothing when atelet holds no local snapshot for
+  // the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
+  // actor is in progress or the actor runs on this node.
+  //
+  // TODO: Temporarily, atelet returns UNIMPLEMENTED.
+  rpc DetachActor(DetachActorRequest) returns (DetachActorResponse) {}
 
   // Terminate tells atelet to terminate/kill any running workload for an actor,
   // unmount its volumes, and clean up actor state on the node.
@@ -926,7 +939,7 @@ message SnapshotReport {
 }
 
 // ActorSnapshotState is what atelet holds for one actor on this node.
-// Returned by Checkpoint, PromoteSnapshot.
+// Returned by Checkpoint, PromoteSnapshot, DetachActor.
 message ActorSnapshotState {
   // The snapshot atelet restores the actor from locally. Unset when the
   // latest checkpoint kept no local copy, and once a detach has made the
@@ -1160,5 +1173,27 @@ message PromoteSnapshotRequest {
 message PromoteSnapshotResponse {
   // The actor's state once promoted: latest_durable is its latest snapshot,
   // and latest_local remains set if atelet still holds the local copy.
+  ActorSnapshotState state = 1;
+}
+
+message DetachActorRequest {
+  // Golden actors are accepted: an IMMEDIATE checkpoint keeps a local copy.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string atespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_name = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 3;
+}
+
+message DetachActorResponse {
+  // The actor's state once detached: latest_local is unset, and latest_durable
+  // is its latest snapshot, if atelet knows one.
   ActorSnapshotState state = 1;
 }

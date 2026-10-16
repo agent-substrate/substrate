@@ -18,7 +18,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 // trustBundleNames are the ClusterTrustBundles the podcertificate controller
@@ -31,11 +31,14 @@ var trustBundleNames = []string{
 }
 
 // EnsureAPIServerPrerequisites creates the secrets and config ate-api-server
-// needs, skipping anything already present.
+// needs, skipping anything already present. The PostgreSQL settings and an
+// explicitly requested log level are rewritten every time.
 func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 	log.Step("ensure_apiserver_prerequisites")
 
-	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDJWTPool, e.CreateJWTAuthorityPoolSecret); err != nil {
+	// Not through ensureSecret: an existing pool Secret may still need its
+	// public keys published, which CreateJWTAuthorityPoolSecret handles.
+	if err := e.CreateJWTAuthorityPoolSecret(ctx); err != nil {
 		return err
 	}
 	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDCAPool, e.CreateActorIDCAPoolSecret); err != nil {
@@ -51,12 +54,33 @@ func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 		return err
 	}
 
+	if err := e.ensureAPIConfig(ctx); err != nil {
+		return err
+	}
+
 	exists, err := e.Kube.ConfigMapExists(ctx, e.Namespace(), ConfigMapAPIAuthn)
 	if err != nil {
 		return err
 	}
 	if !exists {
 		return e.CreateAPIAuthenticationConfig(ctx)
+	}
+	return nil
+}
+
+// ensureAPIConfig writes the ate-api-server config file when it is missing or
+// a log level was asked for explicitly. Otherwise an existing config, possibly
+// edited by hand, is kept.
+func (e *Env) ensureAPIConfig(ctx context.Context) error {
+	if e.Cfg.APILogLevel != "" {
+		return e.CreateAPIConfig(ctx)
+	}
+	exists, err := e.Kube.ConfigMapExists(ctx, e.Namespace(), ConfigMapAPIConfig)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return e.CreateAPIConfig(ctx)
 	}
 	return nil
 }

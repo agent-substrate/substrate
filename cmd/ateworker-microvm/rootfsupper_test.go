@@ -22,9 +22,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/tarutil"
+	"go.ate.dev/substrate/internal/tarutil"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 // upperDirWith returns a rootfs upper directory laid out the way the host

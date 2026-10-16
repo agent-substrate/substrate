@@ -20,12 +20,12 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/preview"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // DeleteWorker executes the workflow to deregister a Worker. The caller reaches
@@ -209,9 +209,6 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 		opName = ateattr.OperationResume
 	case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
 		opName = ateattr.OperationSuspend
-		if latestSnapshotIsPendingLocal(actor.GetStatus()) {
-			opName = ateattr.OperationPause
-		}
 	case ateapipb.ActorState_ACTOR_STATE_REVERTING:
 		opName = ateattr.OperationRevert
 	case ateapipb.ActorState_ACTOR_STATE_DELETING:

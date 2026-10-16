@@ -150,11 +150,7 @@ groups:
             - id: suspend
               stability: development
               value: suspend
-              brief: ateapi wrote the durable snapshot and released the worker.
-            - id: pause
-              stability: development
-              value: pause
-              brief: ateapi wrote a node-local snapshot.
+              brief: ateapi wrote a snapshot, durable or node-local, and released the worker.
             - id: delete
               stability: development
               value: delete
@@ -167,9 +163,9 @@ groups:
               stability: development
               value: unknown
               brief: >
-                No lifecycle operation is running, such as when a running or
-                paused actor crashes because its worker is lost, or the
-                operation is not in this list. This is the default value.
+                No lifecycle operation is running, such as when a running actor
+                crashes because its worker is lost, or the operation is not in
+                this list. This is the default value.
 
   - id: registry.ate.template
     type: attribute_group
@@ -817,14 +813,14 @@ groups:
           conditionally_required: >
             The operation is a create, or ateapi loaded the actor. Thus this key
             is absent when a delete fails or when the load step fails. For a
-            resume, a suspend and a pause, the load step also reads the
+            resume and a suspend, the load step also reads the
             ActorTemplate.
       - ref: ate.template.name
         requirement_level:
           conditionally_required: >
             The operation is a create, or ateapi loaded the actor. Thus this key
             is absent when a delete fails or when the load step fails. For a
-            resume, a suspend and a pause, the load step also reads the
+            resume and a suspend, the load step also reads the
             ActorTemplate.
       - ref: ate.workerpool.namespace
         requirement_level:
@@ -835,7 +831,7 @@ groups:
       - ref: ate.sandbox.class
         requirement_level:
           conditionally_required: >
-            The operation is resume, suspend, pause or revert, and ateapi found
+            The operation is resume, suspend or revert, and ateapi found
             the ActorTemplate. A revert continues when the ActorTemplate no
             longer exists, and then omits this key.
       - ref: ate.snapshot.kind
@@ -843,7 +839,7 @@ groups:
           conditionally_required: The operation is a resume and the snapshot source is known. Other operations do not restore, thus this key is absent.
       - ref: ate.snapshot.fidelity
         requirement_level:
-          conditionally_required: The operation is resume, suspend or pause, and the fidelity is known.
+          conditionally_required: The operation is resume or suspend, and the fidelity is known.
       - ref: error.type
         requirement_level:
           conditionally_required: The operation failed. If this key is absent, the operation was correct.

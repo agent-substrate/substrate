@@ -26,9 +26,9 @@ import (
 	"net/netip"
 	"sync"
 
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet/dns"
-	"github.com/agent-substrate/substrate/internal/netns"
-	"github.com/agent-substrate/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/atunnel/dns"
+	"go.ate.dev/substrate/internal/netns"
+	"go.ate.dev/substrate/internal/nodepath"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
@@ -364,7 +364,7 @@ func CleanupSandboxNetwork(network *SandboxNetwork) error {
 }
 
 // egressServer serves one actor's captured connections. Satisfied by
-// atunnel.Egress; an interface so this package does not depend on it.
+// egress.Proxy; an interface so this package does not depend on it.
 type egressServer interface {
 	Bind(actorUID string) (func(context.Context, net.Listener) error, error)
 }

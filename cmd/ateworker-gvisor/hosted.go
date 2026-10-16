@@ -24,12 +24,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
-	"github.com/agent-substrate/substrate/internal/atunnel"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/workerstats"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/atunnel/ingress"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/workerstats"
 )
 
 // hostedActor holds one actor's attribution, network, and runtime state.
@@ -45,6 +45,9 @@ type hostedActor struct {
 	usage *workerstats.Activation
 	// deadReported keeps the usage sweep to one warning per activation.
 	deadReported atomic.Bool
+	// ctx is canceled when the actor is replaced or unhosted.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // admitActor reserves capacity before network setup. An actor that is already
@@ -55,12 +58,14 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution) (*
 	var stale *actornet.SandboxSession
 	if old, ok := s.actors[attribution.UID]; ok {
 		stale = old.network
+		old.cancel()
 	} else if len(s.actors)+s.draining >= s.maxActors {
 		return nil, nil, apierror.ResourceExhausted("worker is full: %d actors", s.maxActors)
 	}
 	// The sandbox cgroup is new with every activation, so its counters start
 	// at zero.
-	hosted := &hostedActor{attribution: attribution, usage: workerstats.NewActivation(time.Now(), false)}
+	ctx, cancel := context.WithCancel(context.Background())
+	hosted := &hostedActor{attribution: attribution, usage: workerstats.NewActivation(time.Now(), false), ctx: ctx, cancel: cancel}
 	s.actors[attribution.UID] = hosted
 	return hosted, stale, nil
 }
@@ -76,11 +81,16 @@ func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.
 	if err != nil {
 		return nil, err
 	}
+	// evict drops the reservation when network setup fails.
+	evict := func() {
+		hosted.cancel()
+		s.actorsMu.Lock()
+		delete(s.actors, uid)
+		s.actorsMu.Unlock()
+	}
 	if stale != nil {
 		if err := stale.Close(ctx); err != nil {
-			s.actorsMu.Lock()
-			delete(s.actors, uid)
-			s.actorsMu.Unlock()
+			evict()
 			return nil, fmt.Errorf("while clearing stale state for actor %s: %w", uid, err)
 		}
 	}
@@ -92,9 +102,7 @@ func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.
 		DNSPolicy:  s.tunnel.ActorEgressPolicy(attribution),
 	}, s.tunnel.Egress, s.tunnel.DNSRelay)
 	if err != nil {
-		s.actorsMu.Lock()
-		delete(s.actors, uid)
-		s.actorsMu.Unlock()
+		evict()
 		return nil, fmt.Errorf("while setting up the sandbox network: %w", err)
 	}
 
@@ -102,9 +110,7 @@ func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.
 	resolvConf, err := actorResolvConf(actorDirs)
 	if err != nil {
 		_ = session.Close(ctx)
-		s.actorsMu.Lock()
-		delete(s.actors, uid)
-		s.actorsMu.Unlock()
+		evict()
 		return nil, err
 	}
 
@@ -128,6 +134,7 @@ func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) err
 	if !ok {
 		return nil
 	}
+	hosted.cancel()
 	defer func() {
 		s.actorsMu.Lock()
 		s.draining--
@@ -186,7 +193,7 @@ func (s *AteWorkerService) setSession(actorUID string, session *workloadSession)
 }
 
 // sandboxDialer looks up the actor on each dial.
-func (s *AteWorkerService) sandboxDialer(actorUID string) atunnel.DialFunc {
+func (s *AteWorkerService) sandboxDialer(actorUID string) ingress.DialFunc {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		s.actorsMu.RLock()
 		var session *actornet.SandboxSession

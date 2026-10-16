@@ -18,8 +18,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -96,7 +96,13 @@ func ValidateMarkWorkerUnavailableRequest(ctx context.Context, req *ateapipb.Mar
 
 func ValidateReportActorSnapshotStateRequest(ctx context.Context, req *ateapipb.ReportActorSnapshotStateRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
-	return Validate_ReportActorSnapshotStateRequest(ctx, op, nil, req, nil)
+	errs := Validate_ReportActorSnapshotStateRequest(ctx, op, nil, req, nil)
+	// A report with neither latest_local nor uploading is a detach, which
+	// names the snapshot it made durable.
+	if st := req.GetState(); st != nil && st.GetLatestLocal() == nil && st.GetUploading() == nil && st.GetLatestDurable() == nil {
+		errs = append(errs, field.Required(field.NewPath("state", "latest_durable"), "a report with neither latest_local nor uploading must set latest_durable"))
+	}
+	return errs
 }
 
 // validateWorkerUpdate validates a Worker against the previous stored value.
@@ -126,6 +132,11 @@ func ValidateCustom_SandboxRuntime_SandboxClass(_ context.Context, _ operation.O
 // This is needed because DV doesn't have a standard format for IP addresses yet.
 func ValidateCustom_Worker_Ips(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
 	return validateDualStackIPs(fldPath, value)
+}
+
+// This is needed because DV doesn't have a format for SPIFFE IDs.
+func ValidateCustom_Worker_WorkerSpiffeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSPIFFEID(fldPath, *value)
 }
 
 // epoch only moves forward: a lower value would make Actors placed during the

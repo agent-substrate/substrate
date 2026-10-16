@@ -24,9 +24,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/benchmarking/glutton"
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/benchmarking/glutton"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 	"google.golang.org/protobuf/proto"
 )
 

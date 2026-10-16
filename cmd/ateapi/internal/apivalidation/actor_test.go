@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -353,6 +353,21 @@ func TestValidateActorUpdate(t *testing.T) {
 		}))),
 		want: field.ErrorList{
 			field.TooMany(field.NewPath("status", "worker_assignment", "worker_pod_ips"), 3, 2).WithOrigin("maxItems"),
+		},
+	}, {
+		name:   "set valid actor.status.worker_assignment.worker_spiffe_id",
+		oldVal: validInput(withStatus()),
+		newVal: validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) {
+			wa.WorkerSpiffeId = "spiffe://cluster.local/ns/ns/sa/ateworker"
+		}))),
+	}, {
+		name:   "invalid actor.status.worker_assignment.worker_spiffe_id",
+		oldVal: validInput(withStatus()),
+		newVal: validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) {
+			wa.WorkerSpiffeId = "ns/ns/sa/ateworker"
+		}))),
+		want: field.ErrorList{
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_spiffe_id"), nil, ""),
 		},
 	}, {
 		name:   "clear actor.status.worker_assignment",

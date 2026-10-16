@@ -22,13 +22,14 @@ import (
 
 	"github.com/vishvananda/netlink"
 
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
-	"github.com/agent-substrate/substrate/internal/ateworker/tunnel"
-	"github.com/agent-substrate/substrate/internal/atunnel"
-	"github.com/agent-substrate/substrate/internal/netns"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/roottest"
+	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/ateworker/tunnel"
+	"go.ate.dev/substrate/internal/atunnel/egress"
+	"go.ate.dev/substrate/internal/linuxsys"
+	"go.ate.dev/substrate/internal/netns"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/roottest"
 )
 
 // Hosting an actor that is already hosted replaces its network rather than
@@ -36,12 +37,12 @@ import (
 func TestHostActorReplacesSameActor(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	ctx := context.Background()
-	egress, err := atunnel.NewEgress(atunnel.TCPOriginalDestination)
+	egressProxy, err := egress.New(linuxsys.TCPOriginalDestination)
 	if err != nil {
 		t.Fatal(err)
 	}
 	service := &AteWorkerService{
-		tunnel:    &tunnel.Tunnel{Egress: egress, EgressPort: 15001},
+		tunnel:    &tunnel.Tunnel{Egress: egressProxy, EgressPort: 15001},
 		actors:    map[string]*hostedActor{},
 		maxActors: 1,
 	}

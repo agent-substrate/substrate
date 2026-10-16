@@ -27,7 +27,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/agent-substrate/substrate/internal/testcert"
+	"go.ate.dev/substrate/internal/testcert"
 )
 
 // The capabilities e2e assertions are only as trustworthy as this decoder and

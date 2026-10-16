@@ -15,7 +15,7 @@
 package snapshottracker
 
 import (
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // CommitLocal records snap, just stored locally under UPLOAD_MODE_DEFERRED, as

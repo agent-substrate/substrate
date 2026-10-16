@@ -99,10 +99,12 @@ layer diffIDs in order — layers shared by N images exist once.
    confinement (path traversal and symlink/hardlink escapes are refused),
    "later entry wins" within a layer, read-only-dir handling that works
    without `CAP_DAC_OVERRIDE`, and creation of parent directories that the
-   layer tar omits (they may exist only in lower layers). Whiteout entries
-   (`.wh.*`) are **not** written into the tree — overlayfs whiteouts are
-   char devices atelet cannot create — they are recorded in
-   `whiteouts.json` for the consumer to materialize.
+   layer tar omits (they may exist only in lower layers). Character and
+   block device nodes are skipped (atelet runs without `CAP_MKNOD` and the
+   runtime mounts `/dev`). Whiteout entries (`.wh.*`) are **not** written
+   into the tree — overlayfs whiteouts are char devices atelet cannot
+   create — they are recorded in `whiteouts.json` for the consumer to
+   materialize.
 5. **Record**: the image config + diffID list is written under the
    requested digest (and the per-platform child digest for multi-arch refs).
 

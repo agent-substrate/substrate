@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
@@ -284,6 +284,26 @@ func TestTopWorkersRunner_VerboseSurfacesMetricsIssues(t *testing.T) {
 			if !strings.Contains(got, want) {
 				t.Errorf("stderr = %q, want substring %q", got, want)
 			}
+		}
+	})
+}
+
+func TestWarnSharedIdentity(t *testing.T) {
+	t.Run("warns without a token file", func(t *testing.T) {
+		var buf bytes.Buffer
+		warnSharedIdentity(&buf, "")
+		got := buf.String()
+		for _, want := range []string{"Warning:", "ate-client", "shared identity", "--token-file"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("warning %q does not mention %q", got, want)
+			}
+		}
+	})
+	t.Run("silent with a token file", func(t *testing.T) {
+		var buf bytes.Buffer
+		warnSharedIdentity(&buf, "/path/to/token")
+		if got := buf.String(); got != "" {
+			t.Errorf("warning = %q, want none", got)
 		}
 	})
 }

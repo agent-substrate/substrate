@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agent-substrate/substrate/tools/apitool/internal/cmd"
+	"go.ate.dev/substrate/tools/apitool/internal/cmd"
 )
 
 func main() {

@@ -20,9 +20,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/internal/preview"
 	"google.golang.org/grpc/metadata"
 )
 

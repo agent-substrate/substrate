@@ -25,10 +25,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
-	"github.com/agent-substrate/substrate/internal/atunnel"
-	"github.com/agent-substrate/substrate/internal/netns"
-	"github.com/agent-substrate/substrate/internal/roottest"
+	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/linuxsys"
+	"go.ate.dev/substrate/internal/netns"
+	"go.ate.dev/substrate/internal/roottest"
 )
 
 // Verify redirection preserves the destination, including unconfigured ports.
@@ -59,7 +59,7 @@ func TestSandboxEgressReachesAtunnelOnAnyPort(t *testing.T) {
 			return
 		}
 		defer c.Close()
-		dst, err := atunnel.TCPOriginalDestination(c)
+		dst, err := linuxsys.TCPOriginalDestination(c)
 		if err != nil {
 			t.Errorf("TCPOriginalDestination: %v", err)
 			return
@@ -164,7 +164,7 @@ func TestSandboxLinkLocalDoesNotReachAtunnel(t *testing.T) {
 		t.Fatalf("accept allowed connection: %v", err)
 	}
 	defer conn.Close()
-	destination, err := atunnel.TCPOriginalDestination(conn)
+	destination, err := linuxsys.TCPOriginalDestination(conn)
 	if err != nil {
 		t.Fatalf("TCPOriginalDestination: %v", err)
 	}

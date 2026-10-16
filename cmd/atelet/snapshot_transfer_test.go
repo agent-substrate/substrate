@@ -27,16 +27,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/snapshottracker"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
-	"github.com/agent-substrate/substrate/internal/pluginsocket"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/objectstoreplugin"
+	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"go.ate.dev/substrate/internal/pluginsocket"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/objectstorage"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
@@ -51,7 +51,7 @@ import (
 func newPluginHerder(t *testing.T, store objectstorage.ObjectStorage) *Atelet {
 	t.Helper()
 	// Test directories come from t.TempDir, so admit any absolute path.
-	plugin, err := objectstoreplugin.NewNodePlugin(store, "/")
+	plugin, err := objectstoreplugin.NewNodePlugin(store, "/", objectstorage.DefaultUploadMemory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ type pluginSidecar struct {
 
 func newPluginSidecar(t *testing.T, store objectstorage.ObjectStorage) *pluginSidecar {
 	t.Helper()
-	plugin, err := objectstoreplugin.NewNodePlugin(store, "/")
+	plugin, err := objectstoreplugin.NewNodePlugin(store, "/", objectstorage.DefaultUploadMemory)
 	if err != nil {
 		t.Fatal(err)
 	}

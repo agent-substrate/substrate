@@ -20,8 +20,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/workerstats"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/workerstats"
 )
 
 // Recorder is a stdout handler that keeps the kind and source of each record.

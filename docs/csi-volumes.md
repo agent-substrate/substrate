@@ -161,7 +161,7 @@ metadata:
     workload: stateful-agent
 spec:
   replicas: 5
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateworker-gvisor
+  workerImage: ko://go.ate.dev/substrate/cmd/ateworker-gvisor
   sandboxClasses:
   - name: gvisor
 ```

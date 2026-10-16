@@ -34,7 +34,8 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/installdefaults"
 
 	accesslogv3 "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v3"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
@@ -71,9 +72,9 @@ import (
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	serverv3 "github.com/envoyproxy/go-control-plane/pkg/server/v3"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
-	"github.com/agent-substrate/substrate/internal/atunnel"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
+	atunnelingress "go.ate.dev/substrate/internal/atunnel/ingress"
 )
 
 const (
@@ -202,6 +203,14 @@ const (
 	tunnelPortFilterStateKey   = "dev.ate.tunnel.port"
 )
 
+// upstreamSANsFilterStateKey is Envoy's list of SANs the upstream certificate
+// must carry, on top of the cluster's matchers. It does not split the tunnel pool.
+const upstreamSANsFilterStateKey = "envoy.network.upstream_subject_alt_names"
+
+// trustDomainSPIFFEPrefix starts every SPIFFE ID in the pod certificates' trust
+// domain.
+const trustDomainSPIFFEPrefix = "spiffe://" + installdefaults.AteletTrustDomain + "/"
+
 // tunnelCircuitBreakerLimit lifts Envoy's default of 1024: there is a tunnel
 // per active actor and port, and idle ones count too.
 const tunnelCircuitBreakerLimit = 65536
@@ -233,12 +242,6 @@ type XdsServer struct {
 	// client cert and validates the atunnel server against upstreamTrustBundlePath.
 	upstreamCredentialBundlePath string
 	upstreamTrustBundlePath      string
-	// upstreamSpiffePrefix, when set, makes the upstream validator accept the
-	// atunnel server cert by matching its SPIFFE URI SAN against this prefix
-	// (trust-domain match) instead of the actor's ephemeral pod IP. The atunnel
-	// cert carries only a spiffe:// URI SAN, so without this Envoy's default
-	// SAN check against the dialed IP fails ("verify SAN list").
-	upstreamSpiffePrefix string
 	// upstreamConnect: see SetUpstreamConnect.
 	upstreamConnect bool
 
@@ -400,16 +403,20 @@ const otlpDefaultPort = "4317"
 // (cert+key concatenated) presented to the actor's atunnel ingress server;
 // trustBundlePath is the CA bundle used to validate that server. Empty
 // credentialBundlePath leaves the upstream as plaintext.
-func (x *XdsServer) SetUpstreamTls(credentialBundlePath, trustBundlePath, spiffePrefix string) {
+func (x *XdsServer) SetUpstreamTls(credentialBundlePath, trustBundlePath string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.upstreamCredentialBundlePath = credentialBundlePath
 	x.upstreamTrustBundlePath = trustBundlePath
-	x.upstreamSpiffePrefix = spiffePrefix
+}
+
+// upstreamValidated reports whether the router verifies atunnel's certificate.
+func (x *XdsServer) upstreamValidated() bool {
+	return x.upstreamCredentialBundlePath != "" && x.upstreamTrustBundlePath != ""
 }
 
 // SetUpstreamConnect makes actor traffic reach atunnel through CONNECT tunnels
-// on atunnel.DefaultConnectPort, one per actor and port. It needs
+// on atunnelingress.DefaultConnectPort, one per actor and port. It needs
 // SetUpstreamTls, since that listener only accepts mTLS.
 func (x *XdsServer) SetUpstreamConnect(enabled bool) {
 	x.mu.Lock()
@@ -743,8 +750,8 @@ func (x *XdsServer) buildOtlpCollectorCluster() *clusterv3.Cluster {
 // for the ORIGINAL_DST actor cluster, or nil when upstream mTLS is not
 // configured. The router presents its podidentity credential bundle as the
 // client cert and validates the atunnel ingress server against the trust
-// bundle. Validation is by the SPIFFE URI SAN prefix (see upstreamSpiffePrefix)
-// rather than the dialed pod IP.
+// bundle. The cluster accepts any SPIFFE ID in the trust domain;
+// workerIdentityFilterStateFilter narrows each connection to the routed worker.
 //
 // Both the client cert and the trust bundle are referenced as SDS secrets
 // served by this same control plane over ADS, never inlined as file
@@ -769,20 +776,15 @@ func (x *XdsServer) buildUpstreamTransportSocket() *corev3.TransportSocket {
 		// tracks ClusterTrustBundle rotation, while the SAN matcher stays
 		// inline in the default context. Envoy merges the two, which is why
 		// this is a combined rather than a plain SDS validation context.
-		defaultCtx := &tlsv3.CertificateValidationContext{}
-		// Validate the atunnel server by its SPIFFE URI SAN (trust-domain
-		// prefix) rather than the dialed pod IP. Without this, Envoy checks the
-		// cert SAN against the ephemeral pod IP, which the SPIFFE-only cert
-		// never matches.
-		if x.upstreamSpiffePrefix != "" {
-			defaultCtx.MatchTypedSubjectAltNames = []*tlsv3.SubjectAltNameMatcher{
+		defaultCtx := &tlsv3.CertificateValidationContext{
+			MatchTypedSubjectAltNames: []*tlsv3.SubjectAltNameMatcher{
 				{
 					SanType: tlsv3.SubjectAltNameMatcher_URI,
 					Matcher: &matcherv3.StringMatcher{
-						MatchPattern: &matcherv3.StringMatcher_Prefix{Prefix: x.upstreamSpiffePrefix},
+						MatchPattern: &matcherv3.StringMatcher_Prefix{Prefix: trustDomainSPIFFEPrefix},
 					},
 				},
-			}
+			},
 		}
 		commonTls.ValidationContextType = &tlsv3.CommonTlsContext_CombinedValidationContext{
 			CombinedValidationContext: &tlsv3.CommonTlsContext_CombinedCertificateValidationContext{
@@ -974,7 +976,7 @@ func (x *XdsServer) buildActorConnectCluster() *clusterv3.Cluster {
 		LbPolicy: clusterv3.Cluster_CLUSTER_PROVIDED,
 		LbConfig: &clusterv3.Cluster_OriginalDstLbConfig_{
 			OriginalDstLbConfig: &clusterv3.Cluster_OriginalDstLbConfig{
-				UpstreamPortOverride: wrapperspb.UInt32(atunnel.DefaultConnectPort),
+				UpstreamPortOverride: wrapperspb.UInt32(atunnelingress.DefaultConnectPort),
 			},
 		},
 		TransportSocket: x.buildUpstreamTransportSocket(),
@@ -1022,7 +1024,7 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 				RequestHeadersToAdd: []*corev3.HeaderValueOption{
 					{
 						Header: &corev3.HeaderValue{
-							Key: atunnel.TargetPortHeader,
+							Key: atunnelingress.TargetPortHeader,
 							Value: fmt.Sprintf("%%DYNAMIC_METADATA(%s:%s)%%",
 								ingress.OriginalDstMetadataKey, ingress.OriginalDstPortKey),
 						},
@@ -1201,6 +1203,17 @@ func actorTunnelFilterStateFilter() *hcmv3.HttpFilter {
 		filterStateValue(tunnelWorkerFilterStateKey, "envoy.string", worker, once),
 		filterStateValue(tunnelActorFilterStateKey, "envoy.string", actor, once),
 		filterStateValue(tunnelPortFilterStateKey, "envoy.string", port, once),
+	)
+}
+
+// workerIdentityFilterStateFilter requires atunnel's certificate to carry the
+// worker SPIFFE ID ext_proc resolved. Sharing it once with the upstream also
+// covers the CONNECT tunnel's connection; missing metadata becomes "-", which
+// never matches.
+func workerIdentityFilterStateFilter() *hcmv3.HttpFilter {
+	workerID := "%DYNAMIC_METADATA(" + ingress.OriginalDstMetadataKey + ":" + ingress.WorkerSPIFFEIDKey + ")%"
+	return setFilterStateHTTPFilter(
+		filterStateValue(upstreamSANsFilterStateKey, "", workerID, setfilterstatecommonv3.FilterStateValue_ONCE),
 	)
 }
 
@@ -1399,6 +1412,9 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 	if x.upstreamConnect {
 		httpFilters = append(httpFilters, actorTunnelFilterStateFilter())
 	}
+	if x.upstreamValidated() {
+		httpFilters = append(httpFilters, workerIdentityFilterStateFilter())
+	}
 	httpFilters = append(httpFilters, &hcmv3.HttpFilter{
 		Name: "envoy.filters.http.router",
 		ConfigType: &hcmv3.HttpFilter_TypedConfig{
@@ -1577,7 +1593,7 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 	// gRPC requires a negotiated "h2"; http/1.1 keeps plain HTTPS clients
 	// working alongside it. HTTP/1.1-only actors are safe either way: atunnel
 	// downgrades every non-gRPC request to HTTP/1.1 on the actor leg (see
-	// atunnel.protocolMirrorTransport), so offering h2 at the edge cannot
+	// atunnelingress.protocolMirrorTransport), so offering h2 at the edge cannot
 	// change what an actor receives.
 	alpn := []string{"h2", "http/1.1"}
 

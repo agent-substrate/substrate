@@ -20,11 +20,11 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/apivalidation"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/substratex509"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/atelet/internal/apivalidation"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/substratex509"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
@@ -38,8 +38,10 @@ type workerSupportServer struct {
 }
 
 func (b *workerSupportServer) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
-	// Check which worker is calling.
-	_, err := authenticatedWorkerIdentity(ctx)
+	// Identity comes only from the mTLS certificate, never from the request:
+	// the control plane mints only for the Worker that the actor is assigned
+	// to, so a worker gets certificates for the actor it hosts and no other.
+	workerIdentity, err := authenticatedWorkerIdentity(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -50,11 +52,9 @@ func (b *workerSupportServer) MintActorCertificate(ctx context.Context, req *ate
 		return nil, resources.ToGRPCStatusError(errs)
 	}
 
-	// TODO(identity): Check that we believe that this worker is running the
-	// requested actor?  ate-api-server will further check that we (the atelet)
-	// are allowed to request a certificate for the actor.
-
 	resp, err := b.workers.MintWorkerActorCertificate(ctx, &ateapipb.MintWorkerActorCertificateRequest{
+		// Workers are global-scoped and named by their pod UID.
+		Worker: &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
 		Actor: &ateapipb.ObjectRef{
 			Atespace: req.GetActorAtespace(),
 			Name:     req.GetActorName(),
@@ -106,10 +106,10 @@ func verifyClientOnSameNode(node *substratex509.PodIdentity) func(tls.Connection
 // worker says its capacity and sandbox runtimes are, in one
 // WorkerService.RegisterWorker call so capacity and runtimes land atomically.
 //
-// It returns the control plane's error unwrapped so the caller retries: a
-// worker reports once, so an accepted call is the only thing that puts
-// capacity and runtimes on the Worker, and a Worker record the syncer has not
-// created yet is the ordinary reason for a first attempt to fail.
+// It returns the control plane's error unwrapped so the caller retries: an
+// accepted call is the only thing that puts capacity and the current runtimes
+// on the Worker, and a Worker record the syncer has not created yet is the
+// ordinary reason for a first attempt to fail.
 func (s *workerSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.RegisterWorkerRequest) (*ateletpb.RegisterWorkerResponse, error) {
 	// Identity comes only from the mTLS certificate, never from the request:
 	// a worker can report its own capacity and runtimes and no one else's.

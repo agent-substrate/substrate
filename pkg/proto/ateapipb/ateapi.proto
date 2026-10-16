@@ -19,7 +19,7 @@ package ateapi;
 import "google/protobuf/descriptor.proto";
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
+option go_package = "go.ate.dev/substrate/pkg/proto/ateapipb";
 
 // Control is the primary RPC interface for Agentic Substrate.
 service Control {
@@ -1007,6 +1007,14 @@ message WorkerAssignment {
   //
   // +k8s:optional
   SandboxRuntime sandbox_runtime = 9;
+
+  // worker_spiffe_id is the SPIFFE ID worker_pod's certificate carries, copied
+  // from Worker.worker_spiffe_id.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=2048
+  // +k8s:customValidation # a SPIFFE ID
+  string worker_spiffe_id = 10;
 }
 
 // TagStatus is the server-owned state of a Tag.
@@ -2281,6 +2289,14 @@ message Worker {
   // +k8s:customValidation # until `format=k8s-ip` is supported
   // +k8s:immutable
   repeated string ips = 7;
+  // worker_spiffe_id is the SPIFFE ID the worker pod's certificate carries.
+  // atenet-router requires it on the certificate of the worker's atunnel.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=2048
+  // +k8s:customValidation # a SPIFFE ID
+  // +k8s:immutable
+  string worker_spiffe_id = 13;
 
   // sandbox_class mirrors the WorkerPool's default sandbox class
   //
@@ -2419,14 +2435,15 @@ message VersionedSandboxCompat {
   string schema_version = 1;
 
   // Key-value compatibility attributes defined by this schema version, covering
-  // both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
-  // features after masking (e.g. "architecture", "cpu_features").
+  // both runtime assets (e.g. "sandbox_runtime_hash") and effective guest
+  // hardware features after masking (e.g. "architecture", "cpu_features").
   // Matched against a snapshot under the same schema_version: every attribute
-  // on the snapshot must be present on the worker with an equal value; keys
-  // only the worker has are ignored, so a worker can gain keys under one
-  // schema_version without invalidating older snapshots. Removing or
-  // recomputing a key is a new schema_version, under which older snapshots
-  // no longer match.
+  // on the snapshot must be present on the worker with an equal value (except
+  // "cpu_features", where the snapshot's hexadecimal bitmask must be a bitwise
+  // subset of the worker's); keys only the worker has are ignored, so a worker
+  // can gain keys under one schema_version without invalidating older
+  // snapshots. Removing or recomputing a key is a new schema_version, under
+  // which older snapshots no longer match.
   // Order as sent does not matter: ate-api-server sorts attributes by key
   // before recording them.
   //
@@ -2439,7 +2456,7 @@ message VersionedSandboxCompat {
 
 // AttributeEntry is a single key-value compatibility attribute.
 message AttributeEntry {
-  // Attribute name (e.g. "architecture", "cpu_features", "gvisor_asset_hash").
+  // Attribute name (e.g. "architecture", "cpu_features", "sandbox_runtime_hash").
   //
   // +k8s:required
   // +k8s:maxLength=128
@@ -2531,6 +2548,14 @@ service WorkerService {
   // on behalf of a particular actor.
   //
   // SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
+  //
+  // atelet calls this with its own client certificate, as it does for
+  // RequestActorSuspend, naming the Worker its caller proved itself to be.
+  // The control plane mints only for the Worker that the Actor is assigned
+  // to, and only to an atelet on that Worker's node. A request from any
+  // other node or Worker gets NotFound; one from the assigned Worker with a
+  // stale actor_uid gets Aborted. Unlike MintWorkerActorJwt, a paused Actor
+  // gets NotFound, since it has no Worker to bind the certificate to.
   rpc MintWorkerActorCertificate(MintWorkerActorCertificateRequest) returns (MintWorkerActorCertificateResponse);
 
   // MintWorkerActorJwt creates a Substrate-issued JWT that asserts a worker
@@ -2566,18 +2591,16 @@ service WorkerService {
   // rather than a repeat of its success.
   rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse);
 
-  // ReportActorSnapshotState records which snapshots of an Actor the calling
-  // atelet holds on its node, and which of them are durable. Only atelet can
-  // observe when an upload finishes or a local copy is deleted, and the
-  // control plane needs both to decide where the Actor can resume.
+  // ReportActorSnapshotState reports an Actor's snapshot state on the caller's
+  // node. The control plane records two facts from it: an upload finished, and
+  // atelet detached the Actor from the node. Only atelet observes either.
   //
-  // Only atelet should call this, with its own client certificate. The
-  // control plane serves it only for an Actor on the caller's node.
-  // Idempotent: each report carries the whole state and replaces the previous
-  // one. Returns ABORTED while another operation holds the Actor; retry.
-  //
-  // TODO(#2570): not served yet. Every call returns UNIMPLEMENTED until the
-  // handler lands.
+  // atelet calls this with its own client certificate, for an Actor on its
+  // node. Each report carries the whole state, so repeating one is safe.
+  // Returns ABORTED while another operation is changing the Actor; retry.
+  // Returns NOT_FOUND once the Actor is gone or no longer on the caller's
+  // node. Returns FAILED_PRECONDITION or INVALID_ARGUMENT when the report
+  // conflicts with the record; don't retry.
   rpc ReportActorSnapshotState(ReportActorSnapshotStateRequest) returns (ReportActorSnapshotStateResponse);
 }
 
@@ -2641,6 +2664,15 @@ message MintWorkerActorCertificateRequest {
   // +k8s:required
   // +k8s:maxBytes=16384
   bytes certificate_signing_request = 3;
+
+  // The Worker requesting the certificate. atespace is always empty; Workers
+  // are global-scoped. atelet fills this in from its caller's certificate, so
+  // it names the Worker that certificate proves the request came from. It
+  // must be the Worker that the actor is assigned to.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef worker = 4;
 }
 
 // Response message for MintWorkerActorCertificate.
@@ -2700,7 +2732,7 @@ message MintWorkerActorJwtResponse {
 message RequestActorSuspendRequest {
   // The Worker making the request. atespace is always empty; Workers are
   // global-scoped. atelet fills this in from its caller's certificate, so it
-  // names the Worker the request provably came from.
+  // names the Worker that certificate proves the request came from.
   //
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix

@@ -27,11 +27,11 @@ import (
 
 	"google.golang.org/grpc/codes"
 
-	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/ch"
-	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/actorlock"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 // writeSnapshotConfig writes a config.json holding the given fs devices (plus the

@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/pkg/client/clientset/versioned"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/client-go/kubernetes"
 )

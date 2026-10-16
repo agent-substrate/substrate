@@ -28,19 +28,19 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/actoridjwt"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/objectstore"
-	"github.com/agent-substrate/substrate/internal/preview"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/volume"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/actoridjwt"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/objectstore"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/volume"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
@@ -5032,7 +5032,7 @@ func TestCheckpointFailureCrashes(t *testing.T) {
 				_, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{Actor: ref})
 				return err
 			},
-			wantMessage: "pause failed: atelet Checkpoint: injected checkpoint failure",
+			wantMessage: "suspend failed: atelet Checkpoint: injected checkpoint failure",
 		},
 		{
 			name: "suspend",
@@ -5214,7 +5214,7 @@ func TestLifecycleOpPoolAttributesOnSuccess(t *testing.T) {
 		},
 		{
 			name: "pause",
-			op:   ateattr.OperationPause,
+			op:   ateattr.OperationSuspend,
 			run: func(t *testing.T, tc *testContext, actor *ateapipb.ObjectRef) {
 				t.Helper()
 				if _, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{Actor: actor}); err != nil {

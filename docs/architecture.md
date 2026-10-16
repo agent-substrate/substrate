@@ -4,7 +4,7 @@ NOTE: Much of this architecture is aspirational, and is not yet implemented!
 
 ## Overview
 
-Agent Substrate is a secure-by-default agent execution runtime engineered to run millions of sandboxes with 10x higher density than standard container runtimes. The agent substrate control plane provides full lifecycle management for agent sandboxes, delivering sub-second agent resume/suspend operations, and allows heavy multiplexing of agents onto the same compute infrastructure. It supports multiple sandbox technologies including microVMs and gVisor, enabling consistent lifecycle operations for all sandbox types.
+Agent Substrate is a security-hardened, zero-trust runtime for sandboxed agents, engineered to safely run millions of agents and tools with 10x higher density than standard containers. Purpose-built for the era of autonomous agents, Substrate delivers fast resume operations in less than 400ms, with more than 1500 activations per second. Agents get isolated compute, identity, networking, and storage. Sensitive credentials are kept out of reach from untrusted code. It supports multiple sandbox technologies, including microVMs and gVisor, while enabling a consistent lifecycle and management of all sandboxes.
 
 At its core, Agent Substrate maps a larger set of “actors” (applications such
 as agents) onto a smaller set of ready “workers”, relying on
@@ -256,9 +256,9 @@ and Performance:
       SandboxConfigs) as Kubernetes objects allows platform teams to apply
       familiar RBAC, auditing, and policy enforcement to the underlying
       infrastructure, while workload definitions (ActorTemplates) are managed
-      through the substrate API instead, which authenticates callers itself
-      but does not yet implement authorization (see
-      [authentication.md](authentication.md)).
+      through the substrate API instead, which authenticates and authorizes
+      callers itself (see [authentication.md](authentication.md) and
+      [authorization.md](authorization.md)).
 
 ### Resource Model
 
