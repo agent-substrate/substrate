@@ -317,8 +317,9 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `podcert.workersPerSigner`                   | `ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER`        | `--podcert-workers-per-signer`                     | `0`                   | (global)                                 |
 | `preview`                                    | `ATE_PREVIEW`                                   | `--preview`                                        | —                     | (global)                                 |
 | `record.dir`                                 | `ATE_RECORD_DIR`                                | `--record-dir`                                     | —                     | (global)                                 |
-| `rolloutTimeout`                             | `ATE_INSTALL_ROLLOUT_TIMEOUT`                   | `--rollout-timeout`                                | `1m0s`                | (global)                                 |
-| `storage.bucketName`                         | `BUCKET_NAME`                                   | `--storage-bucket-name`                            | —                     | (global)                                 |
+| `rolloutTimeout`                             | `ATE_INSTALL_ROLLOUT_TIMEOUT`                   | `--rollout-timeout`                                | `1m0s`                | (global)                                         |
+| `skipMicroVMDeps`                            | `ATE_INSTALL_SKIP_MICROVM_DEPS`                 | `--skip-microvm-deps`                              | `false`               | `deploy ate-system`, `deploy sandboxconfig`      |
+| `storage.bucketName`                         | `BUCKET_NAME`                                   | `--storage-bucket-name`                            | —                     | (global)                                         |
 
 ## Secrets
 

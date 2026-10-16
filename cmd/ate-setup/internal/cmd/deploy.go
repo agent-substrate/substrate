@@ -27,8 +27,11 @@ var deployCmd = &cobra.Command{
 	Short:       "Deploy Agent Substrate components",
 }
 
-// deployAteSystemPath is the command path the ate-system settings bind to.
-const deployAteSystemPath = "deploy ate-system"
+// Command paths the deploy subcommands bind their flags to.
+const (
+	deployAteSystemPath     = "deploy ate-system"
+	deploySandboxConfigPath = "deploy sandboxconfig"
+)
 
 // deployOptions reads the settings deploy ate-system owns.
 //
@@ -38,7 +41,10 @@ const deployAteSystemPath = "deploy ate-system"
 // correct for an argument: there is no channel to name.
 func deployOptions() (steps.DeployOptions, error) {
 	r := env.Cfg.Resolved()
-	opts := steps.DeployOptions{SetupCSI: r.String("csi.setup")}
+	opts := steps.DeployOptions{
+		SetupCSI:        r.String("csi.setup"),
+		SkipMicroVMDeps: r.Bool("skipMicroVMDeps"),
+	}
 	if err := steps.ValidateCSIDriver(opts.SetupCSI); err != nil {
 		v, _ := r.Value("csi.setup")
 		return opts, &config.InvalidError{Value: v, Want: "nfs, hostpath, both or none"}
@@ -52,8 +58,10 @@ var deployAteSystemCmd = &cobra.Command{
 	Long: `Deploy the whole Agent Substrate control plane.
 
 This installs the CRDs and RBAC, the podcertificate controller and the secrets
-it signs, PostgreSQL, ate-api-server, ate-controller, the atenet dataplane, and
-the atelet DaemonSet, then waits for each to roll out.
+it signs, PostgreSQL, ate-api-server, ate-controller, the atenet dataplane,
+the default gVisor and micro-VM SandboxConfigs (staging the micro-VM guest
+assets to the cluster object store), and the atelet DaemonSet, then waits for
+each to roll out.
 
 The bundled PostgreSQL StatefulSet is skipped when
 ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
@@ -138,10 +146,10 @@ var deployPodCertControllerCmd = &cobra.Command{
 
 var deploySandboxConfigCmd = &cobra.Command{
 	Use:   "sandboxconfig",
-	Short: "Deploy the SandboxConfig admission policy and the default gVisor SandboxConfig only",
+	Short: "Deploy the SandboxConfig admission policy and the default gVisor and micro-VM SandboxConfigs only",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return env.DeploySandboxConfig(cmd.Context())
+		return env.DeploySandboxConfig(cmd.Context(), env.Cfg.Resolved().Bool("skipMicroVMDeps"))
 	},
 }
 
@@ -173,12 +181,21 @@ func init() {
 		deployPostgresCmd,
 	)
 
-	config.RegisterCommand(config.Setting{
-		Key: "csi.setup", Env: "SETUP_CSI", Flag: "setup-csi",
-		Kind: config.KindString, Default: "none",
-		Commands: []string{deployAteSystemPath},
-		Usage:    "Also install CSI driver (nfs, hostpath, both, none; default: none)",
-	})
+	config.RegisterCommand(
+		config.Setting{
+			Key: "csi.setup", Env: "SETUP_CSI", Flag: "setup-csi",
+			Kind: config.KindString, Default: "none",
+			Commands: []string{deployAteSystemPath},
+			Usage:    "Also install CSI driver (nfs, hostpath, both, none; default: none)",
+		},
+		config.Setting{
+			Key: "skipMicroVMDeps", Env: "ATE_INSTALL_SKIP_MICROVM_DEPS", Flag: "skip-microvm-deps",
+			Kind: config.KindBool, Default: "false",
+			Commands: []string{deployAteSystemPath, deploySandboxConfigPath},
+			Usage:    "Skip staging micro-VM guest assets and applying the microvm SandboxConfig",
+		},
+	)
 	config.BindCommandFlags(deployAteSystemPath, deployAteSystemCmd.Flags())
+	config.BindCommandFlags(deploySandboxConfigPath, deploySandboxConfigCmd.Flags())
 	deployAteSystemCmd.Flags().Lookup("setup-csi").NoOptDefVal = "none"
 }

@@ -205,6 +205,10 @@ func TestShimTranslatesFlags(t *testing.T) {
 		args: []string{"--deploy-ate-system"},
 		want: []string{"deploy ate-system --setup-csi=none"},
 	}, {
+		name: "--skip-microvm-deps is forwarded to deploy ate-system",
+		args: []string{"--deploy-ate-system", "--skip-microvm-deps"},
+		want: []string{"deploy ate-system --setup-csi=none --skip-microvm-deps"},
+	}, {
 		// The value-bearing flags were pre-scanned, so they shape every action
 		// regardless of where they appear.
 		name: "global flags apply to actions that precede them",

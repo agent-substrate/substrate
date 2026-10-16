@@ -167,18 +167,30 @@ Run it and follow the printed next steps:
 KIND_CLUSTER_NAME=<cluster> ./hack/run-microvm-demo-kind.sh
 ```
 
-On a cluster that already has the micro-VM deps (`hack/install-microvm-deps.sh`),
-deploy directly instead:
+To deploy onto an existing cluster where `ate-system` is already installed:
 
 ```bash
 ./hack/install-ate.sh --deploy-demo-counter-microvm
 ```
 
-Then create an actor (`--template counter-microvm`, in the
-`ate-demo-counter-microvm` atespace), increment the counter, suspend
-it, resume it (even on a different worker), and confirm the count continues —
-the actor's counter lives in guest RAM, so a continuing count proves the
-guest-memory snapshot survived the round trip.
+Inspect the deployed template, create an actor (`--template counter-microvm`, in
+the `ate-demo-counter-microvm` atespace), increment the counter, suspend it,
+resume it (even on a different worker), and confirm the count continues — the
+actor's counter lives in guest RAM, so a continuing count proves the
+guest-memory snapshot survived the round trip:
+
+```bash
+kubectl ate get actor-templates -a ate-demo-counter-microvm
+kubectl ate get actor-template counter-microvm -a ate-demo-counter-microvm -o yaml
+
+kubectl ate create actor my-counter-microvm-1 -a ate-demo-counter-microvm --template counter-microvm
+
+curl -X POST \
+  -H "ate-target-actor: ate-demo-counter-microvm/my-counter-microvm-1" \
+  http://localhost:8000
+
+kubectl ate suspend actor my-counter-microvm-1 -a ate-demo-counter-microvm
+```
 
 ## Settings
 
