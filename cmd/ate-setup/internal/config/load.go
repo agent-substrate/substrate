@@ -266,6 +266,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
 		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),
 		OtlpEndpoint:                   r.String("otlpEndpoint"),
+		APILogLevel:                    r.String("ateapi.logLevel"),
 		BenchmarkActorMemory:           r.String("benchmark.actorMemory"),
 		PreviewGates:                   splitList(r.String("preview")),
 		kubeconfigEnv:                  kubeconfigEnv,
@@ -401,6 +402,13 @@ func validateResolved(cfg *Config, r *Resolved) error {
 		}
 	default:
 		return &InvalidError{Value: authMode, Want: IngressAuthDeprecatedInsecure + " or " + IngressAuthStaticMTLS}
+	}
+
+	switch cfg.APILogLevel {
+	case "", "debug", "info", "warn", "error":
+	default:
+		level, _ := r.Value("ateapi.logLevel")
+		return &InvalidError{Value: level, Want: "debug, info, warn, or error"}
 	}
 
 	switch cfg.ActorJWTAlgorithm {

@@ -276,7 +276,6 @@ const (
 	OperationCreate  = "create"
 	OperationResume  = "resume"
 	OperationSuspend = "suspend"
-	OperationPause   = "pause"
 	OperationDelete  = "delete"
 	OperationRevert  = "revert"
 	OperationUnknown = "unknown"
@@ -287,7 +286,6 @@ var AllOperations = []string{
 	OperationCreate,
 	OperationResume,
 	OperationSuspend,
-	OperationPause,
 	OperationDelete,
 	OperationRevert,
 }

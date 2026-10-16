@@ -24,6 +24,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -333,6 +334,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			Ips:             podIPs(pod),
 			WorkerPodUid:    string(pod.UID),
 			NodeName:        pod.Spec.NodeName,
+			WorkerSpiffeId:  workerSPIFFEID(pod),
 			SandboxClass:    string(pool.Spec.DefaultSandboxClass()),
 			Labels:          pool.GetLabels(),
 			Epoch:           podEpoch(pod),
@@ -475,6 +477,11 @@ func podIPs(pod *corev1.Pod) []string {
 		ips = append(ips, ip.IP)
 	}
 	return ips
+}
+
+// workerSPIFFEID returns the SPIFFE ID the podidentity signer issues to pod.
+func workerSPIFFEID(pod *corev1.Pod) string {
+	return installdefaults.SPIFFEID(pod.Namespace, pod.Spec.ServiceAccountName)
 }
 
 // markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler

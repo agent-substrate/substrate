@@ -89,6 +89,7 @@ class DeployWorkloadsTest(unittest.TestCase):
             actor_memory="1536Mi",
             wait_timeout_secs=600,
             worker_memory="5Gi",
+            actor_cpu="250m",
         )
         run.assert_called_once_with(
             [
@@ -100,6 +101,8 @@ class DeployWorkloadsTest(unittest.TestCase):
                 "microvm",
                 "--actor-memory",
                 "1536Mi",
+                "--actor-cpu",
+                "250m",
                 "--worker-memory",
                 "5Gi",
                 "--wait-timeout",

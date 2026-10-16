@@ -282,7 +282,7 @@ Rules:
   - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`, and resource-specific ones such as an actor's `source_snapshot_tag`). A request that changes one - including by omitting it, which would clear it - **must** return `INVALID_ARGUMENT` naming the field.
 - The embedded resource field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`), not a generic name like `resource` or `body`.
 - The request **must** have no other fields, apart from its parent's `ObjectRef` for a subresource (see section #2.4).
-- Unknown fields in the request are preserved, so a client built against a newer schema does not lose data by round-tripping through an older one.
+- A request carrying a field the server does not know, at any level of nesting, **must** return `INVALID_ARGUMENT` naming the field, as for every RPC. Fields only the client does not know are a different case: a client that modifies the resource it read sends them back unchanged, so an update from an older client does not clear fields a newer server set.
 - The resource's `atespace` and `name` identify the resource to update; they are not themselves updatable.
 - If the resource does not exist: return `NOT_FOUND`.
 - The `version` and `uid` fields in the embedded resource's `metadata` are **required** preconditions (see section #7). A request that leaves either unset is a blind write and **must** return `INVALID_ARGUMENT`. They are control fields the client echoes back as guards, not fields it edits.

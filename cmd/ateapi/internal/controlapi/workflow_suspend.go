@@ -385,8 +385,9 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // When the latest snapshot has no durable snapshot to record, it commits
 // CRASHED instead and fails the step.
 // It re-reads the actor first so an out-of-band transition (e.g. the syncer
-// crashing the actor after its worker died) is not overwritten: with no
-// assignment left there is nothing to finalize.
+// crashing the actor after its worker died) is not overwritten: an actor that
+// is no longer SUSPENDING is left as it is and the step fails with
+// FailedPrecondition.
 func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
@@ -412,6 +413,9 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	dGetActor = time.Since(t)
 	if err != nil {
 		return nil, err
+	}
+	if state := latestActor.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+		return nil, apierror.FailedPrecondition("FinalizeSuspended prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, state, ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
 	}
 	if snapshotAtLatestGeneration(latestActor.GetStatus()).GetDurableSnapshot() == nil {
 		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageDurableSnapshotMissing)

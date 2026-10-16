@@ -27,7 +27,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateletdial"
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet/dns"
+	"github.com/agent-substrate/substrate/internal/atunnel/dns"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"

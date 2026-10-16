@@ -2690,3 +2690,13 @@ func TestCanRelaxRuntime(t *testing.T) {
 		})
 	}
 }
+
+// atenet-router requires the assignment's SPIFFE ID on atunnel's certificate,
+// so the worker's has to reach it.
+func TestWorkerAssignmentFromCopiesSPIFFEID(t *testing.T) {
+	const id = "spiffe://cluster.local/ns/workers/sa/substrate-worker"
+	got := workerAssignmentFrom(&ateapipb.Worker{WorkerSpiffeId: id}, hardware.Requirement{})
+	if got.GetWorkerSpiffeId() != id {
+		t.Errorf("worker SPIFFE ID = %q, want %q", got.GetWorkerSpiffeId(), id)
+	}
+}

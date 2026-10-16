@@ -1315,18 +1315,10 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 	}
 }
 
-// TestSuspendAndPause_FinalizeWithoutAssignment pins where the two finalize
-// steps differ when the DeleteWorker workflow crashes the actor, clearing its
-// worker assignment, between the atelet call and finalize. Both sides pin
-// bugs tracked in #2676: the suspend commits SUSPENDED over the crash, and
-// the pause keeps the crash but returns OK for an actor left CRASHED. The fix
-// changes the sync wantState to CRASHED and both codes to FailedPrecondition,
-// replacing the err != nil fatal below.
+// TestSuspendAndPause_FinalizeWithoutAssignment verifies that both workflows
+// preserve an out-of-band crash and return FailedPrecondition when the crash
+// clears the worker assignment between the atelet call and finalize's read.
 func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
-	wantState := map[string]ateapipb.ActorState{
-		"sync":  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-		"async": ateapipb.ActorState_ACTOR_STATE_CRASHED,
-	}
 	for _, mode := range suspendModes {
 		t.Run(mode.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -1343,21 +1335,29 @@ func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 					WorkerAssignment: wireTestAssignment(),
 				},
 			})
+			// What a worker delete or the syncer commits: CRASHED with the
+			// crash recorded and the assignment cleared, landing after the
+			// atelet call and before finalize re-reads the actor.
+			originalCrash := newActorCrash(ateattr.OperationDelete, "original crash reason")
 			updateDuringCheckpoint(t, atelet, persistence, actorRef, func(s *ateapipb.ActorStatus) {
 				s.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+				s.Crash = originalCrash
 				s.WorkerAssignment = nil
 			})
 
 			returned, err := mode.run(w, ctx, actorRef)
-			// #2676: both modes should return FailedPrecondition here.
-			if err != nil {
-				t.Fatalf("%s: %v", mode.name, err)
+			if got := apierror.Code(err); got != codes.FailedPrecondition {
+				t.Fatalf("%s: code = %v (err %v), want FailedPrecondition", mode.name, got, err)
 			}
-			if got := returned.GetStatus().GetState(); got != wantState[mode.name] {
-				t.Errorf("returned state = %v, want %v", got, wantState[mode.name])
+			if returned != nil {
+				t.Errorf("%s: returned actor = %v, want nil", mode.name, returned)
 			}
-			if got := mustReadActor(t, ctx, persistence, actorRef).GetStatus().GetState(); got != wantState[mode.name] {
-				t.Errorf("stored state = %v, want %v", got, wantState[mode.name])
+			stored := mustReadActor(t, ctx, persistence, actorRef)
+			if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				t.Errorf("%s: stored state = %v, want CRASHED", mode.name, got)
+			}
+			if got, want := stored.GetStatus().GetCrash().GetMessage(), originalCrash.GetMessage(); got != want {
+				t.Errorf("%s: crash message = %q, want %q kept", mode.name, got, want)
 			}
 		})
 	}

@@ -555,6 +555,24 @@ func TestSyncer_CreateWorker_DualStack(t *testing.T) {
 	}
 }
 
+// atenet-router requires atunnel's certificate to carry the SPIFFE ID the
+// worker registers with.
+func TestSyncer_CreateWorker_SPIFFEID(t *testing.T) {
+	ctx := context.Background()
+	ns, podName, poolName := "ns-syncer-sa", "worker-unit-sa", "pool-sa"
+	api := newFakeControl()
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	pod := workerPod(ns, podName, poolName, testPodUID, "10.0.0.1")
+	pod.Spec.ServiceAccountName = "substrate-worker"
+	key := seedPod(t, pods, pod)
+
+	mustReconcile(t, ctx, s, key)
+	want := "spiffe://cluster.local/ns/ns-syncer-sa/sa/substrate-worker"
+	if got := api.get(testPodUID).GetWorkerSpiffeId(); got != want {
+		t.Fatalf("worker SPIFFE ID = %q, want %q", got, want)
+	}
+}
+
 // A concurrent write between the syncer's read and its update loses the version
 // precondition. The key requeues, and the retry must re-read rather than replay
 // its stale copy — which is what lets the concurrent change and the syncer's own

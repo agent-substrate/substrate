@@ -33,9 +33,9 @@ containers:
 resources:
   limits:
   - name: cpu
-    quantity: "1"
+    quantity: "${ACTOR_CPU}"
   - name: memory
-    quantity: ${ACTOR_MEMORY}
+    quantity: "${ACTOR_MEMORY}"
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/sleep/

@@ -38,6 +38,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 	tests := []struct {
 		name      string
 		seedState ateapipb.ActorState
+		seedOpts  []func(*ateapipb.Actor)
 		// transition runs the workflow step that commits the new state.
 		transition func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate)
 		wantOp     string
@@ -60,9 +61,33 @@ func TestActorStateChangeRecords(t *testing.T) {
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
 				markOnly(t, w, ref, actor, w.PauseActor)
 			},
-			wantOp:     ateattr.OperationPause,
+			wantOp:     ateattr.OperationSuspend,
 			wantState:  ateattr.ActorStateSuspending,
 			wantStored: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+		},
+		{
+			name:      "finalize pause marks the actor suspended",
+			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			seedOpts: []func(*ateapipb.Actor){
+				withPauseInProgress(),
+				func(a *ateapipb.Actor) {
+					a.Status.AssignedNode = "node1"
+					a.Status.WorkerAssignment = &ateapipb.WorkerAssignment{
+						Worker:          &ateapipb.ObjectRef{Name: "worker-gone"},
+						WorkerNamespace: "default",
+						WorkerPool:      "pool1",
+						WorkerPod:       "worker-pod-1",
+					}
+				},
+			},
+			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, _ *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
+				if _, err := w.ensurePausedFinalized(context.Background(), ref); err != nil {
+					t.Fatalf("ensurePausedFinalized: %v", err)
+				}
+			},
+			wantOp:     ateattr.OperationSuspend,
+			wantState:  ateattr.ActorStateSuspended,
+			wantStored: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 		},
 		{
 			name:      "delete marks the actor deleting",
@@ -96,7 +121,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 			}
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-			seedWorkflowActor(t, ctx, persistence, actorRef, tmplAtespace, tmplName, tt.seedState)
+			seedWorkflowActor(t, ctx, persistence, actorRef, tmplAtespace, tmplName, tt.seedState, tt.seedOpts...)
 			actor, err := persistence.GetActor(ctx, actorRef)
 			if err != nil {
 				t.Fatalf("get actor: %v", err)

@@ -29,7 +29,7 @@ likely be split in the future for better scalability.)
   than a header. `atunnel` can't read that metadata directly, though -- it's
   a separate process on the worker pod, not part of Envoy -- so the port to
   reach on the actor itself (its default port, or an arbitrary one for
-  CONNECT) still travels as a real header, `atunnel.TargetPortHeader`.
+  CONNECT) still travels as a real header, `TargetPortHeader` in `internal/atunnel/ingress`.
   `ate-target-actor: <atespace>/<actor>` identifies the Actor independently of
   `:authority`/`Host`.
 * Termination: the router drains gracefully on SIGTERM (readiness flip →

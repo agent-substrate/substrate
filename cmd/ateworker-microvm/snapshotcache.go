@@ -43,8 +43,9 @@ func dropStagedMemoryImage(ctx context.Context, restoreDir string) {
 	if len(targets) == 0 {
 		return
 	}
-	snapshotcache.DropFiles(targets)
-	slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
+	if snapshotcache.DropFiles(targets) {
+		slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
+	}
 }
 
 // dropActorSnapshotCacheAsync pins the actor's snapshot files in restoreDir

@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
@@ -102,7 +103,7 @@ func TestValidateActorStatusCrash(t *testing.T) {
 			name:   "truncated crash message fits",
 			oldVal: validActor(withActorStatus()),
 			newVal: validActor(withCrash(func(c *ateapipb.ActorCrash) {
-				c.Message = newActorCrash("pause", strings.Repeat("x", 2*maxCrashMessageBytes)).GetMessage()
+				c.Message = newActorCrash(ateattr.OperationSuspend, strings.Repeat("x", 2*maxCrashMessageBytes)).GetMessage()
 			})),
 		},
 		{

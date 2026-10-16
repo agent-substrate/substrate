@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
 	"github.com/agent-substrate/substrate/internal/protoredact"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/ateconfigpb"
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/protobuf/proto"
@@ -380,6 +381,7 @@ var ourProtoFiles = []protoreflect.FileDescriptor{
 	ateapipb.File_ateapi_proto,
 	ateletpb.File_atelet_proto,
 	ateworkerpb.File_ateworker_proto,
+	ateconfigpb.File_apiconfig_proto,
 	credproviderpb.File_credprovider_proto,
 	glutton.File_glutton_proto,
 	grpcechopb.File_grpcecho_proto,

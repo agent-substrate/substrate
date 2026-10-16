@@ -321,7 +321,7 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 		{name: "wrapped apierror", op: ateattr.OperationResume, err: fmt.Errorf("workflow failed at step Load: %w", apierror.NotFound("missing")), wantErrorType: "NotFound"},
 		{name: "upstream status is what the caller gets", op: ateattr.OperationResume, err: fmt.Errorf("actor crashed: %w", status.Error(codes.Unavailable, "atelet down")), wantErrorType: "Internal"},
 		{name: "context deadline", op: ateattr.OperationSuspend, err: fmt.Errorf("while checkpointing: %w", context.DeadlineExceeded), wantErrorType: "DeadlineExceeded"},
-		{name: "plain error", op: ateattr.OperationPause, err: errors.New("store is down"), wantErrorType: "Internal"},
+		{name: "plain error", op: ateattr.OperationSuspend, err: errors.New("store is down"), wantErrorType: "Internal"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
