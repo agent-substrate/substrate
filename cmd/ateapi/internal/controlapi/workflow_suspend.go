@@ -24,6 +24,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/checkpointabort"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -53,6 +54,14 @@ func (m suspendMode) uploadMode() ateletpb.UploadMode {
 		return ateletpb.UploadMode_UPLOAD_MODE_DEFERRED
 	}
 	return ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE
+}
+
+// verb names the RPC that runs the mode, for errors returned to its caller.
+func (m suspendMode) verb() string {
+	if m == suspendAsync {
+		return "pause"
+	}
+	return "suspend"
 }
 
 // SuspendActor executes the workflow to suspend a running or paused actor:
@@ -368,6 +377,9 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	wireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 
 	if _, err = client.Checkpoint(ctx, req); err != nil {
+		if checkpointabort.Is(err) {
+			return wireFidelity, w.rollBackAbortedCheckpoint(ctx, actorRef, actor, mode, err)
+		}
 		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
 	return wireFidelity, nil

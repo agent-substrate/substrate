@@ -76,13 +76,18 @@ func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 }
 
 // buildRuntime converts the compatibility attributes atelet wrote for one
-// SandboxConfig version into a SandboxRuntime of sandboxClass.
-func buildRuntime(sandboxClass string, attrs sandboxruntimes.Attributes) *ateletpb.SandboxRuntime {
-	entries := make([]*ateletpb.AttributeEntry, 0, len(attrs))
-	for _, k := range slices.Sorted(maps.Keys(attrs)) {
+// SandboxConfig version, plus the runtime's own extra attributes, into a
+// SandboxRuntime of sandboxClass. An extra attribute replaces one atelet
+// wrote under the same key.
+func buildRuntime(sandboxClass string, attrs, extra sandboxruntimes.Attributes) *ateletpb.SandboxRuntime {
+	merged := make(sandboxruntimes.Attributes, len(attrs)+len(extra))
+	maps.Copy(merged, attrs)
+	maps.Copy(merged, extra)
+	entries := make([]*ateletpb.AttributeEntry, 0, len(merged))
+	for _, k := range slices.Sorted(maps.Keys(merged)) {
 		entries = append(entries, &ateletpb.AttributeEntry{
 			Key:   k,
-			Value: attrs[k],
+			Value: merged[k],
 		})
 	}
 	return &ateletpb.SandboxRuntime{
@@ -95,14 +100,14 @@ func buildRuntime(sandboxClass string, attrs sandboxruntimes.Attributes) *atelet
 }
 
 // buildRequest builds the RegisterWorkerRequest for capacity and the runtimes
-// in f under sandboxClass.
-func buildRequest(capacity *ateletpb.WorkerResources, sandboxClass string, f *sandboxruntimes.File) *ateletpb.RegisterWorkerRequest {
+// in f under sandboxClass, each extended with extra.
+func buildRequest(capacity *ateletpb.WorkerResources, sandboxClass string, extra sandboxruntimes.Attributes, f *sandboxruntimes.File) *ateletpb.RegisterWorkerRequest {
 	req := &ateletpb.RegisterWorkerRequest{
 		Capacity:       capacity,
-		DefaultRuntime: buildRuntime(sandboxClass, f.DefaultRuntime),
+		DefaultRuntime: buildRuntime(sandboxClass, f.DefaultRuntime, extra),
 	}
 	for _, attrs := range f.RestorableRuntimes {
-		req.RestorableRuntimes = append(req.RestorableRuntimes, buildRuntime(sandboxClass, attrs))
+		req.RestorableRuntimes = append(req.RestorableRuntimes, buildRuntime(sandboxClass, attrs, extra))
 	}
 	return req
 }
@@ -155,6 +160,11 @@ type ReportConfig struct {
 	// RuntimesFile is the sandbox runtimes file atelet keeps for this worker
 	// (nodepath.WorkerSandboxRuntimesPath).
 	RuntimesFile string
+	// RuntimeAttributes are compatibility attributes only the runtime itself
+	// knows, such as hardware.AttrHypervisor. They are added to every runtime
+	// in the sandbox runtimes file, replacing any atelet wrote under the same
+	// key.
+	RuntimeAttributes sandboxruntimes.Attributes
 }
 
 // Report keeps the worker registered with the node-local atelet until ctx
@@ -271,7 +281,7 @@ func (r *reconciler) sync(ctx context.Context) (retry bool) {
 		slog.WarnContext(ctx, "Ignoring a sandbox runtimes file with no default runtime", slog.String("path", r.cfg.RuntimesFile))
 		return false
 	}
-	req := buildRequest(r.capacity, r.cfg.SandboxClass, desired)
+	req := buildRequest(r.capacity, r.cfg.SandboxClass, r.cfg.RuntimeAttributes, desired)
 	if proto.Equal(req, r.registered) {
 		return false
 	}

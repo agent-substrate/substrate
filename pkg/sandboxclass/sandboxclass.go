@@ -23,8 +23,8 @@ import "slices"
 const (
 	// GVisor is the gVisor/runsc runtime (cmd/ateworker-gvisor). Default.
 	GVisor = "gvisor"
-	// MicroVM is the micro-VM runtime (cmd/ateworker-microvm). It needs /dev/kvm
-	// and vhost devices.
+	// MicroVM is the micro-VM runtime (cmd/ateworker-microvm). It needs a
+	// supported host hypervisor device and vhost devices.
 	MicroVM = "microvm"
 )
 

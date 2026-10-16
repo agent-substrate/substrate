@@ -89,9 +89,9 @@ type sandboxPrewarmer struct {
 	// compete for node bandwidth.
 	queue workqueue.TypedRateLimitingInterface[string]
 	// microvmCapable gates micro-VM configs: their guest images run to
-	// hundreds of MiB, and a node without /dev/kvm can never run that class
-	// (workers request the ate.dev/kvm extended resource, so they only
-	// schedule where the device exists). See microvmNodeCapable.
+	// hundreds of MiB, and a node without a supported hypervisor device can
+	// never run that class (workers request the matching extended resource,
+	// so they only schedule where the device exists). See microvmNodeCapable.
 	microvmCapable bool
 	// done is closed when the worker goroutine exits; wait blocks on it.
 	done chan struct{}
@@ -169,7 +169,7 @@ func (p *sandboxPrewarmer) skipConfig(ctx context.Context, cfg *v1alpha1.Sandbox
 		return false
 	case v1alpha1.SandboxClassMicroVM:
 		if !p.microvmCapable {
-			slog.DebugContext(ctx, "Skipping sandbox asset prewarm: node has no /dev/kvm, cannot run micro-VM workers",
+			slog.DebugContext(ctx, "Skipping sandbox asset prewarm: node has no supported hypervisor device, cannot run micro-VM workers",
 				slog.String("config", cfg.Name))
 			return true
 		}

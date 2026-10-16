@@ -17,6 +17,7 @@ package register
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -79,24 +80,107 @@ func TestFromFilesMissing(t *testing.T) {
 }
 
 func TestBuildRuntime(t *testing.T) {
-	got := buildRuntime("gvisor", sandboxruntimes.Attributes{
+	fromFile := sandboxruntimes.Attributes{
 		hardware.AttrSandboxBundleHash: "sha256:abc",
 		hardware.AttrCPUFeatures:       "3f",
 		hardware.AttrArchitecture:      runtime.GOARCH,
-	})
-	want := &ateletpb.SandboxRuntime{
-		SandboxClass: "gvisor",
-		Version: &ateletpb.VersionedSandboxCompat{
-			SchemaVersion: hardware.SchemaVersionV1,
-			Attributes: []*ateletpb.AttributeEntry{
-				{Key: hardware.AttrArchitecture, Value: runtime.GOARCH},
-				{Key: hardware.AttrCPUFeatures, Value: "3f"},
-				{Key: hardware.AttrSandboxBundleHash, Value: "sha256:abc"},
-			},
-		},
 	}
-	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
-		t.Errorf("buildRuntime() mismatch (-want +got):\n%s", diff)
+	for _, tc := range []struct {
+		name  string
+		attrs sandboxruntimes.Attributes
+		extra sandboxruntimes.Attributes
+		want  []*ateletpb.AttributeEntry
+	}{{
+		name:  "file only",
+		attrs: fromFile,
+		want: []*ateletpb.AttributeEntry{
+			{Key: hardware.AttrArchitecture, Value: runtime.GOARCH},
+			{Key: hardware.AttrCPUFeatures, Value: "3f"},
+			{Key: hardware.AttrSandboxBundleHash, Value: "sha256:abc"},
+		},
+	}, {
+		// Runtime attributes extend atelet's so the control plane matches
+		// snapshots on both.
+		name:  "runtime attributes",
+		attrs: fromFile,
+		extra: sandboxruntimes.Attributes{hardware.AttrHypervisor: "mshv"},
+		want: []*ateletpb.AttributeEntry{
+			{Key: hardware.AttrArchitecture, Value: runtime.GOARCH},
+			{Key: hardware.AttrCPUFeatures, Value: "3f"},
+			{Key: hardware.AttrHypervisor, Value: "mshv"},
+			{Key: hardware.AttrSandboxBundleHash, Value: "sha256:abc"},
+		},
+	}, {
+		// The runtime knows its own attributes better than atelet does.
+		name:  "runtime attribute replaces atelet's",
+		attrs: sandboxruntimes.Attributes{hardware.AttrArchitecture: runtime.GOARCH, hardware.AttrHypervisor: "kvm"},
+		extra: sandboxruntimes.Attributes{hardware.AttrHypervisor: "mshv"},
+		want: []*ateletpb.AttributeEntry{
+			{Key: hardware.AttrArchitecture, Value: runtime.GOARCH},
+			{Key: hardware.AttrHypervisor, Value: "mshv"},
+		},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := maps.Clone(tc.attrs)
+			got := buildRuntime("gvisor", tc.attrs, tc.extra)
+			want := &ateletpb.SandboxRuntime{
+				SandboxClass: "gvisor",
+				Version: &ateletpb.VersionedSandboxCompat{
+					SchemaVersion: hardware.SchemaVersionV1,
+					Attributes:    tc.want,
+				},
+			}
+			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("buildRuntime() mismatch (-want +got):\n%s", diff)
+			}
+			if !maps.Equal(tc.attrs, before) {
+				t.Errorf("buildRuntime() modified the file's attributes: got %v, want %v", tc.attrs, before)
+			}
+		})
+	}
+}
+
+// TestReconcilerRegistersRuntimeAttributes covers the runtime's own attributes
+// reaching every registered runtime. An assignment records the runtime the
+// actor matched, which can be a restorable one, and the actor's next
+// checkpoint is stamped with it. A restorable runtime without the hypervisor
+// would match no memory snapshot that carries one, and would stamp an MSHV
+// memory snapshot that a resume then reads as KVM.
+func TestReconcilerRegistersRuntimeAttributes(t *testing.T) {
+	f := &sandboxruntimes.File{
+		DefaultRuntime:     sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v2"},
+		RestorableRuntimes: []sandboxruntimes.Attributes{{hardware.AttrSandboxBundleHash: "sha256:v1"}},
+	}
+	var req *ateletpb.RegisterWorkerRequest
+	r := newReconciler(
+		ReportConfig{
+			SandboxClass:      "microvm",
+			RuntimesFile:      "sandbox-runtimes.json",
+			RuntimeAttributes: sandboxruntimes.Attributes{hardware.AttrHypervisor: "mshv"},
+		},
+		&ateletpb.WorkerResources{Actors: 1},
+		func() (*sandboxruntimes.File, error) { return f, nil },
+		func(_ context.Context, got *ateletpb.RegisterWorkerRequest) error {
+			req = got
+			return nil
+		},
+	)
+	if retry := r.sync(t.Context()); retry || req == nil {
+		t.Fatalf("sync() retry = %v, registered %v; want a registration", retry, req)
+	}
+	for _, rt := range append([]*ateletpb.SandboxRuntime{req.GetDefaultRuntime()}, req.GetRestorableRuntimes()...) {
+		found := false
+		for _, a := range rt.GetVersion().GetAttributes() {
+			if a.GetKey() == hardware.AttrHypervisor && a.GetValue() == "mshv" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("runtime %v lacks %s=mshv", rt, hardware.AttrHypervisor)
+		}
+	}
+	if got := len(req.GetRestorableRuntimes()); got != 1 {
+		t.Errorf("len(RestorableRuntimes) = %d, want 1", got)
 	}
 }
 
@@ -117,8 +201,8 @@ func TestReconcilerSync(t *testing.T) {
 		},
 		RestorableRuntimes: []sandboxruntimes.Attributes{v1.DefaultRuntime},
 	}
-	reqV1 := buildRequest(capacity, "gvisor", v1)
-	reqV2 := buildRequest(capacity, "gvisor", v2)
+	reqV1 := buildRequest(capacity, "gvisor", nil, v1)
+	reqV2 := buildRequest(capacity, "gvisor", nil, v2)
 
 	tests := []struct {
 		name           string
@@ -558,7 +642,7 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 	}
 	select {
 	case req := <-got:
-		if diff := cmp.Diff(buildRuntime("gvisor", v1.DefaultRuntime), req.GetDefaultRuntime(), protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(buildRuntime("gvisor", v1.DefaultRuntime, nil), req.GetDefaultRuntime(), protocmp.Transform()); diff != "" {
 			t.Errorf("initial registration default_runtime mismatch (-want +got):\n%s", diff)
 		}
 	case <-ctx.Done():
@@ -580,7 +664,7 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 	}
 	select {
 	case req := <-got:
-		if diff := cmp.Diff(buildRuntime("gvisor", v2.DefaultRuntime), req.GetDefaultRuntime(), protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(buildRuntime("gvisor", v2.DefaultRuntime, nil), req.GetDefaultRuntime(), protocmp.Transform()); diff != "" {
 			t.Errorf("updated registration default_runtime mismatch (-want +got):\n%s", diff)
 		}
 		if len(req.GetRestorableRuntimes()) != 1 {

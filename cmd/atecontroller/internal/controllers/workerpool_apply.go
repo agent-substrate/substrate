@@ -15,6 +15,7 @@
 package controllers
 
 import (
+	"maps"
 	"slices"
 	"strings"
 
@@ -431,7 +432,7 @@ func workerSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCon
 			WithType(corev1.SeccompProfileTypeUnconfined))
 }
 
-// maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a
+// maybeApplyMicroVMPodShape adds the selected hypervisor device and node placement a
 // micro-VM (kata + cloud-hypervisor) worker pool needs, on top of any
 // pod-template settings. No-op unless sandboxClass is the micro-VM class.
 //
@@ -449,7 +450,7 @@ func maybeApplyMicroVMPodShape(
 		return
 	}
 
-	// The micro-VM runtime needs /dev/kvm to create the VM. Request it as an
+	// The micro-VM runtime needs its hypervisor device to create the VM. Request it as an
 	// extended resource served by atelet's device plugin rather than
 	// hostPath-mounting it: a container's device access is gated by the cgroup
 	// device controller, which denies /dev/kvm by default, and kubelet's device
@@ -459,7 +460,13 @@ func maybeApplyMicroVMPodShape(
 	//
 	// atelet advertises it only on nodes where the device exists, so the
 	// request also keeps the pod off nodes that cannot run a micro-VM.
-	addDeviceResourceLimits(containerAC, deviceplugin.ResourceKVM)
+	//
+	// The pool selects the backend by naming its resource in the template's
+	// resources (see microVMHypervisorResource). ateworker-microvm detects the
+	// backend from the device it was granted and reports it with the worker's
+	// runtime, so the control plane restores a snapshot's guest memory only
+	// on a worker with the same backend.
+	setHypervisorDeviceLimit(containerAC, microVMHypervisorResource(containerAC.Resources))
 
 	// The runtime also opens /dev/net/tun to build the guest's tap, but that
 	// one needs no grant: it is in the runtime's default device allow-list, so
@@ -480,7 +487,7 @@ func maybeApplyMicroVMPodShape(
 			WithPath(tunDevicePath).
 			WithType(corev1.HostPathCharDev)))
 
-	// Placement onto KVM-capable nodes comes from the device request above: the
+	// Placement onto capable nodes comes from the device request above: the
 	// scheduler only picks nodes advertising the resource, and atelet advertises
 	// it only where the device exists. That is derived from the node itself,
 	// unlike an ate.dev/sandboxClass label, which is a hand-applied convention
@@ -526,6 +533,48 @@ const (
 	tunDeviceVolume = "dev-net-tun"
 	tunDevicePath   = "/dev/net/tun"
 )
+
+// microVMHypervisorResource returns the hypervisor device resource a micro-VM
+// worker requests: ate.dev/mshv when the pool's template names it in limits or
+// requests, otherwise ate.dev/kvm. WorkerPool validation rejects a template
+// naming both.
+//
+// Other extended resources on a pool only place the pod. This one is read
+// because it is not a device handed to actors: it picks the device the VMM
+// itself drives, and the worker always gets exactly one unit of it.
+func microVMHypervisorResource(res *corev1ac.ResourceRequirementsApplyConfiguration) string {
+	if res != nil {
+		for _, list := range []*corev1.ResourceList{res.Limits, res.Requests} {
+			if list == nil {
+				continue
+			}
+			if _, ok := (*list)[corev1.ResourceName(deviceplugin.ResourceMSHV)]; ok {
+				return deviceplugin.ResourceMSHV
+			}
+		}
+	}
+	return deviceplugin.ResourceKVM
+}
+
+// setHypervisorDeviceLimit makes resourceName the worker's only hypervisor
+// device request, at one unit: a worker drives one VMM backend, and an
+// extended resource's request must equal its limit, so whatever quantity the
+// template named is replaced.
+func setHypervisorDeviceLimit(containerAC *corev1ac.ContainerApplyConfiguration, resourceName string) {
+	if res := containerAC.Resources; res != nil && res.Requests != nil {
+		requests := maps.Clone(*res.Requests)
+		delete(requests, corev1.ResourceName(deviceplugin.ResourceKVM))
+		delete(requests, corev1.ResourceName(deviceplugin.ResourceMSHV))
+		res.Requests = &requests
+	}
+	if res := containerAC.Resources; res != nil && res.Limits != nil {
+		limits := maps.Clone(*res.Limits)
+		delete(limits, corev1.ResourceName(deviceplugin.ResourceKVM))
+		delete(limits, corev1.ResourceName(deviceplugin.ResourceMSHV))
+		res.Limits = &limits
+	}
+	addDeviceResourceLimits(containerAC, resourceName)
+}
 
 // addDeviceResourceLimits requests one unit of each named extended resource,
 // merging into whatever limits the pod template already set.

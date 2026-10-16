@@ -21,6 +21,7 @@ import (
 
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -49,6 +50,16 @@ const (
 	// AttrCPUModel identifies the host CPU family/model (e.g. "6:143" on amd64
 	// or "0x0:0xd40:1" on arm64) reported by microVM runtimes.
 	AttrCPUModel = "cpu_model"
+
+	// AttrHypervisor is the host hypervisor backend a micro-VM runtime drives
+	// (HypervisorKVM, HypervisorMSHV). Only guest memory depends on it: a
+	// restore without memory drops it from its requirement (see
+	// RestoreRuntime), so matching ignores the worker's value.
+	AttrHypervisor = "hypervisor"
+
+	// HypervisorKVM and HypervisorMSHV are the values of AttrHypervisor.
+	HypervisorKVM  = "kvm"
+	HypervisorMSHV = "mshv"
 )
 
 // ProbeHost returns a minimal v1 VersionedSandboxCompat with the current
@@ -65,6 +76,57 @@ func ProbeHost() *ateletpb.VersionedSandboxCompat {
 			},
 		},
 	}
+}
+
+// RestoreRuntime returns the runtime a worker must match to restore guest
+// state captured under snap. includesMemory reports whether the restore
+// includes guest memory. A restore without memory does not depend on the
+// hypervisor backend (a micro-VM's rootfs upper and volumes are plain files),
+// so its requirement drops AttrHypervisor and a snapshot taken on KVM keeps
+// its rootfs on an MSHV worker and the reverse. A memory restore keeps it, so
+// it lands only on the backend that captured the memory.
+func RestoreRuntime(snap *ateapipb.SandboxRuntime, includesMemory bool) *ateapipb.SandboxRuntime {
+	if snap == nil || includesMemory || !hasAttr(snap.GetVersion(), AttrHypervisor) {
+		return snap
+	}
+	return &ateapipb.SandboxRuntime{
+		SandboxClass: snap.GetSandboxClass(),
+		Version:      withoutAttr(snap.GetVersion(), AttrHypervisor),
+	}
+}
+
+// WithAttr returns a copy of rt with key set to value when rt has no key, and
+// rt itself otherwise.
+func WithAttr(rt *ateapipb.SandboxRuntime, key, value string) *ateapipb.SandboxRuntime {
+	if rt == nil || hasAttr(rt.GetVersion(), key) {
+		return rt
+	}
+	out := proto.CloneOf(rt)
+	if out.Version == nil {
+		out.Version = &ateapipb.VersionedSandboxCompat{}
+	}
+	out.Version.Attributes = append(out.Version.Attributes, &ateapipb.AttributeEntry{Key: key, Value: value})
+	return out
+}
+
+func hasAttr(v *ateapipb.VersionedSandboxCompat, key string) bool {
+	for _, a := range v.GetAttributes() {
+		if a.GetKey() == key {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutAttr returns a copy of v without key; v itself is not modified.
+func withoutAttr(v *ateapipb.VersionedSandboxCompat, key string) *ateapipb.VersionedSandboxCompat {
+	out := &ateapipb.VersionedSandboxCompat{SchemaVersion: v.GetSchemaVersion()}
+	for _, a := range v.GetAttributes() {
+		if a.GetKey() != key {
+			out.Attributes = append(out.Attributes, a)
+		}
+	}
+	return out
 }
 
 // Requirement is what a worker must run to restore a snapshot: the

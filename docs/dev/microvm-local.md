@@ -1,11 +1,44 @@
 # Running the microVM runtime locally
 
 The microVM sandbox class (`ateworker-microvm`: a Kata guest on Cloud Hypervisor)
-needs `/dev/kvm`, which takes some extra setup compared to the default gVisor
-path. This guide covers just that delta: getting a KVM-capable Docker
+uses `/dev/kvm` by default, which takes some extra setup compared to the default
+gVisor path. This guide covers just that delta: getting a KVM-capable Docker
 environment — on Linux, or on Apple Silicon macOS via
 [Lima](https://lima-vm.io/) — then running the microVM counter demo and
 verifying a guest-memory snapshot round-trip.
+
+Microsoft Hypervisor root partitions expose `/dev/mshv` instead. Name
+`ate.dev/mshv: "1"` in the microVM `WorkerPool`'s
+`spec.template.resources.limits` and use a Cloud Hypervisor asset built with its
+`mshv` feature (the upstream release binary has both `kvm` and `mshv`). atelet
+advertises `ate.dev/mshv` only on nodes where the character device exists, so
+the worker's resource request drives placement without a node label or
+architecture selector, and `ateworker-microvm` detects the backend from the
+device it was granted.
+
+Cloud Hypervisor does not advance an MSHV guest's clock across a restore, so
+on MSHV `ateworker-microvm` sets the guest clock through the kata-agent after
+cold boot (before the containers start) and after a memory restore. A memory
+snapshot on MSHV freezes the actor's containers (the agent's
+`PauseContainer`, a guest cgroup freeze) before the VM pause, and the
+restore thaws them only after it has reseeded the guest CRNG and set the
+clock, so the containers stay stopped until both are fresh. The freeze runs
+before the checkpoint touches anything else: a Cloud Hypervisor API failure
+before the freeze while Cloud Hypervisor still runs, or a failed freeze that
+thaws every container it froze, fails the suspend or pause with
+`FAILED_PRECONDITION`, leaving the actor `RUNNING` and reachable; golden
+snapshot creation fails on that error instead of retrying it. The checkpoint
+fails the same way as any other failed checkpoint, with the actor off its
+tunnel, on an API failure when Cloud Hypervisor has exited or its API socket
+has no listener, on a failed freeze whose thaw fails, on a failure after the
+freeze (a failed VM pause, for example), and on any of these in a retry
+after an earlier attempt took the actor off its tunnel. Once the freeze
+succeeds, no later failure thaws the containers, since a failed VM pause may
+still apply; a retried checkpoint skips the freeze. A failed restore step
+fails the restore and stops the restored VM; if a container's thaw fails,
+the restore first re-freezes, best effort, the containers it already thawed.
+KVM guests keep their clock and are not frozen; there the CRNG reseed lands
+just after the VM resumes.
 
 ## Prerequisites
 

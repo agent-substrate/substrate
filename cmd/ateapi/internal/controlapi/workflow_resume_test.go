@@ -1282,6 +1282,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 
 	amd64RT := testSandboxRuntime()
 	arm64RT := testRuntime("arm64", "")
+	kvmRT := testMicroVMRuntime(hardware.HypervisorKVM)
+	mshvRT := testMicroVMRuntime(hardware.HypervisorMSHV)
+	noBackendRT := testMicroVMRuntime("")
 	wantAteletRuntime := map[*ateapipb.SandboxRuntime]*ateletpb.SandboxRuntime{
 		amd64RT: {
 			SandboxClass: "gvisor",
@@ -1295,6 +1298,28 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			Version: &ateletpb.VersionedSandboxCompat{
 				SchemaVersion: "v1",
 				Attributes:    []*ateletpb.AttributeEntry{{Key: "architecture", Value: "arm64"}},
+			},
+		},
+		// The worker's backend reaches atelet whatever the snapshot was
+		// stamped with.
+		kvmRT: {
+			SandboxClass: "microvm",
+			Version: &ateletpb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes: []*ateletpb.AttributeEntry{
+					{Key: "architecture", Value: "amd64"},
+					{Key: "hypervisor", Value: "kvm"},
+				},
+			},
+		},
+		mshvRT: {
+			SandboxClass: "microvm",
+			Version: &ateletpb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes: []*ateletpb.AttributeEntry{
+					{Key: "architecture", Value: "amd64"},
+					{Key: "hypervisor", Value: "mshv"},
+				},
 			},
 		},
 	}
@@ -1582,6 +1607,73 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				snapshotName: durableSnapshotName,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			},
+		},
+		{
+			// A rootfs upper holds no hypervisor state, so it survives a
+			// move to the other backend.
+			name: "25 KVM Rootfs durable snapshot on an MSHV worker restores as Rootfs",
+			actor: actorSeed{
+				externalSnapshot: stampedExtSnap(ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, rootfsScope, kvmRT),
+				tmplUID:          "current",
+				assignedRuntime:  mshvRT,
+			},
+			want: restoreWant{
+				snapshotName: durableSnapshotName,
+				snapshotURI:  actorURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			},
+		},
+		{
+			name: "26 MSHV Rootfs durable snapshot on a KVM worker restores as Rootfs",
+			actor: actorSeed{
+				externalSnapshot: stampedExtSnap(ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, rootfsScope, mshvRT),
+				tmplUID:          "current",
+				assignedRuntime:  kvmRT,
+			},
+			want: restoreWant{
+				snapshotName: durableSnapshotName,
+				snapshotURI:  actorURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			},
+		},
+		{
+			name: "27 KVM Full durable snapshot on an MSHV worker drops to Volumes",
+			actor: actorSeed{
+				externalSnapshot: stampedExtSnap(ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, fullScope, kvmRT),
+				tmplUID:          "current",
+				assignedRuntime:  mshvRT,
+			},
+			want: restoreWant{
+				snapshotName: durableSnapshotName,
+				snapshotURI:  actorURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			},
+		},
+		{
+			name: "28 micro-VM Full durable snapshot without a backend on an MSHV worker drops to Volumes",
+			actor: actorSeed{
+				externalSnapshot: stampedExtSnap(ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, fullScope, noBackendRT),
+				tmplUID:          "current",
+				assignedRuntime:  mshvRT,
+			},
+			want: restoreWant{
+				snapshotName: durableSnapshotName,
+				snapshotURI:  actorURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			},
+		},
+		{
+			name: "29 micro-VM Full durable snapshot without a backend on a KVM worker restores in Full",
+			actor: actorSeed{
+				externalSnapshot: stampedExtSnap(ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, actorURI, fullScope, noBackendRT),
+				tmplUID:          "current",
+				assignedRuntime:  kvmRT,
+			},
+			want: restoreWant{
+				snapshotName: durableSnapshotName,
+				snapshotURI:  actorURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 	}
@@ -2314,13 +2406,27 @@ func testRuntime(arch, bundleHash string) *ateapipb.SandboxRuntime {
 	}
 }
 
+// testMicroVMRuntime is an amd64 micro-VM runtime on hypervisor, or with no
+// hypervisor attribute when hypervisor is empty.
+func testMicroVMRuntime(hypervisor string) *ateapipb.SandboxRuntime {
+	attrs := []*ateapipb.AttributeEntry{{Key: hardware.AttrArchitecture, Value: "amd64"}}
+	if hypervisor != "" {
+		attrs = append(attrs, &ateapipb.AttributeEntry{Key: hardware.AttrHypervisor, Value: hypervisor})
+	}
+	return &ateapipb.SandboxRuntime{
+		SandboxClass: "microvm",
+		Version:      &ateapipb.VersionedSandboxCompat{SchemaVersion: hardware.SchemaVersionV1, Attributes: attrs},
+	}
+}
+
 // testSandboxRuntime is the amd64 gvisor runtime most tests report and stamp.
 func testSandboxRuntime() *ateapipb.SandboxRuntime {
 	return testRuntime("amd64", "")
 }
 
-// seedRuntimeWorker stores an ACTIVE gvisor worker on node with room for one
-// actor, reporting def as its default runtime and restorable beyond it.
+// seedRuntimeWorker stores an ACTIVE worker of def's sandbox class on node with
+// room for one actor, reporting def as its default runtime and restorable
+// beyond it.
 func seedRuntimeWorker(t *testing.T, ctx context.Context, st store.Interface, pod, node string, def *ateapipb.SandboxRuntime, restorable ...*ateapipb.SandboxRuntime) *ateapipb.Worker {
 	t.Helper()
 	worker, err := st.CreateWorker(ctx, &ateapipb.Worker{
@@ -2329,7 +2435,7 @@ func seedRuntimeWorker(t *testing.T, ctx context.Context, st store.Interface, po
 		WorkerPool:      "pool",
 		WorkerPod:       pod,
 		WorkerPodUid:    testWorkerUID(pod),
-		SandboxClass:    "gvisor",
+		SandboxClass:    def.GetSandboxClass(),
 		NodeName:        node,
 		Status: &ateapipb.WorkerStatus{
 			State:              ateapipb.WorkerState_WORKER_STATE_ACTIVE,
@@ -2537,6 +2643,106 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 	})
 }
 
+// TestAssignWorkerAttempt_HypervisorBackend pins that only a MEMORY snapshot
+// is held to the hypervisor backend it was taken on: a ROOTFS snapshot is
+// placed on a worker of either backend without relaxing its constraint.
+func TestAssignWorkerAttempt_HypervisorBackend(t *testing.T) {
+	kvmRT := testMicroVMRuntime(hardware.HypervisorKVM)
+	mshvRT := testMicroVMRuntime(hardware.HypervisorMSHV)
+	// Same backend as kvmRT, other architecture: never a strict match.
+	kvmArm64RT := proto.CloneOf(kvmRT)
+	kvmArm64RT.Version.Attributes[0].Value = "arm64"
+	tmpl := &ateapipb.ActorTemplate{
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "microvm"},
+	}
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	suspended := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	durable := func(t *testing.T, fidelity ateapipb.SnapshotFidelity, rt *ateapipb.SandboxRuntime) *ateapipb.Snapshot {
+		snap := durableMemorySnapshot(t, rt)
+		snap.Fidelity = fidelity
+		return snap
+	}
+	local := func(fidelity ateapipb.SnapshotFidelity, rt *ateapipb.SandboxRuntime) *ateapipb.Snapshot {
+		snap := newLocalSnapshot(1, fidelity, "", "local-1", "node-1")
+		snap.SandboxRuntime = rt
+		return snap
+	}
+
+	t.Run("KVM ROOTFS snapshot is placed strictly on an MSHV worker", func(t *testing.T) {
+		ctx := context.Background()
+		st := newTestPersistence(t)
+		seedRuntimeWorker(t, ctx, st, "kvm-arm-pod", "node-arm", kvmArm64RT)
+		seedRuntimeWorker(t, ctx, st, "mshv-pod", "node-mshv", mshvRT)
+		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durable(t, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, kvmRT))
+
+		stored, worker, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, tmpl)
+		if err != nil {
+			t.Fatalf("assignWorkerAttempt: %v", err)
+		}
+		// Only mshv-pod matches strictly; a relaxed pick could be either.
+		if got := worker.GetWorkerPod(); got != "mshv-pod" {
+			t.Errorf("assigned worker = %q, want %q", got, "mshv-pod")
+		}
+		assertAssignedRuntime(t, stored, mshvRT)
+	})
+
+	t.Run("KVM ROOTFS local checkpoint is not held to its backend", func(t *testing.T) {
+		ctx := context.Background()
+		st := newTestPersistence(t)
+		seedRuntimeWorker(t, ctx, st, "mshv-pod", "node-1", mshvRT)
+		actor := seedActorWithSnapshot(t, ctx, st, suspended, "node-1", local(ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, kvmRT))
+
+		// A local checkpoint is never relaxed, so success means the strict
+		// requirement matched.
+		stored, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, tmpl)
+		if err != nil {
+			t.Fatalf("assignWorkerAttempt: %v", err)
+		}
+		assertAssignedRuntime(t, stored, mshvRT)
+	})
+
+	t.Run("KVM MEMORY local checkpoint is held to its backend", func(t *testing.T) {
+		ctx := context.Background()
+		st := newTestPersistence(t)
+		seedRuntimeWorker(t, ctx, st, "mshv-pod", "node-1", mshvRT)
+		actor := seedActorWithSnapshot(t, ctx, st, suspended, "node-1", local(ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, kvmRT))
+
+		_, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, tmpl)
+		if got := apierror.Code(err); got != codes.ResourceExhausted {
+			t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.ResourceExhausted, err)
+		}
+	})
+
+	t.Run("KVM MEMORY snapshot prefers a KVM worker", func(t *testing.T) {
+		ctx := context.Background()
+		st := newTestPersistence(t)
+		seedRuntimeWorker(t, ctx, st, "mshv-pod", "node-mshv", mshvRT)
+		seedRuntimeWorker(t, ctx, st, "kvm-pod", "node-kvm", kvmRT)
+		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durable(t, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, kvmRT))
+
+		stored, worker, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, tmpl)
+		if err != nil {
+			t.Fatalf("assignWorkerAttempt: %v", err)
+		}
+		if got := worker.GetWorkerPod(); got != "kvm-pod" {
+			t.Errorf("assigned worker = %q, want %q", got, "kvm-pod")
+		}
+		assertAssignedRuntime(t, stored, kvmRT)
+	})
+
+	t.Run("MEMORY checkpoint without a backend is held to KVM", func(t *testing.T) {
+		ctx := context.Background()
+		st := newTestPersistence(t)
+		seedRuntimeWorker(t, ctx, st, "mshv-pod", "node-1", mshvRT)
+		actor := seedActorWithSnapshot(t, ctx, st, suspended, "node-1", local(ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testMicroVMRuntime("")))
+
+		_, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, tmpl)
+		if got := apierror.Code(err); got != codes.ResourceExhausted {
+			t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.ResourceExhausted, err)
+		}
+	})
+}
+
 func TestValidateAssignedWorker_RuntimeFallback(t *testing.T) {
 	t.Run("accepts fallback worker on re-entry for durable snapshot", func(t *testing.T) {
 		ctx := context.Background()
@@ -2587,6 +2793,9 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 	tmpl := &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Uid: tmplUID}}
 	localRT := testRuntime("amd64", "paused-under")
 	durableRT := testRuntime("amd64", "suspended-under")
+	kvmRT := testMicroVMRuntime(hardware.HypervisorKVM)
+	mshvRT := testMicroVMRuntime(hardware.HypervisorMSHV)
+	noBackendRT := testMicroVMRuntime("")
 	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	rootfs := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 	volumes := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
@@ -2623,6 +2832,31 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 		{
 			name:      "VOLUMES durable snapshot restores no guest state",
 			snapshots: []*ateapipb.Snapshot{durable(1, volumes, tmplUID, completed, durableRT)},
+		},
+		{
+			name:      "micro-VM MEMORY durable snapshot requires its backend",
+			snapshots: []*ateapipb.Snapshot{durable(1, memory, tmplUID, completed, mshvRT)},
+			want:      mshvRT,
+		},
+		{
+			name:      "micro-VM ROOTFS durable snapshot requires its runtime without the backend",
+			snapshots: []*ateapipb.Snapshot{durable(1, rootfs, tmplUID, completed, mshvRT)},
+			want:      noBackendRT,
+		},
+		{
+			name:      "micro-VM MEMORY durable snapshot without a backend requires KVM",
+			snapshots: []*ateapipb.Snapshot{durable(1, memory, tmplUID, completed, noBackendRT)},
+			want:      kvmRT,
+		},
+		{
+			name:      "micro-VM ROOTFS local checkpoint requires its runtime without the backend",
+			snapshots: []*ateapipb.Snapshot{local(1, rootfs, kvmRT)},
+			want:      noBackendRT,
+		},
+		{
+			name:      "micro-VM MEMORY local checkpoint requires its backend",
+			snapshots: []*ateapipb.Snapshot{local(1, memory, mshvRT)},
+			want:      mshvRT,
 		},
 		{
 			name:      "durable snapshot captured under a replaced template is not restored",

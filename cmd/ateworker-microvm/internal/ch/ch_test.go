@@ -146,3 +146,34 @@ func TestWaitReadyTimesOut(t *testing.T) {
 		t.Fatal("WaitReady returned nil for a dead socket, want timeout error")
 	}
 }
+
+// A VMM that accepts the connection but never answers vmm.ping must not hold
+// WaitReady past its deadline.
+func TestWaitReadyBoundsAnUnansweredPing(t *testing.T) {
+	client := startSilentCH(t)
+	start := time.Now()
+	_, err := client.WaitReady(context.Background(), 100*time.Millisecond)
+	if err == nil {
+		t.Fatal("WaitReady returned nil for a VMM that never answers, want timeout error")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("WaitReady returned after %s, want about its 100ms deadline", elapsed)
+	}
+}
+
+// startSilentCH serves an api-socket whose handler never answers a request,
+// and returns a client for it.
+func startSilentCH(t *testing.T) *Client {
+	t.Helper()
+	sockPath := filepath.Join(t.TempDir(), "ch.sock")
+	lis, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen unix: %v", err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})}
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return NewClient(sockPath)
+}
