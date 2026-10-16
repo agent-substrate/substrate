@@ -270,6 +270,127 @@ func testUnpackLayerDirectoryAliasesTakeLatestHeader(t *testing.T) {
 	}
 }
 
+// TestUnpackLayer_DirectoryHeadersStayWithTheirDirectory checks that a
+// directory header applies only to the directory its entry created or found,
+// even when a later entry makes its name resolve to another directory: by
+// removing the directory through a symlink alias and putting a symlink in its
+// place, or by pointing a symlink on its path elsewhere.
+func TestUnpackLayer_DirectoryHeadersStayWithTheirDirectory(t *testing.T) {
+	if os.Geteuid() != 0 {
+		testUnpackLayerDirectoryHeadersStayWithTheirDirectory(t)
+		return
+	}
+	runAsRootAndAtelet(t, testUnpackLayerDirectoryHeadersStayWithTheirDirectory)
+}
+
+func testUnpackLayerDirectoryHeadersStayWithTheirDirectory(t *testing.T) {
+	early := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	mid := time.Date(2020, 6, 1, 0, 0, 0, 0, time.UTC)
+	late := time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC)
+	type want struct {
+		mode     os.FileMode
+		uid, gid uint32
+		mtime    time.Time
+	}
+	tests := []struct {
+		name    string
+		entries []tarEntry
+		want    map[string]want
+	}{
+		{
+			// "a/b" removes cc/b through the alias a, so "cc/b/sub" now
+			// resolves to y/sub.
+			name: "removed through an alias, stale name longer",
+			entries: []tarEntry{
+				{name: "y/", typeflag: tar.TypeDir},
+				{name: "y/sub/", typeflag: tar.TypeDir, mode: 0o705, uid: 1001, gid: 1001, modTime: late},
+				{name: "cc/", typeflag: tar.TypeDir},
+				{name: "cc/b/", typeflag: tar.TypeDir},
+				{name: "cc/b/sub/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: early},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+				{name: "a/b", typeflag: tar.TypeSymlink, linkname: "../y"},
+			},
+			want: map[string]want{"y/sub": {os.ModeDir | 0o705, 1001, 1001, late}},
+		},
+		{
+			name: "removed through an alias, stale name shorter",
+			entries: []tarEntry{
+				{name: "yyyyyyyy/", typeflag: tar.TypeDir},
+				{name: "yyyyyyyy/sub/", typeflag: tar.TypeDir, mode: 0o705, uid: 1001, gid: 1001, modTime: late},
+				{name: "c/", typeflag: tar.TypeDir},
+				{name: "c/b/", typeflag: tar.TypeDir},
+				{name: "c/b/sub/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: early},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "c"},
+				{name: "a/b", typeflag: tar.TypeSymlink, linkname: "../yyyyyyyy"},
+			},
+			want: map[string]want{"yyyyyyyy/sub": {os.ModeDir | 0o705, 1001, 1001, late}},
+		},
+		{
+			// "a/x/" is written to cc/x, then a points to dd, so "a/x"
+			// resolves to dd/x. cc/x still takes "a/x/", the header written
+			// to it last, through its other name.
+			name: "symlink on the path pointed elsewhere",
+			entries: []tarEntry{
+				{name: "cc/", typeflag: tar.TypeDir},
+				{name: "cc/x/", typeflag: tar.TypeDir, mode: 0o711, uid: 1002, gid: 1002, modTime: early},
+				{name: "dd/", typeflag: tar.TypeDir},
+				{name: "dd/x/", typeflag: tar.TypeDir, mode: 0o705, uid: 1001, gid: 1001, modTime: late},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+				{name: "a/x/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: mid},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "dd"},
+			},
+			want: map[string]want{
+				"cc/x": {os.ModeDir | 0o750, 1000, 1000, mid},
+				"dd/x": {os.ModeDir | 0o705, 1001, 1001, late},
+			},
+		},
+		{
+			// The same through a second symlink, whose replacement leaves
+			// the name "a/x" in place.
+			name: "second symlink on the path pointed elsewhere",
+			entries: []tarEntry{
+				{name: "cc/", typeflag: tar.TypeDir},
+				{name: "cc/x/", typeflag: tar.TypeDir, mode: 0o711, uid: 1002, gid: 1002, modTime: early},
+				{name: "dd/", typeflag: tar.TypeDir},
+				{name: "dd/x/", typeflag: tar.TypeDir, mode: 0o705, uid: 1001, gid: 1001, modTime: late},
+				{name: "p", typeflag: tar.TypeSymlink, linkname: "cc"},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "p"},
+				{name: "a/x/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: mid},
+				{name: "p", typeflag: tar.TypeSymlink, linkname: "dd"},
+			},
+			want: map[string]want{
+				"cc/x": {os.ModeDir | 0o750, 1000, 1000, mid},
+				"dd/x": {os.ModeDir | 0o705, 1001, 1001, late},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, _, err := runUnpack(t, tc.entries)
+			if err != nil {
+				t.Fatalf("unpackLayer: %v", err)
+			}
+			for name, w := range tc.want {
+				uid, gid, mode := ownerOf(t, filepath.Join(dir, name))
+				if mode != w.mode {
+					t.Errorf("%s mode = %v, want %v", name, mode, w.mode)
+				}
+				// Without CAP_CHOWN every entry keeps the unpacking user.
+				if os.Geteuid() == 0 && (uid != w.uid || gid != w.gid) {
+					t.Errorf("%s owner = %d:%d, want %d:%d", name, uid, gid, w.uid, w.gid)
+				}
+				fi, err := os.Lstat(filepath.Join(dir, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !fi.ModTime().Equal(w.mtime) {
+					t.Errorf("%s mtime = %v, want %v", name, fi.ModTime(), w.mtime)
+				}
+			}
+		})
+	}
+}
+
 // stickyDirEntries is a layer with sticky directories other users own, holding
 // entries that belong to users other than root. Unlinking such an entry takes
 // owning it or the directory, or CAP_FOWNER, which atelet does not hold;
