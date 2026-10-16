@@ -28,11 +28,12 @@ import (
 // every platform, because the image cache's unit tests run off Linux.
 //
 // Giving a file to another uid requires CAP_CHOWN. The production callers run
-// as root with it (ateom restoring snapshots, atelet unpacking image layers),
-// so any error there means ownership was lost and is returned. An
-// unprivileged process cannot chown at all, so rather than making extraction
-// unusable outside a root context (unit tests, local tooling), EPERM is
-// tolerated there and the extracted files belong to the extracting user.
+// as root with it (ateworker-microvm restoring snapshots, atelet unpacking
+// image layers), so any error there means ownership was lost and is returned.
+// An unprivileged process cannot chown at all, so rather than making
+// extraction unusable outside a root context (unit tests, local tooling),
+// EPERM is tolerated there and the extracted files belong to the extracting
+// user.
 func Lchown(root *os.Root, name string, hdr *tar.Header) error {
 	err := root.Lchown(name, hdr.Uid, hdr.Gid)
 	if err == nil {
