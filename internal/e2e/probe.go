@@ -40,7 +40,7 @@ type probeConfig struct{ trustBundles []string }
 
 // The allowlisted names atelet resolves trust bundles by.
 const (
-	egressTrustBundleName = "egress-mitm.ate.dev"
+	EgressTrustBundleName = "egress-mitm.ate.dev"
 	systemRootsBundleName = "system-roots.ate.dev"
 )
 
@@ -51,7 +51,7 @@ const (
 // includes the bundle won't start if the bundle is missing, so a suite that
 // just needs a probe shouldn't depend on it.
 func WithTrustBundle() ProbeOption {
-	return func(c *probeConfig) { c.trustBundles = append(c.trustBundles, egressTrustBundleName) }
+	return func(c *probeConfig) { c.trustBundles = append(c.trustBundles, EgressTrustBundleName) }
 }
 
 // WithSystemRoots adds the WebPKI roots atelet ships to the probe's projected
@@ -75,7 +75,7 @@ func DeployProbe(t *testing.T, bucket, name string, opts ...ProbeOption) (string
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	if slices.Contains(cfg.trustBundles, egressTrustBundleName) {
+	if slices.Contains(cfg.trustBundles, EgressTrustBundleName) {
 		// Every actor from this template — the fixture's golden boot included —
 		// fails closed while the bundle is missing, so it has to exist first.
 		EnsureEgressTrustBundle(t, context.Background(), GetClients())

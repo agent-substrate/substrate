@@ -82,7 +82,7 @@ func TestProbeTemplate_TrustBundle(t *testing.T) {
 	}
 	// The egress name must select the bundle atecontroller publishes, or
 	// actors fail closed on a name atelet rejects.
-	if !strings.HasPrefix(EgressTrustBundleObjectName, egressTrustBundleName+":") {
-		t.Errorf("egress trust bundle name %q does not select %q", egressTrustBundleName, EgressTrustBundleObjectName)
+	if !strings.HasPrefix(EgressTrustBundleObjectName, EgressTrustBundleName+":") {
+		t.Errorf("egress trust bundle name %q does not select %q", EgressTrustBundleName, EgressTrustBundleObjectName)
 	}
 }
