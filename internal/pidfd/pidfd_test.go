@@ -90,6 +90,35 @@ func TestExitedFD(t *testing.T) {
 	}
 }
 
+// A blocking pidfd cannot join the netpoller. The watch must still wait for
+// the exit, not report one straight away.
+func TestWatchFallsBackToABlockingPoll(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Wait()
+	fd, err := unix.PidfdOpen(cmd.Process.Pid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done, err := watch(fd, make(chan struct{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+		t.Fatal("closed while the process runs")
+	case <-time.After(200 * time.Millisecond):
+	}
+	_ = cmd.Process.Kill()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("not closed after the process exited")
+	}
+}
+
 // A process that exits while the watcher is starting must still be seen.
 func TestExitedRacingExit(t *testing.T) {
 	for range 200 {

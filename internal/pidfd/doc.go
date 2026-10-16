@@ -14,4 +14,7 @@
 
 // Package pidfd watches for processes to exit without holding a thread per
 // process, so a worker can watch thousands of them.
+//
+// It needs Linux 5.3+ for pidfd_open. Before 5.10, which added
+// PIDFD_NONBLOCK, each watch falls back to a blocking poll on its own thread.
 package pidfd

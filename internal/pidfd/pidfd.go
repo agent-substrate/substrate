@@ -18,7 +18,9 @@ package pidfd
 
 import (
 	"errors"
+	"log/slog"
 	"os"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -29,6 +31,10 @@ import (
 func Exited(pid int) (<-chan struct{}, error) {
 	done := make(chan struct{})
 	fd, err := unix.PidfdOpen(pid, unix.PIDFD_NONBLOCK)
+	if errors.Is(err, unix.EINVAL) {
+		// PIDFD_NONBLOCK is Linux 5.10+; watch falls back to a blocking poll
+		fd, err = unix.PidfdOpen(pid, 0)
+	}
 	if errors.Is(err, unix.ESRCH) {
 		close(done)
 		return done, nil
@@ -72,11 +78,31 @@ func watch(fd int, done chan struct{}) (<-chan struct{}, error) {
 		// The pidfd turns readable when the process exits. Check the fd itself
 		// rather than trusting a wakeup: Read drops a readiness edge that
 		// arrived before it started waiting.
-		_ = rc.Read(func(fd uintptr) bool {
-			fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
-			n, err := unix.Poll(fds, 0)
-			return err == nil && n > 0
+		err := rc.Read(func(fd uintptr) bool {
+			return readable(int(fd), 0)
 		})
+		if err != nil {
+			// the netpoller cannot watch this fd, so wait in a blocking poll:
+			// it holds a thread, but never reports an exit that did not happen
+			slog.Warn("pidfd: falling back to a blocking poll", slog.Any("err", err))
+			_ = rc.Control(func(fd uintptr) {
+				for !readable(int(fd), -1) {
+					time.Sleep(time.Second)
+				}
+			})
+		}
 	}()
 	return done, nil
+}
+
+// readable polls fd for POLLIN for up to timeoutMs, -1 meaning forever.
+func readable(fd, timeoutMs int) bool {
+	fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	for {
+		n, err := unix.Poll(fds, timeoutMs)
+		if err == unix.EINTR {
+			continue
+		}
+		return err == nil && n > 0
+	}
 }
