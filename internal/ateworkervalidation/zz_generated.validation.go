@@ -525,50 +525,6 @@ func Validate_CheckpointWorkloadRequest(
 		errs = append(errs, fn(fldPath.Child("spec"), obj.Spec, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateworkerpb.CheckpointWorkloadRequest.RuntimeAssetPaths
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj map[string]string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.MaxProperties(ctx, op, fldPath, obj, oldObj, 16).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if e := validate.OptionalMap(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.EachMapKey(ctx, op, fldPath, obj, oldObj,
-				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
-					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 64)
-				}); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.EachMapVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual,
-				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
-					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 4096)
-				}); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.CheckpointWorkloadRequest) map[string]string {
-				return oldObj.RuntimeAssetPaths
-			})
-		errs = append(errs, fn(fldPath.Child("runtime_asset_paths"), obj.RuntimeAssetPaths, oldVal, oldObj != nil)...)
-	}
-
 	{ // field ateworkerpb.CheckpointWorkloadRequest.Fidelity
 		fn := func(
 			fldPath *field.Path,

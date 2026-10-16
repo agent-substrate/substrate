@@ -224,8 +224,8 @@ message RunWorkloadRequest {
   // the gVisor runtime, which uses runsc_path.
   //
   // +k8s:optional
-  // +k8s:maxProperties=16 # matches atelet ArchAssets.files's bound
-  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet ArchAssets.files's key bound
+  // +k8s:maxProperties=16 # matches atelet.ArchAssets.files
+  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet.ArchAssets.files
   // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   map<string, string> runtime_asset_paths = 8;
 
@@ -241,7 +241,7 @@ message RunWorkloadRequest {
   //
   // +k8s:optional
   // +k8s:minimum=1
-  // +k8s:maximum=999999 # matches atelet's bound: the control plane caps cpu limits strictly below 1000 cores
+  // +k8s:maximum=999999 # matches atelet.RunRequest.cpu_milli, the control plane caps cpu limits strictly below 1000 cores
   int64 cpu_milli = 11; // CPU limit in millicores (1000 = one core).
   // +k8s:optional
   // +k8s:minimum=1
@@ -267,7 +267,7 @@ message WorkloadSpec {
   // template is gone, as on atelet's own WorkloadSpec.
   //
   // +k8s:optional
-  // +k8s:maxItems=10 # matches the template's containers bound
+  // +k8s:maxItems=10 # matches ateapi.ActorTemplate.containers
   // +k8s:listType=map
   // +k8s:listMapKey=name
   repeated Container containers = 1;
@@ -291,7 +291,7 @@ message Container {
   // mounts, if any.
   //
   // +k8s:optional
-  // +k8s:maxItems=32 # matches the template's volume_mounts bound
+  // +k8s:maxItems=32 # matches ateapi.Container.volume_mounts
   // +k8s:listType=map
   // +k8s:listMapKey=mount_path
   repeated VolumeMount durable_dir_volume_mounts = 3;
@@ -300,7 +300,7 @@ message Container {
   // any.
   //
   // +k8s:optional
-  // +k8s:maxItems=32 # matches the template's volume_mounts bound
+  // +k8s:maxItems=32 # matches ateapi.Container.volume_mounts
   // +k8s:listType=map
   // +k8s:listMapKey=mount_path
   repeated VolumeMount external_volume_mounts = 4;
@@ -311,7 +311,7 @@ message Container {
   // read-only.
   //
   // +k8s:optional
-  // +k8s:maxItems=32 # matches the template's volume_mounts bound
+  // +k8s:maxItems=32 # matches ateapi.Container.volume_mounts
   // +k8s:listType=map
   // +k8s:listMapKey=mount_path
   repeated VolumeMount system_info_volume_mounts = 5;
@@ -319,7 +319,7 @@ message Container {
   // image_volume_mounts are the image volumes this container mounts, if any.
   //
   // +k8s:optional
-  // +k8s:maxItems=32 # matches the template's volume_mounts bound
+  // +k8s:maxItems=32 # matches ateapi.Container.volume_mounts
   // +k8s:listType=map
   // +k8s:listMapKey=mount_path
   repeated VolumeMount image_volume_mounts = 6;
@@ -387,7 +387,7 @@ message WakeupProbe {
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=3600 # matches the template wakeup probe's bound
+  // +k8s:maximum=3600 # matches ateapi.WakeupProbe.timeout_seconds
   int32 timeout_seconds = 2;
 }
 
@@ -396,7 +396,7 @@ message HttpGetAction {
   // Path to access on the HTTP server.
   //
   // +k8s:required
-  // +k8s:maxLength=1024 # matches the template probe path's bound
+  // +k8s:maxLength=1024 # matches ateapi.HttpGetAction.path
   // +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
   string path = 1;
 
@@ -455,15 +455,6 @@ message CheckpointWorkloadRequest {
   // +k8s:required
   WorkloadSpec spec = 7;
 
-  // runtime_asset_paths maps a runtime asset name to the local on-disk path
-  // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
-  //
-  // +k8s:optional
-  // +k8s:maxProperties=16 # matches atelet ArchAssets.files's bound
-  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet ArchAssets.files's key bound
-  // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
-  map<string, string> runtime_asset_paths = 9;
-
   // Fidelity the checkpoint captures.
   //
   // +k8s:required
@@ -516,8 +507,8 @@ message RestoreWorkloadRequest {
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
   //
   // +k8s:optional
-  // +k8s:maxProperties=16 # matches atelet ArchAssets.files's bound
-  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet ArchAssets.files's key bound
+  // +k8s:maxProperties=16 # matches atelet.ArchAssets.files
+  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet.ArchAssets.files
   // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   map<string, string> runtime_asset_paths = 9;
 
@@ -540,7 +531,7 @@ message RestoreWorkloadRequest {
   //
   // +k8s:optional
   // +k8s:minimum=1
-  // +k8s:maximum=999999 # matches atelet's bound: the control plane caps cpu limits strictly below 1000 cores
+  // +k8s:maximum=999999 # matches atelet.RestoreRequest.cpu_milli, the control plane caps cpu limits strictly below 1000 cores
   int64 cpu_milli = 14; // CPU limit in millicores (1000 = one core).
   // +k8s:optional
   // +k8s:minimum=1

@@ -821,7 +821,6 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
 		ActorTemplateName:     req.GetActorTemplateName(),
 		RunscPath:             runscPathFor(assetPaths),
-		RuntimeAssetPaths:     assetPaths,
 		Spec:                  spec,
 		Fidelity:              toWorkerFidelity(req.GetSnapshot().GetFidelity()),
 		ActorUid:              actorUID,

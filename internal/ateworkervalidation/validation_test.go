@@ -263,7 +263,6 @@ func validCheckpointWorkloadRequest(mutate ...func(*ateworkerpb.CheckpointWorklo
 		ActorTemplateName:     "template-1",
 		RunscPath:             "/opt/runsc",
 		Spec:                  fullSpec(),
-		RuntimeAssetPaths:     map[string]string{"kata-kernel": "/opt/kernel"},
 		Fidelity:              ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		ActorDirs:             fullActorDirs(),
 	}
@@ -273,9 +272,9 @@ func validCheckpointWorkloadRequest(mutate ...func(*ateworkerpb.CheckpointWorklo
 	return r
 }
 
-// Checkpoint shares its identity and asset fields with Run, which the Run
-// table covers; this table holds the shared gates at one case each and
-// covers what only Checkpoint has: fidelity and actor_dirs.
+// Checkpoint shares its identity fields with Run, which the Run table
+// covers; this table holds the shared gates at one case each and covers what
+// only Checkpoint has: fidelity and actor_dirs.
 func TestValidateCheckpointWorkloadRequest(t *testing.T) {
 	valid := validCheckpointWorkloadRequest
 
@@ -287,9 +286,9 @@ func TestValidateCheckpointWorkloadRequest(t *testing.T) {
 		name: "valid",
 		obj:  valid(),
 	}, {
-		name: "valid: volumes fidelity, gVisor shape",
+		name: "valid: volumes fidelity",
 		obj: valid(func(r *ateworkerpb.CheckpointWorkloadRequest) {
-			r.Fidelity, r.RuntimeAssetPaths = ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, nil
+			r.Fidelity = ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		}),
 	}, {
 		name: "valid: rootfs fidelity, which runtimes judge for themselves",
@@ -312,15 +311,6 @@ func TestValidateCheckpointWorkloadRequest(t *testing.T) {
 		name: "missing spec",
 		obj:  valid(func(r *ateworkerpb.CheckpointWorkloadRequest) { r.Spec = nil }),
 		want: field.ErrorList{field.Required(field.NewPath("spec"), "")},
-	}, {
-		name: "too many runtime_asset_paths",
-		obj: valid(func(r *ateworkerpb.CheckpointWorkloadRequest) {
-			r.RuntimeAssetPaths = map[string]string{}
-			for i := range 17 {
-				r.RuntimeAssetPaths[fmt.Sprintf("asset-%d", i)] = "/opt/asset"
-			}
-		}),
-		want: field.ErrorList{field.TooMany(field.NewPath("runtime_asset_paths"), 17, 16).WithOrigin("maxProperties")},
 	}, {
 		name: "missing fidelity",
 		obj: valid(func(r *ateworkerpb.CheckpointWorkloadRequest) {
