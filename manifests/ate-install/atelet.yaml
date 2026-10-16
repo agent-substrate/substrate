@@ -146,6 +146,8 @@ spec:
       # toleration to pods that select the class, so a WorkerPool whose
       # template.nodeSelector selects a ComputeClass runs its workers on those
       # nodes.
+      # TODO(roycaihw): move this GKE-specific toleration into the GKE install
+      # overlay once the new installer lands (#2760).
       - key: cloud.google.com/compute-class
         operator: Exists
         effect: NoSchedule
