@@ -68,14 +68,18 @@ func TestRuntimeIndex(t *testing.T) {
 	}
 
 	// Another config with the same binaries under another name shares the
-	// runtime; the entry's provenance follows the latest registration.
+	// runtime; the entry keeps the record it was first registered with,
+	// which is the one the first worker's file was built from.
 	same := hashedTestVersion(t, "release-1", true, shaA)
 	x.register("pod-2", advertisedClass{class: gvisor, config: "config-y", hashed: []hashedVersion{same}})
 	if same.hash != v1.hash {
 		t.Fatal("identical binaries hashed differently")
 	}
-	if rt, _ := x.lookup(v1.hash); rt.config != "config-y" || rt.version != "release-1" {
-		t.Errorf("shared runtime provenance = %s/%s, want config-y/release-1", rt.config, rt.version)
+	if rt, _ := x.lookup(v1.hash); rt.config != "config-x" || rt.version != "v1" {
+		t.Errorf("shared runtime provenance = %s/%s, want the first registration's config-x/v1", rt.config, rt.version)
+	}
+	if wr, _ := x.worker("pod-2"); wr.classes[gvisor].defaultHash != same.hash {
+		t.Error("pod-2 does not advertise the shared runtime as its default")
 	}
 
 	// A pod's re-plan replaces what it advertises; the old runtime stays

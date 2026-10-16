@@ -162,11 +162,13 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 // worker pods and must not have started yet. Worker directories live under
 // workersDir.
 //
-// The syncer never fails atelet startup, but it does hold the serving port:
-// main waits on InitialSync before listening. While the informers have not
-// synced, or a list/watch fails (e.g. Forbidden while an RBAC rollout lags
-// the binary), the port stays closed and the readiness check
-// worker-sandbox-runtimes says why; existing files stay as they are.
+// A syncer that cannot start is fatal to atelet: without it no runtime is
+// ever indexed, so no actor could run. A syncer that cannot sync holds the
+// serving port instead: main waits on InitialSync before listening, so
+// while the informers have not synced, or a list/watch fails (e.g.
+// Forbidden while an RBAC rollout lags the binary), the port stays closed
+// and the readiness check worker-sandbox-runtimes says why; existing files
+// stay as they are.
 func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex) (*workerSandboxSyncer, error) {
 	if err := pods.Informer().AddIndexers(cache.Indexers{podUIDIndex: func(obj any) ([]string, error) {
 		pod, ok := obj.(*corev1.Pod)

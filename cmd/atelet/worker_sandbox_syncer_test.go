@@ -418,45 +418,59 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		// wantUntouched is whether the existing file must not be rewritten.
 		wantUntouched bool
 		wantRetries   int
+		// indexed registers pod-a in the index before processing, as an
+		// earlier sync would have; wantIndexed is whether it is there after.
+		indexed, wantIndexed bool
 	}{{
-		name:    "writes the file",
-		objs:    []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
-		want:    wantVersions(),
-		wantDir: true,
+		name:        "writes the file",
+		wantIndexed: true,
+		objs:        []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		want:        wantVersions(),
+		wantDir:     true,
 	}, {
-		name:     "replaces a stale file",
-		objs:     []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
-		existing: stale,
-		want:     wantVersions(),
-		wantDir:  true,
+		name:        "replaces a stale file",
+		wantIndexed: true,
+		objs:        []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		existing:    stale,
+		want:        wantVersions(),
+		wantDir:     true,
 	}, {
 		name:          "leaves an equal file alone",
+		wantIndexed:   true,
 		objs:          []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
 		existing:      wantVersions(),
 		want:          wantVersions(),
 		wantDir:       true,
 		wantUntouched: true,
 	}, {
-		// The Delete event removes the directory.
-		name:     "pod being deleted",
-		objs:     []any{deleting, resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
-		existing: stale,
-		want:     stale,
-		wantDir:  true,
+		// The Delete event removes the directory, and the index entry with it.
+		name:        "pod being deleted",
+		objs:        []any{deleting, resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		existing:    stale,
+		indexed:     true,
+		want:        stale,
+		wantDir:     true,
+		wantIndexed: true,
 	}, {
 		name:     "pod gone",
 		objs:     []any{resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
 		existing: stale,
+		indexed:  true,
 	}, {
-		name: "pod gone, no directory",
-		objs: []any{resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		name:    "pod gone, no directory",
+		objs:    []any{resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		indexed: true,
 	}, {
+		// A sync that fails before the write leaves the index entry as it
+		// left the file.
 		name:        "unresolved pool keeps the existing file",
 		objs:        []any{workerPod("pod-a", "pool"), multiVersionConfig()},
 		existing:    stale,
+		indexed:     true,
 		want:        stale,
 		wantDir:     true,
 		wantRetries: 1,
+		wantIndexed: true,
 	}, {
 		name:         "unresolved pool retries up to syncMaxRetries",
 		objs:         []any{workerPod("pod-a", "pool"), multiVersionConfig()},
@@ -486,8 +500,9 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 	}, {
 		// A transient failure on a restorable version writes the default
 		// runtime right away and requeues without the syncMaxRetries cap.
-		name: "incomplete restorable version writes partial file and requeues past syncMaxRetries",
-		objs: []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		name:        "incomplete restorable version writes partial file and requeues past syncMaxRetries",
+		wantIndexed: true,
+		objs:        []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
 		assets: &fakeAssetFetcher{
 			fn: func(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
 				if rec.Assets[gvisorAssetName].SHA256 != "sha-v2" {
@@ -509,6 +524,9 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 			s := newTestSyncer(t, tt.objs...)
 			if tt.assets != nil {
 				s.assets = tt.assets
+			}
+			if tt.indexed {
+				s.index.register("pod-a")
 			}
 			limiter := workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)
 			for range tt.priorRetries {
@@ -556,6 +574,9 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 			}
 			if got := s.queue.NumRequeues("pod-a"); got != tt.wantRetries {
 				t.Errorf("NumRequeues = %d, want %d", got, tt.wantRetries)
+			}
+			if _, ok := s.index.worker("pod-a"); ok != tt.wantIndexed {
+				t.Errorf("pod-a in the index = %v, want %v", ok, tt.wantIndexed)
 			}
 			requeued := make(chan struct{})
 			go func() {

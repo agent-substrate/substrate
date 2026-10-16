@@ -130,8 +130,15 @@ func (x *runtimeIndex) registerRuntimes(config string, hashed []hashedVersion) {
 	}
 }
 
-// addRuntime records v under its hash. Called with mu held.
+// addRuntime records v under its hash, unless the hash is already known.
+// The hash covers every asset's name and digest and the pause image, so two
+// versions with one hash differ at most in where identical bytes are
+// fetched from; keeping the first keeps the version the file was built
+// from. Called with mu held.
 func (x *runtimeIndex) addRuntime(config string, v hashedVersion) {
+	if _, ok := x.runtimes[v.hash]; ok {
+		return
+	}
 	x.runtimes[v.hash] = &indexedRuntime{rec: v.rec, config: config, version: v.name}
 }
 

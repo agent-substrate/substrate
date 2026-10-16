@@ -180,8 +180,13 @@ func main() {
 	}
 
 	// readiness flips to not-ready on SIGTERM so /readyz reports 503 while the
-	// pod drains, while /healthz stays 200 for liveness.
+	// pod drains, while /healthz stays 200 for liveness. It is not ready
+	// until the gRPC port is open either: everything from here to net.Listen,
+	// the trust bundle sync, the plugin socket, the cache open and the worker
+	// runtimes gate, is startup, and the health server already answers.
 	readiness := &serverboot.Readiness{}
+	serving := make(chan struct{})
+	readiness.AddCheck("serving", servingCheck(serving))
 	go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
 	go serverboot.StartHealthServer(ctx, *healthListenAddr, readiness)
 
@@ -473,6 +478,7 @@ func main() {
 		if err != nil {
 			serverboot.Fatal(ctx, "Failed to listen", err)
 		}
+		close(serving)
 		svr := grpc.NewServer(ateletServerOptions(credentials.NewTLS(tlsCfg))...)
 		ateletpb.RegisterAteletServer(svr, wmService)
 		reflection.Register(svr)
@@ -496,6 +502,20 @@ func main() {
 	}
 	cancelWait()
 	slog.InfoContext(ctx, "Shutdown complete")
+}
+
+// servingCheck is the readiness check that holds /readyz at 503 until served
+// is closed, which main does once the gRPC port is open. An atelet that
+// stops before then never closes it, and so is never ready.
+func servingCheck(served <-chan struct{}) func(context.Context) error {
+	return func(context.Context) error {
+		select {
+		case <-served:
+			return nil
+		default:
+			return errors.New("atelet is starting; the gRPC port is not open yet")
+		}
+	}
 }
 
 // waitForWorkerRuntimes blocks until synced is closed or ctx ends, logging

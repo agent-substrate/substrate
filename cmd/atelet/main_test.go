@@ -1616,3 +1616,17 @@ func TestWaitForWorkerRuntimes(t *testing.T) {
 		}
 	})
 }
+
+// TestServingCheck pins the readiness contract at startup: /readyz holds
+// 503 until main has opened the gRPC port, whatever else is already up.
+func TestServingCheck(t *testing.T) {
+	served := make(chan struct{})
+	check := servingCheck(served)
+	if err := check(context.Background()); err == nil {
+		t.Error("servingCheck passed before the port was opened")
+	}
+	close(served)
+	if err := check(context.Background()); err != nil {
+		t.Errorf("servingCheck after the port opened = %v, want nil", err)
+	}
+}
