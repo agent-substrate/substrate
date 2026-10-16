@@ -39,6 +39,7 @@ type egressWebSocketMessage struct {
 }
 
 func TestActorEgressWebSocket(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	_, address, _ := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
 		Name: "ws-origin", ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
@@ -67,6 +68,7 @@ func TestActorEgressWebSocket(t *testing.T) {
 }
 
 func TestActorEgressSecureWebSocket(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	_, address, _ := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
 		Name: "wss-origin", ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",

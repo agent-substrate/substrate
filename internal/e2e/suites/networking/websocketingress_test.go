@@ -50,6 +50,7 @@ func deployWebsocketFixture(t *testing.T, ctx context.Context) e2e.SubstrateFixt
 }
 
 func TestWebsocketIngressPing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	fixture := deployWebsocketFixture(t, ctx)

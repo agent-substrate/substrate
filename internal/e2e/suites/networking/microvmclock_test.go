@@ -34,6 +34,7 @@ import (
 // The only wait here is the deliberate interval; ingress readiness is checked
 // separately before the one measured HTTPS operation.
 func TestMicroVMClockAfterDelayedRestore(t *testing.T) {
+	t.Parallel()
 	if !e2e.IsMicroVM() {
 		t.Skip("micro-VM clock contract")
 	}

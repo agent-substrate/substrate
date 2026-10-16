@@ -57,6 +57,7 @@ var grpcEchoFixtureManifests = e2e.SubstrateFixtureManifests{
 // TestIngressGRPC below is the positive counterpart: the same path, against an
 // actor that really does speak gRPC.
 func TestIngressProtocolDowngrade(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "protodowngrade", e2e.SubstrateCounterFixture())
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -139,6 +140,7 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 // deploys as a plain pod, so the two directions cannot disagree about what a
 // working RPC is.
 func TestIngressGRPC(t *testing.T) {
+	t.Parallel()
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)

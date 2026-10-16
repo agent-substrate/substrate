@@ -48,6 +48,7 @@ func reached(status int, _ []byte) bool { return status == http.StatusOK }
 // the origin is reachable by that name and refused by its address, which is
 // the same server.
 func TestActorEgressPolicyDeniesUnlistedHost(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dataplane := e2e.CurrentAtenetDataplane()
 	origin := egressHTTPTarget()
@@ -75,6 +76,7 @@ func TestActorEgressPolicyDeniesUnlistedHost(t *testing.T) {
 
 // TestActorEgressRequiresPolicy: an actor with no EgressPolicy is denied.
 func TestActorEgressRequiresPolicy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dataplane := e2e.CurrentAtenetDataplane()
 	target := e2e.DeployServerPod(t, ctx, egressHTTPTarget())
@@ -105,6 +107,7 @@ func TestActorEgressRequiresPolicy(t *testing.T) {
 // the actor does not, so the certificate the actor verifies tells the two
 // paths apart.
 func TestActorEgressHTTPSByHostname(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dataplane := e2e.CurrentAtenetDataplane()
 
@@ -181,6 +184,7 @@ func TestActorEgressHTTPSByHostname(t *testing.T) {
 // This test validates that TLS passthrough connection is denied when policy changes
 // even if there are outstanding connections that were allowed by the previous policy.
 func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dataplane := e2e.CurrentAtenetDataplane()
 	_, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
@@ -237,6 +241,7 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 }
 
 func TestActorEgressPendingPlaintextHeadersDoNotBlockMITM(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	const mitmBody = "mitm origin"
 	mitm := e2e.DeployServerPod(t, ctx, egressHTTPSTarget("mitm-origin", mitmBody))
@@ -293,6 +298,7 @@ func TestActorEgressPendingPlaintextHeadersDoNotBlockMITM(t *testing.T) {
 // actor with no EgressPolicy or for a host outside its policy, and answers them
 // once a rule in the policy matches the host, without a restart.
 func TestActorDNSRequiresPolicy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	origin := egressHTTPTarget()
 	target := e2e.DeployServerPod(t, ctx, origin)
@@ -362,6 +368,7 @@ func isMitmCert(body string) bool {
 // TestActorEgressHTTPSByHostnameMITM: the gateway terminates the TLS and decides
 // each request by name: example.com 200, example.org 403.
 func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dataplane := e2e.CurrentAtenetDataplane()
 	router, actorRef := hostnamePolicyActor(t, ctx)
@@ -383,6 +390,7 @@ func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
 // TestActorEgressHTTPSByHostnamePassthrough: the gateway acts as TCP proxy fetching
 // allowed SNI.
 func TestActorEgressHTTPSByHostnamePassthrough(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dataplane := e2e.CurrentAtenetDataplane()
 	router, actorRef := hostnamePolicyActor(t, ctx)
