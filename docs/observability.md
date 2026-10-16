@@ -159,6 +159,8 @@ The duration keys are the [`ate.actor.restore.duration`](#the-metric-registry) i
 
 This is the record to use for a per-actor wake-up distribution. The histogram cannot answer that question at all, because actor identity is barred from metric labels; traces can, but the data plane is head-sampled at 1%.
 
+A checkpoint's `total` ends when atelet answers. Removing the pause snapshot the new one supersedes happens after that, off the request path, and is logged per snapshot as `pruned local checkpoint` with a `took` duration. If that removal is still running when the actor's next pause arrives, the pause waits for it before writing anything; the wait is logged as `waited for the previous local checkpoint removal` with a `took` duration; it counts toward `total` and is not inside any phase.
+
 Both ateworkers write records with the same two messages from inside the `worker_restore` and `worker_checkpoint` phases, under `ateworker.actor.restore.duration.<phase>` and `ateworker.actor.checkpoint.duration.<phase>`. The phases are each runtime's own and are listed in `cmd/ateworker-gvisor/phaselog.go` and `cmd/ateworker-microvm/phaselog.go`; `internal/ateworker/phaselog` renders the record. They are not instruments. The same identity keys make the two layers' records joinable per actor, and a failed operation's record carries `error.type`.
 
 ateapi's `Actor state changed` is written once per committed actor state transition. ateapi owns the state machine, so this is where an actor's state and the time it reached it come from:

@@ -547,9 +547,101 @@ type Atelet struct {
 
 	// snapshots tracks each actor's snapshots on this node.
 	snapshots *snapshottracker.Tracker
+
+	// localCheckpointPrunes counts the removals of superseded pause snapshots
+	// that Checkpoint and PromoteSnapshot leave running past their
+	// response; tests wait on it. pendingRemovals holds, per actor, the
+	// channel the in-flight removal closes when it finishes: Checkpoint waits
+	// on it before writing a new snapshot, Terminate before removing the
+	// directory, and the next removal before touching the same directory.
+	localCheckpointPrunes sync.WaitGroup
+	pendingRemovalsMu     sync.Mutex
+	pendingRemovals       map[string]chan struct{} // actor UID -> closed when its removal finishes
 }
 
 var _ ateletpb.AteletServer = (*Atelet)(nil)
+
+// registerLocalCheckpointRemoval records a removal of actorUID's local
+// snapshots before it starts, so waiters can never miss it. It returns the
+// channel of the removal already in flight, if any, and the function the new
+// removal calls when it finishes.
+func (s *Atelet) registerLocalCheckpointRemoval(actorUID string) (previous <-chan struct{}, finished func()) {
+	done := make(chan struct{})
+	s.pendingRemovalsMu.Lock()
+	if s.pendingRemovals == nil {
+		s.pendingRemovals = make(map[string]chan struct{})
+	}
+	prev := s.pendingRemovals[actorUID]
+	s.pendingRemovals[actorUID] = done
+	s.pendingRemovalsMu.Unlock()
+	return prev, func() {
+		s.pendingRemovalsMu.Lock()
+		if s.pendingRemovals[actorUID] == done {
+			delete(s.pendingRemovals, actorUID)
+		}
+		s.pendingRemovalsMu.Unlock()
+		close(done)
+	}
+}
+
+// waitForLocalCheckpointRemoval blocks while a removal of the actor's local
+// snapshots is running, or until ctx ends. Checkpoint calls it before writing
+// a new snapshot, so an actor never has more than one superseded snapshot on
+// disk. The wait is logged, and a ctx that ends first is returned with its own
+// gRPC code so the control plane retries.
+func (s *Atelet) waitForLocalCheckpointRemoval(ctx context.Context, actorRef resources.ActorRef, actorUID string) error {
+	s.pendingRemovalsMu.Lock()
+	pending := s.pendingRemovals[actorUID]
+	s.pendingRemovalsMu.Unlock()
+	if pending == nil {
+		return nil
+	}
+	start := time.Now()
+	select {
+	case <-pending:
+	case <-ctx.Done():
+		return status.Errorf(status.FromContextError(ctx.Err()).Code(), "while waiting for the previous local checkpoint removal: %v", ctx.Err())
+	}
+	slog.InfoContext(ctx, "waited for the previous local checkpoint removal", slog.Any("actor", actorRef), slog.Duration("took", time.Since(start)))
+	return nil
+}
+
+// pruneLocalCheckpointsAfterResponse removes the actor's local snapshots other
+// than keep in the background. The list is taken now, so a snapshot a later
+// pause writes is never touched; an actor's removals run one at a time. If
+// atelet dies first, the next prune or Terminate collects what is left.
+func (s *Atelet) pruneLocalCheckpointsAfterResponse(ctx context.Context, actorRef resources.ActorRef, actorUID, keep string) {
+	plan, err := planLocalCheckpointPrune(actorUID, keep)
+	if err != nil {
+		slog.WarnContext(ctx, "failed to list superseded local checkpoints", slog.Any("actor", actorRef), slog.Any("err", err))
+		return
+	}
+	if plan.empty() {
+		return
+	}
+	previous, finished := s.registerLocalCheckpointRemoval(actorUID)
+	ctx = context.WithoutCancel(ctx)
+	s.localCheckpointPrunes.Add(1)
+	go func() {
+		defer s.localCheckpointPrunes.Done()
+		defer finished()
+		if previous != nil {
+			<-previous
+		}
+		if err := plan.run(ctx); err != nil {
+			slog.WarnContext(ctx, "failed to prune superseded local checkpoints", slog.Any("actor", actorRef), slog.Any("err", err))
+		}
+	}()
+}
+
+// pruneForgottenLocalCheckpoints removes the actor's local snapshots on the
+// spot after a persist failure: the tracker has already forgotten them, and
+// the actor is about to crash, so nothing is gained by deferring. Best-effort.
+func (s *Atelet) pruneForgottenLocalCheckpoints(ctx context.Context, actorRef resources.ActorRef, actorUID string) {
+	if err := pruneLocalCheckpoints(ctx, actorUID); err != nil {
+		slog.WarnContext(ctx, "failed to prune superseded local checkpoints", slog.Any("actor", actorRef), slog.Any("err", err))
+	}
+}
 
 // NewService creates a new WorkersManagerService.
 func NewService(
@@ -775,6 +867,12 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 
+	// Not before the previous pause's superseded snapshot is gone; the clock
+	// is already running, so this wait counts toward total.
+	if err := s.waitForLocalCheckpointRemoval(ctx, actorRef, actorUID); err != nil {
+		return nil, err
+	}
+
 	tWorker := time.Now()
 	resp, err := client.CheckpointWorkload(ctx, &ateworkerpb.CheckpointWorkloadRequest{
 		Atespace:              actorRef.Atespace,
@@ -811,42 +909,22 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	sandboxRec.ActorTemplateName = req.GetActorTemplateName()
 	sandboxRec.Fidelity = ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity())
 
-	// Forget the local snapshot before the prune below deletes it, so the
-	// tracker never names a deleted snapshot, even if this checkpoint fails.
+	// Forget the local snapshot before it is superseded and removed (see
+	// pruneLocalCheckpointsAfterResponse after persist), so the tracker never
+	// names a deleted snapshot, even if this checkpoint fails.
 	//
 	// TODO: Revisit this once the durable case can keep its local snapshot too
-	// (see UPLOAD_MODE_IMMEDIATE). Today the prune deletes every local
-	// snapshot, so the tracker forgets the latest one unconditionally. The
-	// snapshot this checkpoint just took is safe: it stays in
-	// CheckpointStateDir until after the prune, and only moveLocalCheckpoint
-	// moves it into LocalCheckpointsDir, the directory the prune empties.
+	// (see UPLOAD_MODE_IMMEDIATE). Today the removal deletes every superseded
+	// local snapshot, so the tracker forgets the latest one unconditionally.
 	s.snapshots.ForgetLocal(actorUID)
 
-	// No earlier pause snapshot can ever be restored again, so remove them
-	// all: the actor's current state was just captured by CheckpointWorkload,
-	// and the control plane tracks only a single local snapshot, which this
-	// checkpoint either overwrites (pause) or clears (suspend).
-	//
-	// Do not move this above CheckpointWorkload to keep MergeDeltaIntoBase on its
-	// in-place path: that leaves the whole checkpoint window with no local snapshot
-	// while LocalSnapshotInfo still names the pruned one, and a crash there strands
-	// the actor for good (a paused actor has no uploaded copy for resume to fall
-	// back to, RequiredNodes pins it to this node, nothing clears the field).
-	//
-	// Best-effort: if this fail, the actor's terminate prunes again.
-	if err := pruneLocalCheckpoints(ctx, actorUID); err != nil {
-		slog.WarnContext(ctx, "failed to prune superseded local checkpoints", slog.Any("actor", actorRef), slog.Any("err", err))
-	}
-
-	// Pruning stays outside the persist window: it collects superseded
-	// snapshots on both paths, so timing it as part of an external upload would
-	// mix local disk deletion into the object-storage measurement.
 	tPersist := time.Now()
 	var state *ateletpb.ActorSnapshotState
 	switch mode := req.GetUploadConfig().GetMode(); mode {
 	case ateletpb.UploadMode_UPLOAD_MODE_DEFERRED:
 		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
 			dPersist = time.Since(tPersist)
+			s.pruneForgottenLocalCheckpoints(ctx, actorRef, actorUID)
 			return nil, fmt.Errorf("while moving to local snapshot: %w", err)
 		}
 		state = s.snapshots.CommitLocal(actorUID, snap)
@@ -858,6 +936,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		// TODO(#362): Because we do not cache the external snapshot files when upload fails, we have to mark the Actor as CRASHED.
 		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
 			dPersist = time.Since(tPersist)
+			s.pruneForgottenLocalCheckpoints(ctx, actorRef, actorUID)
 			return nil, fmt.Errorf("while uploading external snapshot: %w", err)
 		}
 		snap.UploadTime = time.Now()
@@ -866,6 +945,25 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		return nil, fmt.Errorf("unexpected upload mode: %v", mode)
 	}
 	dPersist = time.Since(tPersist)
+
+	// No earlier pause snapshot can ever be restored again: the actor's current
+	// state was just captured by CheckpointWorkload and is now in place (pause)
+	// or uploaded (suspend), and the control plane tracks only a single local
+	// snapshot, which this checkpoint either overwrote or cleared.
+	//
+	// Not before CheckpointWorkload, to keep MergeDeltaIntoBase on its in-place
+	// path: that would leave the whole checkpoint window with no local snapshot
+	// while LocalSnapshotInfo still names the pruned one, and a crash there
+	// strands the actor for good (resume never falls back to object storage,
+	// RequiredNodes pins it to this node, nothing clears the field). A failed
+	// persist removes them on the spot instead (the tracker forgot them above).
+	//
+	// Best-effort and off the request path: if it fails, Terminate prunes again.
+	var keep string
+	if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_DEFERRED {
+		keep = req.GetSnapshot().GetSnapshotUuid()
+	}
+	s.pruneLocalCheckpointsAfterResponse(ctx, actorRef, actorUID, keep)
 
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
 		return nil, fmt.Errorf("while unmounting external volumes: %w", err)
@@ -1069,12 +1167,10 @@ func (s *Atelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 	// tracker never names a deleted snapshot.
 	state := s.snapshots.CommitPromoted(req.GetActorUid(), snapshottracker.SnapshotRef{Snapshot: req.GetSnapshot(), UploadTime: time.Now()})
 
-	// Best-effort: the snapshot is in object storage now and the actor will
-	// not resume from this node's local copy. Kept outside the persist window
-	// so local disk deletion does not mix into the upload measurement.
-	if err := pruneLocalCheckpoints(ctx, req.GetActorUid()); err != nil {
-		slog.WarnContext(ctx, "failed to prune uploaded local checkpoints", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
-	}
+	// The uploaded snapshot supersedes every local pause snapshot of this
+	// actor; free the node's disk (best-effort and off the request path, like
+	// Checkpoint).
+	s.pruneLocalCheckpointsAfterResponse(ctx, resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}, req.GetActorUid(), "")
 
 	return &ateletpb.PromoteSnapshotResponse{State: state}, nil
 }
@@ -1171,6 +1267,12 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+
+	// Restore reads the actor's local snapshot in place, so not while a removal
+	// under local-checkpoint/ is still running.
+	if err := s.waitForLocalCheckpointRemoval(ctx, actorRef, actorUID); err != nil {
+		return nil, err
+	}
 
 	// The sandbox (binaries + pause image) that runs the restored workload
 	// comes from the request, resolved by the control plane from the
@@ -1466,6 +1568,11 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 	// most one item.
 	if err := s.snapshots.Forget(actorUID); err != nil {
 		return nil, fmt.Errorf("failed to delete snapshot state during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	}
+	// A removal the last pause left running must finish first, so the two do
+	// not empty the same directory at once.
+	if err := s.waitForLocalCheckpointRemoval(ctx, actorRef, actorUID); err != nil {
+		return nil, fmt.Errorf("failed to wait for the pending local checkpoint removal during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 	if err := pruneLocalCheckpoints(ctx, actorUID); err != nil {
 		return nil, fmt.Errorf("failed to prune local checkpoints during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
