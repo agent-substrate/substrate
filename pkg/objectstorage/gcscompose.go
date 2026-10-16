@@ -143,7 +143,7 @@ func removeScratch(ctx context.Context, objs []*storage.ObjectHandle, err error)
 	for _, o := range objs {
 		if delErr := o.Delete(context.WithoutCancel(ctx)); delErr != nil &&
 			!errors.Is(delErr, storage.ErrObjectNotExist) && err == nil {
-			err = fmt.Errorf("while removing upload part %q: %w", o.ObjectName(), delErr)
+			err = fmt.Errorf("while removing scratch object %q: %w", o.ObjectName(), delErr)
 		}
 	}
 	return err
