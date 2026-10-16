@@ -18,6 +18,8 @@ It allows you to run arbitrary commands in an sandboxed, isolated container (run
 - `ko` installed for building images.
 - A GCS bucket for storing snapshots (configured in `demos/sandbox/sandbox-template.yaml.tmpl`).
 - `kubectl-ate` CLI installed (can be installed via `go install ./cmd/kubectl-ate`).
+- A kube context with access to the `ate-system` namespace. The client and
+  `kubectl-ate` both mint their `ate-client` ServiceAccount token through it.
 
 ## How to Run on Agent Substrate
 
@@ -58,13 +60,9 @@ kubectl ate create actor my-sandbox-1 -a ate-demo-sandbox --template sandbox-tem
 
 ### 3. Port-Forward Services
 
-If running clients locally, port-forward the API and router in separate terminals:
+If running clients locally, port-forward the router:
 
 ```bash
-# Terminal 1: API Server
-kubectl port-forward -n ate-system svc/api 8080:443
-
-# Terminal 2: Router
 kubectl port-forward -n ate-system svc/atenet-router 8000:80
 ```
 
@@ -75,10 +73,10 @@ Build and run the client REPL:
 ```bash
 go build -o bin/sandbox-client ./demos/sandbox/client
 
-./bin/sandbox-client --ateapi=localhost:8080 --atenet=localhost:8000 --atespace=ate-demo-sandbox --name=my-sandbox-1
+./bin/sandbox-client --atenet=localhost:8000 --atespace=ate-demo-sandbox --name=my-sandbox-1
 ```
 
-The client sends each `/process` request to the router and automatically sets
+It sends each `/process` request to the router and automatically sets
 the routing header from `--name` and `--atespace`:
 
 ```go
