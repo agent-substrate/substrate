@@ -68,6 +68,7 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution) (*
 		old.stopping.Store(true)
 		if old.sandbox != nil {
 			old.sandbox.Close()
+			old.sandbox = nil
 		}
 	} else if len(s.actors)+s.draining >= s.maxActors {
 		return nil, nil, apierror.ResourceExhausted("worker is full: %d actors", s.maxActors)
@@ -139,9 +140,12 @@ func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) err
 		s.actorsMu.Unlock()
 	}()
 
+	s.actorsMu.Lock()
 	if hosted.sandbox != nil {
 		hosted.sandbox.Close()
+		hosted.sandbox = nil
 	}
+	s.actorsMu.Unlock()
 	if hosted.network == nil {
 		return nil
 	}
