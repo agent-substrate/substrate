@@ -16,12 +16,14 @@
 // EgressPolicy https rule with a replace_headers effect makes the egress
 // gateway's MITM leg resolve the credential through the
 // k8s-credential-provider and replace the actor's placeholder header with it
-// before re-originating upstream. See TestActorEgressCredentialInjection for
-// the proof structure and how to run this locally.
+// before re-originating upstream. The same rule also injects an actor JWT
+// minted by ateapi. See TestActorEgressCredentialInjection for the proof
+// structure and how to run this locally.
 package egresscredinject
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -31,6 +33,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
@@ -59,12 +62,23 @@ const (
 	unauthorizedHost = "unauthorized.egresscredinject.invalid"
 )
 
-// placeholder is the Authorization value the actor sends. replace_headers
-// replaces a header only when the request carries it, so every fetch that
-// should trigger injection sends it.
+// placeholder is the value the actor sends in each injected header.
+// replace_headers replaces a header only when the request carries it, so every
+// fetch that should trigger injection sends it.
 const placeholder = "Bearer actor-placeholder"
 
-var withPlaceholder = []string{"header=" + url.QueryEscape("Authorization:"+placeholder)}
+// The echo rules also replace actorJWTHeader with an actor JWT for
+// actorJWTAudience.
+const (
+	actorJWTHeader   = "X-Actor-Token"
+	actorJWTAudience = "https://egresscredinject.invalid"
+	actorJWTLifetime = 600
+)
+
+var withPlaceholder = []string{
+	"header=" + url.QueryEscape("Authorization:"+placeholder),
+	"header=" + url.QueryEscape(actorJWTHeader+":"+placeholder),
+}
 
 // TestActorEgressCredentialInjection proves the injected credential reaches
 // the upstream, and that every way injection can go wrong lands on the
@@ -74,10 +88,11 @@ var withPlaceholder = []string{"header=" + url.QueryEscape("Authorization:"+plac
 //     injected "Authorization: Bearer <token>" among the headers the origin
 //     received — the on-the-wire proof, not an inference from a status code —
 //     and not the placeholder, so an actor cannot choose the value that
-//     leaves.
-//   - no header: the same fetch without the placeholder echoes no
-//     Authorization at all — the gateway replaces only a header the request
-//     carries, and does not add one.
+//     leaves. The same fetch echoes an actor JWT naming this actor in
+//     actorJWTHeader.
+//   - no header: the same fetch without the placeholders echoes neither
+//     header — the gateway replaces only a header the request carries, and
+//     does not add one.
 //   - cleartext: the same fetch over plain HTTP, allowed by an http rule
 //     with the same effect, echoes the injected credential too.
 //   - fail closed: a credential the policy requires but the provider will
@@ -114,6 +129,12 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 	const id = "probe-credinject"
 	createAndResumeActor(t, ctx, clients, id, echoHost)
 	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id},
+	})
+	if err != nil {
+		t.Fatalf("GetActor %q: %v", id, err)
+	}
 
 	rc, err := e2e.NewRouterClient(ctx)
 	if err != nil {
@@ -138,15 +159,18 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 			// The upstream must receive the policy's credential instead of the
 			// actor's placeholder.
 			wantHeader := "Bearer " + e2e.CredentialInjectionToken
-			replaced := fetchEcho(t, ctx, rc, id, origin, withPlaceholder)
-			if got := assertEchoedAuthorization(t, "injection fetch", replaced); got != wantHeader {
+			replaced := assertEchoedHeaders(t, "injection fetch", fetchEcho(t, ctx, rc, id, origin, withPlaceholder))
+			if got := replaced["Authorization"]; got != wantHeader {
 				t.Errorf("upstream received Authorization %q, want the injected %q", got, wantHeader)
 			}
+			checkActorJWT(t, replaced[actorJWTHeader], actor.GetMetadata())
 
 			// No header is added when the actor did not send one.
-			unasked := fetchEcho(t, ctx, rc, id, origin, nil)
-			if got := assertEchoedAuthorization(t, "fetch without the header", unasked); got != "" {
-				t.Errorf("upstream received Authorization %q on a request that did not carry it, want none", got)
+			unasked := assertEchoedHeaders(t, "fetch without the headers", fetchEcho(t, ctx, rc, id, origin, nil))
+			for _, h := range []string{"Authorization", actorJWTHeader} {
+				if got, ok := unasked[h]; ok {
+					t.Errorf("upstream received %s %q on a request that did not carry it, want none", h, got)
+				}
 			}
 		})
 	}
@@ -235,9 +259,9 @@ func decodeEchoedHeaders(t *testing.T, step, body string) map[string]string {
 	return echoed.Headers
 }
 
-// assertEchoedAuthorization fails on any transport- or HTTP-level failure of
-// an echo fetch and returns the Authorization value the upstream received.
-func assertEchoedAuthorization(t *testing.T, step string, resp fetchResponse) string {
+// assertEchoedHeaders fails on any transport- or HTTP-level failure of an echo
+// fetch and returns the headers the upstream received.
+func assertEchoedHeaders(t *testing.T, step string, resp fetchResponse) map[string]string {
 	t.Helper()
 	if resp.Error != "" {
 		t.Fatalf("%s: TLS through the MITM egress gateway failed: %s", step, resp.Error)
@@ -245,7 +269,46 @@ func assertEchoedAuthorization(t *testing.T, step string, resp fetchResponse) st
 	if resp.Status != "200" {
 		t.Fatalf("%s: status %s, want 200 (an injection failure would deny with 403/500/503; is the provider deployed, the gateway installed with --credential-provider='{\"name\":\"k8s.io\"}', and hack/setup-e2e-egress-tls-kind.sh run so the gateway trusts the echo origin's certificate?) body %q", step, resp.Status, resp.Body)
 	}
-	return decodeEchoedHeaders(t, step, resp.Body)["Authorization"]
+	return decodeEchoedHeaders(t, step, resp.Body)
+}
+
+// checkActorJWT checks the claims of an injected actor JWT against the actor
+// and the echo rules' actor_jwt source. It does not verify the signature.
+func checkActorJWT(t *testing.T, jwt string, actor *ateapipb.ResourceMetadata) {
+	t.Helper()
+	parts := strings.Split(jwt, ".")
+	if len(parts) != 3 {
+		t.Errorf("upstream received %s %q, want an actor JWT", actorJWTHeader, jwt)
+		return
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Errorf("decoding the actor JWT payload: %v", err)
+		return
+	}
+	var claims actoridjwt.WireClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Errorf("decoding the actor JWT claims: %v (payload %s)", err, payload)
+		return
+	}
+	var aud []string
+	if err := json.Unmarshal(claims.Audiences, &aud); err != nil {
+		t.Errorf("decoding the actor JWT aud claim: %v (payload %s)", err, payload)
+	}
+
+	if want := "actor/" + actor.GetAtespace() + "/" + actor.GetName(); claims.Subject != want {
+		t.Errorf("actor JWT sub is %q, want %q", claims.Subject, want)
+	}
+	if !slices.Equal(aud, []string{actorJWTAudience}) {
+		t.Errorf("actor JWT aud is %q, want [%q]", aud, actorJWTAudience)
+	}
+	if got := claims.Expiration - claims.IssuedAt; got != actorJWTLifetime {
+		t.Errorf("actor JWT lives %vs (exp - iat), want %ds", got, actorJWTLifetime)
+	}
+	want := actoridjwt.WireSubstrateClaims{Atespace: actor.GetAtespace(), ActorName: actor.GetName(), ActorUID: actor.GetUid()}
+	if kind, got, ok := claims.Substrate(); !ok || kind != actoridjwt.KindActor || *got != want {
+		t.Errorf("actor JWT payload is %s, want only an actor.ate.dev claim of %+v", payload, want)
+	}
 }
 
 type fetchResponse struct {
@@ -323,10 +386,11 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	})
 	// Exercise each credential outcome on both HTTP and HTTPS: the echo
 	// origin's credential resolves, and each fail-closed host's cannot.
-	rules := []*ateapipb.EgressRule{
-		e2e.EgressInjectHeader("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost, echoHost+".cluster.local"),
-		e2e.EgressInjectHeaderHTTP("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost, echoHost+".cluster.local"),
-	}
+	echoHTTPSRule := e2e.EgressInjectHeader("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost, echoHost+".cluster.local")
+	echoHTTPSRule.Https.Effects.ReplaceHeaders = append(echoHTTPSRule.Https.Effects.ReplaceHeaders, actorJWTInjection())
+	echoHTTPRule := e2e.EgressInjectHeaderHTTP("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost, echoHost+".cluster.local")
+	echoHTTPRule.Http.Effects.ReplaceHeaders = append(echoHTTPRule.Http.Effects.ReplaceHeaders, actorJWTInjection())
+	rules := []*ateapipb.EgressRule{echoHTTPSRule, echoHTTPRule}
 	for _, credential := range []struct {
 		host string
 		uri  string
@@ -344,6 +408,16 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 
 	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
+	}
+}
+
+func actorJWTInjection() *ateapipb.CredentialHeader {
+	return &ateapipb.CredentialHeader{
+		Header: actorJWTHeader,
+		ActorJwt: &ateapipb.ActorJwtSource{
+			Audiences:         []string{actorJWTAudience},
+			ExpirationSeconds: actorJWTLifetime,
+		},
 	}
 }
 
