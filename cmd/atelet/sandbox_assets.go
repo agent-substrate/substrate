@@ -249,12 +249,11 @@ func (s *Atelet) stageAsset(ctx context.Context, entry assetEntry, dst string) (
 		if err := s.downloadVerified(ctx, entry, path); err != nil {
 			return err
 		}
-		// Executable for everyone, as the previous layout staged it: the
-		// cache publishes the file read-only (0555), the directory it is
-		// linked into is the owner's alone, and the content is a public
-		// release artifact, so the group and other bits grant nothing new
-		// while a sandbox runtime that re-executes its binary after
-		// dropping privileges keeps working.
+		// Executable for everyone: a sandbox runtime may re-execute its
+		// binary after dropping privileges, so the group and other bits
+		// must stay. They grant nothing beyond that: the cache publishes
+		// the file read-only (0555), the directory it is linked into is
+		// the owner's alone, and the content is a public release artifact.
 		if err := os.Chmod(path, 0o755); err != nil {
 			return wrapFileSystemErr("while setting file mode", err)
 		}

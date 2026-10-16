@@ -1369,3 +1369,51 @@ func TestConcurrentRunsShareOneAssetDownload(t *testing.T) {
 		}
 	}
 }
+
+// TestCommitSandboxAssetsChecksPathsBeforeMoving pins the order in
+// commitSandboxAssets: a path outside the staging dir fails the commit
+// before anything moves, so the staged set stays for Run's cleanup and the
+// assets dir, which the sandbox record still describes, is untouched.
+func TestCommitSandboxAssetsChecksPathsBeforeMoving(t *testing.T) {
+	useTempNodeDirs(t)
+	const actorUID = "01234567-89ab-cdef-0123-456789abcdef"
+	staging, final := ateletpath.SandboxAssetsStagingDir(actorUID), ateletpath.SandboxAssetsDir(actorUID)
+	for _, dir := range []string{staging, final} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(staging, "runsc"), []byte("new"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(final, "runsc"), []byte("previous"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]string{runscAssetName: filepath.Join(staging, "runsc"), "stray": "/elsewhere/kernel"}
+	if err := commitSandboxAssets(actorUID, staging, paths); err == nil {
+		t.Fatal("commitSandboxAssets accepted a path outside the staging dir")
+	}
+	if got, err := os.ReadFile(filepath.Join(final, "runsc")); err != nil || string(got) != "previous" {
+		t.Errorf("assets dir changed by a refused commit: %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(staging, "runsc")); err != nil {
+		t.Errorf("staged set gone after a refused commit: %v", err)
+	}
+	if paths[runscAssetName] != filepath.Join(staging, "runsc") {
+		t.Errorf("paths rewritten by a refused commit: %v", paths)
+	}
+
+	delete(paths, "stray")
+	if err := commitSandboxAssets(actorUID, staging, paths); err != nil {
+		t.Fatalf("commitSandboxAssets: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(final, "runsc")); err != nil || string(got) != "new" {
+		t.Errorf("assets dir after commit = %q, %v; want the staged set", got, err)
+	}
+	if paths[runscAssetName] != filepath.Join(final, "runsc") {
+		t.Errorf("paths after commit = %v, want them under %s", paths, final)
+	}
+	if _, err := os.Lstat(staging); !os.IsNotExist(err) {
+		t.Errorf("staging dir remains after commit (lstat err = %v)", err)
+	}
+}

@@ -1952,21 +1952,27 @@ func resetSandboxAssetsDir(actorUID string) error {
 
 // commitSandboxAssets replaces the actor's sandbox assets dir with the set
 // Run staged at staging, and rewrites paths, which point under staging, to
-// their final location.
+// their final location. Nothing moves until every path has been checked,
+// so a failure leaves the staged set where it was for Run's cleanup and
+// the assets dir as it was, still matching the sandbox record.
 func commitSandboxAssets(actorUID, staging string, paths map[string]string) error {
 	final := ateletpath.SandboxAssetsDir(actorUID)
+	moved := make(map[string]string, len(paths))
+	for name, p := range paths {
+		rel, err := filepath.Rel(staging, p)
+		if err != nil || !filepath.IsLocal(rel) {
+			return fmt.Errorf("staged asset %q at %q is not under %q", name, p, staging)
+		}
+		moved[name] = filepath.Join(final, rel)
+	}
 	if err := os.RemoveAll(final); err != nil {
 		return wrapFileSystemErr("while removing previous sandbox assets dir", err)
 	}
 	if err := os.Rename(staging, final); err != nil {
 		return wrapFileSystemErr("while placing sandbox assets dir", err)
 	}
-	for name, p := range paths {
-		rel, err := filepath.Rel(staging, p)
-		if err != nil || !filepath.IsLocal(rel) {
-			return fmt.Errorf("staged asset %q at %q is not under %q", name, p, staging)
-		}
-		paths[name] = filepath.Join(final, rel)
+	for name, p := range moved {
+		paths[name] = p
 	}
 	return nil
 }
