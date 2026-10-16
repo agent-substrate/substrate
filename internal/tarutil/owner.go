@@ -21,6 +21,20 @@ import (
 	"os"
 )
 
+// ModeBits are the mode bits an extracted entry takes from its tar header: the
+// permission bits plus setuid, setgid and sticky, which FileMode.Perm() drops.
+const ModeBits = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+
+// Mode returns the mode an extracted entry takes from hdr, as containerd and
+// moby apply it. Without the special bits a setgid data directory would stop
+// passing its group to new files, and /tmp would let users delete each other's
+// files. They govern behavior inside the sandbox, and restoring a snapshot
+// grants nothing new with them: a running workload can set them on its own
+// files anyway.
+func Mode(hdr *tar.Header) os.FileMode {
+	return hdr.FileInfo().Mode() & ModeBits
+}
+
 // Lchown applies hdr's numeric owner to name, a path relative to root,
 // without following a final-component symlink. It is shared by every
 // extractor that restores tar ownership: Extract here, and the image layer
