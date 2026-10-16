@@ -83,20 +83,20 @@ type EvictStats struct {
 	// run, the entries a real pass would have retired.
 	Retired int
 	// FreedBytes counts allocated (on-disk) bytes actually returned to the
-	// filesystem: the footprints of retired entries whose data had no
-	// consumer hard links left and whose physical removal completed. An
-	// entry retired but not removed (a RemoveAll failure, reported in the
-	// returned error) is excluded; its bytes sit in a .rm-* dir until
-	// SweepDebris. In a dry run this is the would-free estimate.
+	// filesystem: the footprints of retired entries whose physical removal
+	// completed. An entry retired but not removed (a RemoveAll failure,
+	// reported in the returned error) is excluded; its bytes sit in a .rm-*
+	// dir until SweepDebris. In a dry run this is the would-free estimate.
 	FreedBytes int64
-	// PendingBytes counts allocated bytes of retired entries whose data is
-	// still hard-linked by a consumer: the cache's claim is gone, but the
-	// kernel frees the space only when the last consumer link is removed.
-	PendingBytes int64
+	// SkippedLinked counts entries some consumer still hard-links. They are
+	// never evicted: retiring one frees nothing while the link lasts, and
+	// would only make the next caller download a second copy beside it.
+	SkippedLinked int
 	// SkippedYoung counts entries vetoed by the store's min age.
 	SkippedYoung int
 	// SkippedBusy counts entries vetoed at retire time: a hit or a fresh
-	// fetch moved their last-use clock after the pass listed them.
+	// fetch moved their last-use clock, or a consumer linked them, after
+	// the pass listed them.
 	SkippedBusy int
 }
 
@@ -109,13 +109,14 @@ type evictCandidate struct {
 	linked bool  // data is a regular file some consumer still hard-links
 }
 
-// EvictUnused frees cache space until targetBytes of actually-freeable
-// bytes are reclaimed or no eligible entries remain, least-recently-used
-// first. Entries younger than the store's min age are skipped, and a hit or
-// fetch racing the pass vetoes its entry at retire time. Retiring an entry
-// never invalidates files already served from it: a consumer's hard link
-// keeps its bytes (counted as pending until the link goes), so eviction
-// only ever costs the next caller a re-download.
+// EvictUnused frees cache space until targetBytes are reclaimed or no
+// eligible entries remain, least-recently-used first. Only entries no
+// consumer links are eligible: a hard link is how a consumer declares an
+// entry in use, and evicting one would free nothing while the link lasts.
+// Entries younger than the store's min age are skipped too, and a hit or
+// fetch racing the pass vetoes its entry at retire time. Eviction therefore
+// never takes anything a caller holds; it only ever costs the next caller a
+// re-download.
 //
 // With dryRun, nothing is touched and the stats report what a real pass
 // would have chosen. Passes are pressure-driven: the caller decides when
@@ -146,21 +147,20 @@ func (s *Store) EvictUnused(ctx context.Context, targetBytes int64, dryRun bool)
 		errs = append(errs, err)
 	}
 
-	// Age gate, then order: entries nobody links first (evicting a linked
-	// entry frees nothing now), least recently used within each group.
+	// Linked and age gates, then least recently used first.
 	now := time.Now()
 	eligible := candidates[:0]
 	for _, c := range candidates {
-		if now.Sub(c.mtime) < s.minAge {
+		switch {
+		case c.linked:
+			stats.SkippedLinked++
+		case now.Sub(c.mtime) < s.minAge:
 			stats.SkippedYoung++
-			continue
+		default:
+			eligible = append(eligible, c)
 		}
-		eligible = append(eligible, c)
 	}
 	sort.Slice(eligible, func(i, j int) bool {
-		if eligible[i].linked != eligible[j].linked {
-			return !eligible[i].linked
-		}
 		return eligible[i].mtime.Before(eligible[j].mtime)
 	})
 
@@ -168,7 +168,7 @@ func (s *Store) EvictUnused(ctx context.Context, targetBytes int64, dryRun bool)
 	// freed is only credited once physical removal succeeds below.
 	type retiredEntry struct {
 		path  string
-		freed int64 // c.size for unlinked victims, 0 for linked ones
+		freed int64
 	}
 	var retired []retiredEntry
 	var selectedBytes int64
@@ -180,10 +180,6 @@ func (s *Store) EvictUnused(ctx context.Context, targetBytes int64, dryRun bool)
 			errs = append(errs, err)
 			break
 		}
-		var freed int64
-		if !c.linked {
-			freed = c.size
-		}
 		if !dryRun {
 			rmPath, ok, err := s.retireEntry(c)
 			if err != nil {
@@ -194,13 +190,12 @@ func (s *Store) EvictUnused(ctx context.Context, targetBytes int64, dryRun bool)
 				stats.SkippedBusy++
 				continue
 			}
-			retired = append(retired, retiredEntry{path: rmPath, freed: freed})
+			retired = append(retired, retiredEntry{path: rmPath, freed: c.size})
 		} else {
-			stats.FreedBytes += freed
+			stats.FreedBytes += c.size
 		}
 		stats.Retired++
-		stats.PendingBytes += c.size - freed
-		selectedBytes += freed
+		selectedBytes += c.size
 	}
 
 	// The slow physical deletion happens after all retires, outside hitMu
@@ -329,7 +324,8 @@ func (s *Store) sizeEntry(entryDir string) (size int64, linked bool, err error) 
 // it retired. It runs inside the key's singleflight (joining any in-flight
 // fetch rather than racing it) and takes hitMu exclusively for the final
 // re-check and rename, so a hit cannot be served from an entry mid-retire.
-// A moved last-use clock is a veto, not an error.
+// A moved last-use clock, or a link gained since the listing, is a veto,
+// not an error.
 func (s *Store) retireEntry(c evictCandidate) (string, bool, error) {
 	var rmPath string
 	var retired bool
@@ -347,6 +343,15 @@ func (s *Store) retireEntry(c evictCandidate) (string, bool, error) {
 		}
 		if !fi.ModTime().Equal(c.mtime) {
 			return nil, nil // hit or refetched since the listing: veto
+		}
+		// The listing's link check ran lock-free. A hit since then touched
+		// the clock, which the check above catches, but the touch is
+		// best-effort, so ask the files themselves: a linked entry is never
+		// retired, whatever the clock says.
+		if _, linked, err := s.sizeEntry(entryDir); err != nil {
+			return nil, err
+		} else if linked {
+			return nil, nil // linked since the listing: veto
 		}
 		// Unique suffix: a crashed pass may have left .rm-<dir>-* behind and
 		// the key may have been refetched and retired again before a sweep.

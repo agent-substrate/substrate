@@ -34,15 +34,15 @@
 //
 // # Contracts
 //
-// Eviction never invalidates what a caller already received:
+// Eviction never takes what a caller holds:
 //
 //   - GetFileTo serves a hit as a hard link, created in the same locked
-//     step that resolves the hit. Evicting the entry later removes only the
-//     cache's own link; the consumer's file stays valid.
+//     step that resolves the hit. While any consumer's link exists the
+//     entry is not evicted: the link is how a consumer declares the entry
+//     in use, and removing the cache's own link would free nothing.
 //   - GetDirTo serves a hit as a directory the consumer owns, in which every
-//     file is a hard link, built in that same locked step. The consumer's
-//     tree stays valid after eviction, and the entry counts as linked while
-//     any of its files is.
+//     file is a hard link, built in that same locked step. The entry counts
+//     as linked while any of its files is.
 //   - GetFileCopyTo serves a private copy. The consumer owns the inode and
 //     may mutate it, and a copy in progress reads a held-open handle, so a
 //     concurrent eviction cannot corrupt it.
