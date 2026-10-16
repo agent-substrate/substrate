@@ -120,9 +120,10 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	// read-only, e.g. ko ships /ko-app as 0555, or gives them to another
 	// user), and their real modes, mtimes and owners are restored afterwards,
 	// so writing into them needs no CAP_DAC_OVERRIDE. The mtime is restored
-	// then because creating child entries updates it. Each header keeps its
-	// position in the tar so the restore pass can apply the last one written
-	// to a directory, whatever name it was written under.
+	// then because creating child entries updates it. Headers are kept by the
+	// directory they were written to, not by name, so the restore pass applies
+	// the last one written to each directory, whatever name it was written
+	// under.
 	//
 	// Entries take their owner as they are written. Wherever
 	// fs.protected_hardlinks=1, the common default, the kernel refuses a
@@ -131,8 +132,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	// CAP_DAC_OVERRIDE grants (a regular file another user owns never keeps
 	// setuid or setgid in atelet, see restoreSetIDBits). Other targets
 	// (symlinks, fifos) are given to root before the link is made.
-	dirHdrs := map[string]dirHdr{}
-	dirSeq := 0
+	dirHdrs := map[dirInode]*dirHdr{}
 
 	// Ancestors an entry needed vs. directories the tar declared: the
 	// difference is recorded as ImplicitDirs (attrs fabricated, see the
@@ -155,19 +155,17 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	// directory created later.
 	replaceExisting := func(name, before string) error {
 		if fi, err := root.Lstat(name); err == nil {
-			var removed map[dirInode]bool
+			var removed map[dirInode]string
 			if fi.IsDir() {
-				if removed, err = subtreeDirInodes(root, name); err != nil {
+				if removed, err = dirPaths(root, name); err != nil {
 					return fmt.Errorf("while replacing existing path at %q before %s: %w", name, before, err)
 				}
 			}
 			if err := root.RemoveAll(name); err != nil {
 				return fmt.Errorf("while replacing existing path at %q before %s: %w", name, before, err)
 			}
-			for d, dh := range dirHdrs {
-				if removed[dh.inode] {
-					delete(dirHdrs, d)
-				}
+			for inode := range removed {
+				delete(dirHdrs, inode)
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("while checking existing path at %q before %s: %w", name, before, err)
@@ -305,8 +303,13 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				if err != nil {
 					return nil, err
 				}
-				dirHdrs[name] = dirHdr{hdr: hdr, seq: dirSeq, inode: inode}
-				dirSeq++
+				dh := dirHdrs[inode]
+				if dh == nil {
+					dh = &dirHdr{}
+					dirHdrs[inode] = dh
+				}
+				dh.hdr = hdr
+				dh.names = append(dh.names, name)
 			}
 			declared[name] = true
 			delete(implicit, name)
@@ -404,52 +407,50 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	// needs CAP_FOWNER, which atelet does not hold. Chown leaves a directory's
 	// mode alone, setgid and sticky included.
 	//
-	// Each header was recorded against the directory its entry created or
-	// found, and replaceExisting dropped the headers of every directory it
-	// removed, so each recorded directory still exists. Names that a symlink
-	// makes aliases ("a -> cc" makes "a/b" and "cc/b" one directory) record
-	// one directory, which is restored once, with the header written last to
-	// it: a second chmod after the first chown would also need CAP_FOWNER.
-	// The restore goes through a name that still resolves to that directory;
-	// one a later symlink points elsewhere is not used. A directory left with
-	// no such name keeps the mode and owner it was extracted with.
+	// Headers are kept by the directory they were written to, and
+	// replaceExisting dropped those of every directory it removed. Names that
+	// a symlink makes aliases ("a -> cc" makes "a/b" and "cc/b" one directory)
+	// record one directory, which is restored once, with the header written
+	// last to it: a second chmod after the first chown would also need
+	// CAP_FOWNER. The restore goes through the latest name written to the
+	// directory that still resolves to it. When a later symlink has pointed
+	// every such name elsewhere, outside the layer or into a loop, the
+	// directory is found by walking the tree without following symlinks.
 	type dirRestore struct {
-		name    string // a name that resolves to the directory
-		nameSeq int
-		hdr     *tar.Header
-		seq     int
+		name string
+		hdr  *tar.Header
 	}
-	byInode := map[dirInode]*dirRestore{}
-	for name, dh := range dirHdrs {
-		r := byInode[dh.inode]
-		if r == nil {
-			r = &dirRestore{nameSeq: -1, seq: -1}
-			byInode[dh.inode] = r
+	dirs := make([]dirRestore, 0, len(dirHdrs))
+	unnamed := map[dirInode]*tar.Header{}
+	for inode, dh := range dirHdrs {
+		name := ""
+		for i := len(dh.names) - 1; i >= 0 && name == ""; i-- {
+			// Any error means the name does not reach the directory (it may
+			// lead outside the layer or into a loop); the walk below looks
+			// for a directory no name reaches.
+			fi, err := root.Lstat(dh.names[i])
+			if err != nil || !fi.IsDir() {
+				continue
+			}
+			if got, err := dirInodeOf(dh.names[i], fi); err == nil && got == inode {
+				name = dh.names[i]
+			}
 		}
-		if dh.seq > r.seq {
-			r.hdr, r.seq = dh.hdr, dh.seq
-		}
-		fi, err := root.Lstat(name)
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		if name == "" {
+			unnamed[inode] = dh.hdr
 			continue
-		} else if err != nil {
-			return nil, fmt.Errorf("while checking directory %q: %w", name, err)
 		}
-		if !fi.IsDir() {
-			continue
-		}
-		inode, err := dirInodeOf(name, fi)
+		dirs = append(dirs, dirRestore{name: name, hdr: dh.hdr})
+	}
+	if len(unnamed) > 0 {
+		paths, err := dirPaths(root, ".")
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("while finding unpacked directories: %w", err)
 		}
-		if inode == dh.inode && dh.seq > r.nameSeq {
-			r.name, r.nameSeq = name, dh.seq
-		}
-	}
-	dirs := make([]*dirRestore, 0, len(byInode))
-	for _, d := range byInode {
-		if d.name != "" {
-			dirs = append(dirs, d)
+		for inode, hdr := range unnamed {
+			if name, ok := paths[inode]; ok {
+				dirs = append(dirs, dirRestore{name: name, hdr: hdr})
+			}
 		}
 	}
 	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i].name) > len(dirs[j].name) })
@@ -497,12 +498,11 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	return wh, nil
 }
 
-// dirHdr is a directory entry's header, its position among the layer's
-// directory entries, and the directory it was written to.
+// dirHdr is the header written last to a directory and every name it was
+// written under, in tar order.
 type dirHdr struct {
 	hdr   *tar.Header
-	seq   int
-	inode dirInode
+	names []string
 }
 
 // dirInode identifies a directory by device and inode number.
@@ -518,10 +518,10 @@ func dirInodeOf(name string, fi os.FileInfo) (dirInode, error) {
 	return dirInode{dev: uint64(st.Dev), ino: st.Ino}, nil
 }
 
-// subtreeDirInodes returns the directories at and below dir, a directory in
-// root, without following symlinks.
-func subtreeDirInodes(root *os.Root, dir string) (map[dirInode]bool, error) {
-	inodes := map[dirInode]bool{}
+// dirPaths returns the directories at and below dir, a directory in root,
+// with the path of each, without following symlinks.
+func dirPaths(root *os.Root, dir string) (map[dirInode]string, error) {
+	paths := map[dirInode]string{}
 	err := fs.WalkDir(root.FS(), dir, func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -537,10 +537,10 @@ func subtreeDirInodes(root *os.Root, dir string) (map[dirInode]bool, error) {
 		if err != nil {
 			return err
 		}
-		inodes[inode] = true
+		paths[inode] = name
 		return nil
 	})
-	return inodes, err
+	return paths, err
 }
 
 // tarMode returns the mode an unpacked entry takes from its tar header: the
