@@ -189,7 +189,7 @@ The access policy RPCs are checked even with authorization off.
 | `GetActor` | `can_get`, the actor | Viewer of its atespace; `atenet-egress` |
 | `DeleteActor` | `can_delete`, the actor | Editor of its atespace |
 | `ListActors` | `can_list_actors`, the atespace, or global if none is given | Atespace viewer; for all atespaces, global viewer, `atenet-router` or `atenet-egress` |
-| `SuspendActor`, `RevertActor` | `can_suspend` / `can_revert`, the actor | Editor of its atespace |
+| `PauseActor`, `SuspendActor`, `RevertActor` | `can_pause` / `can_suspend` / `can_revert`, the actor | Editor of its atespace |
 | `ResumeActor` | `can_resume`, the actor | Editor of its atespace; `atenet-router` |
 | `GetActorEgressPolicy` | `can_get_egress_policy`, the actor | Viewer of its atespace; `atenet-egress`; `atelet` |
 | `CreateActorEgressPolicy`, `UpdateActorEgressPolicy`, `DeleteActorEgressPolicy` | `can_create_egress_policy` / `can_update_egress_policy` / `can_delete_egress_policy`, the actor | Editor of its atespace |
