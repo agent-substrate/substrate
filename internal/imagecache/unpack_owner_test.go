@@ -71,6 +71,10 @@ var ownershipEntries = []tarEntry{
 	{name: "srv/team/", typeflag: tar.TypeDir, mode: 0o2775, uid: 1000, gid: 100},
 	// A symlink's own owner differs from its target's: lchown, not chown.
 	{name: "home/agent/rc", typeflag: tar.TypeSymlink, linkname: ".bashrc", uid: 1002, gid: 1002},
+	// A hardlink to a symlink another user owns (moby writes a symlink with
+	// several names this way): the shared inode takes the link header's owner.
+	{name: "home/agent/ln", typeflag: tar.TypeSymlink, linkname: ".bashrc", uid: 1002, gid: 1002},
+	{name: "home/agent/ln2", typeflag: tar.TypeLink, linkname: "home/agent/ln", uid: 1006, gid: 1006},
 	// A read-only directory owned by another user still receives its child.
 	{name: "opt/", typeflag: tar.TypeDir},
 	{name: "opt/app/", typeflag: tar.TypeDir, mode: 0o555, uid: 1001, gid: 1001},
@@ -110,6 +114,8 @@ func testUnpackLayerAppliesOwnership(t *testing.T) {
 	assertOwner(t, filepath.Join(dir, "tmp"), 0, 0, os.ModeDir|os.ModeSticky|0o777)
 	assertOwner(t, filepath.Join(dir, "srv/team"), 1000, 100, os.ModeDir|os.ModeSetgid|0o775)
 	assertOwner(t, filepath.Join(dir, "home/agent/rc"), 1002, 1002, os.ModeSymlink|0o777)
+	assertOwner(t, filepath.Join(dir, "home/agent/ln"), 1006, 1006, os.ModeSymlink|0o777)
+	assertOwner(t, filepath.Join(dir, "home/agent/ln2"), 1006, 1006, os.ModeSymlink|0o777)
 	assertOwner(t, filepath.Join(dir, "opt/app"), 1001, 1001, os.ModeDir|0o555)
 	assertOwner(t, filepath.Join(dir, "opt/app/bin"), 1001, 1001, 0o755)
 	assertOwner(t, filepath.Join(dir, "opt/app/bin2"), 1001, 1001, 0o755)

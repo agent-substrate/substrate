@@ -122,10 +122,13 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	// then because creating child entries updates it. Keyed by name so a
 	// repeated dir entry's last header wins.
 	//
-	// Files take their owner as they are written, so a hardlink to one that
-	// belongs to another user needs CAP_DAC_OVERRIDE (or CAP_FOWNER) wherever
-	// fs.protected_hardlinks=1, the common default: the kernel then refuses
-	// the link unless the caller could read and write the target.
+	// Entries take their owner as they are written. Wherever
+	// fs.protected_hardlinks=1, the common default, the kernel refuses a
+	// hardlink to another user's entry unless the caller holds CAP_FOWNER or
+	// the target is a regular file it could read and write, which
+	// CAP_DAC_OVERRIDE grants (a regular file another user owns never keeps
+	// setuid or setgid in atelet, see restoreSetIDBits). Other targets
+	// (symlinks, fifos) are given to root before the link is made.
 	dirHdrs := map[string]*tar.Header{}
 
 	// Ancestors an entry needed vs. directories the tar declared: the
@@ -329,6 +332,14 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			// Same "later entry wins" handling as TypeSymlink: replace existing entry.
 			if err := replaceExisting(name, "hardlink"); err != nil {
 				return nil, err
+			}
+			// The chown below gives the shared inode this header's owner.
+			if os.Geteuid() == 0 {
+				if fi, err := root.Lstat(linkname); err == nil && !fi.Mode().IsRegular() && !fi.IsDir() {
+					if err := root.Lchown(linkname, 0, 0); err != nil {
+						return nil, fmt.Errorf("while giving hardlink target %q to root: %w", linkname, err)
+					}
+				}
 			}
 			if err := root.Link(linkname, name); err != nil {
 				return nil, fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
