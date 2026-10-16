@@ -227,7 +227,7 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	}
 	assertSnapshotPresent(t, tc, uri)
 	for _, actor := range []*ateapipb.Actor{early, late} {
-		if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: resources.ActorRefFromActor(actor).ToObjectRef(), AnyState: true}); err != nil {
+		if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: resources.ActorRefFromActor(actor).ToObjectRef()}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -335,7 +335,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	if err := assertNoGolden(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}); err != nil {
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}); err != nil {

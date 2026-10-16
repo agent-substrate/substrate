@@ -447,7 +447,7 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	start := time.Now()
 	// Template dims only once the record resolved: the request names only the
 	// actor, so failures before the load carry none. No pool pair, even when
-	// any_state deletes an actor that still holds a worker.
+	// the deleted actor still held a worker.
 	defer func() {
 		var attrs []attribute.KeyValue
 		if deleted != nil {
@@ -461,7 +461,7 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef, req.GetAnyState(), toDeletePreconditions(req.GetOptions()))
+	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef, toDeletePreconditions(req.GetOptions()))
 	if err != nil {
 		return nil, err
 	}

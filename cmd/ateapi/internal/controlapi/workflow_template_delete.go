@@ -86,7 +86,7 @@ func (w *ActorWorkflow) ensureGoldenActorDeleted(ctx context.Context, goldenRef 
 	ctx, done := stepSpan(ctx, "DeleteGoldenActor")
 	defer func() { err = done(err) }()
 
-	if _, err := w.DeleteActor(ctx, goldenRef, true, store.DeletePreconditions{}); err != nil {
+	if _, err := w.DeleteActor(ctx, goldenRef, store.DeletePreconditions{}); err != nil {
 		if apierror.Code(err) == codes.NotFound {
 			markSkipped(ctx, "golden actor already deleted")
 			return nil

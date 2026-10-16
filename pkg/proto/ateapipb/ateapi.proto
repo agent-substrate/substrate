@@ -63,8 +63,8 @@ service Control {
     option (method).resource = "Actor";
   }
 
-  // Delete an actor. Only suspended or crashed actors can be deleted unless
-  // any_state is set.
+  // Delete an actor. A running actor's workload is terminated, its volumes
+  // detached, and its worker released before the record is removed.
   rpc DeleteActor(DeleteActorRequest) returns (Actor) {
     option (method).resource = "Actor";
   }
@@ -1804,15 +1804,10 @@ message DeleteActorRequest {
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 
-  // If true, delete the actor regardless of its state.
-  //
-  // +k8s:optional
-  bool any_state = 2;
-
   // Optional per-delete preconditions.
   //
   // +k8s:optional
-  DeleteOptions options = 3;
+  DeleteOptions options = 2;
 }
 
 // GetActorEgressPolicyRequest identifies an Actor's egress policy.

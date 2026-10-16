@@ -48,7 +48,6 @@ var (
 	createActorTemplateFlag  string
 	createActorTagFlag       string
 	deleteActorAtespaceFlag  string
-	deleteActorAnyStateFlag  bool
 	pauseActorAtespaceFlag   string
 	resumeActorAtespaceFlag  string
 	suspendActorAtespaceFlag string
@@ -153,8 +152,7 @@ var deleteActorCmd = &cobra.Command{
 
 		actorRef := resources.ActorRef{Atespace: deleteActorAtespaceFlag, Name: args[0]}
 		_, err = c.ControlClient.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor:    actorRef.ToObjectRef(),
-			AnyState: deleteActorAnyStateFlag,
+			Actor: actorRef.ToObjectRef(),
 		})
 		if err != nil {
 			return err
@@ -743,7 +741,6 @@ func init() {
 	createCmd.AddCommand(createActorCmd)
 
 	deleteActorCmd.Flags().StringVarP(&deleteActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
-	deleteActorCmd.Flags().BoolVar(&deleteActorAnyStateFlag, "any-state", false, "delete the actor regardless of current state")
 	deleteCmd.AddCommand(deleteActorCmd)
 
 	pauseActorCmd.Flags().StringVarP(&pauseActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")

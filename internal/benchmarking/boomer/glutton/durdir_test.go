@@ -254,10 +254,6 @@ func TestDurDirShutdownSuspendsBeforeDelete(t *testing.T) {
 	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor" || calls[len(calls)-1] != "DeleteActor" {
 		t.Errorf("recordedCalls must end with [SuspendActor, DeleteActor], got %v", calls)
 	}
-	reqs := fakeCtrl.recordedDeleteRequests()
-	if len(reqs) == 0 || !reqs[0].GetAnyState() {
-		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
-	}
 }
 
 func TestDurDirShutdownPausesBeforeDelete(t *testing.T) {
@@ -277,9 +273,5 @@ func TestDurDirShutdownPausesBeforeDelete(t *testing.T) {
 	calls := fakeCtrl.recordedCalls()
 	if len(calls) < 2 || calls[len(calls)-2] != "PauseActor" || calls[len(calls)-1] != "DeleteActor" {
 		t.Errorf("recordedCalls must end with [PauseActor, DeleteActor], got %v", calls)
-	}
-	reqs := fakeCtrl.recordedDeleteRequests()
-	if len(reqs) == 0 || !reqs[0].GetAnyState() {
-		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
 	}
 }
