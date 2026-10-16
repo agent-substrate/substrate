@@ -258,6 +258,18 @@ kubectl -n $NS rollout resume deployment/$WORKERPOOL
 
 Workers already removed still get their 30 minutes. Do not leave a pool paused, and do not start step 4 while one is: a paused pool ignores every later change to its workers.
 
+### Rebuild a node's image cache
+
+atelet refuses to start on an image cache whose layout version it does not support, and its log names both versions. The cache holds no unique state, but the actors on the node run from it, so delete it only once no actor runs on the node. atelet rebuilds it as actors start:
+
+```bash
+NODE=my-node   # change me
+kubectl debug node/$NODE -it --image=busybox -- rm -rf /host/var/lib/ate/image-cache
+kubectl delete pod -n ate-system -l app=atelet --field-selector spec.nodeName=$NODE
+# kubectl debug leaves its finished pod behind.
+kubectl get pods -o name | grep "^pod/node-debugger-$NODE-" | xargs kubectl delete
+```
+
 ### Roll back
 
 To go back to the old release, roll back every step you began, finished or not, starting with the last. To fix one pool, roll back only that pool. Rollback runs from the old checkout, with `old.yaml`:
