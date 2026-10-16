@@ -115,8 +115,8 @@ func TestUDPHandlerSynthesizedReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readWithin(t, client)
-	if rcode := dnsmessage.RCode(got[3] & 0x0f); rcode != dnsmessage.RCodeRefused {
-		t.Errorf("synthesized rcode = %v, want %v", rcode, dnsmessage.RCodeRefused)
+	if rcode := dnsmessage.RCode(got[3] & 0x0f); rcode != dnsmessage.RCodeNameError {
+		t.Errorf("synthesized rcode = %v, want %v", rcode, dnsmessage.RCodeNameError)
 	}
 	if upstreamCalls.Load() != 0 {
 		t.Errorf("upstream was called %d times on synthesized reply, want 0", upstreamCalls.Load())

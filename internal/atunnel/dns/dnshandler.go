@@ -117,10 +117,16 @@ func (h *dnsHandler) onRequestCommon(raw []byte) (dnsmessage.Header, dnsmessage.
 		return hdr, dnsmessage.Question{}, errReplyAction(hdr, dnsmessage.RCodeNotImplemented, &q)
 	}
 
-	// Check with query policy callout.
+	// Check with query policy callout. A disallowed name results in an NXDOMAIN.
+	//
+	// Note: NXDOMAIN seems to interact better with application stacks than other
+	// error codes such as REFUSED.
 	cq := canonicalizeQuestion(q)
 	if !h.allow(cq) {
-		return hdr, dnsmessage.Question{}, errReplyAction(hdr, dnsmessage.RCodeRefused, &q)
+		return hdr, dnsmessage.Question{}, action{
+			kind:    actionReply,
+			payload: protocol.NXDomainPacket(hdr, q),
+		}
 	}
 
 	return hdr, cq, action{
