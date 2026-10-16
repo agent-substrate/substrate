@@ -52,17 +52,12 @@ func ServerCredentials(cfg Config) (credentials.TransportCredentials, error) {
 		return nil, errors.New("a caller identity is required")
 	}
 
-	serverCert := credbundle.Loader(cfg.ServerBundle)
-	if _, err := serverCert(nil); err != nil {
-		return nil, err
-	}
-
 	// A per-connection config picks up a rotated client CA without a restart.
 	tlsCfg, err := credbundle.PrepareServerTLSConfig(credbundle.ServerConfig{
-		GetCertificate: serverCert,
-		ClientCAPath:   cfg.ClientCAFile,
-		ClientAuth:     tls.RequireAndVerifyClientCert,
-		VerifyPeer:     verifyCallerSAN(cfg.CallerIdentity),
+		CertPath:     cfg.ServerBundle,
+		ClientCAPath: cfg.ClientCAFile,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		VerifyPeer:   verifyCallerSAN(cfg.CallerIdentity),
 	})
 	if err != nil {
 		return nil, err

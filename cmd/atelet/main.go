@@ -2109,12 +2109,12 @@ func removeActorDirs(actorUID string) error {
 // chaining to a CA in clientCAPath.
 func ateletServerTLSConfig(servingBundlePath, clientCAPath string) (*tls.Config, error) {
 	cfg, err := credbundle.PrepareServerTLSConfig(credbundle.ServerConfig{
-		GetCertificate: credbundle.Loader(servingBundlePath),
-		ClientCAPath:   clientCAPath,
-		ClientAuth:     tls.RequireAndVerifyClientCert,
+		CertPath:     servingBundlePath,
+		ClientCAPath: clientCAPath,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("load CA bundle %s: %w", clientCAPath, err)
+		return nil, fmt.Errorf("configuring server TLS: %w", err)
 	}
 	return cfg, nil
 }

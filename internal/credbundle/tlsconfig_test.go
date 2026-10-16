@@ -66,17 +66,26 @@ func TestPrepareClientTLSConfigRejectsUnreadableTrustBundle(t *testing.T) {
 	}
 }
 
-func TestPrepareServerTLSConfigRequiresGetCertificate(t *testing.T) {
+func TestPrepareServerTLSConfigRequiresCertPath(t *testing.T) {
 	if _, err := PrepareServerTLSConfig(ServerConfig{}); err == nil {
 		t.Fatalf("PrepareServerTLSConfig() error = nil, want an error")
 	}
 }
 
+func TestPrepareServerTLSConfigRejectsUnreadableCertPath(t *testing.T) {
+	cfg := ServerConfig{
+		CertPath: filepath.Join(t.TempDir(), "absent.pem"),
+	}
+	if _, err := PrepareServerTLSConfig(cfg); err == nil {
+		t.Fatalf("PrepareServerTLSConfig() error = nil, want a missing-file error")
+	}
+}
+
 func TestPrepareServerTLSConfigRejectsUnreadableClientCA(t *testing.T) {
 	cfg := ServerConfig{
-		GetCertificate: Loader(writeBundle(t, makeTrustBundle(t, 1))),
-		ClientCAPath:   filepath.Join(t.TempDir(), "absent.pem"),
-		ClientAuth:     tls.RequireAndVerifyClientCert,
+		CertPath:     writeBundle(t, makeTrustBundle(t, 1)),
+		ClientCAPath: filepath.Join(t.TempDir(), "absent.pem"),
+		ClientAuth:   tls.RequireAndVerifyClientCert,
 	}
 	if _, err := PrepareServerTLSConfig(cfg); err == nil {
 		t.Fatalf("PrepareServerTLSConfig() error = nil, want a missing-file error")
@@ -97,10 +106,10 @@ func TestPrepareClientAndServerMutualHandshake(t *testing.T) {
 	clientTrust := writeBundle(t, serverCA.certPEM)
 
 	serverCfg, err := PrepareServerTLSConfig(ServerConfig{
-		GetCertificate: Loader(serverBundle),
-		ClientCAPath:   serverTrust,
-		ClientAuth:     tls.RequireAndVerifyClientCert,
-		VerifyPeer:     verifyPeerURI(testClientID),
+		CertPath:     serverBundle,
+		ClientCAPath: serverTrust,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		VerifyPeer:   verifyPeerURI(testClientID),
 	})
 	if err != nil {
 		t.Fatalf("PrepareServerTLSConfig() error = %v", err)
@@ -143,10 +152,10 @@ func TestPrepareClientAndServerMutualHandshake(t *testing.T) {
 	t.Run("wrong server identity rejected by client", func(t *testing.T) {
 		otherServerBundle := writeCredBundle(t, serverCA.issue(t, certOpts{uris: []string{"spiffe://cluster.local/ns/ate-system/sa/other-server"}}))
 		otherCfg, err := PrepareServerTLSConfig(ServerConfig{
-			GetCertificate: Loader(otherServerBundle),
-			ClientCAPath:   serverTrust,
-			ClientAuth:     tls.RequireAndVerifyClientCert,
-			VerifyPeer:     verifyPeerURI(testClientID),
+			CertPath:     otherServerBundle,
+			ClientCAPath: serverTrust,
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			VerifyPeer:   verifyPeerURI(testClientID),
 		})
 		if err != nil {
 			t.Fatalf("PrepareServerTLSConfig() error = %v", err)
@@ -194,10 +203,10 @@ func TestPrepareClientAndServerPickUpCARotation(t *testing.T) {
 	clientTrust := writeBundle(t, serverCA.certPEM)
 
 	serverCfg, err := PrepareServerTLSConfig(ServerConfig{
-		GetCertificate: Loader(serverBundle),
-		ClientCAPath:   serverTrustPath,
-		ClientAuth:     tls.RequireAndVerifyClientCert,
-		VerifyPeer:     verifyPeerURI(testClientID),
+		CertPath:     serverBundle,
+		ClientCAPath: serverTrustPath,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		VerifyPeer:   verifyPeerURI(testClientID),
 	})
 	if err != nil {
 		t.Fatalf("PrepareServerTLSConfig() error = %v", err)
@@ -244,9 +253,9 @@ func TestPrepareClientTLSConfigChecksServerName(t *testing.T) {
 	serverTrust := writeBundle(t, clientCA.certPEM)
 
 	serverCfg, err := PrepareServerTLSConfig(ServerConfig{
-		GetCertificate: Loader(serverBundle),
-		ClientCAPath:   serverTrust,
-		ClientAuth:     tls.RequireAndVerifyClientCert,
+		CertPath:     serverBundle,
+		ClientCAPath: serverTrust,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
 	})
 	if err != nil {
 		t.Fatalf("PrepareServerTLSConfig() error = %v", err)
@@ -282,8 +291,8 @@ func TestPrepareServerTLSConfigWithoutClientCA(t *testing.T) {
 	serverBundle := writeCredBundle(t, serverCA.issue(t, certOpts{uris: []string{testServerID}, dnsNames: []string{"server.test"}}))
 
 	serverCfg, err := PrepareServerTLSConfig(ServerConfig{
-		GetCertificate: Loader(serverBundle),
-		ClientAuth:     tls.VerifyClientCertIfGiven,
+		CertPath:   serverBundle,
+		ClientAuth: tls.VerifyClientCertIfGiven,
 	})
 	if err != nil {
 		t.Fatalf("PrepareServerTLSConfig() error = %v", err)
