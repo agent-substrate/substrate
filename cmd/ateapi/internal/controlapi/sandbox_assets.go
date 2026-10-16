@@ -58,11 +58,11 @@ func resolvePoolSandboxConfig(
 	return sc, nil
 }
 
-// resolveSandboxAssets determines the sandbox binaries and pause image an actor
-// boots with on its assigned worker and projects them onto the
-// ateletpb.SandboxAssets atelet fetches: the default version of the
-// SandboxConfig the worker's pool resolved for its sandbox class, which is the
-// runtime the worker reports as its default.
+// resolveSandboxAssets determines the sandbox binaries an actor boots with on
+// its assigned worker and projects them onto the ateletpb.SandboxAssets atelet
+// fetches: the default version of the SandboxConfig the worker's pool resolved
+// for its sandbox class, which is the runtime the worker reports as its
+// default.
 //
 // TODO: Remove with sandbox_assets. atelet already resolves the pool's
 // SandboxConfig and its versions for every worker on the node (its sandbox
@@ -92,7 +92,6 @@ func resolveSandboxAssets(
 func sandboxAssetsProto(sc *atev1alpha1.SandboxConfig, ver *atev1alpha1.SandboxVersionConfig) *ateletpb.SandboxAssets {
 	out := &ateletpb.SandboxAssets{
 		SandboxClass: string(sc.Spec.SandboxClass),
-		PauseImage:   ver.PauseImage,
 		Assets:       make(map[string]*ateletpb.ArchAssets, len(ver.Assets)),
 	}
 	for arch, files := range ver.Assets {

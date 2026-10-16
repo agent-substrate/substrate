@@ -33,7 +33,6 @@ const testSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852
 func validSandboxAssets(mutate ...func(*ateletpb.SandboxAssets)) *ateletpb.SandboxAssets {
 	a := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
-		PauseImage:   testDigestImage,
 		Assets: map[string]*ateletpb.ArchAssets{
 			"amd64": {Files: map[string]*ateletpb.AssetFile{"gvisor": {Url: "gs://bucket/gvisor.tar.zstd", Sha256: testSHA256}}},
 			"arm64": {Files: map[string]*ateletpb.AssetFile{"gvisor": {Url: "gs://bucket/gvisor.tar.zstd", Sha256: testSHA256}}},
@@ -326,8 +325,8 @@ func TestValidateRunRequest(t *testing.T) {
 		want: field.ErrorList{field.Required(field.NewPath("sandbox_assets"), "")},
 	}, {
 		name: "sandbox asset errors surface at the sandbox_assets path",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.SandboxAssets.PauseImage = "registry.k8s.io/pause:3.10.2" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("sandbox_assets", "pause_image"), nil, "")},
+		obj:  valid(func(r *ateletpb.RunRequest) { r.SandboxAssets.SandboxClass = "kvm" }),
+		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_assets", "sandbox_class"), nil, nil)},
 	}, {
 		name: "invalid container name: path escape",
 		obj: valid(func(r *ateletpb.RunRequest) {
@@ -449,13 +448,6 @@ func TestValidateSandboxAssets(t *testing.T) {
 			field.TooLong(field.NewPath("sandbox_class"), nil, 63).WithOrigin("maxLength"),
 			field.NotSupported[string](field.NewPath("sandbox_class"), nil, nil),
 		},
-	}, {
-		name: "valid: no pause_image (microvm has no pause container)",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.PauseImage = "" }),
-	}, {
-		name: "pause_image not pinned by digest",
-		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.PauseImage = "registry.k8s.io/pause:3.10.2" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("pause_image"), nil, "")},
 	}, {
 		name: "missing assets",
 		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.Assets = nil }),

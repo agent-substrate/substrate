@@ -78,22 +78,22 @@ func testAssets() map[string]map[string]atev1alpha1.AssetFile {
 // TestResolveSandboxAssets pins the pool-side resolution: the SandboxConfig
 // the assigned worker's pool resolved is taken at its default version, a
 // missing default version, an unresolved pool, a missing pool or config is an
-// error, and the pause image travels with the sandbox binaries.
+// error.
 func TestResolveSandboxAssets(t *testing.T) {
-	const namedPause = "gcr.io/gke-release/pause@sha256:named"
+	const v2SHA = "v2-sha"
 	namedConfig := &atev1alpha1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-custom"},
 		Spec: atev1alpha1.SandboxConfigSpec{
 			SandboxClass:   atev1alpha1.SandboxClassGvisor,
 			DefaultVersion: "v2",
 			Versions: []atev1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				PauseImage: "gcr.io/gke-release/pause@sha256:old",
-				Assets:     testAssets(),
+				Name:   "v1",
+				Assets: testAssets(),
 			}, {
-				Name:       "v2",
-				PauseImage: namedPause,
-				Assets:     testAssets(),
+				Name: "v2",
+				Assets: map[string]map[string]atev1alpha1.AssetFile{
+					"amd64": {"gvisor": {URL: "gs://bucket/gvisor.tar.zstd", SHA256: v2SHA}},
+				},
 			}},
 		},
 	}
@@ -111,10 +111,9 @@ func TestResolveSandboxAssets(t *testing.T) {
 			SandboxClass:   atev1alpha1.SandboxClassGvisor,
 			DefaultVersion: "v1",
 			Versions: []atev1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				State:      ptr.To(atev1alpha1.SandboxVersionStateDisabled),
-				PauseImage: namedPause,
-				Assets:     testAssets(),
+				Name:   "v1",
+				State:  ptr.To(atev1alpha1.SandboxVersionStateDisabled),
+				Assets: testAssets(),
 			}},
 		},
 	}
@@ -130,14 +129,14 @@ func TestResolveSandboxAssets(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		assignment     *ateapipb.WorkerAssignment
-		wantPauseImage string
-		wantErr        string
+		name       string
+		assignment *ateapipb.WorkerAssignment
+		wantSHA    string
+		wantErr    string
 	}{{
-		name:           "pool with a resolved config",
-		assignment:     assignment("custom"),
-		wantPauseImage: namedPause,
+		name:       "pool with a resolved config",
+		assignment: assignment("custom"),
+		wantSHA:    v2SHA,
 	}, {
 		name:       "config without its default version",
 		assignment: assignment("no-default"),
@@ -178,8 +177,8 @@ func TestResolveSandboxAssets(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveSandboxAssets() error: %v", err)
 			}
-			if got.GetPauseImage() != tt.wantPauseImage {
-				t.Errorf("pause image = %q, want %q", got.GetPauseImage(), tt.wantPauseImage)
+			if gotSHA := got.GetAssets()["amd64"].GetFiles()["gvisor"].GetSha256(); gotSHA != tt.wantSHA {
+				t.Errorf("amd64 gvisor sha256 = %q, want %q", gotSHA, tt.wantSHA)
 			}
 		})
 	}

@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -26,20 +25,17 @@ import (
 	"k8s.io/client-go/util/workqueue"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
-	"go.ate.dev/substrate/internal/imagecache"
 )
 
 // defaultPrewarmAttemptTimeout bounds one prewarm attempt. The queue is
 // drained by one worker, so an attempt that never returned would block
-// every other runtime's prewarm. The asset downloads are bounded by the
-// asset cache's own fetch timeout; this covers the pause image pull beside
-// them.
+// every other runtime's prewarm.
 const defaultPrewarmAttemptTimeout = 10 * time.Minute
 
 // prewarmMaxRetries bounds how often one runtime's failed prewarm is retried
 // before it is dropped until a worker advertises it again (or first use,
 // which stays the correctness path). The backoff below caps at 5 minutes,
-// so this covers transient bucket or registry outages of several minutes
+// so this covers transient bucket outages of several minutes
 // without hammering a permanently broken runtime forever.
 const prewarmMaxRetries = 8
 
@@ -51,21 +47,19 @@ type sandboxAssetFetcher interface {
 }
 
 // runtimePrewarmer fetches the default runtime of each worker on this node
-// into the asset and image caches before any actor asks for it, so the
+// into the asset cache before any actor asks for it, so the
 // fetch inside the first Run/Restore on the node is a cache hit instead of
 // a download+extract on the critical path. The worker sandbox syncer hands
 // it the default runtime hash of every worker it plans; the index holds
 // the record to fetch.
 //
 // Prewarming is purely a latency optimization: every failure is logged and
-// left to the on-demand fetch in ensureSandboxAssets and the pull inside
-// prepareOCIBundles, which remain the correctness path. Only default
-// runtimes are prewarmed; the first restore of another version a worker
-// advertises pays its download.
+// left to the on-demand fetch in ensureSandboxAssets, which remains the
+// correctness path. Only default runtimes are prewarmed; the first restore of
+// another version a worker advertises pays its download.
 type runtimePrewarmer struct {
 	index  *runtimeIndex
 	assets sandboxAssetFetcher
-	images *imagecache.Store
 	// queue carries runtime hashes. It dedupes while an item waits, and it
 	// rate-limits retries after failures. A single worker drains it, which
 	// also serializes downloads so concurrent prewarms never compete for
@@ -90,11 +84,10 @@ type runtimePrewarmer struct {
 	onFinished func(hash string, err error)
 }
 
-func newRuntimePrewarmer(index *runtimeIndex, assets sandboxAssetFetcher, images *imagecache.Store) *runtimePrewarmer {
+func newRuntimePrewarmer(index *runtimeIndex, assets sandboxAssetFetcher) *runtimePrewarmer {
 	return &runtimePrewarmer{
 		index:          index,
 		assets:         assets,
-		images:         images,
 		attemptTimeout: defaultPrewarmAttemptTimeout,
 		// Downloads fail on the scale of network timeouts, not API conflicts,
 		// so back off in seconds and cap in minutes rather than the
@@ -189,11 +182,9 @@ func (p *runtimePrewarmer) process(ctx context.Context, hash string) {
 	p.queue.Forget(hash)
 }
 
-// prewarm fetches the runtime's assets into the asset cache and its pause
-// image into the image cache. Racing an on-demand ensureSandboxAssets for
-// the same assets is safe: the asset cache runs one download per asset and
-// serves every caller from it, and the image cache collapses concurrent
-// pulls of one digest.
+// prewarm fetches the runtime's assets into the asset cache. Racing an
+// on-demand ensureSandboxAssets for the same assets is safe: the asset cache
+// runs one download per asset and serves every caller from it.
 //
 // Prewarm has no actor to link the assets into, so it stages them into a
 // scratch directory it removes again; the cache keeps the entries.
@@ -202,26 +193,12 @@ func (p *runtimePrewarmer) prewarm(ctx context.Context, hash string, rt *indexed
 	defer cancel()
 	t := time.Now()
 
-	var assetErr, imageErr error
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		scratch, err := os.MkdirTemp(ateletpath.SandboxAssetScratchDir, "prewarm-")
-		if err != nil {
-			assetErr = fmt.Errorf("while creating prewarm scratch dir: %w", err)
-			return
-		}
-		defer func() { _ = os.RemoveAll(scratch) }()
-		_, assetErr = p.assets.ensureSandboxAssets(ctx, rt.rec, scratch)
-	})
-	if rt.rec.PauseImage != "" {
-		wg.Go(func() {
-			if _, err := p.images.EnsureImage(ctx, rt.rec.PauseImage); err != nil {
-				imageErr = fmt.Errorf("while prewarming pause image %q: %w", rt.rec.PauseImage, err)
-			}
-		})
+	scratch, err := os.MkdirTemp(ateletpath.SandboxAssetScratchDir, "prewarm-")
+	if err != nil {
+		return fmt.Errorf("while creating prewarm scratch dir: %w", err)
 	}
-	wg.Wait()
-	if err := errors.Join(assetErr, imageErr); err != nil {
+	defer func() { _ = os.RemoveAll(scratch) }()
+	if _, err := p.assets.ensureSandboxAssets(ctx, rt.rec, scratch); err != nil {
 		return err
 	}
 	slog.InfoContext(ctx, "Sandbox runtime prewarmed",
@@ -229,7 +206,6 @@ func (p *runtimePrewarmer) prewarm(ctx context.Context, hash string, rt *indexed
 		slog.String("config", rt.config),
 		slog.String("version", rt.version),
 		slog.Int("assets", len(rt.rec.Assets)),
-		slog.String("pause_image", rt.rec.PauseImage),
 		slog.Duration("duration", time.Since(t)))
 	return nil
 }

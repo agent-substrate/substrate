@@ -31,8 +31,7 @@ const (
 	AttrArchitecture = "architecture"
 
 	// AttrSandboxBundleHash identifies the sandbox runtime bundle: a
-	// sha256 over a SandboxConfig version's asset digests and pause image
-	// digest, computed by atelet.
+	// sha256 over a SandboxConfig version's asset digests, computed by atelet.
 	AttrSandboxBundleHash = "sandbox_bundle_hash"
 
 	// AttrCPUFeatures is the set of CPU features `runsc cpu-features` reports

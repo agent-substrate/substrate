@@ -48,7 +48,6 @@ import (
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/nodepath"
-	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/otlprelay"
 	"go.ate.dev/substrate/internal/pluginsocket"
 	"go.ate.dev/substrate/internal/preview"
@@ -434,7 +433,7 @@ func main() {
 	// the worker, so the first Run/Restore on this node hits the cache.
 	// Best-effort: on failure the on-demand fetch in ensureSandboxAssets
 	// still covers correctness.
-	prewarmer := newRuntimePrewarmer(runtimes, wmService, imageCache)
+	prewarmer := newRuntimePrewarmer(runtimes, wmService)
 	go prewarmer.run(ctx)
 	// Keep a sandbox runtimes file in each local worker's directory: the
 	// runtimes of the enabled versions of its pool's SandboxConfig,
@@ -703,10 +702,9 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 
-	// The sandbox (binaries + pause image) is the runtime the control plane
-	// assigned the actor to, resolved through the index. Resolved before any
-	// on-node work, BeginStart included, so an invalid request changes
-	// nothing.
+	// The sandbox binaries are the runtime the control plane assigned the
+	// actor to, resolved through the index. Resolved before any on-node work,
+	// BeginStart included, so an invalid request changes nothing.
 	sandboxRec, err := s.advertisedRuntime(ctx, req.GetSandboxRuntime())
 	if err != nil {
 		return nil, err
@@ -771,9 +769,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 		return nil, err
 	}
-	containerSpecs, err := s.prepareOCIBundles(ctx, actorUID, actorRef,
-		req.GetSpec(), sandboxRec.PauseImage,
-	)
+	containerSpecs, err := s.prepareOCIBundles(ctx, actorUID, actorRef, req.GetSpec())
 	if err != nil {
 		return nil, err
 	}
@@ -1342,11 +1338,11 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 
-	// The sandbox (binaries + pause image) that runs the restored workload is
-	// the runtime the control plane assigned the actor to, resolved through
-	// the index. The snapshot manifests only supply the files to restore and
-	// the actor identity. Resolved before any on-node work so an invalid
-	// request changes nothing.
+	// The sandbox binaries that run the restored workload are the runtime the
+	// control plane assigned the actor to, resolved through the index. The
+	// snapshot manifests only supply the files to restore and the actor
+	// identity. Resolved before any on-node work so an invalid request changes
+	// nothing.
 	runtimeRec, err := s.advertisedRuntime(ctx, req.GetSandboxRuntime())
 	if err != nil {
 		return nil, err
@@ -1525,7 +1521,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 			return err
 		}
 		t := time.Now()
-		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage)
+		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec())
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -1548,8 +1544,8 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		return nil, err
 	}
 
-	// Tell worker to do runsc create + runsc restore for pause container and
-	// all application containers.
+	// Tell worker to do runsc create + runsc restore for the sandbox and all
+	// application containers.
 	spec, err := buildWorkerWorkloadSpec(req.GetSpec(), containerSpecs)
 	if err != nil {
 		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
@@ -1804,19 +1800,14 @@ func prepareDurableDirVolume(path string) error {
 	return nil
 }
 
-// prepareOCIBundles pulls images and assembles OCI bundles for the pause
-// container and every application container in spec, in parallel. pauseImage
-// comes from the sandbox record, not the workload spec: it is sandbox
-// configuration, and on a restore it must be the image the snapshot was taken
-// with. It is empty for sandboxes without a pause container, which get no
-// pause bundle. It returns each application container's spec, indexed like
-// spec.GetContainers().
+// prepareOCIBundles pulls images and assembles OCI bundles for every
+// application container in spec, in parallel. It returns each application
+// container's spec, indexed like spec.GetContainers().
 func (s *Atelet) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
 	actorRef resources.ActorRef,
 	spec *ateletpb.WorkloadSpec,
-	pauseImage string,
 ) ([]*ateworkerpb.ContainerSpec, error) {
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
@@ -1828,16 +1819,6 @@ func (s *Atelet) prepareOCIBundles(
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
-
-	if pauseImage != "" {
-		g.Go(func() error {
-			// pause is sandbox infra; it mounts no volumes.
-			if _, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ocispec.PauseContainer, pauseImage, nil, nil); err != nil {
-				return wrapFileSystemErr("while creating pause OCI bundle", err)
-			}
-			return nil
-		})
-	}
 
 	// Application containers.
 	containerSpecs := make([]*ateworkerpb.ContainerSpec, len(spec.GetContainers()))

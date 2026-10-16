@@ -104,7 +104,7 @@ func TestUploadSnapshotManifestLast(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	rec := sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: testPauseImage, SnapshotFiles: []string{"a", "b", "c"}}
+	rec := sandboxAssetsRecord{SandboxClass: "gvisor", SnapshotFiles: []string{"a", "b", "c"}}
 	for _, f := range rec.SnapshotFiles {
 		if err := os.WriteFile(dir+"/"+f, []byte(f), 0o600); err != nil {
 			t.Fatal(err)
@@ -180,7 +180,6 @@ func TestObjectStorePluginErrorCodeThroughAtelet(t *testing.T) {
 	}
 	rec := sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    testPauseImage,
 		SnapshotFiles: []string{"a"},
 		Fidelity:      ateattr.SnapshotFidelityMemory,
 	}
@@ -242,7 +241,7 @@ func TestObjectStorePluginErrorKeepsCredentialsOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: testPauseImage, SnapshotFiles: []string{"a"}, Fidelity: ateattr.SnapshotFidelityMemory}
+	rec := sandboxAssetsRecord{SandboxClass: "gvisor", SnapshotFiles: []string{"a"}, Fidelity: ateattr.SnapshotFidelityMemory}
 	transfers := []struct {
 		name string
 		uri  string // the URI the transfer names in its error, when it takes one
@@ -389,7 +388,6 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 	}
 	rec := sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    testPauseImage,
 		SnapshotFiles: []string{"a"},
 		Fidelity:      ateattr.SnapshotFidelityMemory,
 	}
