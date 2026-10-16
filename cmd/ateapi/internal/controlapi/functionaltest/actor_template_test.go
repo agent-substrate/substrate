@@ -407,7 +407,7 @@ func TestCreateActorTemplate_ExternalVolumesPreview(t *testing.T) {
 					}},
 					Volumes: []*ateapipb.Volume{{
 						Name:     "data",
-						External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard", Capacity: "1Gi"}},
+						External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard", CapacityBytes: 1 << 30}},
 					}},
 					Resources:      resources.CPUMemory(1000, 1<<30),
 					SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},

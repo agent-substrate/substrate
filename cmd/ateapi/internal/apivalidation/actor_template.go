@@ -22,7 +22,6 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -162,13 +161,6 @@ func ValidateCustom_ImageVolumeSource_Reference(_ context.Context, _ operation.O
 
 func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidatePinnedImage(fldPath, *value)
-}
-
-func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if _, err := resource.ParseQuantity(*value); err != nil {
-		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
-	}
-	return nil
 }
 
 // ValidateCustom_SnapshotConfig_StorageLocation ensures an

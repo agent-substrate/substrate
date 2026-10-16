@@ -1499,13 +1499,11 @@ message DurableDirVolumeSource {}
 // ExternalVolumeTemplate provisions an external volume per actor; the volume
 // lives only as long as the actor.
 message ExternalVolumeTemplate {
-  // capacity of the volume to create, in Kubernetes resource.Quantity string
-  // form (e.g. "10Gi"). Required.
+  // capacity_bytes is the size of the volume to create, in bytes. Required.
   //
   // +k8s:required
-  // +k8s:maxLength=32 # guardrail
-  // +k8s:customValidation # must parse as a resource.Quantity
-  string capacity = 1;
+  // +k8s:minimum=1
+  int64 capacity_bytes = 1;
 
   // storage_class_name names the cluster-scoped Kubernetes StorageClass to
   // create the volume from. Required.
