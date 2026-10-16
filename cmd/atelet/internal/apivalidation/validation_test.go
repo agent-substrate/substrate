@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
