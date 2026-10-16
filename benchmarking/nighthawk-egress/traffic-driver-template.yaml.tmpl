@@ -61,10 +61,8 @@ volumes:
 # Sandbox size: headroom so the load generator is not the bottleneck.
 resources:
   limits:
-  - name: cpu
-    quantity: "2"
-  - name: memory
-    quantity: 1Gi
+    cpuMillicores: 2000
+    memoryBytes: 1073741824 # 1Gi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/nighthawk/traffic-driver/

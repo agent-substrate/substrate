@@ -58,9 +58,7 @@ volumes:
 ${TEMPLATE_TRUST_BUNDLE}
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 512Mi
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-probe${FIXTURE_SUFFIX}/

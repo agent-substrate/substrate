@@ -36,10 +36,8 @@ containers:
 # Sandbox size: see agent-luna-template.yaml.tmpl.
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 2Gi
+    cpuMillicores: 1000
+    memoryBytes: 2147483648 # 2Gi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/claude-multiplex-demo/
