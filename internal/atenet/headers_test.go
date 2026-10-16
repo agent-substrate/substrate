@@ -47,3 +47,24 @@ func TestParseTargetActor(t *testing.T) {
 		})
 	}
 }
+
+func TestParsePort(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want int
+		ok   bool
+	}{
+		{in: "1", want: 1, ok: true},
+		{in: "8443", want: 8443, ok: true},
+		{in: "65535", want: 65535, ok: true},
+		{in: "0"},
+		{in: "65536"},
+		{in: "-1"},
+		{in: ""},
+		{in: "http"},
+	} {
+		if got, ok := ParsePort(tc.in); got != tc.want || ok != tc.ok {
+			t.Errorf("ParsePort(%q) = %d, %t; want %d, %t", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+}

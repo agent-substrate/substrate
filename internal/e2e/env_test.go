@@ -15,33 +15,14 @@
 package e2e
 
 import (
-	"os"
 	"reflect"
 	"testing"
 )
 
 func TestCheckEnv(t *testing.T) {
-	// Preserve original env for clean testing environment, and restore it afterwards.
-	// Since CheckEnv reads actual environment variables, we will back up and restore any keys we modify.
-	testKeys := []string{"TEST_ENV_FOO", "TEST_ENV_BAR", "TEST_ENV_EMPTY"}
-	originalVals := make(map[string]string)
-	for _, key := range testKeys {
-		if val, ok := os.LookupEnv(key); ok {
-			originalVals[key] = val
-		}
-		defer func(k string) {
-			if val, ok := originalVals[k]; ok {
-				os.Setenv(k, val)
-			} else {
-				os.Unsetenv(k)
-			}
-		}(key)
-	}
-
-	// Set up our test environment
-	os.Setenv("TEST_ENV_FOO", "value_foo")
-	os.Setenv("TEST_ENV_BAR", "value_bar")
-	os.Setenv("TEST_ENV_EMPTY", "")
+	t.Setenv("TEST_ENV_FOO", "value_foo")
+	t.Setenv("TEST_ENV_BAR", "value_bar")
+	t.Setenv("TEST_ENV_EMPTY", "")
 
 	tests := []struct {
 		name    string

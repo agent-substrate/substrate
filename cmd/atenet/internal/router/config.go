@@ -116,7 +116,7 @@ type authConfig struct {
 }
 
 // credentialProviderConfig holds the egress gateway's connection to the
-// credential provider the MITM-leg injection resolves secrets through. A
+// credential provider that credential injection resolves secrets through. A
 // non-empty Address enables injection; the rest configures the mTLS the gateway
 // dials the provider with. See cmd/atenet/internal/router/egress.
 type credentialProviderConfig struct {
@@ -186,11 +186,10 @@ type routerConfig struct {
 	// the cache.
 	EgressPolicyCacheTTL time.Duration
 
-	// CredentialProvider configures egress credential injection on the MITM leg.
-	// Only the egress gateway sets it, and only when injection is enabled: an
-	// empty CredentialProvider.Address leaves the injector disabled, so a rule
-	// that requires an injection is skipped and the request passes through
-	// without the credential. See egress.Handler.
+	// CredentialProvider configures egress credential injection. Only the
+	// egress gateway sets it, and only when injection is enabled: with an empty
+	// CredentialProvider.Address, a request matching a rule that requires
+	// injection is denied. See egress.Handler.
 	CredentialProvider credentialProviderConfig
 
 	LogLevel    string

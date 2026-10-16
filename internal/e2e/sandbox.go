@@ -39,8 +39,7 @@ func SandboxClass() string { return os.Getenv(sandboxClassEnv) }
 func IsMicroVM() bool { return SandboxClass() == SandboxClassMicroVM }
 
 // Fixture identifies an installed WorkerPool + ActorTemplate pair (both carry
-// the same name) that suites either create Actors from directly or copy the
-// resolved runtime — sandbox class, worker image, container images — out of.
+// the same name) that suites create Actors from.
 type Fixture struct {
 	Namespace string
 	Name      string
@@ -184,10 +183,7 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 		"${FIXTURE_SUFFIX}": "-" + name,
 	}
 	blocks = map[string]string{
-		"${WORKERPOOL_RUNTIME}":     "  sandboxClasses:\n  - name: gvisor",
-		"${TEMPLATE_SANDBOX_CLASS}": "",
-		// Off unless the caller opts in; see WithTrustBundle.
-		"${TEMPLATE_TRUST_BUNDLE}": "",
+		"${WORKERPOOL_RUNTIME}": "  sandboxClasses:\n  - name: gvisor",
 	}
 	if !IsMicroVM() {
 		return inline, blocks
@@ -199,8 +195,5 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 	// hack/install-microvm-deps.sh installs (configName: microvm), so a
 	// missing or stale one fails loudly. The pool only selects the class.
 	blocks["${WORKERPOOL_RUNTIME}"] = "  sandboxClasses:\n  - name: microvm"
-	// Must match the WorkerPool's: a snapshot is not portable across sandbox
-	// classes, so only same-class pools are eligible to run these actors.
-	blocks["${TEMPLATE_SANDBOX_CLASS}"] = "  sandboxClass: microvm"
 	return inline, blocks
 }

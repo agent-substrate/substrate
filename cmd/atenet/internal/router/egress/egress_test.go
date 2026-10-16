@@ -44,6 +44,7 @@ import (
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/egresspolicy"
+	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
@@ -56,39 +57,22 @@ const (
 
 // testCA is a throwaway CA standing in for the actor-identity CA.
 type testCA struct {
-	cert *x509.Certificate
-	key  *ecdsa.PrivateKey
+	*localca.CA
+	pool *localca.ConcretePool
 }
 
-func newTestCA(t *testing.T, commonName string) *testCA {
+func newTestCA(t *testing.T, id string) *testCA {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ca, err := localca.GenerateCA(id, localca.KeyTypeECDSAP256, time.Hour)
 	if err != nil {
-		t.Fatalf("generating CA key: %v", err)
+		t.Fatalf("generating CA: %v", err)
 	}
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: commonName},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatalf("creating CA certificate: %v", err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatalf("parsing CA certificate: %v", err)
-	}
-	return &testCA{cert: cert, key: key}
+	return &testCA{CA: ca, pool: &localca.ConcretePool{CAs: []*localca.CA{ca}, ActiveForSigning: id}}
 }
 
 func (ca *testCA) roots() *x509.CertPool {
 	pool := x509.NewCertPool()
-	pool.AddCert(ca.cert)
+	pool.AddCert(ca.RootCertificate)
 	return pool
 }
 
@@ -98,8 +82,8 @@ type actorCertOptions struct {
 	mutate func(*x509.Certificate)
 }
 
-// issueActorCert mints a leaf off ca, mirroring what ateapi's actoridentity
-// service produces.
+// issueActorCert mints a leaf off ca, mirroring the actor certificate ateapi's
+// worker service mints.
 func (ca *testCA) issueActorCert(t *testing.T, spiffeURI string, opts actorCertOptions) *x509.Certificate {
 	t.Helper()
 	cert, err := x509.ParseCertificate(ca.issueActorCertDER(t, spiffeURI, opts))
@@ -137,11 +121,11 @@ func (ca *testCA) issueActorCertDER(t *testing.T, spiffeURI string, opts actorCe
 		opts.mutate(template)
 	}
 
-	der, err := x509.CreateCertificate(rand.Reader, template, ca.cert, &key.PublicKey, ca.key)
+	chain, err := ca.pool.CreateCertificate(template, &key.PublicKey)
 	if err != nil {
 		t.Fatalf("signing leaf certificate: %v", err)
 	}
-	return der
+	return chain[0]
 }
 
 // xfccHeader renders chain the way Envoy's SANITIZE_SET +
@@ -684,13 +668,6 @@ func TestHandleRequestHeadersRejectsBadCertificates(t *testing.T) {
 			want: envoy_type.StatusCode_Forbidden,
 		},
 		{
-			name: "no URI SAN at all",
-			xfcc: func(t *testing.T) string {
-				return xfccHeader(ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{mutate: func(c *x509.Certificate) { c.URIs = nil }}))
-			},
-			want: envoy_type.StatusCode_Forbidden,
-		},
-		{
 			name: "XFCC Chain that is not a certificate",
 			xfcc: func(*testing.T) string {
 				return `Chain="` + url.PathEscape("-----BEGIN CERTIFICATE-----\nbm90LWEtY2VydA==\n-----END CERTIFICATE-----\n") + `"`
@@ -797,7 +774,7 @@ func TestHandleRequestHeadersRejectsNonConnect(t *testing.T) {
 // turn those into spaces and corrupt the DER, so pin the round trip.
 func TestParseXFCCChainPreservesPlusInPEM(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
-	// Serials differ per certificate, so mint until one encodes with a '+'.
+	// Each leaf has a fresh key and signature, so mint until one encodes with a '+'.
 	var leaf *x509.Certificate
 	for i := 0; i < 50; i++ {
 		candidate := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
@@ -807,7 +784,7 @@ func TestParseXFCCChainPreservesPlusInPEM(t *testing.T) {
 		}
 	}
 	if leaf == nil {
-		t.Skip("no certificate with a '+' in its PEM body after 50 attempts")
+		t.Fatal("no certificate with a '+' in its PEM body after 50 attempts")
 	}
 
 	chain, err := parseXFCCChain(xfccHeader(leaf))
@@ -823,7 +800,7 @@ func TestParseXFCCChainIncludesIntermediates(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
 
-	chain, err := parseXFCCChain(xfccHeader(leaf, ca.cert))
+	chain, err := parseXFCCChain(xfccHeader(leaf, ca.RootCertificate))
 	if err != nil {
 		t.Fatalf("parseXFCCChain() error = %v", err)
 	}

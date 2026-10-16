@@ -15,8 +15,11 @@
 package e2e
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestAtenetDataplaneEgressPolicyDenial(t *testing.T) {
@@ -60,4 +63,28 @@ envoy_http_downstream_rq_xx{envoy_response_code_class="2",envoy_http_conn_manage
 			t.Errorf("EgressConnectStats() = %+v, want %+v", got, want)
 		}
 	})
+}
+
+func TestPollParkingCount(t *testing.T) {
+	reads := []struct {
+		n   int
+		err error
+	}{{0, errors.New("scrape failed")}, {1, nil}, {2, nil}}
+	var calls int
+	read := func(context.Context) (int, error) {
+		r := reads[min(calls, len(reads)-1)]
+		calls++
+		return r.n, r.err
+	}
+
+	got, err := pollParkingCount(context.Background(), read, func(n int) bool { return n == 2 }, time.Minute, 0)
+	if err != nil || got != 2 || calls != 3 {
+		t.Errorf("pollParkingCount = %d, %v after %d reads; want 2, nil after 3", got, err, calls)
+	}
+
+	calls = 0
+	got, err = pollParkingCount(context.Background(), read, func(n int) bool { return n > 5 }, 20*time.Millisecond, time.Millisecond)
+	if err == nil || got != 2 {
+		t.Errorf("pollParkingCount = %d, %v; want the last read 2 and a timeout error", got, err)
+	}
 }

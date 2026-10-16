@@ -17,16 +17,11 @@ package egress
 import (
 	"bufio"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -474,34 +469,10 @@ func TestClientDialContextGatewayHangsUpBeforeResponding(t *testing.T) {
 
 	t.Run("HTTP/2", func(t *testing.T) {
 		ca := newTestCA(t)
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = listener.Close() })
+		gatewayAddress := serveTestRefusingGateway(t, ca, ca, 0, []string{"h2"})
+		client := newTestClient(t, ca, withDialer(dialFixedAddress(gatewayAddress)))
 
-		clientCAs := x509.NewCertPool()
-		clientCAs.AppendCertsFromPEM(ca.certPEM)
-		tlsConfig := &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			Certificates: []tls.Certificate{issueDNSCertificate(t, ca, "egress.test")},
-			ClientAuth:   tls.RequireAndVerifyClientCert,
-			ClientCAs:    clientCAs,
-			NextProtos:   []string{"h2"},
-		}
-		go func() {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			defer conn.Close()
-			tlsConn := tls.Server(conn, tlsConfig)
-			_ = tlsConn.Handshake()
-			_ = tlsConn.Close()
-		}()
-
-		client := newTestClient(t, ca, withDialer(dialFixedAddress(listener.Addr().String())))
-		_, err = client.DialContext(context.Background(), "192.0.2.10:443")
+		_, err := client.DialContext(context.Background(), "192.0.2.10:443")
 		if err == nil {
 			t.Fatal("DialContext succeeded against an HTTP/2 gateway that hung up")
 		}
@@ -663,15 +634,7 @@ func serveTestConnectGateway(t *testing.T, ca *testCA, handle func(net.Conn, *ht
 	if err != nil {
 		t.Fatal(err)
 	}
-	serverCert := issueDNSCertificate(t, ca, "egress.test")
-	clientCAs := x509.NewCertPool()
-	clientCAs.AppendCertsFromPEM(ca.certPEM)
-	tlsListener := tls.NewListener(listener, &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		Certificates: []tls.Certificate{serverCert},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    clientCAs,
-	})
+	tlsListener := tls.NewListener(listener, gatewayTLSConfig(t, ca, ca))
 	t.Cleanup(func() { _ = tlsListener.Close() })
 
 	go func() {
@@ -712,22 +675,15 @@ func serveTestH2ConnectGateway(t *testing.T, ca *testCA, handler http.Handler) (
 		},
 	}
 
-	serverCert := issueDNSCertificate(t, ca, "egress.test")
-	clientCAs := x509.NewCertPool()
-	clientCAs.AppendCertsFromPEM(ca.certPEM)
+	tlsConfig := gatewayTLSConfig(t, ca, ca)
+	tlsConfig.NextProtos = []string{"h2"}
 
 	var protocols http.Protocols
 	protocols.SetHTTP2(true)
 	server := &http.Server{
 		Handler:   handler,
 		Protocols: &protocols,
-		TLSConfig: &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			Certificates: []tls.Certificate{serverCert},
-			ClientAuth:   tls.RequireAndVerifyClientCert,
-			ClientCAs:    clientCAs,
-			NextProtos:   []string{"h2"},
-		},
+		TLSConfig: tlsConfig,
 	}
 	tlsListener := tls.NewListener(trackingListener, server.TLSConfig)
 	t.Cleanup(func() { _ = server.Close() })
@@ -777,16 +733,9 @@ func serveTestRefusingGateway(t *testing.T, serverCA, clientCA *testCA, maxVersi
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 
-	clientCAs := x509.NewCertPool()
-	clientCAs.AppendCertsFromPEM(clientCA.certPEM)
-	config := &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		MaxVersion:   maxVersion,
-		Certificates: []tls.Certificate{issueDNSCertificate(t, serverCA, "egress.test")},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    clientCAs,
-		NextProtos:   nextProtos,
-	}
+	config := gatewayTLSConfig(t, serverCA, clientCA)
+	config.MaxVersion = maxVersion
+	config.NextProtos = nextProtos
 
 	go func() {
 		conn, err := listener.Accept()
@@ -801,35 +750,16 @@ func serveTestRefusingGateway(t *testing.T, serverCA, clientCA *testCA, maxVersi
 	return listener.Addr().String()
 }
 
-func issueDNSCertificate(t *testing.T, ca *testCA, dnsName string) tls.Certificate {
+// gatewayTLSConfig is the gateway's front door: it presents a certificate for
+// egress.test from serverCA and requires a client certificate from clientCA.
+func gatewayTLSConfig(t *testing.T, serverCA, clientCA *testCA) *tls.Config {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
+	clientCAs := x509.NewCertPool()
+	clientCAs.AppendCertsFromPEM(clientCA.certPEM)
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{serverCA.sign(t, &x509.Certificate{DNSNames: []string{"egress.test"}, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    clientCAs,
 	}
-	now := time.Now()
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(now.UnixNano()),
-		NotBefore:    now.Add(-time.Minute),
-		NotAfter:     now.Add(time.Hour),
-		DNSNames:     []string{dnsName},
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, ca.cert, &key.PublicKey, ca.key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := tls.X509KeyPair(
-		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
-		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cert
 }

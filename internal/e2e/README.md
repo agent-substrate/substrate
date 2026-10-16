@@ -29,7 +29,7 @@ what CI installs on the envoy lane; see `internal/e2e/suites/egresscredinject`.
 The suites are runtime-agnostic: the same tests run against gVisor and against
 the micro-VM (kata + cloud-hypervisor) sandbox class. `E2E_SANDBOX_CLASS`
 selects which, by repointing every fixture at its variant --- see
-`e2e.CounterFixture`, `e2e.EgressFixture` and `e2e.RenderFixtureManifest` in
+`e2e.SubstrateCounterFixture`, `e2e.EgressFixture` and `e2e.RenderFixtureManifest` in
 [sandbox.go](sandbox.go). Unset means gVisor.
 
 ```shell

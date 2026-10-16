@@ -59,5 +59,5 @@ func (r *Relay) Serve(ctx context.Context, ns netns.Handle, policy PolicySource)
 	}
 	netC.egressUDP = egressUDP
 
-	return r.serveOn(ctx, &netC, policy)
+	return r.serveOn(ctx, &netC, policy), nil
 }

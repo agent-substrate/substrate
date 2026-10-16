@@ -97,6 +97,6 @@ func NewRelayForUpstreams(upstreams []string) (*Relay, error) {
 
 // serveOn serves DNS on netC's sockets, which the caller has already bound,
 // and dials upstreams with netC's dialer.
-func (r *Relay) serveOn(ctx context.Context, netC *netConn, policy PolicySource) (*Server, error) {
+func (r *Relay) serveOn(ctx context.Context, netC *netConn, policy PolicySource) *Server {
 	return newServer(ctx, &serverConfig{upstreams: r.upstreams, policy: policy}, netC)
 }

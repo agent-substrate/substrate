@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This file turns a parsed config into a running process: signer, minter,
+// This file turns a parsed config into a running process: CA pool, minter,
 // listeners, gRPC server, shutdown. The flags it reads are cmd.go's.
 
 package sdsmint

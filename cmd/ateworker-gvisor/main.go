@@ -615,11 +615,11 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 
-	if err := s.tunnel.Deactivate(ctx, workerstats.ActorAttributionFromRequest(req)); err != nil {
+	attribution := workerstats.ActorAttributionFromRequest(req)
+	if err := s.tunnel.Deactivate(ctx, attribution); err != nil {
 		return nil, err
 	}
 
-	attribution := workerstats.ActorAttributionFromRequest(req)
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor starting", attribution)
 
 	// Contract with atelet:
@@ -627,7 +627,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	//   * Correct runsc version is downloaded and placed on disk.
 	//   * All OCI bundles are set up, including for the pause container.
 
-	egress, err := s.tunnel.PrepareEgress(ctx, workerstats.ActorAttributionFromRequest(req), req.GetEgressGateway())
+	egress, err := s.tunnel.PrepareEgress(ctx, attribution, req.GetEgressGateway())
 	if err != nil {
 		return nil, err
 	}
@@ -650,7 +650,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		if retErr != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
-			if err := s.tunnel.Deactivate(cleanupCtx, workerstats.ActorAttributionFromRequest(req)); err != nil {
+			if err := s.tunnel.Deactivate(cleanupCtx, attribution); err != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", err))
 			}
 			deleteContainers(cleanupCtx, rcmd, containersToDelete, "Run")
@@ -710,10 +710,10 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
+	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), actornet.ActorVethIP, s.sandboxDialer(req.GetActorUid())); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
-	if err := s.tunnel.Activate(workerstats.ActorAttributionFromRequest(req), s.sandboxDialer(req.GetActorUid()), egress); err != nil {
+	if err := s.tunnel.Activate(attribution, s.sandboxDialer(req.GetActorUid()), egress); err != nil {
 		return nil, err
 	}
 
@@ -1139,7 +1139,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	err = wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid())))
+	err = wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, s.sandboxDialer(req.GetActorUid()))
 	timing.wakeupProbe = lap(&tLast)
 	if err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)

@@ -192,9 +192,8 @@ func (d *deltaStream) pack(name string, cert *MintedCert) (*discovery.Resource, 
 	version := cert.Serial
 
 	// Measured against this leaf's own notAfter.
-	// --leaf-cert-ttl is refused below 2m, so the subtraction is positive on the
-	// ordinary path. The floor is for the clamp, where notAfter is the CA's and
-	// can be nearer than that.
+	// --leaf-cert-ttl is refused below 2m, so the subtraction is positive; the
+	// floor is only a guard.
 	ttl := max(time.Until(cert.NotAfter)-time.Minute, time.Second)
 
 	return &discovery.Resource{

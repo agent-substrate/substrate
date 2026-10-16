@@ -17,6 +17,7 @@ package e2e
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,15 +48,7 @@ func FindRepoRoot() (string, error) {
 // to standard outputs, and fails the test if the command returns an error.
 func RunCmd(t *testing.T, name string, args ...string) {
 	t.Helper()
-	t.Logf("Running command: %s %s", name, strings.Join(args, " "))
-	cmd := exec.Command(name, args...)
-	stdoutColor := &ColorWriter{W: os.Stdout, ANSI: ansiCyan}
-	cmd.Stdout = NewIndentWriter(stdoutColor, "        ")
-	stderrColor := &ColorWriter{W: os.Stderr, ANSI: ansiRed}
-	cmd.Stderr = NewIndentWriter(stderrColor, "        ")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("Command failed: %s %s: %v", name, strings.Join(args, " "), err)
-	}
+	RunCmdWithEnv(t, nil, name, args...)
 }
 
 // RunCmdOutput executes the given command with custom environment variables
@@ -64,16 +57,8 @@ func RunCmd(t *testing.T, name string, args ...string) {
 // returns an error.
 func RunCmdOutput(t *testing.T, env []string, name string, args ...string) []byte {
 	t.Helper()
-	t.Logf("Running command: %s %s", name, strings.Join(args, " "))
-	cmd := exec.Command(name, args...)
-	cmd.Env = append(os.Environ(), env...)
 	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	stderrColor := &ColorWriter{W: os.Stderr, ANSI: ansiRed}
-	cmd.Stderr = NewIndentWriter(stderrColor, "        ")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("Command failed: %s %s: %v", name, strings.Join(args, " "), err)
-	}
+	runCmd(t, env, &stdout, name, args...)
 	return stdout.Bytes()
 }
 
@@ -81,13 +66,16 @@ func RunCmdOutput(t *testing.T, env []string, name string, args ...string) []byt
 // appended to the current process environment, and fails the test if it returns an error.
 func RunCmdWithEnv(t *testing.T, env []string, name string, args ...string) {
 	t.Helper()
-	t.Logf("Running command with custom env: %s %s", name, strings.Join(args, " "))
+	runCmd(t, env, NewIndentWriter(&ColorWriter{W: os.Stdout, ANSI: ansiCyan}, "        "), name, args...)
+}
+
+func runCmd(t *testing.T, env []string, stdout io.Writer, name string, args ...string) {
+	t.Helper()
+	t.Logf("Running command: %s %s", name, strings.Join(args, " "))
 	cmd := exec.Command(name, args...)
 	cmd.Env = append(os.Environ(), env...)
-	stdoutColor := &ColorWriter{W: os.Stdout, ANSI: ansiCyan}
-	cmd.Stdout = NewIndentWriter(stdoutColor, "        ")
-	stderrColor := &ColorWriter{W: os.Stderr, ANSI: ansiRed}
-	cmd.Stderr = NewIndentWriter(stderrColor, "        ")
+	cmd.Stdout = stdout
+	cmd.Stderr = NewIndentWriter(&ColorWriter{W: os.Stderr, ANSI: ansiRed}, "        ")
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("Command failed: %s %s: %v", name, strings.Join(args, " "), err)
 	}

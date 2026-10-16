@@ -17,7 +17,6 @@ package router
 import (
 	"net"
 	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -58,23 +57,9 @@ func TestXdsListenAddressIsLoopback(t *testing.T) {
 func TestXdsManifestIsLoopbackOnly(t *testing.T) {
 	pod := findDeployment(t, routerManifestPath, "atenet-router").Spec.Template.Spec
 
-	xdsPort := 0
-	for _, c := range pod.Containers {
-		if c.Name != "atenet-router" {
-			continue
-		}
-		for _, a := range c.Args {
-			if v, ok := strings.CutPrefix(a, "--port-xds="); ok {
-				n, err := strconv.Atoi(v)
-				if err != nil {
-					t.Fatalf("--port-xds=%q is not a number: %v", v, err)
-				}
-				xdsPort = n
-			}
-		}
-	}
-	if xdsPort == 0 {
-		t.Fatal("the atenet-router container sets no --port-xds; the manifest changed shape and this test is checking nothing")
+	xdsPort, err := routerManifestFlags(t).GetInt("port-xds")
+	if err != nil {
+		t.Fatalf("reading --port-xds from the manifest args: %v", err)
 	}
 
 	b := parseEnvoyAdminBootstrap(t, envoyConfigFrom(t, routerManifestPath, "atenet-router-envoy-config"))

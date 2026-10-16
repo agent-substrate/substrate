@@ -15,7 +15,6 @@
 package e2e
 
 import (
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -45,12 +44,7 @@ func TestProbeTemplate_TrustBundle(t *testing.T) {
 			// Strict decoding is what proves the fragment landed at the right
 			// depth: misindented, it would fail the protojson decode or parse
 			// as some other field.
-			inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", cfg.trustBundles)
-			rendered, err := os.ReadFile(renderManifest(t, probeManifests.Template, inline, blocks))
-			if err != nil {
-				t.Fatalf("reading rendered manifest: %v", err)
-			}
-			templates := decodeSubstrateTemplates(t, rendered)
+			templates := renderTemplates(t, probeManifests.Template, cfg.trustBundles)
 			if len(templates) != 1 {
 				t.Fatalf("probe template manifest yields %d documents, want 1", len(templates))
 			}

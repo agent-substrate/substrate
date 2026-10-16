@@ -51,7 +51,6 @@ const (
 // actorEgressPolicy supplies an actor's egress policy to its DNS relay.
 type actorEgressPolicy struct {
 	fetch func(context.Context) (*ateletpb.EgressPolicy, error)
-	ttl   time.Duration
 	now   func() time.Time
 	// log identifies the actor on the source's records.
 	log *slog.Logger
@@ -82,7 +81,6 @@ func (t *Tunnel) ActorEgressPolicy(actor resources.ActorAttribution) dns.PolicyS
 			defer conn.Close()
 			return getEgressPolicy(ctx, ateletpb.NewWorkerSupportClient(conn), actor.Ref)
 		},
-		ttl: egressPolicyTTL,
 		now: time.Now,
 		log: slog.New(slog.Default().Handler().WithAttrs(ateattr.ActorLogAttrs(actor))),
 	}
@@ -177,7 +175,7 @@ func (p *actorEgressPolicy) record(ctx context.Context, policy *ateletpb.EgressP
 	p.nextStaleWarn = time.Time{}
 	p.fetched = true
 	p.policy = policy
-	p.expires = now.Add(p.ttl)
+	p.expires = now.Add(egressPolicyTTL)
 	return policy, nil
 }
 

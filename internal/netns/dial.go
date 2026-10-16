@@ -95,9 +95,7 @@ func validateDialTarget(network, addr string) error {
 func with(targetNS Handle, run func(restore func() error) error) error {
 	var resultErr error
 	var done sync.WaitGroup
-	done.Add(1)
-	go func() {
-		defer done.Done()
+	done.Go(func() {
 		runtime.LockOSThread()
 		originalNS, err := vishnetns.Get()
 		if err != nil {
@@ -129,7 +127,7 @@ func with(targetNS Handle, run func(restore func() error) error) error {
 		if err := restore(); err != nil {
 			resultErr = err
 		}
-	}()
+	})
 	done.Wait()
 	return resultErr
 }

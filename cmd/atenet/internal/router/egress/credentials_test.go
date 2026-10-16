@@ -236,7 +236,7 @@ func TestInjectionDenials(t *testing.T) {
 			want:         envoy_type.StatusCode_ServiceUnavailable,
 		},
 	}
-	for _, leg := range []string{extproc.EgressTLSMITMFilterChainName, extproc.EgressCleartextFilterChainName} {
+	for _, leg := range requestLegs {
 		t.Run(leg, func(t *testing.T) {
 			for _, tc := range tests {
 				t.Run(tc.name, func(t *testing.T) {

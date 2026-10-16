@@ -55,7 +55,7 @@ type minterOptions struct {
 // defaultTTL for leaf cert lifetime.
 const defaultTTL = 15 * time.Minute
 
-// newMinter builds a minter over signer.
+// newMinter builds a minter that signs from pool.
 func newMinter(pool localca.Pool, opts minterOptions) (*minter, error) {
 	if opts.TTL <= 0 {
 		opts.TTL = defaultTTL

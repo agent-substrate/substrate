@@ -25,7 +25,6 @@ import (
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	setfilterstatecommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
 	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
-	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	setfilterstatenetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
 	tcpproxyv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
@@ -48,14 +47,7 @@ func upstreamConnectSnapshot(t *testing.T) *cachev3.Snapshot {
 	server.SetConnectPorts(8081, 0)
 	server.SetUpstreamTls("/run/bundle.pem", "/run/trust.pem")
 	server.SetUpstreamConnect(true)
-	if err := server.UpdateSnapshot(); err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
-	res, err := server.snapshot.GetSnapshot(NodeID)
-	if err != nil {
-		t.Fatalf("Failed to get snapshot: %v", err)
-	}
-	snap := res.(*cachev3.Snapshot)
+	snap := publishedSnapshot(t, server)
 	if err := snap.Consistent(); err != nil {
 		t.Fatalf("Integrity check failed on snapshot: %v", err)
 	}
@@ -113,11 +105,7 @@ func TestUpstreamConnectFlag(t *testing.T) {
 			if err != nil {
 				t.Fatalf("newEnvoyXdsServer: %v", err)
 			}
-			res, err := x.snapshot.GetSnapshot(NodeID)
-			if err != nil {
-				t.Fatalf("Failed to get snapshot: %v", err)
-			}
-			snap := res.(*cachev3.Snapshot)
+			snap := currentSnapshot(t, x)
 			if err := snap.Consistent(); err != nil {
 				t.Fatalf("Integrity check failed on snapshot: %v", err)
 			}
@@ -176,11 +164,7 @@ func TestXdsServer_UpstreamConnectResources(t *testing.T) {
 	// tunnel by it. The worker identity filter follows it (see
 	// TestXdsServer_WorkerIdentityFilter).
 	for _, name := range []string{IngressHTTPListener, MainInternalName} {
-		hcm := &hcmv3.HttpConnectionManager{}
-		if err := listeners[name].(*listenerv3.Listener).GetFilterChains()[0].GetFilters()[0].GetTypedConfig().UnmarshalTo(hcm); err != nil {
-			t.Fatalf("listener %s: unmarshal HCM: %v", name, err)
-		}
-		filters := hcm.GetHttpFilters()
+		filters := listenerHCM(t, listeners[name].(*listenerv3.Listener)).GetHttpFilters()
 		var names []string
 		for _, f := range filters {
 			names = append(names, f.GetName())

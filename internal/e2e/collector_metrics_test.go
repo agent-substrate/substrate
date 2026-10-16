@@ -15,7 +15,11 @@
 package e2e
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -255,5 +259,30 @@ func TestStatesNotAdvanced(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFetchMetrics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/metrics" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("no such page"))
+			return
+		}
+		_, _ = w.Write([]byte(sampleScrape))
+	}))
+	t.Cleanup(server.Close)
+
+	got, err := fetchMetrics(context.Background(), "collector", server.URL+"/metrics")
+	if err != nil {
+		t.Fatalf("fetchMetrics: %v", err)
+	}
+	if got != sampleScrape {
+		t.Errorf("fetchMetrics body = %q, want the served scrape", got)
+	}
+
+	_, err = fetchMetrics(context.Background(), "collector", server.URL+"/other")
+	if err == nil || !strings.Contains(err.Error(), "collector metrics returned 404: no such page") {
+		t.Errorf("fetchMetrics on a 404 = %v, want an error carrying the status and body", err)
 	}
 }

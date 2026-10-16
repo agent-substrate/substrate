@@ -67,7 +67,9 @@ type Config struct {
 	// credential broker connection. It names atelet's namespace, not this
 	// worker's, so it is configured rather than derived from the downward API.
 	BrokerIdentity string
-	// EgressListenAddress receives transparently intercepted actor egress TCP.
+	// EgressListenAddress supplies only its port, which each sandbox redirects
+	// actor egress TCP to. It is never bound: atunnel serves egress inside each
+	// sandbox's gateway namespace.
 	EgressListenAddress string
 	// EgressTrustBundle verifies the remote egress gateway's serving cert.
 	EgressTrustBundle string
@@ -159,13 +161,13 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 	}
 
 	return &Tunnel{
-			Ingress:    ingressServer,
-			Egress:     egressProxy,
-			EgressPort: egressPort,
-			DNSRelay:   dnsRelay,
-			cfg:        cfg,
-			ateletTLS:  ateletTLS},
-		nil
+		Ingress:    ingressServer,
+		Egress:     egressProxy,
+		EgressPort: egressPort,
+		DNSRelay:   dnsRelay,
+		cfg:        cfg,
+		ateletTLS:  ateletTLS,
+	}, nil
 }
 
 // serve listens on address and runs serveFn on it, exiting the process if it

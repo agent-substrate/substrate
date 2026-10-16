@@ -99,9 +99,8 @@ type Handler struct {
 // trusted_ca; see verifyActorCertificate for why it is checked again here.
 // policyCacheTTL of 0 fetches the policy on every callout.
 //
-// provider resolves an allowed rule's credential_uri injections on the
-// TLS-terminated MITM leg; nil leaves them off, so a request that needs one is
-// denied. Actor JWT injections need no provider. providerName, when set, is
+// provider resolves an allowed rule's credential_uri injections; nil leaves
+// them off, so a request that needs one is denied. Actor JWT injections need no provider. providerName, when set, is
 // the provider this gateway serves; a credential URI naming another provider
 // is refused.
 func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
@@ -153,7 +152,7 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 			"egress unavailable: no actor-identity CA configured")
 	}
 
-	actorRef, err := h.authenticateActorCertificate(md)
+	ref, err := h.authenticateActorCertificate(md)
 	if err != nil {
 		// The body stays generic on purpose: an actor that fails authentication
 		// has not proven it is anyone, so it gets no detail about why. The
@@ -164,11 +163,9 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 			"egress denied: invalid actor certificate")
 	}
 
-	if err := h.validateActor(ctx, actorRef); err != nil {
+	if err := h.validateActor(ctx, ref); err != nil {
 		return extproc.Result{}, err
 	}
-
-	ref := resources.ActorRef{Atespace: actorRef.Atespace, Name: actorRef.Name}
 
 	// atunnel always sends the address the actor's kernel dialed, never a
 	// name. Refuse a name here, where there is still a response to do it with.
@@ -274,9 +271,7 @@ func (h *Handler) lookupPolicy(ctx context.Context, leg string, ref resources.Ac
 func (h *Handler) validateActor(ctx context.Context, actorRef resources.ActorRef) error {
 	// Confirm the certified actor still exists.
 	// TODO: this can cause heavy load on ate api server. Change it based on https://github.com/agent-substrate/substrate/issues/592.
-	actor, err := h.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
-	})
+	actor, err := h.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef.ToObjectRef()})
 	if err != nil {
 		return mapEgressIdentityError(actorRef.Atespace, actorRef.Name, err)
 	}

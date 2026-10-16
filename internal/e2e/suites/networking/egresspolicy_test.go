@@ -348,19 +348,7 @@ func fetchThroughEgressActorUntil(t *testing.T, ctx context.Context, router *e2e
 // dataplane.
 func waitForActorRoute(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		response, err := router.Get(ctx, actorRef, "/readyz")
-		if err != nil {
-			t.Fatalf("GET /readyz on the egress Actor through ingress: %v", err)
-		}
-		response.Body.Close()
-		if response.StatusCode == http.StatusOK {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the egress Actor's route did not come up: GET /readyz returned HTTP %d", response.StatusCode)
-		}
-		time.Sleep(time.Second)
-	}
+	waitForRouteReady(t, "GET /readyz on the egress Actor through ingress", func() (*http.Response, error) {
+		return router.Get(ctx, actorRef, "/readyz")
+	})
 }

@@ -124,7 +124,8 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 	}
 	// Registered before the golden wait so a template whose golden never
 	// builds still gets cleaned up; the actors are gone by then (test-body
-	// defers run before cleanups).
+	// defers, and cleanups registered after this one such as
+	// e2e.CreateActor's, run first).
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()

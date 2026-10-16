@@ -92,7 +92,6 @@ func newTestSource(fetch func(context.Context) (*ateletpb.EgressPolicy, error)) 
 	clock := &fakeClock{t: time.Unix(1_000_000, 0)}
 	return &actorEgressPolicy{
 		fetch: fetch,
-		ttl:   egressPolicyTTL,
 		now:   clock.now,
 		log:   slog.New(slog.DiscardHandler),
 	}, clock

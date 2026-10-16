@@ -109,119 +109,125 @@ func TestTCPOriginalDestinationPreservesErrno(t *testing.T) {
 	}
 }
 
+// originalDstFamily is one IP family's addressing for the redirect test: the
+// veth's two ends, and where nftables finds the source address in that
+// family's header.
+type originalDstFamily struct {
+	name    string
+	network string
+	table   nftables.TableFamily
+	// linkSuffix keeps the two families' veth names apart.
+	linkSuffix      string
+	hostIP, actorIP net.IP
+	mask            net.IPMask
+	addrFlags       int
+	// srcOffset and srcLen locate the source address in the IP header.
+	srcOffset, srcLen uint32
+}
+
+// originalDstFamilies derives each family's addresses from the PID so
+// concurrent test processes do not try to use the same host-side address.
+func originalDstFamilies() []originalDstFamily {
+	pid := os.Getpid()
+	// One of the /30s in 198.18.0.0/16.
+	network := uint16(pid % (1 << 14))
+	thirdOctet := byte(network >> 6)
+	fourthOctet := byte(network&0x3f) << 2
+	return []originalDstFamily{
+		{
+			name:      "IPv4",
+			network:   "tcp4",
+			table:     nftables.TableFamilyIPv4,
+			hostIP:    net.IPv4(198, 18, thirdOctet, fourthOctet+1),
+			actorIP:   net.IPv4(198, 18, thirdOctet, fourthOctet+2),
+			mask:      net.CIDRMask(30, 32),
+			srcOffset: 12,
+			srcLen:    4,
+		},
+		{
+			name:       "IPv6",
+			network:    "tcp6",
+			table:      nftables.TableFamilyIPv6,
+			linkSuffix: "6",
+			hostIP:     net.ParseIP(fmt.Sprintf("fd00:198:18:%x::1", uint16(pid))),
+			actorIP:    net.ParseIP(fmt.Sprintf("fd00:198:18:%x::2", uint16(pid))),
+			mask:       net.CIDRMask(64, 128),
+			// This isolated veth has no competing IPv6 peers. Suppress DAD so
+			// the address can be bound immediately instead of remaining
+			// tentative while the test is trying to start its listener.
+			addrFlags: unix.IFA_F_NODAD,
+			srcOffset: 8,
+			srcLen:    16,
+		},
+	}
+}
+
+// Model the production path rather than redirecting a locally generated
+// connection through OUTPUT. Actor egress enters the worker netns through a
+// veth and is redirected in PREROUTING; that is the path on which Linux
+// preserves SO_ORIGINAL_DST for atunnel.
 func TestTCPOriginalDestination(t *testing.T) {
 	roottest.Require(t, "CAP_NET_ADMIN + CAP_SYS_ADMIN for an actor-like network namespace and nftables REDIRECT rule")
 
-	// Model the production path rather than redirecting a locally generated
-	// connection through OUTPUT. Actor egress enters the worker netns through a
-	// veth and is redirected in PREROUTING; that is the path on which Linux
-	// preserves SO_ORIGINAL_DST for atunnel.
-	actorNS := newTestNetNS(t)
-	withTestWorkerNS(t, func() {
-		actorIP, hostIP := setupTestVeth(t, actorNS)
-		// targetListener reserves the port the actor intends to reach. The NAT rule
-		// below must prevent connections from reaching it.
-		//
-		// redirectListener represents atunnel's local egress listener. It receives
-		// the redirected connection and is therefore the connection on which we ask
-		// Linux for the original destination.
-		redirectListener := listenTCP(t, hostIP)
-		defer redirectListener.Close()
-		targetListener := listenTCP(t, hostIP)
-		defer targetListener.Close()
-		targetPort := targetListener.Addr().(*net.TCPAddr).Port
+	for _, family := range originalDstFamilies() {
+		t.Run(family.name, func(t *testing.T) {
+			actorNS := newTestNetNS(t)
+			withTestWorkerNS(t, func() {
+				setupTestVeth(t, family, actorNS)
+				// targetListener reserves the port the actor intends to reach. The NAT rule
+				// below must prevent connections from reaching it.
+				//
+				// redirectListener represents atunnel's local egress listener. It receives
+				// the redirected connection and is therefore the connection on which we ask
+				// Linux for the original destination.
+				redirectListener := listenTCP(t, family)
+				defer redirectListener.Close()
+				targetListener := listenTCP(t, family)
+				defer targetListener.Close()
+				targetPort := targetListener.Addr().(*net.TCPAddr).Port
 
-		table := &nftables.Table{Family: nftables.TableFamilyIPv4, Name: fmt.Sprintf("atunnel_original_dst_test_%d", os.Getpid())}
-		installOriginalDstRedirect(t, table, actorIP, targetPort, redirectListener.Addr().(*net.TCPAddr).Port)
+				installOriginalDstRedirect(t, family, targetPort, redirectListener.Addr().(*net.TCPAddr).Port)
 
-		clientDone := make(chan error, 1)
-		go func() {
-			// From the actor's perspective this is an ordinary connection to
-			// hostIP:targetPort. The worker's PREROUTING rule redirects it before
-			// it reaches the host network stack's local delivery path.
-			clientDone <- netns.Do(context.Background(), actorNS, func(context.Context) error {
-				conn, err := net.DialTimeout("tcp4", net.JoinHostPort(hostIP.String(), fmt.Sprint(targetPort)), 10*time.Second)
-				if err == nil {
-					_ = conn.Close()
+				clientDone := make(chan error, 1)
+				go func() {
+					// From the actor's perspective this is an ordinary connection to
+					// hostIP:targetPort. The worker's PREROUTING rule redirects it before
+					// it reaches the host network stack's local delivery path.
+					clientDone <- netns.Do(context.Background(), actorNS, func(context.Context) error {
+						conn, err := net.DialTimeout(family.network, net.JoinHostPort(family.hostIP.String(), fmt.Sprint(targetPort)), 10*time.Second)
+						if err == nil {
+							_ = conn.Close()
+						}
+						return err
+					})
+				}()
+
+				if err := redirectListener.(*net.TCPListener).SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+					t.Fatal(err)
 				}
-				return err
-			})
-		}()
-
-		if err := redirectListener.(*net.TCPListener).SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-			t.Fatal(err)
-		}
-		redirected, err := redirectListener.Accept()
-		if err != nil {
-			t.Fatalf("accepting redirected connection: %v", err)
-		}
-		defer redirected.Close()
-
-		// The accepted socket is addressed to redirectListener, but the kernel's
-		// SO_ORIGINAL_DST record must still contain the destination chosen by the
-		// actor before nftables rewrote it.
-		got, err := TCPOriginalDestination(redirected)
-		if err != nil {
-			t.Fatalf("TCPOriginalDestination: %v", err)
-		}
-		want := net.JoinHostPort(hostIP.String(), fmt.Sprint(targetPort))
-		if got != want {
-			t.Errorf("original destination = %q, want %q", got, want)
-		}
-		if err := <-clientDone; err != nil {
-			t.Fatalf("dialing redirected connection: %v", err)
-		}
-	})
-}
-
-func TestTCPOriginalDestinationIPv6(t *testing.T) {
-	roottest.Require(t, "CAP_NET_ADMIN + CAP_SYS_ADMIN for an actor-like network namespace and nftables REDIRECT rule")
-
-	actorNS := newTestNetNS(t)
-	withTestWorkerNS(t, func() {
-		actorIP, hostIP := setupTestIPv6Veth(t, actorNS)
-		redirectListener := listenTCP6(t, hostIP)
-		defer redirectListener.Close()
-		targetListener := listenTCP6(t, hostIP)
-		defer targetListener.Close()
-		targetPort := targetListener.Addr().(*net.TCPAddr).Port
-
-		table := &nftables.Table{Family: nftables.TableFamilyIPv6, Name: fmt.Sprintf("atunnel_original_dst_ipv6_test_%d", os.Getpid())}
-		installOriginalDstIPv6Redirect(t, table, actorIP, targetPort, redirectListener.Addr().(*net.TCPAddr).Port)
-
-		clientDone := make(chan error, 1)
-		go func() {
-			clientDone <- netns.Do(context.Background(), actorNS, func(context.Context) error {
-				conn, err := net.DialTimeout("tcp6", net.JoinHostPort(hostIP.String(), fmt.Sprint(targetPort)), 10*time.Second)
-				if err == nil {
-					_ = conn.Close()
+				redirected, err := redirectListener.Accept()
+				if err != nil {
+					t.Fatalf("accepting redirected connection: %v", err)
 				}
-				return err
+				defer redirected.Close()
+
+				// The accepted socket is addressed to redirectListener, but the kernel's
+				// SO_ORIGINAL_DST record must still contain the destination chosen by the
+				// actor before nftables rewrote it.
+				got, err := TCPOriginalDestination(redirected)
+				if err != nil {
+					t.Fatalf("TCPOriginalDestination: %v", err)
+				}
+				want := net.JoinHostPort(family.hostIP.String(), fmt.Sprint(targetPort))
+				if got != want {
+					t.Errorf("original destination = %q, want %q", got, want)
+				}
+				if err := <-clientDone; err != nil {
+					t.Fatalf("dialing redirected connection: %v", err)
+				}
 			})
-		}()
-
-		if err := redirectListener.(*net.TCPListener).SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-			t.Fatal(err)
-		}
-		redirected, err := redirectListener.Accept()
-		if err != nil {
-			t.Fatalf("accepting redirected IPv6 connection: %v", err)
-		}
-		defer redirected.Close()
-
-		// This assertion captures the IPv6 behavior required by #686.
-		got, err := TCPOriginalDestination(redirected)
-		if err != nil {
-			t.Fatalf("TCPOriginalDestination: %v", err)
-		}
-		want := net.JoinHostPort(hostIP.String(), fmt.Sprint(targetPort))
-		if got != want {
-			t.Errorf("original IPv6 destination = %q, want %q", got, want)
-		}
-		if err := <-clientDone; err != nil {
-			t.Fatalf("dialing redirected IPv6 connection: %v", err)
-		}
-	})
+		})
+	}
 }
 
 // withTestWorkerNS runs the worker half of the test in a private namespace.
@@ -243,9 +249,6 @@ func newTestNetNS(t *testing.T) netns.Handle {
 	name := fmt.Sprintf("atunnel-original-dst-%d-%d", os.Getpid(), atomic.AddUint64(&testNetNSSequence, 1))
 	ns, err := netns.CreateNamed(name)
 	if err != nil {
-		if errors.Is(err, unix.EPERM) || strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("needs CAP_SYS_ADMIN to create network namespace: %v", err)
-		}
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -257,14 +260,13 @@ func newTestNetNS(t *testing.T) netns.Handle {
 	return ns
 }
 
-func setupTestVeth(t *testing.T, actorNS netns.Handle) (actorIP, hostIP net.IP) {
+// setupTestVeth joins the current namespace to actorNS with a veth carrying
+// the family's addresses, the actor end inside actorNS.
+func setupTestVeth(t *testing.T, family originalDstFamily, actorNS netns.Handle) {
 	t.Helper()
-	hostName := fmt.Sprintf("atod%d", os.Getpid())
-	peerName := fmt.Sprintf("atop%d", os.Getpid())
+	hostName := fmt.Sprintf("atod%s%d", family.linkSuffix, os.Getpid())
+	peerName := fmt.Sprintf("atop%s%d", family.linkSuffix, os.Getpid())
 	if err := netlink.LinkAdd(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: hostName}, PeerName: peerName}); err != nil {
-		if errors.Is(err, unix.EPERM) || strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("needs CAP_NET_ADMIN to create veth: %v", err)
-		}
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -278,14 +280,7 @@ func setupTestVeth(t *testing.T, actorNS netns.Handle) (actorIP, hostIP net.IP) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Allocate one of the /30s in 198.18.0.0/16 from the PID so concurrent
-	// test processes do not try to use the same host-side address.
-	network := uint16(os.Getpid() % (1 << 14))
-	thirdOctet := byte(network >> 6)
-	fourthOctet := byte(network&0x3f) << 2
-	hostIP = net.IPv4(198, 18, thirdOctet, fourthOctet+1)
-	actorIP = net.IPv4(198, 18, thirdOctet, fourthOctet+2)
-	if err := netlink.AddrAdd(hostLink, &netlink.Addr{IPNet: &net.IPNet{IP: hostIP, Mask: net.CIDRMask(30, 32)}}); err != nil {
+	if err := netlink.AddrAdd(hostLink, &netlink.Addr{IPNet: &net.IPNet{IP: family.hostIP, Mask: family.mask}, Flags: family.addrFlags}); err != nil {
 		t.Fatal(err)
 	}
 	if err := netlink.LinkSetUp(hostLink); err != nil {
@@ -311,100 +306,34 @@ func setupTestVeth(t *testing.T, actorNS netns.Handle) (actorIP, hostIP net.IP) 
 		if err != nil {
 			return err
 		}
-		if err := netlink.AddrAdd(link, &netlink.Addr{IPNet: &net.IPNet{IP: actorIP, Mask: net.CIDRMask(30, 32)}}); err != nil {
+		if err := netlink.AddrAdd(link, &netlink.Addr{IPNet: &net.IPNet{IP: family.actorIP, Mask: family.mask}, Flags: family.addrFlags}); err != nil {
 			return err
 		}
 		return netlink.LinkSetUp(link)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return actorIP, hostIP
 }
 
-func listenTCP(t *testing.T, hostIP net.IP) net.Listener {
+func listenTCP(t *testing.T, family originalDstFamily) net.Listener {
 	t.Helper()
-	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: hostIP, Port: 0})
+	listener, err := net.ListenTCP(family.network, &net.TCPAddr{IP: family.hostIP, Port: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return listener
 }
 
-func setupTestIPv6Veth(t *testing.T, actorNS netns.Handle) (actorIP, hostIP net.IP) {
+func installOriginalDstRedirect(t *testing.T, family originalDstFamily, targetPort, redirectPort int) {
 	t.Helper()
-	hostName := fmt.Sprintf("atod6%d", os.Getpid())
-	peerName := fmt.Sprintf("atop6%d", os.Getpid())
-	if err := netlink.LinkAdd(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: hostName}, PeerName: peerName}); err != nil {
-		if errors.Is(err, unix.EPERM) || strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("needs CAP_NET_ADMIN to create veth: %v", err)
-		}
-		t.Fatal(err)
+	// Restrict the rule to this test's actor so the temporary table cannot
+	// affect unrelated local TCP traffic.
+	actorIP := family.actorIP.To16()
+	if family.table == nftables.TableFamilyIPv4 {
+		actorIP = family.actorIP.To4()
 	}
-	t.Cleanup(func() {
-		if link, err := netlink.LinkByName(hostName); err == nil {
-			if err := netlink.LinkDel(link); err != nil {
-				t.Errorf("deleting test IPv6 veth: %v", err)
-			}
-		}
-	})
-	hostLink, err := netlink.LinkByName(hostName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prefix := uint16(os.Getpid())
-	hostIP = net.ParseIP(fmt.Sprintf("fd00:198:18:%x::1", prefix))
-	actorIP = net.ParseIP(fmt.Sprintf("fd00:198:18:%x::2", prefix))
-	// This isolated veth has no competing IPv6 peers. Suppress DAD so the
-	// address can be bound immediately instead of remaining tentative while
-	// the test is trying to start its listener.
-	if err := netlink.AddrAdd(hostLink, &netlink.Addr{IPNet: &net.IPNet{IP: hostIP, Mask: net.CIDRMask(64, 128)}, Flags: unix.IFA_F_NODAD}); err != nil {
-		t.Fatal(err)
-	}
-	if err := netlink.LinkSetUp(hostLink); err != nil {
-		t.Fatal(err)
-	}
-	peer, err := netlink.LinkByName(peerName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := netlink.LinkSetNsFd(peer, int(actorNS)); err != nil {
-		t.Fatal(err)
-	}
-	if err := netns.Do(context.Background(), actorNS, func(context.Context) error {
-		lo, err := netlink.LinkByName("lo")
-		if err != nil {
-			return err
-		}
-		if err := netlink.LinkSetUp(lo); err != nil {
-			return err
-		}
-		link, err := netlink.LinkByName(peerName)
-		if err != nil {
-			return err
-		}
-		if err := netlink.AddrAdd(link, &netlink.Addr{IPNet: &net.IPNet{IP: actorIP, Mask: net.CIDRMask(64, 128)}, Flags: unix.IFA_F_NODAD}); err != nil {
-			return err
-		}
-		return netlink.LinkSetUp(link)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return actorIP, hostIP
-}
-
-func listenTCP6(t *testing.T, hostIP net.IP) net.Listener {
-	t.Helper()
-	listener, err := net.ListenTCP("tcp6", &net.TCPAddr{IP: hostIP, Port: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return listener
-}
-
-func installOriginalDstRedirect(t *testing.T, table *nftables.Table, actorIP net.IP, targetPort, redirectPort int) {
-	t.Helper()
 	c := &nftables.Conn{}
-	c.AddTable(table)
+	table := c.AddTable(&nftables.Table{Family: family.table, Name: fmt.Sprintf("atunnel_original_dst_%s_test_%d", strings.ToLower(family.name), os.Getpid())})
 	chain := c.AddChain(&nftables.Chain{
 		Name:     "prerouting",
 		Table:    table,
@@ -418,10 +347,8 @@ func installOriginalDstRedirect(t *testing.T, table *nftables.Table, actorIP net
 		Exprs: []expr.Any{
 			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
 			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.IPPROTO_TCP}},
-			// Restrict the rule to this test's actor so the temporary table cannot
-			// affect unrelated local TCP traffic.
-			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 12, Len: 4},
-			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: actorIP.To4()},
+			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: family.srcOffset, Len: family.srcLen},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: actorIP},
 			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: binaryutil.BigEndian.PutUint16(uint16(targetPort))},
 			&expr.Immediate{Register: 1, Data: binaryutil.BigEndian.PutUint16(uint16(redirectPort))},
@@ -429,43 +356,6 @@ func installOriginalDstRedirect(t *testing.T, table *nftables.Table, actorIP net
 		},
 	})
 	if err := c.Flush(); err != nil {
-		if errors.Is(err, unix.EPERM) || strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("needs CAP_NET_ADMIN to install nftables rule: %v", err)
-		}
 		t.Fatalf("installing nftables redirect: %v", err)
-	}
-}
-
-func installOriginalDstIPv6Redirect(t *testing.T, table *nftables.Table, actorIP net.IP, targetPort, redirectPort int) {
-	t.Helper()
-	c := &nftables.Conn{}
-	c.AddTable(table)
-	chain := c.AddChain(&nftables.Chain{
-		Name:     "prerouting",
-		Table:    table,
-		Type:     nftables.ChainTypeNAT,
-		Hooknum:  nftables.ChainHookPrerouting,
-		Priority: nftables.ChainPriorityNATDest,
-	})
-	c.AddRule(&nftables.Rule{
-		Table: table,
-		Chain: chain,
-		Exprs: []expr.Any{
-			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
-			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.IPPROTO_TCP}},
-			// An IPv6 source address begins eight bytes into the IPv6 header.
-			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 8, Len: 16},
-			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: actorIP.To16()},
-			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
-			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: binaryutil.BigEndian.PutUint16(uint16(targetPort))},
-			&expr.Immediate{Register: 1, Data: binaryutil.BigEndian.PutUint16(uint16(redirectPort))},
-			&expr.Redir{RegisterProtoMin: 1},
-		},
-	})
-	if err := c.Flush(); err != nil {
-		if errors.Is(err, unix.EPERM) || strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("needs CAP_NET_ADMIN to install IPv6 nftables rule: %v", err)
-		}
-		t.Fatalf("installing IPv6 nftables redirect: %v", err)
 	}
 }

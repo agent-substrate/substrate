@@ -16,9 +16,6 @@ package capabilities
 
 import (
 	"context"
-	"encoding/json"
-	"io"
-	"net/http"
 	"slices"
 	"testing"
 
@@ -144,39 +141,18 @@ func deployFixture(t *testing.T, ctx context.Context, clients *e2e.Clients, buck
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, template, id string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: namespace, Name: id},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: namespace, Name: template},
-	}}); err != nil {
-		t.Fatalf("CreateActor %q: %v", id, err)
-	}
-	t.Cleanup(func() {
-		// DeleteActor requires the actor to be suspended.
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id}})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id}})
-	})
-
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id},
-	}); err != nil {
+	ref := &ateapipb.ObjectRef{Atespace: namespace, Name: id}
+	e2e.CreateActor(t, ctx, clients, ref, &ateapipb.ObjectRef{Atespace: namespace, Name: template})
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}
 }
 
 func probeCapabilities(t *testing.T, ctx context.Context, rc *e2e.RouterClient, namespace, id string) capabilitiesResponse {
 	t.Helper()
-	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: namespace, Name: id}, "/capabilities")
-	if err != nil {
-		t.Fatalf("GET /capabilities for %q: %v", id, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET /capabilities for %q: status %d, body %q", id, resp.StatusCode, body)
-	}
 	var out capabilitiesResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decoding /capabilities for %q: %v", id, err)
+	if err := rc.GetJSON(ctx, resources.ActorRef{Atespace: namespace, Name: id}, "/capabilities", &out); err != nil {
+		t.Fatal(err)
 	}
 	return out
 }

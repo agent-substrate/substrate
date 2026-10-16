@@ -36,7 +36,7 @@ import (
 const DefaultPolicyCacheTTL = 10 * time.Second
 
 // policyFetchTimeout caps one GetActorEgressPolicy call. It sits under the
-// ext_proc message_timeout (5s in both manifests) so a slow control plane is a
+// ext_proc message_timeout (5s in the manifest) so a slow control plane is a
 // 503 rather than an Envoy timeout.
 const policyFetchTimeout = 4 * time.Second
 

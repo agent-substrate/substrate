@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/portforward"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -62,73 +61,42 @@ var PlatformMetricPrefixes = []string{
 // ScrapeAgentGatewayRouterMetrics reads the AgentGateway router's native
 // Prometheus stats endpoint. AgentGateway instruments are not OTLP exports.
 func ScrapeAgentGatewayRouterMetrics(ctx context.Context) (string, error) {
-	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
-	if err != nil {
-		return "", fmt.Errorf("loading kubeconfig: %w", err)
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return "", fmt.Errorf("creating k8s client: %w", err)
-	}
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, SystemNamespace(), ResourceName("atenet-router"), agentGatewayRouterStatsPort)
-	if err != nil {
-		return "", err
-	}
-	defer stop()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/metrics", localPort), nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-	if err != nil {
-		return "", fmt.Errorf("scraping AgentGateway metrics: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading AgentGateway metrics: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("AgentGateway metrics returned %d: %s", resp.StatusCode, body)
-	}
-	return string(body), nil
+	return scrapeServiceMetrics(ctx, "AgentGateway", SystemNamespace(), ResourceName("atenet-router"), agentGatewayRouterStatsPort)
 }
 
 // ScrapeCollectorMetrics port-forwards the kind stack's OTel Collector and reads
 // its Prometheus exporter surface, returning the raw exposition text.
 func ScrapeCollectorMetrics(ctx context.Context) (string, error) {
-	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
-	if err != nil {
-		return "", fmt.Errorf("loading kubeconfig: %w", err)
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return "", fmt.Errorf("creating k8s client: %w", err)
-	}
+	return scrapeServiceMetrics(ctx, "collector", collectorNamespace, collectorService, collectorPromPort)
+}
 
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, collectorNamespace, collectorService, collectorPromPort)
+// scrapeServiceMetrics port-forwards port of the Service namespace/name and
+// returns its /metrics body. what names the source in errors.
+func scrapeServiceMetrics(ctx context.Context, what, namespace, name string, port int32) (string, error) {
+	localPort, stop, err := ServicePortForward(ctx, namespace, name, port)
 	if err != nil {
 		return "", err
 	}
 	defer stop()
+	return fetchMetrics(ctx, what, fmt.Sprintf("http://127.0.0.1:%d/metrics", localPort))
+}
 
-	url := fmt.Sprintf("http://127.0.0.1:%d/metrics", localPort)
+func fetchMetrics(ctx context.Context, what, url string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
-		return "", fmt.Errorf("scraping collector metrics: %w", err)
+		return "", fmt.Errorf("scraping %s metrics: %w", what, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("reading collector metrics: %w", err)
+		return "", fmt.Errorf("reading %s metrics: %w", what, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("collector metrics returned %d: %s", resp.StatusCode, body)
+		return "", fmt.Errorf("%s metrics returned %d: %s", what, resp.StatusCode, body)
 	}
 	return string(body), nil
 }
@@ -159,16 +127,13 @@ func MissingPlatformMetrics(scrape string, prefixes []string) []string {
 	return missing
 }
 
-// Port-forward each ready atenet-egress pod's Envoy admin port and read its
-// stats/prometheus endpoint, returning the concatenated Prometheus exposition text.
+// ScrapeEgressEnvoyMetrics port-forwards each ready atenet-egress pod's Envoy
+// admin port and reads its stats/prometheus endpoint, returning the
+// concatenated Prometheus exposition text.
 func ScrapeEgressEnvoyMetrics(ctx context.Context) (string, error) {
-	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
+	config, clientset, err := kubeClient()
 	if err != nil {
-		return "", fmt.Errorf("loading kubeconfig: %w", err)
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return "", fmt.Errorf("creating k8s client: %w", err)
+		return "", err
 	}
 
 	ns := SystemNamespace()
@@ -205,24 +170,7 @@ func scrapeEgressEnvoyPod(ctx context.Context, config *rest.Config, clientset ku
 		return "", err
 	}
 	defer stop()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/stats/prometheus", localPort), nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-	if err != nil {
-		return "", fmt.Errorf("scraping egress Envoy metrics on %s: %w", podName, err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading egress Envoy metrics on %s: %w", podName, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("egress Envoy metrics on %s returned %d: %s", podName, resp.StatusCode, body)
-	}
-	return string(body), nil
+	return fetchMetrics(ctx, "egress Envoy "+podName, fmt.Sprintf("http://127.0.0.1:%d/stats/prometheus", localPort))
 }
 
 // LifecycleEventMetric is the count connector's view of the actor lifecycle
@@ -245,7 +193,7 @@ func LifecycleEventCounts(scrape string) map[string]float64 {
 		if name != LifecycleEventMetric && !strings.HasPrefix(name, LifecycleEventMetric+"_") {
 			continue
 		}
-		state := promLabelValue(line, "ate_actor_state")
+		state := PromLabelValue(line, "ate_actor_state")
 		if state == "" {
 			continue
 		}
@@ -293,15 +241,16 @@ func TargetInfoLabel(scrape, service, label string) string {
 		if metricNameFromLine(line) != "target_info" || !strings.Contains(line, `job="`+service+`"`) {
 			continue
 		}
-		if v := promLabelValue(line, label); v != "" {
+		if v := PromLabelValue(line, label); v != "" {
 			return v
 		}
 	}
 	return ""
 }
 
-// promLabelValue reads one label off an exposition line.
-func promLabelValue(line, label string) string {
+// PromLabelValue reads one label off a Prometheus exposition line, or "" when
+// the line does not carry it.
+func PromLabelValue(line, label string) string {
 	key := label + `="`
 	i := strings.Index(line, key)
 	if i < 0 {

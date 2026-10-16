@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc/resolver"
-	"google.golang.org/grpc/serviceconfig"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -48,10 +47,6 @@ func (c *testClientConn) UpdateState(state resolver.State) error {
 
 func (c *testClientConn) ReportError(err error) {
 	c.errChan <- err
-}
-
-func (c *testClientConn) ParseServiceConfig(serviceConfigJSON string) *serviceconfig.ParseResult {
-	return nil
 }
 
 // waitForAddrs consumes updates until the set matches want: the resolver promises

@@ -41,7 +41,7 @@ fi
 # The label CreateNamespace stamps on every namespace the suites create.
 selector="ate.dev/e2e"
 
-leftover="$(kubectl "${kubectl_args[@]}" get namespaces -l "${selector}" -o name)"
+leftover="$(kubectl ${kubectl_args[@]+"${kubectl_args[@]}"} get namespaces -l "${selector}" -o name)"
 if [[ -z "${leftover}" ]]; then
   echo "No leftover e2e namespaces."
   exit 0
@@ -49,4 +49,4 @@ fi
 
 echo "Deleting leftover e2e namespaces:"
 echo "${leftover}"
-kubectl "${kubectl_args[@]}" delete namespaces -l "${selector}" --ignore-not-found
+kubectl ${kubectl_args[@]+"${kubectl_args[@]}"} delete namespaces -l "${selector}" --ignore-not-found

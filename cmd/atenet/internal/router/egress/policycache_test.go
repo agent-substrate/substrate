@@ -147,34 +147,31 @@ func TestPolicyCacheCollapsesConcurrentFetches(t *testing.T) {
 // The leader's cancellation must not fail the callers that joined its fetch,
 // and the fetch it started still lands in the cache.
 func TestPolicyCacheFetchOutlivesCanceledCaller(t *testing.T) {
-	client := &egressMockClient{policy: allowAllPolicy(), policyGate: make(chan struct{})}
-	c, _ := newTestCache(client, 10*time.Second)
+	synctest.Test(t, func(t *testing.T) {
+		client := &egressMockClient{policy: allowAllPolicy(), policyGate: make(chan struct{})}
+		c, _ := newTestCache(client, 10*time.Second)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		_, err := c.get(ctx, testActorRef)
-		done <- err
-	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for client.policyCalls.Load() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("no fetch started")
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			_, err := c.get(ctx, testActorRef)
+			done <- err
+		}()
+		// Returns once the caller is parked on the fetch.
+		synctest.Wait()
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled caller got %v, want context.Canceled", err)
 		}
-		time.Sleep(time.Millisecond)
-	}
-	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled caller got %v, want context.Canceled", err)
-	}
 
-	close(client.policyGate)
-	if _, err := c.get(context.Background(), testActorRef); err != nil {
-		t.Fatalf("get after the detached fetch completed: %v", err)
-	}
-	if calls := client.policyCalls.Load(); calls != 1 {
-		t.Errorf("GetActorEgressPolicy calls = %d, want 1: the canceled caller's fetch should have been reused", calls)
-	}
+		close(client.policyGate)
+		if _, err := c.get(context.Background(), testActorRef); err != nil {
+			t.Fatalf("get after the detached fetch completed: %v", err)
+		}
+		if calls := client.policyCalls.Load(); calls != 1 {
+			t.Errorf("GetActorEgressPolicy calls = %d, want 1: the canceled caller's fetch should have been reused", calls)
+		}
+	})
 }
 
 // An entry is stale the instant its TTL has elapsed, not a tick later, and a
