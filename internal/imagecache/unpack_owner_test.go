@@ -274,7 +274,9 @@ func testUnpackLayerDirectoryAliasesTakeLatestHeader(t *testing.T) {
 // directory header applies only to the directory its entry created or found,
 // even when a later entry makes its name resolve to another directory: by
 // removing the directory through a symlink alias and putting a symlink in its
-// place, or by pointing a symlink on its path elsewhere.
+// place, or by pointing a symlink on its path elsewhere. A directory whose
+// every name now resolves elsewhere, or not at all, still takes the header
+// written last to it.
 func TestUnpackLayer_DirectoryHeadersStayWithTheirDirectory(t *testing.T) {
 	if os.Geteuid() != 0 {
 		testUnpackLayerDirectoryHeadersStayWithTheirDirectory(t)
@@ -345,6 +347,53 @@ func testUnpackLayerDirectoryHeadersStayWithTheirDirectory(t *testing.T) {
 			},
 		},
 		{
+			// cc/x is reached only as "a/x", and nothing writes to it after a
+			// points elsewhere.
+			name: "only name pointed elsewhere",
+			entries: []tarEntry{
+				{name: "cc/", typeflag: tar.TypeDir},
+				{name: "dd/", typeflag: tar.TypeDir},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+				{name: "a/x/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: mid},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "dd"},
+			},
+			want: map[string]want{"cc/x": {os.ModeDir | 0o750, 1000, 1000, mid}},
+		},
+		{
+			// "a/x/" is written to cc/x and then, once a points to dd, to
+			// dd/x: the second header does not replace the first one's.
+			name: "only name reused after it points elsewhere",
+			entries: []tarEntry{
+				{name: "cc/", typeflag: tar.TypeDir},
+				{name: "dd/", typeflag: tar.TypeDir},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+				{name: "a/x/", typeflag: tar.TypeDir, mode: 0o500, uid: 1000, gid: 1000, modTime: early},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "dd"},
+				{name: "a/x/", typeflag: tar.TypeDir, mode: 0o705, uid: 1001, gid: 1001, modTime: late},
+			},
+			want: map[string]want{
+				"cc/x": {os.ModeDir | 0o500, 1000, 1000, early},
+				"dd/x": {os.ModeDir | 0o705, 1001, 1001, late},
+			},
+		},
+		{
+			// As above, with cc/x also written under its own name earlier.
+			name: "name reused, own earlier header",
+			entries: []tarEntry{
+				{name: "cc/", typeflag: tar.TypeDir},
+				{name: "cc/x/", typeflag: tar.TypeDir, mode: 0o711, uid: 1002, gid: 1002, modTime: early},
+				{name: "dd/", typeflag: tar.TypeDir},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+				{name: "a/x/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: mid},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "dd"},
+				{name: "a/x/", typeflag: tar.TypeDir, mode: 0o705, uid: 1001, gid: 1001, modTime: late},
+			},
+			want: map[string]want{
+				"cc/x": {os.ModeDir | 0o750, 1000, 1000, mid},
+				"dd/x": {os.ModeDir | 0o705, 1001, 1001, late},
+			},
+		},
+		{
 			// The same through a second symlink, whose replacement leaves
 			// the name "a/x" in place.
 			name: "second symlink on the path pointed elsewhere",
@@ -363,6 +412,24 @@ func testUnpackLayerDirectoryHeadersStayWithTheirDirectory(t *testing.T) {
 				"dd/x": {os.ModeDir | 0o705, 1001, 1001, late},
 			},
 		},
+	}
+	// "a/x" stops resolving once a points outside the layer or into a loop;
+	// cc/x still takes its header.
+	for _, target := range []string{"/abs", "/", "../..", "a", "/cc"} {
+		tests = append(tests, struct {
+			name    string
+			entries []tarEntry
+			want    map[string]want
+		}{
+			name: "only name pointed to " + target,
+			entries: []tarEntry{
+				{name: "cc/", typeflag: tar.TypeDir},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+				{name: "a/x/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: mid},
+				{name: "a", typeflag: tar.TypeSymlink, linkname: target},
+			},
+			want: map[string]want{"cc/x": {os.ModeDir | 0o750, 1000, 1000, mid}},
+		})
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
