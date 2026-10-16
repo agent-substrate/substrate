@@ -78,7 +78,9 @@ import (
 const (
 	// layoutVersion changes whenever trees unpacked by an older atelet would
 	// differ from what this one unpacks. "2": layer entries keep the owners
-	// their tars record (layout "1" left every entry root-owned).
+	// and modes their tars record (layout "1" left every entry root-owned,
+	// with no setuid, setgid or sticky bit, and files' modes under the
+	// umask).
 	layoutVersion   = "2"
 	versionFileName = "version"
 
