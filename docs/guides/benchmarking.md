@@ -764,17 +764,18 @@ what to set before the run:
   The port-forwards in this document are for the UIs only.
 * **PostgreSQL connection slots.** Each ateapi replica opens up to
   `pool_max_conns` connections in its read/write pool plus 5 for its owner
-  and watch pools. Unset, pgx sizes the pool at the node's CPU count (at
-  least 4), not the container's limit, so on a large node one replica can
-  take most of PostgreSQL's default `max_connections` of 100. Set it with
-  `--ateapi-postgres-pool-max-conns` on ate-setup and keep
+  and watch pools. The installer sets the pool to 20 per replica
+  (`--ateapi-postgres-pool-max-conns` changes it); only a direct `ateapi`
+  run with the flag unset falls back to pgx's default, the node's CPU count
+  (at least 4), not the container's limit. Keep
   `replicas x (pool max + 5)` under `max_connections` with slack for `psql`
   and migrations (see
   [connection sizing](../dev/cloud-sql-scaling-guide.md#connection-sizing-for-a-target-throughput)).
   To raise `max_connections`, add a `-c` argument to the StatefulSet in
   `manifests/ate-install/postgres/postgres.yaml`, or install with
-  `--cluster-size size10`, which sets 300 and pins the pool at 64 but sizes
-  PostgreSQL for a dedicated node. When the slots run out, requests fail with
+  `--cluster-size size10`, which sets 500 and pins the pool at 64 for its
+  bundled PostgreSQL, but sizes it for a dedicated node. When the slots run
+  out, requests fail with
   `INTERNAL` and `remaining connection slots are reserved`.
 * **PostgreSQL probes.** Under load the probes miss their default 1 s
   timeout. Three misses of the liveness probe (`pg_isready`) restart

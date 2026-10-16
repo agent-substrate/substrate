@@ -56,11 +56,21 @@ const (
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
 const DefaultRolloutTimeout = 60 * time.Second
 
+// DefaultPostgresPoolMaxConns is the apiserver's read/write pool limit per
+// replica. pgxpool's own default of max(4, runtime.NumCPU()) opens one
+// connection per CPU of the node, which on a large host exhausts PostgreSQL's
+// 100 default slots. Size10PostgresPoolMaxConns is the limit for the bundled
+// PostgreSQL on size10, which is provisioned for it; an external database
+// keeps the default.
+const (
+	DefaultPostgresPoolMaxConns = "20"
+	Size10PostgresPoolMaxConns  = "64"
+)
+
 // Size10PostgresPoolParams is appended to the bundled read/write connection on
-// size10 clusters. pgxpool defaults MaxConns to max(4, runtime.NumCPU()), which
-// under-uses the size10 server's raised max_connections; pinning the pool makes
-// the client side open the sockets the server is provisioned for.
-const Size10PostgresPoolParams = "&pool_max_conns=64&pool_min_conns=4"
+// size10 clusters: a warm minimum, so the client side keeps the sockets the
+// server is provisioned for open.
+const Size10PostgresPoolParams = "&pool_min_conns=4"
 
 const (
 	DefaultPostgresSchema        = postgressetup.Schema
@@ -182,8 +192,13 @@ type Config struct {
 	// (ATE_API_POSTGRES_SCHEMA). Empty means DefaultPostgresSchema.
 	PostgresSchema string
 	// PostgresPoolMaxConns sizes the apiserver's read/write pool
-	// (ATE_API_POSTGRES_POOL_MAX_CONNS). Empty leaves the DSN or pgxpool default.
+	// (ATE_API_POSTGRES_POOL_MAX_CONNS): DefaultPostgresPoolMaxConns, or
+	// Size10PostgresPoolMaxConns on size10 with bundled PostgreSQL, unless a
+	// channel supplied it.
 	PostgresPoolMaxConns string
+	// PostgresPoolMaxConnsSet distinguishes a supplied limit from the default
+	// when adopting an existing Cloud SQL installation.
+	PostgresPoolMaxConnsSet bool
 	// PostgresServerCAFile is a local PEM file holding the server CA of an
 	// external PostgreSQL (ATE_API_POSTGRES_SERVER_CA_FILE). Its contents are
 	// published as the postgres-server-ca Secret, which ate-api-server mounts
