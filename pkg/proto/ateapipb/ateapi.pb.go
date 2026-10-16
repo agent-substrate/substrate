@@ -4945,7 +4945,7 @@ type SuspendActorRequest struct {
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
-	// suspend_options tunes how the suspend runs. Defaults apply when omitted.
+	// suspend_options controls how SuspendActor persists the actor's snapshot.
 	//
 	// +k8s:optional
 	SuspendOptions *SuspendOptions `protobuf:"bytes,2,opt,name=suspend_options,json=suspendOptions,proto3" json:"suspend_options,omitempty"`
@@ -5041,7 +5041,7 @@ func (x *SuspendActorResponse) GetActor() *Actor {
 	return nil
 }
 
-// SuspendOptions controls how SuspendActor persists the actor's snapshot.
+// SuspendOptions tunes how SuspendActor persists the actor's snapshot.
 type SuspendOptions struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// mode selects when SuspendActor returns relative to the snapshot reaching

@@ -1765,6 +1765,7 @@ message SuspendActorResponse {
   Actor actor = 1;
 }
 
+// SuspendOptions tunes how SuspendActor persists the actor's snapshot.
 message SuspendOptions {
   // mode selects when SuspendActor returns relative to the snapshot reaching
   // durable storage.
