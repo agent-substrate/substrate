@@ -181,7 +181,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		// delete/suspend path.
 		workloadSpec = &ateletpb.WorkloadSpec{}
 		if preview.IsEnabled(preview.GateExternalVolumes) {
-			for _, vol := range actor.GetStatus().GetExternalVolumes() {
+			for _, vol := range actor.GetStatus().GetExternalVolumes().GetStatuses() {
 				// StorageVolumeId is only populated once the volume is provisioned.
 				// Skip volumes that were never created (e.g. failed during PENDING state).
 				if vol.GetStorageVolumeId() != "" {
@@ -373,7 +373,7 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 	// disabling the gate while in use would be an orphaned volume
 	// attachment, we are NOT checking the ExternalVolumes gate in the
 	// delete/suspend path.
-	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetExternalVolumes()); err != nil {
+	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetExternalVolumes().GetStatuses()); err != nil {
 		return apierror.Internal("while deleting actor volumes: %v", err)
 	}
 	return nil
