@@ -367,9 +367,10 @@ func TestWorkerSandboxSyncerJitter(t *testing.T) {
 // runtimes resolve as soon as the event is handled, while the file, and
 // with it what the worker advertises, waits for the sync.
 func TestWorkerSandboxSyncerRegistersAheadOfJitter(t *testing.T) {
+	// Two pods of one pool: the pool is planned once, both pods are delayed.
 	pod := workerPod("pod-a", "pool")
-	s := newTestSyncer(t, pod, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
-	s.maxJitter = time.Hour
+	s := newTestSyncer(t, pod, workerPod("pod-b", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+	s.maxJitter = 50 * time.Millisecond
 
 	cfg := multiVersionConfig()
 	cfg.Generation = 2
@@ -388,11 +389,17 @@ func TestWorkerSandboxSyncerRegistersAheadOfJitter(t *testing.T) {
 			t.Errorf("runtime %s (%s) does not resolve before the jittered sync", v.name, v.hash)
 		}
 	}
-	if _, ok := s.index.worker("pod-a"); ok {
-		t.Error("the worker advertises runtimes before its file is written")
+	for _, uid := range []string{"pod-a", "pod-b"} {
+		if _, ok := s.index.worker(uid); ok {
+			t.Errorf("%s advertises runtimes before its file is written", uid)
+		}
 	}
 	if got := drain(s); len(got) != 0 {
 		t.Errorf("enqueued %v right away, want the jittered delay", got)
+	}
+	time.Sleep(2 * s.maxJitter)
+	if diff := cmp.Diff([]string{"pod-a", "pod-b"}, drain(s)); diff != "" {
+		t.Errorf("UIDs enqueued after the jitter mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -864,33 +871,35 @@ func TestWorkerSandboxSyncerInitialSync(t *testing.T) {
 			return false
 		}
 	}
-	runSyncer := func(t *testing.T, s *workerSandboxSyncer, synced bool) {
+	// runSyncer runs s until the test ends, with the caches reported synced
+	// once cachesSynced is closed.
+	runSyncer := func(t *testing.T, s *workerSandboxSyncer, cachesSynced <-chan struct{}) {
 		t.Helper()
 		ctx, cancel := context.WithCancel(context.Background())
 		stopped := make(chan struct{})
 		go func() {
 			defer close(stopped)
-			s.run(ctx, func() bool { return synced })
+			s.run(ctx, func() bool { return closed(cachesSynced) })
 		}()
 		t.Cleanup(func() {
 			cancel()
 			<-stopped
 		})
 	}
+	alreadySynced := make(chan struct{})
+	close(alreadySynced)
 
-	t.Run("caches not synced", func(t *testing.T) {
+	t.Run("closes only once the caches synced", func(t *testing.T) {
+		// With no pods, the cache sync is the only thing InitialSync waits
+		// for: it cannot close before the channel does, and must after.
 		s := newTestSyncer(t)
-		runSyncer(t, s, false)
-		time.Sleep(300 * time.Millisecond) // cache.WaitForCacheSync polls every 100ms
+		cachesSynced := make(chan struct{})
+		runSyncer(t, s, cachesSynced)
 		if closed(s.InitialSync()) {
-			t.Error("InitialSync closed before the caches synced")
+			t.Fatal("InitialSync closed before the caches synced")
 		}
-	})
-
-	t.Run("no pods", func(t *testing.T) {
-		s := newTestSyncer(t)
-		runSyncer(t, s, true)
-		waitFor(t, "InitialSync to close with no pods", func() bool { return closed(s.InitialSync()) })
+		close(cachesSynced)
+		waitFor(t, "InitialSync to close once the caches synced", func() bool { return closed(s.InitialSync()) })
 	})
 
 	t.Run("every initial pod attempted once", func(t *testing.T) {
@@ -904,7 +913,7 @@ func TestWorkerSandboxSyncerInitialSync(t *testing.T) {
 		// The initial list replays each pod as an Add before the caches sync.
 		s.queue.Add("pod-live")
 		s.queue.Add("pod-orphan")
-		runSyncer(t, s, true)
+		runSyncer(t, s, alreadySynced)
 		waitFor(t, "InitialSync to close once both pods were attempted", func() bool { return closed(s.InitialSync()) })
 		wr, ok := s.index.worker("pod-live")
 		if !ok {

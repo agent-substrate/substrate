@@ -281,18 +281,21 @@ func (s *workerSandboxSyncer) sandboxConfigHandler() cache.ResourceEventHandler 
 // enqueuePool enqueues every local worker pod of pool, each after a random
 // delay below maxDelay when it is not zero.
 //
-// A delayed pod has its runtimes registered first, so the index knows a
-// config's runtimes as soon as the listers do rather than once the file is
-// rewritten. A request for a runtime the index does not know fails the
+// A delayed pool has its runtimes registered first, so the index knows a
+// config's runtimes as soon as the listers do rather than once the files
+// are rewritten. A request for a runtime the index does not know fails the
 // actor, and the registration costs no IO.
 func (s *workerSandboxSyncer) enqueuePool(pool *v1alpha1.WorkerPool, maxDelay time.Duration) {
 	pods, err := corelisters.NewPodLister(s.pods).Pods(pool.Namespace).List(labels.SelectorFromSet(labels.Set{workerPoolLabel: pool.Name}))
-	if err != nil {
+	if err != nil || len(pods) == 0 {
 		return
+	}
+	if maxDelay > 0 {
+		// Once per pool: every pod of it plans the same config.
+		s.registerAhead(pool)
 	}
 	for _, pod := range pods {
 		if maxDelay > 0 {
-			s.registerAhead(pod)
 			s.queue.AddAfter(string(pod.UID), rand.N(maxDelay))
 			continue
 		}
@@ -300,13 +303,13 @@ func (s *workerSandboxSyncer) enqueuePool(pool *v1alpha1.WorkerPool, maxDelay ti
 	}
 }
 
-// registerAhead makes the runtimes of pod's current plan resolvable before
-// its sync runs. Planning and hashing read the listers only, so this is
-// cheap enough for an event handler. Only the hashes are registered; what
-// the pod advertises changes when its sync writes the file. A pod that does
-// not plan is left to the sync, which reports and retries it.
-func (s *workerSandboxSyncer) registerAhead(pod *corev1.Pod) {
-	plan, err := s.resolver.plan(pod)
+// registerAhead makes the runtimes of pool's current plan resolvable before
+// its pods' syncs run. Planning and hashing read the listers only, so this
+// is cheap enough for an event handler. Only the hashes are registered; what
+// a pod advertises changes when its sync writes the file. A pool that does
+// not plan is left to the syncs, which report and retry it.
+func (s *workerSandboxSyncer) registerAhead(pool *v1alpha1.WorkerPool) {
+	plan, err := s.resolver.planPool(pool)
 	if err != nil {
 		return
 	}

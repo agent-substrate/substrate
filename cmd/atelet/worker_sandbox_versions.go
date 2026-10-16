@@ -117,6 +117,15 @@ func poolConfigName(pool *v1alpha1.WorkerPool) string {
 // a pod in no pool, every failure can succeed once an informer catches up or
 // the atecontroller resolves the pool.
 func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (*v1alpha1.SandboxConfig, error) {
+	pool, err := r.pool(pod)
+	if err != nil {
+		return nil, err
+	}
+	return r.config(pool)
+}
+
+// pool returns the WorkerPool a worker pod on this node belongs to.
+func (r *workerSandboxResolver) pool(pod *corev1.Pod) (*v1alpha1.WorkerPool, error) {
 	poolName := pod.Labels[workerPoolLabel]
 	if poolName == "" {
 		return nil, fmt.Errorf("%w: worker pod %s/%s has no %s label", errPermanent, pod.Namespace, pod.Name, workerPoolLabel)
@@ -125,9 +134,14 @@ func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (*v1alpha1.SandboxConfi
 	if err != nil {
 		return nil, fmt.Errorf("%w: while getting WorkerPool %s/%s: %w", errUnresolved, pod.Namespace, poolName, err)
 	}
+	return pool, nil
+}
+
+// config returns the SandboxConfig the workers of pool run.
+func (r *workerSandboxResolver) config(pool *v1alpha1.WorkerPool) (*v1alpha1.SandboxConfig, error) {
 	configName := poolConfigName(pool)
 	if configName == "" {
-		return nil, fmt.Errorf("%w: WorkerPool %s/%s has not resolved a SandboxConfig for sandbox class %q", errUnresolved, pod.Namespace, poolName, pool.Spec.DefaultSandboxClass())
+		return nil, fmt.Errorf("%w: WorkerPool %s/%s has not resolved a SandboxConfig for sandbox class %q", errUnresolved, pool.Namespace, pool.Name, pool.Spec.DefaultSandboxClass())
 	}
 	cfg, err := r.configs.Get(configName)
 	if err != nil {
@@ -138,7 +152,17 @@ func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (*v1alpha1.SandboxConfi
 
 // plan resolves pod's SandboxConfig and the versions of it this node can run.
 func (r *workerSandboxResolver) plan(pod *corev1.Pod) (*sandboxPlan, error) {
-	cfg, err := r.resolve(pod)
+	pool, err := r.pool(pod)
+	if err != nil {
+		return nil, err
+	}
+	return r.planPool(pool)
+}
+
+// planPool is plan for a pool already in hand: the config its workers run
+// and the versions of it this node can run.
+func (r *workerSandboxResolver) planPool(pool *v1alpha1.WorkerPool) (*sandboxPlan, error) {
+	cfg, err := r.config(pool)
 	if err != nil {
 		return nil, err
 	}
