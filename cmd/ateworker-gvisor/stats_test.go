@@ -158,8 +158,6 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			want:     codes.InvalidArgument,
 		},
 		{
-			// Declarative validation also holds the uid to its format, which the
-			// hand-written check it replaced never did.
 			name:     "malformed actor_uid",
 			files:    healthyCgroup,
 			active:   &testActor,

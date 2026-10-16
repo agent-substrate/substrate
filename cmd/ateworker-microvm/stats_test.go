@@ -358,8 +358,6 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			want:     codes.InvalidArgument,
 		},
 		{
-			// Declarative validation also holds the uid to its format, which the
-			// hand-written check it replaced never did.
 			name:     "malformed actor_uid",
 			service:  func() *AteWorkerService { return newStatsService(healthy, "app_ovl") },
 			actorUID: "not-a-uuid",
