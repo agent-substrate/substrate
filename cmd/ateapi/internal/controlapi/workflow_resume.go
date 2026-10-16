@@ -610,6 +610,7 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime *ateapipb.SandboxRunti
 		WorkerPodUid:    w.GetWorkerPodUid(),
 		WorkerPodIps:    slices.Clone(w.GetIps()),
 		NodeName:        w.GetNodeName(),
+		WorkerSpiffeId:  w.GetWorkerSpiffeId(),
 		// The runtime the actor is started or restored under. Snapshots taken
 		// during this assignment are stamped with it, so a worker that later
 		// changes its default does not relabel state captured on the old one.

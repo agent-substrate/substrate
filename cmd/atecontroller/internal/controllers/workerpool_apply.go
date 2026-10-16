@@ -551,7 +551,7 @@ func applyWorkerPoolPodTemplate(
 	podSpecAC.NodeSelector = map[string]string{}
 	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{}
 	podSpecAC.WithPriorityClassName("")
-	podSpecAC.WithServiceAccountName("default")
+	podSpecAC.WithServiceAccountName(installdefaults.WorkerServiceAccount)
 	podSpecAC.WithAffinity(corev1ac.Affinity())
 	resourcesAC := corev1ac.ResourceRequirements()
 	containerAC.WithResources(resourcesAC)

@@ -905,7 +905,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 		sandboxClassTolerationAC(atev1alpha1.SandboxClassGvisor),
 	}
 	podSpecAC.WithPriorityClassName("")
-	podSpecAC.WithServiceAccountName("default")
+	podSpecAC.WithServiceAccountName("ateworker")
 	podSpecAC.WithAffinity(corev1ac.Affinity())
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 	if mutatePodSpec != nil {

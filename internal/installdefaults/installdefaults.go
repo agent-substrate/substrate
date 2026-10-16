@@ -51,6 +51,10 @@ const (
 	EgressServiceAccount     = "atenet-egress"
 	ControllerServiceAccount = "ate-controller"
 
+	// WorkerServiceAccount is what worker pods run as when their WorkerPool
+	// names none; atecontroller creates it in the pool's namespace.
+	WorkerServiceAccount = "ateworker"
+
 	// PodNamespaceEnv is the conventional env var name for the namespace
 	// a pod is running in, exposed via Kubernetes' downward API.
 	PodNamespaceEnv = "POD_NAMESPACE"

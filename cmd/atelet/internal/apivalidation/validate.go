@@ -65,6 +65,11 @@ func ValidatePromoteSnapshotRequest(ctx context.Context, req *ateletpb.PromoteSn
 	return Validate_PromoteSnapshotRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateDetachActorRequest runs the generated validation for req.
+func ValidateDetachActorRequest(ctx context.Context, req *ateletpb.DetachActorRequest) field.ErrorList {
+	return Validate_DetachActorRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 // ValidateRegisterWorkerRequest runs the generated validation for req.
 func ValidateRegisterWorkerRequest(ctx context.Context, req *ateletpb.RegisterWorkerRequest) field.ErrorList {
 	return Validate_RegisterWorkerRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)

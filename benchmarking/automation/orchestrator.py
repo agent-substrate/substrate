@@ -366,6 +366,7 @@ def deploy_workloads(
     wait_timeout_secs: int | str = "",
     worker_memory: str = "",
     fake_atelet_args: Iterable[str] = (),
+    actor_cpu: str = "",
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -379,6 +380,11 @@ def deploy_workloads(
     # minimum); RAM-consuming suites set actorMemory in tests.yaml.
     if actor_memory:
         cmd += ["--actor-memory", actor_memory]
+    # Empty keeps the default in workloads/deploy.sh (1 CPU). The scheduler
+    # books the limit against worker CPU capacity, so dense suites set
+    # actorCPU in tests.yaml to fit more actors per worker.
+    if actor_cpu:
+        cmd += ["--actor-cpu", actor_cpu]
     # Empty leaves the worker pods unsized; set workerMemory in tests.yaml to
     # control how many workers the scheduler packs onto a node.
     if worker_memory:
@@ -566,6 +572,7 @@ def main() -> None:
                     test.get("workerWaitTimeout", ""),
                     test.get("workerMemory", ""),
                     isolate_workload_args(test),
+                    test.get("actorCPU", ""),
                 )
                 try:
                     status = run_test(

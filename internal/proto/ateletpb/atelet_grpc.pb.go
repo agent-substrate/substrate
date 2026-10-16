@@ -301,6 +301,7 @@ const (
 	Atelet_Checkpoint_FullMethodName      = "/atelet.Atelet/Checkpoint"
 	Atelet_Restore_FullMethodName         = "/atelet.Atelet/Restore"
 	Atelet_PromoteSnapshot_FullMethodName = "/atelet.Atelet/PromoteSnapshot"
+	Atelet_DetachActor_FullMethodName     = "/atelet.Atelet/DetachActor"
 	Atelet_Terminate_FullMethodName       = "/atelet.Atelet/Terminate"
 )
 
@@ -339,6 +340,16 @@ type AteletClient interface {
 	// the upload and does not check whether the actor is running. Its only
 	// caller, the suspend of a paused actor, relies on the deletion.
 	PromoteSnapshot(ctx context.Context, in *PromoteSnapshotRequest, opts ...grpc.CallOption) (*PromoteSnapshotResponse, error)
+	// DetachActor makes the actor's latest local snapshot durable, then deletes
+	// the actor's local snapshots on this node, so it can resume on any node.
+	// atelet also detaches a suspended actor on its own after its detach delay.
+	// Waits for an operation already in progress on the actor, such as an
+	// upload or a detach. Does nothing when atelet holds no local snapshot for
+	// the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
+	// actor is in progress or the actor runs on this node.
+	//
+	// TODO: Temporarily, atelet returns UNIMPLEMENTED.
+	DetachActor(ctx context.Context, in *DetachActorRequest, opts ...grpc.CallOption) (*DetachActorResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.
 	Terminate(ctx context.Context, in *TerminateRequest, opts ...grpc.CallOption) (*TerminateResponse, error)
@@ -392,6 +403,16 @@ func (c *ateletClient) PromoteSnapshot(ctx context.Context, in *PromoteSnapshotR
 	return out, nil
 }
 
+func (c *ateletClient) DetachActor(ctx context.Context, in *DetachActorRequest, opts ...grpc.CallOption) (*DetachActorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DetachActorResponse)
+	err := c.cc.Invoke(ctx, Atelet_DetachActor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *ateletClient) Terminate(ctx context.Context, in *TerminateRequest, opts ...grpc.CallOption) (*TerminateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TerminateResponse)
@@ -437,6 +458,16 @@ type AteletServer interface {
 	// the upload and does not check whether the actor is running. Its only
 	// caller, the suspend of a paused actor, relies on the deletion.
 	PromoteSnapshot(context.Context, *PromoteSnapshotRequest) (*PromoteSnapshotResponse, error)
+	// DetachActor makes the actor's latest local snapshot durable, then deletes
+	// the actor's local snapshots on this node, so it can resume on any node.
+	// atelet also detaches a suspended actor on its own after its detach delay.
+	// Waits for an operation already in progress on the actor, such as an
+	// upload or a detach. Does nothing when atelet holds no local snapshot for
+	// the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
+	// actor is in progress or the actor runs on this node.
+	//
+	// TODO: Temporarily, atelet returns UNIMPLEMENTED.
+	DetachActor(context.Context, *DetachActorRequest) (*DetachActorResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.
 	Terminate(context.Context, *TerminateRequest) (*TerminateResponse, error)
@@ -461,6 +492,9 @@ func (UnimplementedAteletServer) Restore(context.Context, *RestoreRequest) (*Res
 }
 func (UnimplementedAteletServer) PromoteSnapshot(context.Context, *PromoteSnapshotRequest) (*PromoteSnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PromoteSnapshot not implemented")
+}
+func (UnimplementedAteletServer) DetachActor(context.Context, *DetachActorRequest) (*DetachActorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DetachActor not implemented")
 }
 func (UnimplementedAteletServer) Terminate(context.Context, *TerminateRequest) (*TerminateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Terminate not implemented")
@@ -558,6 +592,24 @@ func _Atelet_PromoteSnapshot_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Atelet_DetachActor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DetachActorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteletServer).DetachActor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Atelet_DetachActor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteletServer).DetachActor(ctx, req.(*DetachActorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Atelet_Terminate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TerminateRequest)
 	if err := dec(in); err != nil {
@@ -598,6 +650,10 @@ var Atelet_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PromoteSnapshot",
 			Handler:    _Atelet_PromoteSnapshot_Handler,
+		},
+		{
+			MethodName: "DetachActor",
+			Handler:    _Atelet_DetachActor_Handler,
 		},
 		{
 			MethodName: "Terminate",

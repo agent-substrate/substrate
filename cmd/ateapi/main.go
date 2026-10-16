@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apiauthn"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apiconfig"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
@@ -70,6 +71,8 @@ const maxRPCDeadline = 10 * time.Minute
 const minResyncInterval = 250 * time.Millisecond
 
 var (
+	configFile = pflag.String("config-file", "", "API server config file")
+
 	listenAddr           = pflag.String("grpc-listen-addr", ":443", "Address and port the gRPC server should listen on.")
 	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	healthListenAddr     = pflag.String("health-listen-addr", ":9091", "Address and port the /readyz and /healthz probe server should listen on.")
@@ -110,30 +113,47 @@ var (
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
-	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 )
 
 func main() {
 	pflag.Parse()
+
 	if *showVersion {
 		fmt.Println(version.String())
 		return
 	}
+
 	ctx := context.Background()
+
 	serverboot.InitLogger()
-	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
-		serverboot.Fatal(ctx, "Invalid --log-level", err)
+
+	// Load unified config.
+	if *configFile == "" {
+		serverboot.Fatal(ctx, "--config-file must be specified", nil)
 	}
+
+	config, err := apiconfig.LoadConfig(*configFile)
+	if err != nil {
+		serverboot.Fatal(ctx, "Error while loading config file", err)
+	}
+
+	if err := serverboot.SetLogLevel(config.GetLogging().GetLevel()); err != nil {
+		serverboot.Fatal(ctx, "Invalid log level in config file", err)
+	}
+
 	if err := loadFlagsFromEnv(); err != nil {
 		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
 	}
+
 	if err := preview.Init(*previewFlags...); err != nil {
 		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
+
 	if err := rejectStorageEnv(); err != nil {
 		serverboot.Fatal(ctx, "Storage settings moved to the objectstore-plugin sidecar", err)
 	}
+
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
 		serverboot.Fatal(ctx, "Invalid --template-resync-interval", fmt.Errorf("must be at least %s", minResyncInterval))

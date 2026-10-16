@@ -26,7 +26,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
-	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/atunnel/ingress"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/workerstats"
@@ -186,7 +186,7 @@ func (s *AteWorkerService) setSession(actorUID string, session *workloadSession)
 }
 
 // sandboxDialer looks up the actor on each dial.
-func (s *AteWorkerService) sandboxDialer(actorUID string) atunnel.DialFunc {
+func (s *AteWorkerService) sandboxDialer(actorUID string) ingress.DialFunc {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		s.actorsMu.RLock()
 		var session *actornet.SandboxSession

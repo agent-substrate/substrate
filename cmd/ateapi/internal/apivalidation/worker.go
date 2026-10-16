@@ -134,6 +134,11 @@ func ValidateCustom_Worker_Ips(_ context.Context, _ operation.Operation, fldPath
 	return validateDualStackIPs(fldPath, value)
 }
 
+// This is needed because DV doesn't have a format for SPIFFE IDs.
+func ValidateCustom_Worker_WorkerSpiffeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSPIFFEID(fldPath, *value)
+}
+
 // epoch only moves forward: a lower value would make Actors placed during the
 // current run look older than it, and crash them.
 func ValidateCustom_Worker_Epoch(_ context.Context, op operation.Operation, fldPath *field.Path, value, oldValue *int64) field.ErrorList {

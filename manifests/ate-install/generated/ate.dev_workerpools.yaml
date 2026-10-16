@@ -435,8 +435,8 @@ spec:
                   serviceAccountName:
                     description: |-
                       ServiceAccountName for the worker pods. The ServiceAccount must exist
-                      in the WorkerPool's namespace. When omitted, the pods use the
-                      namespace's default ServiceAccount.
+                      in the WorkerPool's namespace. When omitted, the pods run as the
+                      "ateworker" ServiceAccount, which the controller creates.
                     minLength: 1
                     type: string
                   tolerations:

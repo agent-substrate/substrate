@@ -138,6 +138,11 @@ func ValidateCustom_WorkerAssignment_WorkerPodIps(_ context.Context, _ operation
 	return validateDualStackIPs(fldPath, value)
 }
 
+// This is needed because DV doesn't have a format for SPIFFE IDs.
+func ValidateCustom_WorkerAssignment_WorkerSpiffeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSPIFFEID(fldPath, *value)
+}
+
 func ValidateCustom_ExternalVolume_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateVolumeType(fldPath, *value)
 }

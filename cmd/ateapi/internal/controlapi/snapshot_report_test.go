@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -283,7 +285,7 @@ func TestApplyActorSnapshotState(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := applyActorSnapshotState(tt.status, reportNode, tt.state)
+			err := applyActorSnapshotState(context.Background(), tt.status, reportNode, tt.state)
 			if tt.wantCode != codes.OK {
 				if got := apierror.Code(err); got != tt.wantCode {
 					t.Fatalf("applyActorSnapshotState() error = %v, want code %v", err, tt.wantCode)
@@ -295,6 +297,86 @@ func TestApplyActorSnapshotState(t *testing.T) {
 			}
 			if diff := cmp.Diff(tt.want, tt.status, protocmp.Transform()); diff != "" {
 				t.Errorf("status mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// A reported durable snapshot older than the latest COMPLETED one, or at a
+// generation status no longer has, is logged at Info, once, with the
+// generation it named. A repeat of the latest, and one that is applied, aren't
+// logged.
+func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
+	const (
+		pending   = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+		completed = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	)
+	tests := []struct {
+		name      string
+		status    *ateapipb.ActorStatus
+		gen       int32
+		wantMsg   string
+		wantAttrs map[string]string
+	}{{
+		name: "below the latest COMPLETED generation",
+		status: &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 1, reportNode, pending),
+			withDurable(t, 2, reportNode, completed),
+		}},
+		gen:       1,
+		wantMsg:   msgDurableOlder,
+		wantAttrs: map[string]string{"generation": "1", "uuid": snapName(1), "latest_completed_generation": "2"},
+	}, {
+		name: "a generation status no longer has",
+		status: &ateapipb.ActorStatus{LastAssignedGeneration: 3, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 3, reportNode, pending),
+		}},
+		gen:       2,
+		wantMsg:   msgDurableNotRecorded,
+		wantAttrs: map[string]string{"generation": "2", "uuid": snapName(2)},
+	}, {
+		name: "the latest COMPLETED generation itself",
+		status: &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, reportNode, completed),
+		}},
+		gen: 2,
+	}, {
+		name: "applied",
+		status: &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, reportNode, pending),
+		}},
+		gen: 2,
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			type logged struct {
+				msg   string
+				attrs map[string]string
+			}
+			var got []logged
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slogHandlerFunc(func(r slog.Record) {
+				if r.Message != msgDurableOlder && r.Message != msgDurableNotRecorded {
+					return
+				}
+				l := logged{msg: r.Message, attrs: map[string]string{}}
+				r.Attrs(func(a slog.Attr) bool {
+					l.attrs[a.Key] = a.Value.String()
+					return true
+				})
+				got = append(got, l)
+			})))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			if err := applyLatestDurable(context.Background(), tt.status, reported(t, tt.gen)); err != nil {
+				t.Fatalf("applyLatestDurable() error = %v", err)
+			}
+			var want []logged
+			if tt.wantMsg != "" {
+				want = []logged{{msg: tt.wantMsg, attrs: tt.wantAttrs}}
+			}
+			if diff := cmp.Diff(want, got, cmp.AllowUnexported(logged{})); diff != "" {
+				t.Errorf("logged records mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -433,6 +515,124 @@ func TestActorOnNode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := actorOnNode(tc.actor, reportNode); got != tc.want {
 				t.Errorf("actorOnNode() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// ateletReported is reported(t, gen) as atelet returns it.
+func ateletReported(t *testing.T, gen int32) *ateletpb.SnapshotReport {
+	t.Helper()
+	return &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
+		SnapshotUuid: snapName(gen),
+		Generation:   gen,
+		Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Object:       &ateletpb.ObjectStorage{SnapshotUri: ownedURI(t, reportActorUID, gen)},
+	}}
+}
+
+func TestApplyCheckpointState(t *testing.T) {
+	const (
+		pending    = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+		completed  = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		suspended  = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+		suspending = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
+	)
+	tests := []struct {
+		name     string
+		status   *ateapipb.ActorStatus
+		state    *ateletpb.ActorSnapshotState
+		want     *ateapipb.ActorStatus
+		wantCode codes.Code
+	}{{
+		name: "an immediate checkpoint marks its snapshot COMPLETED",
+		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, "", pending),
+		}},
+		state: &ateletpb.ActorSnapshotState{LatestDurable: ateletReported(t, 2)},
+		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, "", completed),
+		}},
+	}, {
+		name: "an immediate checkpoint records the fidelity it reports",
+		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, "", pending),
+		}},
+		state: &ateletpb.ActorSnapshotState{LatestDurable: func() *ateletpb.SnapshotReport {
+			r := ateletReported(t, 2)
+			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+			return r
+		}()},
+		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			func() *ateapipb.Snapshot {
+				snap := withDurable(t, 2, "", completed)
+				snap.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+				return snap
+			}(),
+		}},
+	}, {
+		name: "a deferred checkpoint changes nothing",
+		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			localOnly(2, ""),
+		}},
+		state: &ateletpb.ActorSnapshotState{LatestLocal: ateletReported(t, 2)},
+		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			localOnly(2, ""),
+		}},
+	}, {
+		name: "a deferred checkpoint records an older upload that finished",
+		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 1, reportNode, pending),
+			localOnly(2, ""),
+		}},
+		state: &ateletpb.ActorSnapshotState{LatestLocal: ateletReported(t, 2), LatestDurable: ateletReported(t, 1)},
+		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 1, reportNode, completed),
+			localOnly(2, ""),
+		}},
+	}, {
+		name: "no local snapshot is not a detach",
+		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, reportNode, completed),
+		}},
+		state: &ateletpb.ActorSnapshotState{LatestDurable: ateletReported(t, 2)},
+		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, reportNode, completed),
+		}},
+	}, {
+		name: "an upload URI other than the recorded one is refused",
+		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, "", pending),
+		}},
+		state: &ateletpb.ActorSnapshotState{LatestDurable: func() *ateletpb.SnapshotReport {
+			r := ateletReported(t, 2)
+			r.Snapshot.Object.SnapshotUri = ownedURI(t, reportActorUID, 9)
+			return r
+		}()},
+		wantCode: codes.InvalidArgument,
+	}, {
+		name: "an unset state changes nothing",
+		status: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, "", pending),
+		}},
+		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, "", pending),
+		}},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := applyCheckpointState(context.Background(), tt.status, tt.state)
+			if tt.wantCode != codes.OK {
+				if got := apierror.Code(err); got != tt.wantCode {
+					t.Fatalf("applyCheckpointState() error = %v, want code %v", err, tt.wantCode)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("applyCheckpointState() error = %v", err)
+			}
+			if diff := cmp.Diff(tt.want, tt.status, protocmp.Transform()); diff != "" {
+				t.Errorf("status mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
