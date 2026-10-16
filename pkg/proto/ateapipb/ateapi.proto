@@ -1755,10 +1755,10 @@ message SuspendActorRequest {
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 
-  // suspend_options controls how SuspendActor persists the actor's snapshot.
+  // options controls how SuspendActor persists the actor's snapshot.
   //
   // +k8s:optional
-  SuspendOptions suspend_options = 2;
+  SuspendOptions options = 2;
 }
 
 message SuspendActorResponse {
@@ -1768,9 +1768,9 @@ message SuspendActorResponse {
 // SuspendOptions tunes how SuspendActor persists the actor's snapshot.
 message SuspendOptions {
   // mode selects when SuspendActor returns relative to the snapshot reaching
-  // durable storage.
+  // durable storage. If unspecified, defaults to DURABILITY_MODE_ASYNCHRONOUS.
   //
-  // +k8s:required
+  // +k8s:optional
   // +k8s:minimum=1
   // +k8s:maximum=2 # keep this in sync with the DurabilityMode enum
   DurabilityMode mode = 1;

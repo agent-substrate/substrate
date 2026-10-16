@@ -1001,38 +1001,38 @@ func TestValidateSuspendActorRequest(t *testing.T) {
 	}, {
 		"synchronous mode",
 		&ateapipb.SuspendActorRequest{
-			Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-			SuspendOptions: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			Actor:   &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 		},
 		nil,
 	}, {
 		"asynchronous mode",
 		&ateapipb.SuspendActorRequest{
-			Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-			SuspendOptions: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			Actor:   &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		},
 		nil,
 	}, {
 		"mode unspecified",
 		&ateapipb.SuspendActorRequest{
-			Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-			SuspendOptions: &ateapipb.SuspendOptions{},
+			Actor:   &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Options: &ateapipb.SuspendOptions{},
 		},
-		field.ErrorList{field.Required(field.NewPath("suspend_options", "mode"), "")},
+		nil,
 	}, {
 		"mode negative",
 		&ateapipb.SuspendActorRequest{
-			Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-			SuspendOptions: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode(-1)},
+			Actor:   &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode(-1)},
 		},
-		field.ErrorList{field.Invalid(field.NewPath("suspend_options", "mode"), nil, "").WithOrigin("minimum")},
+		field.ErrorList{field.Invalid(field.NewPath("options", "mode"), nil, "").WithOrigin("minimum")},
 	}, {
 		"mode unknown",
 		&ateapipb.SuspendActorRequest{
-			Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-			SuspendOptions: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode(3)},
+			Actor:   &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode(3)},
 		},
-		field.ErrorList{field.Invalid(field.NewPath("suspend_options", "mode"), nil, "").WithOrigin("maximum")},
+		field.ErrorList{field.Invalid(field.NewPath("options", "mode"), nil, "").WithOrigin("maximum")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -8261,7 +8261,7 @@ func Validate_SuspendActorRequest(
 		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.SuspendActorRequest.SuspendOptions
+	{ // field ateapipb.SuspendActorRequest.Options
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateapipb.SuspendOptions,
@@ -8286,9 +8286,9 @@ func Validate_SuspendActorRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateapipb.SuspendActorRequest) *ateapipb.SuspendOptions {
-				return oldObj.SuspendOptions
+				return oldObj.Options
 			})
-		errs = append(errs, fn(fldPath.Child("suspend_options"), obj.SuspendOptions, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("options"), obj.Options, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -8313,8 +8313,7 @@ func Validate_SuspendOptions(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {

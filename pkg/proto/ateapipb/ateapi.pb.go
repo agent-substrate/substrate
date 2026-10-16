@@ -4945,12 +4945,12 @@ type SuspendActorRequest struct {
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
-	// suspend_options controls how SuspendActor persists the actor's snapshot.
+	// options controls how SuspendActor persists the actor's snapshot.
 	//
 	// +k8s:optional
-	SuspendOptions *SuspendOptions `protobuf:"bytes,2,opt,name=suspend_options,json=suspendOptions,proto3" json:"suspend_options,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	Options       *SuspendOptions `protobuf:"bytes,2,opt,name=options,proto3" json:"options,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SuspendActorRequest) Reset() {
@@ -4990,9 +4990,9 @@ func (x *SuspendActorRequest) GetActor() *ObjectRef {
 	return nil
 }
 
-func (x *SuspendActorRequest) GetSuspendOptions() *SuspendOptions {
+func (x *SuspendActorRequest) GetOptions() *SuspendOptions {
 	if x != nil {
-		return x.SuspendOptions
+		return x.Options
 	}
 	return nil
 }
@@ -5045,9 +5045,9 @@ func (x *SuspendActorResponse) GetActor() *Actor {
 type SuspendOptions struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// mode selects when SuspendActor returns relative to the snapshot reaching
-	// durable storage.
+	// durable storage. If unspecified, defaults to DURABILITY_MODE_ASYNCHRONOUS.
 	//
-	// +k8s:required
+	// +k8s:optional
 	// +k8s:minimum=1
 	// +k8s:maximum=2 # keep this in sync with the DurabilityMode enum
 	Mode          DurabilityMode `protobuf:"varint,1,opt,name=mode,proto3,enum=ateapi.DurabilityMode" json:"mode,omitempty"`
@@ -9754,10 +9754,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x12CreateActorRequest\x12#\n" +
 	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"9\n" +
 	"\x12UpdateActorRequest\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"\x7f\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"p\n" +
 	"\x13SuspendActorRequest\x12'\n" +
-	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12?\n" +
-	"\x0fsuspend_options\x18\x02 \x01(\v2\x16.ateapi.SuspendOptionsR\x0esuspendOptions\";\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x120\n" +
+	"\aoptions\x18\x02 \x01(\v2\x16.ateapi.SuspendOptionsR\aoptions\";\n" +
 	"\x14SuspendActorResponse\x12#\n" +
 	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"<\n" +
 	"\x0eSuspendOptions\x12*\n" +
@@ -10401,7 +10401,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	16,  // 86: ateapi.CreateActorRequest.actor:type_name -> ateapi.Actor
 	16,  // 87: ateapi.UpdateActorRequest.actor:type_name -> ateapi.Actor
 	33,  // 88: ateapi.SuspendActorRequest.actor:type_name -> ateapi.ObjectRef
-	73,  // 89: ateapi.SuspendActorRequest.suspend_options:type_name -> ateapi.SuspendOptions
+	73,  // 89: ateapi.SuspendActorRequest.options:type_name -> ateapi.SuspendOptions
 	16,  // 90: ateapi.SuspendActorResponse.actor:type_name -> ateapi.Actor
 	7,   // 91: ateapi.SuspendOptions.mode:type_name -> ateapi.DurabilityMode
 	33,  // 92: ateapi.PauseActorRequest.actor:type_name -> ateapi.ObjectRef
