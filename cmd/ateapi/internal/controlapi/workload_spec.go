@@ -21,15 +21,15 @@ import (
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
-// toAteletResources copies a container's declared limits into atelet's form.
-// Returns nil when the container declares no limits, so the OCI spec stays
-// untouched for templates that do not use them.
-func toAteletResources(r *ateapipb.Resources) *ateletpb.ResourceLimits {
+// toAteletResources copies declared limits into atelet's form. Returns nil
+// when no limits are declared, so the OCI spec stays untouched for templates
+// that do not use them.
+func toAteletResources(r *ateapipb.Resources) *ateletpb.Resources {
 	l := r.GetLimits()
 	if l.GetMemoryBytes() == 0 && l.GetCpuMillicores() == 0 {
 		return nil
 	}
-	return &ateletpb.ResourceLimits{MemoryBytes: l.GetMemoryBytes(), CpuMillis: l.GetCpuMillicores()}
+	return &ateletpb.Resources{Limits: &ateletpb.ResourceList{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}}
 }
 
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;

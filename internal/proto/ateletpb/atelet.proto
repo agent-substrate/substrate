@@ -468,16 +468,10 @@ message RunRequest {
 
   // The actor's declared size, from the ActorTemplate's resource limits. atelet
   // passes these through to the sandbox so it is sized to the actor (not the
-  // whole host or worker pod). Zero means "unset": keep the runtime default.
+  // whole host or worker pod). A zero limit keeps the runtime default.
   //
   // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 10; // CPU limit in millicores (1000 = one core).
-
-  // +k8s:optional
-  // +k8s:minimum=0
-  int64 memory_bytes = 11; // Memory limit in bytes.
+  Resources resources = 10;
 
   // The runtime the assigned worker runs this actor under, from
   // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
@@ -726,11 +720,11 @@ message Container {
   // +k8s:optional
   SecurityContext security_context = 8;
 
-  // resources are the cgroup limits for this container, resolved by
-  // ate-api-server from the ActorTemplate. Unset means no limits.
+  // resources are the cgroup limits for this container, from the
+  // ActorTemplate. Unset means no limits.
   //
   // +k8s:optional
-  ResourceLimits resources = 9;
+  Resources resources = 9;
 }
 
 // SecurityContext holds security settings for a container's process.
@@ -753,23 +747,6 @@ message Capabilities {
   // +k8s:listType=set
   // +k8s:customValidation # capability grammar
   repeated string drop = 2;
-}
-
-// ResourceLimits are the cgroup limits for one container. Scalars rather than a
-// map so each resource.Quantity is parsed exactly once, in ate-api-server.
-message ResourceLimits {
-  // memory_bytes is the memory limit in bytes. 0 means unset.
-  //
-  // +k8s:optional
-  // +k8s:minimum=0
-  int64 memory_bytes = 1;
-
-  // cpu_millis is the CPU limit in milli-cores (1000 = one core). 0 means unset.
-  //
-  // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_millis = 2;
 }
 
 message EnvVar {
@@ -1088,13 +1065,7 @@ message RestoreRequest {
   // means "unset": keep the runtime default.
   //
   // +k8s:optional
-  // +k8s:minimum=0
-  // +k8s:maximum=999999 # the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 10; // CPU limit in millicores (1000 = one core).
-
-  // +k8s:optional
-  // +k8s:minimum=0
-  int64 memory_bytes = 11; // Memory limit in bytes.
+  Resources resources = 10;
 
   // The runtime the assigned worker restores this actor under, from
   // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and

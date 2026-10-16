@@ -268,7 +268,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		containers:       req.GetSpec().GetContainers(),
 		assetPaths:       req.GetRuntimeAssetPaths(),
 		egressGateway:    req.GetEgressGateway(),
-		size:             sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		size:             sizing.FromLimits(req.GetResources().GetLimits()),
 	}
 
 	attribution := p.actorAttribution()

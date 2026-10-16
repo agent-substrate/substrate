@@ -856,8 +856,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 		ActorUid:              actorUID,
 		ActorDirs:             ateletpath.ActorDirs(actorUID),
 		EgressGateway:         toWorkerEgressGateway(req.GetEgressGateway()),
-		CpuMilli:              req.GetCpuMilli(),
-		MemoryBytes:           req.GetMemoryBytes(),
+		Resources:             toAteworkerResources(req.GetResources()),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling worker RunWorkload: %w", err)
 	}
@@ -1631,8 +1630,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		ActorDirs:             actorDirs,
 		PreserveRestoreDir:    directLocal,
 		EgressGateway:         toWorkerEgressGateway(req.GetEgressGateway()),
-		CpuMilli:              req.GetCpuMilli(),
-		MemoryBytes:           req.GetMemoryBytes(),
+		Resources:             toAteworkerResources(req.GetResources()),
 	})
 	dWorker = time.Since(tWorker)
 	if err != nil {
@@ -1941,7 +1939,7 @@ func (s *Atelet) prepareOCIBundles(
 				Args:         args,
 				Env:          resolveActorEnv(imageConfig, envs),
 				Capabilities: resolveCapabilities(ctr.GetSecurityContext().GetCapabilities()),
-				Resources:    toWorkerResourceLimits(ctr.GetResources()),
+				Resources:    toAteworkerResources(ctr.GetResources()),
 			}
 			return nil
 		})
@@ -2030,11 +2028,15 @@ func buildWorkerWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*atew
 	return out, nil
 }
 
-func toWorkerResourceLimits(limits *ateletpb.ResourceLimits) *ateworkerpb.ResourceLimits {
-	if limits == nil {
+func toAteworkerResources(r *ateletpb.Resources) *ateworkerpb.Resources {
+	if r == nil {
 		return nil
 	}
-	return &ateworkerpb.ResourceLimits{MemoryBytes: limits.GetMemoryBytes(), CpuMillis: limits.GetCpuMillis()}
+	out := &ateworkerpb.Resources{}
+	if l := r.GetLimits(); l != nil {
+		out.Limits = &ateworkerpb.ResourceList{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}
+	}
+	return out
 }
 
 func toWorkerEgressGateway(gateway *ateletpb.EgressGateway) *ateworkerpb.EgressGateway {
