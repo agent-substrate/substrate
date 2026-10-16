@@ -18,6 +18,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,6 +34,8 @@ type tarEntry struct {
 	body     string
 	linkname string
 	modTime  time.Time
+	devmajor int64
+	devminor int64
 }
 
 func defaultMode(typeflag byte) int64 {
@@ -62,6 +65,8 @@ func buildTar(t *testing.T, entries []tarEntry) []byte {
 			Size:     int64(len(e.body)),
 			Linkname: e.linkname,
 			ModTime:  e.modTime,
+			Devmajor: e.devmajor,
+			Devminor: e.devminor,
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			t.Fatalf("tar.WriteHeader(%+v): %v", hdr, err)
@@ -627,25 +632,34 @@ func TestUnpackLayer_HardlinkEscape(t *testing.T) {
 	}
 }
 
-func TestUnpackLayer_RejectSpecialFiles(t *testing.T) {
-	tests := []struct {
-		name     string
-		typeflag byte
-	}{
-		{name: "char device", typeflag: tar.TypeChar},
-		{name: "block device", typeflag: tar.TypeBlock},
-		{name: "fifo", typeflag: tar.TypeFifo},
+func TestUnpackLayer_SkipsDeviceNodes(t *testing.T) {
+	dir, _, err := runUnpack(t, []tarEntry{
+		{name: "dev/", typeflag: tar.TypeDir},
+		{name: "dev/console", typeflag: tar.TypeChar, devmajor: 5, devminor: 1},
+		{name: "dev/sda", typeflag: tar.TypeBlock, devmajor: 8},
+		{name: "dev/zero", typeflag: tar.TypeChar},
+		{name: "etc/hostname", typeflag: tar.TypeReg, body: "x"},
+	})
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := runUnpack(t, []tarEntry{{name: "weird", typeflag: tc.typeflag}})
-			if err == nil {
-				t.Fatalf("unpackLayer succeeded, want unhandled-typeflag error")
-			}
-			if !strings.Contains(err.Error(), "unhandled tar entry typeflag") {
-				t.Errorf("error = %q, want it to mention 'unhandled tar entry typeflag'", err.Error())
-			}
-		})
+	for _, name := range []string{"dev/console", "dev/sda", "dev/zero"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Lstat(%q) = %v, want not exist", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "etc/hostname")); err != nil {
+		t.Errorf("entry after device nodes not extracted: %v", err)
+	}
+}
+
+func TestUnpackLayer_RejectFifo(t *testing.T) {
+	_, _, err := runUnpack(t, []tarEntry{{name: "weird", typeflag: tar.TypeFifo}})
+	if err == nil {
+		t.Fatalf("unpackLayer succeeded, want unhandled-typeflag error")
+	}
+	if !strings.Contains(err.Error(), "unhandled tar entry typeflag") {
+		t.Errorf("error = %q, want it to mention 'unhandled tar entry typeflag'", err.Error())
 	}
 }
 

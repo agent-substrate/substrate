@@ -160,6 +160,13 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			continue
 		}
 
+		// skip device nodes like rootless containerd does, so an image can never
+		// grant device access. the runtime provides /dev
+		if hdr.Typeflag == tar.TypeChar || hdr.Typeflag == tar.TypeBlock {
+			slog.DebugContext(ctx, "Skipping device node in image layer", slog.String("name", name))
+			continue
+		}
+
 		mode := hdr.FileInfo().Mode().Perm()
 
 		// A layer tar routinely omits entries for parent directories that
