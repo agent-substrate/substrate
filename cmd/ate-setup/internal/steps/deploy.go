@@ -167,6 +167,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	var waits []rollout
 	waits = append(waits,
 		rollout{kube.KindDeployment, "ate-api-server"},
+		rollout{kube.KindDeployment, "ate-idp-server"},
 		rollout{kube.KindDeployment, "ate-controller"},
 		rollout{kube.KindDeployment, "atenet-router"},
 		rollout{kube.KindDeployment, "atenet-egress"},

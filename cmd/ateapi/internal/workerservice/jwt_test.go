@@ -125,6 +125,18 @@ func pausedStatus(state ateapipb.ActorState, node string) *ateapipb.ActorStatus 
 	}
 }
 
+// promotingStatus is how a paused actor looks while a suspend uploads its
+// local snapshot: SUSPENDING, still no worker, and the latest generation's
+// durable copy marked PENDING before atelet is asked to upload it.
+func promotingStatus(node string) *ateapipb.ActorStatus {
+	status := pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, node)
+	status.Snapshots[0].DurableSnapshot = &ateapipb.SnapshotStorage{
+		Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+		Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://snaps/root/atespaces/team-a/actors/uid/snap-1"},
+	}
+	return status
+}
+
 func TestMintWorkerActorJwt_Errors(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, testActorJWTIssuer, newTestJWTPool(t))
@@ -337,11 +349,31 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 		},
 		{
 			// Suspending a paused actor uploads its checkpoint from the node that
-			// holds it, with no worker assigned.
+			// holds it, with no worker assigned. The workflow marks the durable
+			// copy PENDING before it asks for the upload.
 			name:   "paused actor being suspended on this node",
 			ctx:    authed,
-			status: pausedStatus(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "node-1"),
+			status: promotingStatus("node-1"),
 			want:   codes.OK,
+		},
+		{
+			name:   "paused actor being suspended on another node",
+			ctx:    authed,
+			status: promotingStatus("node-2"),
+			want:   codes.NotFound,
+		},
+		{
+			// Once the copy is COMPLETED the node has nothing left to do for
+			// the actor, whatever assigned_node and locality still say.
+			name: "suspended actor whose local snapshot is already durable",
+			ctx:  authed,
+			status: func() *ateapipb.ActorStatus {
+				status := promotingStatus("node-1")
+				status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+				status.Snapshots[0].DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+				return status
+			}(),
+			want: codes.NotFound,
 		},
 		{
 			// A crash clears the worker but leaves assigned_node on the last

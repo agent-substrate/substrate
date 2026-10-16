@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand/v2"
 	"net/http"
 	"strings"
 	"sync"
@@ -65,6 +64,7 @@ func init() {
 		Name:       "durdir",
 		LocustFile: "durdir.py",
 		UserClass:  durDirUserClass,
+		Config:     durDirCodec,
 		Init:       initDurDir,
 	})
 }
@@ -85,19 +85,14 @@ type durDirRuntime struct {
 }
 
 func (r *durDirRuntime) dynamicWait() time.Duration {
-	cfg := r.cfg.Dyn.Load()
-	if cfg.MaxWait <= cfg.MinWait {
-		return cfg.MinWait
-	}
-	jitter := cfg.MaxWait - cfg.MinWait
-	return cfg.MinWait + time.Duration(rand.Float64()*float64(jitter))
+	return dynconfig.Get[durDirKnobs](r.cfg.Dyn).WaitTime.Draw()
 }
 
 func (r *durDirRuntime) iterate() {
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
-		dynCfg := r.cfg.Dyn.Load()
+		dynCfg := dynconfig.Get[durDirKnobs](r.cfg.Dyn)
 		u, err := r.startUser(context.Background(), dynCfg)
 		if err != nil {
 			slog.Warn("durdir on_start failed; goroutine will retry next iter",
@@ -109,15 +104,15 @@ func (r *durDirRuntime) iterate() {
 	}
 	user := val.(*durDirUser)
 
-	dynCfg := r.cfg.Dyn.Load()
+	dynCfg := dynconfig.Get[durDirKnobs](r.cfg.Dyn)
 	ctx := context.Background()
 	user.step(ctx, dynCfg)
 
 	time.Sleep(r.dynamicWait())
 }
 
-func (r *durDirRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config) (*durDirUser, error) {
-	tmpl := dynCfg.DurDirTemplate
+func (r *durDirRuntime) startUser(ctx context.Context, dynCfg durDirKnobs) (*durDirUser, error) {
+	tmpl := dynCfg.Template
 	if tmpl == "" {
 		tmpl = defaultDurTemplate
 	}
@@ -146,7 +141,7 @@ func (r *durDirRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config) 
 }
 
 func (r *durDirRuntime) shutdown(ctx context.Context) {
-	dynCfg := r.cfg.Dyn.Load()
+	dynCfg := dynconfig.Get[durDirKnobs](r.cfg.Dyn)
 	r.users.Range(func(_, val any) bool {
 		u := val.(*durDirUser)
 		u.hibernateAndDelete(ctx, dynCfg)
@@ -231,7 +226,7 @@ func (u *durDirUser) suspend(ctx context.Context) {
 	})
 }
 
-func (u *durDirUser) hibernate(ctx context.Context, dynCfg dynconfig.Config) {
+func (u *durDirUser) hibernate(ctx context.Context, dynCfg durDirKnobs) {
 	if dynCfg.LifecycleMode == dynconfig.LifecycleModePause {
 		u.pause(ctx)
 	} else {
@@ -242,7 +237,7 @@ func (u *durDirUser) hibernate(ctx context.Context, dynCfg dynconfig.Config) {
 // hibernateAndDelete hibernates (suspends or pauses) the actor before deleting it.
 // The hibernate call is unmetered (teardown precondition, not benchmark latency),
 // while the delete is metered so true leaks still surface in failures.csv.
-func (u *durDirUser) hibernateAndDelete(ctx context.Context, dynCfg dynconfig.Config) {
+func (u *durDirUser) hibernateAndDelete(ctx context.Context, dynCfg durDirKnobs) {
 	if dynCfg.LifecycleMode == dynconfig.LifecycleModePause {
 		_, _ = u.cfg.APIStub.PauseActor(ctx, &ateapipb.PauseActorRequest{
 			Actor: u.ref(),
@@ -287,19 +282,19 @@ func (u *durDirUser) tracedCall(ctx context.Context, name string, do func(contex
 	return nil
 }
 
-func (u *durDirUser) params(dynCfg dynconfig.Config) (int64, gluttonpb.ReadMode) {
-	fileSize := dynCfg.DurDirFileSize
+func (u *durDirUser) params(dynCfg durDirKnobs) (int64, gluttonpb.ReadMode) {
+	fileSize := dynCfg.FileSize
 	if fileSize <= 0 {
 		fileSize = defaultFileSize
 	}
 	readMode := gluttonpb.ReadMode_READ_MODE_DATA
-	if dynCfg.DurDirReadMode == dynconfig.ReadModeDigest {
+	if dynCfg.ReadMode == readModeDigest {
 		readMode = gluttonpb.ReadMode_READ_MODE_DIGEST_ONLY
 	}
 	return fileSize, readMode
 }
 
-func (u *durDirUser) step(ctx context.Context, dynCfg dynconfig.Config) {
+func (u *durDirUser) step(ctx context.Context, dynCfg durDirKnobs) {
 	fileSize, readMode := u.params(dynCfg)
 
 	// 1. Suspend or pause actor
@@ -326,7 +321,7 @@ func (u *durDirUser) step(ctx context.Context, dynCfg dynconfig.Config) {
 	}
 }
 
-func (u *durDirUser) bootstrap(ctx context.Context, dynCfg dynconfig.Config) error {
+func (u *durDirUser) bootstrap(ctx context.Context, dynCfg durDirKnobs) error {
 	fileSize, readMode := u.params(dynCfg)
 
 	if !u.resume(ctx, dynCfg.ResumeMode) {

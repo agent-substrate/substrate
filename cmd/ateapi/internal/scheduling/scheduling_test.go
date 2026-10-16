@@ -506,10 +506,10 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 	return w
 }
 
-func sandboxRuntime(class, arch string, assetHash ...string) *ateapipb.SandboxRuntime {
+func sandboxRuntime(class, arch string, bundleHash ...string) *ateapipb.SandboxRuntime {
 	attrs := []*ateapipb.AttributeEntry{{Key: "architecture", Value: arch}}
-	if len(assetHash) > 0 && assetHash[0] != "" {
-		attrs = append(attrs, &ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: assetHash[0]})
+	if len(bundleHash) > 0 && bundleHash[0] != "" {
+		attrs = append(attrs, &ateapipb.AttributeEntry{Key: "sandbox_bundle_hash", Value: bundleHash[0]})
 	}
 	return &ateapipb.SandboxRuntime{
 		SandboxClass: class,

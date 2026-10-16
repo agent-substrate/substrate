@@ -689,13 +689,15 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		egressID     = "spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
 		routerID     = "spiffe://cluster.local/ns/ate-system/sa/atenet-router"
 		ateletID     = "spiffe://cluster.local/ns/ate-system/sa/atelet"
+		pluginID     = "spiffe://cluster.local/ns/ate-system/sa/ate-api-server"
 		otherID      = "spiffe://cluster.local/ns/ate-system/sa/other"
 	)
 	authorizer, _, err := New(ctx, pool, fgaServer, nil, SystemPrincipals{
-		ControllerSPIFFEID:    controllerID,
-		EgressGatewaySPIFFEID: egressID,
-		IngressRouterSPIFFEID: routerID,
-		AteletSPIFFEID:        ateletID,
+		ControllerSPIFFEID:       controllerID,
+		EgressGatewaySPIFFEID:    egressID,
+		IngressRouterSPIFFEID:    routerID,
+		AteletSPIFFEID:           ateletID,
+		APIServerSidecarSPIFFEID: pluginID,
 	})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
@@ -790,6 +792,15 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"atelet cannot resume actor", mtls(ateletID), resume, codes.PermissionDenied},
 		{"atelet cannot mint actor JWT", mtls(ateletID), mintJWT, codes.PermissionDenied},
 		{"atelet cannot get worker", mtls(ateletID), getWorker, codes.PermissionDenied},
+		// The objectstore control plugin reads actors to scope their storage
+		// credentials, and nothing else.
+		{"api server sidecar gets actor", mtls(pluginID), getActor, codes.OK},
+		{"api server sidecar cannot delete actor", mtls(pluginID), deleteActor, codes.PermissionDenied},
+		{"api server sidecar cannot list actors", mtls(pluginID), listAllActors, codes.PermissionDenied},
+		{"api server sidecar cannot get egress policy", mtls(pluginID), getEgress, codes.PermissionDenied},
+		{"api server sidecar cannot resume actor", mtls(pluginID), resume, codes.PermissionDenied},
+		{"api server sidecar cannot mint actor JWT", mtls(pluginID), mintJWT, codes.PermissionDenied},
+		{"api server sidecar cannot get worker", mtls(pluginID), getWorker, codes.PermissionDenied},
 
 		// A bearer token whose subject is a granted SPIFFE ID gets nothing.
 		{"jwt with controller ID cannot create worker", jwt(controllerID), createWorker, codes.PermissionDenied},
@@ -797,6 +808,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"jwt with egress ID cannot mint actor JWT", jwt(egressID), mintJWT, codes.PermissionDenied},
 		{"jwt with router ID cannot resume actor", jwt(routerID), resume, codes.PermissionDenied},
 		{"jwt with atelet ID cannot get egress policy", jwt(ateletID), getEgress, codes.PermissionDenied},
+		{"jwt with api server sidecar ID cannot get actor", jwt(pluginID), getActor, codes.PermissionDenied},
 
 		// Other SPIFFE IDs get nothing.
 		{"other mTLS identity cannot resume actor", mtls(otherID), resume, codes.PermissionDenied},

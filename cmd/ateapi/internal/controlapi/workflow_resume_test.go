@@ -1066,6 +1066,10 @@ type capturingAtelet struct {
 	// whatever else happens while the workload checkpoints. Its error fails
 	// the RPC.
 	onCheckpoint func(ctx context.Context) error
+	// checkpointState is the snapshot state Checkpoint returns.
+	checkpointState *ateletpb.ActorSnapshotState
+	// promoteState is the snapshot state PromoteSnapshot returns.
+	promoteState *ateletpb.ActorSnapshotState
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1093,7 +1097,9 @@ func (f *capturingAtelet) Checkpoint(ctx context.Context, req *ateletpb.Checkpoi
 			return nil, err
 		}
 	}
-	return &ateletpb.CheckpointResponse{}, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &ateletpb.CheckpointResponse{State: proto.CloneOf(f.checkpointState)}, nil
 }
 
 func (f *capturingAtelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (*ateletpb.PromoteSnapshotResponse, error) {
@@ -1101,7 +1107,7 @@ func (f *capturingAtelet) PromoteSnapshot(ctx context.Context, req *ateletpb.Pro
 	defer f.mu.Unlock()
 	f.promote = proto.Clone(req).(*ateletpb.PromoteSnapshotRequest)
 	f.promotes++
-	return &ateletpb.PromoteSnapshotResponse{}, nil
+	return &ateletpb.PromoteSnapshotResponse{State: proto.CloneOf(f.promoteState)}, nil
 }
 
 // calls returns how many Checkpoint and PromoteSnapshot RPCs were received.
@@ -1282,6 +1288,22 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 
 	amd64RT := testSandboxRuntime()
 	arm64RT := testRuntime("arm64", "")
+	wantAteletRuntime := map[*ateapipb.SandboxRuntime]*ateletpb.SandboxRuntime{
+		amd64RT: {
+			SandboxClass: "gvisor",
+			Version: &ateletpb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes:    []*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
+			},
+		},
+		arm64RT: {
+			SandboxClass: "gvisor",
+			Version: &ateletpb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes:    []*ateletpb.AttributeEntry{{Key: "architecture", Value: "arm64"}},
+			},
+		},
+	}
 	stampedExtSnap := func(owner ateapipb.SnapshotOwner, uri string, fidelity ateapipb.SnapshotFidelity, rt *ateapipb.SandboxRuntime) *ateapipb.Snapshot {
 		snap := newDurableSnapshot(1, owner, fidelity, "", durableSnapshotName, uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 		snap.SandboxRuntime = rt
@@ -1295,8 +1317,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		want  restoreWant
 	}{
 		{
-			name: "01 nothing to restore cold-boots from the spec",
-			want: restoreWant{run: true},
+			name:  "01 nothing to restore cold-boots from the spec",
+			actor: actorSeed{assignedRuntime: amd64RT},
+			want:  restoreWant{run: true},
 		},
 		{
 			name:  "02 inherited golden snapshot restores in Full",
@@ -1425,7 +1448,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		{
 			name: "13 Full pause snapshot restores locally as Full",
 			actor: actorSeed{
-				localSnapshot: localSnap(localSnapshotName, fullScope),
+				localSnapshot:   localSnap(localSnapshotName, fullScope),
+				assignedRuntime: amd64RT,
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
@@ -1672,12 +1696,16 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				return
 			}
 
+			wantSandboxRuntime := wantAteletRuntime[tt.actor.assignedRuntime]
 			if tt.want.run {
 				if run == nil || restore != nil {
 					t.Fatalf("atelet requests = (restore=%v, run=%v), want exactly one Run", restore, run)
 				}
 				if !proto.Equal(run.GetSandboxAssets(), wantSandboxAssets) {
 					t.Errorf("run SandboxAssets = %v, want %v", run.GetSandboxAssets(), wantSandboxAssets)
+				}
+				if !proto.Equal(run.GetSandboxRuntime(), wantSandboxRuntime) {
+					t.Errorf("run SandboxRuntime = %v, want %v", run.GetSandboxRuntime(), wantSandboxRuntime)
 				}
 				return
 			}
@@ -1686,6 +1714,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			}
 			if !proto.Equal(restore.GetSandboxAssets(), wantSandboxAssets) {
 				t.Errorf("restore SandboxAssets = %v, want %v", restore.GetSandboxAssets(), wantSandboxAssets)
+			}
+			if !proto.Equal(restore.GetSandboxRuntime(), wantSandboxRuntime) {
+				t.Errorf("restore SandboxRuntime = %v, want %v", restore.GetSandboxRuntime(), wantSandboxRuntime)
 			}
 			if got := restore.GetSnapshot().GetSnapshotUuid(); got != tt.want.snapshotName {
 				t.Errorf("Snapshot.SnapshotUuid = %q, want %q", got, tt.want.snapshotName)
@@ -1707,14 +1738,17 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	}
 }
 
-// publishContextVolumePlugin hands back a fixed publish context, standing in
-// for a driver whose node plugin needs attachment metadata.
+// publishContextVolumePlugin records AttachVolume requests and hands back a
+// fixed publish context, standing in for a driver whose node plugin needs
+// attachment metadata.
 type publishContextVolumePlugin struct {
 	volume.VolumePluginControlPlane
 	publishContext map[string]string
+	attachCalls    []volume.AttachVolumeRequest
 }
 
 func (p *publishContextVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	p.attachCalls = append(p.attachCalls, req)
 	return volume.AttachVolumeResponse{PublishContext: p.publishContext}, nil
 }
 
@@ -1740,10 +1774,11 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 		t.Fatalf("GetActor: %v", err)
 	}
 
+	plugin := &publishContextVolumePlugin{publishContext: map[string]string{"devicePath": "/dev/xvdba"}}
 	w := &ActorWorkflow{
 		store: persistence,
 		pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{
-			"mock": &publishContextVolumePlugin{publishContext: map[string]string{"devicePath": "/dev/xvdba"}},
+			"mock": plugin,
 		}},
 	}
 	worker := &ateapipb.Worker{NodeName: "node-1"}
@@ -1764,6 +1799,10 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 	want := map[string]map[string]string{"mounted": {"devicePath": "/dev/xvdba"}}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("publish contexts mismatch (-want +got):\n%s", diff)
+	}
+	wantCalls := []volume.AttachVolumeRequest{{VolumeID: "storage-mounted", Node: "node-1"}}
+	if diff := cmp.Diff(wantCalls, plugin.attachCalls); diff != "" {
+		t.Errorf("attachCalls mismatch (-want +got):\n%s", diff)
 	}
 
 	stored, err := persistence.GetActor(ctx, actorRef)
@@ -2267,13 +2306,13 @@ func TestEnsureWorkerAssigned_ContextEndsInsideAttemptRecordsOne(t *testing.T) {
 }
 
 // testRuntime is a gvisor SandboxRuntime for arch under compatibility schema
-// v1. A non-empty assetHash adds a gvisor_asset_hash attribute, so two
+// v1. A non-empty bundleHash adds a sandbox_bundle_hash attribute, so two
 // runtimes can share an architecture and still differ, as two versions of
 // one SandboxConfig do.
-func testRuntime(arch, assetHash string) *ateapipb.SandboxRuntime {
+func testRuntime(arch, bundleHash string) *ateapipb.SandboxRuntime {
 	attrs := []*ateapipb.AttributeEntry{{Key: "architecture", Value: arch}}
-	if assetHash != "" {
-		attrs = append(attrs, &ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: assetHash})
+	if bundleHash != "" {
+		attrs = append(attrs, &ateapipb.AttributeEntry{Key: hardware.AttrSandboxBundleHash, Value: bundleHash})
 	}
 	return &ateapipb.SandboxRuntime{
 		SandboxClass: "gvisor",
@@ -2698,5 +2737,50 @@ func TestWorkerAssignmentFromCopiesSPIFFEID(t *testing.T) {
 	got := workerAssignmentFrom(&ateapipb.Worker{WorkerSpiffeId: id}, hardware.Requirement{})
 	if got.GetWorkerSpiffeId() != id {
 		t.Errorf("worker SPIFFE ID = %q, want %q", got.GetWorkerSpiffeId(), id)
+	}
+}
+
+func TestToAteletSandboxRuntime(t *testing.T) {
+	tests := []struct {
+		name string
+		in   *ateapipb.SandboxRuntime
+		want *ateletpb.SandboxRuntime
+	}{
+		{name: "nil"},
+		{
+			name: "class only",
+			in:   &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+			want: &ateletpb.SandboxRuntime{SandboxClass: "gvisor"},
+		},
+		{
+			name: "full",
+			in: &ateapipb.SandboxRuntime{
+				SandboxClass: "gvisor",
+				Version: &ateapipb.VersionedSandboxCompat{
+					SchemaVersion: "v1",
+					Attributes: []*ateapipb.AttributeEntry{
+						{Key: "architecture", Value: "amd64"},
+						{Key: "cpu_features", Value: "3f"},
+					},
+				},
+			},
+			want: &ateletpb.SandboxRuntime{
+				SandboxClass: "gvisor",
+				Version: &ateletpb.VersionedSandboxCompat{
+					SchemaVersion: "v1",
+					Attributes: []*ateletpb.AttributeEntry{
+						{Key: "architecture", Value: "amd64"},
+						{Key: "cpu_features", Value: "3f"},
+					},
+				},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if diff := cmp.Diff(tc.want, toAteletSandboxRuntime(tc.in), protocmp.Transform()); diff != "" {
+				t.Errorf("toAteletSandboxRuntime mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }

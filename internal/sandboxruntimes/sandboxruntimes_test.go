@@ -28,8 +28,8 @@ import (
 
 func testRuntimes(defaultHash string) *File {
 	return &File{
-		DefaultRuntime:     Attributes{"sandbox_runtime_hash": defaultHash},
-		RestorableRuntimes: []Attributes{{"sandbox_runtime_hash": "sha256:41ab"}},
+		DefaultRuntime:     Attributes{"sandbox_bundle_hash": defaultHash},
+		RestorableRuntimes: []Attributes{{"sandbox_bundle_hash": "sha256:41ab"}},
 	}
 }
 
@@ -144,14 +144,14 @@ func TestRead(t *testing.T) {
 		wantErr:  true,
 	}, {
 		name:     "unknown field",
-		contents: `{"defaultRuntime": {"sandbox_runtime_hash": "sha256:7c2e"}, "nope": 1}`,
+		contents: `{"defaultRuntime": {"sandbox_bundle_hash": "sha256:7c2e"}, "nope": 1}`,
 		wantErr:  true,
 	}, {
 		name:     "valid file",
-		contents: `{"defaultRuntime": {"sandbox_runtime_hash": "sha256:7c2e"}, "restorableRuntimes": [{"sandbox_runtime_hash": "sha256:41ab"}]}`,
+		contents: `{"defaultRuntime": {"sandbox_bundle_hash": "sha256:7c2e"}, "restorableRuntimes": [{"sandbox_bundle_hash": "sha256:41ab"}]}`,
 		want: &File{
-			DefaultRuntime:     Attributes{"sandbox_runtime_hash": "sha256:7c2e"},
-			RestorableRuntimes: []Attributes{{"sandbox_runtime_hash": "sha256:41ab"}},
+			DefaultRuntime:     Attributes{"sandbox_bundle_hash": "sha256:7c2e"},
+			RestorableRuntimes: []Attributes{{"sandbox_bundle_hash": "sha256:41ab"}},
 		},
 	}}
 	for _, tt := range tests {

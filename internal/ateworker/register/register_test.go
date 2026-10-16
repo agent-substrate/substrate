@@ -80,9 +80,9 @@ func TestFromFilesMissing(t *testing.T) {
 
 func TestBuildRuntime(t *testing.T) {
 	got := buildRuntime("gvisor", sandboxruntimes.Attributes{
-		hardware.AttrSandboxRuntimeHash: "sha256:abc",
-		hardware.AttrCPUFeatures:        "3f",
-		hardware.AttrArchitecture:       runtime.GOARCH,
+		hardware.AttrSandboxBundleHash: "sha256:abc",
+		hardware.AttrCPUFeatures:       "3f",
+		hardware.AttrArchitecture:      runtime.GOARCH,
 	})
 	want := &ateletpb.SandboxRuntime{
 		SandboxClass: "gvisor",
@@ -91,7 +91,7 @@ func TestBuildRuntime(t *testing.T) {
 			Attributes: []*ateletpb.AttributeEntry{
 				{Key: hardware.AttrArchitecture, Value: runtime.GOARCH},
 				{Key: hardware.AttrCPUFeatures, Value: "3f"},
-				{Key: hardware.AttrSandboxRuntimeHash, Value: "sha256:abc"},
+				{Key: hardware.AttrSandboxBundleHash, Value: "sha256:abc"},
 			},
 		},
 	}
@@ -104,16 +104,16 @@ func TestReconcilerSync(t *testing.T) {
 	capacity := &ateletpb.WorkerResources{Actors: testActors}
 	v1 := &sandboxruntimes.File{
 		DefaultRuntime: sandboxruntimes.Attributes{
-			hardware.AttrArchitecture:       runtime.GOARCH,
-			hardware.AttrCPUFeatures:        "3",
-			hardware.AttrSandboxRuntimeHash: "sha256:v1",
+			hardware.AttrArchitecture:      runtime.GOARCH,
+			hardware.AttrCPUFeatures:       "3",
+			hardware.AttrSandboxBundleHash: "sha256:v1",
 		},
 	}
 	v2 := &sandboxruntimes.File{
 		DefaultRuntime: sandboxruntimes.Attributes{
-			hardware.AttrArchitecture:       runtime.GOARCH,
-			hardware.AttrCPUFeatures:        "7",
-			hardware.AttrSandboxRuntimeHash: "sha256:v2",
+			hardware.AttrArchitecture:      runtime.GOARCH,
+			hardware.AttrCPUFeatures:       "7",
+			hardware.AttrSandboxBundleHash: "sha256:v2",
 		},
 		RestorableRuntimes: []sandboxruntimes.Attributes{v1.DefaultRuntime},
 	}
@@ -242,7 +242,7 @@ func TestReconcilerRunBackoff(t *testing.T) {
 	defer cancel()
 
 	file := &sandboxruntimes.File{
-		DefaultRuntime: sandboxruntimes.Attributes{hardware.AttrSandboxRuntimeHash: "sha256:v1"},
+		DefaultRuntime: sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"},
 	}
 	changes := make(chan struct{}, 1)
 
@@ -269,7 +269,7 @@ func TestReconcilerRunBackoff(t *testing.T) {
 			case 4:
 				// Succeed on attempt 4, then trigger a file update on changes.
 				file = &sandboxruntimes.File{
-					DefaultRuntime: sandboxruntimes.Attributes{hardware.AttrSandboxRuntimeHash: "sha256:v2"},
+					DefaultRuntime: sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v2"},
 				}
 				changes <- struct{}{}
 				return nil
@@ -321,7 +321,7 @@ func TestReconcilerIgnoresChangesDuringBackoff(t *testing.T) {
 	defer cancel()
 
 	file := &sandboxruntimes.File{
-		DefaultRuntime: sandboxruntimes.Attributes{hardware.AttrSandboxRuntimeHash: "sha256:v1"},
+		DefaultRuntime: sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"},
 	}
 	changes := make(chan struct{}, 1)
 	// started reports each registration attempt as it begins; release lets
@@ -409,7 +409,7 @@ func TestReconcilerRunResync(t *testing.T) {
 				cancel()
 			}
 			return &sandboxruntimes.File{
-				DefaultRuntime: sandboxruntimes.Attributes{hardware.AttrSandboxRuntimeHash: "sha256:v1"},
+				DefaultRuntime: sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"},
 			}, nil
 		},
 		func(context.Context, *ateletpb.RegisterWorkerRequest) error { return nil },
@@ -548,9 +548,9 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 	// before atelet has reconciled the pod.
 	v1 := &sandboxruntimes.File{
 		DefaultRuntime: sandboxruntimes.Attributes{
-			hardware.AttrArchitecture:       runtime.GOARCH,
-			hardware.AttrCPUFeatures:        "3",
-			hardware.AttrSandboxRuntimeHash: "sha256:v1",
+			hardware.AttrArchitecture:      runtime.GOARCH,
+			hardware.AttrCPUFeatures:       "3",
+			hardware.AttrSandboxBundleHash: "sha256:v1",
 		},
 	}
 	if _, err := sandboxruntimes.Write(path, v1); err != nil {
@@ -569,9 +569,9 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 	// second registration.
 	v2 := &sandboxruntimes.File{
 		DefaultRuntime: sandboxruntimes.Attributes{
-			hardware.AttrArchitecture:       runtime.GOARCH,
-			hardware.AttrCPUFeatures:        "7",
-			hardware.AttrSandboxRuntimeHash: "sha256:v2",
+			hardware.AttrArchitecture:      runtime.GOARCH,
+			hardware.AttrCPUFeatures:       "7",
+			hardware.AttrSandboxBundleHash: "sha256:v2",
 		},
 		RestorableRuntimes: []sandboxruntimes.Attributes{v1.DefaultRuntime},
 	}

@@ -71,7 +71,7 @@ patches:
         path: /spec/template/spec/containers/0/ports
         value:
         - name: grpc
-          containerPort: 8085
+          containerPort: 21998
         # fake-workersync's capacity reports, relayed to ate-api-server under
         # this pod's atelet identity; only fake-workersync's is admitted.
         - name: relay

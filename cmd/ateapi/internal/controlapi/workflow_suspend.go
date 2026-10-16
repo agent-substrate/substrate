@@ -80,6 +80,9 @@ func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.Act
 	var actor *ateapipb.Actor
 	var actorTemplate *ateapipb.ActorTemplate
 	var wireFidelity string
+	// ateletState is the state atelet returned from Checkpoint or
+	// PromoteSnapshot, which finalize applies.
+	var ateletState *ateletpb.ActorSnapshotState
 	// Set just before finalize; nil until then, so earlier exits label
 	// themselves from the record they hold.
 	var finalAttrs []attribute.KeyValue
@@ -127,9 +130,9 @@ func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.Act
 	}
 	actor = marked
 	if fromPaused {
-		wireFidelity, err = w.ensurePausedSnapshotUploaded(leaseCtx, actorRef, actor, actorTemplate)
+		wireFidelity, ateletState, err = w.ensurePausedSnapshotUploaded(leaseCtx, actorRef, actor, actorTemplate)
 	} else {
-		wireFidelity, err = w.ensureAteletSuspended(leaseCtx, actorRef, actor, actorTemplate, mode)
+		wireFidelity, ateletState, err = w.ensureAteletSuspended(leaseCtx, actorRef, actor, actorTemplate, mode)
 	}
 	if err != nil {
 		return nil, err
@@ -139,10 +142,11 @@ func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.Act
 		return nil, err
 	}
 	// FinalizeSuspended clears the WorkerAssignment the labels read, so snapshot
-	// them here, as crash.go does for the crash counter.
+	// them here, as crash.go does for the crash counter. The fidelity label is
+	// the one requested.
 	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", wireFidelity)
 	var finalized *ateapipb.Actor
-	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, mode); err != nil {
+	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, mode, ateletState); err != nil {
 		return nil, err
 	}
 	actor = finalized
@@ -302,31 +306,33 @@ func isPausedOriginSuspend(actor *ateapipb.Actor) bool {
 
 // ensureAteletSuspended checkpoints the workload to the actor's persisted
 // in-progress snapshot location. A sync suspend has atelet upload it before
-// returning; an async suspend has atelet keep it on the node.
+// returning; an async suspend has atelet keep it on the node. It returns the
+// snapshot state atelet reports once the checkpoint is taken, which finalize
+// applies.
 // This is the atelet reentrancy seam (#372):
 // the request is keyed by the actor UID, the worker pod UID, and the
 // once-minted snapshot location, so a re-entered workflow re-sends the same
 // semantic request; once atelet's Checkpoint is idempotent on those keys this
 // step becomes fully reentrant with no changes here.
-func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, mode suspendMode) (wireFidelity string, err error) {
+func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, mode suspendMode) (wireFidelity string, state *ateletpb.ActorSnapshotState, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletSuspend")
 	defer func() { err = done(err) }()
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		// Missing active worker pod reference in SUSPENDING state indicates corrupted store state.
-		return "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageWorkerAssignmentMissing)
+		return "", nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageWorkerAssignmentMissing)
 	}
 
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
-		return "", fmt.Errorf("while getting atelet conn for node %q: %w", assignment.GetNodeName(), err)
+		return "", nil, fmt.Errorf("while getting atelet conn for node %q: %w", assignment.GetNodeName(), err)
 	}
 	client := ateletpb.NewAteletClient(ateletConn)
 
 	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	// Checkpoint does not carry the sandbox config: atelet uses the version the
@@ -341,7 +347,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	if mode == suspendAsync {
 		uri, err := newInProgressSnapshotURI(actorTemplate, actor, inProgressSnap.GetUuid())
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		snapshotURI = uri.String()
 	}
@@ -367,10 +373,11 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	}
 	wireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 
-	if _, err = client.Checkpoint(ctx, req); err != nil {
-		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
+	resp, err := client.Checkpoint(ctx, req)
+	if err != nil {
+		return wireFidelity, nil, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
-	return wireFidelity, nil
+	return wireFidelity, resp.GetState(), nil
 }
 
 // TODO(paused-suspend): remove with the paused -> suspended transition.
@@ -380,19 +387,19 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 // worker to checkpoint. Retries re-send the same semantic request: the
 // destination is minted once and the upload overwrites deterministic object
 // names, with the remote manifest as the commit marker.
-func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireFidelity string, err error) {
+func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireFidelity string, state *ateletpb.ActorSnapshotState, err error) {
 	ctx, done := stepSpan(ctx, "PromoteSnapshot")
 	defer func() { err = done(err) }()
 
 	localSnap := findLatestLocalSnapshot(actor.GetStatus())
 	if localSnap == nil {
-		return "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
+		return "", nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
 	}
 	nodeName := actor.GetStatus().GetAssignedNode()
 	if nodeName == "" {
 		// Without the node the snapshot can never be found (mirrors an async
 		// FinalizeSuspended, which crashes rather than record an unknown node).
-		return "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown)
+		return "", nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown)
 	}
 
 	ateletConn, err := w.dialer.DialForAteletOnNode(nodeName)
@@ -400,7 +407,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		// No atelet on the node is indistinguishable from an atelet restart or
 		// informer lag, and the snapshot bytes may still be on its disk: stay
 		// retryable rather than crash.
-		return "", fmt.Errorf("while getting atelet conn for node %q: %w", nodeName, err)
+		return "", nil, fmt.Errorf("while getting atelet conn for node %q: %w", nodeName, err)
 	}
 	client := ateletpb.NewAteletClient(ateletConn)
 
@@ -423,10 +430,11 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	}
 	wireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 
-	if _, err = client.PromoteSnapshot(ctx, req); err != nil {
-		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "PromoteSnapshot", false, err)
+	resp, err := client.PromoteSnapshot(ctx, req)
+	if err != nil {
+		return wireFidelity, nil, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "PromoteSnapshot", false, err)
 	}
-	return wireFidelity, nil
+	return wireFidelity, resp.GetState(), nil
 }
 
 // newInProgressSnapshotURI is where the snapshot an actor is currently taking is
@@ -468,7 +476,10 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // crashing the actor after its worker died) is not overwritten: an actor that
 // is no longer SUSPENDING is left as it is and the step fails with
 // FailedPrecondition.
-func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, mode suspendMode) (_ *ateapipb.Actor, err error) {
+// ateletState is the state atelet returned from Checkpoint or
+// PromoteSnapshot, applied in the same update. A state that conflicts with the
+// record fails the step before it frees the worker.
+func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, ateletState *ateletpb.ActorSnapshotState) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
 
@@ -512,6 +523,14 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		}
 	}
 
+	// Apply atelet's state before freeing the worker, so a state that
+	// conflicts with the record fails the step while a retry can still call
+	// atelet again.
+	applied := proto.CloneOf(latestActor.GetStatus())
+	if err := applyCheckpointState(ctx, applied, ateletState); err != nil {
+		return nil, err
+	}
+
 	// 1. Free the worker (if it hasn't been freed yet)
 	if latestActor.GetStatus().GetWorkerAssignment() != nil {
 		t = time.Now()
@@ -530,6 +549,8 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	t = time.Now()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+		// The precondition makes toUpdate the version applied was built from.
+		toUpdate.Status.Snapshots = applied.GetSnapshots()
 		snap := snapshotAtLatestGeneration(toUpdate.Status)
 		switch mode {
 		case suspendSync:

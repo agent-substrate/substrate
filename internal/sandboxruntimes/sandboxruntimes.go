@@ -39,7 +39,7 @@ type File struct {
 	RestorableRuntimes []Attributes `json:"restorableRuntimes,omitempty"`
 }
 
-// Attributes maps a compatibility attribute key, e.g. "sandbox_runtime_hash",
+// Attributes maps a compatibility attribute key, e.g. "sandbox_bundle_hash",
 // to its value.
 type Attributes map[string]string
 

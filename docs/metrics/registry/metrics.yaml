@@ -378,6 +378,12 @@ groups:
                 Checkpoint. atelet writes the snapshot to its destination. It
                 uploads an external snapshot. It renames a local snapshot. The
                 ate.snapshot.kind key tells you which.
+            - id: cleanup
+              stability: development
+              value: cleanup
+              brief: >
+                Checkpoint. atelet removes superseded local snapshots, unmounts
+                external volumes, and resets the actor directories on the node.
             - id: total
               stability: development
               value: total
@@ -704,7 +710,7 @@ groups:
         stability: stable
         type: int
         brief: The TCP port of the server that a gRPC client called.
-        examples: [8085]
+        examples: [21998]
 
   # ---------------------------------------------------------------------------
   # Metrics. ateapi

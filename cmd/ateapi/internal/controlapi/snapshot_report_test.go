@@ -122,6 +122,17 @@ func TestApplyActorSnapshotState(t *testing.T) {
 			}(),
 		}},
 	}, {
+		name: "an unset fidelity is refused",
+		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, reportNode, pending),
+		}},
+		state: &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: func() *ateapipb.SnapshotReport {
+			r := reported(t, 2)
+			r.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+			return r
+		}()},
+		wantCode: codes.InvalidArgument,
+	}, {
 		name: "a snapshot already COMPLETED changes nothing",
 		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
 			withDurable(t, 2, reportNode, completed),

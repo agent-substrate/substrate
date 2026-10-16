@@ -227,9 +227,10 @@ class ParseTest(unittest.TestCase):
 
 class UnattributedTest(unittest.TestCase):
     def test_atelet_checkpoint_residual_is_total_minus_sequential_phases(self):
-        out = parse(ATELET_CHECKPOINT)
+        rec = dict(ATELET_CHECKPOINT, **{"ate.actor.checkpoint.duration.cleanup": 0.35})
+        out = parse(rec)
         phase_report.join_layers(out.breakdowns)
-        self.assertAlmostEqual(out.breakdowns[0].phases["unattributed"], 6.0 - (0.01 + 1.14 + 4.48))
+        self.assertAlmostEqual(out.breakdowns[0].phases["unattributed"], 6.0 - (0.01 + 1.14 + 4.48 + 0.35))
     def test_microvm_ateworker_checkpoint_counts_the_concurrent_captures_once(self):
         # prep + pause + max(snapshot, rootfs_upper) + teardown; the two
         # captures overlapped, so only the slower one is spent wall time.
@@ -313,6 +314,16 @@ class ReportTest(unittest.TestCase):
         # a later cycle of a rapidly cycling actor.
         during_persist = dict(ATEWORKER_CHECKPOINT, time="2026-09-23T10:00:59.000000000Z")
         out = parse(ATEWORKER_CHECKPOINT, during_persist, ATELET_CHECKPOINT)
+        pairs = phase_report.pair_records(out.breakdowns)
+        atelet = next(b for b in out.breakdowns if b.source == "atelet")
+        self.assertIs(pairs[id(atelet)], out.breakdowns[0])
+
+    def test_checkpoint_pairing_window_excludes_cleanup(self):
+        # Cleanup runs after the ateworker record is written too: a record from
+        # inside the 0.35 s cleanup window belongs to a later cycle.
+        checkpoint = dict(ATELET_CHECKPOINT, **{"ate.actor.checkpoint.duration.cleanup": 0.35})
+        during_cleanup = dict(ATEWORKER_CHECKPOINT, time="2026-09-23T10:00:56.400000000Z")
+        out = parse(ATEWORKER_CHECKPOINT, during_cleanup, checkpoint)
         pairs = phase_report.pair_records(out.breakdowns)
         atelet = next(b for b in out.breakdowns if b.source == "atelet")
         self.assertIs(pairs[id(atelet)], out.breakdowns[0])

@@ -106,7 +106,7 @@ func TestRecordForArch(t *testing.T) {
 	}
 }
 
-func TestRuntimeHash(t *testing.T) {
+func TestBundleHash(t *testing.T) {
 	gvisor := map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"}}
 	pause := "sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
 
@@ -147,8 +147,8 @@ func TestRuntimeHash(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := runtimeHash(tt.rec, tt.pauseDigest); got != tt.want {
-				t.Errorf("runtimeHash() = %q, want %q", got, tt.want)
+			if got := bundleHash(tt.rec, tt.pauseDigest); got != tt.want {
+				t.Errorf("bundleHash() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -280,7 +280,7 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 	}
 }
 
-func TestVersionRuntimeHash(t *testing.T) {
+func TestVersionBundleHash(t *testing.T) {
 	gvisor := map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"}}
 	pause := "sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
 
@@ -292,14 +292,14 @@ func TestVersionRuntimeHash(t *testing.T) {
 	}{{
 		name:       "pause image pinned by digest",
 		pauseImage: "registry.k8s.io/pause:3.10.2@" + pause,
-		want:       runtimeHash(&sandboxAssetsRecord{Assets: gvisor}, pause),
+		want:       bundleHash(&sandboxAssetsRecord{Assets: gvisor}, pause),
 	}, {
 		name:       "pause image pinned by digest only",
 		pauseImage: "gcr.io/gke-release/pause@" + pause,
-		want:       runtimeHash(&sandboxAssetsRecord{Assets: gvisor}, pause),
+		want:       bundleHash(&sandboxAssetsRecord{Assets: gvisor}, pause),
 	}, {
 		name: "no pause image",
-		want: runtimeHash(&sandboxAssetsRecord{Assets: gvisor}, ""),
+		want: bundleHash(&sandboxAssetsRecord{Assets: gvisor}, ""),
 	}, {
 		// The CRD rejects this shape.
 		name:       "pause image by tag",
@@ -308,15 +308,15 @@ func TestVersionRuntimeHash(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := versionRuntimeHash(&sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: tt.pauseImage, Assets: gvisor})
+			got, err := versionBundleHash(&sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: tt.pauseImage, Assets: gvisor})
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("versionRuntimeHash() error = %v, want error %v", err, tt.wantErr)
+				t.Fatalf("versionBundleHash() error = %v, want error %v", err, tt.wantErr)
 			}
 			if err != nil && !errors.Is(err, errPermanent) {
-				t.Errorf("versionRuntimeHash() error = %v, want errPermanent", err)
+				t.Errorf("versionBundleHash() error = %v, want errPermanent", err)
 			}
 			if got != tt.want {
-				t.Errorf("versionRuntimeHash() = %q, want %q", got, tt.want)
+				t.Errorf("versionBundleHash() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -331,9 +331,9 @@ func wantRuntime(name string) sandboxruntimes.Attributes {
 func wantRuntimeWithFeatures(name, cpuFeatures string) sandboxruntimes.Attributes {
 	rec := &sandboxAssetsRecord{Assets: map[string]assetEntry{gvisorAssetName: {SHA256: "sha-" + name}}}
 	return sandboxruntimes.Attributes{
-		hardware.AttrArchitecture:       runtime.GOARCH,
-		hardware.AttrCPUFeatures:        cpuFeatures,
-		hardware.AttrSandboxRuntimeHash: runtimeHash(rec, pauseDigest(name)),
+		hardware.AttrArchitecture:      runtime.GOARCH,
+		hardware.AttrCPUFeatures:       cpuFeatures,
+		hardware.AttrSandboxBundleHash: bundleHash(rec, pauseDigest(name)),
 	}
 }
 
@@ -482,10 +482,10 @@ func TestPlanAndBuildMicroVM(t *testing.T) {
 	wantMicroVM := func(sha string) sandboxruntimes.Attributes {
 		rec := &sandboxAssetsRecord{Assets: map[string]assetEntry{"kernel": {SHA256: sha}}}
 		return sandboxruntimes.Attributes{
-			hardware.AttrArchitecture:       runtime.GOARCH,
-			hardware.AttrCPUVendor:          testCPUVendor,
-			hardware.AttrCPUModel:           testCPUModel,
-			hardware.AttrSandboxRuntimeHash: runtimeHash(rec, ""),
+			hardware.AttrArchitecture:      runtime.GOARCH,
+			hardware.AttrCPUVendor:         testCPUVendor,
+			hardware.AttrCPUModel:          testCPUModel,
+			hardware.AttrSandboxBundleHash: bundleHash(rec, ""),
 		}
 	}
 
@@ -536,7 +536,7 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 	feats := testCPUFeatures()
 
 	t.Run("a version with an earlier version's binaries in another bucket is neither fetched nor probed", func(t *testing.T) {
-		// runtimeHash leaves URLs out, so v3 is v1's runtime. The syncer must
+		// bundleHash leaves URLs out, so v3 is v1's runtime. The syncer must
 		// see that from the spec alone, before touching v3's bucket.
 		cfg := multiVersionConfig()
 		v3 := *cfg.Spec.Versions[1].DeepCopy()
@@ -565,7 +565,7 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 	t.Run("memoizes runsc cpu-features by asset digest across versions and syncs", func(t *testing.T) {
 		cfg := multiVersionConfig()
 		// Add a third version "v3" that shares v1's gvisor asset digest ("sha-v1")
-		// but has its own pause image digest, so it has a distinct runtime hash
+		// but has its own pause image digest, so it has a distinct bundle hash
 		// while reusing the same runsc binary.
 		v3 := *cfg.Spec.Versions[1].DeepCopy()
 		v3.Name = "v3"
@@ -597,9 +597,9 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 			RestorableRuntimes: []sandboxruntimes.Attributes{
 				wantRuntimeWithFeatures("v1", "1"),
 				{
-					hardware.AttrArchitecture:       runtime.GOARCH,
-					hardware.AttrCPUFeatures:        "1",
-					hardware.AttrSandboxRuntimeHash: runtimeHash(v3Rec, pauseDigest("v3")),
+					hardware.AttrArchitecture:      runtime.GOARCH,
+					hardware.AttrCPUFeatures:       "1",
+					hardware.AttrSandboxBundleHash: bundleHash(v3Rec, pauseDigest("v3")),
 				},
 			},
 		}

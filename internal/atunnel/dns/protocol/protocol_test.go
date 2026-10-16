@@ -285,3 +285,85 @@ func TestErrorPacket(t *testing.T) {
 		}
 	})
 }
+
+func TestNXDomainPacket(t *testing.T) {
+	q := dnsmessage.Question{
+		Name:  dnsmessage.MustNewName("blocked.example.com."),
+		Type:  dnsmessage.TypeA,
+		Class: dnsmessage.ClassINET,
+	}
+	reqHdr := dnsmessage.Header{ID: 0xabcd, RecursionDesired: true}
+	pkt := NXDomainPacket(reqHdr, q)
+
+	var p dnsmessage.Parser
+	gotHdr, err := p.Start(pkt)
+	if err != nil {
+		t.Fatalf("p.Start() unexpected error: %v", err)
+	}
+	if gotHdr.ID != reqHdr.ID {
+		t.Errorf("ID = %#x, want %#x", gotHdr.ID, reqHdr.ID)
+	}
+	if !gotHdr.Response || !gotHdr.RecursionDesired || !gotHdr.RecursionAvailable {
+		t.Errorf("header = %+v, want QR, RD, and RA set", gotHdr)
+	}
+	if gotHdr.RCode != dnsmessage.RCodeNameError {
+		t.Errorf("RCode = %v, want %v", gotHdr.RCode, dnsmessage.RCodeNameError)
+	}
+	questions, err := p.AllQuestions()
+	if err != nil {
+		t.Fatalf("p.AllQuestions() unexpected error: %v", err)
+	}
+	if len(questions) != 1 || questions[0] != q {
+		t.Errorf("questions = %+v, want [%+v]", questions, q)
+	}
+	answers, err := p.AllAnswers()
+	if err != nil {
+		t.Fatalf("p.AllAnswers() unexpected error: %v", err)
+	}
+	if len(answers) != 0 {
+		t.Errorf("answers = %+v, want none", answers)
+	}
+
+	// The SOA record's TTL and MINIMUM bound how long a resolver may cache the
+	// negative answer (RFC 2308 section 5); both must be 0.
+	authorities, err := p.AllAuthorities()
+	if err != nil {
+		t.Fatalf("p.AllAuthorities() unexpected error: %v", err)
+	}
+	if len(authorities) != 1 {
+		t.Fatalf("authorities = %+v, want one SOA record", authorities)
+	}
+	soaHdr := authorities[0].Header
+	soa, ok := authorities[0].Body.(*dnsmessage.SOAResource)
+	if !ok {
+		t.Fatalf("authority record = %T, want *dnsmessage.SOAResource", authorities[0].Body)
+	}
+	if soaHdr.Name.String() != "." || soaHdr.Class != dnsmessage.ClassINET {
+		t.Errorf("SOA owner/class = %v %v, want . ClassINET", soaHdr.Name, soaHdr.Class)
+	}
+	if soaHdr.TTL != 0 {
+		t.Errorf("SOA TTL = %d, want 0", soaHdr.TTL)
+	}
+	if soa.MinTTL != 0 {
+		t.Errorf("SOA MINIMUM = %d, want 0", soa.MinTTL)
+	}
+}
+
+func TestNXDomainPacketUnencodableQuestion(t *testing.T) {
+	// A zero-value Name cannot be encoded; the reply is still NXDOMAIN.
+	badQ := dnsmessage.Question{Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}
+	reqHdr := dnsmessage.Header{ID: 0x4321}
+	pkt := NXDomainPacket(reqHdr, badQ)
+
+	var p dnsmessage.Parser
+	gotHdr, err := p.Start(pkt)
+	if err != nil {
+		t.Fatalf("p.Start() unexpected error: %v", err)
+	}
+	if gotHdr.ID != reqHdr.ID {
+		t.Errorf("ID = %#x, want %#x", gotHdr.ID, reqHdr.ID)
+	}
+	if gotHdr.RCode != dnsmessage.RCodeNameError {
+		t.Errorf("RCode = %v, want %v", gotHdr.RCode, dnsmessage.RCodeNameError)
+	}
+}
