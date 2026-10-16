@@ -329,6 +329,8 @@ var defaultRPCPermissions = map[string]rpcRule{
 	ateapi.WorkerService_AcquireWorkerEpoch_FullMethodName:         inHandler("ateletauth: caller is atelet on the Worker's node"),
 	ateapi.WorkerService_RegisterWorker_FullMethodName:             inHandler("ateletauth: caller is atelet on the Worker's node"),
 	ateapi.WorkerService_SetWorkerSandboxRuntimes_FullMethodName:   inHandler("ateletauth: caller is atelet on the Worker's node"),
+	ateapi.WorkerService_AddWorkerAllocated_FullMethodName:         inHandler("ateletauth: caller is atelet on the Worker's node"),
+	ateapi.WorkerService_SubtractWorkerAllocated_FullMethodName:    inHandler("ateletauth: caller is atelet on the Worker's node"),
 	ateapi.WorkerService_ReportActorCrashed_FullMethodName:         inHandler("ateletauth: caller is atelet on the node of the Worker hosting the Actor"),
 	ateapi.WorkerService_RequestActorSuspend_FullMethodName:        inHandler("ateletauth: caller is atelet on the node of the Worker hosting the Actor"),
 	ateapi.WorkerService_MintWorkerActorCertificate_FullMethodName: inHandler("ateletauth: caller is atelet on the node of the Worker the Actor is assigned to"),

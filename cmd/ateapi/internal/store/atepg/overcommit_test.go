@@ -16,12 +16,14 @@ package atepg
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
 )
 
@@ -139,4 +141,82 @@ func TestBindActorToWorker_OvercommitRebindClampsAtZero(t *testing.T) {
 
 	mustBind(t, p, overcommitAssignment("uid-a", 1000, 1<<30))
 	wantAllocated(t, p, &ateapi.WorkerResources{CpuMillicores: 1000, MemoryBytes: 1 << 30, Actors: 1})
+}
+
+func TestAddWorkerAllocated(t *testing.T) {
+	ctx := context.Background()
+	p := setupPostgresPersistence(t)
+	p.SetOvercommitEnabled(true)
+	createOvercommitWorker(t, p)
+	mustBind(t, p, overcommitAssignment("uid-a", 500, 1<<30))
+
+	got, err := p.AddWorkerAllocated(ctx, overcommitWorker, resources.CPUMemory(250, 1<<30))
+	if err != nil {
+		t.Fatalf("AddWorkerAllocated failed: %v", err)
+	}
+	want := &ateapi.WorkerResources{CpuMillicores: 750, MemoryBytes: 2 << 30, Actors: 1}
+	if diff := cmp.Diff(want, got.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
+		t.Errorf("returned allocated mismatch (-want +got):\n%s", diff)
+	}
+	wantAllocated(t, p, want)
+}
+
+func TestSubtractWorkerAllocated(t *testing.T) {
+	ctx := context.Background()
+	p := setupPostgresPersistence(t)
+	p.SetOvercommitEnabled(true)
+	createOvercommitWorker(t, p)
+	mustBind(t, p, overcommitAssignment("uid-a", 2000, 4<<30))
+
+	got, err := p.SubtractWorkerAllocated(ctx, overcommitWorker, resources.CPUMemory(1500, 1<<30))
+	if err != nil {
+		t.Fatalf("SubtractWorkerAllocated failed: %v", err)
+	}
+	want := &ateapi.WorkerResources{CpuMillicores: 500, MemoryBytes: 3 << 30, Actors: 1}
+	if diff := cmp.Diff(want, got.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
+		t.Errorf("returned allocated mismatch (-want +got):\n%s", diff)
+	}
+	wantAllocated(t, p, want)
+
+	// Handing back more than is booked empties the dimension rather than
+	// taking it negative.
+	if _, err := p.SubtractWorkerAllocated(ctx, overcommitWorker, resources.CPUMemory(5000, 0)); err != nil {
+		t.Fatalf("SubtractWorkerAllocated(clamp) failed: %v", err)
+	}
+	wantAllocated(t, p, &ateapi.WorkerResources{MemoryBytes: 3 << 30, Actors: 1})
+}
+
+// A delta clamped to nothing is not a write, so it must not churn the version.
+func TestSubtractWorkerAllocated_NoOpDoesNotWrite(t *testing.T) {
+	ctx := context.Background()
+	p := setupPostgresPersistence(t)
+	created := createOvercommitWorker(t, p)
+
+	got, err := p.SubtractWorkerAllocated(ctx, overcommitWorker, resources.CPUMemory(100, 0))
+	if err != nil {
+		t.Fatalf("SubtractWorkerAllocated failed: %v", err)
+	}
+	if got.GetMetadata().GetVersion() != created.GetMetadata().GetVersion() {
+		t.Errorf("version = %d, want %d unchanged", got.GetMetadata().GetVersion(), created.GetMetadata().GetVersion())
+	}
+	if stored := allocatedOf(t, p); stored != nil {
+		t.Errorf("allocated = %v, want nil", stored)
+	}
+}
+
+func TestAdjustWorkerAllocated_Errors(t *testing.T) {
+	ctx := context.Background()
+	p := setupPostgresPersistence(t)
+	createOvercommitWorker(t, p)
+
+	for name, adjust := range map[string]func(context.Context, string, *ateapi.Resources) (*ateapi.Worker, error){
+		"add":      p.AddWorkerAllocated,
+		"subtract": p.SubtractWorkerAllocated,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := adjust(ctx, "no-such-worker", resources.CPUMemory(1, 0)); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("absent worker: err = %v, want ErrNotFound", err)
+			}
+		})
+	}
 }

@@ -86,6 +86,16 @@ func ValidateSetWorkerSandboxRuntimesRequest(ctx context.Context, req *ateapi.Se
 	return Validate_SetWorkerSandboxRuntimesRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateAddWorkerAllocatedRequest(ctx context.Context, req *ateapi.AddWorkerAllocatedRequest) field.ErrorList {
+	op := MakeCreateOp(ctx)
+	return Validate_AddWorkerAllocatedRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateSubtractWorkerAllocatedRequest(ctx context.Context, req *ateapi.SubtractWorkerAllocatedRequest) field.ErrorList {
+	op := MakeCreateOp(ctx)
+	return Validate_SubtractWorkerAllocatedRequest(ctx, op, nil, req, nil)
+}
+
 func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateapi.RequestActorSuspendRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_RequestActorSuspendRequest(ctx, op, nil, req, nil)

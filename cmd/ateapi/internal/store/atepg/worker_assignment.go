@@ -232,6 +232,47 @@ func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName str
 	return released, nil
 }
 
+func (p *Persistence) AddWorkerAllocated(ctx context.Context, name string, delta *ateapi.Resources) (*ateapi.Worker, error) {
+	return p.adjustWorkerAllocated(ctx, name, delta, resources.AddResourcesToAllocated)
+}
+
+func (p *Persistence) SubtractWorkerAllocated(ctx context.Context, name string, delta *ateapi.Resources) (*ateapi.Worker, error) {
+	return p.adjustWorkerAllocated(ctx, name, delta, resources.SubtractResourcesFromAllocated)
+}
+
+// adjustWorkerAllocated applies delta to a Worker's allocation under its row
+// lock and announces the change. A delta that changes nothing, such as one
+// clamped away entirely, leaves the Worker at its version and announces
+// nothing.
+func (p *Persistence) adjustWorkerAllocated(ctx context.Context, name string, delta *ateapi.Resources, apply func(*ateapi.WorkerResources, *ateapi.Resources) *ateapi.WorkerResources) (*ateapi.Worker, error) {
+	var result *ateapi.Worker
+	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
+		result = nil
+		worker, err := getWorkerForUpdate(ctx, tx, name)
+		if err != nil {
+			return nil, err
+		}
+		if worker.Status == nil {
+			worker.Status = &ateapi.WorkerStatus{}
+		}
+		allocated := apply(worker.Status.Allocated, delta)
+		if proto.Equal(allocated, worker.Status.Allocated) {
+			result = worker
+			return nil, nil
+		}
+		worker.Status.Allocated = allocated
+		if err := saveWorker(ctx, tx, worker); err != nil {
+			return nil, err
+		}
+		result = worker
+		return worker, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // getAssignmentRow reads the assignment for actorUID and names the worker
 // holding it.
 func getAssignmentRow(ctx context.Context, q querier, actorUID string) (*ateapi.ActorAssignment, string, error) {

@@ -46,6 +46,16 @@ func AddActorCountOnly(total *ateapi.WorkerResources, deltaActors int32) *ateapi
 	})
 }
 
+// AddResourcesToAllocated adds delta to the allocated resources and leaves the
+// actor count untouched. It returns nil when allocation reaches zero.
+func AddResourcesToAllocated(total *ateapi.WorkerResources, delta *ateapi.Resources) *ateapi.WorkerResources {
+	return nonEmpty(&ateapi.WorkerResources{
+		CpuMillicores: total.GetCpuMillicores() + delta.GetCpuMillicores(),
+		MemoryBytes:   total.GetMemoryBytes() + delta.GetMemoryBytes(),
+		Actors:        total.GetActors(),
+	})
+}
+
 // SubtractResourcesFromAllocated subtracts delta from the allocated resources
 // and leaves the actor count untouched. Each dimension is clamped at zero, so a
 // Worker handing back more than is booked empties that dimension instead of

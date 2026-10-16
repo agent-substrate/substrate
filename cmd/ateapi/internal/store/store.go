@@ -300,6 +300,16 @@ type Interface interface {
 	// assignment was already absent.
 	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapi.Worker, error)
 
+	// AddWorkerAllocated adds delta to a Worker's allocated resources under
+	// the same row lock that serializes binds and releases, and returns the
+	// Worker as it now stands. The actor count is left alone. ErrNotFound if
+	// the Worker is gone.
+	AddWorkerAllocated(ctx context.Context, name string, delta *ateapi.Resources) (*ateapi.Worker, error)
+
+	// SubtractWorkerAllocated is AddWorkerAllocated in the other direction,
+	// with each dimension clamped at zero so allocation never goes negative.
+	SubtractWorkerAllocated(ctx context.Context, name string, delta *ateapi.Resources) (*ateapi.Worker, error)
+
 	// GetWorkerAssignment returns a Worker's assignment for actorUID, or
 	// ErrNotFound when the Worker is not hosting that Actor.
 	GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapi.ActorAssignment, error)

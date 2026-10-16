@@ -127,6 +127,47 @@ func TestAddActorCountOnly(t *testing.T) {
 	}
 }
 
+func TestAddResourcesToAllocated(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		total *ateapi.WorkerResources
+		delta *ateapi.Resources
+		want  *ateapi.WorkerResources
+	}{
+		{
+			name:  "grow",
+			total: &ateapi.WorkerResources{CpuMillicores: 500, MemoryBytes: 1 << 30, Actors: 1},
+			delta: CPUMemory(250, 1<<30),
+			want:  &ateapi.WorkerResources{CpuMillicores: 750, MemoryBytes: 2 << 30, Actors: 1},
+		},
+		{
+			name:  "grow a new dimension",
+			total: &ateapi.WorkerResources{CpuMillicores: 500, Actors: 1},
+			delta: CPUMemory(0, 1<<30),
+			want:  &ateapi.WorkerResources{CpuMillicores: 500, MemoryBytes: 1 << 30, Actors: 1},
+		},
+		{
+			name:  "grow from nothing",
+			total: nil,
+			delta: CPUMemory(250, 0),
+			want:  &ateapi.WorkerResources{CpuMillicores: 250},
+		},
+		{
+			name:  "empty delta",
+			total: &ateapi.WorkerResources{CpuMillicores: 500, Actors: 3},
+			delta: nil,
+			want:  &ateapi.WorkerResources{CpuMillicores: 500, Actors: 3},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := AddResourcesToAllocated(tc.total, tc.delta)
+			if diff := cmp.Diff(tc.want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("AddResourcesToAllocated() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestSubtractResourcesFromAllocated(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
