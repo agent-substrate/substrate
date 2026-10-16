@@ -22,8 +22,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 
@@ -58,6 +60,28 @@ func writeSnapshotConfig(t *testing.T, fsDevices []map[string]any) string {
 		t.Fatalf("writing config.json: %v", err)
 	}
 	return dir
+}
+
+// mutateSnapshotConfig rewrites dir's config.json through mutate.
+func mutateSnapshotConfig(t *testing.T, dir string, mutate func(cfg map[string]any)) {
+	t.Helper()
+	cfgPath := filepath.Join(dir, "config.json")
+	b, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	mutate(cfg)
+	b, err = json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // readFsSockets returns the rewritten config's fs sockets keyed by device tag.
@@ -118,6 +142,27 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 			}
 		}
 	})
+
+	// A snapshot config that lacks or mangles the two per-actor boot paths
+	// is broken: skipping their rewrite would restore with the source
+	// actor's, so each shape is an error.
+	for name, mutate := range map[string]func(cfg map[string]any){
+		"missing payload":            func(cfg map[string]any) { delete(cfg, "payload") },
+		"malformed payload":          func(cfg map[string]any) { cfg["payload"] = "vmlinux" },
+		"malformed pmem entry":       func(cfg map[string]any) { cfg["pmem"] = []any{"not a device"} },
+		"missing pmem list":          func(cfg map[string]any) { delete(cfg, "pmem") },
+		"missing guest image device": func(cfg map[string]any) { cfg["pmem"] = []any{} },
+	} {
+		t.Run(name+" is an error", func(t *testing.T) {
+			dir := writeSnapshotConfig(t, []map[string]any{
+				{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
+			})
+			mutateSnapshotConfig(t, dir, mutate)
+			if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
+				t.Fatalf("rewriteSnapshotPaths accepted a config with %s, want an error", name)
+			}
+		})
+	}
 
 	t.Run("unknown pmem device is an error", func(t *testing.T) {
 		dir := writeSnapshotConfig(t, []map[string]any{
@@ -521,6 +566,30 @@ func TestValidateRuntimeAssetPathsRequiresTheActorsOwnDir(t *testing.T) {
 			err := validateRuntimeAssetPaths("actor-a", &ateworkerpb.ActorDirs{SandboxAssetsDir: tc.dir}, map[string]string{assetCH: tc.asset})
 			if (err != nil) != tc.wantErr {
 				t.Errorf("validateRuntimeAssetPaths(actor-a, %q, %q) = %v, wantErr %v", tc.dir, tc.asset, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestRestoreMemoryFidelityRequiresKernelAndImage pins that a memory restore
+// without the kernel or the guest image among its asset paths fails before
+// it prepares or cleans up anything: the snapshot's boot paths are repointed
+// at them, so there is nothing to restore with.
+func TestRestoreMemoryFidelityRequiresKernelAndImage(t *testing.T) {
+	// A zero service cannot prepare egress or clean up sandbox state; the
+	// check must come first for this test to return at all.
+	s := &AteWorkerService{}
+	for name, paths := range map[string]map[string]string{
+		"no assets":  nil,
+		"no kernel":  {assetImage: "/node/actors/actor-a/sandbox-assets/kata-image"},
+		"no image":   {assetKernel: "/node/actors/actor-a/sandbox-assets/kata-kernel"},
+		"empty path": {assetKernel: "", assetImage: "/node/actors/actor-a/sandbox-assets/kata-image"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := actorBootParams{actorUID: "actor-a", assetPaths: paths}
+			err := s.restoreMemoryFidelity(t.Context(), p, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, t.TempDir(), false, time.Now())
+			if err == nil || !strings.Contains(err.Error(), assetKernel) || !strings.Contains(err.Error(), assetImage) {
+				t.Fatalf("restoreMemoryFidelity with %s = %v, want an error naming %q and %q", name, err, assetKernel, assetImage)
 			}
 		})
 	}

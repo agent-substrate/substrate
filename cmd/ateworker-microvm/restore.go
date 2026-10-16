@@ -234,6 +234,12 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 // caller from their tar.
 func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBootParams, scope ateworkerpb.SnapshotFidelity, restoreDir string, preserveRestoreDir bool, tStart time.Time) (retErr error) {
 	actorUID := p.actorUID
+	// Checked before anything is prepared or cleaned up: the snapshot's
+	// kernel and guest image paths are repointed at these below.
+	kernel, image := p.assetPaths[assetKernel], p.assetPaths[assetImage]
+	if kernel == "" || image == "" {
+		return fmt.Errorf("ateworker-microvm requires %q and %q asset paths", assetKernel, assetImage)
+	}
 
 	rr := s.resolveRuntime(p.assetPaths)
 	egress, err := s.tunnel.PrepareEgress(ctx, p.attribution(), p.egressGateway)
@@ -245,10 +251,6 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// Repoint the snapshot's per-actor paths to this actor's: its VMDir
 	// sockets and files, and the kernel and guest image atelet staged under
 	// this actor's own directory.
-	kernel, image := p.assetPaths[assetKernel], p.assetPaths[assetImage]
-	if kernel == "" || image == "" {
-		return fmt.Errorf("ateworker-microvm requires %q and %q asset paths", assetKernel, assetImage)
-	}
 	if err := rewriteSnapshotPaths(restoreDir, actorUID, kernel, image); err != nil {
 		return fmt.Errorf("while rewriting snapshot paths: %w", err)
 	}
@@ -611,28 +613,38 @@ func rewriteSnapshotPaths(snapshotDir, id, kernel, image string) error {
 			}
 		}
 	}
-	if payload, ok := cfg["payload"].(map[string]any); ok {
-		if got, _ := payload["kernel"].(string); got != kernel {
-			payload["kernel"] = kernel
-			changed = true
+	// Every VM this worker boots has a payload with the kernel and a pmem
+	// device with the guest image (see buildVMConfig), and both paths are
+	// per-actor, so a snapshot config without them is broken: skipping the
+	// rewrite would hand CH the source actor's paths.
+	payload, ok := cfg["payload"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("snapshot config %q has no payload", cfgPath)
+	}
+	if got, _ := payload["kernel"].(string); got != kernel {
+		payload["kernel"] = kernel
+		changed = true
+	}
+	pmems, _ := cfg["pmem"].([]any)
+	guestImage := false
+	for _, pm := range pmems {
+		pmm, ok := pm.(map[string]any)
+		if !ok {
+			return fmt.Errorf("snapshot config %q has a malformed pmem device", cfgPath)
+		}
+		switch pmID, _ := pmm["id"].(string); pmID {
+		case guestImagePmemID:
+			guestImage = true
+			if got, _ := pmm["file"].(string); got != image {
+				pmm["file"] = image
+				changed = true
+			}
+		default:
+			return fmt.Errorf("snapshot config %q has pmem device with unknown id %q", cfgPath, pmID)
 		}
 	}
-	if pmems, ok := cfg["pmem"].([]any); ok {
-		for _, pm := range pmems {
-			pmm, ok := pm.(map[string]any)
-			if !ok {
-				return fmt.Errorf("snapshot config %q has a malformed pmem device", cfgPath)
-			}
-			switch pmID, _ := pmm["id"].(string); pmID {
-			case guestImagePmemID:
-				if got, _ := pmm["file"].(string); got != image {
-					pmm["file"] = image
-					changed = true
-				}
-			default:
-				return fmt.Errorf("snapshot config %q has pmem device with unknown id %q", cfgPath, pmID)
-			}
-		}
+	if !guestImage {
+		return fmt.Errorf("snapshot config %q has no %q pmem device", cfgPath, guestImagePmemID)
 	}
 	if !changed {
 		// Same-actor resume: nothing to rewrite, so leave a preserved snapshot untouched.

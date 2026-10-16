@@ -124,11 +124,9 @@ func linkTree(src, dst string) error {
 		target := filepath.Join(dst, rel)
 		switch {
 		case d.IsDir():
-			info, err := d.Info()
-			if err != nil {
-				return err
-			}
-			return os.Mkdir(target, info.Mode().Perm())
+			// protectTree published every directory as 0700; the mirror
+			// gets the same without a stat per directory.
+			return os.Mkdir(target, 0o700)
 		case d.Type().IsRegular():
 			if err := os.Link(path, target); err != nil {
 				if errors.Is(err, syscall.EXDEV) {
