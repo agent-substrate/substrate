@@ -45,11 +45,11 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/agent-substrate/substrate/internal/hardware"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/sandboxruntimes"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/sandboxruntimes"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
 )
 
 // errPermanent marks a failure that retrying cannot fix, so the syncer drops

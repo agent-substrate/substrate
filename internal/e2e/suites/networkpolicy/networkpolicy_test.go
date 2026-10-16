@@ -33,12 +33,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/portforward"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/portforward"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const (
@@ -283,7 +283,7 @@ func testserverPod(name, namespace string) e2e.ServerPod {
 	return e2e.ServerPod{
 		Name:       name,
 		Namespace:  namespace,
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"http"},
 		Port:       testserverPort,
 	}

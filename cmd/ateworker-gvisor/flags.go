@@ -29,7 +29,7 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/agent-substrate/substrate/internal/ateworker/register"
+	"go.ate.dev/substrate/internal/ateworker/register"
 )
 
 // commandFlags holds per-command flags for a single command.

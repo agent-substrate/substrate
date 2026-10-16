@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/internal/objectstore"
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
+	"go.ate.dev/substrate/internal/objectstore"
+	"go.ate.dev/substrate/pkg/objectstorage"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

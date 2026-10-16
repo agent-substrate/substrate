@@ -32,9 +32,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/credbundle"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const (

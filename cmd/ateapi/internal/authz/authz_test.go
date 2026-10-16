@@ -33,8 +33,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"google.golang.org/grpc/codes"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/principal"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/principal"
 )
 
 func configureDockerEnv(ctx context.Context) error {

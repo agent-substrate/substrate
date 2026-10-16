@@ -25,7 +25,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/roottest"
+	"go.ate.dev/substrate/internal/roottest"
 	"golang.org/x/sys/unix"
 )
 

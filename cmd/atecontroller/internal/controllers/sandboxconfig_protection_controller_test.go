@@ -29,7 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // TestSandboxConfigProtectionReconcile checks that the reconciler never adds

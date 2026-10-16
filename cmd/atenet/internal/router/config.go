@@ -20,7 +20,7 @@ import (
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 )
 
 type atenetRouter string

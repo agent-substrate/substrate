@@ -36,10 +36,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/workerstats"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/workerstats"
 )
 
 // workerPoolLabel is the label the pool controller stamps on every worker pod

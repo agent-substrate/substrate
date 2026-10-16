@@ -31,7 +31,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"golang.org/x/sync/errgroup"
 )
 

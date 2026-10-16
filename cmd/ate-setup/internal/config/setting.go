@@ -24,7 +24,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/installdefaults"
 )
 
 // ValueKind is the type of a setting's value.

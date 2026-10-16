@@ -22,7 +22,7 @@ import (
 
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 
-	"github.com/agent-substrate/substrate/internal/deviceplugin"
+	"go.ate.dev/substrate/internal/deviceplugin"
 )
 
 // hostDevRoot is where the node's /dev is mounted into atelet (see

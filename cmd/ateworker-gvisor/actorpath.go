@@ -23,8 +23,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 // ociBundlePath is the container's OCI bundle.

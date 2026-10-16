@@ -29,9 +29,9 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/objectstorage"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

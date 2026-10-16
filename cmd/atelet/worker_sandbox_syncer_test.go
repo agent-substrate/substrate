@@ -35,11 +35,11 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
-	"github.com/agent-substrate/substrate/internal/sandboxruntimes"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	atefake "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
-	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"go.ate.dev/substrate/internal/sandboxruntimes"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	atefake "go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
+	"go.ate.dev/substrate/pkg/client/informers/externalversions"
+	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
 )
 
 const (

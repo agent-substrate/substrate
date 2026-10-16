@@ -33,11 +33,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/egresspolicy"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/internal/egresspolicy"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/substratex509"
 )
 
 func TestRegisterFlags(t *testing.T) {

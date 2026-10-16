@@ -22,8 +22,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/roottest"
 	"github.com/vishvananda/netlink"
+	"go.ate.dev/substrate/internal/roottest"
 	"golang.org/x/sys/unix"
 )
 

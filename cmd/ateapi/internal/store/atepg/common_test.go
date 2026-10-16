@@ -18,9 +18,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // clearAll truncates every table so the next test starts from an empty store

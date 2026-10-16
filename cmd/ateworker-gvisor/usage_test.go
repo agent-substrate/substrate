@@ -24,12 +24,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/actorlock"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/workerstats"
-	"github.com/agent-substrate/substrate/internal/workerstats/workerstatstest"
+	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/workerstats"
+	"go.ate.dev/substrate/internal/workerstats/workerstatstest"
 )
 
 func withUsageRecorder(s *AteWorkerService) *workerstatstest.Recorder {

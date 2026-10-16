@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/internal/installdefaults"
 )
 
 func testSystemPrincipals() SystemPrincipals {

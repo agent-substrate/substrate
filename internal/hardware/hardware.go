@@ -19,8 +19,8 @@ package hardware
 import (
 	"runtime"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const (

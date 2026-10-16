@@ -47,9 +47,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"golang.org/x/sys/unix"
 )
 

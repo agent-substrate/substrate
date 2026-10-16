@@ -20,8 +20,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/substratex509"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/substratex509"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 )

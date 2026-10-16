@@ -34,7 +34,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 )
 
 // providerName is the ate-secret:// URI host this backend serves.

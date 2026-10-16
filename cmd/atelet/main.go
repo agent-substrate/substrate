@@ -30,41 +30,41 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/apivalidation"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/credentialprovider"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/snapshottracker"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateapiauth"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/atelet"
-	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
-	"github.com/agent-substrate/substrate/internal/credbundle"
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/otlprelay"
-	"github.com/agent-substrate/substrate/internal/pluginsocket"
-	"github.com/agent-substrate/substrate/internal/preview"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/substratex509"
-	"github.com/agent-substrate/substrate/internal/version"
-	"github.com/agent-substrate/substrate/internal/volume"
-	"github.com/agent-substrate/substrate/internal/volume/csi"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
-	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/cmd/atelet/internal/apivalidation"
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/credentialprovider"
+	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
+	"go.ate.dev/substrate/cmd/atelet/internal/sparsefile"
+	"go.ate.dev/substrate/cmd/atelet/internal/trustbundle"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateapiauth"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/atelet"
+	"go.ate.dev/substrate/internal/clustertrustbundle"
+	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/otlprelay"
+	"go.ate.dev/substrate/internal/pluginsocket"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/substratex509"
+	"go.ate.dev/substrate/internal/version"
+	"go.ate.dev/substrate/internal/volume"
+	"go.ate.dev/substrate/internal/volume/csi"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/client/clientset/versioned"
+	"go.ate.dev/substrate/pkg/client/informers/externalversions"
+	"go.ate.dev/substrate/pkg/objectstorage"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
@@ -1595,6 +1595,20 @@ func (s *Atelet) downloadExternalCheckpoint(ctx context.Context, snapshotURI str
 	return nil
 }
 
+// prepareDurableDirVolume creates a durable-dir volume's host directory as
+// 0777, as Kubernetes creates an emptyDir: one actor's containers can run as
+// different users. Chmod, because MkdirAll applies the umask. A restore then
+// re-applies the mode the snapshot recorded.
+func prepareDurableDirVolume(path string) error {
+	if err := os.MkdirAll(path, 0o777); err != nil {
+		return fmt.Errorf("while creating %q: %w", path, err)
+	}
+	if err := os.Chmod(path, 0o777); err != nil {
+		return fmt.Errorf("while setting mode of %q: %w", path, err)
+	}
+	return nil
+}
+
 // prepareOCIBundles pulls images and assembles OCI bundles for the pause
 // container and every application container in spec, in parallel. pauseImage
 // comes from the sandbox record, not the workload spec: it is sandbox
@@ -1612,9 +1626,8 @@ func (s *Atelet) prepareOCIBundles(
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
 		if vol.GetDurableDir() != nil {
-			volPath := ateletpath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
-			if err := os.MkdirAll(volPath, 0o700); err != nil {
-				return nil, fmt.Errorf("while creating %q: %w", volPath, err)
+			if err := prepareDurableDirVolume(ateletpath.DurableDirVolumeMountPoint(actorUID, vol.GetName())); err != nil {
+				return nil, err
 			}
 		}
 	}

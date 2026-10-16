@@ -25,9 +25,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/pkg/proto/ateconfigpb"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/pkg/proto/ateconfigpb"
 )
 
 // A deploy without --ateapi-log-level must not undo a level set by hand or by

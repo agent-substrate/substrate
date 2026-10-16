@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/atunnel/dns/freemap"
-	"github.com/agent-substrate/substrate/internal/atunnel/dns/protocol"
+	"go.ate.dev/substrate/internal/atunnel/dns/freemap"
+	"go.ate.dev/substrate/internal/atunnel/dns/protocol"
 	"golang.org/x/net/dns/dnsmessage"
 )
 

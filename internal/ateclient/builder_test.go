@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
+	"go.ate.dev/substrate/internal/clustertrustbundle"
 	certsv1 "k8s.io/api/certificates/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"

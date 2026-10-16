@@ -28,9 +28,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/snapshotcache"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/snapshotcache"
 	"golang.org/x/sys/unix"
 )
 

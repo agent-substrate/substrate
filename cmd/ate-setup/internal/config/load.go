@@ -23,10 +23,10 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
-	"github.com/agent-substrate/substrate/internal/preview"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/oidcdiscovery"
+	"go.ate.dev/substrate/internal/preview"
 )
 
 // ConfigPathEnv names the configuration document when --config is not given.

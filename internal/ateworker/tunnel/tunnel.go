@@ -29,17 +29,17 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateletdial"
-	"github.com/agent-substrate/substrate/internal/atunnel/dns"
-	"github.com/agent-substrate/substrate/internal/atunnel/egress"
-	"github.com/agent-substrate/substrate/internal/atunnel/ingress"
-	"github.com/agent-substrate/substrate/internal/egresspolicy"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/linuxsys"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/ateletdial"
+	"go.ate.dev/substrate/internal/atunnel/dns"
+	"go.ate.dev/substrate/internal/atunnel/egress"
+	"go.ate.dev/substrate/internal/atunnel/ingress"
+	"go.ate.dev/substrate/internal/egresspolicy"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/linuxsys"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/serverboot"
 )
 
 // resolvConfPath holds the worker pod's resolvers. Tests override it.

@@ -23,8 +23,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/internal/ateclient"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"

@@ -37,8 +37,8 @@ import (
 	"golang.org/x/oauth2/google/downscope"
 	"k8s.io/utils/lru"
 
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin/actorscope"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin/gcsboundary"
+	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
+	"go.ate.dev/substrate/internal/objectstoreplugin/gcsboundary"
 )
 
 const (

@@ -17,7 +17,7 @@ package networking
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 func TestAccessLogField(t *testing.T) {

@@ -28,10 +28,10 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc/codes"
 
-	"github.com/agent-substrate/substrate/internal/actorlock"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 var testActorDirs = &ateworkerpb.ActorDirs{

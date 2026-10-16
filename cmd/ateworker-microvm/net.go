@@ -24,8 +24,8 @@ import (
 
 	"github.com/vishvananda/netlink"
 
-	"github.com/agent-substrate/substrate/internal/ateworker/actornet"
-	"github.com/agent-substrate/substrate/internal/netns"
+	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/netns"
 )
 
 const (

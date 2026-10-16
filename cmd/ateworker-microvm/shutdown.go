@@ -31,7 +31,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateworker-microvm/internal/kata"
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 )
 
 // workloadGracePeriod is the whole budget for draining the worker on shutdown:

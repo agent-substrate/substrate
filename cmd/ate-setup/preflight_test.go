@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/cmd"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/cmd"
 )
 
 // Each invocation gets its own command tree and flags, including invocations

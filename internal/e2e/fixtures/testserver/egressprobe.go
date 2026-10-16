@@ -28,8 +28,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/internal/atunnel/egress"
-	"github.com/agent-substrate/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/atunnel/egress"
+	"go.ate.dev/substrate/internal/credbundle"
 )
 
 // tunnelDestination is the CONNECT authority. atunnel takes this from

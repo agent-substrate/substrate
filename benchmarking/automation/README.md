@@ -38,6 +38,10 @@ the router capacity benchmark — see
    - Submits a Job using the just-built image for the test's type
      (`runner-job.yaml.tmpl` for locust,
      `nighthawk-ingress-runner-job.yaml.tmpl` for nighthawk-ingress).
+     A locust Job also gets `--metadata` with the target cluster's name,
+     location and project, merged with the `BENCHMARK_METADATA` environment
+     variable (a JSON object) if set. A `--metadata` in the test's own
+     `flags` is merged in too, its keys winning on conflict.
    - Polls until complete/failed/timeout; tails logs; deletes the Job.
    - Tears down workloads + micro-VM deps (if any) + substrate.
    - If not the last test, redeploys them so the next run starts clean.

@@ -30,7 +30,7 @@ workerSelector:
     workload: egress
 containers:
 - name: egress
-  image: ko://github.com/agent-substrate/substrate/demos/egress
+  image: ko://go.ate.dev/substrate/demos/egress
   command: ["/ko-app/egress"]
   env:
   - name: SSL_CERT_DIR
