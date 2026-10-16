@@ -914,12 +914,12 @@ message Snapshot {
   // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
   SnapshotFidelity fidelity = 3;
 
-  // The snapshot's durable copy in object storage. Required on every
-  // request: atelet uploads there, or reads from there when it holds no
-  // usable local copy.
+  // The snapshot's durable copy in object storage. Required on Checkpoint
+  // and PromoteSnapshot: atelet uploads there, or reads from there when it
+  // holds no usable local copy.
   //
-  // TODO: Temporarily, this is optional while we haven't implemented deferred
-  // uploads.
+  // TODO: Temporarily, this is optional on RestoreRequest while the control
+  // plane does not set it when restoring a paused actor.
   //
   // +k8s:optional
   ObjectStorage object = 4;
@@ -998,7 +998,6 @@ enum UploadMode {
   // Keep this in sync with the maximums on fields of this type.
 }
 
-// +k8s:customValidation # immediate upload requires snapshot.object
 message CheckpointRequest {
   // The UID of the worker pod whose the worker hosts the actor.
   //
@@ -1046,6 +1045,7 @@ message CheckpointRequest {
   // workload.
   //
   // +k8s:required
+  // +k8s:subfield(object)=+k8s:required
   Snapshot snapshot = 8;
 
   // When the snapshot becomes durable.

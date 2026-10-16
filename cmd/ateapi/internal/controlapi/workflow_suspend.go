@@ -215,14 +215,10 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	}
 
 	// Fail here rather than at checkpoint time if the template's location
-	// cannot produce a usable URI: nothing has been written yet. An async
-	// suspend keeps its snapshot on the node, so it needs no URI.
-	var uri resources.SnapshotURI
-	if mode == suspendSync {
-		// TODO: Always populate the in-progress URI.
-		if uri, err = newInProgressSnapshotURI(actorTemplate, actor, snapshotName); err != nil {
-			return nil, err
-		}
+	// cannot produce a usable URI: nothing has been written yet.
+	uri, err := newInProgressSnapshotURI(actorTemplate, actor, snapshotName)
+	if err != nil {
+		return nil, err
 	}
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
@@ -338,10 +334,16 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	// into the snapshot manifest.
 	inProgressSnap := snapshotAtLatestGeneration(actor.GetStatus())
 	fidelity := fidelityToAtelet(preferredFidelity(actor.GetMetadata().GetAtespace(), actorTemplate))
-	// An async suspend's snapshot has no durable copy, so it stays on the node.
-	var object *ateletpb.ObjectStorage
-	if uri := inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(); uri != "" {
-		object = &ateletpb.ObjectStorage{SnapshotUri: uri}
+	// A sync suspend records its URI on the in-progress durable snapshot;
+	// an async one has no durable snapshot record yet, so derive the URI
+	// from the persisted snapshot UUID.
+	snapshotURI := inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()
+	if mode == suspendAsync {
+		uri, err := newInProgressSnapshotURI(actorTemplate, actor, inProgressSnap.GetUuid())
+		if err != nil {
+			return "", err
+		}
+		snapshotURI = uri.String()
 	}
 	req := &ateletpb.CheckpointRequest{
 		WorkerPodUid:          assignment.GetWorkerPodUid(),
@@ -354,7 +356,9 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 			SnapshotUuid: inProgressSnap.GetUuid(),
 			Generation:   inProgressSnap.GetGeneration(),
 			Fidelity:     fidelity,
-			Object:       object,
+			Object: &ateletpb.ObjectStorage{
+				SnapshotUri: snapshotURI,
+			},
 		},
 		UploadConfig: &ateletpb.UploadConfig{
 			Mode: mode.uploadMode(),

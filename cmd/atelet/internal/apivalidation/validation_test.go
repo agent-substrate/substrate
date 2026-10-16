@@ -522,7 +522,6 @@ func TestValidateCheckpointRequest(t *testing.T) {
 	deferred := func(name string) func(*ateletpb.CheckpointRequest) {
 		return func(r *ateletpb.CheckpointRequest) {
 			r.Snapshot.SnapshotUuid = name
-			r.Snapshot.Object = nil
 			r.UploadConfig = &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED}
 		}
 	}
@@ -535,13 +534,8 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		name: "valid immediate",
 		obj:  valid(),
 	}, {
-		name: "valid deferred local only",
+		name: "valid deferred",
 		obj:  valid(deferred("pause-snap-1")),
-	}, {
-		name: "valid deferred with object storage",
-		obj: valid(func(r *ateletpb.CheckpointRequest) {
-			r.UploadConfig = &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED}
-		}),
 	}, {
 		name: "valid volumes fidelity",
 		obj: valid(func(r *ateletpb.CheckpointRequest) {
@@ -612,6 +606,12 @@ func TestValidateCheckpointRequest(t *testing.T) {
 	}, {
 		name: "immediate upload without object storage",
 		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Snapshot.Object = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "object"), "")},
+	}, {
+		name: "deferred upload without object storage",
+		obj: valid(deferred("pause-snap-1"), func(r *ateletpb.CheckpointRequest) {
+			r.Snapshot.Object = nil
+		}),
 		want: field.ErrorList{field.Required(field.NewPath("snapshot", "object"), "")},
 	}, {
 		name: "missing snapshot_uuid",

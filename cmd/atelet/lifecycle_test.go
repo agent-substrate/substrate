@@ -444,12 +444,8 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          workerPodUID,
 		Spec:                  spec,
-		Snapshot: &ateletpb.Snapshot{
-			SnapshotUuid: snapshotName,
-			Generation:   1,
-			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		},
-		UploadConfig: &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED},
+		Snapshot:              lifecycleSnapshot(actorUID, snapshotName, 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
+		UploadConfig:          &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED},
 	}); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}

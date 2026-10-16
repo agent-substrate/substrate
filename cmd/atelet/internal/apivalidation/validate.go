@@ -115,15 +115,6 @@ func ValidateCustom_PromoteSnapshotRequest_Atespace(_ context.Context, _ operati
 	return nil
 }
 
-// ValidateCustom_CheckpointRequest requires snapshot.object when
-// upload_config.mode is UPLOAD_MODE_IMMEDIATE.
-func ValidateCustom_CheckpointRequest(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.CheckpointRequest) field.ErrorList {
-	if value.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE && value.GetSnapshot() != nil && value.GetSnapshot().GetObject() == nil {
-		return field.ErrorList{field.Required(fldPath.Child("snapshot", "object"), "required when upload_config.mode is UPLOAD_MODE_IMMEDIATE")}
-	}
-	return nil
-}
-
 func ValidateCustom_ObjectStorage_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return validateSnapshotURI(fldPath, *value)
 }
