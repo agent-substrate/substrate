@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -117,7 +118,8 @@ func newResource(ctx context.Context, serviceName string, extraAttrs ...attribut
 //
 // The distinction matters because a nil conn on a relay-capable component is
 // exactly the degraded case worth alerting on: the worker asked for the relay,
-// could not dial it, and is now exporting over the worker pod's own network.
+// could not dial it, and is now exporting over the worker pod's own network,
+// or not at all without an OTLP endpoint (see hasOTLPDestination).
 // Collapsing that into the same "no attribute" bucket as atecontroller would
 // hide it.
 func relayAttrs(relayCapable bool, conn *grpc.ClientConn) []attribute.KeyValue {
@@ -182,7 +184,9 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	// Without an exporter the provider still samples and propagates trace
 	// context, so a component that exports nothing keeps the traces of the
 	// components around it whole.
-	export := tracesPushEnabled(ctx)
+	reason, level := otlpExportBlocked(tracesPushEnabled(ctx),
+		hasOTLPDestination(tracesEndpointEnv, opts.RelayCapable, opts.ExporterConn))
+	export := reason == ""
 	if export {
 		expOpts := []otlptracegrpc.Option{
 			// GKE managed traces doesn't support validating the TLS certs of the collector.
@@ -203,16 +207,57 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	tp := sdktrace.NewTracerProvider(tpOpts...)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
-	slog.InfoContext(ctx, "Tracing initialized",
+	attrs := []any{
 		slog.String("sampler", opts.Sampling.Sampler().Description()),
-		slog.Bool("export", export))
+		slog.Bool("export", export),
+	}
+	if !export {
+		attrs = append(attrs, slog.String("reason", reason))
+	}
+	slog.Log(ctx, level, "Tracing initialized", attrs...)
 	return tp, nil
 }
 
 const (
 	metricsExporterEnv = "OTEL_METRICS_EXPORTER"
 	tracesExporterEnv  = "OTEL_TRACES_EXPORTER"
+
+	otlpEndpointEnv    = "OTEL_EXPORTER_OTLP_ENDPOINT"
+	tracesEndpointEnv  = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
+	metricsEndpointEnv = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
+	logsEndpointEnv    = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
 )
+
+const (
+	reasonOTLPNotSelected = "otlp exporter not selected"
+	reasonNoDestination   = "no OTLP relay or endpoint"
+)
+
+// otlpExportBlocked returns why a signal does not export over OTLP, empty when
+// it does, and the level to log that at: Warn when otlp is selected but has
+// nowhere to go, since the component then loses that signal.
+func otlpExportBlocked(selected, hasDestination bool) (string, slog.Level) {
+	switch {
+	case !selected:
+		return reasonOTLPNotSelected, slog.LevelInfo
+	case !hasDestination:
+		return reasonNoDestination, slog.LevelWarn
+	default:
+		return "", slog.LevelInfo
+	}
+}
+
+// hasOTLPDestination reports whether a component has a collector to export
+// to. A relay-capable component (ateworker) without a relay connection
+// needs an OTLP endpoint, the generic one or signalEndpointEnv: a worker pod
+// runs no collector beside it, so the SDK's localhost:4317 default reaches
+// nothing. Every other component keeps that default.
+func hasOTLPDestination(signalEndpointEnv string, relayCapable bool, conn *grpc.ClientConn) bool {
+	if !relayCapable || conn != nil {
+		return true
+	}
+	return strings.TrimSpace(os.Getenv(otlpEndpointEnv)) != "" || strings.TrimSpace(os.Getenv(signalEndpointEnv)) != ""
+}
 
 // metricsExporters applies OTEL_METRICS_EXPORTER with the shared exporter
 // rules. prometheus, the specification's pull exporter, is known only when
@@ -332,7 +377,9 @@ func newMeterProvider(ctx context.Context, serviceName string, push, relayCapabl
 		return nil, fmt.Errorf("create metric resource: %w", err)
 	}
 	opts := []sdkmetric.Option{sdkmetric.WithResource(res), sdkmetric.WithView(dropRPCServerAddress)}
-	if push {
+	reason, level := otlpExportBlocked(push, hasOTLPDestination(metricsEndpointEnv, relayCapable, conn))
+	export := reason == ""
+	if export {
 		expOpts := []otlpmetricgrpc.Option{
 			// GKE managed metrics doesn't support validating the TLS certs of the collector.
 			otlpmetricgrpc.WithInsecure(),
@@ -357,6 +404,11 @@ func newMeterProvider(ctx context.Context, serviceName string, push, relayCapabl
 	}
 	mp := sdkmetric.NewMeterProvider(opts...)
 	otel.SetMeterProvider(mp)
+	attrs := []any{slog.Bool("otlp_export", export)}
+	if !export {
+		attrs = append(attrs, slog.String("reason", reason))
+	}
+	slog.Log(ctx, level, "Metrics initialized", attrs...)
 	return mp, nil
 }
 
