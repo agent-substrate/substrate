@@ -35,6 +35,10 @@ manifest. A change rolls `ate-api-server`.
 | `ateapi.authz.enabled` | `ATE_API_EXPERIMENTAL_ENABLE_AUTHZ` | `true` (the default) |
 | `ateapi.authz.bootstrapOwners` | `ATE_API_AUTHZ_BOOTSTRAP_OWNERS` | `alice@example.com,bob@example.com` |
 
+The owners are a comma-separated list. Put a principal that contains a comma
+or a double quote in double quotes, and double any quote inside it:
+`"Doe, Jane",bob@example.com`.
+
 If you don't set `ateapi.authz.bootstrapOwners`, `ate-setup` uses the shared
 `ate-client` ServiceAccount (`system:serviceaccount:<namespace>:ate-client`),
 so the demos, benchmarks and e2e tests work. See the warning at the top of

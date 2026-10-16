@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/spf13/pflag"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -635,13 +637,13 @@ spec:
 	for _, tc := range []struct {
 		name    string
 		enabled bool
-		owners  string
+		owners  []string
 		want    []string
 	}{
 		{
 			name:    "enforced",
 			enabled: true,
-			owners:  "alice,bob",
+			owners:  []string{"alice", "bob"},
 			want: []string{
 				"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto",
 				"--experimental-enable-authz=true",
@@ -651,10 +653,18 @@ spec:
 		{
 			// Owners stay, so access policies can be set up before enforcement is on.
 			name:   "off keeps the owners",
-			owners: "alice",
+			owners: []string{"alice"},
 			want: []string{
 				"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto",
 				"--authz-bootstrap-owners=alice",
+			},
+		},
+		{
+			name:   "an owner that contains a comma or a quote is quoted",
+			owners: []string{"Doe, Jane", `say "hi"`, "bob"},
+			want: []string{
+				"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto",
+				`--authz-bootstrap-owners="Doe, Jane","say ""hi""",bob`,
 			},
 		},
 		{
@@ -678,6 +688,17 @@ spec:
 			if diff := cmp.Diff(tc.want, argsOf(1)); diff != "" {
 				t.Errorf("ate-api-server args (-want +got):\n%s", diff)
 			}
+			// ate-api-server reads the flag as a StringSlice, so it must come
+			// back as the owners that were set.
+			fs := pflag.NewFlagSet("ate-api-server", pflag.ContinueOnError)
+			fs.ParseErrorsAllowlist.UnknownFlags = true
+			owners := fs.StringSlice("authz-bootstrap-owners", nil, "")
+			if err := fs.Parse(argsOf(1)); err != nil {
+				t.Fatalf("parsing ate-api-server args: %v", err)
+			}
+			if diff := cmp.Diff(tc.owners, *owners, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("--authz-bootstrap-owners as ate-api-server parses it (-want +got):\n%s", diff)
+			}
 			if diff := cmp.Diff([]string{"--keep"}, argsOf(0)); diff != "" {
 				t.Errorf("other container's args changed (-want +got):\n%s", diff)
 			}
@@ -688,7 +709,7 @@ spec:
 	if err != nil {
 		t.Fatalf("DecodeManifestBytes() error = %v", err)
 	}
-	if err := setAPIServerAuthzArgs(objs, true, "alice"); err == nil {
+	if err := setAPIServerAuthzArgs(objs, true, []string{"alice"}); err == nil {
 		t.Error("setAPIServerAuthzArgs() without deployment/ate-api-server error = nil, want an error")
 	}
 }
@@ -698,7 +719,7 @@ func TestCreateAPIServerEnvVarsOmitsAuthz(t *testing.T) {
 		PostgresReadWriteRole:      config.DefaultPostgresReadWriteRole,
 		PostgresOwnerRole:          config.DefaultPostgresOwnerRole,
 		APIExperimentalEnableAuthz: true,
-		APIAuthzBootstrapOwners:    "system:serviceaccount:ate-system:ate-client",
+		APIAuthzBootstrapOwners:    []string{"system:serviceaccount:ate-system:ate-client"},
 	}, Kube: fakeKube(t,
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 		apiServerEnvVarsConfigMap(map[string]string{}),
@@ -725,15 +746,16 @@ func TestSharedBootstrapOwnerWarning(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		enabled bool
-		owners  string
+		owners  []string
 		warn    bool
 	}{
-		{name: "default owner", enabled: true, owners: shared, warn: true},
-		{name: "listed among others", enabled: true, owners: "alice, " + shared + " ,bob", warn: true},
-		{name: "own principals only", enabled: true, owners: "alice,bob", warn: false},
-		{name: "another namespace's client", enabled: true, owners: "system:serviceaccount:other:ate-client", warn: false},
-		{name: "prefix is not a match", enabled: true, owners: shared + "-x", warn: false},
-		{name: "authorization off", enabled: false, owners: shared, warn: false},
+		{name: "default owner", enabled: true, owners: []string{shared}, warn: true},
+		{name: "listed among others", enabled: true, owners: []string{"alice", shared, "bob"}, warn: true},
+		{name: "own principals only", enabled: true, owners: []string{"alice", "bob"}, warn: false},
+		{name: "another namespace's client", enabled: true, owners: []string{"system:serviceaccount:other:ate-client"}, warn: false},
+		{name: "prefix is not a match", enabled: true, owners: []string{shared + "-x"}, warn: false},
+		{name: "part of a principal that contains a comma", enabled: true, owners: []string{"alice," + shared}, warn: false},
+		{name: "authorization off", enabled: false, owners: []string{shared}, warn: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sharedBootstrapOwnerWarning(tc.enabled, tc.owners, "ate-system")

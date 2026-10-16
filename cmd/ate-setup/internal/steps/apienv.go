@@ -29,6 +29,7 @@ import (
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/principal"
 )
 
 // envHashAnnotation carries a digest of the apiserver's environment on the pod
@@ -154,20 +155,18 @@ func (e *Env) UpdateAPIServerEnvVars(ctx context.Context) error {
 // It is the default so demos, benchmarks and e2e work, but everyone who can
 // mint its token, including every kubectl-ate user without --token-file, is
 // then a global owner.
-func sharedBootstrapOwnerWarning(enabled bool, bootstrapOwners, namespace string) string {
+func sharedBootstrapOwnerWarning(enabled bool, bootstrapOwners []string, namespace string) string {
 	if !enabled {
 		return ""
 	}
 	shared := installdefaults.ClientPrincipal(namespace)
-	for owner := range strings.SplitSeq(bootstrapOwners, ",") {
-		if strings.TrimSpace(owner) == shared {
-			return fmt.Sprintf("%s is a bootstrap owner, so anyone who can mint a token for it is a global owner of this install. "+
-				"It is the default so the demos, benchmarks and e2e tests work; for a shared or production install, "+
-				"set --ateapi-authz-bootstrap-owners (ATE_API_AUTHZ_BOOTSTRAP_OWNERS) to your operators' own principals. "+
-				"See docs/authorization.md.", shared)
-		}
+	if !slices.Contains(bootstrapOwners, shared) {
+		return ""
 	}
-	return ""
+	return fmt.Sprintf("%s is a bootstrap owner, so anyone who can mint a token for it is a global owner of this install. "+
+		"It is the default so the demos, benchmarks and e2e tests work; for a shared or production install, "+
+		"set --ateapi-authz-bootstrap-owners (ATE_API_AUTHZ_BOOTSTRAP_OWNERS) to your operators' own principals. "+
+		"See docs/authorization.md.", shared)
 }
 
 // buildAPIServerEnvVars is the Secret payload. ate-api-server takes both
@@ -334,7 +333,7 @@ var apiServerAuthzFlags = []string{"--experimental-enable-authz", "--authz-boots
 // The bootstrap owners are passed even with enforcement off: access policy
 // RPCs are checked either way, so without them nobody could set up policies
 // before turning enforcement on.
-func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, enabled bool, bootstrapOwners string) error {
+func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, enabled bool, bootstrapOwners []string) error {
 	var dep *unstructured.Unstructured
 	for _, obj := range objs {
 		if obj.GetKind() == "Deployment" && obj.GetName() == "ate-api-server" {
@@ -366,8 +365,8 @@ func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, enabled bool, boot
 		if enabled {
 			args = append(args, "--experimental-enable-authz=true")
 		}
-		if strings.Trim(bootstrapOwners, " ,") != "" {
-			args = append(args, "--authz-bootstrap-owners="+bootstrapOwners)
+		if len(bootstrapOwners) > 0 {
+			args = append(args, "--authz-bootstrap-owners="+principal.FormatList(bootstrapOwners))
 		}
 		if err := unstructured.SetNestedStringSlice(container, args, "args"); err != nil {
 			return fmt.Errorf("%s: %w", kube.Describe(dep), err)

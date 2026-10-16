@@ -181,7 +181,8 @@ var Registry = []Setting{
 	{
 		Key: "ateapi.authz.bootstrapOwners", Env: "ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
 		Flag: "ateapi-authz-bootstrap-owners", Kind: KindString,
-		Usage: "Comma-separated principals that always hold owner on global:root when authorization is enforced. " +
+		Usage: "Comma-separated principals that always hold owner on global:root when authorization is enforced; " +
+			`quote a principal that contains a comma, as in '"Doe, Jane",bob'. ` +
 			"Unset means kubectl-ate's ServiceAccount, system:serviceaccount:<namespace>:ate-client",
 	},
 	{
