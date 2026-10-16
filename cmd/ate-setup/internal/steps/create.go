@@ -220,7 +220,7 @@ const inClusterIssuer = "https://kubernetes.default.svc"
 // OIDC discovery handshake. A GKE or otherwise external issuer needs neither.
 func buildAuthenticationConfig(issuer string) string {
 	config := fmt.Sprintf(
-		"actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.ate-system.svc]\n",
+		"jwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.ate-system.svc]\n",
 		issuer)
 	switch issuer {
 	case inClusterIssuer, inClusterIssuer + ".cluster.local":

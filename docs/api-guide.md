@@ -659,34 +659,32 @@ Query the physical resource pool.
 
 ## 7. Advanced: Actor Identity Credentials
 
-Workloads can exchange their ephemeral Kubernetes credentials for stable **Actor Identity** credentials that persist even as the process migrates between different physical workers. This is distinct from the `actorMetadata` data source described under [SystemInfo Volumes](#systeminfo-volumes), which only tells an actor its own identity fields (name, atespace, uid).
+ate-api-server mints credentials that identify an actor to services outside Substrate. They name the logical actor, so they stay the same as the actor moves between workers. This is distinct from the `actorMetadata` data source described under [SystemInfo Volumes](#systeminfo-volumes), which only tells an actor its own identity fields (name, atespace, uid).
 
-### Service: `ateapi.ActorIdentity`
-*   **`MintJWT`:** Generates an OIDC-compatible JWT identifying the Substrate Actor.
-*   **`MintCert`:** Signs a Certificate Signing Request (CSR) to provide an mTLS identity for the actor.
+Both RPCs are on `ateapi.Control`. With authorization on, as ate-setup installs it by default, only the egress gateway may call them; see [authorization.md](authorization.md). It calls `MintActorJwt` when an egress policy injects an actor JWT into a request.
 
-Both RPCs identify the actor the same way the rest of the API does, by `atespace` and `actor_name`.
+### `MintActorJwt`
 
-#### Who may call `MintCert` and `MintJWT`
+*   **Request:** `actor`, the actor's atespace and name; `audiences`, one to 16 values for the token's `aud`; and `expiration_seconds`, the lifetime, from 300 to 3600. The actor must exist, but it doesn't need to be running.
+*   **Response:** `actor_jwt`, the signed token, and `expire_time`, which equals its `exp` claim.
 
-`MintCert` and `MintJWT` are not callable by actors directly. They must be called over mTLS with a
-Pod Certificate, and the broker only signs a CSR when all of the following hold:
+The token's header carries `typ: JWT`, the algorithm of the pool's active signing key (ES256 or RS256), and that key's ID as `kid`. Its claims are:
 
-1.  The client certificate identifies the **`atelet`** service account
-    (`spiffe://cluster.local/ns/ate-system/sa/atelet`) and carries a Pod Identity
-    extension, which pins the calling atelet to a node.
-2.  The requested actor is **currently running**, per the actor database.
-3.  The worker Pod hosting that actor is on the **same node** as the calling
-    atelet, and is still assigned to that actor.
+*   `iss`: ate-api-server's `--actor-jwt-issuer`. ate-setup sets it from the `actorJWT.issuer` setting, which defaults to `https://idp.<namespace>.svc`.
+*   `sub`: `actor/<atespace>/<name>`.
+*   `aud`: the requested audiences, always a JSON array.
+*   `exp`, `nbf`, `iat`: Unix seconds. `nbf` is five minutes before `iat`, to allow for clock skew.
+*   `jti`: a random token ID.
+*   `actor.ate.dev`: an object with the actor's `atespace`, `actorName`, and `actorUID`.
 
-An atelet is therefore confined to minting credentials for the actors it is
-actually hosting. Callers that fail any of these checks receive
-`PERMISSION_DENIED` with no detail, so the RPC cannot be used to discover
-whether an actor exists or where it is running. An actor that exists but is
-suspended, paused, or crashed yields `FAILED_PRECONDITION`.
+Relying parties find the signing keys through OpenID Connect Discovery at `<iss>/.well-known/openid-configuration`, which ate-idp-server serves in every install.
 
-The minted leaf certificate carries the SPIFFE URI
-`spiffe://substrate-actor.local/atespace/${atespace}/actor/${actor_name}`.
+### `MintActorCertificate`
+
+*   **Request:** `actor`; `actor_uid`, which must match the actor's current UID, so that a deleted and recreated actor isn't mistaken for the old one (`ABORTED` otherwise); and `certificate_signing_request`, a DER-encoded CSR. The signer checks the CSR's signature and uses only its public key.
+*   **Response:** `actor_certificates`, DER certificates with the leaf first, followed by any intermediates.
+
+The caller must connect with a client certificate; a bearer token is not enough. The leaf is valid for one hour, allows client and server authentication, carries the SPIFFE URI `spiffe://substrate-actor.local/actor/<atespace>/<name>`, and has the `ActorIdentity` X.509 extension with the actor's atespace, name, and UID.
 
 ---
 
@@ -695,7 +693,7 @@ The minted leaf certificate carries the SPIFFE URI
 Agent Substrate is designed to be the foundational execution layer for any agentic framework.
 
 ### Agent Development Kit (ADK)
-Substrate provides native support for ADK-compatible identities. Workloads can use the `ActorIdentity` service to mint JWTs that align with ADK's security model, ensuring seamless integration with ADK-managed tools and memory.
+An ADK agent running as an actor can have the egress gateway attach an actor JWT ([section 7](#7-advanced-actor-identity-credentials)) to its outbound requests, so the tools and services it calls can tell which actor is calling.
 
 ### LangChain
 Substrate is an ideal runtime for stateful LangChain agents. By defining a LangChain agent as an `ActorTemplate`, you can preserve the agent's internal "thought process" and conversation history in memory across hibernations, while sandboxing its tool execution for security.
