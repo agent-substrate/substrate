@@ -59,7 +59,6 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -322,23 +321,10 @@ func (r *runtime) checkTemplateMemory(ctx context.Context, script *Script) error
 }
 
 // memoryLimit reads the template's memory limit in bytes. found is false
-// when the template sets none; a limit that does not parse is an error.
+// when the template sets none.
 func memoryLimit(tmpl *ateapipb.ActorTemplate) (limit int64, found bool, err error) {
-	for _, l := range tmpl.GetResources().GetLimits() {
-		if l.GetName() != "memory" {
-			continue
-		}
-		q, err := resource.ParseQuantity(l.GetQuantity())
-		if err != nil {
-			return 0, true, fmt.Errorf("memory limit %q: %w", l.GetQuantity(), err)
-		}
-		n, ok := q.AsInt64()
-		if !ok {
-			return 0, true, fmt.Errorf("memory limit %q is not a whole byte count", l.GetQuantity())
-		}
-		return n, true, nil
-	}
-	return 0, false, nil
+	limit = tmpl.GetResources().GetLimits().GetMemoryBytes()
+	return limit, limit != 0, nil
 }
 
 // think returns the suspended "LLM thinking" gap before step s, which is the
