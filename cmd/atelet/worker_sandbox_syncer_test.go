@@ -394,11 +394,7 @@ func TestWorkerSandboxSyncerRegistersAheadOfJitter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		hashed, err := hashVersions(context.Background(), plan)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, v := range hashed {
+		for _, v := range hashVersions(plan) {
 			if _, ok := s.index.lookup(v.hash); !ok {
 				t.Errorf("runtime %s (%s) does not resolve before the jittered sync", v.name, v.hash)
 			}

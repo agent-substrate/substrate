@@ -485,9 +485,9 @@ message RunRequest {
   ResourceRequirements resources = 10;
 
   // The runtime the assigned worker runs this actor under, from
-  // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
-  // sandbox binaries through its advertised-runtime index and records the
-  // runtime for the actor so a later Checkpoint pins the snapshot to it.
+  // WorkerAssignment.sandbox_runtime. atelet resolves the sandbox binaries
+  // through its advertised-runtime index and records the runtime for the
+  // actor so a later Checkpoint pins the snapshot to it.
   //
   // +k8s:required
   SandboxRuntime sandbox_runtime = 12;
@@ -1101,10 +1101,10 @@ message RestoreRequest {
   ResourceRequirements resources = 10;
 
   // The runtime the assigned worker restores this actor under, from
-  // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
-  // sandbox binaries through its advertised-runtime index and records the
-  // runtime for the actor so the next Checkpoint pins the snapshot to what ran
-  // this activation, not what the restored snapshot was taken under.
+  // WorkerAssignment.sandbox_runtime. atelet resolves the sandbox binaries
+  // through its advertised-runtime index and records the runtime for the
+  // actor so the next Checkpoint pins the snapshot to what ran this
+  // activation, not what the restored snapshot was taken under.
   //
   // +k8s:required
   SandboxRuntime sandbox_runtime = 12;

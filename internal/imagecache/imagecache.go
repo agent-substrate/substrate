@@ -148,10 +148,9 @@ var (
 
 // sharedRegistries are the well-known communal registries whose rate limits
 // are shared across all anonymous clients. Everything not listed here is
-// assumed dedicated: fleet-scale pulls realistically hit either the pause
-// image (registry.k8s.io) or the customer's own registry, and enumerating
-// the small stable set of communal hosts beats guessing at every private
-// registry vendor.
+// assumed dedicated: fleet-scale pulls realistically hit the customer's own
+// registry, and enumerating the small stable set of communal hosts beats
+// guessing at every private registry vendor.
 var sharedRegistries = map[string]bool{
 	"registry.k8s.io": true,
 	// Pulls only ever present index.docker.io here: name.ParseReference

@@ -158,11 +158,7 @@ func checkIndexedRuntime(hash string, e indexedRuntimeFile) error {
 	if e.Record == nil {
 		return errors.New("no record")
 	}
-	got, err := versionBundleHash(e.Record)
-	if err != nil {
-		return fmt.Errorf("while hashing the record: %w", err)
-	}
-	if got != hash {
+	if got := bundleHash(e.Record); got != hash {
 		return fmt.Errorf("record hashes to %s", got)
 	}
 	return nil
@@ -237,9 +233,9 @@ func (x *runtimeIndex) registerRuntimes(config string, hashed []hashedVersion) e
 
 // addRuntime records v under its hash, unless the hash is already known,
 // persisting the index first when it has a path. The hash covers every
-// asset's name and digest and the pause image, so two versions with one
-// hash differ at most in where identical bytes are fetched from; keeping
-// the first keeps the version the file was built from. Called with mu held.
+// asset's name and digest, so two versions with one hash differ at most in
+// where identical bytes are fetched from; keeping the first keeps the version
+// the file was built from. Called with mu held.
 func (x *runtimeIndex) addRuntime(config string, v hashedVersion) error {
 	if _, ok := x.runtimes[v.hash]; ok {
 		return nil

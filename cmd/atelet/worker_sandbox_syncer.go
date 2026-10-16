@@ -369,10 +369,7 @@ func (s *workerSandboxSyncer) registerAhead(pool *v1alpha1.WorkerPool) {
 	if err != nil {
 		return
 	}
-	hashed, err := hashVersions(context.Background(), plan)
-	if err != nil {
-		return
-	}
+	hashed := hashVersions(plan)
 	if err := s.index.registerRuntimes(plan.config, hashed); err != nil {
 		// The syncs write it again, and report it if it keeps failing.
 		slog.Warn("Could not index a changed pool's runtimes ahead of its sync", slog.String("pool", pool.Name), slog.Any("err", err))

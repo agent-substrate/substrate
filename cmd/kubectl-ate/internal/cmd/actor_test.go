@@ -523,13 +523,13 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
 		},
 		{
-			name:        "no filter excludes pause container diagnostics",
+			name:        "no filter excludes sandbox diagnostics",
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _pause]","labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"_pause"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: false,
 		},
 		{
-			name:        "explicit pause filter shows runsc diagnostics",
+			name:        "explicit sandbox filter shows runsc diagnostics",
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _pause]","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"_pause"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			container:   "_pause",
@@ -537,7 +537,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _pause]"}`,
 		},
 		{
-			name:        "application filter excludes pause container diagnostics",
+			name:        "application filter excludes sandbox diagnostics",
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _pause]","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"_pause"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			container:   "counter",

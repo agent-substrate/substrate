@@ -35,14 +35,9 @@ func hashedTestVersion(t *testing.T, name string, isDefault bool, sha string) ha
 	t.Helper()
 	rec := &sandboxAssetsRecord{
 		SandboxClass: "gvisor",
-		PauseImage:   testPauseImage,
 		Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/" + name, SHA256: sha}},
 	}
-	h, err := versionBundleHash(rec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return hashedVersion{versionPlan: versionPlan{name: name, isDefault: isDefault, rec: rec}, hash: h}
+	return hashedVersion{versionPlan: versionPlan{name: name, isDefault: isDefault, rec: rec}, hash: bundleHash(rec)}
 }
 
 func TestRuntimeIndex(t *testing.T) {

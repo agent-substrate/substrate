@@ -38,7 +38,7 @@ invalidates: changed content arrives under a new key.
 1. ate-api-server places the actor on a worker and names, in `Run` or
    `Restore`, the **sandbox runtime** that worker registered. Its
    `sandbox_bundle_hash` attribute is the hash of one `SandboxConfig`
-   version's assets and pause image.
+   version's assets.
 2. `atelet` resolves that hash in its **runtime index** to the asset record
    the hash was computed from. A hash the index does not hold fails the
    request with `FailedPrecondition`: the actor reached a node whose workers
@@ -74,8 +74,8 @@ pool runs, hashes every enabled version, and:
   says;
 - makes the worker's `default-runtime/` directory match the file's
   **default** runtimes, and hands each to the **prewarmer**, which fetches
-  its assets into the cache, links them into the runtime's directory, and
-  pulls its pause image, so the first actor on the node finds a warm cache.
+  its assets into the cache and links them into the runtime's directory, so
+  the first actor on the node finds a warm cache.
 
 A `SandboxConfig` or `WorkerPool` change registers the affected pools'
 runtimes at once and rewrites their files after a jitter of up to thirty
@@ -104,8 +104,8 @@ which directories exist. Nothing counts references and nothing prunes.
   permanent `runsc` probe failure does, leaves the file and so the
   directories as they were, with the previous default still linked and still
   advertised. The prewarm starts late by only a little: a gVisor default's
-  release is fetched by the build's probe, so the prewarm is links and the
-  pause image pull, and a micro-VM build takes milliseconds.
+  release is fetched by the build's probe, so the prewarm is links, and a
+  micro-VM build takes milliseconds.
 - The prewarm fills what exists and creates nothing. It checks that its
   directory is there, stages into it, and on an error checks again: a
   directory gone, after a later sync or the pod's removal, means the item

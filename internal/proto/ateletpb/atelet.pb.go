@@ -1682,9 +1682,9 @@ type RunRequest struct {
 	// +k8s:optional
 	Resources *ResourceRequirements `protobuf:"bytes,10,opt,name=resources,proto3" json:"resources,omitempty"`
 	// The runtime the assigned worker runs this actor under, from
-	// WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
-	// sandbox binaries through its advertised-runtime index and records the
-	// runtime for the actor so a later Checkpoint pins the snapshot to it.
+	// WorkerAssignment.sandbox_runtime. atelet resolves the sandbox binaries
+	// through its advertised-runtime index and records the runtime for the
+	// actor so a later Checkpoint pins the snapshot to it.
 	//
 	// +k8s:required
 	SandboxRuntime *SandboxRuntime `protobuf:"bytes,12,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
@@ -3600,10 +3600,10 @@ type RestoreRequest struct {
 	// +k8s:optional
 	Resources *ResourceRequirements `protobuf:"bytes,10,opt,name=resources,proto3" json:"resources,omitempty"`
 	// The runtime the assigned worker restores this actor under, from
-	// WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
-	// sandbox binaries through its advertised-runtime index and records the
-	// runtime for the actor so the next Checkpoint pins the snapshot to what ran
-	// this activation, not what the restored snapshot was taken under.
+	// WorkerAssignment.sandbox_runtime. atelet resolves the sandbox binaries
+	// through its advertised-runtime index and records the runtime for the
+	// actor so the next Checkpoint pins the snapshot to what ran this
+	// activation, not what the restored snapshot was taken under.
 	//
 	// +k8s:required
 	SandboxRuntime *SandboxRuntime `protobuf:"bytes,12,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`

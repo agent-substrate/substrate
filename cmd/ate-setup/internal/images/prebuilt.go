@@ -79,13 +79,13 @@ func (p *Prebuilt) ResolveBytes(ctx context.Context, manifest []byte) ([]byte, e
 // it, such as envoy-dataplane: a release publishes that under the same
 // repository and tag as the rest, so it is found the same way.
 //
-// The digest is not decoration. An ActorTemplate's container image, an image
-// volume's reference, and a SandboxConfig's pauseImage each carry the CEL rule
-// self.contains('@'), so a tag on its own is rejected by admission and every
-// demo would fail to deploy. Pinning also restores what ko gave the control
-// plane deployments for free: an install that cannot shift under a tag someone
-// moves later. Keeping the tag alongside the digest is ko's own output shape,
-// and leaves the reference legible in `kubectl get`.
+// The digest is not decoration. An ActorTemplate's container image and an image
+// volume's reference each carry the CEL rule self.contains('@'), so a tag on
+// its own is rejected by admission and every demo would fail to deploy. Pinning
+// also restores what ko gave the control plane deployments for free: an install
+// that cannot shift under a tag someone moves later. Keeping the tag alongside
+// the digest is ko's own output shape, and leaves the reference legible in
+// `kubectl get`.
 func (p *Prebuilt) Pin(ctx context.Context, image string) (string, error) {
 	tagged := p.src.Repo + "/" + image + ":" + p.src.Tag
 	// A tag that already carries one is pinned as it stands. Looking it up
