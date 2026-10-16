@@ -34,18 +34,35 @@ import (
 // revertableStates are the states a revert is accepted from. A SUSPENDED
 // actor is also accepted when it is paused, that is, when its latest snapshot
 // is node-local: the revert discards that snapshot and returns the actor to
-// its durable one. See isRevertable.
+// its durable one. A SUSPENDING actor is also accepted when its assigned worker
+// is unavailable. See isRevertable.
 var revertableStates = []ateapipb.ActorState{
 	ateapipb.ActorState_ACTOR_STATE_RUNNING,
 	ateapipb.ActorState_ACTOR_STATE_CRASHED,
+	ateapipb.ActorState_ACTOR_STATE_RESUMING,
 }
 
 // isRevertable reports whether a revert is accepted from the actor's current
 // state and snapshot shape.
-func isRevertable(actor *ateapipb.Actor) bool {
+func (w *ActorWorkflow) isRevertable(ctx context.Context, actor *ateapipb.Actor) bool {
 	state := actor.GetStatus().GetState()
-	return slices.Contains(revertableStates, state) ||
-		(state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocalOnly(actor.GetStatus()))
+	if slices.Contains(revertableStates, state) {
+		return true
+	}
+	if state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocalOnly(actor.GetStatus()) {
+		return true
+	}
+	if state == ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+		assignment := actor.GetStatus().GetWorkerAssignment()
+		if assignment == nil {
+			return true
+		}
+		worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
+		if err != nil || worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
+			return true
+		}
+	}
+	return false
 }
 
 // RevertActor executes the workflow to discard an actor's current execution and
@@ -150,8 +167,8 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 		markSkipped(ctx, "actor already REVERTING")
 		return actor, nil
 	}
-	if !isRevertable(actor) {
-		return nil, apierror.FailedPrecondition("Actor %s is not in a revertable state (got: %v, want one of %v, or %s with a node-local snapshot)", actorRef, st, revertableStates, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	if !w.isRevertable(ctx, actor) {
+		return nil, apierror.FailedPrecondition("Actor %s is not in a revertable state (got: %v, want one of %v, %s when worker is unavailable, or %s with a node-local snapshot)", actorRef, st, revertableStates, ateapipb.ActorState_ACTOR_STATE_SUSPENDING, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
@@ -185,7 +202,7 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	defer func() { err = done(err) }()
 
 	if actor.GetStatus().GetAssignedNode() != "" {
-		if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert); err != nil {
+		if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert, false); err != nil {
 			// A failed terminate leaves the actor REVERTING with its
 			// assignment, so the next revert terminates it again. If the
 			// worker's pod goes away, worker deletion crashes the actor, and

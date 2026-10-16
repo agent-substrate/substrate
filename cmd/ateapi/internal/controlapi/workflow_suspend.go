@@ -368,7 +368,21 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	wireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 
 	if _, err = client.Checkpoint(ctx, req); err != nil {
-		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
+		hErr := handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
+		if isWorkerReachabilityError(err) {
+			workerName := assignment.GetWorker().GetName()
+			worker, werr := w.store.GetWorker(ctx, workerName)
+			if (werr == nil && worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE) || errors.Is(werr, store.ErrNotFound) {
+				slog.WarnContext(ctx, "crashing actor because worker is unavailable during suspend checkpoint",
+					slog.String("actor", actorRef.String()),
+					slog.String("worker", workerName))
+				if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, ateletCrashMessage("Checkpoint", err)); cerr != nil {
+					return wireFidelity, cerr
+				}
+				return wireFidelity, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+			}
+		}
+		return wireFidelity, hErr
 	}
 	return wireFidelity, nil
 }

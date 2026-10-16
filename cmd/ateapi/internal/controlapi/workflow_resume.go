@@ -131,6 +131,12 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, err
 	}
 	if tele, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, volumePublishContexts, src); err != nil {
+		if isWorkerReachabilityError(err) && findLatestLocalSnapshot(actor.GetStatus()) == nil {
+			if rollbackErr := w.rollbackResumingActor(leaseCtx, actorRef, actor, actorTemplate); rollbackErr != nil {
+				slog.ErrorContext(leaseCtx, "failed to rollback resuming actor after atelet reachability failure",
+					slog.String("actor", actorRef.String()), slog.Any("error", rollbackErr))
+			}
+		}
 		return nil, false, err
 	}
 	var running *ateapipb.Actor
@@ -263,6 +269,14 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 		if err != nil {
 			return nil, nil, err
 		}
+		if worker == nil {
+			// Worker was unavailable and assignment was released. Reload actor and reschedule.
+			actor, err = w.store.GetActor(ctx, actorRef)
+			if err != nil {
+				return nil, nil, err
+			}
+			break
+		}
 		markSkipped(ctx, "actor already RESUMING with a valid worker assignment")
 		return actor, worker, nil
 	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
@@ -392,8 +406,30 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	}
 	// An unavailable worker may come back with its Actors intact. If its worker
 	// restarted instead, the raised epoch has this Actor crashed for it.
+	// For actors with durable snapshots, release the assignment and reset state to
+	// SUSPENDED to allow rescheduling onto a healthy worker.
 	if worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
-		return nil, apierror.Unavailable("worker %s assigned to actor %s is unavailable", worker.GetMetadata().GetName(), actorRef)
+		if findLatestLocalSnapshot(actor.GetStatus()) != nil {
+			return nil, apierror.Unavailable("worker %s assigned to actor %s is unavailable", worker.GetMetadata().GetName(), actorRef)
+		}
+		slog.InfoContext(ctx, "Assigned worker is unavailable; releasing assignment to reschedule",
+			slog.String("actor", actorRef.String()),
+			slog.String("worker", worker.GetMetadata().GetName()))
+		if _, err := w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid()); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("while releasing unavailable worker assignment: %w", err)
+		}
+		_ = w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForReschedule", ateattr.OperationResume)
+		storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+			toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+			toUpdate.Status.WorkerAssignment = nil
+			toUpdate.Status.AssignedNode = ""
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("while resetting actor to SUSPENDED for rescheduling: %w", err)
+		}
+		logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
+		return nil, nil
 	}
 	// Verify the worker is still hosting this Actor.
 	hosted, err := workerHostsActor(ctx, w.store, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid())
@@ -774,6 +810,14 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
+		if isWorkerReachabilityError(err) {
+			if workerName := assignment.GetWorker().GetName(); workerName != "" {
+				_ = markWorkerUnavailable(ctx, w.store, workerName)
+			}
+			if errors.Is(err, ErrNoAteletOnNode) {
+				return tele, apierror.Unavailable("while connecting to atelet on node %q: %w", assignment.GetNodeName(), err)
+			}
+		}
 		return tele, err
 	}
 	client := ateletpb.NewAteletClient(ateletConn)
@@ -934,4 +978,50 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, nil
+}
+
+// rollbackResumingActor releases the worker assignment and resets the actor
+// to SUSPENDED when a resume attempt fails before the guest starts running.
+func (w *ActorWorkflow) rollbackResumingActor(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) error {
+	assignment := actor.GetStatus().GetWorkerAssignment()
+	if assignment != nil {
+		workerName := assignment.GetWorker().GetName()
+		if workerName != "" {
+			if _, err := w.store.ReleaseActorFromWorker(ctx, workerName, actor.GetMetadata().GetUid()); err != nil && !errors.Is(err, store.ErrNotFound) {
+				slog.WarnContext(ctx, "failed to release actor from worker during rollback",
+					slog.String("actor", actorRef.String()),
+					slog.String("worker", workerName),
+					slog.Any("error", err))
+			}
+		}
+	}
+	_ = w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRollback", ateattr.OperationResume)
+
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+		toUpdate.Status.WorkerAssignment = nil
+		toUpdate.Status.AssignedNode = ""
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if errors.Is(err, store.ErrVersionConflict) {
+			latest, gerr := w.store.GetActor(ctx, actorRef)
+			if gerr == nil && latest.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RESUMING {
+				storedActor, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latest), func(toUpdate *ateapipb.Actor) error {
+					toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+					toUpdate.Status.WorkerAssignment = nil
+					toUpdate.Status.AssignedNode = ""
+					return nil
+				})
+			}
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("while resetting actor state to SUSPENDED during rollback: %w", err)
+	}
+	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
+	return nil
 }

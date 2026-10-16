@@ -763,8 +763,9 @@ func TestValidateAssignedWorker(t *testing.T) {
 		// wantAssignment is the assignment expected on the stored worker
 		// afterwards; wantWorkerWrite false additionally asserts the worker
 		// version did not move (no write at all).
-		wantAssignment  *ateapipb.ActorAssignment
-		wantWorkerWrite bool
+		wantAssignment   *ateapipb.ActorAssignment
+		wantWorkerWrite  bool
+		hasLocalSnapshot bool
 	}{
 		{
 			name:             "crashes actor when worker is gone",
@@ -783,13 +784,24 @@ func TestValidateAssignedWorker(t *testing.T) {
 			wantAssignment:   ownAssignment,
 		},
 		{
-			name:           "leaves actor and worker untouched when worker is unavailable",
-			workerStatus:   unavailableStatus,
-			sandboxClass:   "gvisor",
-			assignment:     ownAssignment,
-			wantCode:       codes.Unavailable,
-			wantActorState: ateapipb.ActorState_ACTOR_STATE_RESUMING,
-			wantAssignment: ownAssignment,
+			name:            "releases assignment and resets to SUSPENDED when worker is unavailable without local snapshot",
+			workerStatus:    unavailableStatus,
+			sandboxClass:    "gvisor",
+			assignment:      ownAssignment,
+			wantCode:        codes.OK,
+			wantActorState:  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			wantAssignment:  nil,
+			wantWorkerWrite: true,
+		},
+		{
+			name:             "leaves actor and worker untouched when worker is unavailable with local snapshot",
+			workerStatus:     unavailableStatus,
+			sandboxClass:     "gvisor",
+			assignment:       ownAssignment,
+			hasLocalSnapshot: true,
+			wantCode:         codes.Unavailable,
+			wantActorState:   ateapipb.ActorState_ACTOR_STATE_RESUMING,
+			wantAssignment:   ownAssignment,
 		},
 		{
 			name:             "crashes actor and leaves worker untouched when assigned to another actor",
@@ -885,6 +897,16 @@ func TestValidateAssignedWorker(t *testing.T) {
 						WorkerPodUid:    testWorkerUID("pod-1"),
 					},
 				},
+			}
+			if tt.hasLocalSnapshot {
+				snap := newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-snap", "node-1")
+				resumingActor.Status.Snapshots = []*ateapipb.Snapshot{snap}
+				if _, err := persistence.UpdateActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, store.Precondition{}, func(toUpdate *ateapipb.Actor) error {
+					toUpdate.Status.Snapshots = []*ateapipb.Snapshot{snap}
+					return nil
+				}); err != nil {
+					t.Fatalf("UpdateActor with snapshot: %v", err)
+				}
 			}
 			tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
 			_, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, resumingActor, tmpl)

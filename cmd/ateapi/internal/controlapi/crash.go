@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -82,10 +83,67 @@ func ateletErrorCrashesActor(ctx context.Context, isTerminateRPC bool, err error
 	}
 }
 
+// isWorkerReachabilityError reports whether err indicates a failure reaching
+// atelet on the worker node.
+func isWorkerReachabilityError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrNoAteletOnNode) {
+		return true
+	}
+	if status.Code(err) == codes.Unavailable {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
+}
+
+// markWorkerUnavailable transitions the named worker to WORKER_STATE_UNAVAILABLE
+// in the store if it is not already unavailable or draining.
+func markWorkerUnavailable(ctx context.Context, st crashActorStore, workerName string) error {
+	worker, err := st.GetWorker(ctx, workerName)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("while getting worker %s: %w", workerName, err)
+	}
+	if worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE ||
+		worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		return nil
+	}
+	_, err = st.UpdateWorker(ctx, workerName, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
+		if toUpdate.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
+			return nil
+		}
+		if toUpdate.Status == nil {
+			toUpdate.Status = &ateapipb.WorkerStatus{}
+		}
+		toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE
+		return nil
+	})
+	if err != nil && !errors.Is(err, store.ErrVersionConflict) && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("while updating worker %s to unavailable: %w", workerName, err)
+	}
+	return nil
+}
+
 // handleAteletError handles an error from the atelet call rpc made for opName.
 // It crashes the actor if ateletErrorCrashesActor says so, and otherwise
 // returns the error for the operation to be retried.
 func handleAteletError(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, rpc string, isTerminateRPC bool, err error) error {
+	if isWorkerReachabilityError(err) {
+		if actor, aerr := st.GetActor(ctx, actorRef); aerr == nil && actor.GetStatus().GetWorkerAssignment() != nil {
+			if workerName := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); workerName != "" {
+				if merr := markWorkerUnavailable(ctx, st, workerName); merr != nil {
+					slog.WarnContext(ctx, "failed to mark worker unavailable on reachability failure",
+						slog.String("worker", workerName), slog.Any("error", merr))
+				}
+			}
+		}
+	}
+
 	if ateletErrorCrashesActor(ctx, isTerminateRPC, err) {
 		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to Atelet error",
 			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
@@ -206,6 +264,7 @@ type crashActorStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
+	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error)
 }
 
