@@ -42,6 +42,7 @@ fit together.`,
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
 	root.AddCommand(pkiCommand(), sinkCommand(), loadCommand())
+	root.AddCommand(linuxCommands()...)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
