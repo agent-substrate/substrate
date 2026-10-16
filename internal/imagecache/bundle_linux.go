@@ -104,12 +104,12 @@ func SetupBundleRootfs(bundlePath string) error {
 	return nil
 }
 
-// upperDirMode is the mode of the upperdir. overlayfs presents it as the
-// container's /, so 0700 would keep every non-root user out of the rootfs.
+// The upper dir becomes / in the container, so non-root users must be able to
+// traverse it.
 const upperDirMode = 0o755
 
-// mkdirUpper creates the upperdir and sets it to exactly upperDirMode,
-// whatever the umask or the mode of one that already exists.
+// mkdirUpper creates dir with upperDirMode. The chmod covers the umask and a
+// dir that already exists.
 func mkdirUpper(dir string) error {
 	if err := os.MkdirAll(dir, upperDirMode); err != nil {
 		return err

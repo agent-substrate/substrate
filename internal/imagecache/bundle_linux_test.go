@@ -169,10 +169,8 @@ func TestSetupBundleRootfs_ZeroLayers(t *testing.T) {
 	}
 }
 
-// overlayfs presents the upperdir's mode as the container's /, so the upperdir
-// is 0755 (a non-root workload needs to traverse /) while the dirs only root
-// uses stay 0700, whether the upperdir is created fresh or already exists
-// narrower. Needs no privileges.
+// The upper dir becomes / in the container, so it must be 0755 whether or not
+// it already exists. rootfs and work stay 0700. Needs no privileges.
 func TestSetupBundleRootfs_DirModes(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

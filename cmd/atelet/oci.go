@@ -94,8 +94,8 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	// and the bundle-local upper/work hold this actor's private writes (wiped
 	// between runs, preserving the pristine-rootfs-per-run contract the old
 	// full re-untar provided). atelet only prepares the (empty) directories —
-	// it deliberately runs with no capabilities, so it cannot mount. upper is
-	// left to imagecache.SetupBundleRootfs, which owns its mode.
+	// it deliberately runs with no capabilities, so it cannot mount.
+	// upper is created by SetupBundleRootfs.
 	for _, d := range []string{"rootfs", "work"} {
 		if err := os.MkdirAll(path.Join(bundlePath, d), 0o700); err != nil {
 			return nil, fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)
