@@ -108,16 +108,16 @@ layer diffIDs in order — layers shared by N images exist once.
    Entries keep their tar mode exactly, whatever atelet's umask, with
    setgid and sticky on directories. Changing a file's owner clears its
    setuid and setgid bits, and without `CAP_FOWNER` and `CAP_FSETID`
-   atelet can put them back only on files root owns (setuid) whose group
-   is root's (setgid); elsewhere the bit is dropped and logged. A
-   root atelet inside a user namespace (rootless or userns-remapped nodes)
-   can only give files to uids and gids the namespace maps, so a layer
-   with an owner outside that range fails to unpack, as it does under
-   rootless Docker. Character and block device nodes are skipped (atelet
-   runs without `CAP_MKNOD` and the runtime mounts `/dev`). Whiteout
-   entries (`.wh.*`) are **not** written into the tree — overlayfs
-   whiteouts are char devices atelet cannot create — they are recorded in
-   `whiteouts.json` for the consumer to materialize.
+   atelet can put back setuid only on files root owns, and setgid only on
+   root-owned files whose group is root; elsewhere the bit is dropped and
+   logged. A root atelet inside a user namespace (rootless or
+   userns-remapped nodes) can only give files to uids and gids the
+   namespace maps, so a layer with an owner outside that range fails to
+   unpack, as it does under rootless Docker. Character and block device
+   nodes are skipped (atelet runs without `CAP_MKNOD` and the runtime
+   mounts `/dev`). Whiteout entries (`.wh.*`) are **not** written into
+   the tree — overlayfs whiteouts are char devices atelet cannot create —
+   they are recorded in `whiteouts.json` for the consumer to materialize.
 5. **Verify** before the layer enters the pool. Images share layers by
    diffID, but each image's author chooses the diffIDs in its config. So
    the uncompressed stream is hashed as it unpacks and must match the
