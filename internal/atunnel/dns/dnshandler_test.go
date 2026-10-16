@@ -44,6 +44,32 @@ func buildTestMessage(t *testing.T, hdr dnsmessage.Header, questions []dnsmessag
 	return msg
 }
 
+// checkUncacheableNegativeAnswer checks that the rest of the reply p is
+// parsing carries an SOA record that forbids caching the negative answer.
+func checkUncacheableNegativeAnswer(t *testing.T, parser *dnsmessage.Parser) {
+	t.Helper()
+	if err := parser.SkipAllQuestions(); err != nil {
+		t.Fatalf("skipping questions: %v", err)
+	}
+	if err := parser.SkipAllAnswers(); err != nil {
+		t.Fatalf("skipping answers: %v", err)
+	}
+	authorities, err := parser.AllAuthorities()
+	if err != nil {
+		t.Fatalf("parsing authorities: %v", err)
+	}
+	if len(authorities) != 1 {
+		t.Fatalf("authorities = %+v, want one SOA record", authorities)
+	}
+	soa, ok := authorities[0].Body.(*dnsmessage.SOAResource)
+	if !ok {
+		t.Fatalf("authority record = %T, want *dnsmessage.SOAResource", authorities[0].Body)
+	}
+	if authorities[0].Header.TTL != 0 || soa.MinTTL != 0 {
+		t.Errorf("SOA TTL = %d, MINIMUM = %d; want both 0 so the answer is not cached", authorities[0].Header.TTL, soa.MinTTL)
+	}
+}
+
 func TestDNSHandlerOnRequestDrop(t *testing.T) {
 	lim := &limiter{
 		inFlight:    &limiterSlots{max: 1},
@@ -157,7 +183,7 @@ func TestDNSHandlerOnRequestSynthesizedReplies(t *testing.T) {
 			wantRCode: dnsmessage.RCodeNotImplemented,
 		},
 		{
-			name: "disallowed domain -> REFUSED",
+			name: "disallowed domain -> NXDOMAIN",
 			raw: buildTestMessage(t, dnsmessage.Header{
 				ID:               0x1007,
 				RecursionDesired: true,
@@ -166,10 +192,10 @@ func TestDNSHandlerOnRequestSynthesizedReplies(t *testing.T) {
 				Type:  dnsmessage.TypeA,
 				Class: dnsmessage.ClassINET,
 			}}),
-			wantRCode: dnsmessage.RCodeRefused,
+			wantRCode: dnsmessage.RCodeNameError,
 		},
 		{
-			name: "disallowed record type -> REFUSED",
+			name: "disallowed record type -> NXDOMAIN",
 			raw: buildTestMessage(t, dnsmessage.Header{
 				ID:               0x1008,
 				RecursionDesired: true,
@@ -178,7 +204,7 @@ func TestDNSHandlerOnRequestSynthesizedReplies(t *testing.T) {
 				Type:  dnsmessage.TypeTXT,
 				Class: dnsmessage.ClassINET,
 			}}),
-			wantRCode: dnsmessage.RCodeRefused,
+			wantRCode: dnsmessage.RCodeNameError,
 		},
 	}
 
@@ -205,6 +231,9 @@ func TestDNSHandlerOnRequestSynthesizedReplies(t *testing.T) {
 				}
 				if hdr.RCode != tc.wantRCode {
 					t.Errorf("reply RCode = %v, want %v", hdr.RCode, tc.wantRCode)
+				}
+				if hdr.RCode == dnsmessage.RCodeNameError {
+					checkUncacheableNegativeAnswer(t, &p)
 				}
 				if got := lim.inFlight.occupied(); got != 0 {
 					t.Errorf("inFlight slots = %d after synthesized reply, want 0", got)

@@ -199,10 +199,10 @@ var policySources = []struct {
 }
 
 // An actor without an egress policy can reach nothing through the egress
-// gateway, so it may resolve nothing either. The relay refuses its queries
-// without asking a resolver, and does the same when it cannot learn the
-// policy.
-func TestRelayRefusesUDPQueriesWithoutPolicy(t *testing.T) {
+// gateway, so it may resolve nothing either. The relay answers its queries
+// NXDOMAIN without asking a resolver, and does the same when it cannot learn
+// the policy.
+func TestRelayDeniesUDPQueriesWithoutPolicy(t *testing.T) {
 	for _, tc := range policySources {
 		t.Run(tc.name, func(t *testing.T) {
 			var asked atomic.Int64
@@ -217,7 +217,7 @@ func TestRelayRefusesUDPQueriesWithoutPolicy(t *testing.T) {
 			_, udpAddr, _ := serveLoopbackWithPolicy(t, relay, tc.policy)
 			client := dialRelay(t, "udp", udpAddr)
 
-			checkAnswer(t, askUDP(t, client, dnsQuery(0x1111)), 0x1111, dnsmessage.RCodeRefused)
+			checkAnswer(t, askUDP(t, client, dnsQuery(0x1111)), 0x1111, dnsmessage.RCodeNameError)
 			if got := asked.Load(); got != 0 {
 				t.Errorf("the resolver was asked %d times, want 0", got)
 			}
@@ -225,7 +225,7 @@ func TestRelayRefusesUDPQueriesWithoutPolicy(t *testing.T) {
 	}
 }
 
-func TestRelayRefusesTCPQueriesWithoutPolicy(t *testing.T) {
+func TestRelayDeniesTCPQueriesWithoutPolicy(t *testing.T) {
 	for _, tc := range policySources {
 		t.Run(tc.name, func(t *testing.T) {
 			upstream, asked := newTCPResolver(t, func(query []byte) []byte { return dnsAnswer(query, 0) })
@@ -237,8 +237,8 @@ func TestRelayRefusesTCPQueriesWithoutPolicy(t *testing.T) {
 			conn := dialRelay(t, "tcp", tcpAddr)
 
 			// The connection stays open for the actor's next query.
-			checkAnswer(t, askTCP(t, conn, dnsQuery(0x1111)), 0x1111, dnsmessage.RCodeRefused)
-			checkAnswer(t, askTCP(t, conn, dnsQuery(0x2222)), 0x2222, dnsmessage.RCodeRefused)
+			checkAnswer(t, askTCP(t, conn, dnsQuery(0x1111)), 0x1111, dnsmessage.RCodeNameError)
+			checkAnswer(t, askTCP(t, conn, dnsQuery(0x2222)), 0x2222, dnsmessage.RCodeNameError)
 			if got := asked.Load(); got != 0 {
 				t.Errorf("the resolver was asked %d queries, want 0", got)
 			}
@@ -283,7 +283,7 @@ func TestRelayFollowsPolicyChanges(t *testing.T) {
 			}
 			conn := dialRelay(t, tc.network, addr)
 
-			checkAnswer(t, tc.ask(t, conn, dnsQuery(1)), 1, dnsmessage.RCodeRefused)
+			checkAnswer(t, tc.ask(t, conn, dnsQuery(1)), 1, dnsmessage.RCodeNameError)
 			policy.policy.Store(&ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{
 				Http: &ateletpb.EgressDestinations{Hostnames: []string{"example.com", "*.wild.example"}},
 			}}})
@@ -291,9 +291,9 @@ func TestRelayFollowsPolicyChanges(t *testing.T) {
 			wildQuery, wildQ := dnsQueryForName(t, 3, "api.wild.example.")
 			checkAnswerForQuestion(t, tc.ask(t, conn, wildQuery), 3, wildQ, dnsmessage.RCodeSuccess)
 			unlistedQuery, unlistedQ := dnsQueryForName(t, 4, "other.example.com.")
-			checkAnswerForQuestion(t, tc.ask(t, conn, unlistedQuery), 4, unlistedQ, dnsmessage.RCodeRefused)
+			checkAnswerForQuestion(t, tc.ask(t, conn, unlistedQuery), 4, unlistedQ, dnsmessage.RCodeNameError)
 			policy.policy.Store(nil)
-			checkAnswer(t, tc.ask(t, conn, dnsQuery(5)), 5, dnsmessage.RCodeRefused)
+			checkAnswer(t, tc.ask(t, conn, dnsQuery(5)), 5, dnsmessage.RCodeNameError)
 		})
 	}
 }
