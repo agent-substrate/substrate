@@ -55,6 +55,7 @@ SANDBOX_CLASS="gvisor"
 # default, since a bigger guest drags more page cache into every memory
 # snapshot. Raise it for RAM-consuming suites.
 ACTOR_MEMORY="256Mi"
+SWEPERF_ACTOR_MEMORY="4Gi"
 # Actor CPU limit (ActorTemplate resources.limits.cpu). The scheduler books
 # it against the worker's CPU capacity, so it bounds how many actors a worker
 # hosts at once as much as the memory limit does.
@@ -189,8 +190,9 @@ substitute() {
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
-      -e "s|\${ACTOR_MEMORY_BYTES}|${ACTOR_MEMORY_BYTES}|g" \
-      -e "s|\${ACTOR_CPU_MILLICORES}|${ACTOR_CPU_MILLICORES}|g" \
+      -e "s|\${ACTOR_MEMORY_BYTES}|${ACTOR_MEMORY_BYTES:-}|g" \
+      -e "s|\${SWEPERF_ACTOR_MEMORY_BYTES}|${SWEPERF_ACTOR_MEMORY_BYTES:-}|g" \
+      -e "s|\${ACTOR_CPU_MILLICORES}|${ACTOR_CPU_MILLICORES:-}|g" \
       -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
       -e "s|\${ATE_ENV_IMAGE}|${ATE_ENV_IMAGE:-}|g" \
       -e "s|\${STORAGE_CLASS_NAME}|${STORAGE_CLASS_NAME}|g" \
@@ -302,6 +304,7 @@ deploy() {
   fi
   ACTOR_CPU_MILLICORES="$(cpu_millicores "${ACTOR_CPU}")"
   ACTOR_MEMORY_BYTES="$(memory_bytes "${ACTOR_MEMORY}")"
+  SWEPERF_ACTOR_MEMORY_BYTES="$(memory_bytes "${SWEPERF_ACTOR_MEMORY}")"
   echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, actor_cpu=${ACTOR_CPU}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
@@ -394,9 +397,11 @@ while [[ "$#" -gt 0 ]]; do
     --actor-memory)
       shift
       ACTOR_MEMORY="$1"
+      SWEPERF_ACTOR_MEMORY="$1"
       ;;
     --actor-memory=*)
       ACTOR_MEMORY="${1#*=}"
+      SWEPERF_ACTOR_MEMORY="${1#*=}"
       ;;
     --actor-cpu)
       shift
