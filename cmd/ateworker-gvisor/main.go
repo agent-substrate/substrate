@@ -786,6 +786,10 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 
 	checkpointPath := req.GetActorDirs().GetCheckpointDir()
+	// Clear any partial files from a previous failed attempt.
+	if err := os.RemoveAll(checkpointPath); err != nil {
+		return nil, fmt.Errorf("while clearing checkpoint directory: %w", err)
+	}
 	err = os.MkdirAll(checkpointPath, 0o700)
 	timing.prep = lap(&tLast)
 	if err != nil {
