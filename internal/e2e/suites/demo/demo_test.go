@@ -184,6 +184,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if diff := cmp.Diff(assignment.GetSandboxRuntime(), snapshotStamp, protocmp.Transform()); diff != "" {
 		t.Fatalf("suspended snapshot stamp mismatch (-assignment +snapshot):\n%s", diff)
 	}
+	assertSnapshotUnderLocation(t, snapshotURI, wantSnapshotLocation(t, at))
 	// The tag is given its own copy of the snapshot the suspend just wrote, so
 	// it survives the Actor being suspended again or deleted.
 	tagToUpdate, err := clients.SubstrateAPI.CreateTag(ctx, &ateapipb.CreateTagRequest{
@@ -205,6 +206,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if diff := cmp.Diff(snapshotStamp, tagToUpdate.GetStatus().GetSnapshot().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
 		t.Fatalf("tag snapshot stamp mismatch (-actor snapshot +tag):\n%s", diff)
 	}
+	assertSnapshotUnderLocation(t, tagSnapshotURI(tagToUpdate), wantSnapshotLocation(t, at))
 	listed, err := clients.SubstrateAPI.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: demoAtespace})
 	if err != nil {
 		t.Fatalf("failed to list Tags: %v", err)
@@ -897,6 +899,41 @@ func runtimeAttribute(rt *ateapipb.SandboxRuntime, key string) string {
 		}
 	}
 	return ""
+}
+
+// wantSnapshotLocation is where ate-api-server stores tmpl's snapshots: the
+// template's storageLocation with the SnapshotStorageLocation preview gate,
+// otherwise $SNAPSHOT_LOCATION, the --snapshot-location ate-setup installs it
+// with.
+func wantSnapshotLocation(t *testing.T, tmpl *ateapipb.ActorTemplate) string {
+	t.Helper()
+	if location := tmpl.GetSnapshotConfig().GetStorageLocation(); location != "" && preview.IsEnabled(preview.GateSnapshotStorageLocation) {
+		return location
+	}
+	env, err := e2e.CheckEnv("SNAPSHOT_LOCATION")
+	if err != nil {
+		t.Fatalf("CheckEnv failed: %v", err)
+	}
+	return env["SNAPSHOT_LOCATION"]
+}
+
+// assertSnapshotUnderLocation fails t unless snapshotURI is stored under
+// location. It compares owner prefixes, so location may be spelled with or
+// without a trailing slash.
+func assertSnapshotUnderLocation(t *testing.T, snapshotURI, location string) {
+	t.Helper()
+	uri, err := resources.ParseSnapshotURI(snapshotURI)
+	if err != nil {
+		t.Fatalf("ParseSnapshotURI(%q): %v", snapshotURI, err)
+	}
+	want, err := uri.Owner().Prefix(location)
+	if err != nil {
+		t.Fatalf("snapshot owner prefix under %q: %v", location, err)
+	}
+	if got := uri.OwnerPrefix(); got != want {
+		t.Errorf("snapshot %q is stored under %q, want %q (SnapshotStorageLocation preview gate enabled: %t)",
+			snapshotURI, got, want, preview.IsEnabled(preview.GateSnapshotStorageLocation))
+	}
 }
 
 func tagSnapshotURI(tag *ateapipb.Tag) string {

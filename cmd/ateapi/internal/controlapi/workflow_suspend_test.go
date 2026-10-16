@@ -633,6 +633,63 @@ func TestSuspendActor_Finalized_ReleasesReplacedSnapshot(t *testing.T) {
 	}
 }
 
+// TestSnapshotLocationChange_LeavesNothingBehind verifies that moving an
+// actor's snapshot location, by changing --snapshot-location, toggling
+// the SnapshotStorageLocation preview gate, or repointing the actor, strands
+// nothing: the next suspend releases the replaced snapshot under its own
+// location, and deleting the actor then collects the new one.
+func TestSnapshotLocationChange_LeavesNothingBehind(t *testing.T) {
+	const (
+		oldLocation = "gs://old-bucket/root"
+		newLocation = "gs://new-bucket/root"
+	)
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	w, objects := newFinalizeWorkflow(persistence)
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
+	})
+	previous, err := resources.NewActorSnapshotURI(oldLocation, actorRef.Atespace, actor.GetMetadata().GetUid(), "old")
+	if err != nil {
+		t.Fatalf("NewActorSnapshotURI(old): %v", err)
+	}
+	fresh, err := resources.NewActorSnapshotURI(newLocation, actorRef.Atespace, actor.GetMetadata().GetUid(), "2026-01-01t00-00-00z-new")
+	if err != nil {
+		t.Fatalf("NewActorSnapshotURI(new): %v", err)
+	}
+	objects.PutSnapshot(t, previous, "manifest.json")
+	objects.PutSnapshot(t, fresh, "manifest.json")
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.LastAssignedGeneration = 2
+		s.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", fresh.Name(), fresh.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		}
+	})
+
+	stored, err := w.ensureSuspendedFinalized(ctx, actorRef, suspendSync)
+	if err != nil {
+		t.Fatalf("ensureSuspendedFinalized: %v", err)
+	}
+	if got := objects.Snapshot(t, previous); len(got) != 0 {
+		t.Errorf("snapshot under the old location after the suspend = %v, want released", got)
+	}
+	if len(objects.Snapshot(t, fresh)) == 0 {
+		t.Fatal("the snapshot this suspend wrote under the new location was collected")
+	}
+
+	if err := w.ensureExternalSnapshotsReleased(ctx, stored); err != nil {
+		t.Fatalf("ensureExternalSnapshotsReleased: %v", err)
+	}
+	if got := objects.Snapshot(t, fresh); len(got) != 0 {
+		t.Errorf("snapshot under the new location after the delete = %v, want released", got)
+	}
+}
+
 // errObjectStore stands in for object storage being unreachable.
 var errObjectStore = errors.New("object storage is unavailable")
 

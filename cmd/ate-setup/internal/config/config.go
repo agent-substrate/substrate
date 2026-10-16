@@ -140,6 +140,10 @@ type Config struct {
 	// BucketName is the snapshot bucket demos are templated with.
 	BucketName string
 
+	// SnapshotLocation is ate-api-server's --snapshot-location
+	// (SNAPSHOT_LOCATION).
+	SnapshotLocation string
+
 	// KODockerRepo is where ko pushes images (KO_DOCKER_REPO).
 	KODockerRepo string
 	// KODefaultPlatforms constrains ko's build platforms.
@@ -428,6 +432,7 @@ func (c *Config) ScriptEnv() []string {
 		"KUBECTL_CONTEXT":     c.Context,
 		"KUBECONFIG":          c.kubeconfigEnv,
 		"BUCKET_NAME":         c.BucketName,
+		"SNAPSHOT_LOCATION":   c.SnapshotLocation,
 		"KO_DOCKER_REPO":      c.KODockerRepo,
 		"KO_DEFAULTPLATFORMS": c.KODefaultPlatforms,
 		"PROJECT_ID":          c.ProjectID,

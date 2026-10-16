@@ -445,3 +445,57 @@ func TestCreateActorTemplate_ExternalVolumesPreview(t *testing.T) {
 		})
 	}
 }
+
+// TestCreateActorTemplate_SnapshotStorageLocationPreview pins how
+// snapshotConfig.storageLocation combines the SnapshotStorageLocation gate
+// with the client's preview opt-in. With the gate off the field is ignored,
+// so any client may set it. With the gate on, only a client that opts in may
+// set it; a template that leaves it empty uses the server's
+// --snapshot-location.
+func TestCreateActorTemplate_SnapshotStorageLocationPreview(t *testing.T) {
+	ns := namespaceForTest("ns-template-storage-location-preview")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+
+	for i, tt := range []struct {
+		name     string
+		gates    []string
+		optIn    bool
+		location string
+		wantCode codes.Code
+	}{
+		{name: "gate off, no opt-in, location set", optIn: false, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
+		{name: "gate off, opt-in, location set", optIn: true, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
+		{name: "gate on, no opt-in, location set", gates: []string{"SnapshotStorageLocation"}, optIn: false, location: "gs://my-bucket/snapshots", wantCode: codes.InvalidArgument},
+		{name: "gate on, no opt-in, no location", gates: []string{"SnapshotStorageLocation"}, optIn: false, wantCode: codes.OK},
+		{name: "gate on, opt-in, location set", gates: []string{"SnapshotStorageLocation"}, optIn: true, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
+		{name: "gate on, opt-in, no location", gates: []string{"SnapshotStorageLocation"}, optIn: true, wantCode: codes.OK},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			preview.InitForTest(t, tt.gates...)
+			ctx := context.Background()
+			if tt.optIn {
+				ctx = metadata.AppendToOutgoingContext(ctx, preview.Header, "true")
+			}
+			_, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+				ActorTemplate: &ateapipb.ActorTemplate{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("tmpl-loc-%d", i)},
+					Containers: []*ateapipb.Container{{
+						Name:  "main",
+						Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+					}},
+					Resources:      &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}},
+					SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: tt.location},
+					SandboxConfig: &ateapipb.SandboxConfig{
+						SandboxClass: "gvisor",
+						ConfigName:   "gvisor-default",
+					},
+				},
+			})
+			if status.Code(err) != tt.wantCode {
+				t.Fatalf("CreateActorTemplate error = %v, want %v", err, tt.wantCode)
+			}
+		})
+	}
+}

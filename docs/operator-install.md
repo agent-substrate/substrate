@@ -319,6 +319,31 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `record.dir`                                 | `ATE_RECORD_DIR`                                | `--record-dir`                                     | —                     | (global)                                 |
 | `rolloutTimeout`                             | `ATE_INSTALL_ROLLOUT_TIMEOUT`                   | `--rollout-timeout`                                | `1m0s`                | (global)                                 |
 | `storage.bucketName`                         | `BUCKET_NAME`                                   | `--storage-bucket-name`                            | —                     | (global)                                 |
+| `storage.snapshotLocation`                   | `SNAPSHOT_LOCATION`                             | `--snapshot-location`                              | —                     | (global)                                 |
+
+## Snapshot storage
+
+ate-api-server stores every actor and tag snapshot under a cluster-wide
+`--snapshot-location`, an object-storage URI such as `gs://BUCKET/PREFIX/`.
+Set it with `SNAPSHOT_LOCATION` (or ate-setup's `--snapshot-location`). It has
+no default, and ate-setup fails before deploying without it unless the
+`SnapshotStorageLocation` preview gate is enabled. If you deploy ate-api-server
+some other way, pass the flag yourself; without the gate, the server refuses to
+start without it.
+
+The kind scripts (`hack/install-ate-kind.sh`, `hack/run-e2e-kind.sh`,
+`hack/run-microvm-demo-kind.sh`) set `SNAPSHOT_LOCATION` to
+`gs://$BUCKET_NAME/` unless it is already set. On GKE, ate-setup does not
+create the bucket or grant access to it: run
+`go run ./tools/setup-gcp create bucket` and
+`go run ./tools/setup-gcp create iam` first, or `bootstrap` for both (see
+[tools/setup-gcp](../tools/setup-gcp/README.md)).
+
+With the `SnapshotStorageLocation` preview gate, an ActorTemplate may set
+`snapshotConfig.storageLocation` to store its snapshots elsewhere; templates
+that leave it empty use `--snapshot-location`. Without the gate,
+ate-api-server ignores `snapshotConfig.storageLocation`. See
+[Snapshot Storage Layout](api-guide.md#snapshot-storage-layout).
 
 ## Secrets
 

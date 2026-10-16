@@ -252,6 +252,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		testActorJWTIssuer,
 		actorJWTAuthorityPool,
 		actorCAPool,
+		testStorageLocation,
 	)
 
 	// 5. Start REAL gRPC Server for ATE API

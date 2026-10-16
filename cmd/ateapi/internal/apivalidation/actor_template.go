@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
@@ -190,7 +191,17 @@ func ValidateCustom_SandboxConfig_SandboxClass(_ context.Context, _ operation.Op
 // ValidateCustom_SnapshotConfig_StorageLocation ensures an
 // ActorTemplate's snapshotConfig.location is a well-formed
 // URI with a bucket, so a bad location fails fast.
-func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+//
+// The field is ignored while the SnapshotStorageLocation gate is off, so a
+// declarative ifDisabled=forbidden would reject the templates that set it
+// on servers without the gate. Instead, with the gate on, a request that
+// did not opt in to preview features is forbidden from setting it.
+func ValidateCustom_SnapshotConfig_StorageLocation(ctx context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if preview.IsEnabled(preview.GateSnapshotStorageLocation) && preview.IsOptedOut(ctx) {
+		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf(
+			"requires a client that opts in to preview features (kubectl ate --preview, or the %s header) while the %s preview gate is enabled",
+			preview.Header, preview.GateSnapshotStorageLocation))}
+	}
 	if err := resources.ValidateSnapshotLocation(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
 	}

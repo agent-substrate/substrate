@@ -32,6 +32,8 @@ export KO_DEFAULTPLATFORMS="linux/${goarch}"
 export ATE_INSTALL_KIND="true"
 # use default bucket name for local deployment
 export BUCKET_NAME="ate-snapshots"
+# cluster-wide snapshot location ate-api-server is installed with
+export SNAPSHOT_LOCATION="${SNAPSHOT_LOCATION:-gs://${BUCKET_NAME}/}"
 # target the local kind cluster's context (mirrors run-microvm-demo-kind.sh) so
 # the install doesn't land on whatever kubeconfig current-context happens to be,
 # or on nothing at all, which kubectl reports as a localhost:8080 dial failure.

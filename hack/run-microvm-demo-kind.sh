@@ -38,6 +38,8 @@ export KO_DEFAULTPLATFORMS="linux/${goarch}"
 export ATE_INSTALL_KIND="true"
 # default bucket name for local deployment (served by the in-cluster rustfs)
 export BUCKET_NAME="${BUCKET_NAME:-ate-snapshots}"
+# cluster-wide snapshot location ate-api-server is installed with
+export SNAPSHOT_LOCATION="${SNAPSHOT_LOCATION:-gs://${BUCKET_NAME}/}"
 # target the local kind cluster's context
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 export KUBECTL_CONTEXT="${KUBECTL_CONTEXT:-kind-${KIND_CLUSTER_NAME}}"

@@ -26,6 +26,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
@@ -146,6 +147,72 @@ func TestCreateActorTemplate(t *testing.T) {
 	}
 	if created.GetMetadata().GetName() != "tmpl-a" {
 		t.Errorf("created name = %q, want tmpl-a", created.GetMetadata().GetName())
+	}
+}
+
+// TestCreateActorTemplate_RequiresSnapshotLocation pins that create rejects,
+// with FailedPrecondition, a template whose actors would have no snapshot
+// location: neither an honored storageLocation nor --snapshot-location.
+func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
+	tests := []struct {
+		name                    string
+		gates                   []string
+		optOut                  bool
+		clusterSnapshotLocation string
+		location                string
+		wantCode                codes.Code
+	}{{
+		name:                    "gate off, cluster location set",
+		clusterSnapshotLocation: "gs://cluster-bucket/",
+		location:                "gs://my-bucket/snapshots",
+		wantCode:                codes.OK,
+	}, {
+		name:     "gate off, no cluster location",
+		location: "gs://my-bucket/snapshots",
+		wantCode: codes.FailedPrecondition,
+	}, {
+		name:     "gate on, location set, no cluster location",
+		gates:    []string{"SnapshotStorageLocation"},
+		location: "gs://my-bucket/snapshots",
+		wantCode: codes.OK,
+	}, {
+		name:                    "gate on, no location, cluster location set",
+		gates:                   []string{"SnapshotStorageLocation"},
+		clusterSnapshotLocation: "gs://cluster-bucket/",
+		wantCode:                codes.OK,
+	}, {
+		name:                    "gate on, opted out, no location, cluster location set",
+		gates:                   []string{"SnapshotStorageLocation"},
+		optOut:                  true,
+		clusterSnapshotLocation: "gs://cluster-bucket/",
+		wantCode:                codes.OK,
+	}, {
+		name:     "gate on, no location, no cluster location",
+		gates:    []string{"SnapshotStorageLocation"},
+		wantCode: codes.FailedPrecondition,
+	}}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preview.InitForTest(t, tt.gates...)
+			persistence := newTestPersistence(t)
+			impl := newServiceImpl(persistence, nil)
+			impl.clusterSnapshotLocation = tt.clusterSnapshotLocation
+			s := &RPCService{impl: impl, sandboxConfigLister: gvisorDefaultLister(t)}
+			ctx := context.Background()
+			if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
+				t.Fatalf("CreateAtespace failed: %v", err)
+			}
+			if tt.optOut {
+				ctx = preview.ContextWithOptOut(ctx)
+			}
+			req := &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+				tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: "ns1", Name: fmt.Sprintf("tmpl-%d", i)}
+				tmpl.SnapshotConfig.StorageLocation = tt.location
+			})}
+			if _, err := s.CreateActorTemplate(ctx, req); apierror.Code(err) != tt.wantCode {
+				t.Errorf("CreateActorTemplate error = %v, want code %v", err, tt.wantCode)
+			}
+		})
 	}
 }
 

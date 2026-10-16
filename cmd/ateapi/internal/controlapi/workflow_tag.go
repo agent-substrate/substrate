@@ -256,7 +256,11 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 
 	// Checked before the name is taken, so an unusable location fails the
 	// create without leaving a pending tag behind.
-	if err := resources.ValidateSnapshotLocation(actorTemplate.GetSnapshotConfig().GetStorageLocation()); err != nil {
+	location, err := w.snapshotLocation(actorTemplate)
+	if err != nil {
+		return nil, err
+	}
+	if err := resources.ValidateSnapshotLocation(location); err != nil {
 		return nil, fmt.Errorf("invalid storage location for tag %s: %w", tagRef, err)
 	}
 	tagToCreate := &ateapipb.Tag{
@@ -294,7 +298,11 @@ func (w *ActorWorkflow) ensureTagSnapshotRecorded(ctx context.Context, tag *atea
 	defer func() { err = done(err) }()
 
 	tagRef := resources.TagRefFromTag(tag)
-	dst, err := resources.NewTagSnapshotURI(actorTemplate.GetSnapshotConfig().GetStorageLocation(), tagRef.Atespace, tag.GetMetadata().GetUid())
+	location, err := w.snapshotLocation(actorTemplate)
+	if err != nil {
+		return nil, resources.SnapshotURI{}, err
+	}
+	dst, err := resources.NewTagSnapshotURI(location, tagRef.Atespace, tag.GetMetadata().GetUid())
 	if err != nil {
 		return nil, resources.SnapshotURI{}, fmt.Errorf("while building the snapshot URI for tag %s: %w", tagRef, err)
 	}

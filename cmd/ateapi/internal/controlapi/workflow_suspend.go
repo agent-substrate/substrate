@@ -216,7 +216,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 
 	// Fail here rather than at checkpoint time if the template's location
 	// cannot produce a usable URI: nothing has been written yet.
-	uri, err := newInProgressSnapshotURI(actorTemplate, actor, snapshotName)
+	uri, err := w.newInProgressSnapshotURI(ctx, actorTemplate, actor, snapshotName)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +339,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	// from the persisted snapshot UUID.
 	snapshotURI := inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if mode == suspendAsync {
-		uri, err := newInProgressSnapshotURI(actorTemplate, actor, inProgressSnap.GetUuid())
+		uri, err := w.newInProgressSnapshotURI(ctx, actorTemplate, actor, inProgressSnap.GetUuid())
 		if err != nil {
 			return "", err
 		}
@@ -431,9 +431,13 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 
 // newInProgressSnapshotURI is where the snapshot an actor is currently taking is
 // written: under the actor's own prefix, so the objects name their owner.
-func newInProgressSnapshotURI(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor, snapshotName string) (resources.SnapshotURI, error) {
+func (w *ActorWorkflow) newInProgressSnapshotURI(ctx context.Context, actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor, snapshotName string) (resources.SnapshotURI, error) {
+	location, err := w.snapshotLocation(actorTemplate)
+	if err != nil {
+		return resources.SnapshotURI{}, err
+	}
 	atespace := actor.GetMetadata().GetAtespace()
-	uri, err := resources.NewActorSnapshotURI(actorTemplate.GetSnapshotConfig().GetStorageLocation(), atespace, actor.GetMetadata().GetUid(), snapshotName)
+	uri, err := resources.NewActorSnapshotURI(location, atespace, actor.GetMetadata().GetUid(), snapshotName)
 	if err != nil {
 		return resources.SnapshotURI{}, fmt.Errorf("while building the snapshot URI for actor %s/%s: %w", atespace, actor.GetMetadata().GetName(), err)
 	}
