@@ -1451,18 +1451,20 @@ message Volume {
   // +k8s:format=k8s-short-name
   string name = 1;
 
-  // Exactly one of durable_dir / external_volume_template / image /
-  // system_info must be set.
+  // Exactly one of durable_dir / external / image / system_info must be
+  // set.
   //
   // +k8s:optional
   // +k8s:unionMember
   DurableDirVolumeSource durable_dir = 2;
 
+  // external is a CSI volume: provisioned for this actor from a template.
+  //
   // +ate:preview=ExternalVolumes
   // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
   // +k8s:optional
   // +k8s:unionMember
-  ExternalVolumeTemplate external_volume_template = 3;
+  ExternalVolumeSource external = 7;
 
   // +k8s:optional
   // +k8s:unionMember
@@ -1473,6 +1475,16 @@ message Volume {
   // +k8s:optional
   // +k8s:unionMember
   ImageVolumeSource image = 6;
+}
+
+// ExternalVolumeSource is a CSI volume provisioned for the actor from a template.
+message ExternalVolumeSource {
+  // template provisions a volume for this actor alone; it is deleted with the
+  // actor.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  ExternalVolumeTemplate template = 1;
 }
 
 // ImageVolumeSource mounts the contents of an OCI image, read-only. The

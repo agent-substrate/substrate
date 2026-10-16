@@ -69,7 +69,8 @@ func TestExternalVolumeRenders(t *testing.T) {
 			for _, want := range []string{
 				"--validate-existing-file-path=/external-data/test.txt",
 				"mountPath: /external-data",
-				"externalVolumeTemplate:",
+				"external:",
+				"template:",
 				tc.wantSC,
 			} {
 				if !strings.Contains(string(manifest), want) {

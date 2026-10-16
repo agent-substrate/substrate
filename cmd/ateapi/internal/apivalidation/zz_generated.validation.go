@@ -3911,6 +3911,57 @@ func Validate_ExternalVolume(
 	return errs
 }
 
+var unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_ExternalVolumeSource_ = validate.NewUnionMembership(validate.NewUnionMember("template"))
+
+// Validate_ExternalVolumeSource validates an instance of ExternalVolumeSource according
+// to declarative validation rules in the API schema.
+func Validate_ExternalVolumeSource(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.ExternalVolumeSource) (errs field.ErrorList) {
+
+	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_ExternalVolumeSource_,
+		func(obj *ateapipb.ExternalVolumeSource) bool {
+			if obj == nil {
+				return false
+			}
+			return obj.Template != nil
+		}); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
+	{ // field ateapipb.ExternalVolumeSource.Template
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.ExternalVolumeTemplate,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ExternalVolumeTemplate(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ExternalVolumeSource) *ateapipb.ExternalVolumeTemplate {
+				return oldObj.Template
+			})
+		errs = append(errs, fn(fldPath.Child("template"), obj.Template, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_ExternalVolumeTemplate validates an instance of ExternalVolumeTemplate according
 // to declarative validation rules in the API schema.
 func Validate_ExternalVolumeTemplate(
@@ -9313,7 +9364,7 @@ func Validate_VersionedSandboxCompat(
 	return errs
 }
 
-var unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_Volume_ = validate.NewUnionMembership(validate.NewUnionMember("durable_dir"), validate.NewUnionMember("external_volume_template"), validate.NewUnionMember("system_info"), validate.NewUnionMember("image"))
+var unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_Volume_ = validate.NewUnionMembership(validate.NewUnionMember("durable_dir"), validate.NewUnionMember("external"), validate.NewUnionMember("system_info"), validate.NewUnionMember("image"))
 
 // Validate_Volume validates an instance of Volume according
 // to declarative validation rules in the API schema.
@@ -9332,7 +9383,7 @@ func Validate_Volume(
 			if obj == nil {
 				return false
 			}
-			return obj.ExternalVolumeTemplate != nil
+			return obj.External != nil
 		},
 		func(obj *ateapipb.Volume) bool {
 			if obj == nil {
@@ -9409,10 +9460,10 @@ func Validate_Volume(
 		errs = append(errs, fn(fldPath.Child("durable_dir"), obj.DurableDir, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.Volume.ExternalVolumeTemplate
+	{ // field ateapipb.Volume.External
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateapipb.ExternalVolumeTemplate,
+			obj, oldObj *ateapipb.ExternalVolumeSource,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -9436,14 +9487,14 @@ func Validate_Volume(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_ExternalVolumeTemplate(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ExternalVolumeSource(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.Volume) *ateapipb.ExternalVolumeTemplate {
-				return oldObj.ExternalVolumeTemplate
+			func(oldObj *ateapipb.Volume) *ateapipb.ExternalVolumeSource {
+				return oldObj.External
 			})
-		errs = append(errs, fn(fldPath.Child("external_volume_template"), obj.ExternalVolumeTemplate, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("external"), obj.External, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.Volume.SystemInfo

@@ -63,9 +63,9 @@ func TestActorVolumesStorageClassErrors(t *testing.T) {
 	tmpl := &ateapipb.ActorTemplate{
 		Volumes: []*ateapipb.Volume{{
 			Name: "data-vol",
-			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+			External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 				StorageClassName: "standard",
-			},
+			}},
 		}},
 	}
 	volumes := []*ateapipb.ExternalVolume{{
@@ -120,9 +120,9 @@ func TestInitialActorVolumes(t *testing.T) {
 		Volumes: []*ateapipb.Volume{
 			{
 				Name: "data-vol-1",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
-				},
+				}},
 			},
 			{
 				Name: "scratch-vol",
@@ -133,9 +133,9 @@ func TestInitialActorVolumes(t *testing.T) {
 			},
 			{
 				Name: "data-vol-2",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "fast",
-				},
+				}},
 			},
 		},
 	}
@@ -179,9 +179,9 @@ func TestCreateActorVolumes(t *testing.T) {
 		Volumes: []*ateapipb.Volume{
 			{
 				Name: "data-vol",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
-				},
+				}},
 			},
 		},
 	}
@@ -190,21 +190,21 @@ func TestCreateActorVolumes(t *testing.T) {
 		Volumes: []*ateapipb.Volume{
 			{
 				Name: "vol1",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
-				},
+				}},
 			},
 			{
 				Name: "vol2",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
-				},
+				}},
 			},
 			{
 				Name: "vol3",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
-				},
+				}},
 			},
 		},
 	}
@@ -346,7 +346,7 @@ func TestCreateActorVolumesRejectsEmptyPluginID(t *testing.T) {
 	tmpl := &ateapipb.ActorTemplate{
 		Volumes: []*ateapipb.Volume{{
 			Name:                   "data-vol",
-			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard"},
+			External: &ateapipb.ExternalVolumeSource{Template: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard"}},
 		}},
 	}
 	registry := &mockPluginRegistry{
