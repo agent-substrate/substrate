@@ -5,11 +5,12 @@ go 1.27.0
 replace go.ate.dev/substrate => ../..
 
 require (
-	go.ate.dev/substrate v0.0.0-00010101000000-000000000000
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/google/go-cmp v0.7.0
 	github.com/spf13/cobra v1.10.2
+	go.ate.dev/substrate v0.0.0-00010101000000-000000000000
 	google.golang.org/protobuf v1.36.12
+	k8s.io/gengo/v2 v2.0.0-20260408192533-25e2208e0dc3
 )
 
 require (

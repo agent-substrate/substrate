@@ -1200,7 +1200,7 @@ type MintActorCertificateRequest struct {
 	// corresponding private key.
 	//
 	// +k8s:required
-	// +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
+	// +k8s:maxBytes=16384 # matches ateapi.MintActorCertificateRequest.certificate_signing_request
 	CertificateSigningRequest []byte `protobuf:"bytes,1,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
 	unknownFields             protoimpl.UnknownFields
 	sizeCache                 protoimpl.SizeCache
@@ -1678,7 +1678,7 @@ type AssetFile struct {
 	// the query.
 	//
 	// +k8s:required
-	// +k8s:maxLength=2048 # matches the SandboxConfig asset url's bound
+	// +k8s:maxLength=2048 # same as the SandboxConfig resource's asset url bound
 	Url string `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
 	// Lower-case hex SHA256; names the cached file and verifies its integrity.
 	//
@@ -1869,12 +1869,12 @@ func (x *SandboxAssets) GetPauseImage() string {
 type WorkloadSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:optional
-	// +k8s:maxItems=10 # matches the template's containers bound
+	// +k8s:maxItems=10 # matches ateapi.ActorTemplate.containers
 	// +k8s:listType=map
 	// +k8s:listMapKey=name
 	Containers []*Container `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
 	// +k8s:optional
-	// +k8s:maxItems=32 # matches the template's volumes bound
+	// +k8s:maxItems=32 # matches ateapi.ActorTemplate.volumes
 	// +k8s:listType=map
 	// +k8s:listMapKey=name
 	Volumes       []*Volume `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
@@ -1968,11 +1968,11 @@ type ExternalVolumeSource struct {
 	// sends volumes that finished provisioning.
 	//
 	// +k8s:required
-	// +k8s:maxLength=256 # matches ExternalVolume.storage_volume_id's bound
+	// +k8s:maxLength=256 # matches ateapi.ExternalVolume.storage_volume_id
 	// +k8s:customValidation # no control characters
 	StorageVolumeId string `protobuf:"bytes,1,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
 	// +k8s:optional
-	// +k8s:maxLength=253 # matches ExternalVolume.volume_type's bound
+	// +k8s:maxLength=253 # matches ateapi.ExternalVolume.volume_type
 	// +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
 	VolumeType string `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// volume_context is the driver's provisioning metadata. Its entries are the
@@ -2054,7 +2054,7 @@ type ImageVolumeSource struct {
 	// reference is the OCI image reference, pinned by digest.
 	//
 	// +k8s:required
-	// +k8s:maxLength=512 # matches the template ImageVolumeSource.reference's bound
+	// +k8s:maxLength=512 # matches ateapi.ImageVolumeSource.reference
 	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
 	Reference     string `protobuf:"bytes,1,opt,name=reference,proto3" json:"reference,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2170,7 +2170,7 @@ type ActorMetadataDataSource struct {
 	//
 	// +k8s:required
 	// +k8s:minItems=1
-	// +k8s:maxItems=8 # matches the template's items bound
+	// +k8s:maxItems=8 # matches ateapi.ActorMetadataDataSource.items
 	// +k8s:listType=atomic
 	// +k8s:unique=map
 	// +k8s:listMapKey=field
@@ -2229,10 +2229,10 @@ type TrustBundleDataSource struct {
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	// +k8s:required
 	// +k8s:minItems=1
-	// +k8s:maxItems=8 # matches the template's names bound
+	// +k8s:maxItems=8 # matches ateapi.TrustBundleDataSource.names
 	// +k8s:listType=set
 	// +k8s:eachVal=+k8s:minLength=1
-	// +k8s:eachVal=+k8s:maxLength=253 # matches the template's bundle-name bound
+	// +k8s:eachVal=+k8s:maxLength=253 # matches ateapi.TrustBundleDataSource.names
 	Names         []string `protobuf:"bytes,3,rep,name=names,proto3" json:"names,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2348,7 +2348,7 @@ func (x *SystemInfoDataSource) GetTrustBundle() *TrustBundleDataSource {
 type SystemInfoVolumeSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:optional
-	// +k8s:maxItems=8 # matches the template's data_sources bound
+	// +k8s:maxItems=8 # matches ateapi.SystemInfoVolumeSource.data_sources
 	// +k8s:listType=atomic
 	// +k8s:customValidation # at most one actor_metadata; paths unique across entries
 	DataSources   []*SystemInfoDataSource `protobuf:"bytes,1,rep,name=data_sources,json=dataSources,proto3" json:"data_sources,omitempty"`
@@ -2549,7 +2549,7 @@ type Container struct {
 	// +k8s:format=k8s-short-name
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// +k8s:required
-	// +k8s:maxLength=512 # matches the template Container.image's bound
+	// +k8s:maxLength=512 # matches ateapi.Container.image
 	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
 	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
 	// +k8s:optional
@@ -2563,7 +2563,7 @@ type Container struct {
 	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
 	Args []string `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
 	// +k8s:optional
-	// +k8s:maxItems=32 # matches the template's env bound
+	// +k8s:maxItems=32 # matches ateapi.Container.env
 	// +k8s:listType=map # each variable is set at most once
 	// +k8s:listMapKey=name
 	Env []*EnvVar `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty"`
@@ -2573,7 +2573,7 @@ type Container struct {
 	// may be mounted at multiple paths.
 	//
 	// +k8s:optional
-	// +k8s:maxItems=32 # matches the template's volume_mounts bound
+	// +k8s:maxItems=32 # matches ateapi.Container.volume_mounts
 	// +k8s:listType=map
 	// +k8s:listMapKey=mount_path
 	// +k8s:customValidation # mounts must not nest
@@ -2922,7 +2922,7 @@ type WakeupProbe struct {
 	//
 	// +k8s:required
 	// +k8s:minimum=1
-	// +k8s:maximum=3600 # matches the template wakeup probe's bound
+	// +k8s:maximum=3600 # matches ateapi.WakeupProbe.timeout_seconds
 	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -2978,7 +2978,7 @@ type HttpGetAction struct {
 	// Path to access on the HTTP server.
 	//
 	// +k8s:required
-	// +k8s:maxLength=1024 # matches the template probe path's bound
+	// +k8s:maxLength=1024 # matches ateapi.HttpGetAction.path
 	// +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	// TCP port to connect to (1..65535).
