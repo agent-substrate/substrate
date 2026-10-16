@@ -15,15 +15,15 @@
 // Package cdi reads a Container Device Interface spec and resolves what a named
 // set of devices asks a container runtime to do.
 //
-// An ateom cannot leave this to the container runtime. containerd applies CDI to
-// the pod's containers, and an actor's containers are created by the ateom
+// A worker cannot leave this to the container runtime. containerd applies CDI to
+// the pod's containers, and an actor's containers are created by the worker
 // underneath one of them, so whatever hands devices to actors reads the spec
 // itself. That holds for any sandbox, and under DRA too, which names allocated
 // devices as CDI device IDs.
 //
 // Applying the edits is a separate step and is not generic: it depends on how the
 // sandbox gets an OCI spec and whether it shares the host's device nodes. See
-// cmd/ateom-gvisor/internal/cdiinject for the gVisor one.
+// cmd/ateworker-gvisor/internal/cdiinject for the gVisor one.
 package cdi
 
 import (

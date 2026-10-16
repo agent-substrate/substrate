@@ -196,7 +196,7 @@ spec:
         - configMapRef:
             name: ate-otel-config
         volumeMounts:
-        - name: run-ateom
+        - name: ate-base
           mountPath: /var/lib/ate
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
@@ -224,7 +224,7 @@ spec:
         - --drain-timeout=5m
         - --objectstore-plugin-socket=/run/objectstore-plugin/node.sock
         # atelet does no mounts, netlink, device, or namespace operations (those
-        # live in the ateom worker pod) — it only reads/writes the
+        # live in the worker pod) — it only reads/writes the
         # /var/lib/ate hostPath as root. CAP_DAC_OVERRIDE is for one thing:
         # emptying a directory a non-root actor created in its 0777 durable dir.
         # It is owned by the actor's uid, typically 0755, so root has no write
@@ -295,7 +295,7 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
         volumeMounts:
-        - name: run-ateom
+        - name: ate-base
           mountPath: /var/lib/ate
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
@@ -326,7 +326,7 @@ spec:
       - name: asset-staging
         emptyDir:
           sizeLimit: 9Gi
-      - name: run-ateom
+      - name: ate-base
         hostPath:
           path: /var/lib/ate
           type: DirectoryOrCreate

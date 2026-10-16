@@ -355,7 +355,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	// passthrough origin's fully qualified alias is allowed on 8443 only,
 	// while the probe dials 443.
 	e2e.EnsureEgressPolicy(t, ctx, clients, ref,
-		e2e.EgressAllowHTTP(mitm.SvcName()),
+		e2e.EgressAllowHTTP(mitm.SvcName(), mitm.SvcName()+".cluster.local"),
 		e2e.EgressAllowHTTPS(mitm.SvcName()),
 		e2e.EgressAllowPassthrough(passthrough.SvcName()),
 		e2e.EgressAllowPassthroughOnPorts([]int32{8443}, passthrough.SvcName()+".cluster.local"),

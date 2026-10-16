@@ -48,9 +48,13 @@ WORKER_COUNT=1
 SANDBOX_CLASS="gvisor"
 # Actor memory limit (ActorTemplate resources.limits.memory). The default
 # is the smallest size microvm admits (128Mi VMM reserve + 128Mi guest floor),
-# so benchmark actors do not inherit the 2 GiB kata default and drag its page
-# cache into every memory snapshot. Raise it for RAM-consuming suites.
+# since a bigger guest drags more page cache into every memory snapshot. Raise
+# it for RAM-consuming suites.
 ACTOR_MEMORY="256Mi"
+# Actor CPU limit (ActorTemplate resources.limits.cpu). The scheduler books
+# it against the worker's CPU capacity, so it bounds how many actors a worker
+# hosts at once as much as the memory limit does.
+ACTOR_CPU="1"
 # Worker pod memory (WorkerPool spec.template.resources), set as both request
 # and limit. Empty leaves the pod unsized. The limit is also the memory the
 # worker reports as its actor capacity.
@@ -62,7 +66,7 @@ STORAGE_CLASS_NAME="${STORAGE_CLASS_NAME:-}"
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
 OTLP_ENDPOINT=""
-# The timeout, in whole seconds, for waiting for the ateom worker pods to be
+# The timeout, in whole seconds, for waiting for the worker pods to be
 # ready.
 WAIT_TIMEOUT_SECS=300
 # fake-atelet's tuning on the fake data plane, as FAKE_ATELET_<FLAG>=VALUE
@@ -80,6 +84,7 @@ usage() {
   echo "                              microvm requires hack/install-microvm-deps.sh --install to have run."
   echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
   echo "                              the smallest size microvm admits)"
+  echo "  --actor-cpu CPU             CPU limit for the benchmark ActorTemplates (default: 1)"
   echo "  --worker-memory SIZE        Memory request and limit for each WorkerPool pod"
   echo "                              (default: unset, the pod is unsized)"
   echo "  --storage-class-name NAME   StorageClass for the glutton-storage external volume. Setting it"
@@ -87,7 +92,7 @@ usage() {
   echo "  --otlp-endpoint URL         The address to which an instrumented actor container"
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
-  echo "  --wait-timeout SECONDS      The timeout in seconds for waiting for the ateom workers to be ready (default: 300)"
+  echo "  --wait-timeout SECONDS      The timeout in seconds for waiting for the workers to be ready (default: 300)"
   echo "  --fake-atelet-env NAME=VALUE"
   echo "                              On a substrate installed with --fake-data-plane, set a fake-atelet flag:"
   echo "                              FAKE_ATELET_DELAY=500ms sets --delay, FAKE_ATELET_DELAY_RESTORE=2s sets"
@@ -139,12 +144,11 @@ substitute() {
   # than defaulted) so a stale config from a dirty teardown fails loudly
   # instead of silently binding these workloads. gvisor-default is applied by
   # hack/install-ate.sh; microvm is applied by hack/install-microvm-deps.sh.
-  # The protojson templates take the sandbox class as its proto enum spelling.
   local manifest="$1"
-  local sandbox_config_name sandbox_class_enum worker_resources=""
+  local sandbox_config_name worker_resources=""
   case "${SANDBOX_CLASS}" in
-    gvisor)  sandbox_config_name="gvisor-default" sandbox_class_enum="SANDBOX_CLASS_GVISOR" ;;
-    microvm) sandbox_config_name="microvm"        sandbox_class_enum="SANDBOX_CLASS_MICROVM" ;;
+    gvisor)  sandbox_config_name="gvisor-default" ;;
+    microvm) sandbox_config_name="microvm" ;;
   esac
   # One flow-style line, so an unset WORKER_MEMORY leaves only a blank line.
   if [[ -n "${WORKER_MEMORY}" ]]; then
@@ -153,10 +157,10 @@ substitute() {
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
-      -e "s|\${SANDBOX_CLASS_ENUM}|${sandbox_class_enum}|g" \
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
+      -e "s|\${ACTOR_CPU}|${ACTOR_CPU}|g" \
       -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
       -e "s|\${SWEPERF_IMAGE}|${SWEPERF_IMAGE:-}|g" \
       -e "s|\${STORAGE_CLASS_NAME}|${STORAGE_CLASS_NAME}|g" \
@@ -251,7 +255,7 @@ deploy() {
     echo "Error: --fake-atelet-env needs substrate installed with --fake-data-plane" >&2
     exit 1
   fi
-  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
+  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, actor_cpu=${ACTOR_CPU}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   if fake_data_plane; then
@@ -259,13 +263,13 @@ deploy() {
     # ready once its capacity is reported, and writes that to the pool's
     # status.
     if ((WORKER_COUNT > 0)); then
-      kubectl wait --for=jsonpath='{.status.readyReplicas}'="${WORKER_COUNT}" workerpool/benchmark-ateom \
+      kubectl wait --for=jsonpath='{.status.readyReplicas}'="${WORKER_COUNT}" workerpool/benchmark-worker \
         --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
     fi
   else
-    kubectl wait --for=create deployment/benchmark-ateom \
+    kubectl wait --for=create deployment/benchmark-worker \
       --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
-    kubectl rollout status deployment/benchmark-ateom \
+    kubectl rollout status deployment/benchmark-worker \
       --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
   fi
 
@@ -347,6 +351,13 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --actor-memory=*)
       ACTOR_MEMORY="${1#*=}"
+      ;;
+    --actor-cpu)
+      shift
+      ACTOR_CPU="$1"
+      ;;
+    --actor-cpu=*)
+      ACTOR_CPU="${1#*=}"
       ;;
     --worker-memory)
       shift

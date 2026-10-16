@@ -40,7 +40,7 @@ const counterExtraPort = 9090
 // other than an actor's primary one via HTTP CONNECT, with the target port
 // carried in the CONNECT authority (e.g. "<actor-dns>:9090") rather than a
 // separate header -- see ingress.Handler.HandleRequestHeaders and
-// atunnel.TargetPortHeader.
+// TargetPortHeader in internal/atunnel/ingress.
 //
 // CONNECT establishment itself (RouterClient.Connect) succeeds as soon as
 // atenet-router's connect_terminate listener reinjects the tunnel into

@@ -126,9 +126,7 @@ func TestActorEgress(t *testing.T) {
 
 	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(origin.Port))
 
-	// The Actor resolves the name itself -- DNS leaves over the UDP masquerade,
-	// not the tunnel, and atunnel forwards the resolved address, never the
-	// name -- so dialing by name covers a leg the by-address fetch above skips.
+	// Test resolution by DNS.
 	t.Run("by DNS name", func(t *testing.T) {
 		url := fmt.Sprintf("http://%s.%s.svc.cluster.local/healthz", origin.Name, target.Namespace)
 		status, body := fetchThroughEgressActor(t, ctx, router, actorRef, url)
@@ -372,7 +370,7 @@ func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.
 				if !strings.HasSuffix(authority, ":"+port) {
 					continue
 				}
-				spiffeSlug := "/ateom-for-actor/" + atespace + "/" + actorName
+				spiffeSlug := "/worker-for-actor/" + atespace + "/" + actorName
 				if !strings.Contains(line.text, spiffeSlug) {
 					continue
 				}
@@ -958,7 +956,7 @@ func postEgressWithStatus(t *testing.T, ctx context.Context, router *e2e.RouterC
 func assertProtocolGateway(t *testing.T, ctx context.Context, since metav1.Time, actorName, authority string) {
 	t.Helper()
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
-	identity := resources.AteomForActorSPIFFEID(actorRef).String()
+	identity := resources.WorkerForActorSPIFFEID(actorRef).String()
 	waitForAccessLog(t, ctx, since, "successful gateway traffic for "+identity+" to "+authority, func(lines []gatewayAccessLogLine) bool {
 		for _, entry := range lines {
 			if protocolGatewayAccessLogMatches(entry, actorRef, authority, false) {
@@ -980,7 +978,7 @@ func protocolGatewayAccessLogMatches(entry gatewayAccessLogLine, actorRef resour
 			return false
 		}
 		for peer := range strings.SplitSeq(peers, ",") {
-			if peer == resources.AteomForActorSPIFFEID(actorRef).String() {
+			if peer == resources.WorkerForActorSPIFFEID(actorRef).String() {
 				return true
 			}
 		}

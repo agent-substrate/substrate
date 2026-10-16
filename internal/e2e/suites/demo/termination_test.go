@@ -88,7 +88,7 @@ func TestGracefulWorkerTermination(t *testing.T) {
 	}
 	t.Logf("Actor %q bound to worker pod %s/%s", actorID, podNS, podName)
 
-	// Evict the worker pod. The kubelet sends SIGTERM to ateom, which propagates
+	// Evict the worker pod. The kubelet sends SIGTERM to worker, which propagates
 	// it into the sandbox; the control plane marks the worker DRAINING on the
 	// DeletionTimestamp watch event and cleans up when the pod is finally gone.
 	if err := clients.K8s.CoreV1().Pods(podNS).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
@@ -196,7 +196,7 @@ func TestGracefulWorkerTerminationSuspend(t *testing.T) {
 	}
 	t.Logf("Actor %q bound to worker pod %s/%s", actorID, podNS, podName)
 
-	// Evict the worker pod. The kubelet sends SIGTERM to ateom, which propagates
+	// Evict the worker pod. The kubelet sends SIGTERM to worker, which propagates
 	// it into the sandbox; the container hangs for 30s.
 	if err := clients.K8s.CoreV1().Pods(podNS).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
 		t.Fatalf("failed to delete worker pod %s/%s: %v", podNS, podName, err)

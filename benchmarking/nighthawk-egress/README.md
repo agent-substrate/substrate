@@ -10,7 +10,7 @@ flowchart LR
     invoker["traffic-driver-invoker<br/>(:19980, adds ate-target-actor)"]
     router["atenet-router<br/>(:80)"]
 
-    subgraph worker["WorkerPod (ateom-gvisor)"]
+    subgraph worker["WorkerPod (ateworker-gvisor)"]
         atunnel-ingress["ingress atunnel"]
         actor["Actor: nighthawk/tester<br/>(nighthawk_service :80)"]
         atunnel-egress["egress atunnel"]

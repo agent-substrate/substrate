@@ -34,7 +34,7 @@ import (
 const reportTimeout = 10 * time.Second
 
 // grpcRelay sends capacity reports to the fake-atelet relay on a Worker's
-// node, as ateom sends them to the atelet on its own node. A rejected report
+// node, as worker sends them to the atelet on its own node. A rejected report
 // carries ate-api-server's status unchanged.
 type grpcRelay struct {
 	creds credentials.TransportCredentials

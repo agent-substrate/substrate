@@ -21,8 +21,10 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 )
 
 // TagActorSnapshot tags the external snapshot held by the suspended actor the
@@ -46,6 +48,7 @@ import (
 // AlreadyExists. To retry, delete the tag, which collects whatever the failed
 // attempt stranded, and create it again.
 func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag) (*ateapipb.Tag, error) {
+	ctx = preview.ContextWithOptIn(ctx)
 	actorRef := resources.ActorRefFromObjectRef(tag.GetSourceActor())
 
 	// Serializes against a suspend of the same actor, which would otherwise
@@ -106,6 +109,7 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 // and never suspended is still borrowing it and becomes unrecoverable. Do not
 // delete a tag while clones of it exist.
 func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error) {
+	ctx = preview.ContextWithOptIn(ctx)
 	// Serializes against a create of the same tag, whose copy would otherwise
 	// keep writing into the prefix this is collecting.
 	ctx, lease, err := acquireTagLease(ctx, w.store, tagRef)
@@ -303,6 +307,7 @@ func (w *ActorWorkflow) ensureTagSnapshotRecorded(ctx context.Context, tag *atea
 		dst.String(),
 		ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
 	)
+	pending.SandboxRuntime = proto.CloneOf(snapshot.GetSandboxRuntime())
 	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
 		toUpdate.Status.Snapshot = pending
 		return nil
@@ -360,6 +365,7 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 		dst.String(),
 		ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
 	)
+	finalSnapshot.SandboxRuntime = proto.CloneOf(snapshot.GetSandboxRuntime())
 	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
 		toUpdate.Status.Snapshot = finalSnapshot
 		return nil

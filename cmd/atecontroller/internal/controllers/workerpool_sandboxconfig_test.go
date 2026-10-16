@@ -355,7 +355,7 @@ func TestReconcileProtectsBeforeRecording(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 			if tc.ref != "" {
 				wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: tc.ref}
 			}
@@ -514,7 +514,7 @@ func TestReconcileConfigDeletedBeforeClaim(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 			wp.Status.SandboxClasses = tc.status
 			if tc.pinned {
 				wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: tc.newDefault.Name}
@@ -613,7 +613,7 @@ func TestSandboxConfigReleasedWhenUnused(t *testing.T) {
 			for _, name := range tc.configs {
 				createSandboxConfig(t, makeSandboxConfig(name, atev1alpha1.SandboxClassGvisor, false))
 			}
-			wp := makeWorkerPool(tc.pool, "default", 1, "ateom:v1")
+			wp := makeWorkerPool(tc.pool, "default", 1, "worker:v1")
 			wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: tc.ref}
 			createWorkerPool(t, wp)
 			waitResolvedAndDeployed(t, wp, tc.ref)
@@ -701,7 +701,7 @@ func TestWorkerPoolConfigRef(t *testing.T) {
 					}
 				}
 			}
-			wp := makeWorkerPool("test-configref-"+tc.ref, "default", 1, "ateom:v1")
+			wp := makeWorkerPool("test-configref-"+tc.ref, "default", 1, "worker:v1")
 			wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: tc.ref}
 			createWorkerPool(t, wp)
 
@@ -790,7 +790,7 @@ func TestWorkerPoolUnresolvedKeepsConfigInUse(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			wp := makeWorkerPool(tc.pool, "default", 1, "ateom:v1")
+			wp := makeWorkerPool(tc.pool, "default", 1, "worker:v1")
 			inUse := testGvisorDefault
 			if tc.config != nil {
 				controllerutil.AddFinalizer(tc.config, testHoldFinalizer)
@@ -875,7 +875,7 @@ func TestSandboxConfigInUseProtection(t *testing.T) {
 			sentinel := makeSandboxConfig(tc.sentinel, atev1alpha1.SandboxClassGvisor, false)
 			createSandboxConfig(t, sentinel)
 			newPool := func(name, config string) *atev1alpha1.WorkerPool {
-				wp := makeWorkerPool(name, "default", 1, "ateom:v1")
+				wp := makeWorkerPool(name, "default", 1, "worker:v1")
 				wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: config}
 				createWorkerPool(t, wp)
 				waitResolved(t, wp, config)
@@ -933,7 +933,7 @@ func TestWorkerPoolDefaultNewestWins(t *testing.T) {
 			t.Fatalf("create SandboxConfig %s: %v", sc.Name, err)
 		}
 	}
-	wp := makeWorkerPool("test-default-newest", "default", 1, "ateom:v1")
+	wp := makeWorkerPool("test-default-newest", "default", 1, "worker:v1")
 	wp.Spec.SandboxClasses[0].Name = atev1alpha1.SandboxClassMicroVM
 	createWorkerPool(t, wp)
 
@@ -1291,7 +1291,7 @@ func TestRecordSandboxConfigEvents(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 			rec := events.NewFakeRecorder(2 * len(tc.classes))
 			r := &WorkerPoolReconciler{Recorder: rec}
 			r.recordSandboxConfigEvents(wp, tc.prev, tc.classes)
@@ -1453,7 +1453,7 @@ func TestResolveSandboxClasses(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 			wp.Generation = generation
 			wp.Spec.SandboxClasses[0].ConfigRef = ref(tc.specRef)
 			wp.Status.SandboxClasses = tc.prev
@@ -1555,7 +1555,7 @@ func TestClaimSandboxConfigs(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 			wp.Status.SandboxClasses = tc.prev
 			if got := claimSandboxConfigs(wp, tc.classes); !equality.Semantic.DeepEqual(got, tc.want) {
 				t.Errorf("claimSandboxConfigs = %+v, want %+v", got, tc.want)
@@ -1646,7 +1646,7 @@ func TestConfirmSandboxConfigSwitch(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 			wp.Generation = generation
 			wp.Status.SandboxClasses = tc.prev
 			got := confirmSandboxConfigSwitch(wp, *class.DeepCopy(), tc.live, configs)
@@ -1760,7 +1760,7 @@ func TestReconcileConfirmsSwitch(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 			wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: "x"}
 			objs := []client.Object{wp, x(), protected(makeSandboxConfig("y", atev1alpha1.SandboxClassGvisor, false))}
 			if tc.inUse != "" {
@@ -1945,7 +1945,7 @@ func TestSwitchInterleavings(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 			wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: "x"}
 			wp.Status.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClassStatus{{
 				Name:      atev1alpha1.SandboxClassGvisor,
@@ -2227,7 +2227,7 @@ func TestReconcileAppliesExistingDeploymentFirst(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			wp := makeWorkerPool("pool", "default", 3, "ateom:v1")
+			wp := makeWorkerPool("pool", "default", 3, "worker:v1")
 			objs := []client.Object{wp, makeSandboxConfig("def", atev1alpha1.SandboxClassGvisor, true)}
 			if tc.hasDeployment {
 				objs = append(objs, &appsv1.Deployment{
@@ -2327,7 +2327,7 @@ func TestSyncStatus(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 			wp.Status = *before.DeepCopy()
 			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(wp).WithStatusSubresource(wp).Build()
 			stored := &atev1alpha1.WorkerPool{}
@@ -2537,7 +2537,7 @@ func removeFinalizer(t *testing.T, name, finalizer string) {
 // makeWorkerPoolClasses returns a pool in ns with the given spec and status
 // sandbox classes.
 func makeWorkerPoolClasses(ns, name string, spec []atev1alpha1.WorkerPoolSandboxClass, status []atev1alpha1.WorkerPoolSandboxClassStatus) *atev1alpha1.WorkerPool {
-	wp := makeWorkerPool(name, ns, 1, "ateom:v1")
+	wp := makeWorkerPool(name, ns, 1, "worker:v1")
 	wp.Spec.SandboxClasses = spec
 	wp.Status.SandboxClasses = status
 	return wp

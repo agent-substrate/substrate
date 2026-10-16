@@ -26,9 +26,9 @@
 registry_version: 1
 
 # The version of the upstream semantic conventions that Substrate borrows from.
-# Substrate takes error.type, file.name, the rpc.* attributes, server.address
-# and server.port from it. This is the only version that the code imports under
-# cmd/, internal/ and pkg/.
+# Substrate takes error.type, file.name, the rpc.* attributes and server.port
+# from it. This is the only version that the code imports under cmd/, internal/
+# and pkg/.
 # It is not the version of this registry: manifest.yaml holds that.
 upstream_semconv_version: 1.40.0
 
@@ -229,6 +229,14 @@ blind_spots:
   - area: podcertcontroller
     code: cmd/podcertcontroller
     brief: This component has no metrics.
+  - area: egress gateway access log
+    code: manifests/ate-install/atenet-egress.yaml
+    brief: >
+      The MITM and cleartext chains log only requests with status 400 or
+      above, gRPC requests with a grpc-status other than OK, any response
+      flag, and a 1% sample of the rest. The runtime keys
+      access_log.min_status and access_log.sample on the admin port restore
+      full logging while you debug.
   - area: GCP Secret Manager credential provider
     code: internal/plugins/gcp-secret-manager
     brief: >
@@ -245,7 +253,7 @@ blind_spots:
     brief: >
       ate.actor.stats.cpu.time counts only the samples atelet reads while an
       actor is hosted. It loses the end of each activation, up to one poll
-      interval plus one ateom sample interval. Thus an activation shorter than
+      interval plus one ateworker sample interval. Thus an activation shorter than
       that, as a checkpoint-when-idle agent, can show little or no CPU here.
       Its ate.actor.usage_sampled records keep it. Issue #2362 moves the
-      counter to the ateoms.
+      counter to the ateworkers.

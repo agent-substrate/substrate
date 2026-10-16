@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/atomicfile"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -105,7 +106,7 @@ type sandboxAssetsRecord struct {
 	ActorUID              string `json:"actorUid,omitempty"`
 	ActorTemplateAtespace string `json:"actorTemplateAtespace,omitempty"`
 	ActorTemplateName     string `json:"actorTemplateName,omitempty"`
-	// SnapshotFiles are the (relative) names of the files ateom wrote into the
+	// SnapshotFiles are the (relative) names of the files worker wrote into the
 	// checkpoint directory, as reported by CheckpointWorkloadResponse. Recorded
 	// in the snapshot manifest so Restore ships/downloads exactly this set
 	// (gVisor's image files, cloud-hypervisor's snapshot set, ...). Empty in the
@@ -162,7 +163,7 @@ func checkPauseImage(sandboxClass, pauseImage string) error {
 // several (kata-shim, cloud-hypervisor, ...).
 // Assets are cached, so re-fetching at Checkpoint/Restore is a no-op once
 // present.
-func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+func (s *Atelet) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
 	if err := os.MkdirAll(nodepath.StaticFilesDir, 0o700); err != nil {
 		return nil, fmt.Errorf("while creating static files dir: %w", err)
 	}
@@ -195,7 +196,7 @@ func runscPathFor(paths map[string]string) string {
 // fetchAsset downloads one content-addressed asset (verifying its sha256) into
 // the shared static-files cache and returns its local path. On a cache hit it
 // returns immediately.
-func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string, error) {
+func (s *Atelet) fetchAsset(ctx context.Context, entry assetEntry) (string, error) {
 	if err := resources.ValidateAssetHash(entry.SHA256); err != nil {
 		return "", wrapFileSystemErr("while validating asset hash", err)
 	}
@@ -232,7 +233,7 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 // verifying its sha256) and extracts it into a content-addressed directory in
 // the shared static-files cache, returning the local path of the extracted
 // `runsc` binary.
-func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) (string, error) {
+func (s *Atelet) fetchGVisorRelease(ctx context.Context, entry assetEntry) (string, error) {
 	if err := resources.ValidateAssetHash(entry.SHA256); err != nil {
 		return "", wrapFileSystemErr("while validating asset hash", err)
 	}
@@ -295,12 +296,12 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 // first, with the plugin's credentials; atelet holds none of its own and does
 // not know which bucket holds snapshots. A gs:// asset is then read
 // anonymously, which serves public buckets such as gs://gvisor, but only when
-// no plugin is configured or the plugin reports it has no such object or
-// cannot serve it, as a plugin on a backend other than GCS does for every
-// gs:// URI (see anonymousFallbackCodes). A refusal on policy or content, and a canceled
-// request, are final. atelet verifies the bytes it caches whichever path
-// fetched them, since it executes them.
-func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tmpPrefix string) (string, error) {
+// no plugin is configured or the plugin reports it has no such object, cannot
+// serve it (as a plugin on a backend other than GCS does for every gs:// URI),
+// or failed unexpectedly (see anonymousFallbackCodes). A refusal on policy or
+// content, and a canceled request, are final. atelet verifies the bytes it
+// caches whichever path fetched them, since it executes them.
+func (s *Atelet) downloadVerified(ctx context.Context, entry assetEntry, tmpPrefix string) (string, error) {
 	wantSum, err := hex.DecodeString(entry.SHA256)
 	if err != nil {
 		return "", fmt.Errorf("while parsing sha256 hash: %w", err)
@@ -348,7 +349,14 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", fmt.Errorf("sandbox asset %s: %w", shown, ctxErr)
 		}
-		slog.InfoContext(ctx, "Object-store plugin did not serve sandbox asset; downloading it anonymously",
+		// Internal and Unavailable mean the plugin failed rather than declined
+		// the URL, so falling back must not hide them: warn. The plugin logs
+		// why it failed; atelet logs only the code (see fetchFromPlugin).
+		level := slog.LevelInfo
+		if pluginCode == codes.Internal || pluginCode == codes.Unavailable {
+			level = slog.LevelWarn
+		}
+		slog.Log(ctx, level, "Object-store plugin did not serve sandbox asset; downloading it anonymously",
 			slog.String("url", shown), slog.String("code", pluginCode.String()))
 	} else if !anonFallback {
 		return "", apierror.FailedPrecondition("sandbox asset %s: no object-store plugin is configured to fetch it", shown)
@@ -366,15 +374,16 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 
 // anonymousFallbackCodes are the plugin codes after which atelet reads a gs://
 // asset anonymously: the plugin has no such object, cannot serve the URL, does
-// not implement AssetProvider, or cannot be reached. PermissionDenied (the URL
-// is under a snapshot location) and FailedPrecondition (wrong size or sha256)
-// are refusals another source must not override.
-var anonymousFallbackCodes = []codes.Code{codes.NotFound, codes.InvalidArgument, codes.Unimplemented, codes.Unavailable}
+// not implement AssetProvider, cannot be reached, or failed with Internal. The
+// in-tree plugin returns Internal for any error it does not recognize, such as
+// GCS refusing its credentials for a public bucket (see #2613), so this falls
+// back on any unexpected failure of that plugin. Any other code is final.
+var anonymousFallbackCodes = []codes.Code{codes.NotFound, codes.InvalidArgument, codes.Unimplemented, codes.Unavailable, codes.Internal}
 
 // downloadAnonymous streams the gs:// asset entry.URL into the existing file
 // at path with no credentials, replacing anything a failed plugin fetch left
 // there, hashing as it goes, and checks the size cap and sha256.
-func (s *AteomHerder) downloadAnonymous(ctx context.Context, entry assetEntry, shown, path string, wantSum []byte) error {
+func (s *Atelet) downloadAnonymous(ctx context.Context, entry assetEntry, shown, path string, wantSum []byte) error {
 	slog.DebugContext(ctx, "Streaming anonymous download from storage", slog.String("url", shown))
 	out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
@@ -413,7 +422,7 @@ func (s *AteomHerder) downloadAnonymous(ctx context.Context, entry assetEntry, s
 // The plugin's status message is dropped here and never logged or returned:
 // atelet's errors become actor crash messages, and a plugin's text may quote a
 // signed URL or other credential in a form no scrubber can recognize.
-func (s *AteomHerder) fetchFromPlugin(ctx context.Context, entry assetEntry, shown, path string) codes.Code {
+func (s *Atelet) fetchFromPlugin(ctx context.Context, entry assetEntry, shown, path string) codes.Code {
 	slog.DebugContext(ctx, "Fetching sandbox asset through the object-store plugin", slog.String("url", shown))
 	_, err := s.assetPlugin.FetchAsset(ctx, &objectstorev1.FetchAssetRequest{
 		AssetUri:  entry.URL,
@@ -427,7 +436,7 @@ func (s *AteomHerder) fetchFromPlugin(ctx context.Context, entry assetEntry, sho
 // pluginError is atelet's own description of the plugin failing with code.
 // anonErr, if set, is why the anonymous read that followed failed; it is
 // atelet's own text and is kept in the message the caller receives.
-func (s *AteomHerder) pluginError(ctx context.Context, entry assetEntry, shown string, code codes.Code, anonErr error) error {
+func (s *Atelet) pluginError(ctx context.Context, entry assetEntry, shown string, code codes.Code, anonErr error) error {
 	newErr := apierror.FailedPrecondition
 	var msg string
 	switch code {
@@ -632,7 +641,7 @@ func writeSandboxRecord(actorUID string, rec *sandboxAssetsRecord) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return wrapFileSystemErr("while creating actor dir", err)
 	}
-	if err := writeFileAtomic(path, data, 0o600); err != nil {
+	if err := atomicfile.Write(path, data, 0o600); err != nil {
 		return wrapFileSystemErr("while writing sandbox record", err)
 	}
 	return nil

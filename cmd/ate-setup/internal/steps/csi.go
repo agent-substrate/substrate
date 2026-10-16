@@ -35,10 +35,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/nodepath"
 )
 
-// ateomHostDir is the host directory atelet mounts sandbox images under. Both
+// workerHostDir is the host directory atelet mounts sandbox images under. Both
 // CSI drivers need it bind-mounted with bidirectional propagation so volumes
 // they mount inside it are visible to atelet.
-const ateomHostDir = nodepath.BasePath
+const workerHostDir = nodepath.BasePath
 
 // csiHostpathControllerService fronts the hostpath driver's socat sidecar,
 // which bridges the TCP endpoint atelet dials to the driver's unix socket. The
@@ -161,9 +161,6 @@ func (e *Env) ensureCSIPrerequisites(ctx context.Context) error {
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
 		return err
 	}
-	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
-		return err
-	}
 	return e.DeployPodCertificateController(ctx)
 }
 
@@ -183,7 +180,7 @@ func (e *Env) setupCSIHostpath(ctx context.Context) error {
 	}
 
 	// Remove any previous deployment first: the plugin StatefulSet holds
-	// mounts under ateomHostDir, and re-applying over a running one leaves
+	// mounts under workerHostDir, and re-applying over a running one leaves
 	// stale mounts behind.
 	log.Infof("Cleaning up existing CSI hostpath resources...")
 	if err := e.Kube.Delete(ctx, objs); err != nil {
@@ -204,7 +201,7 @@ func (e *Env) setupCSIHostpath(ctx context.Context) error {
 		return err
 	}
 	log.Infof("Using Kind node: %s", node)
-	cleanupKindAteomDir(node)
+	cleanupKindWorkerDir(node)
 
 	// Before the driver, not after: atelet talks to the controller over TCP,
 	// the socat sidecar bridges that to the driver's unix socket, and
@@ -229,7 +226,7 @@ func (e *Env) setupCSIHostpath(ctx context.Context) error {
 		return fmt.Errorf("csi-hostpathplugin StatefulSet was not created: %w", err)
 	}
 
-	// Pin the plugin to the node whose ateomHostDir it bind-mounts, and mount
+	// Pin the plugin to the node whose workerHostDir it bind-mounts, and mount
 	// that directory with bidirectional propagation.
 	log.Infof("Patching the CSI hostpath StatefulSet...")
 	patch := fmt.Sprintf(`
@@ -241,15 +238,15 @@ spec:
       containers:
       - name: hostpath
         volumeMounts:
-        - name: ateom-dir
+        - name: ate-base
           mountPath: %s
           mountPropagation: Bidirectional
       volumes:
-      - name: ateom-dir
+      - name: ate-base
         hostPath:
           path: %s
           type: DirectoryOrCreate
-`, node, ateomHostDir, ateomHostDir)
+`, node, workerHostDir, workerHostDir)
 	patchJSON, err := yaml.YAMLToJSON([]byte(patch))
 	if err != nil {
 		return fmt.Errorf("while converting csi-hostpathplugin patch to JSON: %w", err)
@@ -289,7 +286,7 @@ spec:
 		return err
 	}
 
-	// The image cache directories under ateomHostDir were just wiped, so
+	// The image cache directories under workerHostDir were just wiped, so
 	// atelet has to recreate them.
 	log.Infof("Restarting the atelet DaemonSet (if present)...")
 	return e.Kube.RolloutRestart(ctx, e.Namespace(), "atelet", time.Now())
@@ -329,15 +326,15 @@ spec:
       containers:
       - name: nfs
         volumeMounts:
-        - name: ateom-dir
+        - name: ate-base
           mountPath: %s
           mountPropagation: Bidirectional
       volumes:
-      - name: ateom-dir
+      - name: ate-base
         hostPath:
           path: %s
           type: DirectoryOrCreate
-`, ateomHostDir, ateomHostDir)
+`, workerHostDir, workerHostDir)
 	nodePatchJSON, err := yaml.YAMLToJSON([]byte(nodePatch))
 	if err != nil {
 		return fmt.Errorf("while converting csi-nfs-node patch to JSON: %w", err)
@@ -485,7 +482,7 @@ func (e *Env) kindNodeName(ctx context.Context) (string, error) {
 	return nodes.Items[0].Name, nil
 }
 
-// cleanupKindAteomDir clears the sandbox image directory inside the Kind node
+// cleanupKindWorkerDir clears the sandbox image directory inside the Kind node
 // container.
 //
 // Best effort throughout, as in the shell script: a stale mount from a
@@ -493,16 +490,16 @@ func (e *Env) kindNodeName(ctx context.Context) (string, error) {
 // not be running at all when only the CSI drivers are being reinstalled. The
 // directory itself is kept so that mounts held by running pods such as atelet
 // survive.
-func cleanupKindAteomDir(node string) {
+func cleanupKindWorkerDir(node string) {
 	log.Infof("Cleaning up CSI directories on the Kind node...")
 	if !dockerContainerRunning(node) {
 		log.Warnf("Kind node %s is not running. Skipping directory cleanup.", node)
 		return
 	}
 
-	unmount := fmt.Sprintf(`for mnt in $(mount | grep %s | awk '{print $3}'); do umount -f "${mnt}" || true; done`, ateomHostDir)
+	unmount := fmt.Sprintf(`for mnt in $(mount | grep %s | awk '{print $3}'); do umount -f "${mnt}" || true; done`, workerHostDir)
 	runQuiet("docker", "exec", node, "sh", "-c", unmount)
-	runQuiet("docker", "exec", node, "sh", "-c", "rm -rf "+ateomHostDir+"/*")
+	runQuiet("docker", "exec", node, "sh", "-c", "rm -rf "+workerHostDir+"/*")
 }
 
 func dockerContainerRunning(name string) bool {

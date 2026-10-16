@@ -47,7 +47,8 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 			StorageLocation:   "gs://my-bucket/snapshots",
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
+		Resources:     resources.CPUMemory(1000, 512<<20),
 	}
 	for _, m := range mutations {
 		m(template)
@@ -91,19 +92,19 @@ func TestCreateActorTemplate_SandboxConfigChecks(t *testing.T) {
 		wantCode codes.Code
 	}{{
 		name:     "named config exists and matches",
-		sandbox:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+		sandbox:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
 		wantCode: codes.OK,
 	}, {
 		name:     "empty config_name is rejected",
-		sandbox:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM},
+		sandbox:  &ateapipb.SandboxConfig{SandboxClass: "microvm"},
 		wantCode: codes.InvalidArgument,
 	}, {
 		name:     "named config missing",
-		sandbox:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "does-not-exist"},
+		sandbox:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "does-not-exist"},
 		wantCode: codes.FailedPrecondition,
 	}, {
 		name:     "named config class mismatch",
-		sandbox:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM, ConfigName: "gvisor-default"},
+		sandbox:  &ateapipb.SandboxConfig{SandboxClass: "microvm", ConfigName: "gvisor-default"},
 		wantCode: codes.FailedPrecondition,
 	}}
 	for i, tt := range tests {
@@ -166,7 +167,7 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 		tmpl.Metadata.Version = 42
 		tmpl.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"pool": "default"}}
 		tmpl.Containers = []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
-		tmpl.Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "1Gi"}}}
+		tmpl.Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}}
 		// Server-owned status a client must not be able to set.
 		tmpl.Status = &ateapipb.ActorTemplateStatus{
 			GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
@@ -343,7 +344,7 @@ func seedSubstrateTemplate(t *testing.T, ctx context.Context, persistence store.
 			StorageLocation: "gs://ate-snapshots/team-a/",
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			SandboxClass: "gvisor",
 			ConfigName:   "gvisor",
 		},
 	})

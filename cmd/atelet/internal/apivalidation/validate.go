@@ -20,7 +20,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -28,6 +27,12 @@ import (
 // ValidateRequestActorSuspendRequest runs the generated validation for req.
 func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateletpb.RequestActorSuspendRequest) field.ErrorList {
 	return Validate_RequestActorSuspendRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+// ValidateGetActorEgressPolicyRequest runs the generated validation for
+// req.
+func ValidateGetActorEgressPolicyRequest(ctx context.Context, req *ateletpb.GetActorEgressPolicyRequest) field.ErrorList {
+	return Validate_GetActorEgressPolicyRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
 // ValidateMintActorCertificateRequest runs the generated validation for req.
@@ -60,6 +65,11 @@ func ValidatePromoteSnapshotRequest(ctx context.Context, req *ateletpb.PromoteSn
 	return Validate_PromoteSnapshotRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateDetachActorRequest runs the generated validation for req.
+func ValidateDetachActorRequest(ctx context.Context, req *ateletpb.DetachActorRequest) field.ErrorList {
+	return Validate_DetachActorRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 // ValidateRegisterWorkerRequest runs the generated validation for req.
 func ValidateRegisterWorkerRequest(ctx context.Context, req *ateletpb.RegisterWorkerRequest) field.ErrorList {
 	return Validate_RegisterWorkerRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
@@ -76,16 +86,12 @@ func ValidateCustom_EgressGateway_Address(_ context.Context, _ operation.Operati
 	return resources.ValidateHostPort(fldPath, *value)
 }
 
-// ValidateCustom_SandboxAssets_SandboxClass allows the sandbox classes of the
-// SandboxConfig CRD.
 func ValidateCustom_SandboxAssets_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	switch atev1alpha1.SandboxClass(*value) {
-	case atev1alpha1.SandboxClassGvisor, atev1alpha1.SandboxClassMicroVM:
-		return nil
-	}
-	return field.ErrorList{field.NotSupported(fldPath, *value, []string{
-		string(atev1alpha1.SandboxClassGvisor), string(atev1alpha1.SandboxClassMicroVM),
-	})}
+	return resources.ValidateSandboxClass(fldPath, *value)
+}
+
+func ValidateCustom_SandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateSandboxClass(fldPath, *value)
 }
 
 func ValidateCustom_SandboxAssets_PauseImage(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {

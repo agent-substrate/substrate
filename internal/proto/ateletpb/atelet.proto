@@ -20,11 +20,11 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
 
-// AteomSupport provides callouts for ateom.
+// WorkerSupport provides callouts for worker implementations.
 //
-// Called by individual ateom pods over a local connection, authenticated with
-// ateom's k8s pod identity mTLS certificate.
-service AteomSupport {
+// Called by individual worker pods over a local connection, authenticated with
+// the worker's k8s pod identity mTLS certificate.
+service WorkerSupport {
   // Request an atunnel certificate for the given actor.
   //
   // TODO(identity): Rename to MintAtunnelCertificate, as distinct from
@@ -43,8 +43,14 @@ service AteomSupport {
   // passed through as it was given, so a worker can tell a decision from a
   // failure to ask. Callers must not hold a lock the resulting Checkpoint
   // would need: the control plane answers this by driving a suspend back
-  // through atelet into the calling ateom.
+  // through atelet into the calling worker.
   rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse) {}
+
+  // GetActorEgressPolicy returns the egress policy of the actor this
+  // worker hosts, which atelet reads from the control plane's
+  // Control.GetActorEgressPolicy. An error is the control plane's, passed
+  // through as it was given.
+  rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (GetActorEgressPolicyResponse) {}
 }
 
 message RegisterWorkerRequest {
@@ -78,6 +84,7 @@ message SandboxRuntime {
   //
   // +k8s:required
   // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
   string sandbox_class = 1;
 
   // Primary compatibility version stamped onto an actor's snapshot when a
@@ -204,6 +211,71 @@ message RequestActorSuspendRequest {
 message RequestActorSuspendResponse {
 }
 
+message GetActorEgressPolicyRequest {
+  // The actor the calling worker is hosting. atelet reads its policy from the
+  // control plane by name.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_atespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_name = 2;
+}
+
+message GetActorEgressPolicyResponse {
+  // The actor's policy, copied from the control plane's. Unset if the actor
+  // has no policy, which denies all of its egress, DNS included.
+  EgressPolicy egress_policy = 1;
+}
+
+// EgressPolicy is the part of the control plane's EgressPolicy that a worker
+// enforces itself: which destinations each rule allows. The resource metadata
+// and the rules' effects are left out; only the egress gateway applies them,
+// so the credentials they refer to never reach the worker.
+message EgressPolicy {
+  // Rules are an unordered set of allows, as in the control plane's policy.
+  repeated EgressRule rules = 1;
+}
+
+// EgressRule mirrors the control plane's EgressRule: exactly one field is set,
+// naming the rule's protocol. A rule with none set has a protocol this copy
+// does not carry yet, and allows nothing.
+message EgressRule {
+  // Cleartext HTTP to the named hosts.
+  EgressDestinations http = 1;
+
+  // HTTPS to the named hosts, intercepted by the egress gateway.
+  EgressDestinations https = 2;
+
+  // TLS to the named servers, forwarded without decryption.
+  EgressDestinations tls_passthrough = 3;
+}
+
+// EgressDestinations is the hostnames and ports a rule allows, copied from the
+// control plane's HTTPRule, HTTPSRule, or TLSPassthroughRule.
+message EgressDestinations {
+  // Hostnames as the control plane's rule has them, wildcards included.
+  repeated string hostnames = 1;
+
+  // The ports the rule allows, with the control plane's defaults applied.
+  EgressPorts ports = 2;
+}
+
+// EgressPorts mirrors the control plane's Ports: either all ports, or the
+// listed numbers.
+message EgressPorts {
+  // Set if the rule allows every port.
+  EgressAllPorts all = 1;
+
+  // The port numbers the rule allows, when all is unset.
+  repeated int32 numbers = 2;
+}
+
+// EgressAllPorts marks a rule as allowing every port.
+message EgressAllPorts {}
+
 message MintActorCertificateRequest {
   // The actor for which the certificate should be issued.
   //
@@ -235,25 +307,25 @@ message MintActorCertificateResponse {
   repeated bytes actor_certificates = 1;
 }
 
-// AteomHerder allows ate-apiserver to issue control calls to the atelet.
+// Atelet allows ate-apiserver to issue control calls to the atelet.
 //
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
-service AteomHerder {
-  // Run tells atelet to create a new containerized workload from scratch on an
-  // ateom.
+service Atelet {
+  // Run tells atelet to create a new containerized workload from scratch on a
+  // worker.
   rpc Run(RunRequest) returns (RunResponse) {}
 
   // Checkpoint saves the workload's state as a new snapshot of the actor and
-  // returns the ateom to a blank state. upload_config says when the snapshot
-  // becomes durable. Once ateom has captured the workload, and before the new
+  // returns the worker to a blank state. upload_config says when the snapshot
+  // becomes durable. Once the worker has captured the workload, and before the new
   // snapshot is uploaded or stored locally, atelet deletes the actor's older
   // local snapshots, except one still being uploaded, which it deletes when
   // that upload ends. A Checkpoint that then fails to upload or store the new
   // snapshot leaves the actor with no local snapshot.
   rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
 
-  // Restore restores a workload from a snapshot onto an ateom.
+  // Restore restores a workload from a snapshot onto a worker.
   rpc Restore(RestoreRequest) returns (RestoreResponse) {}
 
   // PromoteSnapshot makes `snapshot` durable in object storage while keeping
@@ -270,14 +342,25 @@ service AteomHerder {
   // caller, the suspend of a paused actor, relies on the deletion.
   rpc PromoteSnapshot(PromoteSnapshotRequest) returns (PromoteSnapshotResponse) {}
 
+  // DetachActor makes the actor's latest local snapshot durable, then deletes
+  // the actor's local snapshots on this node, so it can resume on any node.
+  // atelet also detaches a suspended actor on its own after its detach delay.
+  // Waits for an operation already in progress on the actor, such as an
+  // upload or a detach. Does nothing when atelet holds no local snapshot for
+  // the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
+  // actor is in progress or the actor runs on this node.
+  //
+  // TODO: Temporarily, atelet returns UNIMPLEMENTED.
+  rpc DetachActor(DetachActorRequest) returns (DetachActorResponse) {}
+
   // Terminate tells atelet to terminate/kill any running workload for an actor,
   // unmount its volumes, and clean up actor state on the node.
   rpc Terminate(TerminateRequest) returns (TerminateResponse) {}
 }
 
 message TerminateRequest {
-  // The UID of the worker pod whose ateom hosts the actor. If unset, atelet
-  // only cleans up the actor's node resources; it does not reach an ateom.
+  // The UID of the worker pod whose the worker hosts the actor. If unset, atelet
+  // only cleans up the actor's node resources; it does not reach a worker.
   //
   // +k8s:optional
   // +k8s:format=k8s-uuid
@@ -316,7 +399,7 @@ message TerminateResponse {
 }
 
 message RunRequest {
-  // The UID of the worker pod whose ateom hosts the actor.
+  // The UID of the worker pod whose the worker hosts the actor.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
@@ -420,9 +503,6 @@ message ArchAssets {
 // atelet's backend code interprets the asset names (gVisor expects "gvisor",
 // the release tarball; legacy "runsc", a bare binary, is still accepted).
 message SandboxAssets {
-  // TODO: send this as an enum, like ateapi's and ateom's SandboxClass, so
-  // the tags can bound it and the custom validation goes away.
-  //
   // +k8s:required
   // +k8s:maxLength=63 # guardrail; the class names are a few characters
   // +k8s:customValidation # gvisor or microvm
@@ -811,10 +891,10 @@ message Snapshot {
   // for the actor, or for its newest under another snapshot_uuid: the
   // caller's view is stale.
   //
-  // TODO: Temporarily, the control plane does not set this and atelet does
-  // not check it.
+  // TODO: Temporarily, atelet does not compare it with the snapshots it holds.
   //
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:minimum=1
   int32 generation = 2;
 
   // On Checkpoint: the fidelity to capture.
@@ -837,8 +917,7 @@ message Snapshot {
   // usable local copy.
   //
   // TODO: Temporarily, this is optional while we haven't implemented deferred
-  // uploads. Restore also uses its presence to choose between the local copy
-  // and object storage; see RestoreRequest.snapshot.
+  // uploads.
   //
   // +k8s:optional
   ObjectStorage object = 4;
@@ -858,7 +937,7 @@ message SnapshotReport {
 }
 
 // ActorSnapshotState is what atelet holds for one actor on this node.
-// Returned by Checkpoint, PromoteSnapshot.
+// Returned by Checkpoint, PromoteSnapshot, DetachActor.
 message ActorSnapshotState {
   // The snapshot atelet restores the actor from locally. Unset when the
   // latest checkpoint kept no local copy, and once a detach has made the
@@ -919,7 +998,7 @@ enum UploadMode {
 
 // +k8s:customValidation # immediate upload requires snapshot.object
 message CheckpointRequest {
-  // The UID of the worker pod whose ateom hosts the actor.
+  // The UID of the worker pod whose the worker hosts the actor.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
@@ -978,14 +1057,11 @@ message CheckpointResponse {
   // snapshot, unless UPLOAD_MODE_IMMEDIATE kept no local copy. The control
   // plane can drop its entries for any local-only generation not named here:
   // atelet has deleted it, and will never upload it.
-  //
-  // TODO: Temporarily, atelet leaves this unset. An unset state says nothing
-  // about which snapshots atelet holds.
   ActorSnapshotState state = 1;
 }
 
 message RestoreRequest {
-  // The UID of the worker pod whose ateom hosts the actor.
+  // The UID of the worker pod whose the worker hosts the actor.
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
@@ -1022,9 +1098,9 @@ message RestoreRequest {
   // detaching the actor, it waits for the detach to finish and then reads
   // `snapshot.object`. Fails if neither copy exists: that generation is lost.
   //
-  // TODO: Temporarily, whether `snapshot.object` is set chooses the copy:
-  // atelet reads only the local copy when it is unset, and only
-  // `snapshot.object` when it is set, with no fallback either way.
+  // TODO: Temporarily, the control plane does not set `snapshot.object` when
+  // it restores a paused actor, so atelet has nothing to fall back to if that
+  // actor's local copy is missing or unusable.
   //
   // +k8s:required
   Snapshot snapshot = 8;
@@ -1095,8 +1171,27 @@ message PromoteSnapshotRequest {
 message PromoteSnapshotResponse {
   // The actor's state once promoted: latest_durable is its latest snapshot,
   // and latest_local remains set if atelet still holds the local copy.
+  ActorSnapshotState state = 1;
+}
+
+message DetachActorRequest {
+  // Golden actors are accepted: an IMMEDIATE checkpoint keeps a local copy.
   //
-  // TODO: Temporarily, atelet leaves this unset. An unset state says nothing
-  // about which snapshots atelet holds.
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string atespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_name = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 3;
+}
+
+message DetachActorResponse {
+  // The actor's state once detached: latest_local is unset, and latest_durable
+  // is its latest snapshot, if atelet knows one.
   ActorSnapshotState state = 1;
 }

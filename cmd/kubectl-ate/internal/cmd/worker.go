@@ -44,9 +44,10 @@ var (
 )
 
 var getWorkersCmd = &cobra.Command{
-	Use:     "worker <worker-name ...>",
+	Use:     "worker [worker-name ...]",
 	Aliases: []string{"workers"},
 	Short:   "List all workers or get one or more workers",
+	Args:    cobra.ArbitraryArgs,
 	RunE:    runGetWorkers,
 }
 
@@ -54,7 +55,7 @@ var topWorkersCmd = &cobra.Command{
 	Use:     "worker",
 	Aliases: []string{"workers"},
 	Short:   "Display resource (CPU/Memory) usage of workers",
-	Args:    cobra.NoArgs,
+	Args:    noArgs(""),
 	RunE:    runTopWorkers,
 }
 
@@ -177,8 +178,8 @@ type GetWorkersRunner struct {
 
 func (r *GetWorkersRunner) Run(ctx context.Context) error {
 	if len(r.names) > 0 {
-		if r.namespace != "" || r.atespace != "" || r.selector != "" || r.sandboxClass != "" {
-			return fmt.Errorf("filter flags (--namespace, --atespace, --selector, --sandbox-class) cannot be used when getting workers by name")
+		if err := validateWorkerFlags(r.names, r.namespace, r.atespace, r.selector, r.sandboxClass); err != nil {
+			return err
 		}
 		workers := make([]*ateapipb.Worker, 0, len(r.names))
 		for _, name := range r.names {
@@ -205,7 +206,32 @@ func (r *GetWorkersRunner) Run(ctx context.Context) error {
 	return printer.PrintWorkersTo(r.out, filtered, r.outputFmt)
 }
 
+func validateWorkerFlags(names []string, namespace, atespace, selector, sandboxClass string) error {
+	if len(names) > 0 {
+		switch {
+		case namespace != "":
+			return usageErrorf("-n/--namespace cannot be used when getting workers by name")
+		case atespace != "":
+			return usageErrorf("-a/--atespace cannot be used when getting workers by name")
+		case selector != "":
+			return usageErrorf("-l/--selector cannot be used when getting workers by name")
+		case sandboxClass != "":
+			return usageErrorf("--sandbox-class cannot be used when getting workers by name")
+		}
+	}
+	if selector != "" {
+		if _, err := labels.Parse(selector); err != nil {
+			return usageErrorf("invalid label selector %q: %w", selector, err)
+		}
+	}
+	return nil
+}
+
 func runGetWorkers(cmd *cobra.Command, args []string) error {
+	if err := validateWorkerFlags(args, getWorkerNamespaceFlag, getWorkerAtespaceFlag, getWorkerSelectorFlag, getWorkerClassFlag); err != nil {
+		return err
+	}
+
 	apiClient, err := newAPIClient(cmd)
 	if err != nil {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
@@ -320,7 +346,7 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 func extractContainerUsage(pm metricsv1beta1.PodMetrics, stderr io.Writer) (string, string) {
 	var cpuQuant, memQuant *resource.Quantity
 	for _, c := range pm.Containers {
-		if c.Name == "ateom" {
+		if c.Name == "worker" {
 			cpu := c.Usage[corev1.ResourceCPU]
 			mem := c.Usage[corev1.ResourceMemory]
 			cpuQuant = &cpu
@@ -329,7 +355,7 @@ func extractContainerUsage(pm metricsv1beta1.PodMetrics, stderr io.Writer) (stri
 		}
 	}
 	if cpuQuant == nil && len(pm.Containers) > 0 {
-		vlogf(stderr, vFlow, "Container \"ateom\" not found in pod metrics for %s/%s; summing all %d container(s)",
+		vlogf(stderr, vFlow, "Container \"worker\" not found in pod metrics for %s/%s; summing all %d container(s)",
 			pm.Namespace, pm.Name, len(pm.Containers))
 		var totalCPU, totalMem resource.Quantity
 		for _, c := range pm.Containers {
@@ -350,6 +376,10 @@ func extractContainerUsage(pm metricsv1beta1.PodMetrics, stderr io.Writer) (stri
 }
 
 func runTopWorkers(cmd *cobra.Command, args []string) error {
+	if err := validateWorkerFlags(nil, topWorkerNamespaceFlag, topWorkerAtespaceFlag, topWorkerSelectorFlag, topWorkerClassFlag); err != nil {
+		return err
+	}
+
 	apiClient, err := newAPIClient(cmd)
 	if err != nil {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
@@ -381,15 +411,15 @@ func runTopWorkers(cmd *cobra.Command, args []string) error {
 }
 
 func init() {
-	getWorkersCmd.Flags().StringVarP(&getWorkerNamespaceFlag, "namespace", "n", "", "Scope output to a specific Kubernetes namespace")
-	getWorkersCmd.Flags().StringVarP(&getWorkerAtespaceFlag, "atespace", "a", "", "Filter worker pods hosting actors in a specific atespace")
-	getWorkersCmd.Flags().StringVarP(&getWorkerSelectorFlag, "selector", "l", "", "Filter by worker pool labels")
-	getWorkersCmd.Flags().StringVar(&getWorkerClassFlag, "sandbox-class", "", "Filter by sandbox class (e.g. gvisor, microvm)")
+	getWorkersCmd.Flags().StringVarP(&getWorkerNamespaceFlag, "namespace", "n", "", "scope output to a specific Kubernetes namespace")
+	getWorkersCmd.Flags().StringVarP(&getWorkerAtespaceFlag, "atespace", "a", "", "filter worker pods hosting actors in a specific atespace")
+	getWorkersCmd.Flags().StringVarP(&getWorkerSelectorFlag, "selector", "l", "", "filter by worker pool labels")
+	getWorkersCmd.Flags().StringVar(&getWorkerClassFlag, "sandbox-class", "", "filter by sandbox class (e.g. gvisor, microvm)")
 	getCmd.AddCommand(getWorkersCmd)
 
-	topWorkersCmd.Flags().StringVarP(&topWorkerNamespaceFlag, "namespace", "n", "", "Scope output to a specific Kubernetes namespace")
-	topWorkersCmd.Flags().StringVarP(&topWorkerAtespaceFlag, "atespace", "a", "", "Filter worker pods hosting actors in a specific atespace")
-	topWorkersCmd.Flags().StringVarP(&topWorkerSelectorFlag, "selector", "l", "", "Filter by worker pool labels")
-	topWorkersCmd.Flags().StringVar(&topWorkerClassFlag, "sandbox-class", "", "Filter by sandbox class (e.g. gvisor, microvm)")
+	topWorkersCmd.Flags().StringVarP(&topWorkerNamespaceFlag, "namespace", "n", "", "scope output to a specific Kubernetes namespace")
+	topWorkersCmd.Flags().StringVarP(&topWorkerAtespaceFlag, "atespace", "a", "", "filter worker pods hosting actors in a specific atespace")
+	topWorkersCmd.Flags().StringVarP(&topWorkerSelectorFlag, "selector", "l", "", "filter by worker pool labels")
+	topWorkersCmd.Flags().StringVar(&topWorkerClassFlag, "sandbox-class", "", "filter by sandbox class (e.g. gvisor, microvm)")
 	topCmd.AddCommand(topWorkersCmd)
 }

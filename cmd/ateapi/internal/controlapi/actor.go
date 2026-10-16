@@ -31,6 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -92,6 +93,8 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	if tagRef == nil {
 		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
 	} else {
+		// NOTE: whether the ExternalVolumes gate is enabled or not, we do not
+		// support cloning from a tag that has external volumes.
 		for _, volume := range template.GetVolumes() {
 			if volume.GetExternalVolumeTemplate() != nil {
 				// TODO: Permit cloning after CSI volume snapshots are supported.
@@ -116,9 +119,17 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	name := inActor.GetMetadata().GetName()
 
 	// Volume creation is completed asynchronously after the actor is recorded.
-	initVols, err := initialActorVolumes(ctx, s.storageClassLister, template)
-	if err != nil {
+	var initVols []*ateapipb.ExternalVolume
+	if iv, err := initialExternalVolumes(ctx, s.storageClassLister, template); err != nil {
 		return nil, err
+	} else if preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
+		initVols = iv
+	} else if len(iv) > 0 {
+		errs := field.ErrorList{
+			field.Forbidden(field.NewPath("actor", "actor_template"),
+				"ActorTemplates with external volumes require the ExternalVolumes preview gate to be enabled on the server and the client to opt in to preview features (kubectl ate --preview, or the "+preview.Header+" header)"),
+		}
+		return nil, resources.ToAPIError(errs)
 	}
 
 	// Verify that the result is properly valid before storing it.
@@ -553,10 +564,8 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 
-	// TODO(authz): Authorization layer needs to check whether the caller has
-	// the mintActorJWT permission/relation with this actor.  This could be an
-	// atelet (via the relationship of the atelet running the actor), or the
-	// egress gateway (via a cluster-level grant?)
+	// With authz enforced, the interceptor requires can_mint_actor_jwt on the
+	// actor, which only the egress gateway holds.
 
 	// Verify that this actor exists in the store.  It doesn't need to be
 	// running, since we may need to issue JWTs during actor boot / resume.
@@ -577,8 +586,9 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 	now := time.Now().Truncate(time.Second)
 	expiresAt := now.Add(time.Duration(req.GetExpirationSeconds()) * time.Second)
 	actorClaims := &actoridjwt.Claims{
+		Kind:       actoridjwt.KindActor,
 		Issuer:     s.actorJWTIssuer,
-		Subject:    fmt.Sprintf("actor/%s/%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
+		Subject:    fmt.Sprintf("%s/%s/%s", actoridjwt.KindActor.SubjectPrefix(), dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
 		Audiences:  req.GetAudiences(),
 		Expiration: expiresAt,
 		NotBefore:  now.Add(-5 * time.Minute),
@@ -608,10 +618,8 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 
-	// TODO(authz): Authorization layer needs to check whether the caller has
-	// the mintActorCertificate permission/relation with this actor.    This
-	// could be an atelet (via the relationship of the atelet running the
-	// actor), or the egress gateway (via a cluster-level grant?)
+	// With authz enforced, the interceptor requires can_mint_actor_certificate
+	// on the actor, which only the egress gateway holds.
 
 	// Check that the caller authenticated with a client certificate --- we
 	// should not allow bootstrapping a proof-of-possession credential from a

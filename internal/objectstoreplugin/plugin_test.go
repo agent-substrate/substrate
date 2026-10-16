@@ -124,7 +124,7 @@ func serve(t *testing.T, backend *memObjects, root string) *grpc.ClientConn {
 	if err != nil {
 		t.Fatal(err)
 	}
-	node, err := NewNodePlugin(backend, root)
+	node, err := NewNodePlugin(backend, root, objectstorage.DefaultUploadMemory)
 	if err != nil {
 		t.Fatal(err)
 	}

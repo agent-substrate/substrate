@@ -42,6 +42,27 @@ type jwk struct {
 	E         string `json:"e,omitempty"`
 }
 
+// JWKS returns the JWK set, as JSON, that publishes the pool's public keys for
+// signature verification. It carries no private material, so it is what a
+// verifier that cannot use discovery is given instead of the pool itself.
+func (p *ConcretePool) JWKS() ([]byte, error) {
+	keys, err := p.VerificationKeys()
+	if err != nil {
+		return nil, err
+	}
+	return JWKS(keys)
+}
+
+// PublicJWKS returns the JWK set for a serialized pool, for writers that hold
+// the pool only as bytes.
+func PublicJWKS(poolBytes []byte) ([]byte, error) {
+	pool, err := Unmarshal(poolBytes)
+	if err != nil {
+		return nil, fmt.Errorf("while reading the pool: %w", err)
+	}
+	return pool.JWKS()
+}
+
 // JWKS returns the JWK set, as JSON, that publishes keys for signature
 // verification, sorted by key ID. Each key's algorithm must fit its type:
 // ES256 for a P-256 EC key, or RS256, RS384, or RS512 for an RSA key.

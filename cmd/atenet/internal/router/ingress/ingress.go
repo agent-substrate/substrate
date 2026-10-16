@@ -38,7 +38,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/atunnel"
+	atunnelingress "github.com/agent-substrate/substrate/internal/atunnel/ingress"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -54,6 +54,8 @@ const (
 	OriginalDstAddressKey = "local"
 	// OriginalDstPortKey is the actor's target port.
 	OriginalDstPortKey = "port"
+	// WorkerSPIFFEIDKey is the SPIFFE ID atunnel's certificate must carry.
+	WorkerSPIFFEIDKey = "worker_spiffe_id"
 )
 
 // Handler routes ingress requests to the worker hosting their actor.
@@ -100,7 +102,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		targetAuthority = md.Host
 	}
 	if _, portStr, err := net.SplitHostPort(targetAuthority); err == nil {
-		if p, ok := atunnel.ParsePort(portStr); ok {
+		if p, ok := atunnelingress.ParsePort(portStr); ok {
 			targetPort = p
 		}
 	}
@@ -121,16 +123,20 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 
 	// The first IP is in the cluster's primary IP family.
 	// TODO: choose the IP family that matches the dataplane's own address.
+	assignment := actor.GetStatus().GetWorkerAssignment()
 	var workerIP string
-	if ips := actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(); len(ips) > 0 {
+	if ips := assignment.GetWorkerPodIps(); len(ips) > 0 {
 		workerIP = ips[0]
 	}
+	workerSPIFFEID := assignment.GetWorkerSpiffeId()
 	slog.InfoContext(ctx, "ResumeActor result",
 		slog.Any("actor", actorRef),
 		slog.String("state", actor.GetStatus().GetState().String()),
-		slog.String("workerIP", workerIP))
+		slog.String("workerIP", workerIP),
+		slog.String("workerSPIFFEID", workerSPIFFEID))
 
-	if ip := net.ParseIP(workerIP); ip == nil {
+	// Without the SPIFFE ID, atunnel's identity can't be checked.
+	if ip := net.ParseIP(workerIP); ip == nil || workerSPIFFEID == "" {
 		return res, extproc.NewReqError(envoy_type.StatusCode_InternalServerError,
 			"actor %s routing failed", actorRef)
 	}
@@ -147,6 +153,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		OriginalDstMetadataKey: map[string]any{
 			OriginalDstAddressKey: targetAddr,
 			OriginalDstPortKey:    strconv.Itoa(targetPort),
+			WorkerSPIFFEIDKey:     workerSPIFFEID,
 		},
 	})
 	if err != nil {

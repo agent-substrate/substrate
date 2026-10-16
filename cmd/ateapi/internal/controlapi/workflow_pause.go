@@ -24,16 +24,19 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/protobuf/proto"
 )
 
 // PauseActor executes the workflow to pause a running actor. Idempotent:
 // a re-entered workflow fast-forwards past the steps a previous attempt
 // completed, deriving progress from the persisted actor alone.
 func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
+	ctx = preview.ContextWithOptIn(ctx)
 	start := time.Now()
 	var actor *ateapipb.Actor
 	var actorTemplate *ateapipb.ActorTemplate
@@ -47,7 +50,7 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 		if attrs == nil {
 			attrs = lifecycleOpAttrs(actor, actorTemplate, "", wireFidelity)
 		}
-		w.instruments.recordLifecycleOp(ctx, ateattr.OperationPause, start, err, attrs...)
+		w.instruments.recordLifecycleOp(ctx, ateattr.OperationSuspend, start, err, attrs...)
 	}()
 
 	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
@@ -79,7 +82,7 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 	// TODO: There is no difference between suspend and pause for now, but we
 	// could optimize pause by not detaching. We would need to make sure Resume
 	// is idempotent.
-	if err = w.ensureVolumesDetached(leaseCtx, actor, actorTemplate, "DetachVolumesForPause", ateattr.OperationPause); err != nil {
+	if err = w.ensureVolumesDetached(leaseCtx, actor, actorTemplate, "DetachVolumesForPause", ateattr.OperationSuspend); err != nil {
 		return nil, err
 	}
 	// FinalizePaused clears the WorkerAssignment the labels read, so snapshot
@@ -140,14 +143,15 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 		// Increment last_assigned_generation for the new Pause request.
 		gen := toUpdate.Status.LastAssignedGeneration + 1
 		toUpdate.Status.LastAssignedGeneration = gen
-		toUpdate.Status.Snapshots = append(toUpdate.Status.Snapshots,
-			newLocalSnapshot(
-				gen,
-				actorTemplate.GetSnapshotConfig().GetPreferredFidelity(),
-				actorTemplate.GetMetadata().GetUid(),
-				snapshotUUID,
-				"",
-			))
+		snap := newLocalSnapshot(
+			gen,
+			actorTemplate.GetSnapshotConfig().GetPreferredFidelity(),
+			actorTemplate.GetMetadata().GetUid(),
+			snapshotUUID,
+			"",
+		)
+		snap.SandboxRuntime = proto.CloneOf(toUpdate.GetStatus().GetWorkerAssignment().GetSandboxRuntime())
+		toUpdate.Status.Snapshots = append(toUpdate.Status.Snapshots, snap)
 		return nil
 	})
 	if err != nil {
@@ -156,7 +160,7 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 		}
 		return nil, err
 	}
-	logActorStateChanged(ctx, storedActor, ateattr.OperationPause)
+	logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend)
 	return storedActor, nil
 }
 
@@ -173,14 +177,14 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		// Missing active worker pod reference mid-pause indicates corrupted store state.
-		return "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationPause, crashMessageWorkerAssignmentMissing)
+		return "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageWorkerAssignmentMissing)
 	}
 
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
 		return "", fmt.Errorf("while getting atelet conn for node %q: %w", assignment.GetNodeName(), err)
 	}
-	client := ateletpb.NewAteomHerderClient(ateletConn)
+	client := ateletpb.NewAteletClient(ateletConn)
 
 	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 	if err != nil {
@@ -200,6 +204,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		Spec:                  workloadSpec,
 		Snapshot: &ateletpb.Snapshot{
 			SnapshotUuid: inProgressSnap.GetUuid(),
+			Generation:   inProgressSnap.GetGeneration(),
 			Fidelity:     fidelityToAtelet(actorTemplate.GetSnapshotConfig().GetPreferredFidelity()),
 		},
 		UploadConfig: &ateletpb.UploadConfig{
@@ -210,7 +215,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	wireFidelity = ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity())
 
 	if _, err = client.Checkpoint(ctx, req); err != nil {
-		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationPause, "Checkpoint", false, err)
+		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
 	return wireFidelity, nil
 }
@@ -242,10 +247,10 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			// so the actor can never be resumed (the scheduler would search for a
 			// worker on an unknown node forever). Crash it instead of committing
 			// SUSPENDED with a snapshot nothing can find.
-			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationPause, crashMessageLocalSnapshotNodeUnknown)
+			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown)
 		}
 		if snapshotAtLatestGeneration(latestActor.GetStatus()) == nil {
-			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationPause, crashMessageLocalSnapshotMissing)
+			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
 		}
 
 		worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
@@ -284,7 +289,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			}
 			return nil, err
 		}
-		logActorStateChanged(ctx, storedActor, ateattr.OperationPause)
+		logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend)
 		latestActor = storedActor
 	}
 

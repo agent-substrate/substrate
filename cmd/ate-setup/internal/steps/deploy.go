@@ -186,8 +186,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	return e.applyOtelEndpointOverride(ctx)
 }
 
-// DeployPodCertificateController applies the podcertificate controller and
-// waits until it is rolling and has published its trust bundles.
+// DeployPodCertificateController creates any missing signer CA pools, applies
+// the podcertificate controller, and waits until it is rolling and has
+// published its trust bundles.
 //
 // size10 clusters render the podcert-size10 overlay instead of the base file.
 // It appends --kube-api-qps=100 / --kube-api-burst=200 so the controller keeps
@@ -200,6 +201,11 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 // reason: one apply means one rollout, and the rollout wait sees the pod that
 // will actually serve.
 func (e *Env) DeployPodCertificateController(ctx context.Context) error {
+	// The controller mounts every pool, so one that an older release did not
+	// create keeps the new pod in ContainerCreating.
+	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
+		return err
+	}
 	path := e.Cfg.Manifest("pod-certificate-controller.yaml")
 	if e.Cfg.Size10() {
 		path = e.Cfg.Manifest("podcert-size10")
@@ -300,7 +306,7 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 			return err
 		}
 	}
-	manifest, err := e.renderResolve(ctx, e.Cfg.Manifest("ate-api-server.yaml"))
+	manifest, err := e.renderResolve(ctx, e.apiServerManifestPath())
 	if err != nil {
 		return err
 	}
@@ -312,6 +318,14 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 		return err
 	}
 	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), "ate-api-server", e.Cfg.RolloutTimeout)
+}
+
+// apiServerManifestPath is the ate-api-server manifest for the environment.
+func (e *Env) apiServerManifestPath() string {
+	if e.Cfg.Kind {
+		return e.Cfg.Manifest("kind", "ate-api-server")
+	}
+	return e.Cfg.Manifest("ate-api-server.yaml")
 }
 
 // DeployAteController redeploys only ate-controller.
@@ -330,7 +344,7 @@ func (e *Env) DeployAteController(ctx context.Context) error {
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
-	manifest, err := e.renderDataPlane(e.Cfg.Manifest("ate-controller.yaml"))
+	manifest, err := e.render(e.Cfg.Manifest("ate-controller.yaml"))
 	if err != nil {
 		return err
 	}
@@ -459,12 +473,7 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 		return err
 	}
 
-	path := e.Cfg.Manifest("atelet.yaml")
-	if e.Cfg.Kind {
-		// The kind overlay patches the DaemonSet for the local node layout.
-		path = e.Cfg.Path(installDir + "/kind/atelet")
-	}
-	manifest, err := e.renderDataPlane(path)
+	manifest, err := e.render(e.ateletManifestPath())
 	if err != nil {
 		return err
 	}
@@ -479,6 +488,14 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 		return err
 	}
 	return e.waitFakeWorkersync(ctx)
+}
+
+// ateletManifestPath is the atelet manifest for the environment.
+func (e *Env) ateletManifestPath() string {
+	if e.Cfg.Kind {
+		return e.Cfg.Manifest("kind", "atelet")
+	}
+	return e.Cfg.Manifest("atelet.yaml")
 }
 
 // DeployAtenet redeploys the atenet dataplane: router and egress.

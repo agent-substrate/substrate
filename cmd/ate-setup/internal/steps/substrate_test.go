@@ -43,9 +43,10 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 	// The values benchmarking/workloads/deploy.sh substitutes, beyond the
 	// ${BUCKET_NAME} every installer provides.
 	benchmarkValues := map[string]string{
+		"${ACTOR_CPU}":           "1",
 		"${ACTOR_MEMORY}":        "256Mi",
 		"${OTLP_ENDPOINT}":       "http://otel-collector.otel-system:4317",
-		"${SANDBOX_CLASS_ENUM}":  "SANDBOX_CLASS_GVISOR",
+		"${SANDBOX_CLASS}":       "gvisor",
 		"${SANDBOX_CONFIG_NAME}": "gvisor-default",
 	}
 

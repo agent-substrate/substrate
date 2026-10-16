@@ -53,8 +53,16 @@ volumes:
         - egress-mitm.ate.dev
         - system-roots.ate.dev
         path: egress-trust-bundle/trust-bundle.pem
+# Sandbox size. The pool sets no worker limits, so the worker offers the
+# node's allocatable and these only need to fit the node.
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
 sandboxConfig:
-  sandboxClass: SANDBOX_CLASS_GVISOR
+  sandboxClass: gvisor
   configName: gvisor-default
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY

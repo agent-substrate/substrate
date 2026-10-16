@@ -89,6 +89,7 @@ class DeployWorkloadsTest(unittest.TestCase):
             actor_memory="1536Mi",
             wait_timeout_secs=600,
             worker_memory="5Gi",
+            actor_cpu="250m",
         )
         run.assert_called_once_with(
             [
@@ -100,6 +101,8 @@ class DeployWorkloadsTest(unittest.TestCase):
                 "microvm",
                 "--actor-memory",
                 "1536Mi",
+                "--actor-cpu",
+                "250m",
                 "--worker-memory",
                 "5Gi",
                 "--wait-timeout",
@@ -133,6 +136,39 @@ class RunnerSizingTest(unittest.TestCase):
         subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "t", "NAME": "n", "DEST": "d"}
         subs.update(locust.job_subs({"file": "f", "duration": "1m", "users": 1}))
         self.assertNotIn("${", orchestrator.render_template(self.TMPL, subs))
+
+
+class RunnerNamespaceTest(unittest.TestCase):
+    """Every runner Job's namespace carries the label ate-system's
+    NetworkPolicy admits API clients by; without it the runner cannot reach
+    ate-api-server."""
+
+    HERE = os.path.dirname(__file__)
+    POLICIES = os.path.join(HERE, "..", "..", "manifests", "ate-install", "ate-system-networkpolicies.yaml")
+
+    def api_client_labels(self):
+        for doc in yaml.safe_load_all(open(self.POLICIES)):
+            if not doc or doc["metadata"]["name"] != "ate-api-server":
+                continue
+            for rule in doc["spec"]["ingress"]:
+                for peer in rule.get("from", []):
+                    if "namespaceSelector" in peer:
+                        return peer["namespaceSelector"]["matchLabels"]
+        self.fail("ate-api-server NetworkPolicy admits no namespace by label")
+
+    def test_namespace_has_api_access_label(self):
+        want = self.api_client_labels()
+        for name in ("runner-job.yaml.tmpl", "nighthawk-ingress-runner-job.yaml.tmpl"):
+            with self.subTest(template=name):
+                text = open(os.path.join(self.HERE, "manifests", name)).read()
+                ns = next(
+                    yaml.safe_load(d)
+                    for d in text.split("\n---\n")
+                    if "kind: Namespace" in d
+                )
+                self.assertEqual(ns["metadata"]["name"], "benchmarking")
+                for k, v in want.items():
+                    self.assertEqual(ns["metadata"].get("labels", {}).get(k), v)
 
 
 class JobNameTest(unittest.TestCase):

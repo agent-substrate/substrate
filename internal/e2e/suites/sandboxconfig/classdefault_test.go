@@ -85,7 +85,7 @@ func TestWorkerPoolFollowsClassDefault(t *testing.T) {
 		Spec: atev1alpha1.WorkerPoolSpec{
 			Replicas: 0,
 			// Never pulled: the pool runs no workers.
-			WorkerImage:    "ateom:unused",
+			WorkerImage:    "worker:unused",
 			SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: class}},
 		},
 	}, metav1.CreateOptions{})

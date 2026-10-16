@@ -32,7 +32,7 @@ var revertActorCmd = &cobra.Command{
 
 The actor's external snapshot is left untouched, so a later resume restores
 from it. Only crashed, running, or paused actors can be reverted.`,
-	Args: cobra.ExactArgs(1),
+	Args: exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
@@ -54,7 +54,6 @@ from it. Only crashed, running, or paused actors can be reverted.`,
 }
 
 func init() {
-	revertActorCmd.Flags().StringVarP(&revertAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
-	_ = revertActorCmd.MarkFlagRequired("atespace")
+	revertActorCmd.Flags().StringVarP(&revertAtespaceFlag, "atespace", "a", "", "the actor's atespace")
 	revertCmd.AddCommand(revertActorCmd)
 }

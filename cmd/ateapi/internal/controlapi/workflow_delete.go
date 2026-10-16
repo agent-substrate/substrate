@@ -23,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -32,6 +33,7 @@ import (
 
 // DeleteActor executes the workflow to delete an actor. Idempotent.
 func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef, anyState bool, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
+	ctx = preview.ContextWithOptIn(ctx)
 	ctx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
 		return nil, err
@@ -143,7 +145,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 				return err
 			}
 			if !hosted {
-				slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping ateom workload termination",
+				slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping worker workload termination",
 					slog.String("worker", workerName),
 					slog.Any("actor", actorRef))
 				workerPodUID = ""
@@ -156,7 +158,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		return fmt.Errorf("while connecting to atelet on node %q: %w", nodeName, err)
 	}
 
-	client := ateletpb.NewAteomHerderClient(conn)
+	client := ateletpb.NewAteletClient(conn)
 
 	var workloadSpec *ateletpb.WorkloadSpec
 	if actorTemplate != nil {
@@ -172,19 +174,26 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			slog.String("actor", actorRef.Name),
 			slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
 			slog.String("templateName", actor.GetActorTemplate().GetName()))
+		// Given that external volumes has been in the codebase for a while and
+		// its preview-ness is solely around the API, and that the impact of
+		// disabling the gate while in use would be an orphaned volume
+		// attachment, we are NOT checking the ExternalVolumes gate in the
+		// delete/suspend path.
 		workloadSpec = &ateletpb.WorkloadSpec{}
-		for _, vol := range actor.GetStatus().GetExternalVolumes() {
-			// StorageVolumeId is only populated once the volume is provisioned.
-			// Skip volumes that were never created (e.g. failed during PENDING state).
-			if vol.GetStorageVolumeId() != "" {
-				workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
-					Name: vol.GetName(),
-					External: &ateletpb.ExternalVolumeSource{
-						StorageVolumeId: vol.GetStorageVolumeId(),
-						VolumeType:      vol.GetVolumeType(),
-						VolumeContext:   vol.GetVolumeContext(),
-					},
-				})
+		if preview.IsEnabled(preview.GateExternalVolumes) {
+			for _, vol := range actor.GetStatus().GetExternalVolumes() {
+				// StorageVolumeId is only populated once the volume is provisioned.
+				// Skip volumes that were never created (e.g. failed during PENDING state).
+				if vol.GetStorageVolumeId() != "" {
+					workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
+						Name: vol.GetName(),
+						External: &ateletpb.ExternalVolumeSource{
+							StorageVolumeId: vol.GetStorageVolumeId(),
+							VolumeType:      vol.GetVolumeType(),
+							VolumeContext:   vol.GetVolumeContext(),
+						},
+					})
+				}
 			}
 		}
 	}
@@ -215,6 +224,11 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 	ctx, done := stepSpan(ctx, "DetachVolumesForDelete")
 	defer func() { err = done(err) }()
 
+	// Given that external volumes has been in the codebase for a while and
+	// its preview-ness is solely around the API, and that the impact of
+	// disabling the gate while in use would be an orphaned volume
+	// attachment, we are NOT checking the ExternalVolumes gate in the
+	// delete/suspend path.
 	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, "delete")
 }
 
@@ -304,9 +318,9 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 	return latestActor, nil
 }
 
-// ensureMarkedDeleting transitions the actor and its volumes to DELETING and
-// persists the change, returning the stored copy. Skips when a previous
-// attempt already marked the actor.
+// ensureMarkedDeleting transitions the actor to DELETING and persists the
+// change, returning the stored copy. Skips when a previous attempt already
+// marked the actor.
 func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, anyState bool) (updated *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "MarkDeleting")
 	defer func() { err = done(err) }()
@@ -331,9 +345,6 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
-		for _, vol := range toUpdate.GetStatus().GetExternalVolumes() {
-			vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
-		}
 		return nil
 	})
 	if err != nil {
@@ -357,6 +368,11 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 		return apierror.FailedPrecondition("DeleteVolumes prerequisite not met for Actor: %s (got: %v, want %s)", actor.GetMetadata().GetName(), st, ateapipb.ActorState_ACTOR_STATE_DELETING)
 	}
 
+	// Given that external volumes has been in the codebase for a while and
+	// its preview-ness is solely around the API, and that the impact of
+	// disabling the gate while in use would be an orphaned volume
+	// attachment, we are NOT checking the ExternalVolumes gate in the
+	// delete/suspend path.
 	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetExternalVolumes()); err != nil {
 		return apierror.Internal("while deleting actor volumes: %v", err)
 	}
