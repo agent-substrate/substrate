@@ -361,11 +361,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Volume.external_volume_template",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Volume.system_info",
     "message": "field has no doc comment"
   },

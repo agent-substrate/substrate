@@ -97,6 +97,10 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		errs = append(errs, fmt.Errorf("while deleting volumes: %w", err))
 	}
 
+	if err := w.ensureSharedVolumeRefsReleased(ctx, actor); err != nil {
+		errs = append(errs, fmt.Errorf("while releasing external volume references: %w", err))
+	}
+
 	if err := w.ensureExternalSnapshotsReleased(ctx, actor); err != nil {
 		errs = append(errs, fmt.Errorf("while releasing external snapshots: %w", err))
 	}
@@ -377,6 +381,15 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 		return apierror.Internal("while deleting actor volumes: %v", err)
 	}
 	return nil
+}
+
+// ensureSharedVolumeRefsReleased drops the actor's SharedVolume references
+// and deletes any volume that reached its LAST_ACTOR trigger.
+func (w *ActorWorkflow) ensureSharedVolumeRefsReleased(ctx context.Context, actor *ateapipb.Actor) (err error) {
+	ctx, done := stepSpan(ctx, "ReleaseSharedVolumeRefs")
+	defer func() { err = done(err) }()
+
+	return releaseSharedVolumes(ctx, w.store, w.sharedVolumes, actor)
 }
 
 // ensureExternalSnapshotsReleased collects everything the actor wrote to

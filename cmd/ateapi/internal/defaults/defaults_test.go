@@ -58,6 +58,14 @@ func TestApply(t *testing.T) {
 			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		}},
 	}, {
+		name: "external volume without an access mode gets read write once",
+		in:   &ateapipb.SharedVolume{},
+		want: &ateapipb.SharedVolume{AccessMode: ateapipb.AccessMode_ACCESS_MODE_READ_WRITE_ONCE},
+	}, {
+		name: "external volume keeps its access mode",
+		in:   &ateapipb.SharedVolume{AccessMode: ateapipb.AccessMode_ACCESS_MODE_READ_WRITE_MANY},
+		want: &ateapipb.SharedVolume{AccessMode: ateapipb.AccessMode_ACCESS_MODE_READ_WRITE_MANY},
+	}, {
 		name: "container without wakeup probe stays without one",
 		in:   &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Name: "main"}}},
 		want: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Name: "main"}}},

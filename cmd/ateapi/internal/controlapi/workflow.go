@@ -106,6 +106,7 @@ func logActorState(ctx context.Context, actor *ateapipb.Actor, opName, state str
 // already validated, and what the workflow writes is the system's own state.
 type ActorWorkflow struct {
 	store                actorWorkflowStore
+	sharedVolumes        sharedVolumeDeleter
 	workerCache          *workercache.Cache
 	scheduler            scheduling.Scheduler
 	dialer               *AteletDialer
@@ -132,9 +133,11 @@ func NewActorWorkflow(
 	egressGatewayAddress string,
 	pluginRegistry VolumePluginRegistry,
 	objectStorePlugin objectstorev1.ControlProviderClient,
+	sharedVolumes sharedVolumeDeleter,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:                store,
+		sharedVolumes:        sharedVolumes,
 		workerCache:          workerCache,
 		scheduler:            scheduling.New(workerCache),
 		dialer:               dialer,
@@ -183,6 +186,7 @@ type actorWorkflowStore interface {
 	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapipb.ActorTemplate, error)
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
+	sharedVolumeRefStore
 }
 
 // WorkerWorkflow handles the multi-step operations on a Worker. Like
@@ -245,4 +249,8 @@ func (w *ActorWorkflow) acquireActorLease(ctx context.Context, actorRef resource
 
 func acquireTagLease(ctx context.Context, holder leaseHolder, tagRef resources.TagRef) (context.Context, *store.Lease, error) {
 	return acquireLease(ctx, holder, "lease:tag:"+tagRef.Atespace+":"+tagRef.Name, "Tag")
+}
+
+func acquireSharedVolumeLease(ctx context.Context, holder leaseHolder, volumeRef resources.SharedVolumeRef) (context.Context, *store.Lease, error) {
+	return acquireLease(ctx, holder, "lease:sharedvolume:"+volumeRef.Atespace+":"+volumeRef.Name, "SharedVolume")
 }

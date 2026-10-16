@@ -16,7 +16,7 @@ do not need it.
 
 In Kubernetes, volumes are reconciled asynchronously via standard Kubernetes objects (e.g. `PersistentVolumeClaim`, `PersistentVolume`). Agent Substrate takes a different approach tailored for actor lifecycle operations:
 
-* **No PV or PVC Objects:** External volumes are declaratively defined in the [`ActorTemplate`](api-guide.md#2-actortemplate-the-workload-blueprint) via `externalVolumeTemplate` and provisioned dynamically for each actor instance. Volume operations are coupled directly with the actor lifecycle.
+* **No PV or PVC Objects:** External volumes are declaratively defined in the [`ActorTemplate`](api-guide.md#2-actortemplate-the-workload-blueprint) via `external.template` and provisioned dynamically for each actor instance. Volume operations are coupled directly with the actor lifecycle.
 * **Direct Network-Based CSI Controller:** The Substrate control plane (`ateapi`) communicates directly with the CSI Controller gRPC service over the network (via TCP or DNS endpoints, optionally secured with TLS/mTLS).
 
 ---
@@ -74,7 +74,7 @@ External volumes are declared on the `ActorTemplate` resource. For complete deta
 
 To attach a CSI volume to an actor:
 
-1. Define the volume under `volumes` with an `externalVolumeTemplate`.
+1. Define the volume under `volumes` with an `external.template`.
 2. Mount the volume inside one or more containers under `containers[].volumeMounts`.
 
 #### `volumes[]`
@@ -82,14 +82,15 @@ To attach a CSI volume to an actor:
 ```yaml
 volumes:
 - name: my-data-volume
-  externalVolumeTemplate:
-    capacity: 10Gi
-    storageClassName: standard-rwx
+  external:
+    template:
+      capacity: 10Gi
+      storageClassName: standard-rwx
 ```
 
 * `name`: Unique DNS-label-compliant volume name.
-* `externalVolumeTemplate.capacity`: Quantity string representing the requested volume size (e.g. `1Gi`, `50Gi`).
-* `externalVolumeTemplate.storageClassName`: Name of a Kubernetes `StorageClass` present in the cluster whose `provisioner` matches a registered `CSIDriverConfig`.
+* `external.template.capacity`: Quantity string representing the requested volume size (e.g. `1Gi`, `50Gi`).
+* `external.template.storageClassName`: Name of a Kubernetes `StorageClass` present in the cluster whose `provisioner` matches a registered `CSIDriverConfig`.
 
 #### `containers[].volumeMounts[]`
 
@@ -200,7 +201,60 @@ snapshotConfig:
   storageLocation: gs://my-snapshots-bucket/stateful-agent
 volumes:
 - name: shared-storage
-  externalVolumeTemplate:
-    capacity: 5Gi
-    storageClassName: csi-nfs-sc
+  external:
+    template:
+      capacity: 5Gi
+      storageClassName: csi-nfs-sc
 ```
+
+## 5. Shared Volumes
+
+A `SharedVolume` is an atespace-scoped CSI volume whose lifetime is
+independent of any actor, so several actors can mount the same storage in turn.
+Create one from a StorageClass, or register a volume that already exists:
+
+```bash
+kubectl ate create sharedvolume ctx-42 -a demo --storage-class csi-nfs-sc --capacity 10Gi
+kubectl ate create sharedvolume imported -a demo --volume-id <csi-volume-id> --volume-type nfs.csi.k8s.io
+```
+
+Each volume records:
+
+- `accessMode`: fixed at create. Only `READ_WRITE_ONCE` is accepted today, so
+  at most one resumed actor holds the volume; a resume that would take a held
+  volume fails and names the holder.
+- `deleteTrigger`: `MANUAL` removes the volume only on an explicit delete;
+  `LAST_ACTOR` removes it when the last actor referencing it is deleted.
+  Provisioned volumes default to `LAST_ACTOR`, registered ones to `MANUAL`.
+  Deleting the volume also deletes the storage.
+- `status.refs`: every actor referencing the volume, with `active` set while
+  the actor is resumed. A referenced volume cannot be deleted.
+
+A template mounts a `SharedVolume` with `external.sharedVolume`. Name the volume
+in the template, or leave the name empty and bind it per actor at creation:
+
+```yaml
+volumes:
+- name: shared
+  external: {sharedVolume: {}}
+```
+
+```bash
+kubectl ate create actor producer-42 -a demo --template producer --volume shared=ctx-42
+kubectl ate create actor consumer-42 -a demo --template consumer --volume shared=ctx-42
+```
+
+Bindings are validated and recorded when the actor is created and cannot change
+afterwards.
+
+The golden snapshot is not used for templates that reference a `SharedVolume`. The
+first resume of such an actor is a cold boot from the image, and later resumes
+restore the actor's own snapshot, which was taken over the real volume. An
+explicit `sourceTag` is refused at actor creation. The reason is in gVisor:
+the golden actor warms up against a local empty directory at the mount path,
+but runsc derives the `disable_file_handle_sharing` mount option from the bind
+source's filesystem (NFS and FUSE get it, local disks do not) and refuses a
+restore whose mount options differ from the checkpoint's. Supporting golden
+restores here is follow-up work; the candidate approaches are a golden actor
+that warms up on a scratch volume from the same driver, or an upstream runsc
+change that excludes host-derived mount options from restore validation.
