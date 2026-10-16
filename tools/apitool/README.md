@@ -12,6 +12,11 @@ go run . validate
 `validate` runs the rules in `internal/lint` against `ateapi.proto` and fails if any
 rule reports a finding that isn't exempted (see below).
 
+It also runs the cross-proto rules in `lint.CrossProto` against `ateapi.proto`,
+`atelet.proto`, and `ateworker.proto` together. Today that is `matching-dv-tags`,
+which checks that a tag commented `# matches <field>` has the same value as that
+field's tag. See [Bounds copied from another proto](../../docs/api-validation.md#bounds-copied-from-another-proto).
+
 ### Exemptions
 
 Findings can be exempted via `exemptions.json`. To regenerate `exemptions.json`

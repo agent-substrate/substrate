@@ -883,7 +883,7 @@ message ActorStatus {
   //
   // +ate:preview=ExternalVolumes
   // +k8s:optional
-  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:maxItems=32 # matches ateapi.ActorTemplate.volumes
   // +k8s:listType=map
   // +k8s:listMapKey=name
   repeated ExternalVolume external_volumes = 7;
@@ -1294,7 +1294,7 @@ message Container {
   // (e.g. "name@sha256:...").
   //
   // +k8s:required
-  // +k8s:maxLength=512 # matches ImageVolumeSource.reference's bound
+  // +k8s:maxLength=512 # matches ateapi.ImageVolumeSource.reference
   // +k8s:customValidation # must be a well-formed image reference, pinned by digest
   string image = 2;
 
@@ -1499,7 +1499,7 @@ message ExternalVolumeTemplate {
   // form (e.g. "10Gi"). Required.
   //
   // +k8s:required
-  // +k8s:maxLength=32 # matches Limits.quantity's bound
+  // +k8s:maxLength=32 # matches ateapi.Limits.quantity
   // +k8s:customValidation # must parse as a resource.Quantity
   string capacity = 1;
 

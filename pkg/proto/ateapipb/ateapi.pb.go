@@ -1938,7 +1938,7 @@ type ActorStatus struct {
 	//
 	// +ate:preview=ExternalVolumes
 	// +k8s:optional
-	// +k8s:maxItems=32 # matches the template's volumes bound
+	// +k8s:maxItems=32 # matches ateapi.ActorTemplate.volumes
 	// +k8s:listType=map
 	// +k8s:listMapKey=name
 	ExternalVolumes []*ExternalVolume `protobuf:"bytes,7,rep,name=external_volumes,json=externalVolumes,proto3" json:"external_volumes,omitempty"`
@@ -3132,7 +3132,7 @@ type Container struct {
 	// (e.g. "name@sha256:...").
 	//
 	// +k8s:required
-	// +k8s:maxLength=512 # matches ImageVolumeSource.reference's bound
+	// +k8s:maxLength=512 # matches ateapi.ImageVolumeSource.reference
 	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
 	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
 	// Entrypoint array; when set, the image's ENTRYPOINT and CMD are both
@@ -3788,7 +3788,7 @@ type ExternalVolumeTemplate struct {
 	// form (e.g. "10Gi"). Required.
 	//
 	// +k8s:required
-	// +k8s:maxLength=32 # matches Limits.quantity's bound
+	// +k8s:maxLength=32 # matches ateapi.Limits.quantity
 	// +k8s:customValidation # must parse as a resource.Quantity
 	Capacity string `protobuf:"bytes,1,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	// storage_class_name names the cluster-scoped Kubernetes StorageClass to
