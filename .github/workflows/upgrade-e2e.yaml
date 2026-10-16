@@ -110,9 +110,11 @@ jobs:
       env:
         E2E_ATE_SETUP_CONFIG: ${{ github.workspace }}/new.yaml
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-upgrade.xml
+      # The previous release is installed with no preview gates, and CI has to
+      # say so.
       run: |
         cp "${ATE_RECORD_DIR}"/installs/*.yaml "${E2E_ATE_SETUP_CONFIG}"
-        hack/run-e2e-kind.sh ./internal/e2e/upgrade -timeout 60m -v -args --no-color
+        hack/run-e2e-kind.sh ./internal/e2e/upgrade -timeout 60m -v -args --no-color --preview=""
     # A suite that stops matching would otherwise leave the run green and empty.
     - name: Require the suite to have run tests
       if: always() && steps.from.outputs.tag != ''

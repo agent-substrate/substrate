@@ -165,19 +165,16 @@ func TestRollingUpgrade(t *testing.T) {
 	// answer, and a suspended one resumes onto the spare old worker.
 	router = newRouter(ctx, t)
 	for _, a := range actors[:2] {
-		if state(ctx, t, api, a) == ateapipb.ActorState_ACTOR_STATE_RUNNING {
-			callCounter(ctx, t, router, a, "after "+stepAtelet)
+		if got := state(ctx, t, api, a); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+			t.Fatalf("actor %q is %v after %s, want it still running", a.name, got, stepAtelet)
 		}
+		callCounter(ctx, t, router, a, "after "+stepAtelet)
 	}
 	resumeActor(ctx, t, api, router, actors[3])
 	callCounter(ctx, t, router, actors[3], "after "+stepAtelet)
 
-	var onOldWorkers []*actor
-	for _, a := range actors {
-		if state(ctx, t, api, a) == ateapipb.ActorState_ACTOR_STATE_RUNNING {
-			onOldWorkers = append(onOldWorkers, a)
-		}
-	}
+	// These run on old workers, so the pool roll has to evict them.
+	onOldWorkers := []*actor{actors[0], actors[1], actors[3]}
 	var newImage string
 	ok := t.Run(stepPoolRoll, func(t *testing.T) {
 		harness.setStep(stepPoolRoll)
