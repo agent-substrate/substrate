@@ -854,7 +854,14 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 				sandbox = hosted.sandbox
 			}
 			if sandbox == nil {
-				slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint: it was never pinned")
+				// never pinned: fall back to the pidfile, still better than
+				// cleaning up before the sandbox is reaped
+				var err error
+				if sandbox, err = openSandboxProcess(req.GetActorDirs()); err != nil {
+					slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", err))
+				} else {
+					defer sandbox.Close()
+				}
 			}
 			err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, fsPaths)
 			if err != nil {
