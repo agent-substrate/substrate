@@ -79,7 +79,7 @@ spec:
               sandboxClass:
                 default: gvisor
                 description: |-
-                  SandboxClass is the sandbox runtime family this config applies to. An
+                  sandboxClass is the sandbox runtime family this config applies to. An
                   ActorTemplate only uses SandboxConfigs whose SandboxClass matches its
                   sandbox_config.sandbox_class.
                 enum:
@@ -103,13 +103,13 @@ spec:
                           properties:
                             sha256:
                               description: |-
-                                SHA256 is the lower-case hex SHA256 of the asset. It both names the cached
+                                sha256 is the lower-case hex SHA256 of the asset. It both names the cached
                                 file (preventing collisions) and verifies the download's integrity.
                               pattern: ^[a-f0-9]{64}$
                               type: string
                             url:
                               description: |-
-                                URL is where to download the asset from (e.g. a gs:// URL). atelet
+                                url is where to download the asset from (e.g. a gs:// URL). atelet
                                 fetches every URL through the node's object-store plugin, with the
                                 plugin's credentials. The plugin refuses URLs under a snapshot location.
                                 The in-tree plugin serves only its storage backend's scheme: gs:// on
@@ -125,7 +125,7 @@ spec:
                           type: object
                         type: object
                       description: |-
-                        Assets is the set of files atelet fetches for this runtime, keyed first by
+                        assets is the set of files atelet fetches for this runtime, keyed first by
                         architecture (GOARCH, e.g. "amd64", "arm64") and then by asset name. The
                         asset names are interpreted by the sandbox backend: gVisor expects a
                         "gvisor" asset (the release's gvisor.tar.zstd, which atelet extracts so
@@ -145,7 +145,7 @@ spec:
                       type: string
                     pauseImage:
                       description: |-
-                        PauseImage is the container image used as the root sandbox container.
+                        pauseImage is the container image used as the root sandbox container.
                         It holds the sandbox's namespaces and runs no workload code, so it is an
                         implementation detail of the sandbox rather than something actor authors
                         choose. Required for gvisor; not allowed for microvm, which runs no pause
@@ -183,7 +183,6 @@ spec:
                 x-kubernetes-list-type: map
             required:
             - defaultVersion
-            - sandboxClass
             - versions
             type: object
             x-kubernetes-validations:

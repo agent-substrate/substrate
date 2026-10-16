@@ -75,13 +75,13 @@ spec:
             description: spec defines the desired state of WorkerPool
             properties:
               replicas:
-                description: Replicas is the number of worker pods to run.
+                description: replicas is the number of worker pods to run.
                 format: int32
                 minimum: 0
                 type: integer
               sandboxClasses:
                 description: |-
-                  SandboxClasses lists the sandbox runtime families this pool runs. Exactly
+                  sandboxClasses lists the sandbox runtime families this pool runs. Exactly
                   one entry is allowed today. The names cannot change after creation.
                 items:
                   description: WorkerPoolSandboxClass is one sandbox runtime family
@@ -89,14 +89,14 @@ spec:
                   properties:
                     configRef:
                       description: |-
-                        ConfigRef names a cluster-scoped SandboxConfig for this sandbox class.
+                        configRef names a cluster-scoped SandboxConfig for this sandbox class.
                         The referenced config's SandboxClass must match Name. When omitted, the
                         pool uses the newest SandboxConfig of this class annotated
                         sandboxconfig.ate.dev/is-class-default: "true". The controller reports
                         the resolved config in status.sandboxClasses.
                       properties:
                         name:
-                          description: Name is the SandboxConfig's metadata.name.
+                          description: name is the SandboxConfig's metadata.name.
                           maxLength: 253
                           minLength: 1
                           type: string
@@ -105,7 +105,7 @@ spec:
                       type: object
                     name:
                       description: |-
-                        Name selects the sandbox runtime family, which drives the worker pod
+                        name selects the sandbox runtime family, which drives the worker pod
                         shape (KVM/vhost device mounts and node placement). The concrete binary
                         is still selected by WorkerImage. The sandbox binaries themselves come
                         from the SandboxConfig each ActorTemplate names (required).
@@ -128,14 +128,14 @@ spec:
                 - message: sandboxClasses names are immutable
                   rule: self.map(c, c.name) == oldSelf.map(c, c.name)
               template:
-                description: Template holds optional metadata, scheduling, and resource
+                description: template holds optional metadata, scheduling, and resource
                   settings for worker workloads.
                 properties:
                   annotations:
                     additionalProperties:
                       type: string
                     description: |-
-                      Annotations are added to the generated Deployment and worker pods. Keys
+                      annotations are added to the generated Deployment and worker pods. Keys
                       in the ate.dev domain and its subdomains are reserved for controllers.
                     maxProperties: 64
                     type: object
@@ -154,7 +154,7 @@ spec:
                       pattern: ^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$
                       type: string
                     description: |-
-                      Labels are added to the generated Deployment and worker pods. Keys in
+                      labels are added to the generated Deployment and worker pods. Keys in
                       the ate.dev domain and its subdomains are reserved for controllers.
                     maxProperties: 64
                     type: object
@@ -165,7 +165,7 @@ spec:
                       rule: self.all(key, !format.qualifiedName().validate(key).hasValue())
                   nodeAffinity:
                     description: |-
-                      NodeAffinity scheduling rules for the worker pods. Mapped to
+                      nodeAffinity scheduling rules for the worker pods. Mapped to
                       spec.affinity.nodeAffinity on the pod.
                     properties:
                       preferredDuringSchedulingIgnoredDuringExecution:
@@ -366,14 +366,14 @@ spec:
                   nodeSelector:
                     additionalProperties:
                       type: string
-                    description: NodeSelector is a selector which must be true for
+                    description: nodeSelector is a selector which must be true for
                       the pod to fit on a node.
                     type: object
                   priorityClassName:
-                    description: PriorityClassName for the worker pods.
+                    description: priorityClassName for the worker pods.
                     type: string
                   resources:
-                    description: Resources are the compute resources allocated for
+                    description: resources are the compute resources allocated for
                       each worker pod.
                     properties:
                       claims:
@@ -434,13 +434,13 @@ spec:
                     type: object
                   serviceAccountName:
                     description: |-
-                      ServiceAccountName for the worker pods. The ServiceAccount must exist
+                      serviceAccountName for the worker pods. The ServiceAccount must exist
                       in the WorkerPool's namespace. When omitted, the pods run as the
                       "ateworker" ServiceAccount, which the controller creates.
                     minLength: 1
                     type: string
                   tolerations:
-                    description: Tolerations for the worker pods.
+                    description: tolerations for the worker pods.
                     items:
                       description: |-
                         The pod this Toleration is attached to tolerates any taint that matches
@@ -483,7 +483,7 @@ spec:
                     x-kubernetes-list-type: atomic
                 type: object
               workerImage:
-                description: WorkerImage is the worker container image to deploy as
+                description: workerImage is the worker container image to deploy as
                   workers.
                 minLength: 1
                 type: string
@@ -496,18 +496,18 @@ spec:
             description: status is the observed state of WorkerPool
             properties:
               readyReplicas:
-                description: ReadyReplicas is the number of ready worker pods.
+                description: readyReplicas is the number of ready worker pods.
                 format: int32
                 minimum: 0
                 type: integer
               replicas:
-                description: Replicas is the total number of worker pods.
+                description: replicas is the total number of worker pods.
                 format: int32
                 minimum: 0
                 type: integer
               sandboxClasses:
                 description: |-
-                  SandboxClasses reports the SandboxConfig each sandbox class of the pool
+                  sandboxClasses reports the SandboxConfig each sandbox class of the pool
                   uses and whether the class's spec resolves.
                 items:
                   description: |-
@@ -515,7 +515,7 @@ spec:
                     of one sandbox class of a WorkerPool.
                   properties:
                     conditions:
-                      description: Conditions describe the current state of this sandbox
+                      description: conditions describe the current state of this sandbox
                         class.
                       items:
                         description: Condition contains details for one aspect of
@@ -578,13 +578,13 @@ spec:
                       x-kubernetes-list-type: map
                     configRef:
                       description: |-
-                        ConfigRef names the cluster-scoped SandboxConfig in use. That is the
+                        configRef names the cluster-scoped SandboxConfig in use. That is the
                         config spec.sandboxClasses[].configRef names, or the class default, or
                         the last resolved config while the spec does not resolve. Omitted when
                         the class has never resolved.
                       properties:
                         name:
-                          description: Name is the SandboxConfig's metadata.name.
+                          description: name is the SandboxConfig's metadata.name.
                           maxLength: 253
                           minLength: 1
                           type: string
@@ -592,20 +592,20 @@ spec:
                       - name
                       type: object
                     name:
-                      description: Name is the sandbox runtime family.
+                      description: name is the sandbox runtime family.
                       enum:
                       - gvisor
                       - microvm
                       type: string
                     pendingConfigRef:
                       description: |-
-                        PendingConfigRef names the SandboxConfig the class is switching to
+                        pendingConfigRef names the SandboxConfig the class is switching to
                         while the controller confirms it against the API server. It protects
                         the config from deletion like configRef does. The same reconcile
                         clears it, and configRef either moves to it or stays where it was.
                       properties:
                         name:
-                          description: Name is the SandboxConfig's metadata.name.
+                          description: name is the SandboxConfig's metadata.name.
                           maxLength: 253
                           minLength: 1
                           type: string
@@ -621,7 +621,7 @@ spec:
                 - name
                 x-kubernetes-list-type: map
               selector:
-                description: Selector is the label selector for the worker pods.
+                description: selector is the label selector for the worker pods.
                 type: string
             type: object
         required:

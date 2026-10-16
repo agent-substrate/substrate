@@ -119,6 +119,10 @@ const (
 	assetKernel    = "kata-kernel"
 	assetImage     = "kata-image"
 	assetVirtiofsd = "virtiofsd"
+
+	// guestImagePmemID names the virtio-pmem device that carries the guest
+	// image, in the VM config and so in every snapshot's config.json.
+	guestImagePmemID = "guest-image"
 )
 
 // kataAgentPath is where the kata guest image keeps the agent binary. buildVMConfig
@@ -184,7 +188,7 @@ type actorContainer struct {
 	// spec is the container's OCI spec shaped for micro-VM execution.
 	spec *specs.Spec
 	// imageMounts are the image volumes this container mounts, and where.
-	imageMounts []*ateworkerpb.ImageVolumeMount
+	imageMounts []*ateworkerpb.VolumeMount
 }
 
 // resolvedRuntime holds the concrete binary paths for a request, taken from fetched
@@ -231,7 +235,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := ateworkervalidation.ValidateRunWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
-	if err := validateRuntimeAssetPaths(req.GetRuntimeAssetPaths()); err != nil {
+	if err := validateRuntimeAssetPaths(req.GetActorUid(), req.GetActorDirs(), req.GetRuntimeAssetPaths()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -684,9 +688,9 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 			return nil, fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
 		}
 		for _, vm := range c.imageMounts {
-			src := imagecache.ImageVolumeMountPath(c.bundle, vm.GetVolumeName())
-			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetVolumeName()); err != nil {
-				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetVolumeName(), c.name, err)
+			src := imagecache.ImageVolumeMountPath(c.bundle, vm.GetName())
+			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetName()); err != nil {
+				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetName(), c.name, err)
 			}
 		}
 	}
@@ -696,7 +700,7 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 		}
 	}
 	if hasCsiVolumes(containers) {
-		if err := s.stageCsiVolumes(ctx, id, actorDirs.GetVolumesDir()); err != nil {
+		if err := s.stageCsiVolumes(ctx, id, actorDirs.GetExternalVolumeMountsDir()); err != nil {
 			return nil, fmt.Errorf("while staging CSI volumes: %w", err)
 		}
 	}
@@ -808,7 +812,7 @@ func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus 
 		Payload: ch.PayloadConfig{Kernel: kernel, Cmdline: cmdline},
 		// The guest image is a virtio-pmem device (/dev/pmem0), mounted read-only
 		// with DAX, so its file data stays in the host page cache instead of being copied into guest RAM.
-		Pmem:     []ch.PmemConfig{{ID: "guest-image", File: image, DiscardWrites: true}},
+		Pmem:     []ch.PmemConfig{{ID: guestImagePmemID, File: image, DiscardWrites: true}},
 		Fs:       buildFsConfigs(id),
 		Platform: &ch.PlatformConfig{NumPciSegments: 2},
 		Rng:      &ch.RngConfig{Src: "/dev/urandom"},

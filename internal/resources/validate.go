@@ -29,6 +29,7 @@ import (
 
 	"github.com/distribution/reference"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/volumepath"
 	"go.ate.dev/substrate/pkg/sandboxclass"
@@ -51,8 +52,11 @@ func ToGRPCStatusError(errs field.ErrorList) error {
 }
 
 // ToAPIError turns validation errors into the InvalidArgument error an RPC
-// handler responds with. Callers check len(errs) > 0 first.
+// handler responds with, or nil if errs is empty.
 func ToAPIError(errs field.ErrorList) error {
+	if len(errs) == 0 {
+		return nil
+	}
 	return apierror.InvalidArgument("%v", errs.ToAggregate())
 }
 
@@ -121,7 +125,8 @@ func ValidateActorDirs(actorDirs *ateworkerpb.ActorDirs, fldPath *field.Path) fi
 		{"restore_dir", actorDirs.GetRestoreDir()},
 		{"durable_dir_volume_mounts_dir", actorDirs.GetDurableDirVolumeMountsDir()},
 		{"system_info_volume_roots_dir", actorDirs.GetSystemInfoVolumeRootsDir()},
-		{"volumes_dir", actorDirs.GetVolumesDir()},
+		{"external_volume_mounts_dir", actorDirs.GetExternalVolumeMountsDir()},
+		{"sandbox_assets_dir", actorDirs.GetSandboxAssetsDir()},
 	} {
 		errs = append(errs, validateAbsDir(actorDir.path, fldPath.Child(actorDir.name))...)
 	}
@@ -190,12 +195,24 @@ func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorLi
 	return nil
 }
 
+// ValidateSandboxAssetsDir requires dir, the sandbox_assets_dir a request
+// names, to be the actor's own, nodepath.ActorSandboxAssetsDir(actorUID), so
+// a request cannot point a worker at binaries staged for another actor or
+// anywhere else on the node. The actor UID is checked first: it becomes a
+// path element, and must be a plain label rather than a traversal.
+func ValidateSandboxAssetsDir(actorUID, dir string, fldPath *field.Path) field.ErrorList {
+	if errs := content.IsDNS1123Label(actorUID); len(errs) > 0 {
+		return field.ErrorList{field.Invalid(fldPath, dir, fmt.Sprintf("actor_uid %q is not a valid label: %s", actorUID, strings.Join(errs, "; ")))}
+	}
+	if want := nodepath.ActorSandboxAssetsDir(actorUID); dir != want {
+		return field.ErrorList{field.Invalid(fldPath, dir, fmt.Sprintf("must be the actor's own sandbox assets dir %s", want))}
+	}
+	return nil
+}
+
 // ValidateAssetHash ensures a sandbox asset's SHA-256 hash is exactly 64 hex
-// characters before it is used to build the on-disk asset path
-// (static-files/asset-<hash>) and, on a cache hit, returned for worker to
-// execute. Without this, a hash containing path separators or ".." could
-// point the cache-hit early return (and the download target) at an arbitrary
-// binary outside the static-files dir.
+// characters before it becomes the asset's cache key, so a malformed hash is
+// rejected as the request's fault rather than failing deep inside the cache.
 func ValidateAssetHash(sha256Hash string) error {
 	if len(sha256Hash) != 64 {
 		return fmt.Errorf("invalid asset sha256 hash: want 64 hex chars, got %d", len(sha256Hash))

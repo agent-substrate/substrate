@@ -232,7 +232,7 @@ func Validate_ActorDirs(
 		errs = append(errs, fn(fldPath.Child("system_info_volume_roots_dir"), &obj.SystemInfoVolumeRootsDir, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateworkerpb.ActorDirs.VolumesDir
+	{ // field ateworkerpb.ActorDirs.ExternalVolumeMountsDir
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -259,9 +259,41 @@ func Validate_ActorDirs(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateworkerpb.ActorDirs) *string {
-				return &oldObj.VolumesDir
+				return &oldObj.ExternalVolumeMountsDir
 			})
-		errs = append(errs, fn(fldPath.Child("volumes_dir"), &obj.VolumesDir, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("external_volume_mounts_dir"), &obj.ExternalVolumeMountsDir, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateworkerpb.ActorDirs.SandboxAssetsDir
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 4096); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateworkerpb.ActorDirs) *string {
+				return &oldObj.SandboxAssetsDir
+			})
+		errs = append(errs, fn(fldPath.Child("sandbox_assets_dir"), &obj.SandboxAssetsDir, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -682,7 +714,7 @@ func Validate_Container(
 	{ // field ateworkerpb.Container.DurableDirVolumeMounts
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj []*ateworkerpb.DurableDirVolumeMount,
+			obj, oldObj []*ateworkerpb.VolumeMount,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -692,7 +724,7 @@ func Validate_Container(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.PtrSliceNoNils[ateworkerpb.DurableDirVolumeMount](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.PtrSliceNoNils[ateworkerpb.VolumeMount](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -708,28 +740,24 @@ func Validate_Container(
 			}
 			// lists with map semantics require unique keys
 			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
-				func(a *ateworkerpb.DurableDirVolumeMount, b *ateworkerpb.DurableDirVolumeMount) bool {
-					return a.MountPath == b.MountPath
-				}); len(e) != 0 {
+				func(a *ateworkerpb.VolumeMount, b *ateworkerpb.VolumeMount) bool { return a.MountPath == b.MountPath }); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateworkerpb.DurableDirVolumeMount, b *ateworkerpb.DurableDirVolumeMount) bool {
-					return a.MountPath == b.MountPath
-				}, ateDeepEqual, Validate_DurableDirVolumeMount); len(e) != 0 {
+				func(a *ateworkerpb.VolumeMount, b *ateworkerpb.VolumeMount) bool { return a.MountPath == b.MountPath }, ateDeepEqual, Validate_VolumeMount); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.Container) []*ateworkerpb.DurableDirVolumeMount {
+			func(oldObj *ateworkerpb.Container) []*ateworkerpb.VolumeMount {
 				return oldObj.DurableDirVolumeMounts
 			})
 		errs = append(errs, fn(fldPath.Child("durable_dir_volume_mounts"), obj.DurableDirVolumeMounts, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateworkerpb.Container.CsiVolumeMounts
+	{ // field ateworkerpb.Container.ExternalVolumeMounts
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj []*ateworkerpb.VolumeMount,
@@ -770,15 +798,15 @@ func Validate_Container(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateworkerpb.Container) []*ateworkerpb.VolumeMount {
-				return oldObj.CsiVolumeMounts
+				return oldObj.ExternalVolumeMounts
 			})
-		errs = append(errs, fn(fldPath.Child("csi_volume_mounts"), obj.CsiVolumeMounts, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("external_volume_mounts"), obj.ExternalVolumeMounts, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateworkerpb.Container.SystemInfoVolumeMounts
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj []*ateworkerpb.SystemInfoVolumeMount,
+			obj, oldObj []*ateworkerpb.VolumeMount,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -788,7 +816,7 @@ func Validate_Container(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.PtrSliceNoNils[ateworkerpb.SystemInfoVolumeMount](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.PtrSliceNoNils[ateworkerpb.VolumeMount](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -804,22 +832,18 @@ func Validate_Container(
 			}
 			// lists with map semantics require unique keys
 			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
-				func(a *ateworkerpb.SystemInfoVolumeMount, b *ateworkerpb.SystemInfoVolumeMount) bool {
-					return a.MountPath == b.MountPath
-				}); len(e) != 0 {
+				func(a *ateworkerpb.VolumeMount, b *ateworkerpb.VolumeMount) bool { return a.MountPath == b.MountPath }); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateworkerpb.SystemInfoVolumeMount, b *ateworkerpb.SystemInfoVolumeMount) bool {
-					return a.MountPath == b.MountPath
-				}, ateDeepEqual, Validate_SystemInfoVolumeMount); len(e) != 0 {
+				func(a *ateworkerpb.VolumeMount, b *ateworkerpb.VolumeMount) bool { return a.MountPath == b.MountPath }, ateDeepEqual, Validate_VolumeMount); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.Container) []*ateworkerpb.SystemInfoVolumeMount {
+			func(oldObj *ateworkerpb.Container) []*ateworkerpb.VolumeMount {
 				return oldObj.SystemInfoVolumeMounts
 			})
 		errs = append(errs, fn(fldPath.Child("system_info_volume_mounts"), obj.SystemInfoVolumeMounts, oldVal, oldObj != nil)...)
@@ -828,7 +852,7 @@ func Validate_Container(
 	{ // field ateworkerpb.Container.ImageVolumeMounts
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj []*ateworkerpb.ImageVolumeMount,
+			obj, oldObj []*ateworkerpb.VolumeMount,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -838,7 +862,7 @@ func Validate_Container(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.PtrSliceNoNils[ateworkerpb.ImageVolumeMount](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.PtrSliceNoNils[ateworkerpb.VolumeMount](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -854,22 +878,18 @@ func Validate_Container(
 			}
 			// lists with map semantics require unique keys
 			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
-				func(a *ateworkerpb.ImageVolumeMount, b *ateworkerpb.ImageVolumeMount) bool {
-					return a.MountPath == b.MountPath
-				}); len(e) != 0 {
+				func(a *ateworkerpb.VolumeMount, b *ateworkerpb.VolumeMount) bool { return a.MountPath == b.MountPath }); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateworkerpb.ImageVolumeMount, b *ateworkerpb.ImageVolumeMount) bool {
-					return a.MountPath == b.MountPath
-				}, ateDeepEqual, Validate_ImageVolumeMount); len(e) != 0 {
+				func(a *ateworkerpb.VolumeMount, b *ateworkerpb.VolumeMount) bool { return a.MountPath == b.MountPath }, ateDeepEqual, Validate_VolumeMount); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.Container) []*ateworkerpb.ImageVolumeMount {
+			func(oldObj *ateworkerpb.Container) []*ateworkerpb.VolumeMount {
 				return oldObj.ImageVolumeMounts
 			})
 		errs = append(errs, fn(fldPath.Child("image_volume_mounts"), obj.ImageVolumeMounts, oldVal, oldObj != nil)...)
@@ -901,83 +921,6 @@ func Validate_Container(
 				return oldObj.ContainerSpec
 			})
 		errs = append(errs, fn(fldPath.Child("container_spec"), obj.ContainerSpec, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
-// Validate_DurableDirVolumeMount validates an instance of DurableDirVolumeMount according
-// to declarative validation rules in the API schema.
-func Validate_DurableDirVolumeMount(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateworkerpb.DurableDirVolumeMount) (errs field.ErrorList) {
-
-	{ // field ateworkerpb.DurableDirVolumeMount.VolumeName
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.DurableDirVolumeMount) *string {
-				return &oldObj.VolumeName
-			})
-		errs = append(errs, fn(fldPath.Child("volume_name"), &obj.VolumeName, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateworkerpb.DurableDirVolumeMount.MountPath
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// custom validation
-			if e := ValidateCustom_DurableDirVolumeMount_MountPath(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 4096); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.DurableDirVolumeMount) *string {
-				return &oldObj.MountPath
-			})
-		errs = append(errs, fn(fldPath.Child("mount_path"), &obj.MountPath, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -1144,83 +1087,6 @@ func Validate_HttpGetAction(
 				return &oldObj.Port
 			})
 		errs = append(errs, fn(fldPath.Child("port"), &obj.Port, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
-// Validate_ImageVolumeMount validates an instance of ImageVolumeMount according
-// to declarative validation rules in the API schema.
-func Validate_ImageVolumeMount(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateworkerpb.ImageVolumeMount) (errs field.ErrorList) {
-
-	{ // field ateworkerpb.ImageVolumeMount.VolumeName
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.ImageVolumeMount) *string {
-				return &oldObj.VolumeName
-			})
-		errs = append(errs, fn(fldPath.Child("volume_name"), &obj.VolumeName, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateworkerpb.ImageVolumeMount.MountPath
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// custom validation
-			if e := ValidateCustom_ImageVolumeMount_MountPath(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 4096); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.ImageVolumeMount) *string {
-				return &oldObj.MountPath
-			})
-		errs = append(errs, fn(fldPath.Child("mount_path"), &obj.MountPath, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -2131,83 +1997,6 @@ func Validate_RunWorkloadRequest(
 	return errs
 }
 
-// Validate_SystemInfoVolumeMount validates an instance of SystemInfoVolumeMount according
-// to declarative validation rules in the API schema.
-func Validate_SystemInfoVolumeMount(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateworkerpb.SystemInfoVolumeMount) (errs field.ErrorList) {
-
-	{ // field ateworkerpb.SystemInfoVolumeMount.VolumeName
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.SystemInfoVolumeMount) *string {
-				return &oldObj.VolumeName
-			})
-		errs = append(errs, fn(fldPath.Child("volume_name"), &obj.VolumeName, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateworkerpb.SystemInfoVolumeMount.MountPath
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// custom validation
-			if e := ValidateCustom_SystemInfoVolumeMount_MountPath(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 4096); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateworkerpb.SystemInfoVolumeMount) *string {
-				return &oldObj.MountPath
-			})
-		errs = append(errs, fn(fldPath.Child("mount_path"), &obj.MountPath, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
 // Validate_TerminateWorkloadRequest validates an instance of TerminateWorkloadRequest according
 // to declarative validation rules in the API schema.
 func Validate_TerminateWorkloadRequest(
@@ -2474,7 +2263,7 @@ func Validate_VolumeMount(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateworkerpb.VolumeMount) (errs field.ErrorList) {
 
-	{ // field ateworkerpb.VolumeMount.VolumeName
+	{ // field ateworkerpb.VolumeMount.Name
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -2501,9 +2290,9 @@ func Validate_VolumeMount(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateworkerpb.VolumeMount) *string {
-				return &oldObj.VolumeName
+				return &oldObj.Name
 			})
-		errs = append(errs, fn(fldPath.Child("volume_name"), &obj.VolumeName, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("name"), &obj.Name, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateworkerpb.VolumeMount.MountPath

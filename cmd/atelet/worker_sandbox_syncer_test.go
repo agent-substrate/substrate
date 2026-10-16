@@ -58,11 +58,14 @@ func testCPUFeatures() []string {
 	}
 }
 
+// fakeAssetFetcher answers ensureSandboxAssets from fn. The paths it returns
+// are not under dstDir: the syncer only runs what it is handed, so where the
+// fake says a binary is does not matter.
 type fakeAssetFetcher struct {
 	fn func(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error)
 }
 
-func (f *fakeAssetFetcher) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+func (f *fakeAssetFetcher) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, _ string) (map[string]string, error) {
 	return f.fn(ctx, rec)
 }
 
@@ -165,6 +168,7 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 		workerPools: listersv1alpha1.NewWorkerPoolLister(pools),
 		configs:     listersv1alpha1.NewSandboxConfigLister(configs),
 	}, pods, newTestAssetFetcher(), t.TempDir())
+	s.scratchDir = t.TempDir() // the runsc probe stages the binary there
 	s.probeCPUIdentity = func() (string, string, error) { return testCPUVendor, testCPUModel, nil }
 	s.runCPUFeatures = func(context.Context, string) ([]string, error) { return testCPUFeatures(), nil }
 	// Tests that check the jitter set it.
@@ -455,7 +459,7 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 				if rec.Assets[gvisorAssetName].SHA256 != "sha-v2" {
 					return nil, errors.New("temporary download failure on restorable version")
 				}
-				return newTestAssetFetcher().ensureSandboxAssets(ctx, rec)
+				return newTestAssetFetcher().ensureSandboxAssets(ctx, rec, "")
 			},
 		},
 		priorRetries: syncMaxRetries,
@@ -761,6 +765,7 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 				ateFactory.Shutdown()
 			})
 
+			useTempAssetScratch(t)
 			s, err := startWorkerSandboxSyncer(ctx,
 				podFactory.Core().V1().Pods(),
 				ateFactory.Api().V1alpha1().WorkerPools(),

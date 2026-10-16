@@ -29,15 +29,15 @@ func TestDurableFSCheckpointPaths(t *testing.T) {
 	containers := []*ateworkerpb.Container{
 		{
 			Name: "app",
-			DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-				{VolumeName: "data", MountPath: "/var/data"},
-				{VolumeName: "cache", MountPath: "/var/cache"},
+			DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+				{Name: "data", MountPath: "/var/data"},
+				{Name: "cache", MountPath: "/var/cache"},
 			},
 		},
 		{
 			Name: "sidecar",
-			DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-				{VolumeName: "logs", MountPath: "/var/log/app"},
+			DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+				{Name: "logs", MountPath: "/var/log/app"},
 			},
 		},
 	}
@@ -156,21 +156,21 @@ func TestFSRestoreContainers(t *testing.T) {
 		},
 		{
 			Name: "app",
-			DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-				{VolumeName: "data", MountPath: "/var/data"},
+			DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+				{Name: "data", MountPath: "/var/data"},
 			},
 		},
 		{
 			Name: "sidecar-shared-only",
-			DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-				{VolumeName: "data", MountPath: "/mnt/data"},
+			DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+				{Name: "data", MountPath: "/mnt/data"},
 			},
 		},
 		{
 			Name: "sidecar-with-own-vol",
-			DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-				{VolumeName: "data", MountPath: "/mnt/data"},
-				{VolumeName: "logs", MountPath: "/var/log"},
+			DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+				{Name: "data", MountPath: "/mnt/data"},
+				{Name: "logs", MountPath: "/var/log"},
 			},
 		},
 	}

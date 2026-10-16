@@ -472,11 +472,6 @@ func Validate_CheckpointRequest(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateletpb.CheckpointRequest) (errs field.ErrorList) {
 
-	// custom validation
-	if e := ValidateCustom_CheckpointRequest(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-		errs = append(errs, e...)
-	}
-
 	{ // field ateletpb.CheckpointRequest.WorkerPodUid
 		fn := func(
 			fldPath *field.Path,
@@ -718,6 +713,21 @@ func Validate_CheckpointRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
+			func() { // cohort = "object"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "object",
+					func(o *ateletpb.Snapshot) *ateletpb.ObjectStorage { return o.Object }, ateDeepEqual, validate.RequiredPointer).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "object",
+					func(o *ateletpb.Snapshot) *ateletpb.ObjectStorage { return o.Object }, ateDeepEqual, validate.OptionalPointer).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			// call the type's validation function
 			errs = append(errs, Validate_Snapshot(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -916,7 +926,7 @@ func Validate_Container(
 	{ // field ateletpb.Container.Env
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj []*ateletpb.EnvEntry,
+			obj, oldObj []*ateletpb.EnvVar,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -926,7 +936,7 @@ func Validate_Container(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.PtrSliceNoNils[ateletpb.EnvEntry](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.PtrSliceNoNils[ateletpb.EnvVar](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -942,18 +952,18 @@ func Validate_Container(
 			}
 			// lists with map semantics require unique keys
 			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
-				func(a *ateletpb.EnvEntry, b *ateletpb.EnvEntry) bool { return a.Name == b.Name }); len(e) != 0 {
+				func(a *ateletpb.EnvVar, b *ateletpb.EnvVar) bool { return a.Name == b.Name }); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateletpb.EnvEntry, b *ateletpb.EnvEntry) bool { return a.Name == b.Name }, ateDeepEqual, Validate_EnvEntry); len(e) != 0 {
+				func(a *ateletpb.EnvVar, b *ateletpb.EnvVar) bool { return a.Name == b.Name }, ateDeepEqual, Validate_EnvVar); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.Container) []*ateletpb.EnvEntry {
+			func(oldObj *ateletpb.Container) []*ateletpb.EnvVar {
 				return oldObj.Env
 			})
 		errs = append(errs, fn(fldPath.Child("env"), obj.Env, oldVal, oldObj != nil)...)
@@ -1252,13 +1262,13 @@ func Validate_EgressGateway(
 	return errs
 }
 
-// Validate_EnvEntry validates an instance of EnvEntry according
+// Validate_EnvVar validates an instance of EnvVar according
 // to declarative validation rules in the API schema.
-func Validate_EnvEntry(
+func Validate_EnvVar(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateletpb.EnvEntry) (errs field.ErrorList) {
+	obj, oldObj *ateletpb.EnvVar) (errs field.ErrorList) {
 
-	{ // field ateletpb.EnvEntry.Name
+	{ // field ateletpb.EnvVar.Name
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -1279,7 +1289,7 @@ func Validate_EnvEntry(
 				return // do not proceed
 			}
 			// custom validation
-			if e := ValidateCustom_EnvEntry_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := ValidateCustom_EnvVar_Name(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256); len(e) != 0 {
@@ -1288,13 +1298,13 @@ func Validate_EnvEntry(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.EnvEntry) *string {
+			func(oldObj *ateletpb.EnvVar) *string {
 				return &oldObj.Name
 			})
 		errs = append(errs, fn(fldPath.Child("name"), &obj.Name, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.EnvEntry.Value
+	{ // field ateletpb.EnvVar.Value
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -1319,7 +1329,7 @@ func Validate_EnvEntry(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.EnvEntry) *string {
+			func(oldObj *ateletpb.EnvVar) *string {
 				return &oldObj.Value
 			})
 		errs = append(errs, fn(fldPath.Child("value"), &obj.Value, oldVal, oldObj != nil)...)
@@ -3702,13 +3712,13 @@ func Validate_SystemInfoDataSource(
 	return errs
 }
 
-// Validate_SystemInfoVolume validates an instance of SystemInfoVolume according
+// Validate_SystemInfoVolumeSource validates an instance of SystemInfoVolumeSource according
 // to declarative validation rules in the API schema.
-func Validate_SystemInfoVolume(
+func Validate_SystemInfoVolumeSource(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateletpb.SystemInfoVolume) (errs field.ErrorList) {
+	obj, oldObj *ateletpb.SystemInfoVolumeSource) (errs field.ErrorList) {
 
-	{ // field ateletpb.SystemInfoVolume.DataSources
+	{ // field ateletpb.SystemInfoVolumeSource.DataSources
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj []*ateletpb.SystemInfoDataSource,
@@ -3736,7 +3746,7 @@ func Validate_SystemInfoVolume(
 				return // do not proceed
 			}
 			// custom validation
-			if e := ValidateCustom_SystemInfoVolume_DataSources(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := ValidateCustom_SystemInfoVolumeSource_DataSources(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// iterate the list and call the type's validation function
@@ -3746,7 +3756,7 @@ func Validate_SystemInfoVolume(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.SystemInfoVolume) []*ateletpb.SystemInfoDataSource {
+			func(oldObj *ateletpb.SystemInfoVolumeSource) []*ateletpb.SystemInfoDataSource {
 				return oldObj.DataSources
 			})
 		errs = append(errs, fn(fldPath.Child("data_sources"), obj.DataSources, oldVal, oldObj != nil)...)
@@ -4286,7 +4296,7 @@ func Validate_Volume(
 	{ // field ateletpb.Volume.DurableDir
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.DurableDirVolume,
+			obj, oldObj *ateletpb.DurableDirVolumeSource,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -4305,7 +4315,7 @@ func Validate_Volume(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.Volume) *ateletpb.DurableDirVolume {
+			func(oldObj *ateletpb.Volume) *ateletpb.DurableDirVolumeSource {
 				return oldObj.DurableDir
 			})
 		errs = append(errs, fn(fldPath.Child("durable_dir"), obj.DurableDir, oldVal, oldObj != nil)...)
@@ -4344,7 +4354,7 @@ func Validate_Volume(
 	{ // field ateletpb.Volume.SystemInfo
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.SystemInfoVolume,
+			obj, oldObj *ateletpb.SystemInfoVolumeSource,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -4361,11 +4371,11 @@ func Validate_Volume(
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_SystemInfoVolume(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_SystemInfoVolumeSource(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.Volume) *ateletpb.SystemInfoVolume {
+			func(oldObj *ateletpb.Volume) *ateletpb.SystemInfoVolumeSource {
 				return oldObj.SystemInfo
 			})
 		errs = append(errs, fn(fldPath.Child("system_info"), obj.SystemInfo, oldVal, oldObj != nil)...)

@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/codes"
 
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
@@ -72,7 +73,8 @@ func testDirs() *ateworkerpb.ActorDirs {
 		RestoreDir:                "/node/actors/actor-a/restore-state",
 		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
 		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
-		VolumesDir:                "/node/actors/actor-a/volumes",
+		ExternalVolumeMountsDir:   "/node/actors/actor-a/volumes",
+		SandboxAssetsDir:          nodepath.ActorSandboxAssetsDir(testActor.UID),
 	}
 }
 

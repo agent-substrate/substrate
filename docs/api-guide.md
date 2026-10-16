@@ -451,7 +451,7 @@ This means a single, cluster-managed config pins the sandbox runtime version for
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `sandboxClass` | `string` | **Required.** Runtime family this config applies to: `gvisor` (default) or `microvm`. An `ActorTemplate` only uses `SandboxConfig`s whose `sandboxClass` matches its own. |
+| `sandboxClass` | `string` | Optional. Runtime family this config applies to: `gvisor` (default) or `microvm`. An `ActorTemplate` only uses `SandboxConfig`s whose `sandboxClass` matches its own. |
 | `defaultVersion` | `string` | **Required.** Name of the entry in `versions` that actors boot with. It must name an existing version that is not `Disabled`. |
 | `versions` | `[]SandboxVersionConfig` | **Required.** 1–16 sandbox versions, unique by `name`. |
 

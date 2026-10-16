@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 )
 
 // testWorkerUID derives a stable pod UID from a pod name, for Workers seeded
@@ -232,6 +233,14 @@ func seedSuspendTemplate(t *testing.T, ctx context.Context, st store.Interface, 
 	t.Helper()
 	ref := suspendTestTemplateRef()
 	storetest.MustCreateAtespace(t, ctx, st, ref.GetAtespace())
+	if snapshotConfig.GetStorageLocation() == "" {
+		if snapshotConfig == nil {
+			snapshotConfig = &ateapipb.SnapshotConfig{}
+		} else {
+			snapshotConfig = proto.CloneOf(snapshotConfig)
+		}
+		snapshotConfig.StorageLocation = testStorageLocation
+	}
 	created, err := st.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
 		Metadata:       &ateapipb.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
 		SnapshotConfig: snapshotConfig,

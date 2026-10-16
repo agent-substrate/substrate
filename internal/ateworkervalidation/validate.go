@@ -84,22 +84,10 @@ func ValidateCustom_HttpGetAction_Path(_ context.Context, _ operation.Operation,
 	return resources.ValidateHTTPGetPath(fldPath, *value)
 }
 
-// The four mount messages share one mount_path rule: a clean absolute Unix
-// path, the shape atelet already enforces, shared through internal/resources.
-
+// ValidateCustom_VolumeMount_MountPath holds a mount path to the clean
+// absolute Unix path shape atelet already enforces, shared through
+// internal/resources.
 func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidateMountPath(fldPath, *value)
-}
-
-func ValidateCustom_DurableDirVolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidateMountPath(fldPath, *value)
-}
-
-func ValidateCustom_SystemInfoVolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidateMountPath(fldPath, *value)
-}
-
-func ValidateCustom_ImageVolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateMountPath(fldPath, *value)
 }
 
@@ -119,8 +107,8 @@ func ValidateCustom_Container(_ context.Context, _ operation.Operation, fldPath 
 	for i, m := range value.GetDurableDirVolumeMounts() {
 		add("durable_dir_volume_mounts", i, m.GetMountPath())
 	}
-	for i, m := range value.GetCsiVolumeMounts() {
-		add("csi_volume_mounts", i, m.GetMountPath())
+	for i, m := range value.GetExternalVolumeMounts() {
+		add("external_volume_mounts", i, m.GetMountPath())
 	}
 	for i, m := range value.GetSystemInfoVolumeMounts() {
 		add("system_info_volume_mounts", i, m.GetMountPath())

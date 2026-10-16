@@ -522,7 +522,6 @@ func TestValidateCheckpointRequest(t *testing.T) {
 	deferred := func(name string) func(*ateletpb.CheckpointRequest) {
 		return func(r *ateletpb.CheckpointRequest) {
 			r.Snapshot.SnapshotUuid = name
-			r.Snapshot.Object = nil
 			r.UploadConfig = &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED}
 		}
 	}
@@ -535,13 +534,8 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		name: "valid immediate",
 		obj:  valid(),
 	}, {
-		name: "valid deferred local only",
+		name: "valid deferred",
 		obj:  valid(deferred("pause-snap-1")),
-	}, {
-		name: "valid deferred with object storage",
-		obj: valid(func(r *ateletpb.CheckpointRequest) {
-			r.UploadConfig = &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED}
-		}),
 	}, {
 		name: "valid volumes fidelity",
 		obj: valid(func(r *ateletpb.CheckpointRequest) {
@@ -612,6 +606,12 @@ func TestValidateCheckpointRequest(t *testing.T) {
 	}, {
 		name: "immediate upload without object storage",
 		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Snapshot.Object = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("snapshot", "object"), "")},
+	}, {
+		name: "deferred upload without object storage",
+		obj: valid(deferred("pause-snap-1"), func(r *ateletpb.CheckpointRequest) {
+			r.Snapshot.Object = nil
+		}),
 		want: field.ErrorList{field.Required(field.NewPath("snapshot", "object"), "")},
 	}, {
 		name: "missing snapshot_uuid",
@@ -1437,7 +1437,7 @@ func TestValidateWorkloadSpec(t *testing.T) {
 	}
 	valid := func(mutate ...func(*ateletpb.WorkloadSpec)) *ateletpb.WorkloadSpec {
 		s := &ateletpb.WorkloadSpec{
-			Volumes:    []*ateletpb.Volume{{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}}},
+			Volumes:    []*ateletpb.Volume{{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}}},
 			Containers: []*ateletpb.Container{ctr("main"), ctr("sidecar")},
 		}
 		for _, m := range mutate {
@@ -1470,7 +1470,7 @@ func TestValidateWorkloadSpec(t *testing.T) {
 		obj: valid(func(s *ateletpb.WorkloadSpec) {
 			s.Volumes = nil
 			for i := range 33 {
-				s.Volumes = append(s.Volumes, &ateletpb.Volume{Name: fmt.Sprintf("v%d", i), DurableDir: &ateletpb.DurableDirVolume{}})
+				s.Volumes = append(s.Volumes, &ateletpb.Volume{Name: fmt.Sprintf("v%d", i), DurableDir: &ateletpb.DurableDirVolumeSource{}})
 			}
 		}),
 		want: field.ErrorList{field.TooMany(field.NewPath("volumes"), 33, 32).WithOrigin("maxItems")},
@@ -1522,7 +1522,7 @@ func TestValidateWorkloadSpec(t *testing.T) {
 // asserted at their paths under the volume.
 func TestValidateVolume(t *testing.T) {
 	durable := func(mutate ...func(*ateletpb.Volume)) *ateletpb.Volume {
-		v := &ateletpb.Volume{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}}
+		v := &ateletpb.Volume{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}}
 		for _, m := range mutate {
 			m(v)
 		}
@@ -1543,7 +1543,7 @@ func TestValidateVolume(t *testing.T) {
 		return &ateletpb.Volume{Name: "data", Image: &ateletpb.ImageVolumeSource{Reference: ref}}
 	}
 	systemInfo := func(ds ...*ateletpb.SystemInfoDataSource) *ateletpb.Volume {
-		return &ateletpb.Volume{Name: "data", SystemInfo: &ateletpb.SystemInfoVolume{DataSources: ds}}
+		return &ateletpb.Volume{Name: "data", SystemInfo: &ateletpb.SystemInfoVolumeSource{DataSources: ds}}
 	}
 	bundle := func(name, path string) *ateletpb.SystemInfoDataSource {
 		return &ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{name}, Path: path}}
@@ -1654,7 +1654,7 @@ func TestValidateVolume(t *testing.T) {
 			want: field.ErrorList{field.Invalid(field.NewPath("image", "reference"), nil, "")},
 		},
 
-		// SystemInfoVolume and SystemInfoDataSource.
+		// SystemInfoVolumeSource and SystemInfoDataSource.
 		{
 			name: "valid system info",
 			obj:  systemInfo(bundle("podcert", "a.pem"), bundle("podcert", "b.pem"), metadata(item(fieldName, "name"))),
@@ -1774,7 +1774,7 @@ func TestValidateContainer(t *testing.T) {
 			Image:   testDigestImage,
 			Command: []string{"/bin/app"},
 			Args:    []string{"--serve"},
-			Env:     []*ateletpb.EnvEntry{{Name: "PORT", Value: "8080"}},
+			Env:     []*ateletpb.EnvVar{{Name: "PORT", Value: "8080"}},
 			VolumeMounts: []*ateletpb.VolumeMount{
 				{Name: "data", MountPath: "/data"},
 				{Name: "data", MountPath: "/mnt/data"},
@@ -1785,7 +1785,7 @@ func TestValidateContainer(t *testing.T) {
 		}
 		return c
 	}
-	env := func(mutate func(*ateletpb.EnvEntry)) *ateletpb.Container {
+	env := func(mutate func(*ateletpb.EnvVar)) *ateletpb.Container {
 		return valid(func(c *ateletpb.Container) { mutate(c.Env[0]) })
 	}
 	// mount replaces the mounts with a single one, so the nesting check
@@ -1860,31 +1860,31 @@ func TestValidateContainer(t *testing.T) {
 			want: field.ErrorList{field.TooLong(field.NewPath("args").Index(0), nil, 4096).WithOrigin("maxLength")},
 		},
 
-		// EnvEntry.
+		// EnvVar.
 		{
 			name: "duplicate env names",
 			obj: valid(func(c *ateletpb.Container) {
-				c.Env = append(c.Env, &ateletpb.EnvEntry{Name: "PORT", Value: "9"})
+				c.Env = append(c.Env, &ateletpb.EnvVar{Name: "PORT", Value: "9"})
 			}),
 			want: field.ErrorList{field.Duplicate(field.NewPath("env").Index(1), nil)},
 		}, {
 			name: "env: missing name",
-			obj:  env(func(e *ateletpb.EnvEntry) { e.Name = "" }),
+			obj:  env(func(e *ateletpb.EnvVar) { e.Name = "" }),
 			want: field.ErrorList{field.Required(envPath.Child("name"), "")},
 		}, {
 			name: "env: name with equals sign",
-			obj:  env(func(e *ateletpb.EnvEntry) { e.Name = "A=B" }),
+			obj:  env(func(e *ateletpb.EnvVar) { e.Name = "A=B" }),
 			want: field.ErrorList{field.Invalid(envPath.Child("name"), nil, "")},
 		}, {
 			name: "env: name too long",
-			obj:  env(func(e *ateletpb.EnvEntry) { e.Name = strings.Repeat("N", 257) }),
+			obj:  env(func(e *ateletpb.EnvVar) { e.Name = strings.Repeat("N", 257) }),
 			want: field.ErrorList{field.TooLong(envPath.Child("name"), nil, 256).WithOrigin("maxLength")},
 		}, {
 			name: "env: empty value is allowed",
-			obj:  env(func(e *ateletpb.EnvEntry) { e.Value = "" }),
+			obj:  env(func(e *ateletpb.EnvVar) { e.Value = "" }),
 		}, {
 			name: "env: value too long",
-			obj:  env(func(e *ateletpb.EnvEntry) { e.Value = strings.Repeat("v", 32769) }),
+			obj:  env(func(e *ateletpb.EnvVar) { e.Value = strings.Repeat("v", 32769) }),
 			want: field.ErrorList{field.TooLong(envPath.Child("value"), nil, 32768).WithOrigin("maxLength")},
 		},
 

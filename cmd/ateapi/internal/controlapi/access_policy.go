@@ -81,10 +81,8 @@ func (s *ServiceImpl) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 		if err := mutate(toUpdate); err != nil {
 			return err
 		}
-		if errs := apivalidation.ValidateGlobalAccessPolicyUpdate(ctx, field.NewPath("access_policy"), toUpdate, oldVal); len(errs) > 0 {
-			return resources.ToAPIError(errs)
-		}
-		return nil
+		errs := apivalidation.ValidateGlobalAccessPolicyUpdate(ctx, field.NewPath("access_policy"), toUpdate, oldVal)
+		return resources.ToAPIError(errs)
 	})
 	return mapAccessPolicyWrite(updated, err)
 }
@@ -141,10 +139,8 @@ func (s *ServiceImpl) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 		if err := mutate(toUpdate); err != nil {
 			return err
 		}
-		if errs := apivalidation.ValidateAtespaceAccessPolicyUpdate(ctx, field.NewPath("access_policy"), toUpdate, oldVal); len(errs) > 0 {
-			return resources.ToAPIError(errs)
-		}
-		return nil
+		errs := apivalidation.ValidateAtespaceAccessPolicyUpdate(ctx, field.NewPath("access_policy"), toUpdate, oldVal)
+		return resources.ToAPIError(errs)
 	})
 	return mapAccessPolicyWrite(updated, err)
 }

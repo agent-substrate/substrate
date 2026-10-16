@@ -559,12 +559,18 @@ func containerNames(containers []*ateworkerpb.Container) []string {
 	return names
 }
 
-// validateRunscPath ensures we only execute runsc from the static files dir
-func validateRunscPath(p string) error {
-	if errs := resources.ValidateRuntimeAssetPath(nodepath.StaticFilesDir, p, field.NewPath("runsc_path")); len(errs) > 0 {
-		return resources.ToAPIError(errs)
+// validateRunscPath ensures we only execute runsc from the actor's own
+// sandbox assets dir, where atelet staged it. The dir is derived from the
+// actor UID here and the request's sandbox_assets_dir must match it, so a
+// request cannot name a root of its own choosing. actorDirs must have passed
+// the generated validator.
+func validateRunscPath(actorUID string, actorDirs *ateworkerpb.ActorDirs, p string) error {
+	root := actorDirs.GetSandboxAssetsDir()
+	errs := resources.ValidateSandboxAssetsDir(actorUID, root, field.NewPath("actor_dirs", "sandbox_assets_dir"))
+	if len(errs) == 0 {
+		errs = resources.ValidateRuntimeAssetPath(root, p, field.NewPath("runsc_path"))
 	}
-	return nil
+	return resources.ToAPIError(errs)
 }
 
 // supportedFidelities are the snapshot fidelities this runtime serves. gVisor
@@ -578,17 +584,15 @@ var supportedFidelities = []ateworkerpb.SnapshotFidelity{
 // validateFidelity rejects a checkpoint or restore request whose fidelity
 // this runtime cannot serve.
 func validateFidelity(fidelity ateworkerpb.SnapshotFidelity) error {
-	if errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity")); len(errs) > 0 {
-		return apierror.InvalidArgument("%v", errs.ToAggregate())
-	}
-	return nil
+	errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity"))
+	return resources.ToAPIError(errs)
 }
 
 func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.RunWorkloadRequest) (resp *ateworkerpb.RunWorkloadResponse, retErr error) {
 	if err := ateworkervalidation.ValidateRunWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
-	if err := validateRunscPath(req.GetRunscPath()); err != nil {
+	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -726,7 +730,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return nil, err
 	}
-	if err := validateRunscPath(req.GetRunscPath()); err != nil {
+	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -955,7 +959,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return nil, err
 	}
-	if err := validateRunscPath(req.GetRunscPath()); err != nil {
+	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -1167,7 +1171,7 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 	if err := ateworkervalidation.ValidateTerminateWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
-	if err := validateRunscPath(req.GetRunscPath()); err != nil {
+	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {

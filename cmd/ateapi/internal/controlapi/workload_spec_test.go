@@ -51,7 +51,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:       "home",
-						DurableDir: &ateletpb.DurableDirVolume{},
+						DurableDir: &ateletpb.DurableDirVolumeSource{},
 					},
 				},
 				Containers: []*ateletpb.Container{
@@ -100,7 +100,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name: "system-info",
-						SystemInfo: &ateletpb.SystemInfoVolume{
+						SystemInfo: &ateletpb.SystemInfoVolumeSource{
 							DataSources: []*ateletpb.SystemInfoDataSource{
 								{ActorMetadata: &ateletpb.ActorMetadataDataSource{
 									Items: []*ateletpb.ActorMetadataItem{
@@ -147,7 +147,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:       "home",
-						DurableDir: &ateletpb.DurableDirVolume{},
+						DurableDir: &ateletpb.DurableDirVolumeSource{},
 					},
 					{
 						Name:  "agent",
@@ -196,7 +196,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name: "system-info",
-						SystemInfo: &ateletpb.SystemInfoVolume{
+						SystemInfo: &ateletpb.SystemInfoVolumeSource{
 							DataSources: []*ateletpb.SystemInfoDataSource{
 								{TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{"egress-trust"}, Path: "trust/ca.pem"}},
 							},
@@ -236,7 +236,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:       "home",
-						DurableDir: &ateletpb.DurableDirVolume{},
+						DurableDir: &ateletpb.DurableDirVolumeSource{},
 					},
 				},
 				Containers: []*ateletpb.Container{
@@ -265,7 +265,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:       "home",
-						DurableDir: &ateletpb.DurableDirVolume{},
+						DurableDir: &ateletpb.DurableDirVolumeSource{},
 					},
 				},
 				Containers: []*ateletpb.Container{{Name: "main", Image: "main"}},
@@ -290,7 +290,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Containers: []*ateletpb.Container{{
 					Name:  "main",
 					Image: "main",
-					Env: []*ateletpb.EnvEntry{
+					Env: []*ateletpb.EnvVar{
 						{Name: "LITERAL", Value: "plain"},
 						{Name: "EMPTY", Value: ""},
 					},

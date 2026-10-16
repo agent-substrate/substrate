@@ -36,13 +36,12 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
+	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/api/v1alpha1"
@@ -157,24 +156,36 @@ func checkPauseImage(sandboxClass, pauseImage string) error {
 	return nil
 }
 
-// ensureSandboxAssets fetches every asset in the record content-addressed and
-// returns a map of asset name to local path. gVisor has a single "gvisor"
-// release-tarball asset or a bare "runsc" binary; the micro-VM runtime has
-// several (kata-shim, cloud-hypervisor, ...).
-// Assets are cached, so re-fetching at Checkpoint/Restore is a no-op once
-// present.
-func (s *Atelet) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
-	if err := os.MkdirAll(nodepath.StaticFilesDir, 0o700); err != nil {
-		return nil, fmt.Errorf("while creating static files dir: %w", err)
+// ensureSandboxAssets stages every asset in the record under dstDir, named
+// by asset name, and returns a map of asset name to the local path the worker
+// runs it from. gVisor has a single "gvisor" release-tarball asset (staged
+// as a directory, the path is its runsc) or a bare "runsc" binary; the
+// micro-VM runtime has several (kata-shim, cloud-hypervisor, ...).
+//
+// Each asset is served from the node's content-addressed asset cache as a
+// hard link, so the download runs once per node, concurrent callers for one
+// asset share it, and what an actor was handed stays valid whatever the
+// cache evicts later. An asset already present under dstDir is kept as it
+// is: dstDir is the actor's own, reset at Run and Restore, so a Checkpoint
+// or Terminate finds exactly what its activation staged.
+func (s *Atelet) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error) {
+	// Owner-only, like the actor's bundle dir: the worker runs the binaries
+	// as root, and nothing else needs to see them.
+	if err := os.MkdirAll(dstDir, 0o700); err != nil {
+		return nil, wrapFileSystemErr("while creating sandbox assets dir", err)
 	}
 	paths := make(map[string]string, len(rec.Assets))
 	for name, entry := range rec.Assets {
+		if !plainAssetName(name) {
+			return nil, apierror.InvalidArgument("sandbox asset name %q is not a plain file name", name)
+		}
+		dst := filepath.Join(dstDir, name)
 		var p string
 		var err error
 		if name == gvisorAssetName {
-			p, err = s.fetchGVisorRelease(ctx, entry)
+			p, err = s.stageGVisorRelease(ctx, entry, dst)
 		} else {
-			p, err = s.fetchAsset(ctx, entry)
+			p, err = s.stageAsset(ctx, entry, dst)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("while fetching sandbox asset %q: %w", name, err)
@@ -182,6 +193,14 @@ func (s *Atelet) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsReco
 		paths[name] = p
 	}
 	return paths, nil
+}
+
+// plainAssetName reports whether name is one path element that names a
+// file of its own under the assets dir: not empty, not "." (which Base and
+// IsLocal both accept, and which would make the assets dir itself the
+// destination), not "..", and without separators.
+func plainAssetName(name string) bool {
+	return name != "" && name != "." && name == filepath.Base(name) && filepath.IsLocal(name)
 }
 
 // runscAssetNames are the assets that carry the gVisor `runsc` binary, most
@@ -199,104 +218,126 @@ func runscPathFor(paths map[string]string) string {
 	return ""
 }
 
-// fetchAsset downloads one content-addressed asset (verifying its sha256) into
-// the shared static-files cache and returns its local path. On a cache hit it
-// returns immediately.
-func (s *Atelet) fetchAsset(ctx context.Context, entry assetEntry) (string, error) {
-	if err := resources.ValidateAssetHash(entry.SHA256); err != nil {
-		return "", wrapFileSystemErr("while validating asset hash", err)
-	}
-
-	localPath := ateletpath.AssetPath(entry.SHA256)
-	_, err := os.Stat(localPath)
-	if err == nil {
-		slog.DebugContext(ctx, "Sandbox asset cache hit", slog.String("path", localPath))
-		return localPath, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", wrapFileSystemErr("while stat-ing local file", err)
-	}
-
-	slog.InfoContext(ctx, "Sandbox asset cache miss; downloading", slog.String("url", entry.displayURL()), slog.String("sha256", entry.SHA256))
-	t := time.Now()
-	tmpName, err := s.downloadVerified(ctx, entry, filepath.Base(localPath)+"-download-")
+// assetKey is the asset's cache key: its content hash, which the key
+// constructor validates before anything is looked up or staged under it.
+func assetKey(entry assetEntry) (filecache.Key, error) {
+	key, err := filecache.SHA256Key(entry.SHA256)
 	if err != nil {
-		return "", err
+		return filecache.Key{}, wrapFileSystemErr("while validating asset hash", err)
 	}
-	defer os.Remove(tmpName) // no-op if successful rename later in the function
-
-	if err := os.Chmod(tmpName, 0o755); err != nil {
-		return "", wrapFileSystemErr("while setting file mode", err)
-	}
-	if err := os.Rename(tmpName, localPath); err != nil {
-		return "", wrapFileSystemErr("while renaming temp file to target", err)
-	}
-
-	slog.InfoContext(ctx, "Sandbox asset download complete", slog.String("path", localPath), slog.Duration("duration", time.Since(t)))
-	return localPath, nil
+	return key, nil
 }
 
-// fetchGVisorRelease downloads the gVisor release tarball (gvisor.tar.zstd,
-// verifying its sha256) and extracts it into a content-addressed directory in
-// the shared static-files cache, returning the local path of the extracted
-// `runsc` binary.
-func (s *Atelet) fetchGVisorRelease(ctx context.Context, entry assetEntry) (string, error) {
-	if err := resources.ValidateAssetHash(entry.SHA256); err != nil {
-		return "", wrapFileSystemErr("while validating asset hash", err)
-	}
-
-	releaseDir := ateletpath.GVisorReleaseDir(entry.SHA256)
-	runscPath := filepath.Join(releaseDir, "runsc")
-	_, err := os.Stat(releaseDir)
+// staged reports whether dst already holds the asset from this activation.
+func staged(ctx context.Context, dst string) (bool, error) {
+	_, err := os.Lstat(dst)
 	if err == nil {
-		slog.DebugContext(ctx, "gVisor release cache hit", slog.String("dir", releaseDir))
-		return runscPath, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", wrapFileSystemErr("while stat-ing extracted release dir", err)
+		slog.DebugContext(ctx, "Sandbox asset already staged", slog.String("path", dst))
+		return true, nil
 	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return false, wrapFileSystemErr("while stat-ing staged asset", err)
+	}
+	return false, nil
+}
 
-	slog.InfoContext(ctx, "gVisor release cache miss; downloading", slog.String("url", entry.displayURL()), slog.String("sha256", entry.SHA256))
-	tDownload := time.Now()
-	tarball, err := s.downloadVerified(ctx, entry, filepath.Base(releaseDir)+"-download-")
+// stageAsset links one single-file asset from the cache to dst, downloading
+// it (and verifying its sha256) on a cache miss, and returns dst.
+func (s *Atelet) stageAsset(ctx context.Context, entry assetEntry, dst string) (string, error) {
+	key, err := assetKey(entry)
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(tarball)
-	slog.InfoContext(ctx, "gVisor release download complete", slog.String("url", entry.displayURL()), slog.Duration("duration", time.Since(tDownload)))
-
-	tmpDir, err := os.MkdirTemp(nodepath.StaticFilesDir, filepath.Base(releaseDir)+"-extract-")
-	if err != nil {
-		return "", wrapFileSystemErr("while creating extraction dir", err)
+	if ok, err := staged(ctx, dst); err != nil || ok {
+		return dst, err
 	}
-	defer func() { _ = os.RemoveAll(tmpDir) }() // no-op after rename
-
-	slog.InfoContext(ctx, "Extracting gVisor archive", slog.String("path", tarball), slog.String("url", entry.displayURL()))
-	tExtract := time.Now()
-	// The redacted form ends in the URL path, so a query does not hide the
-	// archive suffix.
-	if err := extractTarArchive(ctx, tarball, entry.displayURL(), tmpDir); err != nil {
-		return "", err
-	}
-	slog.InfoContext(ctx, "gVisor archive extraction complete", slog.String("url", entry.displayURL()), slog.Duration("duration", time.Since(tExtract)))
-	if fi, err := os.Stat(filepath.Join(tmpDir, "runsc")); err != nil || !fi.Mode().IsRegular() {
-		return "", fmt.Errorf("gvisor tarball %v contains no runsc binary (stat: %v)", entry.displayURL(), err)
-	}
-	if err := os.Chmod(tmpDir, 0o755); err != nil { // MkdirTemp created it 0700
-		return "", wrapFileSystemErr("while setting extraction dir mode", err)
-	}
-	if err := os.Rename(tmpDir, releaseDir); err != nil {
-		// A concurrent fetch of the same release may have won the rename.
-		if errors.Is(err, syscall.EEXIST) || errors.Is(err, syscall.ENOTEMPTY) {
-			return runscPath, nil
+	fetch := func(ctx context.Context, path string) error {
+		slog.InfoContext(ctx, "Sandbox asset cache miss; downloading", slog.String("url", entry.displayURL()), slog.String("sha256", entry.SHA256))
+		t := time.Now()
+		if err := s.downloadVerified(ctx, entry, path); err != nil {
+			return err
 		}
-		return "", wrapFileSystemErr("while renaming extraction dir to target", err)
+		// Executable for everyone: a sandbox runtime may re-execute its
+		// binary after dropping privileges, so the group and other bits
+		// must stay. They grant nothing beyond that: the cache publishes
+		// the file read-only (0555), the directory it is linked into is
+		// the owner's alone, and the content is a public release artifact.
+		if err := os.Chmod(path, 0o755); err != nil {
+			return wrapFileSystemErr("while setting file mode", err)
+		}
+		slog.InfoContext(ctx, "Sandbox asset download complete", slog.String("url", entry.displayURL()), slog.Duration("duration", time.Since(t)))
+		return nil
+	}
+	if err := s.sandboxAssetCache.GetFileTo(ctx, key, dst, fetch); err != nil && !stagedMeanwhile(ctx, dst, err) {
+		return "", err
+	}
+	return dst, nil
+}
+
+// stagedMeanwhile reports whether err from the cache says dst exists: a
+// concurrent call for the same actor, such as a Checkpoint racing a
+// Terminate, staged it first. A hard link is complete the moment it exists,
+// and the cache places a tree by rename, so what is there is whole.
+func stagedMeanwhile(ctx context.Context, dst string, err error) bool {
+	if !errors.Is(err, fs.ErrExist) {
+		return false
+	}
+	// A fetcher's own error reaches here wrapped too, and could wrap
+	// ErrExist for reasons of its own; only an existing dst means staged.
+	if _, lerr := os.Lstat(dst); lerr != nil {
+		return false
+	}
+	slog.DebugContext(ctx, "Sandbox asset staged by a concurrent call", slog.String("path", dst))
+	return true
+}
+
+// stageGVisorRelease links the extracted gVisor release (gvisor.tar.zstd:
+// runsc plus its gvisor-bin/ helpers, which must sit next to it) from the
+// cache to the directory dst, downloading, verifying and extracting the
+// tarball on a cache miss, and returns the local path of runsc.
+func (s *Atelet) stageGVisorRelease(ctx context.Context, entry assetEntry, dst string) (string, error) {
+	runscPath := filepath.Join(dst, "runsc")
+	key, err := assetKey(entry)
+	if err != nil {
+		return "", err
+	}
+	if ok, err := staged(ctx, dst); err != nil || ok {
+		return runscPath, err
+	}
+	fetch := func(ctx context.Context, dir string) error {
+		slog.InfoContext(ctx, "gVisor release cache miss; downloading", slog.String("url", entry.displayURL()), slog.String("sha256", entry.SHA256))
+		tDownload := time.Now()
+		// The tarball is downloaded into the tree it is extracted into and
+		// removed before the cache publishes the tree; on a failure the
+		// cache discards the whole tree, tarball included.
+		tarball := filepath.Join(dir, ".gvisor-release-download")
+		if err := s.downloadVerified(ctx, entry, tarball); err != nil {
+			return err
+		}
+		slog.InfoContext(ctx, "gVisor release download complete", slog.String("url", entry.displayURL()), slog.Duration("duration", time.Since(tDownload)))
+
+		slog.InfoContext(ctx, "Extracting gVisor archive", slog.String("url", entry.displayURL()))
+		tExtract := time.Now()
+		// The redacted form ends in the URL path, so a query does not hide the
+		// archive suffix.
+		if err := extractTarArchive(ctx, tarball, entry.displayURL(), dir); err != nil {
+			return err
+		}
+		slog.InfoContext(ctx, "gVisor archive extraction complete", slog.String("url", entry.displayURL()), slog.Duration("duration", time.Since(tExtract)))
+		if fi, err := os.Stat(filepath.Join(dir, "runsc")); err != nil || !fi.Mode().IsRegular() {
+			return fmt.Errorf("gvisor tarball %v contains no runsc binary (stat: %v)", entry.displayURL(), err)
+		}
+		return os.Remove(tarball)
+	}
+	if err := s.sandboxAssetCache.GetDirTo(ctx, key, dst, fetch); err != nil && !stagedMeanwhile(ctx, dst, err) {
+		return "", err
 	}
 	return runscPath, nil
 }
 
-// downloadVerified fetches entry.URL into a temp file in the static-files
-// cache and returns the temp path once the size cap and sha256 both check out.
-// On error the temp file is removed; on success the caller owns it (rename it
-// into place or extract from it, then remove it).
+// downloadVerified fetches entry.URL into a new file at path, which must not
+// exist, and returns once the size cap and sha256 both check out. On error
+// the file is removed.
 //
 // Every asset is fetched through the object-store plugin's AssetProvider
 // first, with the plugin's credentials; atelet holds none of its own and does
@@ -307,53 +348,53 @@ func (s *Atelet) fetchGVisorRelease(ctx context.Context, entry assetEntry) (stri
 // or failed unexpectedly (see anonymousFallbackCodes). A refusal on policy or
 // content, and a canceled request, are final. atelet verifies the bytes it
 // caches whichever path fetched them, since it executes them.
-func (s *Atelet) downloadVerified(ctx context.Context, entry assetEntry, tmpPrefix string) (string, error) {
+func (s *Atelet) downloadVerified(ctx context.Context, entry assetEntry, path string) error {
 	wantSum, err := hex.DecodeString(entry.SHA256)
 	if err != nil {
-		return "", fmt.Errorf("while parsing sha256 hash: %w", err)
+		return fmt.Errorf("while parsing sha256 hash: %w", err)
 	}
 	u, err := url.Parse(entry.URL)
 	if err != nil {
-		return "", apierror.InvalidArgument("sandbox asset URL is not a valid URL: %v", urlErrorCause(err))
+		return apierror.InvalidArgument("sandbox asset URL is not a valid URL: %v", urlErrorCause(err))
 	}
 	shown := redactURL(u)
 
-	tmpFile, err := os.CreateTemp(nodepath.StaticFilesDir, tmpPrefix)
+	// Created here, so the plugin and the anonymous download both write into
+	// a file atelet owns; the plugin writes it by path.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return "", wrapFileSystemErr("while creating temp file", err)
+		return wrapFileSystemErr("while creating download file", err)
 	}
-	tmpName := tmpFile.Name()
+	if err := f.Close(); err != nil {
+		return wrapFileSystemErr("while closing download file", err)
+	}
 	ok := false
 	defer func() {
 		if !ok {
-			os.Remove(tmpName)
+			os.Remove(path)
 		}
 	}()
-	// The plugin writes the file by path.
-	if err := tmpFile.Close(); err != nil {
-		return "", wrapFileSystemErr("while closing temp file", err)
-	}
 
 	// atelet's only client of its own is an anonymous GCS client, for public
 	// buckets such as gs://gvisor, so only a gs:// asset has a fallback.
 	anonFallback := u.Scheme == "gs"
 	var pluginCode codes.Code
 	if s.assetPlugin != nil {
-		pluginCode = s.fetchFromPlugin(ctx, entry, shown, tmpName)
+		pluginCode = s.fetchFromPlugin(ctx, entry, shown, path)
 		if pluginCode == codes.OK {
-			if err := verifyAssetFile(tmpName, shown, wantSum); err != nil {
-				return "", err
+			if err := verifyAssetFile(path, shown, wantSum); err != nil {
+				return err
 			}
 			ok = true
-			return tmpName, nil
+			return nil
 		}
 		if !anonFallback || !slices.Contains(anonymousFallbackCodes, pluginCode) {
 			slog.WarnContext(ctx, "Object-store plugin failed to fetch sandbox asset",
 				slog.String("url", shown), slog.String("code", pluginCode.String()))
-			return "", s.pluginError(ctx, entry, shown, pluginCode, nil)
+			return s.pluginError(ctx, entry, shown, pluginCode, nil)
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", fmt.Errorf("sandbox asset %s: %w", shown, ctxErr)
+			return fmt.Errorf("sandbox asset %s: %w", shown, ctxErr)
 		}
 		// Internal and Unavailable mean the plugin failed rather than declined
 		// the URL, so falling back must not hide them: warn. The plugin logs
@@ -365,17 +406,17 @@ func (s *Atelet) downloadVerified(ctx context.Context, entry assetEntry, tmpPref
 		slog.Log(ctx, level, "Object-store plugin did not serve sandbox asset; downloading it anonymously",
 			slog.String("url", shown), slog.String("code", pluginCode.String()))
 	} else if !anonFallback {
-		return "", apierror.FailedPrecondition("sandbox asset %s: no object-store plugin is configured to fetch it", shown)
+		return apierror.FailedPrecondition("sandbox asset %s: no object-store plugin is configured to fetch it", shown)
 	}
 
-	if err := s.downloadAnonymous(ctx, entry, shown, tmpName, wantSum); err != nil {
+	if err := s.downloadAnonymous(ctx, entry, shown, path, wantSum); err != nil {
 		if s.assetPlugin == nil {
-			return "", err
+			return err
 		}
-		return "", s.pluginError(ctx, entry, shown, pluginCode, err)
+		return s.pluginError(ctx, entry, shown, pluginCode, err)
 	}
 	ok = true
-	return tmpName, nil
+	return nil
 }
 
 // anonymousFallbackCodes are the plugin codes after which atelet reads a gs://

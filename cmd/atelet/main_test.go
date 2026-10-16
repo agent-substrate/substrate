@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -40,7 +41,6 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/atelet"
 	"go.ate.dev/substrate/internal/imagecache"
-	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
@@ -286,7 +286,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 			Image:   image,
 			Command: []string{"/bin/app"},
 			Args:    []string{"serve"},
-			Env:     []*ateletpb.EnvEntry{{Name: "GREETING", Value: "hello"}},
+			Env:     []*ateletpb.EnvVar{{Name: "GREETING", Value: "hello"}},
 			SecurityContext: &ateletpb.SecurityContext{
 				Capabilities: &ateletpb.Capabilities{Add: []string{"NET_ADMIN"}, Drop: []string{"KILL"}},
 			},
@@ -508,44 +508,45 @@ func TestToWorkerFidelity(t *testing.T) {
 	}
 }
 
-// TestFetchAssetRejectsBadHash confirms fetchAsset validates the asset hash
-// before the cache-hit os.Stat/early-return, not merely "at some point". To
-// prove the ordering, it plants a real file at the exact path an invalid hash
-// resolves to: a correctly-ordered fetchAsset validates first and returns an
-// error, while a regression that stats first would find this file and return it
-// with a nil error, failing the test. StaticFilesDir is redirected to a temp
-// dir so the planted path is writable and isolated.
-func TestFetchAssetRejectsBadHash(t *testing.T) {
-	orig := nodepath.StaticFilesDir
-	nodepath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { nodepath.StaticFilesDir = orig })
-
-	// Invalid (8 chars, not 64) but separator-free, so it resolves to a normal
-	// filename inside the temp StaticFilesDir.
-	const badHash = "deadbeef"
-	if err := os.WriteFile(ateletpath.AssetPath(badHash), []byte("planted"), 0o755); err != nil {
-		t.Fatalf("planting cache file: %v", err)
+// TestStageAssetRejectsBadHash confirms stageAsset validates the asset hash
+// before it looks for an already-staged file, not merely "at some point". To
+// prove the ordering, it plants a file at the destination: a correctly-ordered
+// stageAsset validates first and returns an error, while a regression that
+// checked the destination first would find this file and return it with a
+// nil error, failing the test.
+func TestStageAssetRejectsBadHash(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "asset")
+	if err := os.WriteFile(dst, []byte("planted"), 0o755); err != nil {
+		t.Fatalf("planting staged file: %v", err)
 	}
 
-	s := &Atelet{}
-	_, err := s.fetchAsset(context.Background(), assetEntry{SHA256: badHash})
+	s := &Atelet{sandboxAssetCache: newTestAssetCache(t)}
+	_, err := s.stageAsset(context.Background(), assetEntry{SHA256: "deadbeef"}, dst)
 	if err == nil {
-		t.Fatal("fetchAsset returned a cache hit for an invalid hash; validation must run before the os.Stat early return")
+		t.Fatal("stageAsset returned the planted file for an invalid hash; validation must run before the staged check")
 	}
 	// The error must come from the validation step, proving it ran before the
-	// cache-hit stat could return the planted file.
+	// staged check could return the planted file.
 	if !strings.Contains(err.Error(), "while validating asset hash") {
 		t.Errorf("error did not come from hash validation: %v", err)
 	}
 }
 
-// fakeObjectStorage serves fixed bytes for GetObject so fetchAsset can be tested.
+// fakeObjectStorage serves fixed bytes for GetObject so stageAsset can be tested.
 type fakeObjectStorage struct {
 	data []byte
 	err  error
+	// gets, if set, counts GetObject calls.
+	gets *atomic.Int32
+	// delay, if set, holds each GetObject so concurrent callers overlap.
+	delay time.Duration
 }
 
 func (f fakeObjectStorage) GetObject(_ context.Context, _, _ string) (io.ReadCloser, error) {
+	if f.gets != nil {
+		f.gets.Add(1)
+	}
+	time.Sleep(f.delay)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -554,92 +555,123 @@ func (f fakeObjectStorage) GetObject(_ context.Context, _, _ string) (io.ReadClo
 
 func (fakeObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) error { return nil }
 
-// TestFetchAssetStreaming covers the streamed download: good asset cached,
-// over-cap rejected, hash mismatch rejected (failures leave no cache file).
-func TestFetchAssetStreaming(t *testing.T) {
-	origDir, origCap := nodepath.StaticFilesDir, maxAssetBytes
-	t.Cleanup(func() { nodepath.StaticFilesDir, maxAssetBytes = origDir, origCap })
+// TestStageAssetStreaming covers the streamed download: good asset cached
+// and staged, over-cap rejected, hash mismatch rejected (failures leave no
+// cache entry).
+func TestStageAssetStreaming(t *testing.T) {
+	origCap := maxAssetBytes
+	t.Cleanup(func() { maxAssetBytes = origCap })
 
 	content := []byte("micro-vm kernel bytes")
 	goodHash := fmt.Sprintf("%x", sha256.Sum256(content))
 	const url = "gs://test-bucket/asset"
 
-	t.Run("good asset is cached", func(t *testing.T) {
-		nodepath.StaticFilesDir = t.TempDir()
-		s := &Atelet{anonGCSClient: fakeObjectStorage{data: content}}
-		path, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+	t.Run("good asset is cached and staged", func(t *testing.T) {
+		root := t.TempDir()
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
+		path, err := stageTestAsset(t, s, root, assetEntry{URL: url, SHA256: goodHash})
 		if err != nil {
-			t.Fatalf("fetchAsset: %v", err)
+			t.Fatalf("stageAsset: %v", err)
 		}
 		got, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("reading cached asset: %v", err)
+			t.Fatalf("reading staged asset: %v", err)
 		}
 		if !bytes.Equal(got, content) {
-			t.Errorf("cached bytes = %q, want %q", got, content)
+			t.Errorf("staged bytes = %q, want %q", got, content)
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0o555 {
+			t.Errorf("staged mode = %v, want 0555 (read-only, executable)", fi.Mode().Perm())
+		}
+		if n := cachedAssets(t, root); n != 1 {
+			t.Errorf("cache holds %d assets, want 1", n)
 		}
 	})
 
 	t.Run("over-cap asset rejected, cache not written", func(t *testing.T) {
-		nodepath.StaticFilesDir = t.TempDir()
+		root := t.TempDir()
 		maxAssetBytes = 4 // content is longer than this
-		s := &Atelet{anonGCSClient: fakeObjectStorage{data: content}}
-		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
+		_, err := stageTestAsset(t, s, root, assetEntry{URL: url, SHA256: goodHash})
 		if err == nil {
-			t.Fatal("fetchAsset accepted an over-cap asset")
+			t.Fatal("stageAsset accepted an over-cap asset")
 		}
-		if _, err := os.Stat(ateletpath.AssetPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("over-cap download left a file at the cache path (stat err = %v)", err)
+		if n := cachedAssets(t, root); n != 0 {
+			t.Errorf("over-cap download left %d assets in the cache", n)
 		}
 	})
 
 	t.Run("hash mismatch rejected, cache not written", func(t *testing.T) {
-		nodepath.StaticFilesDir = t.TempDir()
+		root := t.TempDir()
 		maxAssetBytes = origCap
 		wrongHash := strings.Repeat("a", 64) // valid 64-hex format, wrong value
-		s := &Atelet{anonGCSClient: fakeObjectStorage{data: content}}
-		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: wrongHash})
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
+		_, err := stageTestAsset(t, s, root, assetEntry{URL: url, SHA256: wrongHash})
 		if err == nil {
-			t.Fatal("fetchAsset accepted a hash mismatch")
+			t.Fatal("stageAsset accepted a hash mismatch")
 		}
-		if _, err := os.Stat(ateletpath.AssetPath(wrongHash)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("mismatched download left a file at the cache path (stat err = %v)", err)
+		if n := cachedAssets(t, root); n != 0 {
+			t.Errorf("mismatched download left %d assets in the cache", n)
 		}
 	})
 
 	t.Run("missing object keeps the client's sentinel", func(t *testing.T) {
-		nodepath.StaticFilesDir = t.TempDir()
+		root := t.TempDir()
 		maxAssetBytes = origCap
 		// The objectstorage clients tag a missing object with ErrObjectNotFound.
 		notFound := fmt.Errorf("%w: no such object", objectstorage.ErrObjectNotFound)
-		s := &Atelet{anonGCSClient: fakeObjectStorage{err: notFound}}
-		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{err: notFound}}
+		_, err := stageTestAsset(t, s, root, assetEntry{URL: url, SHA256: goodHash})
 		if !errors.Is(err, objectstorage.ErrObjectNotFound) {
 			t.Errorf("missing-object error lost the client's sentinel: %v", err)
 		}
 	})
 
 	t.Run("malformed url is rejected", func(t *testing.T) {
-		nodepath.StaticFilesDir = t.TempDir()
+		root := t.TempDir()
 		maxAssetBytes = origCap
-		s := &Atelet{anonGCSClient: fakeObjectStorage{data: content}}
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
 		// Invalid percent-escape: url.Parse rejects it inside objectstorage.Open.
-		_, err := s.fetchAsset(context.Background(), assetEntry{URL: "gs://bucket/%zz", SHA256: goodHash})
+		_, err := stageTestAsset(t, s, root, assetEntry{URL: "gs://bucket/%zz", SHA256: goodHash})
 		if err == nil {
-			t.Fatal("fetchAsset accepted a malformed URL")
+			t.Fatal("stageAsset accepted a malformed URL")
 		}
 	})
 
 	t.Run("network error keeps its context wrap", func(t *testing.T) {
-		nodepath.StaticFilesDir = t.TempDir()
+		root := t.TempDir()
 		maxAssetBytes = origCap
-		s := &Atelet{anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
-		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
+		_, err := stageTestAsset(t, s, root, assetEntry{URL: url, SHA256: goodHash})
 		if err == nil {
-			t.Fatal("fetchAsset accepted a failing open")
+			t.Fatal("stageAsset accepted a failing open")
 		}
 		if !strings.Contains(err.Error(), "while fetching") {
 			t.Errorf("open failure lost its context wrap: %v", err)
+		}
+	})
+
+	t.Run("already staged asset is kept without a fetch", func(t *testing.T) {
+		root := t.TempDir()
+		maxAssetBytes = origCap
+		var gets atomic.Int32
+		s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content, gets: &gets}}
+		path, err := stageTestAsset(t, s, root, assetEntry{URL: url, SHA256: goodHash})
+		if err != nil {
+			t.Fatalf("stageAsset: %v", err)
+		}
+		// A Checkpoint or Terminate of the same activation finds the link
+		// Run staged and uses it as it is.
+		again, err := s.stageAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash}, path)
+		if err != nil || again != path {
+			t.Fatalf("stageAsset onto a staged path = %q, %v; want %q", again, err, path)
+		}
+		if gets.Load() != 1 {
+			t.Errorf("object fetched %d times, want 1", gets.Load())
 		}
 	})
 }
@@ -764,10 +796,10 @@ func TestBuildWorkerWorkloadSpecForwardsContainerSpecs(t *testing.T) {
 func TestBuildWorkerWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 	in := &ateletpb.WorkloadSpec{
 		Volumes: []*ateletpb.Volume{
-			{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
-			{Name: "cache", DurableDir: &ateletpb.DurableDirVolume{}},
+			{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
+			{Name: "cache", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 			{Name: "scratch", External: &ateletpb.ExternalVolumeSource{}},
-			{Name: "system-info", SystemInfo: &ateletpb.SystemInfoVolume{}},
+			{Name: "system-info", SystemInfo: &ateletpb.SystemInfoVolumeSource{}},
 		},
 		Containers: []*ateletpb.Container{
 			{
@@ -794,21 +826,21 @@ func TestBuildWorkerWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 		Containers: []*ateworkerpb.Container{
 			{
 				Name: "main",
-				DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-					{VolumeName: "data", MountPath: "/home/counter"},
-					{VolumeName: "cache", MountPath: "/var/cache"},
+				DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+					{Name: "data", MountPath: "/home/counter"},
+					{Name: "cache", MountPath: "/var/cache"},
 				},
-				CsiVolumeMounts: []*ateworkerpb.VolumeMount{
-					{VolumeName: "scratch", MountPath: "/scratch"},
+				ExternalVolumeMounts: []*ateworkerpb.VolumeMount{
+					{Name: "scratch", MountPath: "/scratch"},
 				},
-				SystemInfoVolumeMounts: []*ateworkerpb.SystemInfoVolumeMount{
-					{VolumeName: "system-info", MountPath: "/run/ate"},
+				SystemInfoVolumeMounts: []*ateworkerpb.VolumeMount{
+					{Name: "system-info", MountPath: "/run/ate"},
 				},
 			},
 			{
 				Name: "sidecar",
-				DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-					{VolumeName: "data", MountPath: "/shared"},
+				DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+					{Name: "data", MountPath: "/shared"},
 				},
 			},
 			{Name: "no-volumes"},
@@ -833,7 +865,7 @@ func TestBuildWorkerWorkloadSpecValidation(t *testing.T) {
 			name: "missing volume definition",
 			in: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
-					{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+					{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 				},
 				Containers: []*ateletpb.Container{
 					{
@@ -867,7 +899,7 @@ func TestBuildWorkerWorkloadSpecValidation(t *testing.T) {
 			name: "duplicate volume names",
 			in: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
-					{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+					{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 					{Name: "data", External: &ateletpb.ExternalVolumeSource{}},
 				},
 				Containers: []*ateletpb.Container{
@@ -943,7 +975,7 @@ func TestRemoveActorDirsKeepsPopulatedVolume(t *testing.T) {
 	useTempNodeDirs(t)
 	const actorUID = "actor-uid-1"
 
-	stillMounted := filepath.Join(ateletpath.VolumeHostPath(actorUID, "data"), "payload")
+	stillMounted := filepath.Join(ateletpath.ExternalVolumeHostPath(actorUID, "data"), "payload")
 	if err := os.MkdirAll(filepath.Dir(stillMounted), 0o755); err != nil {
 		t.Fatalf("creating volume dir: %v", err)
 	}
@@ -1152,7 +1184,7 @@ func TestBuildWorkerWorkloadSpec_ImageVolumeMounts(t *testing.T) {
 	spec := &ateletpb.WorkloadSpec{
 		Volumes: []*ateletpb.Volume{
 			{Name: "agent", Image: &ateletpb.ImageVolumeSource{}},
-			{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+			{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 			{Name: "ext", External: &ateletpb.ExternalVolumeSource{}},
 		},
 		Containers: []*ateletpb.Container{{
@@ -1177,10 +1209,10 @@ func TestBuildWorkerWorkloadSpec_ImageVolumeMounts(t *testing.T) {
 	if len(ctr.GetImageVolumeMounts()) != 1 {
 		t.Fatalf("image volume mounts = %v, want 1", ctr.GetImageVolumeMounts())
 	}
-	if name, path := ctr.GetImageVolumeMounts()[0].GetVolumeName(), ctr.GetImageVolumeMounts()[0].GetMountPath(); name != "agent" || path != "/ate" {
+	if name, path := ctr.GetImageVolumeMounts()[0].GetName(), ctr.GetImageVolumeMounts()[0].GetMountPath(); name != "agent" || path != "/ate" {
 		t.Errorf("image volume mount = (%q, %q), want (agent, /ate)", name, path)
 	}
-	if len(ctr.GetDurableDirVolumeMounts()) != 1 || ctr.GetDurableDirVolumeMounts()[0].GetVolumeName() != "data" {
+	if len(ctr.GetDurableDirVolumeMounts()) != 1 || ctr.GetDurableDirVolumeMounts()[0].GetName() != "data" {
 		t.Errorf("durable mounts = %v, want just data", ctr.GetDurableDirVolumeMounts())
 	}
 }
@@ -1501,7 +1533,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Snapshot: &ateletpb.Snapshot{Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
-						{Name: "durable", DurableDir: &ateletpb.DurableDirVolume{}},
+						{Name: "durable", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 					},
 				},
 			},
@@ -1525,7 +1557,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Snapshot: &ateletpb.Snapshot{Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
-						{Name: "durable", DurableDir: &ateletpb.DurableDirVolume{}},
+						{Name: "durable", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 						{Name: "csi", External: &ateletpb.ExternalVolumeSource{}},
 					},
 				},

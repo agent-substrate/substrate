@@ -51,19 +51,19 @@ func TestBuild_VolumeMounts(t *testing.T) {
 		ActorDirs: &ateworkerpb.ActorDirs{
 			OciBundleDir:              "/node/actors/a/bundles",
 			DurableDirVolumeMountsDir: durableDir,
-			VolumesDir:                volumesDir,
+			ExternalVolumeMountsDir:   volumesDir,
 			SystemInfoVolumeRootsDir:  sysInfoDir,
 		},
 		Container: &ateworkerpb.Container{
 			Name:          "app",
 			ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}},
-			DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-				{VolumeName: "data", MountPath: "/var/data"},
-				{VolumeName: "data", MountPath: "/home/counter"},
+			DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+				{Name: "data", MountPath: "/var/data"},
+				{Name: "data", MountPath: "/home/counter"},
 			},
-			SystemInfoVolumeMounts: []*ateworkerpb.SystemInfoVolumeMount{{VolumeName: "sysinfo", MountPath: "/run/ate"}},
-			CsiVolumeMounts:        []*ateworkerpb.VolumeMount{{VolumeName: "csi", MountPath: "/mnt/csi"}},
-			ImageVolumeMounts:      []*ateworkerpb.ImageVolumeMount{{VolumeName: "agent", MountPath: "/ate"}},
+			SystemInfoVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "sysinfo", MountPath: "/run/ate"}},
+			ExternalVolumeMounts:   []*ateworkerpb.VolumeMount{{Name: "csi", MountPath: "/mnt/csi"}},
+			ImageVolumeMounts:      []*ateworkerpb.VolumeMount{{Name: "agent", MountPath: "/ate"}},
 		},
 	})
 

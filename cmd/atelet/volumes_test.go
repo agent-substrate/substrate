@@ -105,7 +105,7 @@ func TestUnmountExternalVolumes(t *testing.T) {
 	}
 	durableVol := &ateletpb.Volume{
 		Name:       "durable-1",
-		DurableDir: &ateletpb.DurableDirVolume{},
+		DurableDir: &ateletpb.DurableDirVolumeSource{},
 	}
 
 	t.Run("success", func(t *testing.T) {
@@ -187,7 +187,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	}
 	durableVol := &ateletpb.Volume{
 		Name:       "durable-1",
-		DurableDir: &ateletpb.DurableDirVolume{},
+		DurableDir: &ateletpb.DurableDirVolumeSource{},
 	}
 
 	t.Run("success mounts external volumes and creates mount directory", func(t *testing.T) {
@@ -209,8 +209,8 @@ func TestMountExternalVolumes(t *testing.T) {
 			t.Fatalf("mountCalls count = %d, want 2", len(fake.mountCalls))
 		}
 
-		expectedPath1 := ateletpath.VolumeHostPath(actorUID, "vol-1")
-		expectedPath2 := ateletpath.VolumeHostPath(actorUID, "vol-2")
+		expectedPath1 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
+		expectedPath2 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-2")
 
 		for _, path := range []string{expectedPath1, expectedPath2} {
 			info, err := os.Stat(path)
@@ -237,7 +237,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	t.Run("target directory already exists is handled cleanly", func(t *testing.T) {
 		withTempActorsDir(t)
 
-		expectedPath := ateletpath.VolumeHostPath(actorUID, "vol-1")
+		expectedPath := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
 		if err := os.MkdirAll(expectedPath, 0o750); err != nil {
 			t.Fatalf("pre-creating mount point: %v", err)
 		}
@@ -327,8 +327,8 @@ func TestMountExternalVolumes(t *testing.T) {
 	t.Run("multi-volume partial failure does not roll back already mounted volume", func(t *testing.T) {
 		withTempActorsDir(t)
 
-		expectedPath1 := ateletpath.VolumeHostPath(actorUID, "vol-1")
-		expectedPath2 := ateletpath.VolumeHostPath(actorUID, "vol-2")
+		expectedPath1 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
+		expectedPath2 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-2")
 
 		fake := &fakeWorkerPlugin{
 			mountErrs: map[string]error{
@@ -407,8 +407,8 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 			t.Fatalf("mountExternalVolumes failed: %v", err)
 		}
 
-		path1 := ateletpath.VolumeHostPath(actorUID, "vol-1")
-		path2 := ateletpath.VolumeHostPath(actorUID, "vol-2")
+		path1 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
+		path2 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-2")
 		for _, p := range []string{path1, path2} {
 			if _, err := os.Stat(p); err != nil {
 				t.Fatalf("expected mount path %q to exist before unmount: %v", p, err)
@@ -445,8 +445,8 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 			t.Fatalf("unmountExternalVolumes failed: %v", err)
 		}
 
-		path1 := ateletpath.VolumeHostPath(actorUID, "vol-1")
-		path2 := ateletpath.VolumeHostPath(actorUID, "vol-2")
+		path1 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
+		path2 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-2")
 		for _, p := range []string{path1, path2} {
 			if _, err := os.Stat(p); err != nil {
 				t.Fatalf("expected mount path %q to exist before reset: %v", p, err)
@@ -465,7 +465,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		}
 
 		// The parent volumes directory is preserved and empty.
-		volumesDir := ateletpath.VolumesDir(actorUID)
+		volumesDir := ateletpath.ExternalVolumeMountsDir(actorUID)
 		entries, err := os.ReadDir(volumesDir)
 		if err != nil {
 			t.Fatalf("ReadDir(%q) failed: %v", volumesDir, err)
@@ -490,7 +490,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		}
 
 		// Simulate lingering content in the volume mount point (e.g. unmount failed or data present).
-		path1 := ateletpath.VolumeHostPath(actorUID, "vol-1")
+		path1 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
 		filePath := filepath.Join(path1, "lingering.txt")
 		if err := os.WriteFile(filePath, []byte("volume data"), 0o600); err != nil {
 			t.Fatalf("writing test file: %v", err)
@@ -517,7 +517,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 			t.Fatalf("resetActorDirs failed when volumes dir does not exist: %v", err)
 		}
 
-		volumesDir := ateletpath.VolumesDir(actorUID)
+		volumesDir := ateletpath.ExternalVolumeMountsDir(actorUID)
 		if info, err := os.Stat(volumesDir); err != nil || !info.IsDir() {
 			t.Errorf("expected volumes dir %q to be created, stat err = %v", volumesDir, err)
 		}

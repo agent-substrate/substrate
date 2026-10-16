@@ -34,21 +34,20 @@ var (
 	// moved through the object-store plugin. It lives under BasePath, which the
 	// node plugin shares with atelet.
 	SnapshotScratchDir = filepath.Join(nodepath.BasePath, "snapshot-scratch")
+
+	// SandboxAssetCacheDir is the node-local sandbox asset cache (see
+	// cmd/atelet/internal/filecache): runsc releases, micro-VM kernels, VMMs
+	// and guest images, content-addressed. It lives under BasePath, on the
+	// same mount as ActorsDir, because an actor's assets are hard links from
+	// here into its SandboxAssetsDir.
+	SandboxAssetCacheDir = filepath.Join(nodepath.BasePath, "sandbox-asset-cache")
+
+	// SandboxAssetScratchDir holds short-lived destination directories for
+	// asset fetches that have no actor, such as prewarming a SandboxConfig's
+	// default version. Wiped at startup. Under BasePath so the links the
+	// cache serves into it are on the cache's mount.
+	SandboxAssetScratchDir = filepath.Join(nodepath.BasePath, "sandbox-asset-scratch")
 )
-
-// AssetPath returns the cache path for a single-file sandbox asset
-func AssetPath(sha256 string) string {
-	return filepath.Join(nodepath.StaticFilesDir, "asset-"+sha256)
-}
-
-// GVisorReleaseDir is the directory a gVisor release tarball (gvisor.tar.bz2,
-// containing runsc plus its gvisor-bin/ helper binaries) is extracted into,
-// content-addressed by the tarball's sha256. runsc requires the gvisor-bin/
-// subdirectory to sit next to it, so the whole release is kept together under
-// one directory rather than as loose files in StaticFilesDir.
-func GVisorReleaseDir(sha256 string) string {
-	return filepath.Join(nodepath.StaticFilesDir, "gvisor-"+sha256)
-}
 
 func ActorPath(actorUID string) string {
 	return filepath.Join(
@@ -78,6 +77,25 @@ func ActorSnapshotStateFile(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
 		"snapshot-state.json",
+	)
+}
+
+// SandboxAssetsDir holds the actor's sandbox runtime assets, one entry per
+// asset name, each a hard link (or a directory of hard links, for a gVisor
+// release) from SandboxAssetCacheDir. The worker runs binaries from here
+// only, and derives the same path itself to check a request against.
+func SandboxAssetsDir(actorUID string) string {
+	return nodepath.ActorSandboxAssetsDir(actorUID)
+}
+
+// SandboxAssetsStagingDir is where Run stages an activation's assets before
+// moving them into SandboxAssetsDir, so a failed fetch leaves whatever a
+// live activation has there untouched. Not among the directories
+// resetActorDirs empties.
+func SandboxAssetsStagingDir(actorUID string) string {
+	return filepath.Join(
+		ActorPath(actorUID),
+		"sandbox-assets.staging",
 	)
 }
 
@@ -181,16 +199,16 @@ func RestoreStateDir(actorUID string) string {
 	)
 }
 
-func VolumesDir(actorUID string) string {
+func ExternalVolumeMountsDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
 		"volumes",
 	)
 }
 
-func VolumeHostPath(actorUID, volumeName string) string {
+func ExternalVolumeHostPath(actorUID, volumeName string) string {
 	return filepath.Join(
-		VolumesDir(actorUID),
+		ExternalVolumeMountsDir(actorUID),
 		volumeName,
 	)
 }
@@ -205,6 +223,7 @@ func ActorDirs(actorUID string) *ateworkerpb.ActorDirs {
 		RestoreDir:                RestoreStateDir(actorUID),
 		DurableDirVolumeMountsDir: DurableDirVolumeMountsDir(actorUID),
 		SystemInfoVolumeRootsDir:  SystemInfoVolumeRootsDir(actorUID),
-		VolumesDir:                VolumesDir(actorUID),
+		ExternalVolumeMountsDir:   ExternalVolumeMountsDir(actorUID),
+		SandboxAssetsDir:          SandboxAssetsDir(actorUID),
 	}
 }

@@ -1152,7 +1152,7 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 	ateletVolumes := ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	immediate := ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE
 	checkpointSync := ateletCall{checkpoints: 1, fidelity: ateletVolumes, uploadMode: immediate, object: true}
-	checkpointAsync := ateletCall{checkpoints: 1, fidelity: ateletVolumes, uploadMode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED}
+	checkpointAsync := ateletCall{checkpoints: 1, fidelity: ateletVolumes, uploadMode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED, object: true}
 	promote := ateletCall{promotes: 1, fidelity: ateletVolumes, object: true}
 	// rejected is a FailedPrecondition outcome: no atelet call, and the
 	// record left as want describes it.
@@ -1277,7 +1277,7 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 					// wireTestAssignment names.
 					ctx := context.Background()
 					persistence := newTestPersistence(t)
-					seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation, PreferredFidelity: volumes})
+					tmpl := seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation, PreferredFidelity: volumes})
 					actorRef := resources.ActorRef{Atespace: atespace, Name: fmt.Sprintf("row%d-%s", i, mode.name)}
 					created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 						Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
@@ -1308,7 +1308,7 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 					if got.state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && stored.GetStatus().GetWorkerAssignment() != nil {
 						t.Errorf("WorkerAssignment = %v, want cleared on SUSPENDED", stored.GetStatus().GetWorkerAssignment())
 					}
-					assertRequestNamesLatestSnapshot(t, atelet, stored)
+					assertRequestNamesLatestSnapshot(t, atelet, tmpl, stored)
 				})
 			}
 		})
@@ -1363,6 +1363,44 @@ func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 	}
 }
 
+// TestSuspendAndPause_InvalidStorageLocationRejected verifies that both
+// workflows validate the template's storage location in MarkSuspending before
+// writing SUSPENDING, leaving the actor RUNNING untouched.
+func TestSuspendAndPause_InvalidStorageLocationRejected(t *testing.T) {
+	for _, mode := range suspendModes {
+		t.Run(mode.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: "not-a-uri"})
+			w := newMarkOnlyWorkflow(persistence)
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: suspendTestTemplateRef(),
+				Status: &ateapipb.ActorStatus{
+					State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					AssignedNode:     "node-1",
+					WorkerAssignment: wireTestAssignment(),
+				},
+			})
+
+			if _, err := mode.run(w, ctx, actorRef); err == nil {
+				t.Fatalf("%s: expected error for invalid storage location, got nil", mode.name)
+			}
+			stored := mustReadActor(t, ctx, persistence, actorRef)
+			if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+				t.Errorf("%s: stored state = %v, want RUNNING untouched", mode.name, got)
+			}
+			if got := stored.GetStatus().GetLastAssignedGeneration(); got != 0 {
+				t.Errorf("%s: last_assigned_generation = %d, want 0 untouched", mode.name, got)
+			}
+			if got := stored.GetStatus().GetSnapshots(); len(got) != 0 {
+				t.Errorf("%s: snapshots = %v, want empty", mode.name, got)
+			}
+		})
+	}
+}
+
 // describeAteletCall summarizes the suspend RPCs atelet received: how many
 // of each, and the fidelity, upload mode, and object destination requested.
 func describeAteletCall(atelet *capturingAtelet) ateletCall {
@@ -1396,9 +1434,9 @@ func describeSnapshots(status *ateapipb.ActorStatus) []snapshotOutcome {
 }
 
 // assertRequestNamesLatestSnapshot verifies the suspend RPC atelet received,
-// if any, names the snapshot at the stored actor's latest generation, and that
-// an object destination is that snapshot's durable copy.
-func assertRequestNamesLatestSnapshot(t *testing.T, atelet *capturingAtelet, stored *ateapipb.Actor) {
+// if any, names the snapshot at the stored actor's latest generation and its
+// object storage URI.
+func assertRequestNamesLatestSnapshot(t *testing.T, atelet *capturingAtelet, tmpl *ateapipb.ActorTemplate, stored *ateapipb.Actor) {
 	t.Helper()
 	var snap *ateletpb.Snapshot
 	if req := atelet.checkpointRequest(); req != nil {
@@ -1412,9 +1450,11 @@ func assertRequestNamesLatestSnapshot(t *testing.T, atelet *capturingAtelet, sto
 	if got, want := snap.GetSnapshotUuid(), latest.GetUuid(); got != want {
 		t.Errorf("request Snapshot.SnapshotUuid = %q, want the latest generation's %q", got, want)
 	}
-	if obj := snap.GetObject(); obj != nil {
-		if got, want := obj.GetSnapshotUri(), latest.GetDurableSnapshot().GetObject().GetSnapshotUri(); got != want {
-			t.Errorf("request Snapshot.Object.SnapshotUri = %q, want the latest generation's durable copy %q", got, want)
-		}
+	wantURI := latest.GetDurableSnapshot().GetObject().GetSnapshotUri()
+	if wantURI == "" {
+		wantURI = mustActorSnapshotURI(t, tmpl, stored, latest.GetUuid()).String()
+	}
+	if got := snap.GetObject().GetSnapshotUri(); got != wantURI {
+		t.Errorf("request Snapshot.Object.SnapshotUri = %q, want %q", got, wantURI)
 	}
 }

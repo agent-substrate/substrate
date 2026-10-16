@@ -29,7 +29,7 @@ import (
 // hasCsiVolumes reports whether any container mounts a CSI volume.
 func hasCsiVolumes(containers []*ateworkerpb.Container) bool {
 	for _, c := range containers {
-		if len(c.GetCsiVolumeMounts()) > 0 {
+		if len(c.GetExternalVolumeMounts()) > 0 {
 			return true
 		}
 	}

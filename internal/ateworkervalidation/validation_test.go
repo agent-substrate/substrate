@@ -36,10 +36,10 @@ func fullSpec() *ateworkerpb.WorkloadSpec {
 	return &ateworkerpb.WorkloadSpec{Containers: []*ateworkerpb.Container{{
 		Name:                   "main",
 		WakeupProbe:            &ateworkerpb.WakeupProbe{HttpGet: &ateworkerpb.HttpGetAction{Path: "/healthz", Port: 8080}, TimeoutSeconds: 30},
-		DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{{VolumeName: "data", MountPath: "/data"}},
-		CsiVolumeMounts:        []*ateworkerpb.VolumeMount{{VolumeName: "csi", MountPath: "/csi"}},
-		SystemInfoVolumeMounts: []*ateworkerpb.SystemInfoVolumeMount{{VolumeName: "sysinfo", MountPath: "/etc/sysinfo"}},
-		ImageVolumeMounts:      []*ateworkerpb.ImageVolumeMount{{VolumeName: "img", MountPath: "/img"}},
+		DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "data", MountPath: "/data"}},
+		ExternalVolumeMounts:   []*ateworkerpb.VolumeMount{{Name: "ext", MountPath: "/ext"}},
+		SystemInfoVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "sysinfo", MountPath: "/etc/sysinfo"}},
+		ImageVolumeMounts:      []*ateworkerpb.VolumeMount{{Name: "img", MountPath: "/img"}},
 	}}}
 }
 
@@ -51,7 +51,8 @@ func fullActorDirs() *ateworkerpb.ActorDirs {
 		RestoreDir:                "/actors/uid/restore",
 		DurableDirVolumeMountsDir: "/actors/uid/durable",
 		SystemInfoVolumeRootsDir:  "/actors/uid/sysinfo",
-		VolumesDir:                "/actors/uid/volumes",
+		ExternalVolumeMountsDir:   "/actors/uid/volumes",
+		SandboxAssetsDir:          "/actors/uid/sandbox-assets",
 	}
 }
 
@@ -444,40 +445,40 @@ func TestValidateContainer(t *testing.T) {
 		obj:  valid(func(c *ateworkerpb.Container) { c.Name = "_pause" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		name: "too many csi mounts",
+		name: "too many external mounts",
 		obj: valid(func(c *ateworkerpb.Container) {
-			c.CsiVolumeMounts = nil
+			c.ExternalVolumeMounts = nil
 			for i := range 33 {
-				c.CsiVolumeMounts = append(c.CsiVolumeMounts, &ateworkerpb.VolumeMount{VolumeName: "v", MountPath: fmt.Sprintf("/m/%d", i)})
+				c.ExternalVolumeMounts = append(c.ExternalVolumeMounts, &ateworkerpb.VolumeMount{Name: "v", MountPath: fmt.Sprintf("/m/%d", i)})
 			}
 		}),
-		want: field.ErrorList{field.TooMany(field.NewPath("csi_volume_mounts"), 33, 32).WithOrigin("maxItems")},
+		want: field.ErrorList{field.TooMany(field.NewPath("external_volume_mounts"), 33, 32).WithOrigin("maxItems")},
 	}, {
 		name: "duplicate durable-dir mount path",
 		obj: valid(func(c *ateworkerpb.Container) {
-			c.DurableDirVolumeMounts = []*ateworkerpb.DurableDirVolumeMount{{VolumeName: "a", MountPath: "/data"}, {VolumeName: "b", MountPath: "/data"}}
+			c.DurableDirVolumeMounts = []*ateworkerpb.VolumeMount{{Name: "a", MountPath: "/data"}, {Name: "b", MountPath: "/data"}}
 		}),
 		want: field.ErrorList{field.Duplicate(field.NewPath("durable_dir_volume_mounts").Index(1), nil)},
 	}, {
 		name: "nil image mount",
-		obj:  valid(func(c *ateworkerpb.Container) { c.ImageVolumeMounts = []*ateworkerpb.ImageVolumeMount{nil} }),
+		obj:  valid(func(c *ateworkerpb.Container) { c.ImageVolumeMounts = []*ateworkerpb.VolumeMount{nil} }),
 		want: field.ErrorList{field.Required(field.NewPath("image_volume_mounts").Index(0), "")},
 	}, {
 		name: "valid: no mounts",
 		obj: valid(func(c *ateworkerpb.Container) {
-			c.DurableDirVolumeMounts, c.CsiVolumeMounts, c.SystemInfoVolumeMounts, c.ImageVolumeMounts = nil, nil, nil, nil
+			c.DurableDirVolumeMounts, c.ExternalVolumeMounts, c.SystemInfoVolumeMounts, c.ImageVolumeMounts = nil, nil, nil, nil
 		}),
 	}, {
 		name: "empty system-info mount",
-		obj:  valid(func(c *ateworkerpb.Container) { c.SystemInfoVolumeMounts = []*ateworkerpb.SystemInfoVolumeMount{{}} }),
+		obj:  valid(func(c *ateworkerpb.Container) { c.SystemInfoVolumeMounts = []*ateworkerpb.VolumeMount{{}} }),
 		want: field.ErrorList{
-			field.Required(field.NewPath("system_info_volume_mounts").Index(0).Child("volume_name"), ""),
+			field.Required(field.NewPath("system_info_volume_mounts").Index(0).Child("name"), ""),
 			field.Required(field.NewPath("system_info_volume_mounts").Index(0).Child("mount_path"), ""),
 		},
 	}, {
-		name: "invalid csi mount volume_name: uppercase",
-		obj:  valid(func(c *ateworkerpb.Container) { c.CsiVolumeMounts[0].VolumeName = "CSI" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("csi_volume_mounts").Index(0).Child("volume_name"), nil, "").WithOrigin("format=k8s-short-name")},
+		name: "invalid external mount name: uppercase",
+		obj:  valid(func(c *ateworkerpb.Container) { c.ExternalVolumeMounts[0].Name = "EXT" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("external_volume_mounts").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		name: "relative durable-dir mount_path",
 		obj:  valid(func(c *ateworkerpb.Container) { c.DurableDirVolumeMounts[0].MountPath = "data" }),
@@ -491,27 +492,27 @@ func TestValidateContainer(t *testing.T) {
 		obj:  valid(func(c *ateworkerpb.Container) { c.ImageVolumeMounts[0].MountPath = "/" + strings.Repeat("x", 4096) }),
 		want: field.ErrorList{field.TooLong(field.NewPath("image_volume_mounts").Index(0).Child("mount_path"), nil, 4096).WithOrigin("maxLength")},
 	}, {
-		name: "csi mount nested under another in its list",
+		name: "external mount nested under another in its list",
 		obj: valid(func(c *ateworkerpb.Container) {
-			c.CsiVolumeMounts = append(c.CsiVolumeMounts, &ateworkerpb.VolumeMount{VolumeName: "csi-2", MountPath: "/csi/inner"})
+			c.ExternalVolumeMounts = append(c.ExternalVolumeMounts, &ateworkerpb.VolumeMount{Name: "ext-2", MountPath: "/ext/inner"})
 		}),
-		want: field.ErrorList{field.Invalid(field.NewPath("csi_volume_mounts").Index(1).Child("mount_path"), nil, "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("external_volume_mounts").Index(1).Child("mount_path"), nil, "")},
 	}, {
-		name: "system-info mount nested under a csi mount",
+		name: "system-info mount nested under an external mount",
 		obj: valid(func(c *ateworkerpb.Container) {
-			c.SystemInfoVolumeMounts = append(c.SystemInfoVolumeMounts, &ateworkerpb.SystemInfoVolumeMount{VolumeName: "sysinfo-2", MountPath: "/csi/inner"})
+			c.SystemInfoVolumeMounts = append(c.SystemInfoVolumeMounts, &ateworkerpb.VolumeMount{Name: "sysinfo-2", MountPath: "/ext/inner"})
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("system_info_volume_mounts").Index(1).Child("mount_path"), nil, "")},
 	}, {
 		name: "image mount nested over a system-info mount",
 		obj: valid(func(c *ateworkerpb.Container) {
-			c.ImageVolumeMounts = append(c.ImageVolumeMounts, &ateworkerpb.ImageVolumeMount{VolumeName: "etc", MountPath: "/etc"})
+			c.ImageVolumeMounts = append(c.ImageVolumeMounts, &ateworkerpb.VolumeMount{Name: "etc", MountPath: "/etc"})
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("image_volume_mounts").Index(1).Child("mount_path"), nil, "")},
 	}, {
 		name: "same mount path in two lists",
 		obj: valid(func(c *ateworkerpb.Container) {
-			c.ImageVolumeMounts = append(c.ImageVolumeMounts, &ateworkerpb.ImageVolumeMount{VolumeName: "data-again", MountPath: "/data"})
+			c.ImageVolumeMounts = append(c.ImageVolumeMounts, &ateworkerpb.VolumeMount{Name: "data-again", MountPath: "/data"})
 		}),
 		want: field.ErrorList{field.Duplicate(field.NewPath("image_volume_mounts").Index(1).Child("mount_path"), nil)},
 	}}
@@ -545,9 +546,17 @@ func TestValidateActorDirs(t *testing.T) {
 		obj:  valid(func(d *ateworkerpb.ActorDirs) { d.RootDir = "" }),
 		want: field.ErrorList{field.Required(field.NewPath("root_dir"), "")},
 	}, {
-		name: "missing volumes_dir",
-		obj:  valid(func(d *ateworkerpb.ActorDirs) { d.VolumesDir = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("volumes_dir"), "")},
+		name: "missing external_volume_mounts_dir",
+		obj:  valid(func(d *ateworkerpb.ActorDirs) { d.ExternalVolumeMountsDir = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("external_volume_mounts_dir"), "")},
+	}, {
+		name: "missing sandbox_assets_dir",
+		obj:  valid(func(d *ateworkerpb.ActorDirs) { d.SandboxAssetsDir = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("sandbox_assets_dir"), "")},
+	}, {
+		name: "relative sandbox_assets_dir",
+		obj:  valid(func(d *ateworkerpb.ActorDirs) { d.SandboxAssetsDir = "sandbox-assets" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("sandbox_assets_dir"), nil, "")},
 	}, {
 		name: "relative oci_bundle_dir",
 		obj:  valid(func(d *ateworkerpb.ActorDirs) { d.OciBundleDir = "bundles" }),

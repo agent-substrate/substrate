@@ -32,7 +32,7 @@ var parityActorDirs = &ateworkerpb.ActorDirs{
 	OciBundleDir:              "/node/actors/a/bundles",
 	DurableDirVolumeMountsDir: "/node/actors/a/durable-dir",
 	SystemInfoVolumeRootsDir:  "/node/actors/a/system-info",
-	VolumesDir:                "/node/actors/a/volumes",
+	ExternalVolumeMountsDir:   "/node/actors/a/volumes",
 }
 
 // parityOptions mounts one volume of every kind.
@@ -42,10 +42,10 @@ var parityOptions = Options{
 	Container: &ateworkerpb.Container{
 		Name:                   "app",
 		ContainerSpec:          &ateworkerpb.ContainerSpec{Args: []string{"/app"}},
-		DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{{VolumeName: "data", MountPath: "/var/data"}},
-		SystemInfoVolumeMounts: []*ateworkerpb.SystemInfoVolumeMount{{VolumeName: "sysinfo", MountPath: "/run/ate"}},
-		CsiVolumeMounts:        []*ateworkerpb.VolumeMount{{VolumeName: "csi", MountPath: "/mnt/csi"}},
-		ImageVolumeMounts:      []*ateworkerpb.ImageVolumeMount{{VolumeName: "agent", MountPath: "/ate"}},
+		DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "data", MountPath: "/var/data"}},
+		SystemInfoVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "sysinfo", MountPath: "/run/ate"}},
+		ExternalVolumeMounts:   []*ateworkerpb.VolumeMount{{Name: "csi", MountPath: "/mnt/csi"}},
+		ImageVolumeMounts:      []*ateworkerpb.VolumeMount{{Name: "agent", MountPath: "/ate"}},
 	},
 }
 

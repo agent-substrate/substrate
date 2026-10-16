@@ -171,17 +171,17 @@ func Build(o Options) *specs.Spec {
 	}
 	actorDirs := o.ActorDirs
 	for _, m := range container.GetDurableDirVolumeMounts() {
-		bind(m.GetMountPath(), filepath.Join(actorDirs.GetDurableDirVolumeMountsDir(), m.GetVolumeName()), "rw")
+		bind(m.GetMountPath(), filepath.Join(actorDirs.GetDurableDirVolumeMountsDir(), m.GetName()), "rw")
 	}
-	for _, m := range container.GetCsiVolumeMounts() {
-		bind(m.GetMountPath(), filepath.Join(actorDirs.GetVolumesDir(), m.GetVolumeName()), "rw")
+	for _, m := range container.GetExternalVolumeMounts() {
+		bind(m.GetMountPath(), filepath.Join(actorDirs.GetExternalVolumeMountsDir(), m.GetName()), "rw")
 	}
 	for _, m := range container.GetSystemInfoVolumeMounts() {
-		bind(m.GetMountPath(), filepath.Join(actorDirs.GetSystemInfoVolumeRootsDir(), m.GetVolumeName()), "ro")
+		bind(m.GetMountPath(), filepath.Join(actorDirs.GetSystemInfoVolumeRootsDir(), m.GetName()), "ro")
 	}
 	bundlePath := filepath.Join(actorDirs.GetOciBundleDir(), container.GetName())
 	for _, m := range container.GetImageVolumeMounts() {
-		bind(m.GetMountPath(), imagecache.ImageVolumeMountPath(bundlePath, m.GetVolumeName()), "ro")
+		bind(m.GetMountPath(), imagecache.ImageVolumeMountPath(bundlePath, m.GetName()), "ro")
 	}
 
 	return spec

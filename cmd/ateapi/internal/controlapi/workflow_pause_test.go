@@ -601,13 +601,13 @@ func TestPauseActor_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 		t.Run(tc.preferred.String(), func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-			seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{PreferredFidelity: tc.preferred})
+			tmpl := seedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{PreferredFidelity: tc.preferred})
 			w, atelet := newWireCaptureWorkflow(t, persistence)
 			inst, reader := newTestInstruments(t)
 			w.instruments = inst
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+			created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorTemplate: suspendTestTemplateRef(),
 				Status: &ateapipb.ActorStatus{
@@ -637,8 +637,9 @@ func TestPauseActor_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 			if got := req.GetSnapshot().GetGeneration(); got != 1 {
 				t.Errorf("CheckpointRequest.Snapshot.Generation = %d, want 1, the in-progress snapshot's", got)
 			}
-			if got := req.GetSnapshot().GetObject(); got != nil {
-				t.Errorf("CheckpointRequest.Snapshot.Object = %v, want nil for a node-local checkpoint", got)
+			wantURI := mustActorSnapshotURI(t, tmpl, created, "local-snap-1").String()
+			if got := req.GetSnapshot().GetObject().GetSnapshotUri(); got != wantURI {
+				t.Errorf("CheckpointRequest.Snapshot.Object.SnapshotUri = %q, want %q", got, wantURI)
 			}
 			if got := req.GetUploadConfig().GetMode(); got != ateletpb.UploadMode_UPLOAD_MODE_DEFERRED {
 				t.Errorf("CheckpointRequest.UploadConfig.Mode = %v, want UPLOAD_MODE_DEFERRED", got)

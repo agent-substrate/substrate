@@ -109,20 +109,13 @@ func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 }
 
 func TestRestoreWorkloadRejectsUnsupportedFidelity(t *testing.T) {
-	staticFilesDir := nodepath.StaticFilesDir
-	nodepath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { nodepath.StaticFilesDir = staticFilesDir })
-	runscPath := filepath.Join(nodepath.StaticFilesDir, "runsc")
-	if err := os.WriteFile(runscPath, nil, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	// A zero service cannot acquire locks, configure networking, or open log pipes.
 	s := &AteWorkerService{}
 	for _, fidelity := range []ateworkerpb.SnapshotFidelity{0, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, 99} {
 		t.Run(fidelity.String(), func(t *testing.T) {
-			// Valid but for the fidelity, so the rejection is the fidelity's.
+			// Valid but for the fidelity, so the rejection is the fidelity's;
+			// the fidelity check runs before the runsc path is looked at.
 			req := validRestoreRequest()
-			req.RunscPath = runscPath
 			req.Fidelity = fidelity
 			resp, err := s.RestoreWorkload(context.Background(), req)
 			if resp != nil || apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "fidelity") {
@@ -144,7 +137,8 @@ func testDirs() *ateworkerpb.ActorDirs {
 		RestoreDir:                "/node/actors/actor-a/restore-state",
 		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
 		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
-		VolumesDir:                "/node/actors/actor-a/volumes",
+		ExternalVolumeMountsDir:   "/node/actors/actor-a/volumes",
+		SandboxAssetsDir:          nodepath.ActorSandboxAssetsDir(testActor.UID),
 	}
 }
 
@@ -281,4 +275,50 @@ func decodeRecord(t *testing.T, b []byte) map[string]any {
 		t.Fatalf("parse record %q: %v", b, err)
 	}
 	return m
+}
+
+// TestValidateRunscPathRequiresTheActorsOwnDir pins that the root the runsc
+// path is checked against is derived from the actor UID, not taken from the
+// request: a request cannot name a root of its own choosing.
+func TestValidateRunscPathRequiresTheActorsOwnDir(t *testing.T) {
+	orig := nodepath.ActorsDir
+	nodepath.ActorsDir = t.TempDir()
+	t.Cleanup(func() { nodepath.ActorsDir = orig })
+	stage := func(t *testing.T, actorUID string) string {
+		t.Helper()
+		dir := nodepath.ActorSandboxAssetsDir(actorUID)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		runsc := filepath.Join(dir, "runsc")
+		if err := os.WriteFile(runsc, nil, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		return runsc
+	}
+	own, other := stage(t, "actor-a"), stage(t, "actor-b")
+	dirs := func(sandboxAssetsDir string) *ateworkerpb.ActorDirs {
+		return &ateworkerpb.ActorDirs{SandboxAssetsDir: sandboxAssetsDir}
+	}
+	for _, tc := range []struct {
+		name    string
+		dir     string
+		runsc   string
+		wantErr bool
+	}{
+		{"runsc in the actor's own dir", filepath.Dir(own), own, false},
+		{"runsc outside the actor's dir", filepath.Dir(own), "/bin/sh", true},
+		{"another actor's dir named as the root", filepath.Dir(other), other, true},
+		{"the root named as the root", "/", "/bin/sh", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRunscPath("actor-a", dirs(tc.dir), tc.runsc)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("validateRunscPath(actor-a, %q, %q) = %v, wantErr %v", tc.dir, tc.runsc, err, tc.wantErr)
+			}
+			if err != nil && apierror.Code(err) != codes.InvalidArgument {
+				t.Errorf("code = %v, want %v", apierror.Code(err), codes.InvalidArgument)
+			}
+		})
+	}
 }
