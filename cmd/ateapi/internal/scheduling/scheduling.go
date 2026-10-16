@@ -55,7 +55,7 @@ type Constraints struct {
 
 	// Limits are the actor's declared resource limits, in the units a Worker
 	// reports its capacity in, so the two subtract.
-	Limits *ateapipb.Resources
+	Limits *ateapipb.ResourceRequirements
 }
 
 // ErrNoCapacity is returned by Schedule when no worker that meets the
@@ -192,7 +192,7 @@ func workerResourceUtilization(w *ateapipb.Worker) float64 {
 	return utilization(w.GetStatus().GetCapacity().GetResources(), w.GetStatus().GetAllocated().GetResources())
 }
 
-func utilization(capacity, used *ateapipb.Resources) float64 {
+func utilization(capacity, used *ateapipb.ResourceRequirements) float64 {
 	var (
 		maxRatio    float64
 		hasPositive bool
@@ -255,7 +255,7 @@ func (s *scheduler) HasRoom(worker *ateapipb.Worker, constraints Constraints) bo
 	return ok
 }
 
-func checkRoom(worker *ateapipb.Worker, want *ateapipb.Resources) (candidate, bool) {
+func checkRoom(worker *ateapipb.Worker, want *ateapipb.ResourceRequirements) (candidate, bool) {
 	capacity := worker.GetStatus().GetCapacity()
 	used := worker.GetStatus().GetAllocated()
 

@@ -47,7 +47,7 @@ func TestFromFiles(t *testing.T) {
 		memory string
 		want   *ateletpb.WorkerResources
 	}{
-		{name: "limits set", cpu: "2000", memory: "4294967296", want: &ateletpb.WorkerResources{Actors: testActors, Resources: &ateletpb.Resources{Limits: &ateletpb.ResourceList{CpuMillicores: 2000, MemoryBytes: 4294967296}}}},
+		{name: "limits set", cpu: "2000", memory: "4294967296", want: &ateletpb.WorkerResources{Actors: testActors, Resources: &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: 2000, MemoryBytes: 4294967296}}}},
 		{name: "unparseable is none", cpu: "2Gi", memory: "", want: &ateletpb.WorkerResources{Actors: testActors}},
 		{name: "negative is none", cpu: "-1", memory: "-1", want: &ateletpb.WorkerResources{Actors: testActors}},
 	} {

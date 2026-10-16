@@ -67,7 +67,7 @@ func validRunWorkloadRequest(mutate ...func(*ateworkerpb.RunWorkloadRequest)) *a
 		Spec:                  fullSpec(),
 		RuntimeAssetPaths:     map[string]string{"kata-kernel": "/opt/kernel", "virtiofsd": "/opt/virtiofsd"},
 		EgressGateway:         &ateworkerpb.EgressGateway{Address: "gateway:443"},
-		Resources:             &ateworkerpb.Resources{Limits: &ateworkerpb.ResourceList{CpuMillicores: 1500, MemoryBytes: 1 << 30}},
+		Resources:             &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: 1500, MemoryBytes: 1 << 30}},
 		ActorDirs:             fullActorDirs(),
 	}
 	for _, m := range mutate {
@@ -149,19 +149,19 @@ func TestValidateRunWorkloadRequest(t *testing.T) {
 	}, {
 		name: "negative cpu_millicores",
 		obj: valid(func(r *ateworkerpb.RunWorkloadRequest) {
-			r.Resources = &ateworkerpb.Resources{Limits: &ateworkerpb.ResourceList{CpuMillicores: -1}}
+			r.Resources = &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: -1}}
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "cpu_millicores past atelet's bound",
 		obj: valid(func(r *ateworkerpb.RunWorkloadRequest) {
-			r.Resources = &ateworkerpb.Resources{Limits: &ateworkerpb.ResourceList{CpuMillicores: 1000000}}
+			r.Resources = &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: 1000000}}
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("maximum")},
 	}, {
 		name: "negative memory_bytes",
 		obj: valid(func(r *ateworkerpb.RunWorkloadRequest) {
-			r.Resources = &ateworkerpb.Resources{Limits: &ateworkerpb.ResourceList{MemoryBytes: -1}}
+			r.Resources = &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: -1}}
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "memory_bytes"), nil, "").WithOrigin("minimum")},
 	}, {
@@ -596,7 +596,7 @@ func validRestoreWorkloadRequest(mutate ...func(*ateworkerpb.RestoreWorkloadRequ
 		RuntimeAssetPaths:     map[string]string{"kata-kernel": "/opt/kernel"},
 		Fidelity:              ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 		EgressGateway:         &ateworkerpb.EgressGateway{Address: "gateway:443"},
-		Resources:             &ateworkerpb.Resources{Limits: &ateworkerpb.ResourceList{CpuMillicores: 1500, MemoryBytes: 1 << 30}},
+		Resources:             &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: 1500, MemoryBytes: 1 << 30}},
 		ActorDirs:             fullActorDirs(),
 	}
 	for _, m := range mutate {
@@ -651,13 +651,13 @@ func TestValidateRestoreWorkloadRequest(t *testing.T) {
 	}, {
 		name: "negative cpu_millicores",
 		obj: valid(func(r *ateworkerpb.RestoreWorkloadRequest) {
-			r.Resources = &ateworkerpb.Resources{Limits: &ateworkerpb.ResourceList{CpuMillicores: -1}}
+			r.Resources = &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: -1}}
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "cpu_millicores past atelet's bound",
 		obj: valid(func(r *ateworkerpb.RestoreWorkloadRequest) {
-			r.Resources = &ateworkerpb.Resources{Limits: &ateworkerpb.ResourceList{CpuMillicores: 1000000}}
+			r.Resources = &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: 1000000}}
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("maximum")},
 	}, {

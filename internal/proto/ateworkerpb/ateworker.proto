@@ -240,7 +240,7 @@ message RunWorkloadRequest {
   // runtime default (unlimited for gVisor, the worker's own default for the micro-VM).
   //
   // +k8s:optional
-  Resources resources = 10;
+  ResourceRequirements resources = 10;
   // +k8s:required
   ActorDirs actor_dirs = 12;
 }
@@ -346,19 +346,19 @@ message ContainerSpec {
   // resources are the container's own declared limits, if any.
   //
   // +k8s:optional
-  Resources resources = 4;
+  ResourceRequirements resources = 4;
 }
 
-// Resources mirrors atelet's Resources.
-message Resources {
+// ResourceRequirements mirrors atelet's ResourceRequirements.
+message ResourceRequirements {
   // limits is the maximum amount of compute resources allowed.
   //
   // +k8s:optional
-  ResourceList limits = 1;
+  Resources limits = 1;
 }
 
-// ResourceList is an amount of each compute resource.
-message ResourceList {
+// Resources is an amount of each compute resource.
+message Resources {
   // cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
   //
   // +k8s:optional
@@ -542,7 +542,7 @@ message RestoreWorkloadRequest {
   // these are ignored. Zero means "unset": keep the runtime default.
   //
   // +k8s:optional
-  Resources resources = 11;
+  ResourceRequirements resources = 11;
   // +k8s:required
   ActorDirs actor_dirs = 13;
 

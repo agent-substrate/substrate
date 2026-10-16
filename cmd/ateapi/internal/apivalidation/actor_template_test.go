@@ -173,7 +173,7 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 	}, {
 		"empty resources",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Resources = &ateapipb.Resources{}
+			tmpl.Resources = &ateapipb.ResourceRequirements{}
 		})},
 		field.ErrorList{
 			field.Required(field.NewPath("actor_template", "resources", "limits", "cpu_millicores"), ""),
@@ -867,25 +867,25 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "negative cpu",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: -1}}
+			tmpl.Containers[0].Resources = &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: -1}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "negative memory",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: &ateapipb.ResourceList{MemoryBytes: -1}}
+			tmpl.Containers[0].Resources = &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{MemoryBytes: -1}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "limits", "memory_bytes"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "cpu above maximum",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: 1000000}}
+			tmpl.Containers[0].Resources = &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 1000000}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("maximum")},
 	}, {
 		name: "template-level resources validated too",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Resources = &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: 1000, MemoryBytes: -1}}
+			tmpl.Resources = &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 1000, MemoryBytes: -1}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "memory_bytes"), nil, "").WithOrigin("minimum")},
 	}}

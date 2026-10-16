@@ -45,7 +45,7 @@ type SandboxSize struct {
 // FromLimits builds a SandboxSize from an actor's declared limits as carried
 // on the worker RPCs. It is runtime-agnostic; both ateworker-gvisor and
 // ateworker-microvm call it. Negative values are clamped to zero ("unset").
-func FromLimits(l *ateworkerpb.ResourceList) SandboxSize {
+func FromLimits(l *ateworkerpb.Resources) SandboxSize {
 	return SandboxSize{MilliCPU: max(l.GetCpuMillicores(), 0), MemoryBytes: max(l.GetMemoryBytes(), 0)}
 }
 

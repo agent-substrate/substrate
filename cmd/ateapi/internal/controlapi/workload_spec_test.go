@@ -538,28 +538,28 @@ func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
 func TestToAteletResources(t *testing.T) {
 	tests := []struct {
 		name string
-		in   *ateapipb.Resources
-		want *ateletpb.Resources
+		in   *ateapipb.ResourceRequirements
+		want *ateletpb.ResourceRequirements
 	}{{
 		name: "nil resources",
 		in:   nil,
 		want: nil,
 	}, {
 		name: "empty resources",
-		in:   &ateapipb.Resources{},
+		in:   &ateapipb.ResourceRequirements{},
 		want: nil,
 	}, {
 		name: "memory only",
-		in:   &ateapipb.Resources{Limits: &ateapipb.ResourceList{MemoryBytes: 256 << 20}},
-		want: &ateletpb.Resources{Limits: &ateletpb.ResourceList{MemoryBytes: 268435456}},
+		in:   &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{MemoryBytes: 256 << 20}},
+		want: &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: 268435456}},
 	}, {
 		name: "cpu only",
-		in:   &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: 200}},
-		want: &ateletpb.Resources{Limits: &ateletpb.ResourceList{CpuMillicores: 200}},
+		in:   &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 200}},
+		want: &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: 200}},
 	}, {
 		name: "both",
-		in:   &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: 1000, MemoryBytes: 1 << 30}},
-		want: &ateletpb.Resources{Limits: &ateletpb.ResourceList{MemoryBytes: 1073741824, CpuMillicores: 1000}},
+		in:   &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 1000, MemoryBytes: 1 << 30}},
+		want: &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: 1073741824, CpuMillicores: 1000}},
 	}}
 
 	for _, tc := range tests {
@@ -589,7 +589,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
 			{
 				Name:      "limited",
 				Image:     "main",
-				Resources: &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: 200, MemoryBytes: 256 << 20}},
+				Resources: &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 200, MemoryBytes: 256 << 20}},
 			},
 			{Name: "unlimited", Image: "main"},
 		},

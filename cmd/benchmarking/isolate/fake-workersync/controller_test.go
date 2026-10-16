@@ -415,7 +415,7 @@ func poolNames(name string, n int) []string {
 
 func wantCapacity(actors int32, cpu, mem string) *ateapipb.WorkerResources {
 	c, m := resource.MustParse(cpu), resource.MustParse(mem)
-	return &ateapipb.WorkerResources{Actors: actors, Resources: &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: c.MilliValue(), MemoryBytes: m.Value()}}}
+	return &ateapipb.WorkerResources{Actors: actors, Resources: &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: c.MilliValue(), MemoryBytes: m.Value()}}}
 }
 
 func TestReconcileHonorsReplicasAndLimits(t *testing.T) {

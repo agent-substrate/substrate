@@ -50,7 +50,7 @@ func report() *ateapipb.RegisterWorkerRequest {
 		Worker: &ateapipb.ObjectRef{Name: "fake-r1-c52b9bd3-0"},
 		Capacity: &ateapipb.WorkerResources{
 			Actors:    1000,
-			Resources: &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: 64000, MemoryBytes: 256 << 30}},
+			Resources: &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 64000, MemoryBytes: 256 << 30}},
 		},
 	}
 }

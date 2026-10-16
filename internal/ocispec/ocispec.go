@@ -60,7 +60,7 @@ const (
 // ociResources maps the resolved limits onto the OCI spec's linux.resources.
 // Returns nil when nothing is set, so the spec carries no linux.resources at
 // all for a container that declares no limits.
-func ociResources(r *ateworkerpb.Resources) *specs.LinuxResources {
+func ociResources(r *ateworkerpb.ResourceRequirements) *specs.LinuxResources {
 	l := r.GetLimits()
 	if l.GetMemoryBytes() <= 0 && l.GetCpuMillicores() <= 0 {
 		return nil

@@ -408,7 +408,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 			SecurityContext: &ateletpb.SecurityContext{
 				Capabilities: &ateletpb.Capabilities{Add: []string{"NET_ADMIN"}, Drop: []string{"KILL"}},
 			},
-			Resources: &ateletpb.Resources{Limits: &ateletpb.ResourceList{MemoryBytes: 1 << 30, CpuMillicores: 500}},
+			Resources: &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: 1 << 30, CpuMillicores: 500}},
 		}},
 	}
 
@@ -421,7 +421,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 		Args:         []string{"/bin/app", "serve"},
 		Env:          []string{"GREETING=hello", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 		Capabilities: []string{"CAP_AUDIT_WRITE", "CAP_NET_ADMIN", "CAP_NET_BIND_SERVICE"},
-		Resources:    &ateworkerpb.Resources{Limits: &ateworkerpb.ResourceList{MemoryBytes: 1 << 30, CpuMillicores: 500}},
+		Resources:    &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: 1 << 30, CpuMillicores: 500}},
 	}}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("prepareOCIBundles container specs mismatch (-want +got):\n%s", diff)

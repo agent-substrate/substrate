@@ -355,7 +355,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 			Worker: workerRef(apiWorkerName),
 			Capacity: &ateapipb.WorkerResources{
 				Actors:    10,
-				Resources: &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: 2000, MemoryBytes: 4 << 30}},
+				Resources: &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 2000, MemoryBytes: 4 << 30}},
 			},
 			DefaultRuntime: validRuntime(),
 		}

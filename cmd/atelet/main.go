@@ -2028,13 +2028,13 @@ func buildWorkerWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*atew
 	return out, nil
 }
 
-func toAteworkerResources(r *ateletpb.Resources) *ateworkerpb.Resources {
+func toAteworkerResources(r *ateletpb.ResourceRequirements) *ateworkerpb.ResourceRequirements {
 	if r == nil {
 		return nil
 	}
-	out := &ateworkerpb.Resources{}
+	out := &ateworkerpb.ResourceRequirements{}
 	if l := r.GetLimits(); l != nil {
-		out.Limits = &ateworkerpb.ResourceList{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}
+		out.Limits = &ateworkerpb.Resources{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}
 	}
 	return out
 }

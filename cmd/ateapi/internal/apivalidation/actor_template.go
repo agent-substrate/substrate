@@ -83,7 +83,7 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 
 // ValidateCustom_ActorTemplate_Resources requires both a cpu and a memory
 // limit, which the scheduler books against worker capacity.
-func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Resources) field.ErrorList {
+func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ResourceRequirements) field.ErrorList {
 	var errs field.ErrorList
 	if value.GetLimits().GetCpuMillicores() == 0 {
 		errs = append(errs, field.Required(fldPath.Child("limits", "cpu_millicores"), ""))

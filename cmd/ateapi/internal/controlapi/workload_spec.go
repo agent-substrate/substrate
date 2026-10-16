@@ -24,12 +24,12 @@ import (
 // toAteletResources copies declared limits into atelet's form. Returns nil
 // when no limits are declared, so the OCI spec stays untouched for templates
 // that do not use them.
-func toAteletResources(r *ateapipb.Resources) *ateletpb.Resources {
+func toAteletResources(r *ateapipb.ResourceRequirements) *ateletpb.ResourceRequirements {
 	l := r.GetLimits()
 	if l.GetMemoryBytes() == 0 && l.GetCpuMillicores() == 0 {
 		return nil
 	}
-	return &ateletpb.Resources{Limits: &ateletpb.ResourceList{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}}
+	return &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}}
 }
 
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;

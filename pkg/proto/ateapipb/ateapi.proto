@@ -1168,21 +1168,22 @@ message ActorTemplate {
   //
   // +k8s:required
   // +k8s:customValidation # cpu and memory limits are both set
-  Resources resources = 6;
+  ResourceRequirements resources = 6;
 
   // +k8s:optional
   ActorTemplateStatus status = 7;
 }
 
-message Resources {
+// ResourceRequirements are the compute resources a workload may use.
+message ResourceRequirements {
   // limits is the maximum amount of compute resources allowed.
   //
   // +k8s:optional
-  ResourceList limits = 1;
+  Resources limits = 1;
 }
 
-// ResourceList is an amount of each compute resource.
-message ResourceList {
+// Resources is an amount of each compute resource.
+message Resources {
   // cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
   //
   // +k8s:optional
@@ -1345,7 +1346,7 @@ message Container {
   // actor's sandbox. A limit of 0 leaves that resource unlimited.
   //
   // +k8s:optional
-  Resources resources = 9;
+  ResourceRequirements resources = 9;
 }
 
 // SecurityContext holds security settings for a container's process,
@@ -2491,7 +2492,7 @@ message WorkerResources {
   // Resources are compared against the Actor's resources for placement.
   //
   // +k8s:optional
-  Resources resources = 1;
+  ResourceRequirements resources = 1;
 
   // A count of Actors.  Workers can use this to limit the number of Actors
   // that can be placed on them, constraining the costs of other things that
@@ -2534,7 +2535,7 @@ message ActorAssignment {
   // The resources allocated to the Actor when it was assigned.
   //
   // +k8s:optional
-  Resources resources = 4;
+  ResourceRequirements resources = 4;
 
   // worker_epoch is the Worker's epoch when the Actor was bound.
   //

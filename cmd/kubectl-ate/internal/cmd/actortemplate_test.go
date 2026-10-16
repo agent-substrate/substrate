@@ -80,7 +80,7 @@ func TestActorTemplateFromManifest(t *testing.T) {
 			},
 			VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/home/counter"}},
 		}},
-		Resources: &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: 1000, MemoryBytes: 512 << 20}},
+		Resources: &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 1000, MemoryBytes: 512 << 20}},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			StorageLocation:   "gs://ate-snapshots/ate-demo-counter/",

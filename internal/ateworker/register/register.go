@@ -107,11 +107,11 @@ func buildRequest(capacity *ateletpb.WorkerResources, sandboxClass string, f *sa
 
 // cpuMemory is the Resources for those two dimensions; nil when both are
 // zero.
-func cpuMemory(cpuMilli, memoryBytes int64) *ateletpb.Resources {
+func cpuMemory(cpuMilli, memoryBytes int64) *ateletpb.ResourceRequirements {
 	if cpuMilli == 0 && memoryBytes == 0 {
 		return nil
 	}
-	return &ateletpb.Resources{Limits: &ateletpb.ResourceList{CpuMillicores: cpuMilli, MemoryBytes: memoryBytes}}
+	return &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: cpuMilli, MemoryBytes: memoryBytes}}
 }
 
 func readLimit(path string) int64 {

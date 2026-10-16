@@ -284,8 +284,8 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 			SandboxClass:    "gvisor",
 			Status: &ateapipb.WorkerStatus{
 				State:     ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-				Capacity:  &ateapipb.WorkerResources{Actors: 4, Resources: &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: 2000, MemoryBytes: 4 << 30}}},
-				Allocated: &ateapipb.WorkerResources{Actors: 1, Resources: &ateapipb.Resources{Limits: &ateapipb.ResourceList{CpuMillicores: 500, MemoryBytes: 1 << 30}}},
+				Capacity:  &ateapipb.WorkerResources{Actors: 4, Resources: &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 2000, MemoryBytes: 4 << 30}}},
+				Allocated: &ateapipb.WorkerResources{Actors: 1, Resources: &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{CpuMillicores: 500, MemoryBytes: 1 << 30}}},
 			},
 		},
 	}

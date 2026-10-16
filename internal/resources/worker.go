@@ -21,7 +21,7 @@ import (
 // AddToAllocated adjusts allocation by an assignment; sign is 1 or -1.
 // It returns nil when allocation reaches zero.
 func AddToAllocated(total *ateapipb.WorkerResources, assignment *ateapipb.ActorAssignment, sign int64) *ateapipb.WorkerResources {
-	var held *ateapipb.Resources
+	var held *ateapipb.ResourceRequirements
 	if sign > 0 {
 		held = Add(total.GetResources(), assignment.GetResources())
 	} else {
@@ -42,7 +42,7 @@ func SumAllocated(assignments []*ateapipb.ActorAssignment) *ateapipb.WorkerResou
 	if len(assignments) == 0 {
 		return nil
 	}
-	var total *ateapipb.Resources
+	var total *ateapipb.ResourceRequirements
 	for _, assignment := range assignments {
 		total = Add(total, assignment.GetResources())
 	}

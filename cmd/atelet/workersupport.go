@@ -148,9 +148,9 @@ func toWorkerResources(in *ateletpb.WorkerResources) *ateapipb.WorkerResources {
 	}
 	out := &ateapipb.WorkerResources{Actors: in.GetActors()}
 	if r := in.GetResources(); r != nil {
-		out.Resources = &ateapipb.Resources{}
+		out.Resources = &ateapipb.ResourceRequirements{}
 		if l := r.GetLimits(); l != nil {
-			out.Resources.Limits = &ateapipb.ResourceList{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}
+			out.Resources.Limits = &ateapipb.Resources{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}
 		}
 	}
 	return out

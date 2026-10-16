@@ -154,7 +154,7 @@ message WorkerResources {
   // Resources are compared against actors' resources for placement.
   //
   // +k8s:optional
-  Resources resources = 1;
+  ResourceRequirements resources = 1;
 
   // A count of Actors. Workers can use this to limit the number of Actors
   // that can be placed on them, constraining costs not captured in the
@@ -165,15 +165,16 @@ message WorkerResources {
   int32 actors = 2;
 }
 
-message Resources {
+// ResourceRequirements are the compute resources a workload may use.
+message ResourceRequirements {
   // limits is the maximum amount of compute resources allowed.
   //
   // +k8s:optional
-  ResourceList limits = 1;
+  Resources limits = 1;
 }
 
-// ResourceList is an amount of each compute resource.
-message ResourceList {
+// Resources is an amount of each compute resource.
+message Resources {
   // cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
   //
   // +k8s:optional
@@ -471,7 +472,7 @@ message RunRequest {
   // whole host or worker pod). A zero limit keeps the runtime default.
   //
   // +k8s:optional
-  Resources resources = 10;
+  ResourceRequirements resources = 10;
 
   // The runtime the assigned worker runs this actor under, from
   // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
@@ -724,7 +725,7 @@ message Container {
   // ActorTemplate. Unset means no limits.
   //
   // +k8s:optional
-  Resources resources = 9;
+  ResourceRequirements resources = 9;
 }
 
 // SecurityContext holds security settings for a container's process.
@@ -1065,7 +1066,7 @@ message RestoreRequest {
   // means "unset": keep the runtime default.
   //
   // +k8s:optional
-  Resources resources = 10;
+  ResourceRequirements resources = 10;
 
   // The runtime the assigned worker restores this actor under, from
   // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and

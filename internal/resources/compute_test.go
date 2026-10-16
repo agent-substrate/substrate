@@ -36,8 +36,8 @@ func TestAddAndSub(t *testing.T) {
 func TestCovers(t *testing.T) {
 	tests := []struct {
 		name string
-		have *ateapipb.Resources
-		want *ateapipb.Resources
+		have *ateapipb.ResourceRequirements
+		want *ateapipb.ResourceRequirements
 		ok   bool
 	}{
 		{

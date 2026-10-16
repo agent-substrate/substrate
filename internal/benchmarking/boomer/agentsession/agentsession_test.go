@@ -591,7 +591,7 @@ func (f *fakeControlClient) GetActorTemplate(ctx context.Context, in *ateapipb.G
 	f.record(ctx, "GetActorTemplate")
 	tmpl := &ateapipb.ActorTemplate{}
 	if f.templateMemory != 0 {
-		tmpl.Resources = &ateapipb.Resources{Limits: &ateapipb.ResourceList{MemoryBytes: f.templateMemory}}
+		tmpl.Resources = &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{MemoryBytes: f.templateMemory}}
 	}
 	return tmpl, nil
 }
