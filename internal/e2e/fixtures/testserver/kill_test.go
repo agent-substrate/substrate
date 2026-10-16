@@ -19,6 +19,8 @@ package main
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -53,5 +55,28 @@ func TestKillMatchingSkipsSelf(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("killed %d, want 0", n)
+	}
+}
+
+func TestKillMatchingCountsAProcessAlreadyGone(t *testing.T) {
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	// a process listed but reaped by the time it is killed
+	proc := t.TempDir()
+	dir := filepath.Join(proc, strconv.Itoa(cmd.Process.Pid))
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte("virtiofsd\x00actor-uid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n, err := killMatching(proc, "actor-uid", os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("killed %d, want 1", n)
 	}
 }

@@ -15,6 +15,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -65,7 +66,9 @@ func killMatching(procDir, contains string, self int) (int, error) {
 		if err != nil || !strings.Contains(string(cmdline), contains) {
 			continue
 		}
-		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		// already gone counts: a gofer or virtiofsd can exit on its own once
+		// the process it serves is killed
+		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 			return killed, fmt.Errorf("killing %d: %w", pid, err)
 		}
 		killed++
