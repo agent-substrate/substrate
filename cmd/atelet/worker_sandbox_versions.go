@@ -64,6 +64,13 @@ import (
 // The same failures on a restorable version leave it out of the file instead.
 var errPermanent = errors.New("permanent failure")
 
+// errIncomplete marks a sync that wrote the worker's file with the default
+// version and the restorable versions that resolved, while at least one
+// restorable version had a transient failure. finish requeues the pod
+// without the syncMaxRetries cap so the remaining restorable versions are
+// added once the transient failure clears.
+var errIncomplete = errors.New("incomplete sandbox runtimes")
+
 // sandboxPlan is what one worker's sandbox runtimes file is built from.
 type sandboxPlan struct {
 	config       string
@@ -184,15 +191,17 @@ func recordForArch(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConf
 
 // buildFile returns the file content naming the runtimes of the versions in
 // plan. A version whose runtime hash equals an earlier one's is left out, so
-// the file lists each runtime once. A restorable version whose attributes
-// cannot be built is left out when the failure is permanent; the default
-// version's failure, or a transient one, fails the sync, which leaves the
-// existing file in place until a retry succeeds.
+// the file lists each runtime once. The default version's failure fails the
+// sync, which leaves the existing file in place until a retry succeeds. A
+// restorable version whose attributes cannot be built is left out; when the
+// failure is transient the file is returned with an error wrapping
+// errIncomplete, so the caller writes the runtimes that resolved right away
+// and retries for the rest.
 //
 // TODO: write the file as soon as the default version's attributes are known
-// and add restorable runtimes on the retry. On a fresh node the first worker
-// cannot register until every restorable version's runsc has been fetched
-// and probed, serially, and one transient fetch failure defers it further.
+// and add restorable runtimes on a later pass. On a fresh node the first
+// worker cannot register until every restorable version's runsc has been
+// fetched and probed, serially.
 //
 // Listing a runtime does not promise its assets are on the node: probing
 // fetches a gVisor version's runsc the first time this atelet sees it, but
@@ -202,6 +211,7 @@ func recordForArch(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConf
 func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan) (*sandboxruntimes.File, error) {
 	out := &sandboxruntimes.File{}
 	seen := make(map[string]bool, len(plan.versions))
+	var incomplete error
 	for _, v := range plan.versions {
 		h, err := versionRuntimeHash(v.rec)
 		if err == nil && seen[h] {
@@ -213,12 +223,17 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan) 
 		}
 		if err != nil {
 			err = fmt.Errorf("SandboxConfig %q, version %q: %w", plan.config, v.name, err)
-			if v.isDefault || !errors.Is(err, errPermanent) {
+			if v.isDefault {
 				// Without the default no worker of the pool could start
-				// actors on this node; a transient failure is retried whole.
+				// actors on this node.
 				return nil, err
 			}
-			slog.WarnContext(ctx, "Leaving a sandbox version out of the worker sandbox runtimes file", slog.Any("err", err))
+			if errors.Is(err, errPermanent) {
+				slog.WarnContext(ctx, "Leaving a sandbox version out of the worker sandbox runtimes file", slog.Any("err", err))
+			} else {
+				// Logged once by finish, with every version this names.
+				incomplete = errors.Join(incomplete, err)
+			}
 			continue
 		}
 		seen[h] = true
@@ -227,6 +242,9 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan) 
 		} else {
 			out.RestorableRuntimes = append(out.RestorableRuntimes, attrs)
 		}
+	}
+	if incomplete != nil {
+		return out, fmt.Errorf("%w: %w", errIncomplete, incomplete)
 	}
 	return out, nil
 }
@@ -267,6 +285,8 @@ type cpuIdentity struct {
 // hostCPUIdentity returns the host CPU's vendor and model, probing them the
 // first time. A failed probe is tried again on the next sync.
 func (s *workerSandboxSyncer) hostCPUIdentity() (vendor, model string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.hostCPU == nil {
 		if vendor, model, err = s.probeCPUIdentity(); err != nil {
 			return "", "", err
@@ -285,12 +305,14 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 		return "", fmt.Errorf("%w: gvisor version has no %q or %q asset", errPermanent, gvisorAssetName, runscAssetName)
 	}
 	digest := rec.Assets[asset].SHA256
-	if mask, ok := s.cpuFeatures[digest]; ok {
+	s.mu.Lock()
+	mask, ok := s.cpuFeatures[digest]
+	s.mu.Unlock()
+	if ok {
 		return mask, nil
 	}
-	// The queue has one worker, so a download that hangs would block every
-	// pod on the node; prewarmTimeout bounds the same fetch for the same
-	// reason.
+	// A download that hangs would hold a sync worker; prewarmTimeout bounds
+	// the fetch for the same reason it bounds prewarming.
 	ctx, cancel := context.WithTimeout(ctx, prewarmTimeout)
 	defer cancel()
 	paths, err := s.assets.ensureSandboxAssets(ctx, rec)
@@ -301,11 +323,13 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 	if err != nil {
 		return "", err
 	}
-	mask, err := hardware.EncodeCPUFeatures(runtime.GOARCH, names)
+	mask, err = hardware.EncodeCPUFeatures(runtime.GOARCH, names)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", errPermanent, err)
 	}
+	s.mu.Lock()
 	s.cpuFeatures[digest] = mask
+	s.mu.Unlock()
 	return mask, nil
 }
 
@@ -321,8 +345,8 @@ func runscAssetOf(rec *sandboxAssetsRecord) (string, bool) {
 }
 
 // cpuFeaturesTimeout bounds one `runsc cpu-features` run, which takes
-// milliseconds. The queue has one worker, so a runsc that hangs would block
-// every pod on the node. A var so tests can shorten it.
+// milliseconds. A runsc that hangs would hold a sync worker. A var so tests
+// can shorten it.
 var cpuFeaturesTimeout = 30 * time.Second
 
 // runRunscCPUFeatures executes `<runscPath> cpu-features` and returns the
@@ -393,16 +417,22 @@ func runtimeHash(rec *sandboxAssetsRecord, pauseDigest string) string {
 //   - plan: resolve the pool's config and its versions for this node
 //   - build: hash and probe each version's runtime
 //   - write: replace the file if its content changed
+//
+// A file missing restorable runtimes for a transient reason is written all
+// the same, and the errIncomplete from build is returned so finish retries.
 func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) error {
 	plan, err := s.resolver.plan(pod)
 	if err != nil {
 		return err
 	}
-	want, err := s.buildFile(ctx, plan)
-	if err != nil {
+	want, buildErr := s.buildFile(ctx, plan)
+	if buildErr != nil && !errors.Is(buildErr, errIncomplete) {
+		return buildErr
+	}
+	if err := s.write(ctx, string(pod.UID), plan.config, want); err != nil {
 		return err
 	}
-	return s.write(ctx, string(pod.UID), plan.config, want)
+	return buildErr
 }
 
 func (s *workerSandboxSyncer) write(ctx context.Context, uid, config string, want *sandboxruntimes.File) error {

@@ -312,6 +312,89 @@ func TestReconcilerRunBackoff(t *testing.T) {
 	}
 }
 
+// A change signal that lands while run is backing off after a failed
+// registration must not cut the backoff short: with ateapi down, every
+// worker on the node would otherwise retry on every signal in lockstep. The
+// signal is still acted on once the backoff has elapsed.
+func TestReconcilerIgnoresChangesDuringBackoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	file := &sandboxruntimes.File{
+		DefaultRuntime: sandboxruntimes.Attributes{hardware.AttrSandboxRuntimeHash: "sha256:v1"},
+	}
+	changes := make(chan struct{}, 1)
+	// started reports each registration attempt as it begins; release lets
+	// the second one return.
+	started := make(chan int, 4)
+	release := make(chan struct{})
+	attempts := 0
+	r := newReconciler(
+		ReportConfig{SandboxClass: "gvisor", RuntimesFile: "sandbox-runtimes.json"},
+		&ateletpb.WorkerResources{Actors: testActors},
+		func() (*sandboxruntimes.File, error) { return file, nil },
+		func(context.Context, *ateletpb.RegisterWorkerRequest) error {
+			attempts++
+			started <- attempts
+			if attempts == 1 {
+				// The change is pending before run reaches its select.
+				changes <- struct{}{}
+				return errors.New("transient failure")
+			}
+			<-release
+			return nil
+		},
+	)
+	// Unbuffered, so a send succeeds only while run is waiting on the timer.
+	backoffTimer := make(chan time.Time)
+	armed := make(chan time.Duration, 4)
+	r.after = func(d time.Duration) <-chan time.Time {
+		armed <- d
+		if d == r.initialBackoff {
+			return backoffTimer
+		}
+		return make(chan time.Time) // the resync timer never fires here
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- r.run(ctx, changes)
+	}()
+
+	if n := <-started; n != 1 {
+		t.Fatalf("first attempt = %d, want 1", n)
+	}
+	if d := <-armed; d != r.initialBackoff {
+		t.Fatalf("armed %v after the failed attempt, want the initial backoff %v", d, r.initialBackoff)
+	}
+	// Were run listening to changes during the backoff, it would be inside
+	// the second attempt now rather than receiving the timer.
+	select {
+	case n := <-started:
+		t.Fatalf("attempt %d started before the backoff elapsed: the change signal bypassed the backoff", n)
+	case backoffTimer <- time.Now():
+	}
+	if n := <-started; n != 2 {
+		t.Fatalf("attempt after the backoff = %d, want 2", n)
+	}
+	close(release)
+
+	// The pending change is consumed once the retry succeeds; the file it
+	// announces is what was just registered, so no third attempt follows.
+	for _, want := range []time.Duration{r.resync, r.resync} {
+		if d := <-armed; d != want {
+			t.Fatalf("armed %v after a successful sync, want the resync interval %v", d, want)
+		}
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("run() = %v, want context.Canceled", err)
+	}
+	if attempts != 2 {
+		t.Errorf("attempts = %d, want 2", attempts)
+	}
+}
+
 func TestReconcilerRunResync(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -362,10 +445,10 @@ func TestWatchFileFallbackToPolling(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Point WatchFile at a path whose parent directory does not exist so w.Add
+	// Point WatchFilePath at a path whose parent directory does not exist so w.Add
 	// fails naturally and triggers the polling fallback.
 	missingPath := filepath.Join(t.TempDir(), "missing-parent", nodepath.SandboxRuntimesFileName)
-	changes := WatchFile(ctx, missingPath)
+	changes := WatchFilePath(ctx, missingPath)
 
 	select {
 	case _, ok := <-changes:
@@ -455,13 +538,13 @@ func TestReconcilerRunWatchesFile(t *testing.T) {
 		},
 	)
 
-	changes := WatchFile(ctx, path)
+	changes := WatchFilePath(ctx, path)
 	done := make(chan error, 1)
 	go func() {
 		done <- r.run(ctx, changes)
 	}()
 
-	// Write the file after WatchFile has started, as happens when a worker comes up
+	// Write the file after WatchFilePath has started, as happens when a worker comes up
 	// before atelet has reconciled the pod.
 	v1 := &sandboxruntimes.File{
 		DefaultRuntime: sandboxruntimes.Attributes{

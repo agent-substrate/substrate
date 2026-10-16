@@ -508,7 +508,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	if assignedWorker == nil {
 		pickedWorker, err := w.scheduler.Schedule(ctx, constraints)
 		if errors.Is(err, scheduling.ErrNoCapacity) && relaxable {
-			constraints.RequiredRuntime = nil
+			constraints.RequiredRuntime = hardware.Requirement{}
 			pickedWorker, err = w.scheduler.Schedule(ctx, constraints)
 		}
 		if err != nil {
@@ -521,10 +521,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 
 		assignedWorker = pickedWorker
 		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
-	} else if relaxable && !hardware.WorkerMatches(assignedWorker.GetStatus(), snapRuntime) {
+	} else if relaxable && !snapRuntime.WorkerMatches(assignedWorker.GetStatus()) {
 		// The stale claim only passed the relaxed check, so bind under it:
 		// admit asks the same question again under the row lock.
-		constraints.RequiredRuntime = nil
+		constraints.RequiredRuntime = hardware.Requirement{}
 	}
 
 	assignment := &ateapipb.ActorAssignment{
@@ -601,7 +601,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 // attempt re-runs scheduling.
 var errWorkerFilledUp = errors.New("picked worker no longer has room")
 
-func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime *ateapipb.SandboxRuntime) *ateapipb.WorkerAssignment {
+func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime hardware.Requirement) *ateapipb.WorkerAssignment {
 	return &ateapipb.WorkerAssignment{
 		Worker:          &ateapipb.ObjectRef{Name: w.GetMetadata().GetName()},
 		WorkerNamespace: w.GetWorkerNamespace(),
@@ -622,7 +622,7 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime *ateapipb.SandboxRunti
 		// matched version once SandboxConfig can name them, or treat a
 		// restorable-only match as incompatible until it can. Latent for now:
 		// worker reports no restorable_runtimes (internal/ateworker/register.go).
-		SandboxRuntime: proto.CloneOf(hardware.RuntimeFor(w.GetStatus(), snapRuntime)),
+		SandboxRuntime: proto.CloneOf(snapRuntime.RuntimeFor(w.GetStatus())),
 	}
 }
 
@@ -659,7 +659,7 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 	}
 	c := scheduling.Constraints{
 		SandboxClass:    tmpl.GetSandboxConfig().GetSandboxClass(),
-		RequiredRuntime: requiredSnapshotRuntime(actor, tmpl),
+		RequiredRuntime: hardware.NewRequirement(requiredSnapshotRuntime(actor, tmpl)),
 		ActorSelector:   labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
 		RequiredNodes:   requiredNodes,
 		Limits:          limits.Proto(),
@@ -704,7 +704,7 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 // fidelity downgrade, and nothing invalidates the checkpoint files if the actor
 // boots elsewhere. Suspending the actor uploads it and lifts the pin.
 func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) bool {
-	if constraints.RequiredRuntime == nil {
+	if constraints.RequiredRuntime.Runtime() == nil {
 		return false
 	}
 	return findLatestLocalSnapshot(actor.GetStatus()) == nil
@@ -714,11 +714,11 @@ func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) 
 // relaxable — satisfies constraints with RequiredRuntime relaxed.
 func (w *ActorWorkflow) appliesWithFallback(worker *ateapipb.Worker, constraints scheduling.Constraints, relaxable bool) bool {
 	relaxed := constraints
-	relaxed.RequiredRuntime = nil
+	relaxed.RequiredRuntime = hardware.Requirement{}
 	if !w.scheduler.Applies(worker, relaxed) {
 		return false
 	}
-	return relaxable || hardware.WorkerMatches(worker.GetStatus(), constraints.RequiredRuntime)
+	return relaxable || constraints.RequiredRuntime.WorkerMatches(worker.GetStatus())
 }
 
 // ensureVolumesAttached attaches the actor's mounted external volumes to the

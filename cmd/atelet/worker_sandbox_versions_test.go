@@ -366,6 +366,14 @@ func TestPlanAndBuild(t *testing.T) {
 		return cfg
 	}
 
+	unsupportedClass := multiVersionConfig()
+	unsupportedClass.Spec.SandboxClass = "unknown"
+
+	noRunscAsset := multiVersionConfig()
+	noRunscAsset.Spec.Versions[3].Assets = map[string]map[string]v1alpha1.AssetFile{
+		runtime.GOARCH: {"other": {URL: "gs://bucket/other", SHA256: "sha-other"}},
+	}
+
 	tests := []struct {
 		name          string
 		cfg           *v1alpha1.SandboxConfig
@@ -402,6 +410,16 @@ func TestPlanAndBuild(t *testing.T) {
 		name: "non-default version pause image not pinned by digest is left out",
 		cfg:  tagged(1),
 		want: onlyDefault,
+	}, {
+		name:          "unsupported sandbox class",
+		cfg:           unsupportedClass,
+		wantErr:       true,
+		wantPermanent: true,
+	}, {
+		name:          "gvisor version has no gvisor or runsc asset",
+		cfg:           noRunscAsset,
+		wantErr:       true,
+		wantPermanent: true,
 	}, {
 		name:    "surfaces an unresolved config",
 		wantErr: true,
@@ -614,8 +632,9 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 			t.Errorf("planAndBuild() on runCPUFeatures error = %v, want non-permanent error", err)
 		}
 
-		// On a restorable version alone it still fails the whole sync, so the
-		// retry adds the version rather than the file settling without it.
+		// On a restorable version alone, buildFile returns the default runtime
+		// alongside errIncomplete so syncPod writes the partial file right away
+		// and requeues for the rest.
 		s = newTestSyncer(t, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
 		s.assets = &fakeAssetFetcher{
 			fn: func(_ context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
@@ -626,8 +645,13 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 			},
 		}
 		s.runCPUFeatures = func(context.Context, string) ([]string, error) { return feats, nil }
-		if _, err := planAndBuild(s, workerPod("pod-a", "pool")); err == nil || errors.Is(err, errPermanent) {
-			t.Errorf("planAndBuild() on a restorable version's fetch error = %v, want non-permanent error", err)
+		got, err := planAndBuild(s, workerPod("pod-a", "pool"))
+		if !errors.Is(err, errIncomplete) || errors.Is(err, errPermanent) {
+			t.Errorf("planAndBuild() on a restorable version's fetch error = %v, want errIncomplete and not errPermanent", err)
+		}
+		want := &sandboxruntimes.File{DefaultRuntime: wantRuntime("v2")}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("planAndBuild() partial file mismatch (-want +got):\n%s", diff)
 		}
 	})
 

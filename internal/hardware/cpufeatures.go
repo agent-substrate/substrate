@@ -189,20 +189,6 @@ func DecodeCPUFeatures(arch, value string) ([]string, error) {
 	return out, nil
 }
 
-// matchesCPUFeatures reports whether every feature in snapVal is in
-// workerVal. A value that is not a canonical mask matches nothing.
-func matchesCPUFeatures(workerVal, snapVal string) bool {
-	w, ok := parseFeatureMask(workerVal)
-	if !ok {
-		return false
-	}
-	s, ok := parseFeatureMask(snapVal)
-	if !ok {
-		return false
-	}
-	return s.subsetOf(w)
-}
-
 // ProbeCPUIdentity reads /proc/cpuinfo for the host CPU's vendor and model:
 // the AttrCPUVendor and AttrCPUModel values of a microVM runtime.
 func ProbeCPUIdentity() (vendor, model string, err error) {

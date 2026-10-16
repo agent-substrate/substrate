@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -2367,7 +2368,7 @@ type relaxingTestScheduler struct {
 }
 
 func (s *relaxingTestScheduler) Schedule(_ context.Context, c scheduling.Constraints) (*ateapipb.Worker, error) {
-	if c.RequiredRuntime != nil {
+	if c.RequiredRuntime.Runtime() != nil {
 		return nil, scheduling.ErrNoCapacity
 	}
 	return s.relaxedWorker, nil
@@ -2683,7 +2684,7 @@ func TestCanRelaxRuntime(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{Snapshots: tc.snapshots}}
-			if got := canRelaxRuntime(actor, scheduling.Constraints{RequiredRuntime: tc.required}); got != tc.want {
+			if got := canRelaxRuntime(actor, scheduling.Constraints{RequiredRuntime: hardware.NewRequirement(tc.required)}); got != tc.want {
 				t.Errorf("canRelaxRuntime = %v, want %v", got, tc.want)
 			}
 		})

@@ -23,12 +23,12 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// watchPollInterval is how often WatchFile signals when fsnotify is
+// watchPollInterval is how often WatchFilePath signals when fsnotify is
 // unavailable (for example, when the node's inotify instance budget is
 // exhausted). A var so tests can shorten it.
 var watchPollInterval = 5 * time.Second
 
-// WatchFile signals on the returned channel whenever the file at path is
+// WatchFilePath signals on the returned channel whenever the file at path is
 // created, written, or replaced, or when the underlying watcher reports an
 // error (such as an event queue overflow) so the caller can re-read the file.
 // It watches path's parent directory, which must exist, so atomic file
@@ -36,10 +36,10 @@ var watchPollInterval = 5 * time.Second
 // exist yet at startup.
 //
 // If fsnotify cannot watch the parent directory (for example, when the host
-// UID's fs.inotify.max_user_instances budget is exhausted), WatchFile logs a
+// UID's fs.inotify.max_user_instances budget is exhausted), WatchFilePath logs a
 // warning and falls back to signaling periodically at watchPollInterval until
 // ctx ends. The returned channel is closed when ctx ends.
-func WatchFile(ctx context.Context, path string) <-chan struct{} {
+func WatchFilePath(ctx context.Context, path string) <-chan struct{} {
 	cleanPath := filepath.Clean(path)
 	changes := make(chan struct{}, 1)
 	w, err := fsnotify.NewWatcher()

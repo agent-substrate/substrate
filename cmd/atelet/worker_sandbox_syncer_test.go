@@ -370,6 +370,8 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		objs []any
 		// existing is written to pod-a's file before processing, when set.
 		existing *sandboxruntimes.File
+		// assets overrides s.assets when set.
+		assets sandboxAssetFetcher
 		// priorRetries is how often pod-a has been retried before.
 		priorRetries int
 		// want is the file afterwards; nil means no file.
@@ -427,12 +429,32 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		objs:         []any{workerPod("pod-a", "pool"), multiVersionConfig()},
 		priorRetries: syncMaxRetries,
 	}, {
+		// A transient failure on a restorable version writes the default
+		// runtime right away and requeues without the syncMaxRetries cap.
+		name: "incomplete restorable version writes partial file and requeues past syncMaxRetries",
+		objs: []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		assets: &fakeAssetFetcher{
+			fn: func(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+				if rec.Assets[gvisorAssetName].SHA256 != "sha-v2" {
+					return nil, errors.New("temporary download failure on restorable version")
+				}
+				return newTestAssetFetcher().ensureSandboxAssets(ctx, rec)
+			},
+		},
+		priorRetries: syncMaxRetries,
+		want:         &sandboxruntimes.File{DefaultRuntime: wantRuntime("v2")},
+		wantDir:      true,
+		wantRetries:  syncMaxRetries + 1,
+	}, {
 		name: "pod of no pool is not retried",
 		objs: []any{workerPod("pod-a", ""), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newTestSyncer(t, tt.objs...)
+			if tt.assets != nil {
+				s.assets = tt.assets
+			}
 			limiter := workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)
 			for range tt.priorRetries {
 				limiter.When("pod-a")

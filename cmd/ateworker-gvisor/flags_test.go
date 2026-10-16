@@ -214,4 +214,17 @@ func TestFlagStoreWatchAndReload(t *testing.T) {
 	if !reflect.DeepEqual(gotAfterBad, wantUpdated) {
 		t.Fatalf("after invalid reload buildArgs(create) = %v, want previous valid config %v", gotAfterBad, wantUpdated)
 	}
+
+	// Reloading when the file content is unchanged (e.g. on a polling tick)
+	// must be a no-op and keep the existing *flagConfig pointer.
+	if err := os.WriteFile(cfgPath, []byte(updatedJSON), 0o600); err != nil {
+		t.Fatalf("failed to rewrite config: %v", err)
+	}
+	waitForReload(t, reloadCh)
+	beforePtr := store.get()
+	store.reload()
+	waitForReload(t, reloadCh)
+	if afterPtr := store.get(); afterPtr != beforePtr {
+		t.Errorf("reload() with unchanged content replaced *flagConfig (%p -> %p), want no-op", beforePtr, afterPtr)
+	}
 }

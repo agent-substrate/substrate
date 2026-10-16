@@ -179,7 +179,7 @@ func Report(ctx context.Context, cfg ReportConfig) error {
 	if err != nil {
 		return fmt.Errorf("register worker: %w", err)
 	}
-	changes := WatchFile(ctx, cfg.RuntimesFile)
+	changes := WatchFilePath(ctx, cfg.RuntimesFile)
 	r := newReconciler(
 		cfg,
 		FromFiles(cfg.Actors),
@@ -227,20 +227,24 @@ func newReconciler(
 
 // run syncs at startup, on every change to the file, with backoff after a
 // transient failure, and periodically at resyncInterval, until ctx ends.
+// Change signals are ignored while backing off so periodic polling or rapid
+// writes cannot bypass the backoff delay when atelet or ateapi is down.
 func (r *reconciler) run(ctx context.Context, changes <-chan struct{}) error {
 	backoff := r.initialBackoff
 	for {
 		wait := r.resync
+		onChange := changes
 		if r.sync(ctx) {
 			wait = backoff
 			backoff = min(backoff*2, r.maxBackoff)
+			onChange = nil
 		} else {
 			backoff = r.initialBackoff
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case _, ok := <-changes:
+		case _, ok := <-onChange:
 			if !ok {
 				changes = nil
 			}

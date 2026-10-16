@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 
 	"github.com/agent-substrate/substrate/internal/ateworker/register"
@@ -126,7 +127,7 @@ func newFlagStore(ctx context.Context, path string) (*flagStore, error) {
 		return nil, err
 	}
 
-	changes := register.WatchFile(ctx, cleanPath)
+	changes := register.WatchFilePath(ctx, cleanPath)
 	store := &flagStore{
 		path: cleanPath,
 		cfg:  cfg,
@@ -173,7 +174,12 @@ func (s *flagStore) reload() {
 	}
 
 	s.mu.Lock()
-	s.cfg = cfg
+	unchanged := reflect.DeepEqual(s.cfg, cfg)
+	if !unchanged {
+		s.cfg = cfg
+	}
 	s.mu.Unlock()
-	slog.Info("Reloaded flags configuration", slog.String("path", s.path))
+	if !unchanged {
+		slog.Info("Reloaded flags configuration", slog.String("path", s.path))
+	}
 }

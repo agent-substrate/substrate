@@ -34,10 +34,11 @@ type Constraints struct {
 	// portable across sandbox classes, so this is never relaxed.
 	SandboxClass string
 
-	// RequiredRuntime, when non-nil, restricts placement to workers whose
-	// DefaultRuntime or RestorableRuntimes can restore a snapshot stamped with
-	// this runtime.
-	RequiredRuntime *ateapipb.SandboxRuntime
+	// RequiredRuntime, when it names a runtime, restricts placement to
+	// workers whose DefaultRuntime or RestorableRuntimes can restore a
+	// snapshot stamped with it. Prepared once per Schedule, since Applies
+	// asks it of every candidate.
+	RequiredRuntime hardware.Requirement
 
 	// TemplateSelector and ActorSelector must both match the worker's labels.
 	TemplateSelector labels.Selector
@@ -232,7 +233,7 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 		return false
 	}
 
-	if !hardware.WorkerMatches(worker.GetStatus(), constraints.RequiredRuntime) {
+	if !constraints.RequiredRuntime.WorkerMatches(worker.GetStatus()) {
 		return false
 	}
 
