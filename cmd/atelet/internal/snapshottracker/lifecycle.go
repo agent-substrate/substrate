@@ -139,23 +139,30 @@ func (t *Tracker) BeginStart(ctx context.Context, actorUID string) (end func(), 
 }
 
 // BeginCheckpoint records that a Checkpoint of the actor is in progress on this
-// node, once any detach in progress has finished, and returns the func to call
-// when the checkpoint ends, whether or not it succeeded. atelet does not
-// detach the actor in between, so a detach cannot delete the local snapshot
-// the checkpoint writes.
+// node, once any detach or earlier hold in progress has finished, and returns
+// the func to call when the checkpoint ends, whether or not it succeeded.
+// atelet does not detach the actor or run a second checkpoint of it in between,
+// so neither can delete or overwrite the local snapshot the checkpoint writes.
 func (t *Tracker) BeginCheckpoint(ctx context.Context, actorUID string) (end func(), err error) {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
-	// Every operation is a detach.
-	a, err := t.waitIdleLocked(ctx, actorUID, nil)
-	if err != nil {
-		return nil, err
+	for {
+		// Every operation is a detach.
+		a, err := t.waitIdleLocked(ctx, actorUID, nil)
+		if err != nil {
+			return nil, err
+		}
+		if a == nil || a.holds == 0 {
+			// Unlike BeginStart, leave DetachAt as it is. Either it is already
+			// zero, because the actor's Run or Restore on this node unscheduled
+			// the detach, or this is a retry of a Checkpoint that already
+			// committed its snapshot, whose detach stays scheduled.
+			return t.holdLocked(actorUID, a), nil
+		}
+		if err := t.waitOpLocked(ctx, actorUID, a.holdDone); err != nil {
+			return nil, err
+		}
 	}
-	// Unlike BeginStart, leave DetachAt as it is. Either it is already
-	// zero, because the actor's Run or Restore on this node unscheduled the
-	// detach, or this is a retry of a Checkpoint that already committed its
-	// snapshot, whose detach stays scheduled.
-	return t.holdLocked(actorUID, a), nil
 }
 
 // holdLocked counts a Run, Restore, or Checkpoint of the actor in progress on
@@ -168,11 +175,18 @@ func (t *Tracker) holdLocked(actorUID string, a *actorSnapshots) (end func()) {
 		a = &actorSnapshots{actorUID: actorUID}
 	}
 	t.addLocked(a)
+	if a.holds == 0 {
+		a.holdDone = make(chan struct{})
+	}
 	a.holds++
 	return func() {
 		t.lock(actorUID)
 		defer t.unlock(actorUID)
 		a.holds--
+		if a.holds == 0 {
+			close(a.holdDone)
+			a.holdDone = nil
+		}
 		if !t.tracksLocked(a) {
 			// Forget (via Terminate) dropped the actor while the Run, Restore,
 			// or Checkpoint was in progress.

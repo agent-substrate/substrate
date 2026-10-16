@@ -82,6 +82,12 @@ type fakeWorker struct {
 	// fidelities records the fidelity each checkpoint or restore arrived
 	// with, by RPC name.
 	fidelities map[string]ateworkerpb.SnapshotFidelity
+	// checkpointCalls counts CheckpointWorkload calls.
+	checkpointCalls atomic.Int32
+	// checkpointStarted, when set, receives once per CheckpointWorkload before
+	// it blocks on checkpointRelease.
+	checkpointStarted chan struct{}
+	checkpointRelease chan struct{}
 }
 
 func (f *fakeWorker) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFidelity) {
@@ -108,6 +114,11 @@ func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkload
 }
 
 func (f *fakeWorker) CheckpointWorkload(_ context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (*ateworkerpb.CheckpointWorkloadResponse, error) {
+	f.checkpointCalls.Add(1)
+	if f.checkpointStarted != nil {
+		f.checkpointStarted <- struct{}{}
+		<-f.checkpointRelease
+	}
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
 	f.recordFidelity("CheckpointWorkload", req.GetFidelity())
 	dir := req.GetActorDirs().GetCheckpointDir()
@@ -255,8 +266,12 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	// Pause: a deferred checkpoint, which leaves the snapshot on this node.
-	resp, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
+	// Pause: a deferred checkpoint, which leaves the snapshot on this node. A
+	// second Checkpoint for the same snapshot arrives while the first is still
+	// inside worker, as a caller-timeout retry does: it must wait for the first
+	// and then find the snapshot committed in the tracker, so worker
+	// checkpoints once.
+	checkpointReq := &ateletpb.CheckpointRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
 		ActorUid:              actorUID,
@@ -266,9 +281,42 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 		Spec:                  spec,
 		Snapshot:              lifecycleSnapshot(actorUID, snapshotName, 1, fidelity),
 		UploadConfig:          deferredUploadConfig(),
-	})
-	if err != nil {
-		t.Fatalf("Checkpoint: %v", err)
+	}
+	type checkpointResult struct {
+		resp *ateletpb.CheckpointResponse
+		err  error
+	}
+	worker.checkpointStarted = make(chan struct{}, 1)
+	worker.checkpointRelease = make(chan struct{})
+	checkpointResults := make(chan checkpointResult, 2)
+	go func() {
+		resp, err := s.Checkpoint(ctx, checkpointReq)
+		checkpointResults <- checkpointResult{resp, err}
+	}()
+	<-worker.checkpointStarted
+	go func() {
+		resp, err := s.Checkpoint(ctx, checkpointReq)
+		checkpointResults <- checkpointResult{resp, err}
+	}()
+	// The retry is queued on the actor's hold; nothing else must reach worker.
+	time.Sleep(50 * time.Millisecond)
+	close(worker.checkpointRelease)
+	for range 2 {
+		res := <-checkpointResults
+		if res.err != nil {
+			t.Fatalf("Checkpoint: %v", res.err)
+		}
+		st := res.resp.GetState()
+		if got := st.GetLatestLocal(); got.GetSnapshot().GetSnapshotUuid() != snapshotName || got.GetLocalCommitTime() == nil {
+			t.Errorf("latest_local = %v, want the pause snapshot with its commit time", got)
+		}
+		if st.GetLatestDurable() != nil {
+			t.Errorf("state = %v, want nothing durable", st)
+		}
+	}
+	worker.checkpointStarted = nil
+	if got := worker.checkpointCalls.Load(); got != 1 {
+		t.Fatalf("worker CheckpointWorkload calls = %d, want 1", got)
 	}
 	snapshotFile := filepath.Join(ateletpath.LocalSnapshotDir(actorUID, snapshotName), "checkpoint.img")
 	if _, err := os.Stat(snapshotFile); err != nil {
@@ -279,12 +327,13 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 	if _, err := os.Stat(filepath.Join(ateletpath.SandboxAssetsDir(actorUID), runscAssetName)); err != nil {
 		t.Errorf("paused actor lost its staged runsc: %v", err)
 	}
-	st := resp.GetState()
-	if got := st.GetLatestLocal(); got.GetSnapshot().GetSnapshotUuid() != snapshotName || got.GetLocalCommitTime() == nil {
-		t.Errorf("latest_local = %v, want the pause snapshot with its commit time", got)
+	// A later retry with the same SnapshotUuid is idempotent too.
+	retryResp, err := s.Checkpoint(ctx, checkpointReq)
+	if err != nil {
+		t.Fatalf("retried Checkpoint: %v", err)
 	}
-	if st.GetLatestDurable() != nil {
-		t.Errorf("state = %v, want nothing durable", st)
+	if got := retryResp.GetState().GetLatestLocal(); got.GetSnapshot().GetSnapshotUuid() != snapshotName || got.GetLocalCommitTime() == nil {
+		t.Errorf("retried latest_local = %v, want the pause snapshot with its commit time", got)
 	}
 
 	// Resume: no Snapshot.Object; atelet must find that local snapshot.
@@ -1271,6 +1320,37 @@ func TestImmediateCheckpointWithoutLocalCopy(t *testing.T) {
 	}
 	if got := a.s.snapshots.State(pluginActorUID); !proto.Equal(got, st) {
 		t.Errorf("tracked state = %v, want %v, as Checkpoint returned", got, st)
+	}
+}
+
+// TestImmediateCheckpointRetryIsIdempotent suspends a running actor, then
+// repeats the same Checkpoint, as a caller-timeout retry does once the first
+// attempt has finished and torn the actor down: the retry finds the snapshot
+// committed as durable in the tracker, drives worker no second time, uploads
+// nothing, and reports the same state.
+func TestImmediateCheckpointRetryIsIdempotent(t *testing.T) {
+	a := runPluginActor(t)
+	snap := a.snapshot("suspend-snap-1", 1)
+
+	resp, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+	if err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	// Any upload the retry attempted would fail.
+	a.store.putErr = errors.New("object store unavailable")
+	retryResp, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+	if err != nil {
+		t.Fatalf("retried Checkpoint: %v", err)
+	}
+	if got := a.worker.checkpointCalls.Load(); got != 1 {
+		t.Errorf("worker CheckpointWorkload calls = %d, want 1", got)
+	}
+	if !proto.Equal(retryResp.GetState(), resp.GetState()) {
+		t.Errorf("retried state = %v, want %v, as the first Checkpoint returned", retryResp.GetState(), resp.GetState())
+	}
+	if _, err := os.Stat(ateletpath.CheckpointStateDir(pluginActorUID)); err != nil {
+		t.Errorf("checkpoint-state dir after the retry: stat = %v, want it reset in place", err)
 	}
 }
 

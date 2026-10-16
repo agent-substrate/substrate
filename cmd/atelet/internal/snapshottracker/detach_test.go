@@ -785,3 +785,43 @@ func TestTrackerDetachActsForTheActor(t *testing.T) {
 		}
 	})
 }
+
+// A second BeginCheckpoint for the same actor waits until the first checkpoint
+// ends, and stops waiting if its context ends first.
+func TestTrackerBeginCheckpointSerializesPerActor(t *testing.T) {
+	tr := newIdleTestTracker(t, newFakeSnapshotStore())
+	end1, err := tr.BeginCheckpoint(t.Context(), trackedActorUID)
+	if err != nil {
+		t.Fatalf("first beginCheckpoint: %v", err)
+	}
+
+	canceledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := tr.BeginCheckpoint(canceledCtx, trackedActorUID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("beginCheckpoint with canceled ctx while held = %v, want %v", err, context.Canceled)
+	}
+
+	acquired2 := make(chan func(), 1)
+	go func() {
+		end2, err := tr.BeginCheckpoint(t.Context(), trackedActorUID)
+		if err != nil {
+			t.Errorf("second beginCheckpoint: %v", err)
+			return
+		}
+		acquired2 <- end2
+	}()
+
+	select {
+	case <-acquired2:
+		t.Fatal("second BeginCheckpoint returned before the first ended")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	end1()
+	select {
+	case end2 := <-acquired2:
+		end2()
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for second BeginCheckpoint after first ended")
+	}
+}

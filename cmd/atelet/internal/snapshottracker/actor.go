@@ -166,6 +166,8 @@ type actorSnapshots struct {
 	// progress on this node. While it is nonzero, atelet does not detach the
 	// actor, and the entry stays in memory.
 	holds int
+	// holdDone is closed once holds drops to zero.
+	holdDone chan struct{}
 	// retryAt holds the actor's next background detach back after one failed.
 	// The entry stays in memory while retryAt is set.
 	retryAt time.Time
