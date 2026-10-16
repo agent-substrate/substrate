@@ -318,11 +318,6 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.reconcileCloudSQLProxySidecar(ctx); err != nil {
 		return err
 	}
-	// The environment this run rewrote also feeds ate-idp-server, which the
-	// manifest does not carry.
-	if err := e.annotateAPIServerEnvHash(ctx); err != nil {
-		return err
-	}
 	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), "ate-api-server", e.Cfg.RolloutTimeout)
 }
 

@@ -45,17 +45,8 @@ spec:
       - name: ate-idp-server
         image: ko://go.ate.dev/substrate/cmd/ate-idp-server
         args:
-        - --issuer=$(ACTOR_JWT_ISSUER)
         - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
         - --server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem
-        env:
-        # The value ate-api-server puts in the iss claim, so the two cannot
-        # disagree. ate-setup rolls this Deployment when the ConfigMap changes.
-        - name: ACTOR_JWT_ISSUER
-          valueFrom:
-            configMapKeyRef:
-              name: ate-api-server-envvars
-              key: ATE_API_ACTOR_JWT_ISSUER
         ports:
         - name: https
           containerPort: 8443
@@ -90,8 +81,7 @@ spec:
               signerName: servicedns.podcert.ate.dev/identity
               keyType: ECDSAP256
               credentialBundlePath: credential-bundle.pem
-      # The pool ate-api-server signs with. A projected Secret, unlike a
-      # subPath mount, picks up a rotated pool.
+      # The pool ate-api-server signs with.
       - name: actor-id-jwt-pool
         projected:
           sources:
