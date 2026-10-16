@@ -1265,7 +1265,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 
 	// The sandbox (binaries + pause image) that runs the restored workload
 	// comes from the request, resolved by the control plane from the
-	// ActorTemplate's SandboxConfig. The snapshot manifests only supply the
+	// assigned worker pool's SandboxConfig. The snapshot manifests only supply the
 	// files to restore and the actor identity. Resolved before any on-node
 	// work so an invalid request changes nothing.
 	runtimeRec, err := recordFromRequest(req.GetSandboxAssets())

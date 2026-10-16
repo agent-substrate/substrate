@@ -86,7 +86,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 			return
 		}
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationResume, start, err,
-			lifecycleOpAttrs(actor, actorTemplate, tele.SnapshotKind, tele.WireFidelity)...)
+			lifecycleOpAttrs(actor, tele.SnapshotKind, tele.WireFidelity)...)
 	}()
 
 	// Routed requests call ResumeActor even when the actor is already running.
@@ -319,12 +319,12 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 		return assignedActor, assignedWorker, nil
 	case ctxErr != nil:
 		if attempted {
-			w.recordExhaustedAssignment(ctx, lastAttempt, actorTemplate, ctxErr)
+			w.recordExhaustedAssignment(ctx, lastAttempt, actor, ctxErr)
 		}
 		return nil, nil, err
 	case exhausted:
 		err = apierror.Aborted("concurrent update conflict, please retry: %w", store.ErrVersionConflict)
-		w.recordExhaustedAssignment(ctx, lastAttempt, actorTemplate, err)
+		w.recordExhaustedAssignment(ctx, lastAttempt, actor, err)
 		return nil, nil, err
 	default:
 		// assignWorkerAttempt recorded this one itself.
@@ -345,12 +345,8 @@ var assignmentBackoff = wait.Backoff{
 
 // recordExhaustedAssignment writes the one record of an assignment loop that
 // ended without assigning. No worker was assigned, so no pool is named.
-func (w *ActorWorkflow) recordExhaustedAssignment(ctx context.Context, elapsed time.Duration, actorTemplate *ateapipb.ActorTemplate, err error) {
-	class := ""
-	if actorTemplate != nil {
-		class = actorTemplate.GetSandboxConfig().GetSandboxClass()
-	}
-	w.instruments.recordSchedulerAssignment(ctx, elapsed, ateattr.SchedulerOutcomeError, "", "", class, err)
+func (w *ActorWorkflow) recordExhaustedAssignment(ctx context.Context, elapsed time.Duration, actor *ateapipb.Actor, err error) {
+	w.instruments.recordSchedulerAssignment(ctx, elapsed, ateattr.SchedulerOutcomeError, "", "", snapshotSandboxClass(actor), err)
 }
 
 // validateAssignedWorker checks a RESUMING actor's persisted assignment
@@ -485,9 +481,6 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	poolNamespace := ""
 	pool := ""
 	class := ""
-	if actorTemplate != nil {
-		class = actorTemplate.GetSandboxConfig().GetSandboxClass()
-	}
 	defer func() {
 		if schedulerRecordable(err) {
 			w.instruments.recordSchedulerAssignment(ctx, time.Since(start), outcome, poolNamespace, pool, class, err)
@@ -499,6 +492,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		return nil, nil, err
 	}
 	snapRuntime := constraints.RequiredRuntime
+	class = constraints.SandboxClass
 	relaxable := canRelaxRuntime(actor, constraints)
 
 	assignedWorker, err := w.workerHoldingStaleClaim(ctx, actor, constraints, relaxable)
@@ -591,6 +585,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}
 	poolNamespace = bound.GetWorkerNamespace()
 	pool = bound.GetWorkerPool()
+	class = bound.GetSandboxClass()
 	outcome = ateattr.SchedulerOutcomeAssigned
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, bound, nil
@@ -618,7 +613,7 @@ func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime hardware.Requirement) 
 		// TODO: Workers report restorable_runtimes, so a match on one records
 		// that older runtime here and ensureAteletRestored sends it on Run and
 		// Restore, but atelet still restores with the assets in the request
-		// (the template's SandboxConfig default version): the restore runs on
+		// (the worker pool's SandboxConfig default version): the restore runs on
 		// the newer version and fails, or its next checkpoint is stamped with a
 		// runtime that did not produce it. A follow-up resolves the matching
 		// version of the worker pool's SandboxConfig from sandbox_runtime in
@@ -676,7 +671,7 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 		requiredNodes = []string{node}
 	}
 	c := scheduling.Constraints{
-		SandboxClass:    tmpl.GetSandboxConfig().GetSandboxClass(),
+		SandboxClass:    snapshotSandboxClass(actor),
 		RequiredRuntime: hardware.NewRequirement(requiredSnapshotRuntime(actor, tmpl)),
 		ActorSelector:   labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
 		RequiredNodes:   requiredNodes,
@@ -686,6 +681,22 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 		c.TemplateSelector = labels.SelectorFromSet(labels.Set(sel.GetMatchLabels()))
 	}
 	return c, nil
+}
+
+// snapshotSandboxClass returns the sandbox class of the snapshot ResumeActor
+// will restore from, the actor's local snapshot or else its latest durable
+// one (a golden tag borrowed at creation included), or "" when the actor has
+// none and cold-boots. Unlike requiredSnapshotRuntime it does not depend on
+// fidelity: a worker of another class cannot read the snapshot's files even
+// for a volumes-only restore.
+func snapshotSandboxClass(actor *ateapipb.Actor) string {
+	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
+		return localSnap.GetSandboxRuntime().GetSandboxClass()
+	}
+	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
+		return snap.GetSandboxRuntime().GetSandboxClass()
+	}
+	return ""
 }
 
 // requiredSnapshotRuntime returns the SandboxRuntime stamped on the snapshot
@@ -807,9 +818,9 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		return tele, err
 	}
 
-	// The sandbox binaries and pause image come from the template's
-	// SandboxConfig on every path, restores included.
-	sandboxAssets, err := resolveSandboxAssets(w.sandboxConfigLister, actorTemplate.GetSandboxConfig())
+	// The sandbox binaries and pause image come from the assigned worker's
+	// pool SandboxConfig on every path, restores included.
+	sandboxAssets, err := resolveSandboxAssets(w.workerPoolLister, w.sandboxConfigLister, assignment)
 	if err != nil {
 		return tele, fmt.Errorf("while resolving sandbox assets: %w", err)
 	}

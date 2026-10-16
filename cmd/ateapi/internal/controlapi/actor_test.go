@@ -251,22 +251,17 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 
 	storetest.MustCreateAtespace(t, ctx, persistence, testAtespace)
 	// tmpl-a and tmpl-b are volume-compatible; tmpl-c mounts the data volume
-	// elsewhere, tmpl-d declares an extra volume, and tmpl-e runs on a
-	// different sandbox class.
+	// elsewhere, and tmpl-d declares an extra volume.
 	dataVolume := &ateapipb.Volume{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}
 	scratchVolume := &ateapipb.Volume{Name: "scratch", DurableDir: &ateapipb.DurableDirVolumeSource{}}
-	gvisorConfig := &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"}
-	microvmConfig := &ateapipb.SandboxConfig{SandboxClass: "microvm", ConfigName: "microvm"}
 	templates := map[string]struct {
-		mountPath     string
-		volumes       []*ateapipb.Volume
-		sandboxConfig *ateapipb.SandboxConfig
+		mountPath string
+		volumes   []*ateapipb.Volume
 	}{
-		"tmpl-a": {"/data", []*ateapipb.Volume{dataVolume}, gvisorConfig},
-		"tmpl-b": {"/data", []*ateapipb.Volume{dataVolume}, gvisorConfig},
-		"tmpl-c": {"/mnt/data", []*ateapipb.Volume{dataVolume}, gvisorConfig},
-		"tmpl-d": {"/data", []*ateapipb.Volume{dataVolume, scratchVolume}, gvisorConfig},
-		"tmpl-e": {"/data", []*ateapipb.Volume{dataVolume}, microvmConfig},
+		"tmpl-a": {"/data", []*ateapipb.Volume{dataVolume}},
+		"tmpl-b": {"/data", []*ateapipb.Volume{dataVolume}},
+		"tmpl-c": {"/mnt/data", []*ateapipb.Volume{dataVolume}},
+		"tmpl-d": {"/data", []*ateapipb.Volume{dataVolume, scratchVolume}},
 	}
 	for name, tmpl := range templates {
 		if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
@@ -278,7 +273,6 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 			}},
 			Volumes:        tmpl.volumes,
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			SandboxConfig:  tmpl.sandboxConfig,
 			Resources:      resources.CPUMemory(1000, 512<<20),
 		}); err != nil {
 			t.Fatalf("creating template %s: %v", name, err)
@@ -319,15 +313,6 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		t.Fatalf("UpdateActor to a template with different volumes = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
-	// Repointing at a template naming a different SandboxConfig is rejected.
-	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      created.GetMetadata(),
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-e"},
-	}})
-	if got := apierror.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("UpdateActor to a template with a different sandbox config = %v, want FailedPrecondition (err: %v)", got, err)
-	}
-
 	// Repointing at an existing template with identical volumes and mounts
 	// succeeds.
 	updated, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
@@ -342,8 +327,8 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 	}
 
 	// When the old template no longer exists there is nothing left to
-	// compare the sandbox config or volume layout against, so the repoint
-	// only requires the new ref to resolve.
+	// compare the volume layout against, so the repoint only requires the new
+	// ref to resolve.
 	orphan := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "orphan-actor"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-gone"},
@@ -351,12 +336,12 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 	})
 	repointed, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      orphan.GetMetadata(),
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-e"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-d"},
 	}})
 	if err != nil {
 		t.Fatalf("UpdateActor from a deleted template failed: %v", err)
 	}
-	if got, want := repointed.GetActorTemplate().GetName(), "tmpl-e"; got != want {
+	if got, want := repointed.GetActorTemplate().GetName(), "tmpl-d"; got != want {
 		t.Errorf("updated actor_template.name = %q, want %q", got, want)
 	}
 
@@ -418,7 +403,6 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 		if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
 			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: location},
-			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
 		}); err != nil {
 			t.Fatalf("creating template %s: %v", name, err)
 		}

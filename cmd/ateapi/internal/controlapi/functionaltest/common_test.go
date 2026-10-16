@@ -241,6 +241,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 	service := controlapi.NewRPCService(
 		persistence,
 		wc,
+		workerPoolLister,
 		sandboxConfigLister,
 		csiDriverConfigLister,
 		scLister,
@@ -471,9 +472,9 @@ func createTemplateWithVolumes(t *testing.T, tc *testContext, ns string, volumes
 func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns string, containers []*ateapipb.Container, volumes []*ateapipb.Volume) *ateapipb.ActorTemplate {
 	t.Helper()
 
-	// Sandbox binaries live on a (cluster-scoped) SandboxConfig the template
-	// names. Create the gvisor-default SandboxConfig so a boot-from-spec Run
-	// can resolve its assets.
+	// Sandbox binaries live on the (cluster-scoped) SandboxConfig the
+	// actor's WorkerPool resolves. Create the gvisor-default SandboxConfig so
+	// a boot-from-spec Run can resolve its assets.
 	ensureDefaultGvisorSandboxConfig(t, tc)
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
 
@@ -485,10 +486,6 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 			},
 			SnapshotConfig: &ateapipb.SnapshotConfig{
 				StorageLocation: testStorageLocation,
-			},
-			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: "gvisor",
-				ConfigName:   "gvisor-default",
 			},
 			Containers: containers,
 			Volumes:    volumes,
@@ -659,22 +656,32 @@ func createWorkerPool(t *testing.T, tc *testContext, ns string, name string, lab
 			SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor}},
 		},
 	}
-	_, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Create(context.Background(), wp, metav1.CreateOptions{})
+	created, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Create(context.Background(), wp, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create WorkerPool: %v", err)
+	}
+	// The status the controller would write once it confirmed the pool's
+	// SandboxConfig: resume resolves the sandbox assets through it. Status is
+	// a subresource, so it takes its own write.
+	created.Status.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClassStatus{{
+		Name:      atev1alpha1.SandboxClassGvisor,
+		ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "gvisor-default"},
+	}}
+	if _, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).UpdateStatus(context.Background(), created, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("failed to update WorkerPool status: %v", err)
 	}
 
 	waitForWorkerPoolInInformer(t, tc, ns, name)
 }
 
-// waitForWorkerPoolInInformer blocks until the pool the test just created is
-// visible to the scheduler, which reads it through an informer rather than the
-// API.
+// waitForWorkerPoolInInformer blocks until the pool the test just created,
+// with its resolved SandboxConfig, is visible to the scheduler and the resume
+// workflow, which read it through an informer rather than the API.
 func waitForWorkerPoolInInformer(t *testing.T, tc *testContext, ns, name string) {
 	t.Helper()
 	err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
-		_, err := tc.workerPoolLister.WorkerPools(ns).Get(name)
-		return err == nil, nil
+		pool, err := tc.workerPoolLister.WorkerPools(ns).Get(name)
+		return err == nil && pool.ResolvedSandboxConfig() != "", nil
 	})
 	if err != nil {
 		t.Fatalf("failed to wait for WorkerPool %s/%s in informer: %v", ns, name, err)
@@ -694,10 +701,6 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 			},
 			SnapshotConfig: &ateapipb.SnapshotConfig{
 				StorageLocation: testStorageLocation,
-			},
-			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: "gvisor",
-				ConfigName:   "gvisor-default",
 			},
 			Containers: []*ateapipb.Container{
 				{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}},

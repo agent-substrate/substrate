@@ -87,7 +87,7 @@ func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.Act
 	defer func() {
 		attrs := finalAttrs
 		if attrs == nil {
-			attrs = lifecycleOpAttrs(actor, actorTemplate, "", wireFidelity)
+			attrs = lifecycleOpAttrs(actor, "", wireFidelity)
 		}
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationSuspend, start, err, attrs...)
 	}()
@@ -140,7 +140,7 @@ func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.Act
 	}
 	// FinalizeSuspended clears the WorkerAssignment the labels read, so snapshot
 	// them here, as crash.go does for the crash counter.
-	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", wireFidelity)
+	finalAttrs = lifecycleOpAttrs(actor, "", wireFidelity)
 	var finalized *ateapipb.Actor
 	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, mode); err != nil {
 		return nil, err

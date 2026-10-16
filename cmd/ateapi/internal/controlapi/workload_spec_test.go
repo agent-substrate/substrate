@@ -607,8 +607,7 @@ func TestToAteletResources(t *testing.T) {
 // ate-api-server.
 func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
 	got, err := workloadSpecFromActorTemplate(&ateapipb.ActorTemplate{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-limits"},
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "microvm"},
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-limits"},
 		Containers: []*ateapipb.Container{
 			{
 				Name:  "limited",

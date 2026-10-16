@@ -59,7 +59,7 @@ func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 				WorkerPod:       wa.GetWorkerPod(),
 				WorkerPodUid:    wa.GetWorkerPodUid(),
 				NodeName:        node,
-				SandboxClass:    tc.WorkerClass,
+				SandboxClass:    "gvisor",
 				Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
 			}); err != nil {
 				t.Fatalf("CreateWorker: %v", err)
@@ -176,6 +176,7 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		WorkerPodUid:    testWorkerUID("free-pod"),
 		NodeName:        "node2",
 		SandboxClass:    "gvisor",
+		Labels:          map[string]string{"pool": "b"},
 		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
 	}
 	for _, w := range []*ateapipb.Worker{stale, free} {
@@ -195,7 +196,9 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		t.Fatalf("workercache.Start: %v", err)
 	}
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
+	tmpl := &ateapipb.ActorTemplate{
+		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"pool": "b"}},
+	}
 	resuming, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, tmpl)
 	if err != nil {
 		t.Fatalf("assignWorkerAttempt: %v", err)

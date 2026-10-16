@@ -383,7 +383,8 @@ func NormalizeSandboxClass(class string) string {
 // helper and not through SandboxClassKey.
 //
 // To omit the attribute while the class is unknown is a different choice, and
-// two emitters make it: recordSchedulerAssignment and snapshotOp.attrs.
+// three emitters make it: lifecycleOpAttrs, recordSchedulerAssignment and
+// snapshotOp.attrs.
 func SandboxClassAttribute(class string) attribute.KeyValue {
 	return SandboxClassKey.String(NormalizeSandboxClass(class))
 }

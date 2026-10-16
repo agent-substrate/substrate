@@ -59,9 +59,6 @@ resources:
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://ate-snapshots/ate-demo-counter/
-sandboxConfig:
-  sandboxClass: gvisor
-  configName: gvisor-default
 volumes:
 - name: data
   durableDir: {}
@@ -93,10 +90,6 @@ func TestActorTemplateFromManifest(t *testing.T) {
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			StorageLocation:   "gs://ate-snapshots/ate-demo-counter/",
 		},
-		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: "gvisor",
-			ConfigName:   "gvisor-default",
-		},
 		Volumes: []*ateapipb.Volume{{
 			Name:       "data",
 			DurableDir: &ateapipb.DurableDirVolumeSource{},
@@ -114,9 +107,6 @@ func TestActorTemplateFromManifest_SnakeCase(t *testing.T) {
   name: counter
 snapshot_config:
   storage_location: gs://ate-snapshots/ate-demo-counter/
-sandbox_config:
-  sandbox_class: microvm
-  config_name: microvm
 `
 	got, err := actorTemplateFromManifest([]byte(manifest))
 	if err != nil {
@@ -124,9 +114,6 @@ sandbox_config:
 	}
 	if got.GetSnapshotConfig().GetStorageLocation() != "gs://ate-snapshots/ate-demo-counter/" {
 		t.Errorf("storage_location = %q", got.GetSnapshotConfig().GetStorageLocation())
-	}
-	if got.GetSandboxConfig().GetSandboxClass() != "microvm" {
-		t.Errorf("sandbox_class = %v", got.GetSandboxConfig().GetSandboxClass())
 	}
 }
 
@@ -157,19 +144,16 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 		manifest string
 		atespace string
 		name     string
-		class    string
 	}{
 		{
 			manifest: "counter-template.yaml.tmpl",
 			atespace: "ate-demo-counter",
 			name:     "counter",
-			class:    "gvisor",
 		},
 		{
 			manifest: "counter-microvm-template.yaml.tmpl",
 			atespace: "ate-demo-counter-microvm",
 			name:     "counter-microvm",
-			class:    "microvm",
 		},
 	}
 	for _, test := range tests {
@@ -197,9 +181,6 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 			if got.GetMetadata().GetAtespace() != test.atespace || got.GetMetadata().GetName() != test.name {
 				t.Errorf("metadata = %s/%s, want %s/%s",
 					got.GetMetadata().GetAtespace(), got.GetMetadata().GetName(), test.atespace, test.name)
-			}
-			if got.GetSandboxConfig().GetSandboxClass() != test.class {
-				t.Errorf("sandbox class = %v, want %v", got.GetSandboxConfig().GetSandboxClass(), test.class)
 			}
 			if len(got.GetContainers()) == 0 || got.GetSnapshotConfig().GetStorageLocation() == "" {
 				t.Errorf("missing required fields: %v", got)

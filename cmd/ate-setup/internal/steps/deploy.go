@@ -568,10 +568,8 @@ func (e *Env) DeploySandboxConfig(ctx context.Context) error {
 		return err
 	}
 
-	// Install the cluster-wide sandbox config. Sandbox binaries live on
-	// cluster-scoped SandboxConfigs each ActorTemplate names via
-	// sandboxConfig.configName; gVisor templates name this one unless they
-	// create their own SandboxConfig.
+	// Install the cluster-wide default gVisor SandboxConfig that gVisor
+	// WorkerPools resolve by default unless they pin their own configRef.
 	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml"))
 }
 

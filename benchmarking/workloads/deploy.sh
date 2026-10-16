@@ -151,16 +151,8 @@ run_kubectl_ate() {
 }
 
 substitute() {
-  # SandboxConfig names are pinned per class in the ActorTemplates (rather
-  # than defaulted) so a stale config from a dirty teardown fails loudly
-  # instead of silently binding these workloads. gvisor-default is applied by
-  # hack/install-ate.sh; microvm is applied by hack/install-microvm-deps.sh.
   local manifest="$1"
-  local sandbox_config_name worker_resources=""
-  case "${SANDBOX_CLASS}" in
-    gvisor)  sandbox_config_name="gvisor-default" ;;
-    microvm) sandbox_config_name="microvm" ;;
-  esac
+  local worker_resources=""
   # One flow-style line, so an unset WORKER_MEMORY leaves only a blank line.
   if [[ -n "${WORKER_MEMORY}" ]]; then
     worker_resources="resources: {requests: {memory: \"${WORKER_MEMORY}\"}, limits: {memory: \"${WORKER_MEMORY}\"}}"
@@ -168,7 +160,6 @@ substitute() {
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
-      -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
       -e "s|\${ACTOR_CPU}|${ACTOR_CPU}|g" \

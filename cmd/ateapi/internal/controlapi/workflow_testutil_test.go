@@ -54,14 +54,10 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: "gs://snapshots",
 		},
-		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: "gvisor",
-			ConfigName:   "gvisor",
-		},
 	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("create test ActorTemplate: %v", err)
 	}
-	return NewActorWorkflow(st, nil, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objectstoretest.New()))
+	return NewActorWorkflow(st, nil, nil, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objectstoretest.New()))
 }
 
 // newFinalizeWorkflow builds an ActorWorkflow over persistence with an
@@ -244,10 +240,6 @@ func seedSuspendTemplate(t *testing.T, ctx context.Context, st store.Interface, 
 	created, err := st.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
 		Metadata:       &ateapipb.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
 		SnapshotConfig: snapshotConfig,
-		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: "gvisor",
-			ConfigName:   "gvisor",
-		},
 	})
 	if err != nil {
 		t.Fatalf("CreateActorTemplate: %v", err)

@@ -3693,7 +3693,7 @@ type RestoreRequest struct {
 	// +k8s:minimum=0
 	MemoryBytes int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	// The sandbox binaries and pause image to restore with, resolved from the
-	// ActorTemplate's SandboxConfig.
+	// assigned worker pool's SandboxConfig.
 	//
 	// +k8s:required
 	SandboxAssets *SandboxAssets `protobuf:"bytes,16,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`

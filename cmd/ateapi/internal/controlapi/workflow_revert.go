@@ -68,7 +68,7 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 	defer func() {
 		attrs := finalAttrs
 		if attrs == nil {
-			attrs = lifecycleOpAttrs(actor, actorTemplate, "", "")
+			attrs = lifecycleOpAttrs(actor, "", "")
 		}
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationRevert, start, err, attrs...)
 	}()
@@ -103,7 +103,7 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 
 	// FinalizeReverted clears the WorkerAssignment the labels read, so snapshot
 	// them here, as suspend and crash.go do.
-	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", "")
+	finalAttrs = lifecycleOpAttrs(actor, "", "")
 	var finalized *ateapipb.Actor
 	if finalized, err = w.ensureRevertedFinalized(leaseCtx, actorRef); err != nil {
 		return nil, err

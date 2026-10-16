@@ -1140,7 +1140,7 @@ message RestoreRequest {
   int64 memory_bytes = 15; // Memory limit in bytes.
 
   // The sandbox binaries and pause image to restore with, resolved from the
-  // ActorTemplate's SandboxConfig.
+  // assigned worker pool's SandboxConfig.
   //
   // +k8s:required
   SandboxAssets sandbox_assets = 16;

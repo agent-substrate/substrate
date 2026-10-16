@@ -25,45 +25,57 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
-// resolveTemplateSandboxConfig resolves the SandboxConfig the ActorTemplate
-// names via sandbox_config.config_name and checks that its class matches the
-// template's sandbox_class.
-func resolveTemplateSandboxConfig(
+// resolvePoolSandboxConfig resolves the SandboxConfig the controller confirmed
+// for the WorkerPool of the actor's assigned worker.
+func resolvePoolSandboxConfig(
+	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
-	templateSandbox *ateapipb.SandboxConfig,
+	assignment *ateapipb.WorkerAssignment,
 ) (*atev1alpha1.SandboxConfig, error) {
-	name := templateSandbox.GetConfigName()
-	sc, err := sandboxConfigLister.Get(name)
+	namespace, poolName := assignment.GetWorkerNamespace(), assignment.GetWorkerPool()
+	if namespace == "" || poolName == "" {
+		return nil, fmt.Errorf("worker assignment names no worker pool")
+	}
+	pool, err := workerPoolLister.WorkerPools(namespace).Get(poolName)
 	if k8serrors.IsNotFound(err) {
-		return nil, apierror.FailedPrecondition("SandboxConfig %q not found", name)
+		return nil, apierror.FailedPrecondition("WorkerPool %s/%s not found", namespace, poolName)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("while getting SandboxConfig %q: %w", name, err)
+		return nil, fmt.Errorf("while getting WorkerPool %s/%s: %w", namespace, poolName, err)
 	}
-	if class := templateSandbox.GetSandboxClass(); string(sc.Spec.SandboxClass) != class {
+	configName := pool.ResolvedSandboxConfig()
+	if configName == "" {
 		return nil, apierror.FailedPrecondition(
-			"SandboxConfig %q has class %q but sandbox_config.sandbox_class is %q", name, sc.Spec.SandboxClass, class)
+			"WorkerPool %s/%s has not resolved a SandboxConfig for sandbox class %q", namespace, poolName, pool.Spec.DefaultSandboxClass())
+	}
+	sc, err := sandboxConfigLister.Get(configName)
+	if k8serrors.IsNotFound(err) {
+		return nil, apierror.FailedPrecondition("SandboxConfig %q of WorkerPool %s/%s not found", configName, namespace, poolName)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while getting SandboxConfig %q: %w", configName, err)
 	}
 	return sc, nil
 }
 
 // resolveSandboxAssets determines the sandbox binaries and pause image an actor
-// should boot with and projects them onto the ateletpb.SandboxAssets atelet
-// fetches: the default version of the SandboxConfig the ActorTemplate names via
-// sandbox_config.config_name (required; enforced by CreateActorTemplate),
-// checked against the template's sandbox_class.
+// boots with on its assigned worker and projects them onto the
+// ateletpb.SandboxAssets atelet fetches: the default version of the
+// SandboxConfig the worker's pool resolved for its sandbox class, which is the
+// runtime the worker reports as its default.
+//
+// TODO: Remove with sandbox_assets. atelet already resolves the pool's
+// SandboxConfig and its versions for every worker on the node (its sandbox
+// runtimes syncer), and Run and Restore carry sandbox_runtime; once atelet
+// resolves the version from that field instead of taking the assets from the
+// request, this lookup, the WorkerPool and SandboxConfig listers on
+// ActorWorkflow, and ateapi's sandboxconfigs RBAC go.
 func resolveSandboxAssets(
+	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
-	templateSandbox *ateapipb.SandboxConfig,
+	assignment *ateapipb.WorkerAssignment,
 ) (*ateletpb.SandboxAssets, error) {
-	if templateSandbox.GetSandboxClass() == "" {
-		return nil, fmt.Errorf("ActorTemplate names no sandbox_config.sandbox_class")
-	}
-	if templateSandbox.GetConfigName() == "" {
-		return nil, fmt.Errorf("ActorTemplate names no sandbox_config.config_name")
-	}
-
-	sc, err := resolveTemplateSandboxConfig(sandboxConfigLister, templateSandbox)
+	sc, err := resolvePoolSandboxConfig(workerPoolLister, sandboxConfigLister, assignment)
 	if err != nil {
 		return nil, err
 	}

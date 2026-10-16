@@ -1145,11 +1145,6 @@ message ActorTemplate {
   // +k8s:required
   SnapshotConfig snapshot_config = 5;
 
-  // sandbox_config selects the sandbox runtime this version's actors run on.
-  //
-  // +k8s:required
-  SandboxConfig sandbox_config = 6;
-
   // resources is the actor's compute size. Both cpu and memory limits are
   // required: the scheduler books them against worker capacity, and a
   // micro-VM is booted at that size.
@@ -1214,24 +1209,6 @@ message ActorTemplateStatus {
   GoldenSnapshotStatus golden_snapshot_status = 1;
 }
 
-// SandboxConfig selects the sandbox runtime for an ActorTemplate.
-message SandboxConfig {
-  // sandbox_class selects the sandbox runtime family: "gvisor" or "microvm".
-  // Snapshots are not portable across classes.
-  //
-  // +k8s:required
-  // +k8s:maxLength=63
-  // +k8s:customValidation # must be "gvisor" or "microvm"
-  string sandbox_class = 1;
-
-  // config_name names the cluster-scoped SandboxConfig Kubernetes object
-  // supplying the sandbox binaries. Required; must match sandbox_class.
-  //
-  // +k8s:required
-  // +k8s:format=k8s-long-name
-  string config_name = 2;
-}
-
 // SnapshotConfig selects what actor snapshots capture and where they are
 // stored.
 message SnapshotConfig {
@@ -1249,9 +1226,7 @@ message SnapshotConfig {
   // more than this level, and it may package less when a layer cannot be
   // captured or is too expensive to capture at the time, for example memory
   // under host pressure. A process resumed in place on its worker keeps its
-  // memory regardless of this setting. ROOTFS requires
-  // sandbox_config.sandbox_class "microvm". Defaults to MEMORY
-  // when unset.
+  // memory regardless of this setting. Defaults to MEMORY when unset.
   //
   // +k8s:required
   // +k8s:minimum=1
@@ -1676,7 +1651,7 @@ message CreateActorTemplateRequest {
   // version, timestamps) is ignored, as are the status fields.
   //
   // +k8s:required
-  // +k8s:customValidation # volume_mounts must reference declared volumes; ROOTFS fidelity requires the micro-VM sandbox class
+  // +k8s:customValidation # volume_mounts must reference declared volumes
   ActorTemplate actor_template = 1;
 }
 
