@@ -411,7 +411,7 @@ message MintActorCertificateRequest {
   // corresponding private key.
   //
   // +k8s:required
-  // +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
+  // +k8s:maxBytes=16384 # matches substrate.ateapi.v1.MintActorCertificateRequest.certificate_signing_request
   bytes certificate_signing_request = 4;
 }
 
@@ -593,13 +593,13 @@ message EgressGateway {
 // +k8s:customValidation # every volume mount names a declared volume
 message WorkloadSpec {
   // +k8s:optional
-  // +k8s:maxItems=10 # matches the template's containers bound
+  // +k8s:maxItems=10 # matches substrate.ateapi.v1.ActorTemplate.containers
   // +k8s:listType=map
   // +k8s:listMapKey=name
   repeated Container containers = 1;
 
   // +k8s:optional
-  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:maxItems=32 # matches substrate.ateapi.v1.ActorTemplate.volumes
   // +k8s:listType=map
   // +k8s:listMapKey=name
   repeated Volume volumes = 2;
@@ -613,12 +613,12 @@ message ExternalVolumeSource {
   // sends volumes that finished provisioning.
   //
   // +k8s:required
-  // +k8s:maxLength=256 # matches ExternalVolumeStatus.storage_volume_id's bound
+  // +k8s:maxLength=256 # matches substrate.ateapi.v1.ExternalVolumeStatus.storage_volume_id
   // +k8s:customValidation # no control characters
   string storage_volume_id = 1;
 
   // +k8s:optional
-  // +k8s:maxLength=253 # matches ExternalVolumeStatus.volume_type's bound
+  // +k8s:maxLength=253 # matches substrate.ateapi.v1.ExternalVolumeStatus.volume_type
   // +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
   string volume_type = 2;
 
@@ -641,7 +641,7 @@ message ImageVolumeSource {
   // reference is the OCI image reference, pinned by digest.
   //
   // +k8s:required
-  // +k8s:maxLength=512 # matches the template ImageVolumeSource.reference's bound
+  // +k8s:maxLength=512 # matches substrate.ateapi.v1.ImageVolumeSource.reference
   // +k8s:customValidation # must be a well-formed image reference, pinned by digest
   string reference = 1;
 }
@@ -680,7 +680,7 @@ message ActorMetadataDataSource {
   //
   // +k8s:required
   // +k8s:minItems=1
-  // +k8s:maxItems=8 # matches the template's items bound
+  // +k8s:maxItems=8 # matches substrate.ateapi.v1.ActorMetadataDataSource.items
   // +k8s:listType=atomic
   // +k8s:unique=map
   // +k8s:listMapKey=field
@@ -699,10 +699,10 @@ message TrustBundleDataSource {
   string path = 1;
   // +k8s:required
   // +k8s:minItems=1
-  // +k8s:maxItems=8 # matches the template's names bound
+  // +k8s:maxItems=8 # matches substrate.ateapi.v1.TrustBundleDataSource.names
   // +k8s:listType=set
   // +k8s:eachVal=+k8s:minLength=1
-  // +k8s:eachVal=+k8s:maxLength=253 # matches the template's bundle-name bound
+  // +k8s:eachVal=+k8s:maxLength=253 # matches substrate.ateapi.v1.TrustBundleDataSource.names
   repeated string names = 2;
 }
 
@@ -725,7 +725,7 @@ message SystemInfoDataSource {
 // being started, whatever checkpointed state it boots from.
 message SystemInfoVolumeSource {
   // +k8s:optional
-  // +k8s:maxItems=8 # matches the template's data_sources bound
+  // +k8s:maxItems=8 # matches substrate.ateapi.v1.SystemInfoVolumeSource.data_sources
   // +k8s:listType=atomic
   // +k8s:customValidation # at most one actor_metadata; paths unique across entries
   repeated SystemInfoDataSource data_sources = 1;
@@ -777,7 +777,7 @@ message Container {
   string name = 1;
 
   // +k8s:required
-  // +k8s:maxLength=512 # matches the template Container.image's bound
+  // +k8s:maxLength=512 # matches substrate.ateapi.v1.Container.image
   // +k8s:customValidation # must be a well-formed image reference, pinned by digest
   string image = 2;
 
@@ -794,7 +794,7 @@ message Container {
   repeated string args = 7;
 
   // +k8s:optional
-  // +k8s:maxItems=32 # matches the template's env bound
+  // +k8s:maxItems=32 # matches substrate.ateapi.v1.Container.env
   // +k8s:listType=map # each variable is set at most once
   // +k8s:listMapKey=name
   repeated EnvVar env = 4;
@@ -806,7 +806,7 @@ message Container {
   // may be mounted at multiple paths.
   //
   // +k8s:optional
-  // +k8s:maxItems=32 # matches the template's volume_mounts bound
+  // +k8s:maxItems=32 # matches substrate.ateapi.v1.Container.volume_mounts
   // +k8s:listType=map
   // +k8s:listMapKey=mount_path
   // +k8s:customValidation # mounts must not nest
@@ -867,7 +867,7 @@ message WakeupProbe {
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=3600 # matches the template wakeup probe's bound
+  // +k8s:maximum=3600 # matches substrate.ateapi.v1.WakeupProbe.timeout_seconds
   int32 timeout_seconds = 2;
 }
 
@@ -876,7 +876,7 @@ message HttpGetAction {
   // Path to access on the HTTP server.
   //
   // +k8s:required
-  // +k8s:maxLength=1024 # matches the template probe path's bound
+  // +k8s:maxLength=1024 # matches substrate.ateapi.v1.HttpGetAction.path
   // +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
   string path = 1;
 

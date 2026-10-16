@@ -672,7 +672,7 @@ type WorkloadSpec struct {
 	// template is gone, as on atelet's own WorkloadSpec.
 	//
 	// +k8s:optional
-	// +k8s:maxItems=10 # matches ateapi.ActorTemplate.containers
+	// +k8s:maxItems=10 # matches substrate.ateapi.v1.ActorTemplate.containers
 	// +k8s:listType=map
 	// +k8s:listMapKey=name
 	Containers    []*Container `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
@@ -735,7 +735,7 @@ type Container struct {
 	// mounts, if any.
 	//
 	// +k8s:optional
-	// +k8s:maxItems=32 # matches ateapi.Container.volume_mounts
+	// +k8s:maxItems=32 # matches substrate.ateapi.v1.Container.volume_mounts
 	// +k8s:listType=map
 	// +k8s:listMapKey=mount_path
 	DurableDirVolumeMounts []*VolumeMount `protobuf:"bytes,3,rep,name=durable_dir_volume_mounts,json=durableDirVolumeMounts,proto3" json:"durable_dir_volume_mounts,omitempty"`
@@ -743,7 +743,7 @@ type Container struct {
 	// any.
 	//
 	// +k8s:optional
-	// +k8s:maxItems=32 # matches ateapi.Container.volume_mounts
+	// +k8s:maxItems=32 # matches substrate.ateapi.v1.Container.volume_mounts
 	// +k8s:listType=map
 	// +k8s:listMapKey=mount_path
 	ExternalVolumeMounts []*VolumeMount `protobuf:"bytes,4,rep,name=external_volume_mounts,json=externalVolumeMounts,proto3" json:"external_volume_mounts,omitempty"`
@@ -753,14 +753,14 @@ type Container struct {
 	// read-only.
 	//
 	// +k8s:optional
-	// +k8s:maxItems=32 # matches ateapi.Container.volume_mounts
+	// +k8s:maxItems=32 # matches substrate.ateapi.v1.Container.volume_mounts
 	// +k8s:listType=map
 	// +k8s:listMapKey=mount_path
 	SystemInfoVolumeMounts []*VolumeMount `protobuf:"bytes,5,rep,name=system_info_volume_mounts,json=systemInfoVolumeMounts,proto3" json:"system_info_volume_mounts,omitempty"`
 	// image_volume_mounts are the image volumes this container mounts, if any.
 	//
 	// +k8s:optional
-	// +k8s:maxItems=32 # matches ateapi.Container.volume_mounts
+	// +k8s:maxItems=32 # matches substrate.ateapi.v1.Container.volume_mounts
 	// +k8s:listType=map
 	// +k8s:listMapKey=mount_path
 	ImageVolumeMounts []*VolumeMount `protobuf:"bytes,6,rep,name=image_volume_mounts,json=imageVolumeMounts,proto3" json:"image_volume_mounts,omitempty"`
@@ -1117,7 +1117,7 @@ type WakeupProbe struct {
 	//
 	// +k8s:required
 	// +k8s:minimum=1
-	// +k8s:maximum=3600 # matches ateapi.WakeupProbe.timeout_seconds
+	// +k8s:maximum=3600 # matches substrate.ateapi.v1.WakeupProbe.timeout_seconds
 	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -1173,7 +1173,7 @@ type HttpGetAction struct {
 	// Path to access on the HTTP server.
 	//
 	// +k8s:required
-	// +k8s:maxLength=1024 # matches ateapi.HttpGetAction.path
+	// +k8s:maxLength=1024 # matches substrate.ateapi.v1.HttpGetAction.path
 	// +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	// TCP port to connect to (1..65535).

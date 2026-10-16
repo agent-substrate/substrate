@@ -1048,7 +1048,7 @@ type ExternalVolumes struct {
 	// volume appears at most once.
 	//
 	// +k8s:optional
-	// +k8s:maxItems=32 # matches the template's volumes bound
+	// +k8s:maxItems=32 # matches substrate.ateapi.v1.ActorTemplate.volumes
 	// +k8s:listType=map
 	// +k8s:listMapKey=name
 	Volumes       []*ExternalVolumeStatus `protobuf:"bytes,1,rep,name=volumes,proto3" json:"volumes,omitempty"`
@@ -3276,7 +3276,7 @@ type Container struct {
 	// (e.g. "name@sha256:...").
 	//
 	// +k8s:required
-	// +k8s:maxLength=512 # matches ImageVolumeSource.reference's bound
+	// +k8s:maxLength=512 # matches substrate.ateapi.v1.ImageVolumeSource.reference
 	// +k8s:customValidation # must be a well-formed image reference, pinned by digest
 	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
 	// Entrypoint array; when set, the image's ENTRYPOINT and CMD are both
