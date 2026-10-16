@@ -20,6 +20,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -500,6 +502,34 @@ func TestNewReseedNonce(t *testing.T) {
 	if bytes.Equal(a, b) {
 		t.Fatal("two nonces are identical; reseed would not make clones diverge")
 	}
+}
+
+func TestRestoreGuestReadyError(t *testing.T) {
+	// Child timeouts in dialAgentRetry and reseedGuestCRNG wrap a real
+	// context.DeadlineExceeded.
+	cause := fmt.Errorf("agent ReseedRandomDev: %w", context.DeadlineExceeded)
+
+	t.Run("live caller context reports Unavailable even when cause wraps child DeadlineExceeded", func(t *testing.T) {
+		err := restoreGuestReadyError(t.Context(), "reseeding guest CRNG", cause)
+		if got := apierror.Code(err); got != codes.Unavailable {
+			t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Unavailable, err)
+		}
+		if !errors.Is(err, cause) {
+			t.Errorf("err = %v, want it to wrap %v", err, cause)
+		}
+	})
+
+	t.Run("canceled caller context reports Canceled without child DeadlineExceeded shadowing it", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		err := restoreGuestReadyError(ctx, "dialing kata-agent after resume", cause)
+		if got := apierror.Code(err); got != codes.Canceled {
+			t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Canceled, err)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want it to wrap context.Canceled", err)
+		}
+	})
 }
 
 func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
