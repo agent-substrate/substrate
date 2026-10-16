@@ -241,6 +241,12 @@ func TestBuild_Annotations(t *testing.T) {
 	}
 	gotMethods := map[protoreflect.Name]string{}
 	for _, svc := range api.Services {
+		// (method) annotations are required on Control only, and other services
+		// may reuse a Control method's name, as WorkerService does with
+		// GetActorEgressPolicy.
+		if svc.Name != "Control" {
+			continue
+		}
 		for _, m := range svc.Methods {
 			if _, ok := wantMethods[m.Name]; ok {
 				gotMethods[m.Name] = m.Resource
