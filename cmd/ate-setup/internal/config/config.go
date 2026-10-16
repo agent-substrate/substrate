@@ -117,9 +117,9 @@ type Config struct {
 	// follows neither form.
 	ExpectedJWTIssuer string
 
-	// APIAuthzBootstrapOwners is the comma-separated principal list granted
-	// owner on global:root (ATE_API_AUTHZ_BOOTSTRAP_OWNERS).
-	APIAuthzBootstrapOwners string
+	// APIAuthzBootstrapOwners are the principals granted owner on global:root
+	// (ATE_API_AUTHZ_BOOTSTRAP_OWNERS, parsed by principal.ParseList).
+	APIAuthzBootstrapOwners []string
 
 	// ActorJWTAlgorithm is the signing algorithm of the key in a new actor JWT
 	// pool (ACTOR_JWT_ALGORITHM): ES256 or RS256.
