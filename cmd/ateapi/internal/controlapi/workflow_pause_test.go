@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
@@ -407,6 +408,10 @@ func TestPauseActor_MarkedPausing_StateMatrix(t *testing.T) {
 		}
 		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Errorf("state %v: code = %v, want FailedPrecondition (err: %v)", seedState, got, err)
+		}
+		// Only a sync suspend accepts a paused actor, so a pause must not offer it.
+		if strings.Contains(err.Error(), "node-local snapshot") {
+			t.Errorf("state %v: err = %v, want no mention of a node-local snapshot", seedState, err)
 		}
 		if got := stored.GetStatus().GetState(); got != seedState {
 			t.Errorf("state %v: stored state = %v, want it untouched", seedState, got)

@@ -81,8 +81,8 @@ func TestActorStateChangeRecords(t *testing.T) {
 				},
 			},
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, _ *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
-				if _, err := w.ensurePausedFinalized(context.Background(), ref); err != nil {
-					t.Fatalf("ensurePausedFinalized: %v", err)
+				if _, err := w.ensureSuspendedFinalized(context.Background(), ref, suspendAsync); err != nil {
+					t.Fatalf("ensureSuspendedFinalized: %v", err)
 				}
 			},
 			wantOp:     ateattr.OperationSuspend,
