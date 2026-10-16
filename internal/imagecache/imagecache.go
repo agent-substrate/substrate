@@ -673,26 +673,41 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 
 // ensureLayer makes the unpacked tree for diffID present in the pool,
 // collapsing concurrent requests for the same layer across images.
+//
+// retireLayer shares the layer's flight. A call that joins a flight instead
+// of leading it runs no closure and learns nothing about what the flight
+// did: after a retirement the dir is gone. So the dir is checked after every
+// flight, and a missing one is unpacked again in a flight of its own, which
+// the finished retirement cannot touch and a later pass sees as fresh.
 func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {
 	dir := s.layerDir(diffID)
-	_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
-			// Refresh the dir mtime inside the flight: retireLayer re-checks
-			// the mtime in this same flight, so a layer reused here can
-			// never be renamed away between this stat and the image record
-			// that will re-reference it.
-			now := time.Now()
-			if err := os.Chtimes(dir, now, now); err != nil {
-				slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
+	const maxFlights = 2
+	for flight := 1; ; flight++ {
+		_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
+			if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
+				// Refresh the dir mtime inside the flight: retireLayer re-checks
+				// the mtime in this same flight, so a layer reused here can
+				// never be renamed away between this stat and the image record
+				// that will re-reference it.
+				now := time.Now()
+				if err := os.Chtimes(dir, now, now); err != nil {
+					slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
+				}
+				return nil, nil
 			}
-			return nil, nil
+			return nil, s.unpackLayerToPool(ctx, diffID, layer)
+		})
+		if err != nil {
+			return "", err
 		}
-		return nil, s.unpackLayerToPool(ctx, diffID, layer)
-	})
-	if err != nil {
-		return "", err
+		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
+			return dir, nil
+		}
+		if flight == maxFlights {
+			return "", fmt.Errorf("layer %s missing after %d flights", diffID, flight)
+		}
+		slog.InfoContext(ctx, "Image cache layer retired under a pull; unpacking it again", slog.String("diffid", diffID.String()))
 	}
-	return dir, nil
 }
 
 // unpackLayerToPool streams the layer (download → decompress → untar) into a
