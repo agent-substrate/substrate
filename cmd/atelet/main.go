@@ -328,9 +328,14 @@ func main() {
 	trackerCtx, stopTracker := context.WithCancel(ctx)
 	store := &trackerStore{}
 	snapshots := snapshottracker.New(trackerCtx, store, clock.RealClock{}, snapshottracker.WithDetachDelay(*snapshotDetachDelay))
-	// The runtimes this node's workers advertise, filled by the worker
-	// sandbox syncer below and read by Run and Restore.
-	runtimes := newRuntimeIndex()
+	// The runtimes this node's workers advertise, read by Run and Restore.
+	// Loaded from disk before anything serves, so a runtime a worker
+	// registered before a restart resolves at once; the worker sandbox
+	// syncer below keeps it current.
+	runtimes, err := openRuntimeIndex(ctx, ateletpath.SandboxRuntimeIndexFile)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to open the sandbox runtime index", err)
+	}
 	wmService := NewService(
 		ctx,
 		workerDialer,
@@ -389,12 +394,11 @@ func main() {
 	// WorkerPools tell the syncer which SandboxConfig each local worker's pool
 	// uses.
 	//
-	// Startup does not wait on these factories here; the syncer does, and
-	// atelet serves actors only once the syncer has indexed the runtimes the
-	// workers already on this node advertise (see InitialSync below). A
-	// failing list/watch (e.g. Forbidden while the ClusterRole rollout lags
-	// the binary) therefore holds up serving, which is right: without the
-	// SandboxConfigs no actor could be placed, and /readyz says why.
+	// Startup does not wait on these factories: the runtime index was loaded
+	// from disk above, so the workers already on this node resolve at once,
+	// and the syncer catches up with changes in the background. A failing
+	// list/watch (e.g. Forbidden while the ClusterRole rollout lags the
+	// binary) is logged by the informer and leaves the files as they are.
 	//
 	// 0 disables periodic resync. Both react to watch events and retry on their own.
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
@@ -419,7 +423,7 @@ func main() {
 	// Keep a sandbox runtimes file in each local worker's directory: the
 	// runtimes of the enabled versions of its pool's SandboxConfig,
 	// rewritten when the config changes.
-	syncer, err := startWorkerSandboxSyncer(ctx,
+	_, err = startWorkerSandboxSyncer(ctx,
 		workerPodFactory.Core().V1().Pods(),
 		ateFactory.Api().V1alpha1().WorkerPools(),
 		ateFactory.Api().V1alpha1().SandboxConfigs(),
@@ -429,14 +433,6 @@ func main() {
 		// Without the syncer no runtime is ever indexed, so no actor could run.
 		serverboot.Fatal(ctx, "Failed to start the worker sandbox runtimes syncer", err)
 	}
-	readiness.AddCheck("worker-sandbox-runtimes", func(context.Context) error {
-		select {
-		case <-syncer.InitialSync():
-			return nil
-		default:
-			return errors.New("the sandbox runtimes of this node's workers are not indexed yet")
-		}
-	})
 	// Start after the informers are registered: a factory only runs
 	// informers that exist when Start is called.
 	ateFactory.Start(stopCh)
@@ -469,30 +465,23 @@ func main() {
 	}()
 
 	// Workers already registered with the control plane may be sent actors
-	// the moment atelet is reachable, and after a restart their runtimes are
-	// known only once the syncer has indexed them. Until then the port stays
-	// closed: a connection refused is retried by ate-api-server, a request
-	// that missed the index would fail the actor.
-	if waitForWorkerRuntimes(shutdownCtx, syncer.InitialSync()) {
-		lis, err := net.Listen("tcp", ":"+strconv.Itoa(*port))
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to listen", err)
-		}
-		close(serving)
-		svr := grpc.NewServer(ateletServerOptions(credentials.NewTLS(tlsCfg))...)
-		ateletpb.RegisterAteletServer(svr, wmService)
-		reflection.Register(svr)
-		slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))
-
-		drainDone := drainOnShutdown(shutdownCtx, svr, readiness)
-		if err := svr.Serve(lis); err != nil {
-			serverboot.Fatal(ctx, "Failed to serve", err)
-		}
-		<-drainDone
-	} else {
-		slog.InfoContext(ctx, "Shutdown signal received before this node's worker runtimes were indexed; not serving")
-		readiness.MarkNotReady()
+	// the moment atelet is reachable; the runtime index loaded above is what
+	// makes that safe after a restart.
+	lis, err := net.Listen("tcp", ":"+strconv.Itoa(*port))
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to listen", err)
 	}
+	close(serving)
+	svr := grpc.NewServer(ateletServerOptions(credentials.NewTLS(tlsCfg))...)
+	ateletpb.RegisterAteletServer(svr, wmService)
+	reflection.Register(svr)
+	slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))
+
+	drainDone := drainOnShutdown(shutdownCtx, svr, readiness)
+	if err := svr.Serve(lis); err != nil {
+		serverboot.Fatal(ctx, "Failed to serve", err)
+	}
+	<-drainDone
 	stopTracker()
 	// Workers stop once their operations see the cancellation. The bound keeps
 	// one that does not from holding atelet past its telemetry flushes.
@@ -514,32 +503,6 @@ func servingCheck(served <-chan struct{}) func(context.Context) error {
 			return nil
 		default:
 			return errors.New("atelet is starting; the gRPC port is not open yet")
-		}
-	}
-}
-
-// waitForWorkerRuntimes blocks until synced is closed or ctx ends, logging
-// every so often so a node held at startup by a failing SandboxConfig or
-// WorkerPool watch says so. It reports whether synced closed: false means
-// ctx ended first, and the caller must not open the port.
-func waitForWorkerRuntimes(ctx context.Context, synced <-chan struct{}) bool {
-	select {
-	case <-synced:
-		return true
-	default:
-	}
-	slog.InfoContext(ctx, "Waiting for the sandbox runtimes of this node's workers to be indexed before serving")
-	t := time.NewTicker(10 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-synced:
-			slog.InfoContext(ctx, "Worker sandbox runtimes indexed; serving")
-			return true
-		case <-ctx.Done():
-			return false
-		case <-t.C:
-			slog.WarnContext(ctx, "Still waiting for the sandbox runtimes of this node's workers; are the SandboxConfig and WorkerPool watches failing?")
 		}
 	}
 }

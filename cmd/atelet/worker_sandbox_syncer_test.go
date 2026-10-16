@@ -858,76 +858,37 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 	}
 }
 
-// TestWorkerSandboxSyncerInitialSync pins when atelet may start serving:
-// not before the caches sync, and not before every pod found at that first
-// sync has been processed once, failures included; with no pods, as soon
-// as the caches sync.
-func TestWorkerSandboxSyncerInitialSync(t *testing.T) {
-	closed := func(ch <-chan struct{}) bool {
-		select {
-		case <-ch:
-			return true
-		default:
-			return false
-		}
-	}
-	// runSyncer runs s until the test ends, with the caches reported synced
-	// once cachesSynced is closed.
-	runSyncer := func(t *testing.T, s *workerSandboxSyncer, cachesSynced <-chan struct{}) {
-		t.Helper()
-		ctx, cancel := context.WithCancel(context.Background())
-		stopped := make(chan struct{})
-		go func() {
-			defer close(stopped)
-			s.run(ctx, func() bool { return closed(cachesSynced) })
-		}()
-		t.Cleanup(func() {
-			cancel()
-			<-stopped
-		})
-	}
-	alreadySynced := make(chan struct{})
-	close(alreadySynced)
-
-	t.Run("closes only once the caches synced", func(t *testing.T) {
-		// With no pods, the cache sync is the only thing InitialSync waits
-		// for: it cannot close before the channel does, and must after.
-		s := newTestSyncer(t)
-		cachesSynced := make(chan struct{})
-		runSyncer(t, s, cachesSynced)
-		if closed(s.InitialSync()) {
-			t.Fatal("InitialSync closed before the caches synced")
-		}
-		close(cachesSynced)
-		waitFor(t, "InitialSync to close once the caches synced", func() bool { return closed(s.InitialSync()) })
+// TestWorkerSandboxSyncerRunIndexesExistingPods pins what run does with the
+// pods already on the node: each is processed once the caches synced, so a
+// pod that resolves is indexed, and one whose pool does not exist is not
+// and is retried in the background without holding anything else.
+func TestWorkerSandboxSyncerRunIndexesExistingPods(t *testing.T) {
+	s := newTestSyncer(t, workerPod("pod-live", "pool"), workerPod("pod-orphan", "missing-pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+	// The initial list replays each pod as an Add before the caches sync.
+	s.queue.Add("pod-live")
+	s.queue.Add("pod-orphan")
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		s.run(ctx, func() bool { return true })
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-stopped
 	})
 
-	t.Run("every initial pod attempted once", func(t *testing.T) {
-		// pod-live resolves and is indexed; pod-orphan's pool does not
-		// exist, so its sync fails and is retried in the background. Both
-		// count as attempted: one unresolved pool must not hold the node.
-		s := newTestSyncer(t, workerPod("pod-live", "pool"), workerPod("pod-orphan", "missing-pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
-		if closed(s.InitialSync()) {
-			t.Fatal("InitialSync closed before run")
-		}
-		// The initial list replays each pod as an Add before the caches sync.
-		s.queue.Add("pod-live")
-		s.queue.Add("pod-orphan")
-		runSyncer(t, s, alreadySynced)
-		waitFor(t, "InitialSync to close once both pods were attempted", func() bool { return closed(s.InitialSync()) })
-		wr, ok := s.index.worker("pod-live")
-		if !ok {
-			t.Fatal("index.worker(pod-live) not indexed")
-		}
-		cr, ok := wr.class(v1alpha1.SandboxClassGvisor)
-		if !ok || cr.config != "gvisor-release" || cr.defaultHash == "" {
-			t.Errorf("index.worker(pod-live).class(gvisor) = %+v, %v; want gvisor-release with a default runtime", cr, ok)
-		}
-		if _, ok := s.index.lookup(cr.defaultHash); !ok {
-			t.Error("pod-live's default runtime is not resolvable")
-		}
-		if _, ok := s.index.worker("pod-orphan"); ok {
-			t.Error("a pod whose pool does not exist was indexed")
-		}
-	})
+	waitFor(t, "pod-live to be indexed", func() bool { _, ok := s.index.worker("pod-live"); return ok })
+	wr, _ := s.index.worker("pod-live")
+	cr, ok := wr.class(v1alpha1.SandboxClassGvisor)
+	if !ok || cr.config != "gvisor-release" || cr.defaultHash == "" {
+		t.Errorf("index.worker(pod-live).class(gvisor) = %+v, %v; want gvisor-release with a default runtime", cr, ok)
+	}
+	if _, ok := s.index.lookup(cr.defaultHash); !ok {
+		t.Error("pod-live's default runtime is not resolvable")
+	}
+	waitFor(t, "pod-orphan to be retried", func() bool { return s.queue.NumRequeues("pod-orphan") > 0 })
+	if _, ok := s.index.worker("pod-orphan"); ok {
+		t.Error("a pod whose pool does not exist was indexed")
+	}
 }

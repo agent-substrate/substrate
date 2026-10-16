@@ -96,15 +96,9 @@ const syncWorkers = 2
 // it writes the pod's file and removes it when the pod is gone.
 type workerSandboxSyncer struct {
 	resolver *workerSandboxResolver
-	// index is told what each pod advertises, before its file is written.
+	// index is told each pod's runtimes before its file is written, and
+	// what the pod advertises once it is.
 	index *runtimeIndex
-	// pending holds the UIDs of the pods present when the caches first
-	// synced and not yet processed once; synced closes when it empties.
-	// Until then the index may lack runtimes workers registered before an
-	// atelet restart, so atelet does not serve (see InitialSync).
-	pendingMu sync.Mutex
-	pending   map[string]struct{}
-	synced    chan struct{}
 	// pods holds this node's worker pods, indexed by podUIDIndex.
 	pods   cache.Indexer
 	assets sandboxAssetFetcher
@@ -142,7 +136,6 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 		assets:     assets,
 		scratchDir: ateletpath.SandboxAssetScratchDir,
 		index:      index,
-		synced:     make(chan struct{}),
 		// Backoff doubles from 1s for informer lag and unresolved pools, and
 		// caps at 5m where uncapped retries for transient asset fetch or probe
 		// failures stay until they recover.
@@ -163,12 +156,12 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 // workersDir.
 //
 // A syncer that cannot start is fatal to atelet: without it no runtime is
-// ever indexed, so no actor could run. A syncer that cannot sync holds the
-// serving port instead: main waits on InitialSync before listening, so
-// while the informers have not synced, or a list/watch fails (e.g.
-// Forbidden while an RBAC rollout lags the binary), the port stays closed
-// and the readiness check worker-sandbox-runtimes says why; existing files
-// stay as they are.
+// ever indexed, so no actor could run. A syncer that cannot sync does not
+// hold up serving: every runtime a worker registered before a restart was
+// loaded from disk with the index, so while the informers have not synced,
+// or a list/watch fails (e.g. Forbidden while an RBAC rollout lags the
+// binary), existing files and index entries stay as they are and only
+// changes wait.
 func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex) (*workerSandboxSyncer, error) {
 	if err := pods.Informer().AddIndexers(cache.Indexers{podUIDIndex: func(obj any) ([]string, error) {
 		pod, ok := obj.(*corev1.Pod)
@@ -317,7 +310,10 @@ func (s *workerSandboxSyncer) registerAhead(pool *v1alpha1.WorkerPool) {
 	if err != nil {
 		return
 	}
-	s.index.registerRuntimes(plan.config, hashed)
+	if err := s.index.registerRuntimes(plan.config, hashed); err != nil {
+		// The syncs write it again, and report it if it keeps failing.
+		slog.Warn("Could not index a changed pool's runtimes ahead of its sync", slog.String("pool", pool.Name), slog.Any("err", err))
+	}
 }
 
 // enqueueExistingDirs enqueues the UID of every worker directory on disk, so
@@ -361,7 +357,6 @@ func (s *workerSandboxSyncer) run(ctx context.Context, synced ...cache.InformerS
 	if !cache.WaitForCacheSync(ctx.Done(), synced...) {
 		return
 	}
-	s.markPending()
 	s.enqueueExistingDirs(ctx)
 	var wg sync.WaitGroup
 	for range syncWorkers {
@@ -374,51 +369,10 @@ func (s *workerSandboxSyncer) run(ctx context.Context, synced ...cache.InformerS
 					return
 				}
 				s.process(ctx, uid)
-				s.markAttempted(uid)
 			}
 		}()
 	}
 	wg.Wait()
-}
-
-// InitialSync is closed once every worker pod present when the caches first
-// synced has been processed once, so every runtime those workers advertise
-// is in the index, or once the caches synced with no such pod. atelet
-// serves actors only from then on. A pod whose sync failed counts: it keeps
-// retrying in the background, and holding the whole node for one pool that
-// has not resolved yet would be the wrong trade.
-func (s *workerSandboxSyncer) InitialSync() <-chan struct{} {
-	return s.synced
-}
-
-// markPending records the pods in the cache at first sync as the ones the
-// initial pass must cover. Every one of them is already on the queue: the
-// initial list replayed each as an Add.
-func (s *workerSandboxSyncer) markPending() {
-	s.pendingMu.Lock()
-	defer s.pendingMu.Unlock()
-	s.pending = map[string]struct{}{}
-	for _, obj := range s.pods.List() {
-		if pod, ok := obj.(*corev1.Pod); ok {
-			s.pending[string(pod.UID)] = struct{}{}
-		}
-	}
-	if len(s.pending) == 0 {
-		close(s.synced)
-	}
-}
-
-// markAttempted takes uid off the initial pass, closing synced on the last.
-func (s *workerSandboxSyncer) markAttempted(uid string) {
-	s.pendingMu.Lock()
-	defer s.pendingMu.Unlock()
-	if _, ok := s.pending[uid]; !ok {
-		return
-	}
-	delete(s.pending, uid)
-	if len(s.pending) == 0 {
-		close(s.synced)
-	}
 }
 
 // process brings the directory of the pod with the given UID up to date:

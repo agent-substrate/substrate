@@ -1583,40 +1583,6 @@ func TestShouldHaveSnapshots(t *testing.T) {
 	}
 }
 
-// TestWaitForWorkerRuntimes pins the startup gate's answer: true once the
-// index covers the node's workers, false when shutdown arrives first, so
-// main never opens the port on a node that is already stopping.
-func TestWaitForWorkerRuntimes(t *testing.T) {
-	t.Run("already synced", func(t *testing.T) {
-		synced := make(chan struct{})
-		close(synced)
-		if !waitForWorkerRuntimes(context.Background(), synced) {
-			t.Error("waitForWorkerRuntimes = false with synced closed, want true")
-		}
-	})
-	t.Run("synced while waiting", func(t *testing.T) {
-		synced := make(chan struct{})
-		got := make(chan bool, 1)
-		go func() { got <- waitForWorkerRuntimes(context.Background(), synced) }()
-		close(synced)
-		select {
-		case ok := <-got:
-			if !ok {
-				t.Error("waitForWorkerRuntimes = false after synced closed, want true")
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("waitForWorkerRuntimes did not return after synced closed")
-		}
-	})
-	t.Run("shutdown first", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		if waitForWorkerRuntimes(ctx, make(chan struct{})) {
-			t.Error("waitForWorkerRuntimes = true with ctx done and synced open, want false")
-		}
-	})
-}
-
 // TestServingCheck pins the readiness contract at startup: /readyz holds
 // 503 until main has opened the gRPC port, whatever else is already up.
 func TestServingCheck(t *testing.T) {

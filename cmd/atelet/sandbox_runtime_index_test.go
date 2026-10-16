@@ -15,6 +15,10 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -164,5 +168,126 @@ func TestResolveRuntime(t *testing.T) {
 	unpinned := &sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: "registry.k8s.io/pause:3.10", Assets: requested.Assets}
 	if _, err := s.advertisedSandboxAssets(t.Context(), unpinned); apierror.Code(err) != codes.InvalidArgument {
 		t.Errorf("advertisedSandboxAssets with an unpinned pause image = %v, want %s", err, codes.InvalidArgument)
+	}
+}
+
+// TestRuntimeIndexPersists pins what survives an atelet restart: every
+// runtime registered, with its provenance, through a file rewritten before
+// the entry exists in memory; an entry whose record does not hash to its
+// key is dropped on load without taking the rest with it, and a file that
+// cannot be decoded starts the index empty rather than failing startup.
+func TestRuntimeIndexPersists(t *testing.T) {
+	const (
+		shaA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		shaB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sandbox-runtime-index.json")
+	x, err := openRuntimeIndex(ctx, path)
+	if err != nil {
+		t.Fatalf("openRuntimeIndex with no file: %v", err)
+	}
+	v1, v2 := hashedTestVersion(t, "v1", true, shaA), hashedTestVersion(t, "v2", false, shaB)
+	if err := x.registerRuntimes("config-x", []hashedVersion{v1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.register("pod-1", advertisedClass{class: v1alpha1.SandboxClassGvisor, config: "config-x", hashed: []hashedVersion{v1, v2}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Restart: a new index over the same file resolves both, with what they
+	// were registered as, and knows no worker until the syncer runs.
+	reopened, err := openRuntimeIndex(ctx, path)
+	if err != nil {
+		t.Fatalf("openRuntimeIndex over the written file: %v", err)
+	}
+	for _, v := range []hashedVersion{v1, v2} {
+		rt, ok := reopened.lookup(v.hash)
+		if !ok {
+			t.Fatalf("runtime %s not loaded", v.name)
+		}
+		if rt.config != "config-x" || rt.version != v.name || rt.rec.Assets[gvisorAssetName].SHA256 != v.rec.Assets[gvisorAssetName].SHA256 {
+			t.Errorf("runtime %s loaded as %s/%s with digest %s; want config-x/%s with the registered digest", v.name, rt.config, rt.version, rt.rec.Assets[gvisorAssetName].SHA256, v.name)
+		}
+	}
+	if _, ok := reopened.worker("pod-1"); ok {
+		t.Error("a worker entry survived the restart; only the syncer knows what a worker advertises now")
+	}
+
+	// An entry filed under the wrong hash is dropped; the other survives.
+	// Here v1's record is moved under a hash it does not match.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f runtimeIndexFile
+	if err := json.Unmarshal(data, &f); err != nil {
+		t.Fatal(err)
+	}
+	const wrongHash = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	f.Runtimes[wrongHash] = f.Runtimes[v1.hash]
+	delete(f.Runtimes, v1.hash)
+	mismatched, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, mismatched, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	damaged, err := openRuntimeIndex(ctx, path)
+	if err != nil {
+		t.Fatalf("openRuntimeIndex over a file with a bad entry: %v", err)
+	}
+	if _, ok := damaged.lookup(v2.hash); !ok {
+		t.Error("the intact entry was not loaded")
+	}
+	if _, ok := damaged.lookup(wrongHash); ok {
+		t.Error("an entry whose record does not hash to its key was loaded")
+	}
+	if _, ok := damaged.lookup(v1.hash); ok {
+		t.Error("v1 loaded though the file no longer holds it under its hash")
+	}
+	// Registering v1 again rewrites the file with the good entries only.
+	if err := damaged.registerRuntimes("config-x", []hashedVersion{v1}); err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := openRuntimeIndex(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []hashedVersion{v1, v2} {
+		if _, ok := rewritten.lookup(v.hash); !ok {
+			t.Errorf("runtime %s missing after the rewrite", v.name)
+		}
+	}
+	if len(rewritten.runtimes) != 2 {
+		t.Errorf("rewritten index holds %d runtimes, want 2 (the bad entry gone)", len(rewritten.runtimes))
+	}
+
+	// A file that does not decode starts the index empty, not atelet failed.
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	empty, err := openRuntimeIndex(ctx, path)
+	if err != nil {
+		t.Fatalf("openRuntimeIndex over a corrupt file: %v", err)
+	}
+	if len(empty.runtimes) != 0 {
+		t.Errorf("corrupt file loaded %d runtimes, want 0", len(empty.runtimes))
+	}
+}
+
+// TestRuntimeIndexPersistFailureIsReported pins that an index that cannot
+// write its file reports it and does not index the runtime, so the sync
+// that asked retries rather than advertising a hash a restart would lose.
+func TestRuntimeIndexPersistFailureIsReported(t *testing.T) {
+	x := newRuntimeIndex()
+	x.path = filepath.Join(t.TempDir(), "missing", "sandbox-runtime-index.json") // dir never created
+	v := hashedTestVersion(t, "v1", true, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err := x.registerRuntimes("config-x", []hashedVersion{v}); err == nil {
+		t.Fatal("registerRuntimes with an unwritable path = nil, want an error")
+	}
+	if _, ok := x.lookup(v.hash); ok {
+		t.Error("a runtime whose file could not be written was indexed")
 	}
 }

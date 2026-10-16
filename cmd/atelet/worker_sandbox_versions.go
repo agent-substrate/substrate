@@ -493,8 +493,11 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 	if err != nil {
 		return err
 	}
-	// Resolvable before the file can let the worker register any of them.
-	s.index.registerRuntimes(plan.config, hashed)
+	// Resolvable, and on disk, before the file can let the worker register
+	// any of them.
+	if err := s.index.registerRuntimes(plan.config, hashed); err != nil {
+		return err
+	}
 	want, buildErr := s.buildFile(ctx, plan, hashed)
 	if buildErr != nil && !errors.Is(buildErr, errIncomplete) {
 		return buildErr
@@ -506,7 +509,9 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 	// failed before the write left the previous entry, and one that wrote
 	// a partial file names only the runtimes in it. One class per pool
 	// today; a pool that runs several will yield one plan per class here.
-	s.index.register(string(pod.UID), advertisedClass{class: plan.sandboxClass, config: plan.config, hashed: writtenVersions(hashed, want)})
+	if err := s.index.register(string(pod.UID), advertisedClass{class: plan.sandboxClass, config: plan.config, hashed: writtenVersions(hashed, want)}); err != nil {
+		return err
+	}
 	return buildErr
 }
 
