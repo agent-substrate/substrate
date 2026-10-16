@@ -112,6 +112,7 @@ var (
 
 	objectStorePluginSocket = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/control.sock", "Unix socket of the control object-store plugin that external snapshots are deleted and copied through.")
 	snapshotLocation        = pflag.String("snapshot-location", "", "Base object-storage URI (for example gs://BUCKET/PREFIX/) that actor snapshots are stored under. Required unless the PerTemplateSnapshotLocation preview gate is enabled; with the gate, an actor template's snapshotConfig.storageLocation overrides it.")
+	enableOvercommit        = pflag.Bool("enable-overcommit", false, "Enable worker-level overcommit accounting: a released Actor frees only its slot, and ateworkers hand back unused resources through SubtractWorkerAllocated. Must match the setting of the ateworkers.")
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
@@ -227,6 +228,7 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to set up persistence backend", err)
 	}
+	persistence.SetOvercommitEnabled(*enableOvercommit)
 	pool := persistence.Pool()
 	defer pool.Close()
 	// Backends may run background maintenance rooted in their own context
@@ -517,6 +519,7 @@ func logFlagValues(ctx context.Context) {
 		slog.Duration("drain-timeout", *drainTimeout),
 		slog.String("snapshot-location", *snapshotLocation),
 		slog.Any("preview", *previewFlags),
+		slog.Bool("enable-overcommit", *enableOvercommit),
 	)
 }
 

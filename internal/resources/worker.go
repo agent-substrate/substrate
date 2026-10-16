@@ -33,6 +33,39 @@ func AddToAllocated(total *ateapi.WorkerResources, assignment *ateapi.ActorAssig
 	return out
 }
 
+// AddActorCountOnly adjusts the actor count by deltaActors and leaves resources
+// untouched. Under worker-level overcommit a released Actor's resources are
+// handed back by the Worker rather than by the release, so only its slot moves
+// here. The count is clamped at zero. It returns nil when allocation reaches
+// zero.
+func AddActorCountOnly(total *ateapi.WorkerResources, deltaActors int32) *ateapi.WorkerResources {
+	return nonEmpty(&ateapi.WorkerResources{
+		CpuMillicores: total.GetCpuMillicores(),
+		MemoryBytes:   total.GetMemoryBytes(),
+		Actors:        max(total.GetActors()+deltaActors, 0),
+	})
+}
+
+// SubtractResourcesFromAllocated subtracts delta from the allocated resources
+// and leaves the actor count untouched. Each dimension is clamped at zero, so a
+// Worker handing back more than is booked empties that dimension instead of
+// driving it negative. It returns nil when allocation reaches zero.
+func SubtractResourcesFromAllocated(total *ateapi.WorkerResources, delta *ateapi.Resources) *ateapi.WorkerResources {
+	return nonEmpty(&ateapi.WorkerResources{
+		CpuMillicores: max(total.GetCpuMillicores()-delta.GetCpuMillicores(), 0),
+		MemoryBytes:   max(total.GetMemoryBytes()-delta.GetMemoryBytes(), 0),
+		Actors:        total.GetActors(),
+	})
+}
+
+// nonEmpty returns r, or nil when it holds nothing.
+func nonEmpty(r *ateapi.WorkerResources) *ateapi.WorkerResources {
+	if r.CpuMillicores == 0 && r.MemoryBytes == 0 && r.Actors == 0 {
+		return nil
+	}
+	return r
+}
+
 // SumAllocated is what a set of assignments takes from a Worker, or nil for
 // none. Rebuilds the total rather than adjusting it, which is what the checks
 // holding AddToAllocated to the assignments it counts compare against.

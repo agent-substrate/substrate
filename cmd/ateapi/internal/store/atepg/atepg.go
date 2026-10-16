@@ -80,6 +80,18 @@ type Persistence struct {
 	// watchMu guards watchers, the live WatchWorkers channels.
 	watchMu  sync.Mutex
 	watchers map[chan store.WorkerEvent]struct{}
+
+	// overcommitEnabled switches to worker-level overcommit accounting, where
+	// the Worker hands back an Actor's resources through
+	// SubtractWorkerAllocated and a release frees only its slot. Set once
+	// before serving.
+	overcommitEnabled bool
+}
+
+// SetOvercommitEnabled turns worker-level overcommit accounting on or off. Call
+// it before the store serves any request.
+func (p *Persistence) SetOvercommitEnabled(enabled bool) {
+	p.overcommitEnabled = enabled
 }
 
 // addWatcher enrolls a WatchWorkers channel to receive locally published events.

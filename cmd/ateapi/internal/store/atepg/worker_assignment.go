@@ -131,7 +131,15 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 
 		// Subtract before adding: the Actor is already counted, and its
 		// declared size may have changed.
-		worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, previous, -1)
+		if p.overcommitEnabled {
+			// Under overcommit the Worker may already have handed some of
+			// the previous booking back, so each dimension is clamped at
+			// zero instead of going negative.
+			allocated := resources.SubtractResourcesFromAllocated(worker.Status.Allocated, previous.GetResources())
+			worker.Status.Allocated = resources.AddActorCountOnly(allocated, -1)
+		} else {
+			worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, previous, -1)
+		}
 
 		// Admit against the Worker without the old reservation. An
 		// ActorTemplate is mutable, so a replacement can be larger than what
@@ -200,7 +208,18 @@ func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName str
 		if worker.Status == nil {
 			worker.Status = &ateapi.WorkerStatus{}
 		}
-		worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, -1)
+		if p.overcommitEnabled {
+			// Under overcommit the ateworker hands the Actor's resources
+			// back through SubtractWorkerAllocated, so a release frees only
+			// its slot.
+			// TODO: an Actor that was bound but never tracked by the
+			// ateworker (it failed before starting, or the ateworker
+			// restarted) never has its resources handed back, and they stay
+			// allocated until the Worker goes away.
+			worker.Status.Allocated = resources.AddActorCountOnly(worker.Status.Allocated, -1)
+		} else {
+			worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, -1)
+		}
 		if err := saveWorker(ctx, tx, worker); err != nil {
 			return nil, err
 		}

@@ -77,3 +77,111 @@ func TestSumAllocated(t *testing.T) {
 		t.Errorf("SumAllocated() mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// Under overcommit a release frees the slot but leaves resources to the
+// Worker, and a Worker holding nothing still carries no allocation at all.
+func TestAddActorCountOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		total *ateapi.WorkerResources
+		delta int32
+		want  *ateapi.WorkerResources
+	}{
+		{
+			name:  "release keeps resources",
+			total: &ateapi.WorkerResources{CpuMillicores: 1500, MemoryBytes: 3 << 30, Actors: 2},
+			delta: -1,
+			want:  &ateapi.WorkerResources{CpuMillicores: 1500, MemoryBytes: 3 << 30, Actors: 1},
+		},
+		{
+			name:  "increment",
+			total: &ateapi.WorkerResources{CpuMillicores: 1500, MemoryBytes: 3 << 30, Actors: 1},
+			delta: +1,
+			want:  &ateapi.WorkerResources{CpuMillicores: 1500, MemoryBytes: 3 << 30, Actors: 2},
+		},
+		{
+			name:  "count clamps at zero",
+			total: &ateapi.WorkerResources{CpuMillicores: 100},
+			delta: -1,
+			want:  &ateapi.WorkerResources{CpuMillicores: 100},
+		},
+		{
+			name:  "emptied is nil",
+			total: &ateapi.WorkerResources{Actors: 1},
+			delta: -1,
+			want:  nil,
+		},
+		{
+			name:  "nil stays nil",
+			total: nil,
+			delta: -1,
+			want:  nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := AddActorCountOnly(tc.total, tc.delta)
+			if diff := cmp.Diff(tc.want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("AddActorCountOnly() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestSubtractResourcesFromAllocated(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		total *ateapi.WorkerResources
+		delta *ateapi.Resources
+		want  *ateapi.WorkerResources
+	}{
+		{
+			name:  "reclaim",
+			total: &ateapi.WorkerResources{CpuMillicores: 2000, MemoryBytes: 4 << 30, Actors: 2},
+			delta: CPUMemory(1500, 1<<30),
+			want:  &ateapi.WorkerResources{CpuMillicores: 500, MemoryBytes: 3 << 30, Actors: 2},
+		},
+		{
+			name:  "one dimension clamps at zero, the other stays",
+			total: &ateapi.WorkerResources{CpuMillicores: 500, MemoryBytes: 1 << 30, Actors: 1},
+			delta: CPUMemory(900, 512<<20),
+			want:  &ateapi.WorkerResources{MemoryBytes: 512 << 20, Actors: 1},
+		},
+		{
+			name:  "exactly to zero",
+			total: &ateapi.WorkerResources{CpuMillicores: 500, MemoryBytes: 1 << 30, Actors: 1},
+			delta: CPUMemory(500, 0),
+			want:  &ateapi.WorkerResources{MemoryBytes: 1 << 30, Actors: 1},
+		},
+		{
+			name:  "subtracting from an empty dimension stays at zero",
+			total: &ateapi.WorkerResources{CpuMillicores: 500, Actors: 1},
+			delta: CPUMemory(0, 1<<30),
+			want:  &ateapi.WorkerResources{CpuMillicores: 500, Actors: 1},
+		},
+		{
+			name:  "from nothing stays nothing",
+			total: nil,
+			delta: CPUMemory(500, 1<<30),
+			want:  nil,
+		},
+		{
+			name:  "emptied with no actors is nil",
+			total: &ateapi.WorkerResources{CpuMillicores: 500, MemoryBytes: 1 << 30},
+			delta: CPUMemory(500, 2<<30),
+			want:  nil,
+		},
+		{
+			name:  "emptied with actors keeps the count",
+			total: &ateapi.WorkerResources{CpuMillicores: 500, MemoryBytes: 1 << 30, Actors: 2},
+			delta: CPUMemory(9000, 9<<30),
+			want:  &ateapi.WorkerResources{Actors: 2},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SubtractResourcesFromAllocated(tc.total, tc.delta)
+			if diff := cmp.Diff(tc.want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("SubtractResourcesFromAllocated() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
