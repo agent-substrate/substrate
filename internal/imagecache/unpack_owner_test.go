@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"syscall"
 	"testing"
+	"time"
 
 	"go.ate.dev/substrate/internal/roottest"
 )
@@ -212,6 +213,61 @@ func testUnpackLayerAppliesModesWithOwners(t *testing.T) {
 	assertOwner(t, filepath.Join(dir, "usr/bin/newgrp"), 0, 0, os.ModeSetuid|os.ModeSetgid|0o755)
 	assertOwner(t, filepath.Join(dir, "usr/bin/crontab"), 0, 54321, ifCap(fsetid, os.ModeSetgid)|0o755)
 	assertOwner(t, filepath.Join(dir, "opt/tool"), 1000, 1000, ifCap(fowner, os.ModeSetuid)|0o755)
+}
+
+// TestUnpackLayer_DirectoryAliasesTakeLatestHeader checks that a directory a
+// layer declares under two names, one through a symlink, takes the header
+// written last, whichever name restores first. Restoring both names gave the
+// second a chmod on a directory the first had already given to another user,
+// which needs CAP_FOWNER, and an unprivileged unpack the wrong mode.
+func TestUnpackLayer_DirectoryAliasesTakeLatestHeader(t *testing.T) {
+	if os.Geteuid() != 0 {
+		testUnpackLayerDirectoryAliasesTakeLatestHeader(t)
+		return
+	}
+	runAsRootAndAtelet(t, testUnpackLayerDirectoryAliasesTakeLatestHeader)
+}
+
+func testUnpackLayerDirectoryAliasesTakeLatestHeader(t *testing.T) {
+	early := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	late := time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC)
+	entries := []tarEntry{
+		{name: "cc/", typeflag: tar.TypeDir},
+		// "a/b" is shorter than "cc/b", "alias/d" longer than "cc/d", so
+		// the restore pass meets the later header first in one pair and
+		// second in the other.
+		{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+		{name: "alias", typeflag: tar.TypeSymlink, linkname: "cc"},
+		{name: "a/b/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: early},
+		{name: "cc/b/", typeflag: tar.TypeDir, mode: 0o705, uid: 1001, gid: 1001, modTime: late},
+		{name: "cc/d/", typeflag: tar.TypeDir, mode: 0o750, uid: 1000, gid: 1000, modTime: early},
+		{name: "alias/d/", typeflag: tar.TypeDir, mode: 0o1705, uid: 1001, gid: 1001, modTime: late},
+	}
+	dir, _, err := runUnpack(t, entries)
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
+	}
+	want := map[string]os.FileMode{
+		"cc/b": os.ModeDir | 0o705,
+		"cc/d": os.ModeDir | os.ModeSticky | 0o705,
+	}
+	for name, mode := range want {
+		uid, gid, got := ownerOf(t, filepath.Join(dir, name))
+		if got != mode {
+			t.Errorf("%s mode = %v, want %v", name, got, mode)
+		}
+		// Without CAP_CHOWN every entry keeps the unpacking user.
+		if os.Geteuid() == 0 && (uid != 1001 || gid != 1001) {
+			t.Errorf("%s owner = %d:%d, want 1001:1001", name, uid, gid)
+		}
+		fi, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !fi.ModTime().Equal(late) {
+			t.Errorf("%s mtime = %v, want %v", name, fi.ModTime(), late)
+		}
+	}
 }
 
 // stickyDirEntries is a layer with sticky directories other users own, holding

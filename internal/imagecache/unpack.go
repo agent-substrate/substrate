@@ -119,8 +119,9 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	// read-only, e.g. ko ships /ko-app as 0555, or gives them to another
 	// user), and their real modes, mtimes and owners are restored afterwards,
 	// so writing into them needs no CAP_DAC_OVERRIDE. The mtime is restored
-	// then because creating child entries updates it. Keyed by name so a
-	// repeated dir entry's last header wins.
+	// then because creating child entries updates it. Each header keeps its
+	// position in the tar so the restore pass can apply the last one written
+	// to a directory, whatever name it was written under.
 	//
 	// Entries take their owner as they are written. Wherever
 	// fs.protected_hardlinks=1, the common default, the kernel refuses a
@@ -129,7 +130,8 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	// CAP_DAC_OVERRIDE grants (a regular file another user owns never keeps
 	// setuid or setgid in atelet, see restoreSetIDBits). Other targets
 	// (symlinks, fifos) are given to root before the link is made.
-	dirHdrs := map[string]*tar.Header{}
+	dirHdrs := map[string]dirHdr{}
+	dirSeq := 0
 
 	// Ancestors an entry needed vs. directories the tar declared: the
 	// difference is recorded as ImplicitDirs (attrs fabricated, see the
@@ -285,7 +287,8 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			} else if err != nil {
 				return nil, fmt.Errorf("while creating directory=%q, mode=%v: %w", name, mode, err)
 			}
-			dirHdrs[name] = hdr
+			dirHdrs[name] = dirHdr{hdr: hdr, seq: dirSeq}
+			dirSeq++
 			declared[name] = true
 			delete(implicit, name)
 
@@ -370,21 +373,28 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	}
 
 	// Restore the image's intended directory modes, mtimes and owners now that
-	// every child exists. Deepest paths first: a child's path is always longer
-	// than its parent's, so length-descending order guarantees a directory is
-	// restored before any of its ancestors — restoring a parent to a
-	// non-traversable mode or owner then can't block restoring its children.
+	// every child exists. Deepest paths first: a child's path is longer than
+	// its parent's, so length-descending order restores a directory before its
+	// ancestors, and restoring a parent to a non-traversable mode or owner
+	// can't block restoring its children. A name through a symlink can break
+	// that order; only an unprivileged unpack then fails, as root's
+	// CAP_DAC_OVERRIDE searches any directory.
 	//
 	// Chmod and the mtime come before chown, unlike tarutil's restore: once a
 	// directory belongs to another uid, changing its mode or setting its times
 	// needs CAP_FOWNER, which atelet does not hold. Chown leaves a directory's
 	// mode alone, setgid and sticky included.
-	dirs := make([]string, 0, len(dirHdrs))
-	for name := range dirHdrs {
-		dirs = append(dirs, name)
+	//
+	// Names that a symlink makes aliases ("a -> cc" makes "a/b" and "cc/b"
+	// one directory) are restored once, with the header written last: a
+	// second chmod after the first chown would also need CAP_FOWNER.
+	type dirInode struct{ dev, ino uint64 }
+	type dirRestore struct {
+		name string
+		dirHdr
 	}
-	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
-	for _, name := range dirs {
+	byInode := map[dirInode]dirRestore{}
+	for name, dh := range dirHdrs {
 		// Directories a later entry replaced were dropped from dirHdrs as it
 		// was written, so name resolves to the directory its entry created,
 		// through any symlink that already stood on its path then. A path
@@ -400,7 +410,22 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		if !fi.IsDir() {
 			continue
 		}
-		hdr := dirHdrs[name]
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			return nil, fmt.Errorf("while checking directory %q: no inode in %T", name, fi.Sys())
+		}
+		key := dirInode{dev: uint64(st.Dev), ino: st.Ino}
+		if cur, ok := byInode[key]; !ok || dh.seq > cur.seq {
+			byInode[key] = dirRestore{name: name, dirHdr: dh}
+		}
+	}
+	dirs := make([]dirRestore, 0, len(byInode))
+	for _, d := range byInode {
+		dirs = append(dirs, d)
+	}
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i].name) > len(dirs[j].name) })
+	for _, d := range dirs {
+		name, hdr := d.name, d.hdr
 		mode := tarMode(hdr)
 		if err := root.Chmod(name, mode); err != nil {
 			return nil, fmt.Errorf("while restoring mode %v on directory %q: %w", mode, name, err)
@@ -441,6 +466,13 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	sort.Strings(wh.ImplicitDirs)
 
 	return wh, nil
+}
+
+// dirHdr is a directory entry's header and its position among the layer's
+// directory entries.
+type dirHdr struct {
+	hdr *tar.Header
+	seq int
 }
 
 // tarMode returns the mode an unpacked entry takes from its tar header: the
