@@ -26,6 +26,10 @@ import (
 
 // writeActorEtcFiles points the guest resolver at its fixed gateway address
 // and writes the guest's /etc/hosts.
+//
+// rootfs is the read-only lower under the actor's restored overlay upper, so
+// rewriting both on every activation keeps the actor's own edits. Writing them
+// after restore instead would clobber them.
 func writeActorEtcFiles(rootfs string) error {
 	pod, err := os.ReadFile("/etc/resolv.conf")
 	if err != nil {

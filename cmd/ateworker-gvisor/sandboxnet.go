@@ -48,7 +48,11 @@ func actorResolvConf(actorDirs *ateworkerpb.ActorDirs) (string, error) {
 }
 
 // setupAppRootfs composes an application container's bundle rootfs and writes
-// its /etc/hosts there, where the actor can edit it.
+// its /etc/hosts there.
+//
+// This is the base layer under the sandbox's restored rootfs writes, so
+// rewriting it on every activation keeps the actor's own edits. Writing it
+// after restore instead would clobber them.
 func setupAppRootfs(actorDirs *ateworkerpb.ActorDirs, containerName string) error {
 	bundle := ociBundlePath(actorDirs, containerName)
 	if err := imagecache.SetupBundleRootfs(bundle); err != nil {
