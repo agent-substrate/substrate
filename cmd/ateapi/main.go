@@ -21,9 +21,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -36,7 +38,6 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workerservice"
-	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/installdefaults"
@@ -97,7 +98,7 @@ var (
 	ingressRouterSPIFFEID = pflag.String("ingress-router-spiffe-id", installdefaults.RouterSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of atenet-router. Holds the ingress_router authz role, which resumes and lists actors.")
 
 	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
-	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https://<host>, with no path. Required.")
+	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Required.")
 	defaultEgressGatewayAddress = pflag.String("default-egress-gateway-address", "", "Default address (host:port) of the egress PEP that each actor's atunnel dials. Sent on every atelet Run and Restore, so it takes effect at the actor's next activation. Empty leaves actors with no TCP egress.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
@@ -676,9 +677,28 @@ func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) 
 	return serverCfg, nil
 }
 
+// validateActorJWTIssuer checks that issuer is an OpenID issuer identifier: an
+// https URL with a host and no user info, query, or fragment. A path is
+// allowed.
 func validateActorJWTIssuer(issuer string) error {
 	if issuer == "" {
 		return errors.New("required")
 	}
-	return actoridjwt.ValidateIssuer(issuer)
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return fmt.Errorf("invalid issuer: %w", err)
+	}
+	switch {
+	case u.Scheme != "https":
+		return fmt.Errorf("issuer %q must use the https scheme", issuer)
+	case u.Hostname() == "":
+		return fmt.Errorf("issuer %q has no host", issuer)
+	case u.User != nil:
+		return fmt.Errorf("issuer %q must not contain user info", issuer)
+	case strings.Contains(issuer, "?"):
+		return fmt.Errorf("issuer %q must not contain a query", issuer)
+	case strings.Contains(issuer, "#"):
+		return fmt.Errorf("issuer %q must not contain a fragment", issuer)
+	}
+	return nil
 }

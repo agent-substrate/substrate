@@ -105,7 +105,11 @@ func TestValidateActorJWTIssuer(t *testing.T) {
 		{issuer: "", wantErr: true},
 		{issuer: "http://idp.example.com", wantErr: true},
 		{issuer: "https://idp.ate-system.svc"},
-		{issuer: "https://idp.example.com/prod", wantErr: true},
+		{issuer: "https://idp.example.com/prod"},
+		{issuer: "https:///prod", wantErr: true},
+		{issuer: "https://user@idp.example.com", wantErr: true},
+		{issuer: "https://idp.example.com?env=prod", wantErr: true},
+		{issuer: "https://idp.example.com#prod", wantErr: true},
 	} {
 		err := validateActorJWTIssuer(tt.issuer)
 		if gotErr := err != nil; gotErr != tt.wantErr {
