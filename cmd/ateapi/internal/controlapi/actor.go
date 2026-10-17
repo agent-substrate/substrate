@@ -302,17 +302,18 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		// Update actor template is only allowed while the actor is suspended.
 		// The repointed ref must also resolve, mirroring CreateActor's
 		// check (same non-atomicity caveat; resume re-resolves and fails
-		// cleanly), and the replacement's sandbox config, volumes, and
-		// volume mounts must match the old template's. It must also store
-		// snapshots under the location the actor's own already live in.
+		// cleanly), and the replacement's volumes and volume mounts must match
+		// the old template's. It must also store snapshots under the location
+		// the actor's own already live in.
 		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
 			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				return apierror.FailedPrecondition(
 					"actor must be %s to change its actor template (got: %s)", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, state)
 			}
-			// A paused actor's latest snapshot is node-local and was captured
-			// from the old template's sandbox; suspend or revert it first.
-			if latestSnapshotIsLocalOnly(oldVal.GetStatus()) {
+			// A paused actor resumes from its node-local snapshot, uploaded or
+			// not, which was captured from the old template's sandbox; suspend
+			// or revert it first.
+			if latestSnapshotIsLocal(oldVal.GetStatus()) {
 				return apierror.FailedPrecondition(
 					"actor must hold no node-local snapshot to change its actor template: suspend or revert it first")
 			}
@@ -326,21 +327,12 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
 			switch {
 			case err == nil:
-				// Snapshots are not portable across sandbox runtime
-				// families, so the replacement template must name the same
-				// SandboxConfig.
-				if !proto.Equal(oldTemplate.GetSandboxConfig(), newTemplate.GetSandboxConfig()) {
-					oldSC, newSC := oldTemplate.GetSandboxConfig(), newTemplate.GetSandboxConfig()
-					return apierror.FailedPrecondition(
-						"the current actor template names SandboxConfig %q (class %s) but the new one names %q (class %s); the sandbox config must be identical to repoint an actor",
-						oldSC.GetConfigName(), oldSC.GetSandboxClass(), newSC.GetConfigName(), newSC.GetSandboxClass())
-				}
 				if err := validateTemplateVolumesUnchanged(oldTemplate, newTemplate); err != nil {
 					return err
 				}
 			case errors.Is(err, errActorTemplateNotFound):
 				// The old template is gone, so there is nothing left to
-				// compare the sandbox config or volume layout against.
+				// compare the volume layout against.
 			default:
 				return err
 			}
@@ -480,7 +472,7 @@ func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorReq
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.PauseActor(ctx, actorRef)
+	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendAsync)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
@@ -524,7 +516,7 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActo
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef)
+	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendModeFromOptions(req.GetOptions()))
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")

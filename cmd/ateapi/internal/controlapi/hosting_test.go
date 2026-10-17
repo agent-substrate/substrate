@@ -59,7 +59,7 @@ func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 				WorkerPod:       wa.GetWorkerPod(),
 				WorkerPodUid:    wa.GetWorkerPodUid(),
 				NodeName:        node,
-				SandboxClass:    tc.WorkerClass,
+				SandboxClass:    "gvisor",
 				Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
 			}); err != nil {
 				t.Fatalf("CreateWorker: %v", err)
@@ -176,6 +176,7 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		WorkerPodUid:    testWorkerUID("free-pod"),
 		NodeName:        "node2",
 		SandboxClass:    "gvisor",
+		Labels:          map[string]string{"pool": "b"},
 		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
 	}
 	for _, w := range []*ateapipb.Worker{stale, free} {
@@ -195,7 +196,9 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		t.Fatalf("workercache.Start: %v", err)
 	}
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
+	tmpl := &ateapipb.ActorTemplate{
+		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"pool": "b"}},
+	}
 	resuming, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, tmpl)
 	if err != nil {
 		t.Fatalf("assignWorkerAttempt: %v", err)
@@ -217,5 +220,41 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 	onStale.Status.WorkerAssignment = &ateapipb.WorkerAssignment{Worker: &ateapipb.ObjectRef{Name: testWorkerUID("stale-pod")}}
 	if got, err := HostingNode(ctx, persistence, onStale); err != nil || got != "" {
 		t.Errorf("HostingNode naming the released stale worker = %q, %v; want \"\", nil", got, err)
+	}
+}
+
+// TestHostingNodeWithoutWorker pins which no-worker shapes count assigned_node
+// as hosting the actor. None of them reads the store.
+func TestHostingNodeWithoutWorker(t *testing.T) {
+	durable := func(st ateapipb.SnapshotStorageStatus) *ateapipb.SnapshotStorage {
+		return &ateapipb.SnapshotStorage{Status: st, Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://snaps/root/atespaces/a/actors/uid/snap-1"}}
+	}
+	status := func(state ateapipb.ActorState, locality string, d *ateapipb.SnapshotStorage) *ateapipb.ActorStatus {
+		return &ateapipb.ActorStatus{
+			State:                  state,
+			AssignedNode:           "node-1",
+			LastAssignedGeneration: 1,
+			Snapshots:              []*ateapipb.Snapshot{{Uuid: "snap-1", Generation: 1, Owner: ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, Locality: locality, DurableSnapshot: d}},
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		status *ateapipb.ActorStatus
+		want   string
+	}{
+		{"paused", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1", nil), "node-1"},
+		{"paused, suspend uploading its snapshot", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "node-1", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)), "node-1"},
+		{"suspended, snapshot durable, local copy kept", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)), ""},
+		{"suspended, no local copy", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)), ""},
+		{"pause in progress, not yet captured", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "", nil), ""},
+		{"crashed with a local copy", status(ateapipb.ActorState_ACTOR_STATE_CRASHED, "node-1", nil), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			actor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "n", Uid: "uid"}, Status: tc.status}
+			got, err := HostingNode(context.Background(), nil, actor)
+			if err != nil || got != tc.want {
+				t.Fatalf("HostingNode = %q, %v, want %q", got, err, tc.want)
+			}
+		})
 	}
 }

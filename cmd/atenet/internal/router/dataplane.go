@@ -40,8 +40,9 @@ type dataplaneHealthCheck struct {
 func (r atenetRouter) healthCheck() dataplaneHealthCheck {
 	switch r {
 	case atenetRouterEnvoy:
-		// localhost, not 127.0.0.1: the admin socket binds `::`, so the dial
-		// has to be able to fall through to the IPv6 loopback.
+		// Use `localhost` because we must try both IPv6 and IPv4.
+		//
+		// TODO: Shouldn't this work for the agentgateway case as well?
 		return dataplaneHealthCheck{url: "http://localhost:9901/ready", expectedBody: "LIVE"}
 	case atenetRouterAgentgateway:
 		return dataplaneHealthCheck{url: "http://127.0.0.1:15021/healthz/ready", expectedBody: "ready"}

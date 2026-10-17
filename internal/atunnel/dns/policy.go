@@ -47,7 +47,7 @@ func egressPolicyCheck(ctx context.Context, source PolicySource) queryPolicy {
 	return func(q dnsmessage.Question) bool {
 		policy, err := source.EgressPolicy(ctx)
 		if err != nil {
-			slog.DebugContext(ctx, "dns relay refused a query; the actor's egress policy is unavailable", slog.Any("err", err))
+			slog.DebugContext(ctx, "dns relay denied a query; the actor's egress policy is unavailable", slog.Any("err", err))
 			return false
 		}
 		mu.Lock()

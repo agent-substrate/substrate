@@ -187,9 +187,6 @@ containers:
     httpGet:
       path: /readyz
       port: 8080
-sandboxConfig:
-  sandboxClass: gvisor
-  configName: gvisor-default
 resources:
   limits:
   - name: cpu

@@ -46,7 +46,10 @@ from typing import IO, Any, TextIO
 from cluster_facts import (
     EMPTY_FACTS,
     append_trial_summary,
+    diff_worker_pods,
     get_cluster_hardware_facts,
+    read_evicted_pods,
+    snapshot_worker_pods,
 )
 from common.boomer_config import build_config_json
 from server_telemetry import extract_and_record_server_telemetry
@@ -154,7 +157,8 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help=(
             "Read node capacity and worker pod count from the Kubernetes API "
-            "after the run to derive density frontiers. Pass "
+            "after the run to derive density frontiers, and worker pod restarts "
+            "and evictions around it for oom_events. Pass "
             "--no-cluster-facts to skip Kubernetes API discovery"
         ),
     )
@@ -517,6 +521,32 @@ def collect_cluster_facts(
     return get_cluster_hardware_facts(logs)
 
 
+def read_worker_pods(
+    args: argparse.Namespace, logs: TextIO
+) -> dict[str, dict[str, Any]] | None:
+    """Worker pod state, or None when discovery is off or the read fails."""
+    if not args.cluster_facts:
+        return None
+    try:
+        return snapshot_worker_pods(logs)
+    except Exception as e:
+        tee(logs, f"Warning: Failed to read worker pods: {e}")
+        return None
+
+
+def read_evictions(
+    args: argparse.Namespace, since_ts: int, logs: TextIO
+) -> set[str] | None:
+    """Pods evicted since since_ts, or None when discovery is off or it fails."""
+    if not args.cluster_facts:
+        return None
+    try:
+        return read_evicted_pods(since_ts, logs)
+    except Exception as e:
+        tee(logs, f"Warning: Failed to read evictions: {e}")
+        return None
+
+
 def main() -> None:
     args = parse_args()
     now = datetime.now(timezone.utc)
@@ -547,8 +577,13 @@ def main() -> None:
         traces.write("\t".join(TRACE_COLUMNS) + "\n")
         traces.flush()
         log_run_config(args, prefix, work_dir, logs)
+        # Worker pods around the run, for OOMKilled restarts and evictions.
+        pods_before = read_worker_pods(args, logs)
         exit_code = run_test(args, csv_prefix, logs, traces)
         run_end_ts = int(datetime.now(timezone.utc).timestamp())
+        pods_after = read_worker_pods(args, logs)
+        # Right after the run, as Evicted events expire after about 1h.
+        evicted_uids = read_evictions(args, run_ts, logs)
 
         stats_generated = False
         if stats_csv.exists():
@@ -618,6 +653,7 @@ def main() -> None:
                 test_name=args.name,
                 logs=logs,
                 lag_s=args.atelet_lag_s,
+                worker_pods=diff_worker_pods(pods_before, pods_after, evicted_uids),
             )
         except Exception as e:
             tee(logs, f"Warning: Failed to harvest server telemetry: {e}")

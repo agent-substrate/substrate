@@ -147,6 +147,9 @@ func (e *Env) renderSystemManifests(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if manifest, err = setIDPServerIssuer(manifest, e.Cfg.ActorJWTIssuer); err != nil {
+		return nil, err
+	}
 	if e.Cfg.Router != config.RouterAgentgateway {
 		imageReference, err := e.dockerfileImage(ctx, envoyDataplaneImage, envoyDataplaneDockefile)
 		if err != nil {

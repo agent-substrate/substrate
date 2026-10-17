@@ -77,13 +77,13 @@ Expected:
 NAMESPACE                  NAME                                 DESIRED  READY  AVAILABLE
 ate-demo-counter-microvm   workerpool.ate.dev/counter-microvm   1        1      1
 
-ATESPACE                   NAME              SANDBOX CLASS   GOLDEN SNAPSHOT                        ERROR   AGE
-ate-demo-counter-microvm   counter-microvm   microvm         b9f6bd93-3c5a-4b64-9d5e-2f8a1c7d0e42           1m
+ATESPACE                   NAME              GOLDEN TAG                             ERROR   AGE
+ate-demo-counter-microvm   counter-microvm   b9f6bd93-3c5a-4b64-9d5e-2f8a1c7d0e42           1m
 ```
 
-The template is ready once the GOLDEN SNAPSHOT column is non-empty (the
+The template is ready once the GOLDEN TAG column is non-empty (the
 value is a UUID); ERROR means the golden build failed, and `-o yaml` shows
-the full error message. An empty GOLDEN SNAPSHOT with no ERROR means the
+the full error message. An empty GOLDEN TAG with no ERROR means the
 golden build — a full guest boot plus checkpoint — is still running.
 
 ## Option B: Apple Silicon macOS via Lima

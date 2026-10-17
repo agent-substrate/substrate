@@ -414,12 +414,6 @@ func (s *AteWorkerService) beginRPC(actorUID, name string, cancel context.Cancel
 	return release, nil
 }
 
-// validateActorDirs rejects a request whose actor directories are unusable.
-func validateActorDirs(actorDirs *ateworkerpb.ActorDirs) error {
-	errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs"))
-	return resources.ToAPIError(errs)
-}
-
 // supportedFidelities are the snapshot fidelities this runtime serves: the
 // rootfs upper is host-backed, so it ships with or without guest memory.
 var supportedFidelities = []ateworkerpb.SnapshotFidelity{
@@ -439,7 +433,7 @@ func validateFidelity(fidelity ateworkerpb.SnapshotFidelity) error {
 // sandbox assets dir, where atelet staged them. The dir is derived from the
 // actor UID here and the request's sandbox_assets_dir must match it, so a
 // request cannot name a root of its own choosing. actorDirs must have passed
-// validateActorDirs.
+// the generated validator.
 func validateRuntimeAssetPaths(actorUID string, actorDirs *ateworkerpb.ActorDirs, paths map[string]string) error {
 	root := actorDirs.GetSandboxAssetsDir()
 	if errs := resources.ValidateSandboxAssetsDir(actorUID, root, field.NewPath("actor_dirs", "sandbox_assets_dir")); len(errs) > 0 {

@@ -157,9 +157,9 @@ type SandboxVersionConfig struct {
 // +kubebuilder:validation:XValidation:rule="!self.versions.exists(v, v.name == self.defaultVersion && has(v.state) && v.state == 'Disabled')",message="the version named by defaultVersion must not be Disabled"
 // +kubebuilder:validation:XValidation:rule="self.sandboxClass == 'gvisor' ? self.versions.all(v, has(v.pauseImage) && size(v.pauseImage) > 0) : self.versions.all(v, !has(v.pauseImage) || size(v.pauseImage) == 0)",message="pauseImage is required on every version for gvisor and not allowed for other sandbox classes"
 type SandboxConfigSpec struct {
-	// sandboxClass is the sandbox runtime family this config applies to. An
-	// ActorTemplate only uses SandboxConfigs whose SandboxClass matches its
-	// sandbox_config.sandbox_class.
+	// sandboxClass is the sandbox runtime family this config applies to. A
+	// WorkerPool only uses SandboxConfigs whose sandboxClass matches the entry
+	// in its spec.sandboxClasses.
 	//
 	// +optional
 	// +kubebuilder:validation:Enum=gvisor;microvm
@@ -202,8 +202,9 @@ func (s *SandboxConfigSpec) DefaultVersionConfig() (*SandboxVersionConfig, bool)
 }
 
 // SandboxConfig is cluster-scoped configuration describing the versions of the
-// sandbox binaries for a sandbox runtime family. It is referenced by an
-// ActorTemplate's sandbox_config.config_name (required) and decouples sandbox
+// sandbox binaries for a sandbox runtime family. It is referenced by a
+// WorkerPool's spec.sandboxClasses[].configRef (or resolved via the
+// sandboxconfig.ate.dev/is-class-default annotation) and decouples sandbox
 // binary selection from the workload definition.
 //
 // +genclient

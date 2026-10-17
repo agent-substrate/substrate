@@ -46,9 +46,6 @@ resources:
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_VOLUMES
   storageLocation: gs://${BUCKET_NAME}/ate-demo-autoscaled-workerpool/
-sandboxConfig:
-  sandboxClass: gvisor
-  configName: gvisor-default
 volumes:
 - name: data
   durableDir: {}

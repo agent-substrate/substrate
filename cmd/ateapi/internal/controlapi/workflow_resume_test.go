@@ -164,7 +164,7 @@ func TestAssignWorkerAttempt_MissingSelectedWorkerIsRetried(t *testing.T) {
 	actor, wc := seedAssignFixture(t, ctx, persistence)
 	st := &bindErrorStore{Interface: persistence, err: store.ErrNotFound}
 	w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
+	tmpl := &ateapipb.ActorTemplate{}
 
 	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if !errors.Is(err, store.ErrVersionConflict) {
@@ -185,7 +185,7 @@ func TestEnsureWorkerAssigned_ConflictExhaustionIsRetryable(t *testing.T) {
 	actor, wc := seedAssignFixture(t, ctx, persistence)
 	st := &bindErrorStore{Interface: persistence, err: store.ErrVersionConflict}
 	w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
+	tmpl := &ateapipb.ActorTemplate{}
 
 	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if !errors.Is(err, store.ErrVersionConflict) {
@@ -227,9 +227,7 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: "actor-uid"},
 	}
-	tmpl := &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
-	}
+	tmpl := &ateapipb.ActorTemplate{}
 	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, actor, tmpl)
 	if apierror.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("assignWorkerAttempt() error = %v, want ResourceExhausted (no worker has room)", err)
@@ -257,15 +255,15 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	})
 
-	// stale-pod is claimed by this actor from a failed attempt but its sandbox
-	// class no longer matches the template; free-pod is eligible and free.
+	// stale-pod is claimed by this actor from a failed attempt but its labels
+	// do not match the template's selector; free-pod is eligible and free.
 	stale := &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("stale-pod")},
 		WorkerNamespace: "worker-ns",
 		WorkerPool:      "pool-a",
 		WorkerPod:       "stale-pod",
 		WorkerPodUid:    testWorkerUID("stale-pod"),
-		SandboxClass:    "microvm",
+		SandboxClass:    "gvisor",
 		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
 	}
 	free := &ateapipb.Worker{
@@ -275,6 +273,7 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 		WorkerPod:       "free-pod",
 		WorkerPodUid:    testWorkerUID("free-pod"),
 		SandboxClass:    "gvisor",
+		Labels:          map[string]string{"pool": "b"},
 		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
 	}
 	for _, w := range []*ateapipb.Worker{stale, free} {
@@ -296,7 +295,7 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
+		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"pool": "b"}},
 	}
 	_, worker, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if err != nil {
@@ -372,9 +371,7 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 	}
 
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
-	}
+	tmpl := &ateapipb.ActorTemplate{}
 	_, worker, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if err != nil {
 		t.Fatalf("assignWorkerAttempt() on retry = %v, want nil (must re-pick a free worker)", err)
@@ -513,9 +510,7 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 			}}
 
 			w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
-			tmpl := &ateapipb.ActorTemplate{
-				SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
-			}
+			tmpl := &ateapipb.ActorTemplate{}
 			refreshed, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 
 			if tc.wantRetry {
@@ -754,6 +749,7 @@ func TestValidateAssignedWorker(t *testing.T) {
 		// is gone.
 		workerStatus *ateapipb.WorkerStatus
 		sandboxClass string
+		tmplSelector map[string]string
 		assignment   *ateapipb.ActorAssignment
 		// wantCode is codes.OK when validateAssignedWorker must return nil.
 		wantCode       codes.Code
@@ -833,7 +829,8 @@ func TestValidateAssignedWorker(t *testing.T) {
 		{
 			name:             "releases own ineligible worker and crashes actor",
 			workerStatus:     activeStatus,
-			sandboxClass:     "microvm",
+			sandboxClass:     "gvisor",
+			tmplSelector:     map[string]string{"pool": "other"},
 			assignment:       ownAssignment,
 			wantCode:         codes.Aborted,
 			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
@@ -886,7 +883,10 @@ func TestValidateAssignedWorker(t *testing.T) {
 					},
 				},
 			}
-			tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"}}
+			tmpl := &ateapipb.ActorTemplate{}
+			if tt.tmplSelector != nil {
+				tmpl.WorkerSelector = &ateapipb.Selector{MatchLabels: tt.tmplSelector}
+			}
 			_, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, resumingActor, tmpl)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
@@ -1066,6 +1066,10 @@ type capturingAtelet struct {
 	// whatever else happens while the workload checkpoints. Its error fails
 	// the RPC.
 	onCheckpoint func(ctx context.Context) error
+	// checkpointState is the snapshot state Checkpoint returns.
+	checkpointState *ateletpb.ActorSnapshotState
+	// promoteState is the snapshot state PromoteSnapshot returns.
+	promoteState *ateletpb.ActorSnapshotState
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1093,7 +1097,9 @@ func (f *capturingAtelet) Checkpoint(ctx context.Context, req *ateletpb.Checkpoi
 			return nil, err
 		}
 	}
-	return &ateletpb.CheckpointResponse{}, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &ateletpb.CheckpointResponse{State: proto.CloneOf(f.checkpointState)}, nil
 }
 
 func (f *capturingAtelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (*ateletpb.PromoteSnapshotResponse, error) {
@@ -1101,7 +1107,7 @@ func (f *capturingAtelet) PromoteSnapshot(ctx context.Context, req *ateletpb.Pro
 	defer f.mu.Unlock()
 	f.promote = proto.Clone(req).(*ateletpb.PromoteSnapshotRequest)
 	f.promotes++
-	return &ateletpb.PromoteSnapshotResponse{}, nil
+	return &ateletpb.PromoteSnapshotResponse{State: proto.CloneOf(f.promoteState)}, nil
 }
 
 // calls returns how many Checkpoint and PromoteSnapshot RPCs were received.
@@ -1208,7 +1214,9 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 		},
 	}})
 
-	return &ActorWorkflow{store: persistence, dialer: dialer, sandboxConfigLister: lister}, fake
+	pools := workerPoolListerFor(t, []*atev1alpha1.WorkerPool{resolvedWorkerPool("worker-ns", "pool", "gvisor")})
+
+	return &ActorWorkflow{store: persistence, dialer: dialer, workerPoolLister: pools, sandboxConfigLister: lister}, fake
 }
 
 // TestResumeActor_AteletWireRequest is the characteristic test for the
@@ -1239,6 +1247,16 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	localSnap := func(name string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
 		return newLocalSnapshot(1, fidelity, "", name, "node-1")
 	}
+	// pauseUploadURI is where atelet uploads the pause snapshot.
+	pauseUploadURI := someActorSnapshotURI(t, testStorageLocation, "team-a", localSnapshotName)
+	uploadedLocalSnap := func(name string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
+		snap := localSnap(name, fidelity)
+		snap.DurableSnapshot = &ateapipb.SnapshotStorage{
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: pauseUploadURI},
+		}
+		return snap
+	}
 
 	// actorSeed is the actor status a row persists before resuming.
 	type actorSeed struct {
@@ -1256,14 +1274,15 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		sourceTag *ateapipb.ObjectRef
 		// assignedRuntime seeds WorkerAssignment.SandboxRuntime.
 		assignedRuntime *ateapipb.SandboxRuntime
+		// poolConfigName, when set, is the SandboxConfig the assigned
+		// worker's pool resolves instead of the "gvisor" config the
+		// workflow's lister serves.
+		poolConfigName string
 	}
 	// templateSeed is the ActorTemplate configuration a row persists.
 	type templateSeed struct {
 		// golden seeds the template's golden tag snapshot.
 		golden *ateapipb.Snapshot
-		// configName is the SandboxConfig the template names; "" means the
-		// "gvisor" config the workflow's lister serves.
-		configName string
 	}
 	// restoreWant pins the request atelet receives. On a non-OK code neither
 	// Restore nor Run may reach atelet; with run set the Run RPC (cold boot)
@@ -1274,7 +1293,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		run  bool
 		// snapshotName is Snapshot.SnapshotUuid and snapshotURI is
 		// Snapshot.Object.SnapshotUri. Both are asserted on every Restore, so
-		// a local row also pins that no durable copy is sent.
+		// a local row also pins which durable copy, if any, is sent.
 		snapshotName string
 		snapshotURI  string
 		scope        ateletpb.SnapshotFidelity
@@ -1282,6 +1301,22 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 
 	amd64RT := testSandboxRuntime()
 	arm64RT := testRuntime("arm64", "")
+	wantAteletRuntime := map[*ateapipb.SandboxRuntime]*ateletpb.SandboxRuntime{
+		amd64RT: {
+			SandboxClass: "gvisor",
+			Version: &ateletpb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes:    []*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
+			},
+		},
+		arm64RT: {
+			SandboxClass: "gvisor",
+			Version: &ateletpb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes:    []*ateletpb.AttributeEntry{{Key: "architecture", Value: "arm64"}},
+			},
+		},
+	}
 	stampedExtSnap := func(owner ateapipb.SnapshotOwner, uri string, fidelity ateapipb.SnapshotFidelity, rt *ateapipb.SandboxRuntime) *ateapipb.Snapshot {
 		snap := newDurableSnapshot(1, owner, fidelity, "", durableSnapshotName, uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 		snap.SandboxRuntime = rt
@@ -1295,8 +1330,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		want  restoreWant
 	}{
 		{
-			name: "01 nothing to restore cold-boots from the spec",
-			want: restoreWant{run: true},
+			name:  "01 nothing to restore cold-boots from the spec",
+			actor: actorSeed{assignedRuntime: amd64RT},
+			want:  restoreWant{run: true},
 		},
 		{
 			name:  "02 inherited golden snapshot restores in Full",
@@ -1425,7 +1461,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		{
 			name: "13 Full pause snapshot restores locally as Full",
 			actor: actorSeed{
-				localSnapshot: localSnap(localSnapshotName, fullScope),
+				localSnapshot:   localSnap(localSnapshotName, fullScope),
+				assignedRuntime: amd64RT,
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
@@ -1499,17 +1536,16 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			// Restores take their sandbox from the template, like cold boots,
-			// so an unresolvable SandboxConfig stops them before atelet.
-			name:  "19 durable snapshot restore with a missing SandboxConfig is rejected",
-			actor: actorSeed{externalSnapshot: extSnap(actorURI, fullScope)},
-			tmpl:  templateSeed{configName: "missing"},
+			// Restores take their sandbox from the assigned worker's pool,
+			// like cold boots, so an unresolvable SandboxConfig stops them
+			// before atelet.
+			name:  "19 durable snapshot restore with a missing pool SandboxConfig is rejected",
+			actor: actorSeed{externalSnapshot: extSnap(actorURI, fullScope), poolConfigName: "missing"},
 			want:  restoreWant{code: codes.FailedPrecondition},
 		},
 		{
-			name:  "20 local snapshot restore with a missing SandboxConfig is rejected",
-			actor: actorSeed{localSnapshot: localSnap(localSnapshotName, fullScope)},
-			tmpl:  templateSeed{configName: "missing"},
+			name:  "20 local snapshot restore with a missing pool SandboxConfig is rejected",
+			actor: actorSeed{localSnapshot: localSnap(localSnapshotName, fullScope), poolConfigName: "missing"},
 			want:  restoreWant{code: codes.FailedPrecondition},
 		},
 		{
@@ -1566,10 +1602,24 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
+		{
+			// atelet uploads a pause's snapshot in the background. Once that
+			// upload is recorded, a local restore sends it too, so atelet can
+			// download the snapshot if its local copy is gone.
+			name: "25 uploaded pause snapshot restores locally and sends its upload",
+			actor: actorSeed{
+				localSnapshot: uploadedLocalSnap(localSnapshotName, fullScope),
+			},
+			want: restoreWant{
+				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			},
+		},
 	}
 
 	// Every request atelet receives, Run or Restore, carries the sandbox the
-	// template's SandboxConfig resolves to.
+	// assigned worker's pool SandboxConfig resolves to.
 	wantSandboxAssets := sandboxAssetsProto(
 		&atev1alpha1.SandboxConfig{Spec: atev1alpha1.SandboxConfigSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}},
 		&atev1alpha1.SandboxVersionConfig{Name: "v1", PauseImage: "pause@sha256:abc", Assets: testAssets()},
@@ -1582,18 +1632,13 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			w, atelet := newWireCaptureWorkflow(t, persistence)
 
 			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
-			configName := tt.tmpl.configName
-			if configName == "" {
-				configName = "gvisor"
+			if tt.actor.poolConfigName != "" {
+				w.workerPoolLister = workerPoolListerFor(t, []*atev1alpha1.WorkerPool{resolvedWorkerPool("worker-ns", "pool", tt.actor.poolConfigName)})
 			}
 			tmpl := &ateapipb.ActorTemplate{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
 				SnapshotConfig: &ateapipb.SnapshotConfig{
 					StorageLocation: testStorageLocation,
-				},
-				SandboxConfig: &ateapipb.SandboxConfig{
-					SandboxClass: "gvisor",
-					ConfigName:   configName,
 				},
 			}
 			if tt.tmpl.golden != nil {
@@ -1672,12 +1717,16 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				return
 			}
 
+			wantSandboxRuntime := wantAteletRuntime[tt.actor.assignedRuntime]
 			if tt.want.run {
 				if run == nil || restore != nil {
 					t.Fatalf("atelet requests = (restore=%v, run=%v), want exactly one Run", restore, run)
 				}
 				if !proto.Equal(run.GetSandboxAssets(), wantSandboxAssets) {
 					t.Errorf("run SandboxAssets = %v, want %v", run.GetSandboxAssets(), wantSandboxAssets)
+				}
+				if !proto.Equal(run.GetSandboxRuntime(), wantSandboxRuntime) {
+					t.Errorf("run SandboxRuntime = %v, want %v", run.GetSandboxRuntime(), wantSandboxRuntime)
 				}
 				return
 			}
@@ -1686,6 +1735,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			}
 			if !proto.Equal(restore.GetSandboxAssets(), wantSandboxAssets) {
 				t.Errorf("restore SandboxAssets = %v, want %v", restore.GetSandboxAssets(), wantSandboxAssets)
+			}
+			if !proto.Equal(restore.GetSandboxRuntime(), wantSandboxRuntime) {
+				t.Errorf("restore SandboxRuntime = %v, want %v", restore.GetSandboxRuntime(), wantSandboxRuntime)
 			}
 			if got := restore.GetSnapshot().GetSnapshotUuid(); got != tt.want.snapshotName {
 				t.Errorf("Snapshot.SnapshotUuid = %q, want %q", got, tt.want.snapshotName)
@@ -1707,14 +1759,17 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	}
 }
 
-// publishContextVolumePlugin hands back a fixed publish context, standing in
-// for a driver whose node plugin needs attachment metadata.
+// publishContextVolumePlugin records AttachVolume requests and hands back a
+// fixed publish context, standing in for a driver whose node plugin needs
+// attachment metadata.
 type publishContextVolumePlugin struct {
 	volume.VolumePluginControlPlane
 	publishContext map[string]string
+	attachCalls    []volume.AttachVolumeRequest
 }
 
 func (p *publishContextVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	p.attachCalls = append(p.attachCalls, req)
 	return volume.AttachVolumeResponse{PublishContext: p.publishContext}, nil
 }
 
@@ -1740,10 +1795,11 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 		t.Fatalf("GetActor: %v", err)
 	}
 
+	plugin := &publishContextVolumePlugin{publishContext: map[string]string{"devicePath": "/dev/xvdba"}}
 	w := &ActorWorkflow{
 		store: persistence,
 		pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{
-			"mock": &publishContextVolumePlugin{publishContext: map[string]string{"devicePath": "/dev/xvdba"}},
+			"mock": plugin,
 		}},
 	}
 	worker := &ateapipb.Worker{NodeName: "node-1"}
@@ -1764,6 +1820,10 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 	want := map[string]map[string]string{"mounted": {"devicePath": "/dev/xvdba"}}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("publish contexts mismatch (-want +got):\n%s", diff)
+	}
+	wantCalls := []volume.AttachVolumeRequest{{VolumeID: "storage-mounted", Node: "node-1"}}
+	if diff := cmp.Diff(wantCalls, plugin.attachCalls); diff != "" {
+		t.Errorf("attachCalls mismatch (-want +got):\n%s", diff)
 	}
 
 	stored, err := persistence.GetActor(ctx, actorRef)
@@ -2036,12 +2096,6 @@ func newContendedWorkflow(t *testing.T, sched *filledUpScheduler) (*ActorWorkflo
 	return w, actor, reader
 }
 
-func gvisorTemplate() *ateapipb.ActorTemplate {
-	return &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
-	}
-}
-
 // TestEnsureWorkerAssigned_ContentionRecordsOneObservation holds the note on
 // ate.scheduler.assignment.duration: ateapi records only the last attempt. A
 // resume that loses a race for the last slot on a worker retries, and the
@@ -2054,7 +2108,7 @@ func TestEnsureWorkerAssigned_ContentionRecordsOneObservation(t *testing.T) {
 	}
 	w, actor, reader := newContendedWorkflow(t, sched)
 
-	_, worker, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, gvisorTemplate())
+	_, worker, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapipb.ActorTemplate{})
 	if err != nil {
 		t.Fatalf("ensureWorkerAssigned: %v", err)
 	}
@@ -2088,7 +2142,7 @@ func TestEnsureWorkerAssigned_ExhaustedBackoffRecordsOneError(t *testing.T) {
 	}
 	w, actor, reader := newContendedWorkflow(t, sched)
 
-	_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, gvisorTemplate())
+	_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapipb.ActorTemplate{})
 	if err == nil {
 		t.Fatal("ensureWorkerAssigned succeeded, want a failure after the backoff ended")
 	}
@@ -2157,7 +2211,7 @@ func TestEnsureWorkerAssigned_CancelledDuringBackoffRecordsOne(t *testing.T) {
 	}
 	defer cancel()
 
-	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, gvisorTemplate())
+	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapipb.ActorTemplate{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ensureWorkerAssigned error = %v, want context.Canceled", err)
 	}
@@ -2187,7 +2241,7 @@ func TestEnsureWorkerAssigned_CancelledBeforeFirstAttemptRecordsNothing(t *testi
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, gvisorTemplate())
+	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapipb.ActorTemplate{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ensureWorkerAssigned error = %v, want context.Canceled", err)
 	}
@@ -2219,7 +2273,7 @@ func TestEnsureWorkerAssigned_CancelledInLastSleepRecordsOne(t *testing.T) {
 	}
 	defer cancel()
 
-	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, gvisorTemplate())
+	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapipb.ActorTemplate{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ensureWorkerAssigned error = %v, want context.Canceled", err)
 	}
@@ -2248,7 +2302,7 @@ func TestEnsureWorkerAssigned_ContextEndsInsideAttemptRecordsOne(t *testing.T) {
 	}
 	w, actor, reader := newContendedWorkflow(t, sched)
 
-	_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, gvisorTemplate())
+	_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapipb.ActorTemplate{})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("ensureWorkerAssigned error = %v, want context.DeadlineExceeded", err)
 	}
@@ -2267,13 +2321,13 @@ func TestEnsureWorkerAssigned_ContextEndsInsideAttemptRecordsOne(t *testing.T) {
 }
 
 // testRuntime is a gvisor SandboxRuntime for arch under compatibility schema
-// v1. A non-empty assetHash adds a gvisor_asset_hash attribute, so two
+// v1. A non-empty bundleHash adds a sandbox_bundle_hash attribute, so two
 // runtimes can share an architecture and still differ, as two versions of
 // one SandboxConfig do.
-func testRuntime(arch, assetHash string) *ateapipb.SandboxRuntime {
+func testRuntime(arch, bundleHash string) *ateapipb.SandboxRuntime {
 	attrs := []*ateapipb.AttributeEntry{{Key: "architecture", Value: arch}}
-	if assetHash != "" {
-		attrs = append(attrs, &ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: assetHash})
+	if bundleHash != "" {
+		attrs = append(attrs, &ateapipb.AttributeEntry{Key: hardware.AttrSandboxBundleHash, Value: bundleHash})
 	}
 	return &ateapipb.SandboxRuntime{
 		SandboxClass: "gvisor",
@@ -2318,6 +2372,35 @@ func durableMemorySnapshot(t *testing.T, runtime *ateapipb.SandboxRuntime) *atea
 	snap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	snap.SandboxRuntime = runtime
 	return snap
+}
+
+// seedMicroVMWorker stores an ACTIVE microvm worker on node with room for one
+// actor, reporting a microvm default runtime.
+func seedMicroVMWorker(t *testing.T, ctx context.Context, st store.Interface, pod, node string) *ateapipb.Worker {
+	t.Helper()
+	worker, err := st.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID(pod)},
+		WorkerNamespace: "worker-ns",
+		WorkerPool:      "vm-pool",
+		WorkerPod:       pod,
+		WorkerPodUid:    testWorkerUID(pod),
+		SandboxClass:    "microvm",
+		NodeName:        node,
+		Status: &ateapipb.WorkerStatus{
+			State:    ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity: &ateapipb.WorkerResources{Actors: 1},
+			DefaultRuntime: &ateapipb.SandboxRuntime{
+				SandboxClass: "microvm",
+				Version: &ateapipb.VersionedSandboxCompat{SchemaVersion: "v1", Attributes: []*ateapipb.AttributeEntry{
+					{Key: "architecture", Value: "amd64"},
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorker(%s): %v", pod, err)
+	}
+	return worker
 }
 
 // seedActorWithSnapshot stores actor team-a/id1 in state holding snap as its
@@ -2392,7 +2475,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		seedRuntimeWorker(t, ctx, st, "amd-pod", "node-amd", amd64RT)
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, amd64RT))
 
-		stored, worker, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, gvisorTemplate())
+		stored, worker, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapipb.ActorTemplate{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
 		}
@@ -2408,7 +2491,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		seedRuntimeWorker(t, ctx, st, "amd-pod", "node-amd", newDefaultRT, oldRestorableRT)
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
 
-		stored, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, gvisorTemplate())
+		stored, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapipb.ActorTemplate{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
 		}
@@ -2423,7 +2506,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		seedRuntimeWorker(t, ctx, st, "arm-pod", "node-arm", arm64RT)
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, amd64RT))
 
-		stored, worker, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, gvisorTemplate())
+		stored, worker, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapipb.ActorTemplate{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
 		}
@@ -2432,6 +2515,30 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		}
 		// The volumes-only restore runs under the fallback worker's default.
 		assertAssignedRuntime(t, stored, arm64RT)
+	})
+
+	t.Run("does not fall back to a worker of another sandbox class", func(t *testing.T) {
+		// A snapshot's files are written by one class's worker and read back
+		// by the same, so relaxing the runtime never crosses classes, not
+		// even for a volumes-only restore that needs no runtime at all.
+		for _, fidelity := range []ateapipb.SnapshotFidelity{
+			ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+		} {
+			t.Run(fidelity.String(), func(t *testing.T) {
+				ctx := context.Background()
+				st := newTestPersistence(t)
+				seedMicroVMWorker(t, ctx, st, "vm-pod", "node-vm")
+				snap := durableMemorySnapshot(t, amd64RT)
+				snap.Fidelity = fidelity
+				actor := seedActorWithSnapshot(t, ctx, st, suspended, "", snap)
+
+				_, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapipb.ActorTemplate{})
+				if apierror.Code(err) != codes.ResourceExhausted {
+					t.Fatalf("assignWorkerAttempt with only a microvm worker = %v, want ResourceExhausted", err)
+				}
+			})
+		}
 	})
 
 	t.Run("does not relax runtime constraint for local pause snapshot", func(t *testing.T) {
@@ -2443,7 +2550,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		local.SandboxRuntime = amd64RT
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "node-1", local)
 
-		_, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, gvisorTemplate())
+		_, _, err := newSchedulingWorkflow(t, ctx, st).assignWorkerAttempt(ctx, actorRef, actor, &ateapipb.ActorTemplate{})
 		if got := apierror.Code(err); got != codes.ResourceExhausted {
 			t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.ResourceExhausted, err)
 		}
@@ -2473,7 +2580,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
 
 		w := &ActorWorkflow{store: st, scheduler: &relaxingTestScheduler{Scheduler: scheduling.New(nil), relaxedWorker: worker}}
-		stored, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, gvisorTemplate())
+		stored, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, &ateapipb.ActorTemplate{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
 		}
@@ -2493,7 +2600,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
 
 		w := &ActorWorkflow{store: st, scheduler: &relaxingTestScheduler{Scheduler: scheduling.New(nil), relaxedWorker: stale}}
-		stored, bound, err := w.assignWorkerAttempt(ctx, actorRef, actor, gvisorTemplate())
+		stored, bound, err := w.assignWorkerAttempt(ctx, actorRef, actor, &ateapipb.ActorTemplate{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
 		}
@@ -2537,7 +2644,7 @@ func TestValidateAssignedWorker_RuntimeFallback(t *testing.T) {
 		}
 
 		w := &ActorWorkflow{store: st, scheduler: scheduling.New(nil)}
-		worker, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, resumingActor, gvisorTemplate())
+		worker, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, resumingActor, &ateapipb.ActorTemplate{})
 		if err != nil {
 			t.Fatalf("validateAssignedWorker: %v", err)
 		}
@@ -2698,5 +2805,50 @@ func TestWorkerAssignmentFromCopiesSPIFFEID(t *testing.T) {
 	got := workerAssignmentFrom(&ateapipb.Worker{WorkerSpiffeId: id}, hardware.Requirement{})
 	if got.GetWorkerSpiffeId() != id {
 		t.Errorf("worker SPIFFE ID = %q, want %q", got.GetWorkerSpiffeId(), id)
+	}
+}
+
+func TestToAteletSandboxRuntime(t *testing.T) {
+	tests := []struct {
+		name string
+		in   *ateapipb.SandboxRuntime
+		want *ateletpb.SandboxRuntime
+	}{
+		{name: "nil"},
+		{
+			name: "class only",
+			in:   &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+			want: &ateletpb.SandboxRuntime{SandboxClass: "gvisor"},
+		},
+		{
+			name: "full",
+			in: &ateapipb.SandboxRuntime{
+				SandboxClass: "gvisor",
+				Version: &ateapipb.VersionedSandboxCompat{
+					SchemaVersion: "v1",
+					Attributes: []*ateapipb.AttributeEntry{
+						{Key: "architecture", Value: "amd64"},
+						{Key: "cpu_features", Value: "3f"},
+					},
+				},
+			},
+			want: &ateletpb.SandboxRuntime{
+				SandboxClass: "gvisor",
+				Version: &ateletpb.VersionedSandboxCompat{
+					SchemaVersion: "v1",
+					Attributes: []*ateletpb.AttributeEntry{
+						{Key: "architecture", Value: "amd64"},
+						{Key: "cpu_features", Value: "3f"},
+					},
+				},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if diff := cmp.Diff(tc.want, toAteletSandboxRuntime(tc.in), protocmp.Transform()); diff != "" {
+				t.Errorf("toAteletSandboxRuntime mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }

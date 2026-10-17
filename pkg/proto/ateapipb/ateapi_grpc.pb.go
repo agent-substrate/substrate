@@ -95,9 +95,12 @@ type ControlClient interface {
 	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
 	// to the template's commit scope where required (Full capture, Data commit).
 	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
+	// Deprecated: Do not use.
 	// Pause a given actor: checkpoint it to its worker's node and leave it
 	// SUSPENDED with that node-local snapshot, pinned to the node. A paused
 	// actor is told from a suspended one by its snapshots, not its state.
+	//
+	// Deprecated: use SuspendActor with DURABILITY_MODE_ASYNCHRONOUS.
 	PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
@@ -256,6 +259,7 @@ func (c *controlClient) SuspendActor(ctx context.Context, in *SuspendActorReques
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *controlClient) PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PauseActorResponse)
@@ -672,9 +676,12 @@ type ControlServer interface {
 	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
 	// to the template's commit scope where required (Full capture, Data commit).
 	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
+	// Deprecated: Do not use.
 	// Pause a given actor: checkpoint it to its worker's node and leave it
 	// SUSPENDED with that node-local snapshot, pinned to the node. A paused
 	// actor is told from a suspended one by its snapshots, not its state.
+	//
+	// Deprecated: use SuspendActor with DURABILITY_MODE_ASYNCHRONOUS.
 	PauseActor(context.Context, *PauseActorRequest) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)

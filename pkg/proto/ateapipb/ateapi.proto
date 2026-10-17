@@ -48,7 +48,10 @@ service Control {
   // Pause a given actor: checkpoint it to its worker's node and leave it
   // SUSPENDED with that node-local snapshot, pinned to the node. A paused
   // actor is told from a suspended one by its snapshots, not its state.
+  //
+  // Deprecated: use SuspendActor with DURABILITY_MODE_ASYNCHRONOUS.
   rpc PauseActor(PauseActorRequest) returns (PauseActorResponse) {
+    option deprecated = true;
     option (method).resource = "Actor";
   }
 
@@ -549,7 +552,8 @@ message Actor {
 
   // worker_selector is the per-actor placement constraint. The scheduler
   // evaluates the AND of this selector and the template's workerSelector to
-  // find eligible pools.
+  // find eligible pools. It narrows the template's selection; pinning a
+  // sandbox class belongs on the template's worker_selector.
   // Changes take effect on the next ResumeActor call.
   //
   // +k8s:optional
@@ -1125,7 +1129,13 @@ message ActorTemplate {
   ResourceMetadata metadata = 1;
 
   // worker_selector restricts which worker pools actors from this template
-  // may use.
+  // may use, by matching the pools' labels. Unset, every pool is eligible.
+  //
+  // The pool decides the sandbox class an actor runs in, so this selector is
+  // also how a template pins one: if the cluster runs pools of more than one
+  // sandbox class and the workload needs a particular one, select only pools
+  // of that class. An actor booting with no snapshot and no selector may land
+  // on a pool of any class, and keeps that class from its first checkpoint on.
   //
   // +k8s:optional
   Selector worker_selector = 2;
@@ -1144,11 +1154,6 @@ message ActorTemplate {
 
   // +k8s:required
   SnapshotConfig snapshot_config = 5;
-
-  // sandbox_config selects the sandbox runtime this version's actors run on.
-  //
-  // +k8s:required
-  SandboxConfig sandbox_config = 6;
 
   // resources is the actor's compute size. Both cpu and memory limits are
   // required: the scheduler books them against worker capacity, and a
@@ -1214,24 +1219,6 @@ message ActorTemplateStatus {
   GoldenSnapshotStatus golden_snapshot_status = 1;
 }
 
-// SandboxConfig selects the sandbox runtime for an ActorTemplate.
-message SandboxConfig {
-  // sandbox_class selects the sandbox runtime family: "gvisor" or "microvm".
-  // Snapshots are not portable across classes.
-  //
-  // +k8s:required
-  // +k8s:maxLength=63
-  // +k8s:customValidation # must be "gvisor" or "microvm"
-  string sandbox_class = 1;
-
-  // config_name names the cluster-scoped SandboxConfig Kubernetes object
-  // supplying the sandbox binaries. Required; must match sandbox_class.
-  //
-  // +k8s:required
-  // +k8s:format=k8s-long-name
-  string config_name = 2;
-}
-
 // SnapshotConfig selects what actor snapshots capture and where they are
 // stored.
 message SnapshotConfig {
@@ -1249,9 +1236,7 @@ message SnapshotConfig {
   // more than this level, and it may package less when a layer cannot be
   // captured or is too expensive to capture at the time, for example memory
   // under host pressure. A process resumed in place on its worker keeps its
-  // memory regardless of this setting. ROOTFS requires
-  // sandbox_config.sandbox_class "microvm". Defaults to MEMORY
-  // when unset.
+  // memory regardless of this setting. Defaults to MEMORY when unset.
   //
   // +k8s:required
   // +k8s:minimum=1
@@ -1676,7 +1661,7 @@ message CreateActorTemplateRequest {
   // version, timestamps) is ignored, as are the status fields.
   //
   // +k8s:required
-  // +k8s:customValidation # volume_mounts must reference declared volumes; ROOTFS fidelity requires the micro-VM sandbox class
+  // +k8s:customValidation # volume_mounts must reference declared volumes
   ActorTemplate actor_template = 1;
 }
 
@@ -1754,10 +1739,40 @@ message SuspendActorRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
+
+  // options controls how SuspendActor persists the actor's snapshot.
+  //
+  // +k8s:optional
+  SuspendOptions options = 2;
 }
 
 message SuspendActorResponse {
   Actor actor = 1;
+}
+
+// SuspendOptions tunes how SuspendActor persists the actor's snapshot.
+message SuspendOptions {
+  // mode selects when SuspendActor returns relative to the snapshot reaching
+  // durable storage. If unspecified, defaults to DURABILITY_MODE_ASYNCHRONOUS.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the DurabilityMode enum
+  DurabilityMode mode = 1;
+}
+
+// DurabilityMode selects when a suspend is acknowledged relative to its
+// snapshot being stored durably.
+enum DurabilityMode {
+  DURABILITY_MODE_UNSPECIFIED = 0;
+
+  // Return only after the snapshot is complete in durable storage.
+  DURABILITY_MODE_SYNCHRONOUS = 1;
+
+  // Return once the snapshot is captured on the node. The upload to durable
+  // storage continues in the background.
+  DURABILITY_MODE_ASYNCHRONOUS = 2;
+  // Keep this in sync with SuspendOptions.mode's maximum.
 }
 
 message PauseActorRequest {
@@ -2435,7 +2450,7 @@ message VersionedSandboxCompat {
   string schema_version = 1;
 
   // Key-value compatibility attributes defined by this schema version, covering
-  // both runtime assets (e.g. "sandbox_runtime_hash") and effective guest
+  // both runtime assets (e.g. "sandbox_bundle_hash") and effective guest
   // hardware features after masking (e.g. "architecture", "cpu_features").
   // Matched against a snapshot under the same schema_version: every attribute
   // on the snapshot must be present on the worker with an equal value (except
@@ -2456,7 +2471,7 @@ message VersionedSandboxCompat {
 
 // AttributeEntry is a single key-value compatibility attribute.
 message AttributeEntry {
-  // Attribute name (e.g. "architecture", "cpu_features", "sandbox_runtime_hash").
+  // Attribute name (e.g. "architecture", "cpu_features", "sandbox_bundle_hash").
   //
   // +k8s:required
   // +k8s:maxLength=128

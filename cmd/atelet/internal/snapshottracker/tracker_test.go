@@ -16,6 +16,7 @@ package snapshottracker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -69,6 +71,25 @@ func testRef(uuid string, generation int32, commitTime time.Time) SnapshotRef {
 	}
 }
 
+// testActor is the actor testRef's snapshots belong to.
+var testActor = resources.ActorRef{Atespace: "ate-demo", Name: "counter"}
+
+func TestSnapshotRefJSONKeepsTheActor(t *testing.T) {
+	ref := testRef("s1", 1, time.Unix(1_700_000_000, 0).UTC())
+	ref.Actor = testActor
+	data, err := json.Marshal(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got SnapshotRef
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Actor != testActor || !proto.Equal(got.Snapshot, ref.Snapshot) || !got.CommitTime.Equal(ref.CommitTime) {
+		t.Errorf("round trip = %+v, want %+v", got, ref)
+	}
+}
+
 func timeOf(ts *timestamppb.Timestamp) time.Time {
 	if ts == nil {
 		return time.Time{}
@@ -98,13 +119,14 @@ type fakeSnapshotStore struct {
 
 	mu       sync.Mutex
 	calls    []string
+	actors   map[string]resources.ActorRef
 	uploaded map[string]bool
 	blocking bool
 	err      error
 }
 
 func newFakeSnapshotStore() *fakeSnapshotStore {
-	return &fakeSnapshotStore{started: make(chan string, 100), release: make(chan error)}
+	return &fakeSnapshotStore{started: make(chan string, 100), release: make(chan error), actors: map[string]resources.ActorRef{}}
 }
 
 // setBlocking makes later calls wait for release, or their context.
@@ -127,9 +149,17 @@ func (f *fakeSnapshotStore) uploads() []string {
 	return slices.Clone(f.calls)
 }
 
+// actorOf returns the actor the upload of the snapshot acted for.
+func (f *fakeSnapshotStore) actorOf(uuid string) resources.ActorRef {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.actors[uuid]
+}
+
 func (f *fakeSnapshotStore) UploadLocalSnapshot(ctx context.Context, _ string, ref SnapshotRef) (bool, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, ref.uuid())
+	f.actors[ref.uuid()] = ref.Actor
 	blocking, err := f.blocking, f.err
 	f.mu.Unlock()
 	f.started <- ref.uuid()

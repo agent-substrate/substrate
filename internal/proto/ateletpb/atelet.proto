@@ -110,7 +110,7 @@ message VersionedSandboxCompat {
   string schema_version = 1;
 
   // Key-value compatibility attributes defined by this schema version, covering
-  // both runtime assets (e.g. "sandbox_runtime_hash") and effective guest
+  // both runtime assets (e.g. "sandbox_bundle_hash") and effective guest
   // hardware features after masking (e.g. "architecture", "cpu_features").
   // Matched against a snapshot under the same schema_version: every attribute
   // on the snapshot must be present on the worker with an equal value (except
@@ -130,7 +130,7 @@ message VersionedSandboxCompat {
 
 // AttributeEntry is a single key-value compatibility attribute.
 message AttributeEntry {
-  // Attribute name (e.g. "architecture", "cpu_features", "sandbox_runtime_hash").
+  // Attribute name (e.g. "architecture", "cpu_features", "sandbox_bundle_hash").
   //
   // +k8s:required
   // +k8s:maxLength=128
@@ -456,6 +456,16 @@ message RunRequest {
   // +k8s:optional
   // +k8s:minimum=0
   int64 memory_bytes = 11; // Memory limit in bytes.
+
+  // The runtime the assigned worker runs this actor under, from
+  // WorkerAssignment.sandbox_runtime.
+  //
+  // TODO: atelet still runs with sandbox_assets; a follow-up resolves the
+  // SandboxConfig version from this field, makes it required, and removes
+  // sandbox_assets.
+  //
+  // +k8s:optional
+  SandboxRuntime sandbox_runtime = 12;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -1130,10 +1140,20 @@ message RestoreRequest {
   int64 memory_bytes = 15; // Memory limit in bytes.
 
   // The sandbox binaries and pause image to restore with, resolved from the
-  // ActorTemplate's SandboxConfig.
+  // assigned worker pool's SandboxConfig.
   //
   // +k8s:required
   SandboxAssets sandbox_assets = 16;
+
+  // The runtime the assigned worker restores this actor under, from
+  // WorkerAssignment.sandbox_runtime.
+  //
+  // TODO: atelet still restores with sandbox_assets; a follow-up resolves the
+  // SandboxConfig version from this field, makes it required, and removes
+  // sandbox_assets.
+  //
+  // +k8s:optional
+  SandboxRuntime sandbox_runtime = 17;
 }
 
 message RestoreResponse {

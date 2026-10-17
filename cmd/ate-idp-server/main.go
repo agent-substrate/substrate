@@ -35,6 +35,7 @@ import (
 	"go.ate.dev/substrate/cmd/ate-idp-server/internal/server"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/localjwtauthority"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
 )
@@ -46,6 +47,7 @@ var (
 	serverBundle = pflag.String("server-cred-bundle", "", "Credential bundle (PEM key and chain) presented for serving TLS (required).")
 	logLevel     = pflag.String("log-level", "info", "One of debug, info, warn, error.")
 	drainGrace   = pflag.Duration("drain-grace", 5*time.Second, "How long to wait for in-flight requests on shutdown.")
+	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 )
 
 func main() {
@@ -55,6 +57,9 @@ func main() {
 	serverboot.InitLogger()
 	if err := serverboot.SetLogLevel(*logLevel); err != nil {
 		serverboot.Fatal(ctx, "invalid --log-level", err)
+	}
+	if err := preview.Init(*previewFlags...); err != nil {
+		serverboot.Fatal(ctx, "invalid --preview", err)
 	}
 	slog.InfoContext(ctx, "starting ate-idp-server", slog.String("version", version.String()))
 

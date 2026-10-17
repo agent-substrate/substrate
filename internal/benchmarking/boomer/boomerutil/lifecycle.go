@@ -57,8 +57,8 @@ const (
 	conflictRetryJitter  = 5 * time.Millisecond
 )
 
-// ClassifyLifecycleFailure maps an error from ResumeActor / SuspendActor /
-// PauseActor onto what to do about it. Unrecognized codes are recoverable
+// ClassifyLifecycleFailure maps an error from ResumeActor / SuspendActor
+// onto what to do about it. Unrecognized codes are recoverable
 // until proven otherwise: a wrapped atelet error arrives as Internal.
 func ClassifyLifecycleFailure(err error) FailureAction {
 	s, ok := status.FromError(err)

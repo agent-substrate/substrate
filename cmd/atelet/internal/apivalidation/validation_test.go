@@ -392,6 +392,18 @@ func TestValidateRunRequest(t *testing.T) {
 			r.CpuMilli = 0
 			r.MemoryBytes = 0
 		}),
+	}, {
+		name: "valid sandbox_runtime",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.SandboxRuntime = runtimeWithAttributes(1)
+		}),
+	}, {
+		name: "sandbox_runtime errors surface at their path",
+		obj: valid(func(r *ateletpb.RunRequest) {
+			r.SandboxRuntime = runtimeWithAttributes(1)
+			r.SandboxRuntime.SandboxClass = "kata"
+		}),
+		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_runtime", "sandbox_class"), nil, nil)},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -835,6 +847,18 @@ func TestValidateRestoreRequest(t *testing.T) {
 			r.SandboxAssets = validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = "kata" })
 		}),
 		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_assets", "sandbox_class"), nil, nil)},
+	}, {
+		name: "valid sandbox_runtime",
+		obj: valid(func(r *ateletpb.RestoreRequest) {
+			r.SandboxRuntime = runtimeWithAttributes(1)
+		}),
+	}, {
+		name: "sandbox_runtime errors surface at their path",
+		obj: valid(func(r *ateletpb.RestoreRequest) {
+			r.SandboxRuntime = runtimeWithAttributes(1)
+			r.SandboxRuntime.SandboxClass = "kata"
+		}),
+		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_runtime", "sandbox_class"), nil, nil)},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

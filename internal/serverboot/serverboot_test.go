@@ -605,33 +605,98 @@ func bridgedRegistry(t *testing.T) *prometheus.Registry {
 	return reg
 }
 
-// With the OTLP export, whether selected or the default, the bridged family and
-// the OTel instrument are each pushed once. The instrument must stay off the
-// bridged registry: there the bridge would push it a second time, under its
-// Prometheus name.
+// With the OTLP export, the bridged family and the OTel instrument are each
+// pushed once. When the scraped endpoint is on too, the instrument is served
+// from the bridged registry as well, and the bridge must not push it again
+// under its Prometheus name.
 func TestInitMetricsBridgedPushesEachMetricOnce(t *testing.T) {
-	for _, tt := range []struct{ name, value string }{
-		{"unset", ""},
-		{"otlp", "otlp"},
-		{"list", "otlp,prometheus"},
+	for _, tt := range []struct {
+		name, value string
+		served      bool
+	}{
+		{"unset", "", true},
+		{"otlp", "otlp", false},
+		{"list", "otlp,prometheus", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			collector := startMetricsCollector(t, tt.value)
 			reg := bridgedRegistry(t)
-			mp, _, err := InitMetricsBridged(t.Context(), "test-bridged-otlp", reg, nil)
+			mp, servePull, err := InitMetricsBridged(t.Context(), "test-bridged-otlp", reg, nil)
 			if err != nil {
 				t.Fatalf("InitMetricsBridged: %v", err)
 			}
+			if servePull != tt.served {
+				t.Errorf("servePull = %v, want %v", servePull, tt.served)
+			}
 			addOne(t, mp, "ate.test.bridged.count")
-			if gatheredNames(t, reg)["ate_test_bridged_count_total"] {
-				t.Error("the OTel instrument is registered on the bridged registry")
+			names := gatheredNames(t, reg)
+			if names["ate_test_bridged_count_total"] != tt.served {
+				t.Errorf("the bridged registry serves the OTel instrument = %v, want %v", !tt.served, tt.served)
+			}
+			if !names["test_bridged_family"] {
+				t.Error("the bridged registry lost its own family")
 			}
 			pushed := collector.flush(t, mp)
-			if pushed["ate.test.bridged.count"] != 1 || pushed["test_bridged_family"] != 1 || pushed["ate_test_bridged_count_total"] != 0 {
-				t.Errorf("want ate.test.bridged.count and test_bridged_family pushed once each and nothing else for them, got %v", pushed)
+			if pushed["ate.test.bridged.count"] != 1 || pushed["test_bridged_family"] != 1 {
+				t.Errorf("want ate.test.bridged.count and test_bridged_family pushed once each, got %v", pushed)
+			}
+			if pushed["ate_test_bridged_count_total"] != 0 || pushed["target_info"] != 0 {
+				t.Errorf("the bridge pushed what the OTel reader already covers: %v", pushed)
 			}
 		})
 	}
+}
+
+// A skip list that cannot be gathered drops the batch without failing the
+// collection, so nothing is pushed twice and the other metrics still push.
+// inner's own error is still returned.
+func TestSkipFamiliesDropsBatchOnGatherError(t *testing.T) {
+	innerErr := errors.New("inner failed")
+	for _, tt := range []struct {
+		name     string
+		innerErr error
+	}{
+		{"no inner error", nil},
+		{"inner error", innerErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			inner := producerFunc(func(context.Context) ([]metricdata.ScopeMetrics, error) {
+				return []metricdata.ScopeMetrics{{Metrics: []metricdata.Metrics{{Name: "kept"}}}}, tt.innerErr
+			})
+			failing := prometheus.NewRegistry()
+			failing.MustRegister(failingCollector{})
+			scopes, err := skipFamilies{inner: inner, skip: failing}.Produce(t.Context())
+			if scopes != nil || err != tt.innerErr {
+				t.Errorf("Produce = %v, %v; want no metrics and %v", scopes, err, tt.innerErr)
+			}
+		})
+	}
+}
+
+// A family that reaches the skip registry while inner produces is still
+// dropped, so the bridge never pushes it under its Prometheus name.
+func TestSkipFamiliesCoversFamiliesRegisteredDuringProduce(t *testing.T) {
+	skip := prometheus.NewRegistry()
+	inner := producerFunc(func(context.Context) ([]metricdata.ScopeMetrics, error) {
+		skip.MustRegister(prometheus.NewCounter(prometheus.CounterOpts{Name: "late_total", Help: "late"}))
+		return []metricdata.ScopeMetrics{{Metrics: []metricdata.Metrics{{Name: "late_total"}, {Name: "kept"}}}}, nil
+	})
+	scopes, err := skipFamilies{inner: inner, skip: skip}.Produce(t.Context())
+	if err != nil {
+		t.Fatalf("Produce: %v", err)
+	}
+	if len(scopes) != 1 || len(scopes[0].Metrics) != 1 || scopes[0].Metrics[0].Name != "kept" {
+		t.Errorf("Produce = %v, want only kept", scopes)
+	}
+}
+
+// failingCollector is an unchecked collector whose every Gather fails.
+type failingCollector struct{}
+
+func (failingCollector) Describe(chan<- *prometheus.Desc) {}
+
+func (failingCollector) Collect(ch chan<- prometheus.Metric) {
+	ch <- prometheus.NewInvalidMetric(prometheus.NewDesc("failing", "always invalid", nil, nil), errors.New("boom"))
 }
 
 // wrapProducer sits between the bridge and the OTLP push.

@@ -242,14 +242,15 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 	actor := &ateapipb.Actor{
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-agents", Name: "support-agent"},
 		Status: &ateapipb.ActorStatus{
-			WorkerAssignment: &ateapipb.WorkerAssignment{WorkerNamespace: "ate-workers", WorkerPool: "pool-a"},
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				WorkerNamespace: "ate-workers",
+				WorkerPool:      "pool-a",
+				SandboxRuntime:  &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+			},
 		},
 	}
-	template := &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
-	}
 	inst.recordLifecycleOp(context.Background(), ateattr.OperationResume, time.Now(), nil,
-		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest, ateattr.SnapshotFidelityVolumes)...)
+		lifecycleOpAttrs(actor, ateattr.SnapshotKindLatest, ateattr.SnapshotFidelityVolumes)...)
 
 	dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)
 	assertAttrKeys(t, dp,
@@ -286,9 +287,9 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 // pins the pool pair: a failure before the assign step emits neither key.
 func TestLifecycleOpAttrsOmitsUnknownScope(t *testing.T) {
 	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-agents", Name: "support-agent"}}
-	for _, kv := range lifecycleOpAttrs(actor, nil, "", "") {
+	for _, kv := range lifecycleOpAttrs(actor, "", "") {
 		switch kv.Key {
-		case ateattr.SnapshotFidelityKey, ateattr.SnapshotKindKey, ateattr.WorkerPoolNamespaceKey, ateattr.WorkerPoolNameKey:
+		case ateattr.SnapshotFidelityKey, ateattr.SnapshotKindKey, ateattr.WorkerPoolNamespaceKey, ateattr.WorkerPoolNameKey, ateattr.SandboxClassKey:
 			t.Errorf("attribute %s must be omitted while unknown, got %q", kv.Key, kv.Value.AsString())
 		}
 	}
@@ -299,7 +300,7 @@ func TestLifecycleOpAttrsOmitsUnknownScope(t *testing.T) {
 // holds no actor, so the template keys are omitted, as on a failed delete,
 // rather than recorded as the empty string.
 func TestLifecycleOpAttrsOmitsTemplateBeforeLoad(t *testing.T) {
-	if got := lifecycleOpAttrs(nil, nil, "", ""); len(got) != 0 {
+	if got := lifecycleOpAttrs(nil, "", ""); len(got) != 0 {
 		t.Errorf("lifecycleOpAttrs(nil actor) = %v, want no attributes", got)
 	}
 }

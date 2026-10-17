@@ -73,9 +73,6 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, re
 // is as for admitActor.
 func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, error) {
 	uid := attribution.UID
-	if uid == "" {
-		return nil, fmt.Errorf("actor UID is required")
-	}
 
 	hosted, stale, err := s.admitActor(attribution, resumesGuest)
 	if err != nil {

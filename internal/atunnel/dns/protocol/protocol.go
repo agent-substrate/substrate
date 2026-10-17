@@ -79,9 +79,10 @@ func QDCount(raw []byte) uint16 {
 	return binary.BigEndian.Uint16(raw[4:6])
 }
 
-// ErrorPacket returns a serialized DNS packet signaling an error.
-func ErrorPacket(hdr dnsmessage.Header, rcode dnsmessage.RCode, q *dnsmessage.Question) []byte {
-	respHdr := dnsmessage.Header{
+// responseHeader returns the header of a synthesized response to a request
+// with header hdr.
+func responseHeader(hdr dnsmessage.Header, rcode dnsmessage.RCode) dnsmessage.Header {
+	return dnsmessage.Header{
 		ID:                 hdr.ID,
 		Response:           true,
 		OpCode:             hdr.OpCode,
@@ -89,8 +90,42 @@ func ErrorPacket(hdr dnsmessage.Header, rcode dnsmessage.RCode, q *dnsmessage.Qu
 		RecursionAvailable: true,
 		RCode:              rcode,
 	}
+}
 
-	b := dnsmessage.NewBuilder(nil, respHdr)
+// NXDomainPacket returns a serialized NXDOMAIN response to the question q.
+//
+// The authority section carries an SOA record for the root zone whose TTL and
+// MINIMUM are both 0. Resolvers that cache negative answers take the cache
+// lifetime from that record (RFC 2308 section 5), so they do not cache this
+// one; without an SOA record some, such as dnspython, cache it indefinitely.
+func NXDomainPacket(hdr dnsmessage.Header, q dnsmessage.Question) []byte {
+	root := dnsmessage.MustNewName(".")
+	b := dnsmessage.NewBuilder(nil, responseHeader(hdr, dnsmessage.RCodeNameError))
+	if err := b.StartQuestions(); err != nil {
+		return ErrorPacket(hdr, dnsmessage.RCodeNameError, &q)
+	}
+	if err := b.Question(q); err != nil {
+		return ErrorPacket(hdr, dnsmessage.RCodeNameError, &q)
+	}
+	if err := b.StartAuthorities(); err != nil {
+		return ErrorPacket(hdr, dnsmessage.RCodeNameError, &q)
+	}
+	if err := b.SOAResource(
+		dnsmessage.ResourceHeader{Name: root, Class: dnsmessage.ClassINET, TTL: 0},
+		dnsmessage.SOAResource{NS: root, MBox: root, MinTTL: 0},
+	); err != nil {
+		return ErrorPacket(hdr, dnsmessage.RCodeNameError, &q)
+	}
+	out, err := b.Finish()
+	if err != nil {
+		return ErrorPacket(hdr, dnsmessage.RCodeNameError, &q)
+	}
+	return out
+}
+
+// ErrorPacket returns a serialized DNS packet signaling an error.
+func ErrorPacket(hdr dnsmessage.Header, rcode dnsmessage.RCode, q *dnsmessage.Question) []byte {
+	b := dnsmessage.NewBuilder(nil, responseHeader(hdr, rcode))
 	// Try to tack on the question, if possible.
 	if q != nil {
 		if err := b.StartQuestions(); err == nil {
