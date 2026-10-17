@@ -2010,7 +2010,8 @@ type WorkerServiceClient interface {
 	// atelet detached the Actor from the node. Only atelet observes either.
 	//
 	// atelet calls this with its own client certificate, for an Actor on its
-	// node. Each report carries the whole state, so repeating one is safe.
+	// node, each time a background upload or detach succeeds. Each report
+	// carries the whole state, so repeating one is safe.
 	// Returns ABORTED while another operation is changing the Actor; retry.
 	// Returns NOT_FOUND once the Actor is gone or no longer on the caller's
 	// node. Returns FAILED_PRECONDITION or INVALID_ARGUMENT when the report
@@ -2145,7 +2146,8 @@ type WorkerServiceServer interface {
 	// atelet detached the Actor from the node. Only atelet observes either.
 	//
 	// atelet calls this with its own client certificate, for an Actor on its
-	// node. Each report carries the whole state, so repeating one is safe.
+	// node, each time a background upload or detach succeeds. Each report
+	// carries the whole state, so repeating one is safe.
 	// Returns ABORTED while another operation is changing the Actor; retry.
 	// Returns NOT_FOUND once the Actor is gone or no longer on the caller's
 	// node. Returns FAILED_PRECONDITION or INVALID_ARGUMENT when the report

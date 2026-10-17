@@ -327,6 +327,24 @@ func main() {
 		serverboot.Fatal(ctx, "Object-store plugin is not serving", err)
 	}
 
+	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		K8sClient:        k8sClient,
+		CAFile:           *ateapiCAFile,
+		ServerName:       *ateapiServerName,
+		ClientCredBundle: *grpcServerCredBundle,
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
+	}
+	// atelet acts for the system, not a user, so it always opts in to the
+	// preview features the server enables.
+	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
+	ateapiConn, err := grpc.NewClient(*ateapiAddress, dialOpts...)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create ateapi client", err)
+	}
+	defer ateapiConn.Close()
+
 	// The snapshot tracker's workers get a context of their own, cancelled only
 	// once the gRPC server has drained, so background snapshot work keeps
 	// running while in-flight RPCs finish.
@@ -335,7 +353,8 @@ func main() {
 	snapshots := snapshottracker.New(trackerCtx, store, clock.RealClock{},
 		snapshottracker.WithUploadDelay(*snapshotUploadDelay),
 		snapshottracker.WithDetachDelay(*snapshotDetachDelay),
-		snapshottracker.WithInstruments(trackerInstruments))
+		snapshottracker.WithInstruments(trackerInstruments),
+		snapshottracker.WithReporter(&snapshotReporter{workers: ateapipb.NewWorkerServiceClient(ateapiConn)}))
 	// The runtimes this node's workers advertise, read by Run and Restore.
 	// Loaded from disk before anything serves, so a runtime a worker
 	// registered before a restart resolves at once; the worker sandbox
@@ -363,24 +382,6 @@ func main() {
 	store.s = wmService
 	snapshots.Start()
 	go systemInfoVolumes.run(ctx)
-
-	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		K8sClient:        k8sClient,
-		CAFile:           *ateapiCAFile,
-		ServerName:       *ateapiServerName,
-		ClientCredBundle: *grpcServerCredBundle,
-	})
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
-	}
-	// atelet acts for the system, not a user, so it always opts in to the
-	// preview features the server enables.
-	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
-	ateapiConn, err := grpc.NewClient(*ateapiAddress, dialOpts...)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create ateapi client", err)
-	}
-	defer ateapiConn.Close()
 
 	tlsCfg, err := ateletServerTLSConfig(*grpcServerCredBundle, *clientCACerts)
 	if err != nil {

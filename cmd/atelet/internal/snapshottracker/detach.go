@@ -24,7 +24,9 @@ import (
 // beginDetachLocked begins a detach of the actor's latest local snapshot,
 // under a context derived from ctx, and returns the func that finishes it
 // once the caller releases the actor's lock. It begins nothing, and fails,
-// when no detach can make the snapshot durable (see detachTarget).
+// when no detach can make the snapshot durable (see detachTarget). A
+// background detach that succeeds reports the actor's state once it has
+// ended; a Detach call returns that state to its caller instead.
 func (t *Tracker) beginDetachLocked(ctx context.Context, a *actorSnapshots, background bool) (func() (*ateletpb.ActorSnapshotState, error), error) {
 	target, alreadyDurable, err := a.detachTarget()
 	if err != nil {
@@ -32,7 +34,11 @@ func (t *Tracker) beginDetachLocked(ctx context.Context, a *actorSnapshots, back
 	}
 	opCtx, op := t.beginOpLocked(ctx, a, opDetach, target)
 	return func() (*ateletpb.ActorSnapshotState, error) {
-		return t.finishDetach(opCtx, a.actorUID, op, alreadyDurable, background)
+		st, err := t.finishDetach(opCtx, a.actorUID, op, alreadyDurable, background)
+		if background && err == nil {
+			t.report(a.actorUID, target.Actor, opDetach)
+		}
+		return st, err
 	}, nil
 }
 

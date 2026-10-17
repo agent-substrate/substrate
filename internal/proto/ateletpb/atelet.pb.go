@@ -3596,10 +3596,13 @@ type CheckpointResponse struct {
 	// atelet has deleted any local snapshot not named here, or deletes it once
 	// uploading ends.
 	//
+	// atelet reports what later background uploads and detaches change with
+	// WorkerService.ReportActorSnapshotState.
+	//
 	// TODO: Add a snapshot garbage collection system for orphaned objects in
-	// object storage. atelet reports snapshot state to ateapi only on RPC
-	// responses, so a background upload superseded before the next response
-	// leaves objects ateapi never learned were durable.
+	// object storage. Those reports are best-effort, so a background upload
+	// whose report is dropped, and that a newer snapshot supersedes before
+	// the next response, leaves objects ateapi never learned were durable.
 	State         *ActorSnapshotState `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

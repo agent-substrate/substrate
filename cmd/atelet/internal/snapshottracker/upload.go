@@ -41,7 +41,9 @@ func (t *Tracker) beginUploadLocked(ctx context.Context, a *actorSnapshots) func
 		if superseded != nil {
 			t.removeSupersededLocalCopy(actorUID, *superseded)
 		}
-		t.backgroundUpload(opCtx, actorUID, op)
+		if t.backgroundUpload(opCtx, actorUID, op) {
+			t.report(actorUID, target.Actor, opUpload)
+		}
 	}
 }
 
@@ -81,8 +83,10 @@ func (t *Tracker) uploadSnapshot(ctx context.Context, actorUID string, target Sn
 // replaces target, it removes target's local copy if LatestLocal moved on (see
 // removeSupersededLocalCopy); when the upload fails and LatestLocal cannot
 // replace target, it keeps target in Uploading to retry. An upload Forget
-// abandoned leaves the actor alone.
-func (t *Tracker) backgroundUpload(ctx context.Context, actorUID string, op *actorOp) {
+// abandoned leaves the actor alone. It reports whether the upload succeeded,
+// so the caller reports the actor's new state once op has ended, rather than
+// keep whatever waits on op waiting on the control plane too.
+func (t *Tracker) backgroundUpload(ctx context.Context, actorUID string, op *actorOp) (succeeded bool) {
 	defer close(op.done)
 	target := op.target
 	uploaded, elapsed, err := t.uploadSnapshot(ctx, actorUID, target, true)
@@ -92,7 +96,7 @@ func (t *Tracker) backgroundUpload(ctx context.Context, actorUID string, op *act
 	a := t.endOpLocked(actorUID, op)
 	if a == nil {
 		t.unlock(actorUID)
-		return
+		return false
 	}
 	removeOld := false
 	switch {
@@ -128,6 +132,7 @@ func (t *Tracker) backgroundUpload(ctx context.Context, actorUID string, op *act
 	if removeOld {
 		t.removeSupersededLocalCopy(actorUID, target)
 	}
+	return err == nil
 }
 
 // recordUploadLocked records that an upload of target succeeded. uploaded

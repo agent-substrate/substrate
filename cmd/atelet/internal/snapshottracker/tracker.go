@@ -23,6 +23,7 @@ import (
 
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/clock"
@@ -35,6 +36,12 @@ type Store interface {
 	// without uploading if a manifest is already committed there. It reports
 	// whether it uploaded.
 	UploadLocalSnapshot(ctx context.Context, actorUID string, ref SnapshotRef) (bool, error)
+}
+
+// Reporter tells the control plane an actor's snapshot state after atelet
+// changed it in the background, as ReportActorSnapshotState does.
+type Reporter interface {
+	ReportActorSnapshotState(ctx context.Context, actor resources.ActorRef, actorUID string, state *ateletpb.ActorSnapshotState) error
 }
 
 // Tracker tracks each actor's snapshots on this node: the latest one stored
@@ -73,6 +80,11 @@ type Store interface {
 //     Checkpoint, or PromoteSnapshot is in progress (BeginStart,
 //     BeginCheckpoint, or BeginPromote) waits for it to end, which queues the
 //     actor again.
+//  7. Once a background upload or detach succeeds, the worker that ran it
+//     reports the actor's state to the control plane (see report), retrying
+//     a few times. A report that still fails is dropped: the state that the
+//     actor's next Checkpoint, PromoteSnapshot, or detach returns or reports
+//     carries the same facts.
 //
 // The Detach RPC runs in the calling goroutine rather than on a worker, so an
 // explicit control-plane call does not wait behind other actors' background
@@ -105,6 +117,9 @@ type Tracker struct {
 	// instruments records background upload duration and outcome. Nil without
 	// WithInstruments.
 	instruments *Instruments
+	// reporter reports the state a background upload or detach leaves. Nil
+	// without WithReporter, and then nothing is reported.
+	reporter Reporter
 	// retries says how long an actor's background work is held back after a
 	// failure: longer with each consecutive failure for the actor.
 	retries workqueue.TypedRateLimiter[string]
@@ -153,6 +168,14 @@ func WithDetachDelay(d time.Duration) Option {
 func WithInstruments(inst *Instruments) Option {
 	return func(t *Tracker) {
 		t.instruments = inst
+	}
+}
+
+// WithReporter sets what reports an actor's snapshot state to the control
+// plane after a background upload or detach succeeds.
+func WithReporter(r Reporter) Option {
+	return func(t *Tracker) {
+		t.reporter = r
 	}
 }
 
