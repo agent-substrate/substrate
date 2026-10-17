@@ -38,6 +38,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestEmbeddedScriptsAreValid keeps every built-in variant loadable: a file
@@ -554,6 +555,8 @@ type fakeControlClient struct {
 	calls       []string
 	resumeErrs  []error
 	suspendErrs []error
+	// suspendReqs holds every SuspendActor request, in arrival order.
+	suspendReqs []*ateapipb.SuspendActorRequest
 	// sawDeadline is set when a call arrived with a context deadline.
 	sawDeadline bool
 	// templateMemory is the memory limit GetActorTemplate reports; "" means
@@ -614,22 +617,14 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 }
 
 func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
-	f.record(ctx, suspendCallName(in))
+	f.record(ctx, "SuspendActor")
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.suspendReqs = append(f.suspendReqs, in)
 	if err := nextErr(&f.suspendErrs); err != nil {
 		return nil, err
 	}
 	return &ateapipb.SuspendActorResponse{}, nil
-}
-
-// suspendCallName is the name a SuspendActor call is recorded under: an
-// async suspend is told apart from a sync one.
-func suspendCallName(in *ateapipb.SuspendActorRequest) string {
-	if in.GetOptions().GetMode() == ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
-		return "SuspendActor(async)"
-	}
-	return "SuspendActor"
 }
 
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
@@ -646,6 +641,12 @@ func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.Delete
 		time.Sleep(f.deleteDelay)
 	}
 	return &ateapipb.Actor{}, nil
+}
+
+func (f *fakeControlClient) recordedSuspendReqs() []*ateapipb.SuspendActorRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*ateapipb.SuspendActorRequest(nil), f.suspendReqs...)
 }
 
 func (f *fakeControlClient) recordedCalls() []string {
@@ -714,6 +715,45 @@ func TestRunStep_RetriesStrandedHibernate(t *testing.T) {
 
 	if !u.runStep(context.Background(), pingStep) {
 		t.Error("runStep = false once the suspend cleared")
+	}
+}
+
+// A step ends with an async SuspendActor in pause LifecycleMode and a sync
+// one in suspend LifecycleMode.
+func TestRunStep_HibernateMode(t *testing.T) {
+	ref := &ateapipb.ObjectRef{Atespace: "benchmark", Name: "agent-test"}
+	for _, tt := range []struct {
+		name          string
+		lifecycleMode string
+		want          *ateapipb.SuspendActorRequest
+	}{
+		{
+			name:          "pause",
+			lifecycleMode: dynconfig.LifecycleModePause,
+			want: &ateapipb.SuspendActorRequest{
+				Actor:   ref,
+				Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			},
+		},
+		{
+			name:          "suspend",
+			lifecycleMode: dynconfig.LifecycleModeSuspend,
+			want:          &ateapipb.SuspendActorRequest{Actor: ref},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctl := &fakeControlClient{}
+			u := newTestUser(t, &fake.Server{}, ctl, knobs{Lifecycle: dynconfig.Lifecycle{LifecycleMode: tt.lifecycleMode}})
+
+			if !u.runStep(context.Background(), pingStep) {
+				t.Fatal("runStep = false")
+			}
+
+			got := ctl.recordedSuspendReqs()
+			if len(got) != 1 || !proto.Equal(got[0], tt.want) {
+				t.Errorf("SuspendActor requests = %v, want [%v]", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -931,7 +971,7 @@ func TestLifecycleModeNone(t *testing.T) {
 	if got := wakeFirstTouchCount(t) - wakesBefore; got != 0 {
 		t.Errorf("WakeFirstTouch recorded %v times in LifecycleModeNone, want 0", got)
 	}
-	for _, call := range []string{"SuspendActor", "PauseActor", "ResumeActor"} {
+	for _, call := range []string{"SuspendActor", "ResumeActor"} {
 		if got := countCalls(ctl.recordedCalls(), call); got != 0 {
 			t.Errorf("%s called %d times in LifecycleModeNone, want 0; calls = %v", call, got, ctl.recordedCalls())
 		}
@@ -969,8 +1009,8 @@ func TestSnapshotSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := countCalls(ctl.recordedCalls(), "SuspendActor(async)"); got != 0 {
-		t.Fatalf("SuspendActor(async) after startUser = %d, want 0", got)
+	if got := ctl.recordedSuspendReqs(); len(got) != 0 {
+		t.Fatalf("SuspendActor requests after startUser = %v, want none", got)
 	}
 
 	// Run 4 steps (1-based 1..4). Only steps 2 and 4 should park; only step 3
@@ -983,8 +1023,18 @@ func TestSnapshotSteps(t *testing.T) {
 			t.Fatalf("step %d failed", i+1)
 		}
 	}
-	if got := countCalls(ctl.recordedCalls(), "SuspendActor(async)"); got != 2 {
-		t.Errorf("SuspendActor(async) calls across 4 steps = %d, want 2 (steps 2 and 4); calls = %v", got, ctl.recordedCalls())
+	wantSuspend := &ateapipb.SuspendActorRequest{
+		Actor:   session.ref(),
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	}
+	gotSuspends := ctl.recordedSuspendReqs()
+	if len(gotSuspends) != 2 {
+		t.Errorf("SuspendActor requests across 4 steps = %v, want 2 (steps 2 and 4)", gotSuspends)
+	}
+	for _, got := range gotSuspends {
+		if !proto.Equal(got, wantSuspend) {
+			t.Errorf("SuspendActor request = %v, want %v", got, wantSuspend)
+		}
 	}
 	if got := countCalls(ctl.recordedCalls(), "ResumeActor"); got != 1 {
 		t.Errorf("ResumeActor calls across 4 steps = %d, want 1 (at step 3 after step 2 parked); calls = %v", got, ctl.recordedCalls())
