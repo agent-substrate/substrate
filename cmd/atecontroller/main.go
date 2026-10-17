@@ -313,14 +313,15 @@ func main() {
 
 	workerPodInformerFactory.Start(runCtx.Done())
 	ateFactory.Start(runCtx.Done())
-	// The syncer cannot reconcile without these caches, but exiting here would
-	// forfeit recovery: the informers keep retrying, and a fixed RoleBinding
-	// lets them sync without a controller restart.
+	// Fatal, like the manager's own caches: controller-runtime fails the
+	// process a cache misses its CacheSyncTimeout in, and a controller blind
+	// to workers has nothing to run half-alive for.
 	if err := cachesync.WaitForCacheSync(runCtx, cacheSyncTimeout, map[string]cache.InformerSynced{
 		"worker Pods": workerPodInformer.HasSynced,
 		"WorkerPools": workerPoolInformer.Informer().HasSynced,
 	}); err != nil {
-		setupLog.Error(err, "worker-sync caches not synced; the syncer will keep waiting for them in the background")
+		setupLog.Error(err, "worker-sync caches not synced")
+		os.Exit(1)
 	}
 
 	setupLog.Info("starting manager")
