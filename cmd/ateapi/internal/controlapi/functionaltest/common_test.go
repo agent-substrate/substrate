@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
 	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
@@ -589,6 +591,19 @@ func localSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
 		}
 	}
 	return best
+}
+
+// checkLocalRestore fails the test unless got, the snapshot a Restore sent
+// atelet, is local, the actor's local snapshot, and names where that snapshot
+// is uploaded, which atelet falls back to when its local copy is gone.
+func checkLocalRestore(t *testing.T, got *ateletpb.Snapshot, local *ateapipb.Snapshot) {
+	t.Helper()
+	if local == nil {
+		t.Fatal("the actor holds no local snapshot to restore")
+	}
+	if got.GetSnapshotUuid() != local.GetUuid() || !strings.HasSuffix(got.GetObject().GetSnapshotUri(), "/"+local.GetUuid()) {
+		t.Errorf("restore snapshot = %v, want local snapshot %s with its upload location", got, local.GetUuid())
+	}
 }
 
 func tagSnapshotURI(tag *ateapipb.Tag) string {

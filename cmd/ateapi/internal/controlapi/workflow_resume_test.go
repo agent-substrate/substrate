@@ -1466,6 +1466,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
@@ -1480,6 +1481,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
@@ -1490,6 +1492,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
@@ -1503,6 +1506,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
@@ -1516,6 +1520,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
@@ -1532,6 +1537,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 			want: restoreWant{
 				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
@@ -1603,9 +1609,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			// atelet uploads a pause's snapshot in the background. Once that
-			// upload is recorded, a local restore sends it too, so atelet can
-			// download the snapshot if its local copy is gone.
+			// A local restore always names where the snapshot is uploaded, so
+			// atelet can download it if a detach removed its local copy before
+			// the control plane learned of it. Once the upload is recorded,
+			// the recorded URI is sent.
 			name: "25 uploaded pause snapshot restores locally and sends its upload",
 			actor: actorSeed{
 				localSnapshot: uploadedLocalSnap(localSnapshotName, fullScope),
@@ -2848,6 +2855,37 @@ func TestToAteletSandboxRuntime(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if diff := cmp.Diff(tc.want, toAteletSandboxRuntime(tc.in), protocmp.Transform()); diff != "" {
 				t.Errorf("toAteletSandboxRuntime mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestLocalSnapshotUploadURI pins where a local restore tells atelet to
+// download from when its local copy is gone: the recorded upload, else the
+// location the pause gave atelet, else nowhere.
+func TestLocalSnapshotUploadURI(t *testing.T) {
+	actor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "a", Uid: someActorUID}}
+	tmpl := func(location string) *ateapipb.ActorTemplate {
+		return &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: location}}
+	}
+	recorded := newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", "node-1")
+	recorded.DurableSnapshot = &ateapipb.SnapshotStorage{Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://elsewhere/snap-1"}}
+	unrecorded := newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap-1", "node-1")
+
+	tests := []struct {
+		name string
+		tmpl *ateapipb.ActorTemplate
+		snap *ateapipb.Snapshot
+		want string
+	}{
+		{"recorded upload wins", tmpl(testStorageLocation), recorded, "gs://elsewhere/snap-1"},
+		{"pause snapshot derives its upload location", tmpl(testStorageLocation), unrecorded, someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-1")},
+		{"no usable storage location sends none", tmpl(""), unrecorded, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := localSnapshotUploadURI(t.Context(), tt.tmpl, actor, tt.snap); got != tt.want {
+				t.Errorf("localSnapshotUploadURI() = %q, want %q", got, tt.want)
 			}
 		})
 	}

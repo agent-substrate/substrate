@@ -853,10 +853,11 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			CpuMilli:       cpuMilli,
 			MemoryBytes:    memBytes,
 		}
-		// atelet uploads a pause's snapshot in the background. Once that upload
-		// is recorded, atelet can download it if its local copy is gone.
-		if durable := localSnap.GetDurableSnapshot(); durable.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
-			req.Snapshot.Object = &ateletpb.ObjectStorage{SnapshotUri: durable.GetObject().GetSnapshotUri()}
+		// Always name where the snapshot is, or will be, uploaded. atelet reads
+		// its local copy first and downloads only when that copy is gone, as
+		// after a detach whose report has not reached the control plane yet.
+		if uri := localSnapshotUploadURI(ctx, actorTemplate, actor, localSnap); uri != "" {
+			req.Snapshot.Object = &ateletpb.ObjectStorage{SnapshotUri: uri}
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 
@@ -928,6 +929,22 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		return tele, nil
 	}
+}
+
+// localSnapshotUploadURI is where atelet uploads snap, a local snapshot of the
+// actor: the URI the record holds, or for a pause, which records none, the one
+// the pause gave atelet. It returns "" when neither is known, and the restore
+// then relies on the local copy alone.
+func localSnapshotUploadURI(ctx context.Context, actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor, snap *ateapipb.Snapshot) string {
+	if uri := snap.GetDurableSnapshot().GetObject().GetSnapshotUri(); uri != "" {
+		return uri
+	}
+	uri, err := newInProgressSnapshotURI(actorTemplate, actor, snap.GetUuid())
+	if err != nil {
+		slog.WarnContext(ctx, "Restoring a local snapshot without its upload location", slog.String("snapshot", snap.GetUuid()), slog.Any("err", err))
+		return ""
+	}
+	return uri.String()
 }
 
 // logRuntimeFallback records a resume that restores the durable volumes alone

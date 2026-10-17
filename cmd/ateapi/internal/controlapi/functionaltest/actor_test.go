@@ -3723,14 +3723,17 @@ func TestResumeActor_LocalRestoreFailureCrashesActor(t *testing.T) {
 		t.Fatalf("SuspendActor failed: %v", err)
 	}
 
+	paused, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: ref})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+
 	tc.fakeAtelet.Reset()
 	tc.fakeAtelet.FailRestore = status.Error(codes.Internal, "injected restore failure")
 	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref}); status.Code(err) != codes.Internal {
 		t.Fatalf("ResumeActor status code = %v, want Internal (err: %v)", status.Code(err), err)
 	}
-	if got := tc.fakeAtelet.RestoreRequest.GetSnapshot(); got.GetSnapshotUuid() == "" || got.GetObject() != nil {
-		t.Fatalf("restore snapshot = %v, want local snapshot (uuid set, no object)", got)
-	}
+	checkLocalRestore(t, tc.fakeAtelet.RestoreRequest.GetSnapshot(), localSnapshot(paused.GetStatus()))
 
 	actor, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: ref})
 	if err != nil {
@@ -4180,6 +4183,10 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 		t.Fatalf("SuspendActor failed: %v", err)
 	}
 	waitForWorkerAvailable(t, tc, worker)
+	paused, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
 
 	// Resume from pause: the local checkpoint was captured on v2 and the
 	// actor's template is v2, so the restore must be FULL.
@@ -4187,9 +4194,7 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 		t.Fatalf("ResumeActor(from v2 pause) failed: %v", err)
 	}
 	restoreReq := tc.fakeAtelet.lastRestoreRequest()
-	if got := restoreReq.GetSnapshot(); got.GetSnapshotUuid() == "" || got.GetObject() != nil {
-		t.Errorf("restore request snapshot = %v, want local snapshot (uuid set, no object)", got)
-	}
+	checkLocalRestore(t, restoreReq.GetSnapshot(), localSnapshot(paused.GetStatus()))
 	if got := restoreReq.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		t.Errorf("restore request scope = %v, want FULL (local checkpoint was captured on v2)", got)
 	}
