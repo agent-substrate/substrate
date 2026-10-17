@@ -415,6 +415,43 @@ groups:
               value: error
               brief: The attempt failed. Only this outcome has an error.type key.
 
+  - id: registry.ate.template.golden
+    type: attribute_group
+    brief: The labels of a golden snapshot build outcome.
+    attributes:
+      - id: ate.template.golden.outcome
+        stability: development
+        brief: >
+          The terminal outcome of one golden snapshot build. The reconciler
+          records exactly one outcome per build that reaches a terminal
+          state, so retries and other replicas cannot double-count it.
+        type:
+          members:
+            - id: success
+              stability: development
+              value: success
+              brief: The template's golden tag was recorded.
+            - id: golden_tag_conflict
+              stability: development
+              value: golden_tag_conflict
+              brief: >
+                The golden tag belongs to another actor or template. Rebuilding
+                cannot fix this; the template must be recreated.
+            - id: golden_actor_invalid
+              stability: development
+              value: golden_actor_invalid
+              brief: The template's spec was rejected when creating the golden actor.
+            - id: golden_actor_crashed
+              stability: development
+              value: golden_actor_crashed
+              brief: The golden actor crashed before its snapshot was taken.
+            - id: golden_actor_unexpected_state
+              stability: development
+              value: golden_actor_unexpected_state
+              brief: >
+                The golden actor reached a state the reconciler does not drive,
+                so something outside the pipeline interfered with it.
+
   - id: registry.ate.router
     type: attribute_group
     brief: The labels of the atenet router.
@@ -887,6 +924,37 @@ groups:
       - ref: error.type
         requirement_level:
           conditionally_required: The outcome is error.
+
+  - id: metric.ate.template.golden.builds
+    type: metric
+    metric_name: ate.template.golden.builds
+    instrument: counter
+    unit: "{build}"
+    stability: development
+    brief: The number of golden snapshot builds that reached a terminal state.
+    note: >
+      One build of a golden snapshot ends in exactly one record: the terminal
+      status commit of the template reconciler. A success is the recording of
+      the golden tag, including its recovery after a replica died mid-build.
+      A failure is one of the four terminal reasons. A template that opted out
+      of the golden snapshot builds nothing and records nothing. Non-terminal
+      errors retry and record nothing, so a slow or wedged build is invisible
+      here until it terminates; watch the reconciler's error logs for that.
+      A template deleted mid-build ends without a record: the delete workflow
+      never writes the golden snapshot status.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [errors]
+        code_anchor: cmd/ateapi/internal/controlapi/metrics.go
+        cuj: Did this template get its golden snapshot, and if not, why?
+    attributes:
+      - ref: ate.template.atespace
+        requirement_level: required
+      - ref: ate.template.name
+        requirement_level: required
+      - ref: ate.template.golden.outcome
+        requirement_level: required
 
   # ---------------------------------------------------------------------------
   # Metrics. atelet
