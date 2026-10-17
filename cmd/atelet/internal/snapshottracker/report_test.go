@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/util/wait"
 	clocktesting "k8s.io/utils/clock/testing"
 
 	"go.ate.dev/substrate/internal/proto/ateletpb"
@@ -74,33 +75,32 @@ func (f *fakeReporter) reports() []reportCall {
 	return append([]reportCall(nil), f.calls...)
 }
 
-// waitReports waits until rep has received n calls, stepping the tracker's
-// fake clock so that report retries waiting on it go ahead.
-func waitReports(t *testing.T, tr *Tracker, rep *fakeReporter, n int) []reportCall {
+// fastReportBackoff retries reports at once, so tests need not wait.
+var fastReportBackoff = wait.Backoff{Steps: defaultReportBackoff.Steps, Duration: time.Millisecond, Factor: 2}
+
+// waitReports waits until rep has received n calls.
+func waitReports(t *testing.T, rep *fakeReporter, n int) []reportCall {
 	t.Helper()
-	clk := tr.clock.(*clocktesting.FakeClock)
-	eventually(t, "the reports are made", func() bool {
-		if len(rep.reports()) >= n {
-			return true
-		}
-		clk.Step(reportRetryDelay)
-		return false
-	})
+	eventually(t, "the reports are made", func() bool { return len(rep.reports()) >= n })
 	return rep.reports()
 }
 
 // noMoreReports fails the test if rep receives more than n calls within a
-// short while, stepping the clock past any retry meanwhile.
-func noMoreReports(t *testing.T, tr *Tracker, rep *fakeReporter, n int) {
+// short while.
+func noMoreReports(t *testing.T, rep *fakeReporter, n int) {
 	t.Helper()
-	clk := tr.clock.(*clocktesting.FakeClock)
-	for range 20 {
-		clk.Step(reportRetryDelay)
-		time.Sleep(5 * time.Millisecond)
-	}
+	time.Sleep(100 * time.Millisecond)
 	if got := len(rep.reports()); got != n {
 		t.Fatalf("got %d reports, want %d", got, n)
 	}
+}
+
+// newReportTracker returns a tracker with no store that reports to rep and
+// retries at once, for tests that call report directly.
+func newReportTracker(ctx context.Context, rep *fakeReporter) *Tracker {
+	tr := New(ctx, nil, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)), WithReporter(rep))
+	tr.reportBackoff = fastReportBackoff
+	return tr
 }
 
 // newReportingTracker returns a tracker like newTestTracker's that reports to
@@ -109,6 +109,7 @@ func newReportingTracker(t *testing.T, store Store, rep *fakeReporter) *Tracker 
 	t.Helper()
 	tr := newIdleTestTracker(t, store)
 	tr.reporter = rep
+	tr.reportBackoff = fastReportBackoff
 	tr.Start()
 	return tr
 }
@@ -132,8 +133,8 @@ func TestTrackerReportsAfterBackgroundUpload(t *testing.T) {
 
 	uploadNow(t, tr, store, nil)
 
-	got := waitReports(t, tr, rep, 1)
-	noMoreReports(t, tr, rep, 1)
+	got := waitReports(t, rep, 1)
+	noMoreReports(t, rep, 1)
 	if got[0].actor != testActor || got[0].actorUID != trackedActorUID {
 		t.Errorf("reported for %+v/%s, want %+v/%s", got[0].actor, got[0].actorUID, testActor, trackedActorUID)
 	}
@@ -153,7 +154,7 @@ func TestTrackerDoesNotReportFailedUpload(t *testing.T) {
 
 	uploadNow(t, tr, store, errors.New("object store down"))
 
-	noMoreReports(t, tr, rep, 0)
+	noMoreReports(t, rep, 0)
 }
 
 // A background detach reports the state it leaves, no local snapshot and the
@@ -178,8 +179,8 @@ func TestTrackerReportsAfterBackgroundDetach(t *testing.T) {
 
 			detachNow(t, tr)
 
-			got := waitReports(t, tr, rep, 1)
-			noMoreReports(t, tr, rep, 1)
+			got := waitReports(t, rep, 1)
+			noMoreReports(t, rep, 1)
 			if st := got[0].state; st.GetLatestLocal() != nil || st.GetUploading() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
 				t.Errorf("reported %v, want only latest_durable s1", st)
 			}
@@ -201,7 +202,7 @@ func TestTrackerDetachCallDoesNotReport(t *testing.T) {
 		t.Fatalf("Detach: %v", err)
 	}
 
-	noMoreReports(t, tr, rep, 0)
+	noMoreReports(t, rep, 0)
 }
 
 // A report in flight holds neither the actor's lock nor its operation, so a
@@ -213,7 +214,7 @@ func TestTrackerReportDoesNotHoldTheActor(t *testing.T) {
 	tr := newReportingTracker(t, store, rep)
 	tr.CommitLocal(trackedActorUID, actorRef("s1", 1, tr.clock.Now()))
 	uploadNow(t, tr, store, nil)
-	waitReports(t, tr, rep, 1)
+	waitReports(t, rep, 1)
 
 	returnsPromptly(t, "BeginCheckpoint during a report", func() {
 		end, err := tr.BeginCheckpoint(t.Context(), trackedActorUID)
@@ -232,7 +233,7 @@ func TestTrackerReportDoesNotHoldTheActor(t *testing.T) {
 }
 
 // report retries only what the control plane says is worth retrying, at most
-// reportAttempts times, and reads the state afresh for each attempt.
+// reportBackoff's steps, and reads the state afresh for each attempt.
 func TestReportRetries(t *testing.T) {
 	aborted := status.Error(codes.Aborted, "busy")
 	unavailable := status.Error(codes.Unavailable, "down")
@@ -244,7 +245,7 @@ func TestReportRetries(t *testing.T) {
 		{name: "ok", wantCalls: 1},
 		{name: "aborted then ok", script: []error{aborted}, wantCalls: 2},
 		{name: "deadline then ok", script: []error{status.Error(codes.DeadlineExceeded, "slow")}, wantCalls: 2},
-		{name: "unavailable every time gives up", script: []error{unavailable, unavailable, unavailable, unavailable}, wantCalls: reportAttempts},
+		{name: "unavailable every time gives up", script: []error{unavailable, unavailable, unavailable, unavailable}, wantCalls: defaultReportBackoff.Steps},
 		{name: "not found", script: []error{status.Error(codes.NotFound, "gone")}, wantCalls: 1},
 		{name: "failed precondition", script: []error{status.Error(codes.FailedPrecondition, "conflict")}, wantCalls: 1},
 		{name: "invalid argument", script: []error{status.Error(codes.InvalidArgument, "bad")}, wantCalls: 1},
@@ -253,7 +254,7 @@ func TestReportRetries(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			useActorDir(t)
 			rep := &fakeReporter{script: tc.script}
-			tr := New(t.Context(), nil, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)), WithReporter(rep))
+			tr := newReportTracker(t.Context(), rep)
 			tr.CommitLocal(trackedActorUID, actorRef("s1", 1, tr.clock.Now()))
 
 			done := make(chan struct{})
@@ -261,7 +262,7 @@ func TestReportRetries(t *testing.T) {
 				defer close(done)
 				tr.report(trackedActorUID, testActor, opUpload)
 			}()
-			waitReports(t, tr, rep, tc.wantCalls)
+			waitReports(t, rep, tc.wantCalls)
 			waitClosed(t, done, "the report")
 			if got := len(rep.reports()); got != tc.wantCalls {
 				t.Fatalf("got %d calls, want %d", got, tc.wantCalls)
@@ -275,12 +276,12 @@ func TestReportRetries(t *testing.T) {
 	}
 }
 
-// report stops retrying once the tracker's context ends.
+// report stops once the tracker's context ends, even mid-attempt.
 func TestReportStopsWhenTrackerStops(t *testing.T) {
 	useActorDir(t)
 	ctx, cancel := context.WithCancel(t.Context())
-	rep := &fakeReporter{script: []error{status.Error(codes.Unavailable, "down")}}
-	tr := New(ctx, nil, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)), WithReporter(rep))
+	rep := &fakeReporter{block: make(chan struct{})}
+	tr := newReportTracker(ctx, rep)
 	tr.CommitLocal(trackedActorUID, actorRef("s1", 1, tr.clock.Now()))
 
 	done := make(chan struct{})
@@ -288,7 +289,7 @@ func TestReportStopsWhenTrackerStops(t *testing.T) {
 		defer close(done)
 		tr.report(trackedActorUID, testActor, opUpload)
 	}()
-	eventually(t, "the first attempt", func() bool { return len(rep.reports()) == 1 })
+	waitReports(t, rep, 1)
 	cancel()
 	waitClosed(t, done, "the report after the tracker stopped")
 	if got := len(rep.reports()); got != 1 {
@@ -301,7 +302,7 @@ func TestReportStopsWhenTrackerStops(t *testing.T) {
 func TestReportSkipsSnapshotWithoutActor(t *testing.T) {
 	useActorDir(t)
 	rep := &fakeReporter{}
-	tr := New(t.Context(), nil, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)), WithReporter(rep))
+	tr := newReportTracker(t.Context(), rep)
 	tr.report(trackedActorUID, resources.ActorRef{}, opUpload)
 	if got := len(rep.reports()); got != 0 {
 		t.Errorf("got %d calls, want 0", got)

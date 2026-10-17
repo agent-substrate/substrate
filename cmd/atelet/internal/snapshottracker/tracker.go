@@ -25,6 +25,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/clock"
 )
@@ -120,6 +121,9 @@ type Tracker struct {
 	// reporter reports the state a background upload or detach leaves. Nil
 	// without WithReporter, and then nothing is reported.
 	reporter Reporter
+	// reportBackoff is how many times a report is tried, and how long apart:
+	// defaultReportBackoff.
+	reportBackoff wait.Backoff
 	// retries says how long an actor's background work is held back after a
 	// failure: longer with each consecutive failure for the actor.
 	retries workqueue.TypedRateLimiter[string]
@@ -184,16 +188,17 @@ func WithReporter(r Reporter) Option {
 // schedules no uploads or detaches.
 func New(ctx context.Context, store Store, clk clock.WithTicker, opts ...Option) *Tracker {
 	t := &Tracker{
-		ctx:         ctx,
-		store:       store,
-		clock:       clk,
-		uploadDelay: DefaultUploadDelay,
-		detachDelay: DefaultDetachDelay,
-		retries:     workqueue.NewTypedItemExponentialFailureRateLimiter[string](snapshotRetryDelay, maxSnapshotRetryDelay),
-		workers:     snapshotWorkers,
-		queue:       workqueue.NewTypedDelayingQueueWithConfig(workqueue.TypedDelayingQueueConfig[string]{Clock: clk}),
-		locks:       actorlock.New(),
-		actors:      map[string]*actorSnapshots{},
+		ctx:           ctx,
+		store:         store,
+		clock:         clk,
+		uploadDelay:   DefaultUploadDelay,
+		detachDelay:   DefaultDetachDelay,
+		reportBackoff: defaultReportBackoff,
+		retries:       workqueue.NewTypedItemExponentialFailureRateLimiter[string](snapshotRetryDelay, maxSnapshotRetryDelay),
+		workers:       snapshotWorkers,
+		queue:         workqueue.NewTypedDelayingQueueWithConfig(workqueue.TypedDelayingQueueConfig[string]{Clock: clk}),
+		locks:         actorlock.New(),
+		actors:        map[string]*actorSnapshots{},
 	}
 	for _, opt := range opts {
 		opt(t)

@@ -35,6 +35,10 @@ func (t *Tracker) beginDetachLocked(ctx context.Context, a *actorSnapshots, back
 	opCtx, op := t.beginOpLocked(ctx, a, opDetach, target)
 	return func() (*ateletpb.ActorSnapshotState, error) {
 		st, err := t.finishDetach(opCtx, a.actorUID, op, alreadyDurable, background)
+		// Only a background detach reports. A Detach call comes from the
+		// control plane, which applies the state the call returns while it
+		// holds the actor's lease; a report then would only repeat it, and be
+		// refused with ABORTED until that lease is released.
 		if background && err == nil {
 			t.report(a.actorUID, target.Actor, opDetach)
 		}

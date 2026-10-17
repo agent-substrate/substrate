@@ -22,32 +22,39 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
+
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 )
 
-// Report settings. A report runs on the worker that ran the upload or detach,
-// so these bound how long a control plane that is down or busy holds that
-// worker: about reportAttempts*reportAttemptTimeout plus the retry delays.
-const (
-	// reportAttempts is how many times a worker tries to report a state.
-	reportAttempts = 3
-	// reportAttemptTimeout bounds each attempt.
-	reportAttemptTimeout = 3 * time.Second
-	// reportRetryDelay is how long a worker waits before its second attempt.
-	// Each further attempt waits twice as long as the one before.
-	reportRetryDelay = 500 * time.Millisecond
-)
+// A report runs on the worker that ran the upload or detach, so these bound
+// how long a control plane that is down or busy holds that worker: about
+// Steps*reportAttemptTimeout plus the delays between attempts.
+
+// reportAttemptTimeout bounds each attempt to report a state.
+const reportAttemptTimeout = 3 * time.Second
+
+// defaultReportBackoff is how many times a worker tries to report a state,
+// and how long it waits between attempts: 500ms before the second, doubling
+// after that.
+var defaultReportBackoff = wait.Backoff{
+	Steps:    3,
+	Duration: 500 * time.Millisecond,
+	Factor:   2,
+}
 
 // report tells the control plane the actor's snapshot state after a
 // background operation of kind cause succeeded. It reads the state afresh for
 // each attempt, so a report carries what atelet holds when it is sent, and it
 // never holds the actor's lock while it waits on the control plane.
 //
-// It is best-effort: it gives up after reportAttempts, on an error the control
-// plane says not to retry, or once the tracker's context ends. A report that is
-// dropped loses nothing for good, since every later Checkpoint,
-// PromoteSnapshot, or detach returns or reports the actor's whole state.
+// It is best-effort: it gives up after reportBackoff's steps, on an error the
+// control plane says not to retry, or once the tracker's context ends. A
+// report that is dropped loses nothing for good, since every later
+// Checkpoint, PromoteSnapshot, or detach returns or reports the actor's whole
+// state.
 func (t *Tracker) report(actorUID string, actor resources.ActorRef, cause opKind) {
 	if t.reporter == nil {
 		return
@@ -59,25 +66,19 @@ func (t *Tracker) report(actorUID string, actor resources.ActorRef, cause opKind
 			slog.String("actorUID", actorUID), slog.String("cause", cause.String()))
 		return
 	}
-	delay := reportRetryDelay
-	for attempt := 1; ; attempt++ {
+	attempt := 0
+	retriable := func(err error) bool { return retryableReportErr(err) && t.ctx.Err() == nil }
+	// The error is logged per attempt; retry.OnError's is the last attempt's.
+	_ = retry.OnError(t.reportBackoff, retriable, func() error {
+		attempt++
 		st := t.State(actorUID)
 		start := t.clock.Now()
 		ctx, cancel := context.WithTimeout(t.ctx, reportAttemptTimeout)
+		defer cancel()
 		err := t.reporter.ReportActorSnapshotState(ctx, actor, actorUID, st)
-		cancel()
-		retry := retryableReportErr(err) && attempt < reportAttempts && t.ctx.Err() == nil
-		logReport(t.ctx, actorUID, actor, cause, attempt, t.clock.Since(start), st, err, retry)
-		if !retry {
-			return
-		}
-		select {
-		case <-t.ctx.Done():
-			return
-		case <-t.clock.After(delay):
-		}
-		delay *= 2
-	}
+		logReport(t.ctx, actorUID, actor, cause, attempt, t.clock.Since(start), st, err, retriable(err) && attempt < t.reportBackoff.Steps)
+		return err
+	})
 }
 
 // retryableReportErr reports whether a failed report is worth repeating: the
@@ -94,11 +95,11 @@ func retryableReportErr(err error) bool {
 }
 
 // reportOutcome labels how a report attempt ended, for logs.
-func reportOutcome(err error, retry bool) string {
+func reportOutcome(err error, willRetry bool) string {
 	switch {
 	case err == nil:
 		return "ok"
-	case retry:
+	case willRetry:
 		return "retry"
 	case status.Code(err) == codes.NotFound:
 		return "not_found"
@@ -112,8 +113,8 @@ func reportOutcome(err error, retry bool) string {
 // logReport logs one report attempt: at info level when it succeeded, will be
 // retried, or found the actor gone from this node, and as a warning when the
 // state is dropped otherwise.
-func logReport(ctx context.Context, actorUID string, actor resources.ActorRef, cause opKind, attempt int, elapsed time.Duration, st *ateletpb.ActorSnapshotState, err error, retry bool) {
-	outcome := reportOutcome(err, retry)
+func logReport(ctx context.Context, actorUID string, actor resources.ActorRef, cause opKind, attempt int, elapsed time.Duration, st *ateletpb.ActorSnapshotState, err error, willRetry bool) {
+	outcome := reportOutcome(err, willRetry)
 	attrs := []any{
 		slog.String("actorUID", actorUID),
 		slog.Any("actor", actor),
