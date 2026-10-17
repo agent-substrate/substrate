@@ -29,7 +29,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-// TestPauseActor_Finalized_WorkerGone reproduces the scenario where the
+// TestSuspendActorAsync_Finalized_WorkerGone reproduces the scenario where the
 // worker pod disappears from the DB during pause finalization, so the node it
 // ran on is unknown.
 //
@@ -37,7 +37,7 @@ import (
 // instead of left paused, since a local snapshot with an unknown node can
 // never be safely resumed. The pause fails with FailedPrecondition rather than
 // reporting the pause as done.
-func TestPauseActor_Finalized_WorkerGone(t *testing.T) {
+func TestSuspendActorAsync_Finalized_WorkerGone(t *testing.T) {
 	ctx := context.Background()
 	st := newTestPersistence(t)
 	seedSuspendTemplate(t, ctx, st, nil)
@@ -96,11 +96,11 @@ func TestPauseActor_Finalized_WorkerGone(t *testing.T) {
 	}
 }
 
-// TestPauseActor_Finalized_AlreadyCrashed verifies that if the actor was
+// TestSuspendActorAsync_Finalized_AlreadyCrashed verifies that if the actor was
 // crashed out-of-band while it checkpointed, and has no AssignedNode, the
 // pause's finalize preserves the existing Crash status and snapshots, emits no
 // duplicate crash log record, and still fails.
-func TestPauseActor_Finalized_AlreadyCrashed(t *testing.T) {
+func TestSuspendActorAsync_Finalized_AlreadyCrashed(t *testing.T) {
 	ctx := context.Background()
 	st := newTestPersistence(t)
 	seedSuspendTemplate(t, ctx, st, nil)
@@ -148,11 +148,11 @@ func TestPauseActor_Finalized_AlreadyCrashed(t *testing.T) {
 	}
 }
 
-// TestPauseActor_Finalized_KeepsCrashFromWorkerDelete verifies that a crash the
+// TestSuspendActorAsync_Finalized_KeepsCrashFromWorkerDelete verifies that a crash the
 // DeleteWorker workflow commits while the pause's finalize is freeing the
 // worker is kept: the finalize update is pinned to the actor version it
 // checked, so it fails Aborted instead of committing SUSPENDED over the crash.
-func TestPauseActor_Finalized_KeepsCrashFromWorkerDelete(t *testing.T) {
+func TestSuspendActorAsync_Finalized_KeepsCrashFromWorkerDelete(t *testing.T) {
 	ctx := context.Background()
 	st := newTestPersistence(t)
 	seedSuspendTemplate(t, ctx, st, nil)
@@ -174,10 +174,10 @@ func TestPauseActor_Finalized_KeepsCrashFromWorkerDelete(t *testing.T) {
 	assertConcurrentCrashKept(t, ctx, st, actorRef, err, "suspend failed: "+crashMessageWorkerPodGone)
 }
 
-// TestPauseActor_Finalized_RecordsFidelity verifies pause records the template's
+// TestSuspendActorAsync_Finalized_RecordsFidelity verifies pause records the template's
 // preferred_fidelity on the local Snapshot alongside Locality, and keeps its
 // durable copy PENDING for atelet to upload in the background.
-func TestPauseActor_Finalized_RecordsFidelity(t *testing.T) {
+func TestSuspendActorAsync_Finalized_RecordsFidelity(t *testing.T) {
 	tests := []struct {
 		name      string
 		preferred ateapipb.SnapshotFidelity
@@ -260,12 +260,12 @@ func TestPauseActor_Finalized_RecordsFidelity(t *testing.T) {
 	}
 }
 
-// TestPauseActor_Finalized_MissingSnapshotClearsAssignment verifies that if the
+// TestSuspendActorAsync_Finalized_MissingSnapshotClearsAssignment verifies that if the
 // latest generation snapshot entry, or its PENDING durable copy, is missing
 // when the pause finalizes, the actor transitions to CRASHED and clears
 // WorkerAssignment after releasing the worker rather than getting stuck
 // SUSPENDING, and the pause fails.
-func TestPauseActor_Finalized_MissingSnapshotClearsAssignment(t *testing.T) {
+func TestSuspendActorAsync_Finalized_MissingSnapshotClearsAssignment(t *testing.T) {
 	tests := []struct {
 		name string
 		// clobber rewrites the record while atelet checkpoints.
@@ -335,7 +335,7 @@ func TestPauseActor_Finalized_MissingSnapshotClearsAssignment(t *testing.T) {
 	}
 }
 
-func TestPauseActor_AteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
+func TestSuspendActorAsync_AteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 	tests := []struct {
 		name         string
 		prevSnapshot string
@@ -398,11 +398,11 @@ func TestPauseActor_AteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 	}
 }
 
-// TestPauseActor_CrashesWhenPausingActorMissingWorkerPod verifies that a
+// TestSuspendActorAsync_CrashesWhenPausingActorMissingWorkerPod verifies that a
 // pausing actor with no worker pod recorded is moved to CRASHED by the
 // corrupted-assignment check before atelet is called, and the pause fails
 // with FailedPrecondition.
-func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
+func TestSuspendActorAsync_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 	ctx := context.Background()
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
@@ -427,9 +427,9 @@ func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 	}
 }
 
-// TestPauseActor_MarkedPausing_GoldenAtespaceRejected verifies golden actors cannot be
+// TestSuspendActorAsync_MarkedPausing_GoldenAtespaceRejected verifies golden actors cannot be
 // paused: by design they can only be suspended (committed).
-func TestPauseActor_MarkedPausing_GoldenAtespaceRejected(t *testing.T) {
+func TestSuspendActorAsync_MarkedPausing_GoldenAtespaceRejected(t *testing.T) {
 	ctx := context.Background()
 	st := newTestPersistence(t)
 	seedSuspendTemplate(t, ctx, st, nil)
@@ -449,10 +449,10 @@ func TestPauseActor_MarkedPausing_GoldenAtespaceRejected(t *testing.T) {
 	}
 }
 
-// TestPauseActor_AteletPaused_ForwardsPreferredFidelity verifies that local pause
+// TestSuspendActorAsync_AteletPaused_ForwardsPreferredFidelity verifies that local pause
 // checkpoints forward the template's PreferredFidelity to atelet, and label the
 // pause's lifecycle-op metric with it.
-func TestPauseActor_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
+func TestSuspendActorAsync_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 	tests := []struct {
 		preferred ateapipb.SnapshotFidelity
 		want      ateletpb.SnapshotFidelity

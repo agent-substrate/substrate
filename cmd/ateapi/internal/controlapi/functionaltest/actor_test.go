@@ -1659,12 +1659,6 @@ func TestValidation_Actor(t *testing.T) {
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
-	t.Run("PauseActor", func(t *testing.T) {
-		//nolint:staticcheck // PauseActor is still served until it is removed.
-		_, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{})
-		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
-	})
-
 	t.Run("SuspendActor", func(t *testing.T) {
 		_, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
@@ -2781,7 +2775,7 @@ func TestSuspendActor_VolumeDetachFailure_DeleteActorAnyState(t *testing.T) {
 	}
 }
 
-// TestPauseActor_VolumeLifecycle_DetachResumeAndMigrate tests external volume
+// TestSuspendActorAsync_VolumeLifecycle_DetachResumeAndMigrate tests external volume
 // attachment, publishContext delivery, detachment, cross-node migration, and
 // deletion across async SuspendActor, ResumeActor, SuspendActor, and DeleteActor:
 // 1. Creates a template with an external volume and a mock worker pod on node1.
@@ -2790,7 +2784,7 @@ func TestSuspendActor_VolumeDetachFailure_DeleteActorAnyState(t *testing.T) {
 // 4. Calls ResumeActor from pause; verifies volume is re-attached to node1 and restore request carries node1 publishContext.
 // 5. Calls SuspendActor, replaces worker-1 (node1) with worker-2 (node2), and calls ResumeActor; verifies volume is attached to node2 and restore request carries node2 publishContext.
 // 6. Calls SuspendActor and DeleteActor; verifies volume is detached from node2 and deleted.
-func TestPauseActor_VolumeLifecycle_DetachResumeAndMigrate(t *testing.T) {
+func TestSuspendActorAsync_VolumeLifecycle_DetachResumeAndMigrate(t *testing.T) {
 	preview.InitForTest(t, "ExternalVolumes")
 
 	ns := namespaceForTest("ns-pause-vol-lifecycle")
@@ -2967,7 +2961,7 @@ func TestPauseActor_VolumeLifecycle_DetachResumeAndMigrate(t *testing.T) {
 	}
 }
 
-// TestPauseActor_VolumeDetachFailure_RetrySuccess tests scenario D:
+// TestSuspendActorAsync_VolumeDetachFailure_RetrySuccess tests scenario D:
 // when volume detachment fails during async SuspendActor:
 // 1. Async SuspendActor fails, leaving the actor in ACTOR_STATE_SUSPENDING.
 // 2. A subsequent retry of async SuspendActor re-attempts volume detachment and succeeds, transitioning the actor to ACTOR_STATE_SUSPENDED.
@@ -2980,7 +2974,7 @@ func TestPauseActor_VolumeLifecycle_DetachResumeAndMigrate(t *testing.T) {
 // 5. Calls async SuspendActor a second time (retry); detachment succeeds.
 // 6. Verifies actor state transitions to ACTOR_STATE_SUSPENDED with a local snapshot.
 // 7. Cleans up by deleting the actor with AnyState=true.
-func TestPauseActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
+func TestSuspendActorAsync_VolumeDetachFailure_RetrySuccess(t *testing.T) {
 	preview.InitForTest(t, "ExternalVolumes")
 
 	ns := namespaceForTest("ns-pause-vol-detach-retry")
@@ -4200,7 +4194,7 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 }
 
 // TestSuspendActorAsynchronous tests the full workflow of suspending a running
-// actor asynchronously, through SuspendActor and through PauseActor.
+// actor asynchronously.
 // Workflow:
 //  1. Creates a mock ActorTemplate.
 //  2. Creates a mock Atelet Pod on 'node1'.
@@ -4223,14 +4217,6 @@ func TestSuspendActorAsynchronous(t *testing.T) {
 					Actor:   ref,
 					Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 				})
-				return err
-			},
-		},
-		{
-			name: "PauseActor",
-			suspend: func(ctx context.Context, client ateapipb.ControlClient, ref *ateapipb.ObjectRef) error {
-				//nolint:staticcheck // PauseActor is still served until it is removed.
-				_, err := client.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: ref})
 				return err
 			},
 		},

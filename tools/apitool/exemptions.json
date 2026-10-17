@@ -271,26 +271,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.PauseActorRequest",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.PauseActorRequest.actor",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.PauseActorResponse",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.PauseActorResponse.actor",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Resources",
     "message": "message has no doc comment"
   },

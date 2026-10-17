@@ -171,12 +171,6 @@ func TestDefaultRPCPermissions(t *testing.T) {
 
 		// Actor lifecycle.
 		{
-			name:       "PauseActor",
-			fullMethod: ateapipb.Control_PauseActor_FullMethodName,
-			req:        &ateapipb.PauseActorRequest{Actor: actorRef},
-			want:       []check{{RelationCanSuspend, "actor:team-a/runner"}},
-		},
-		{
 			name:       "ResumeActor",
 			fullMethod: ateapipb.Control_ResumeActor_FullMethodName,
 			req:        &ateapipb.ResumeActorRequest{Actor: actorRef},

@@ -44,16 +44,6 @@ service Control {
     option (method).resource = "Actor";
   }
 
-  // Pause a given actor: checkpoint it to its worker's node and leave it
-  // SUSPENDED with that node-local snapshot, pinned to the node. A paused
-  // actor is told from a suspended one by its snapshots, not its state.
-  //
-  // Deprecated: use SuspendActor with DURABILITY_MODE_ASYNCHRONOUS.
-  rpc PauseActor(PauseActorRequest) returns (PauseActorResponse) {
-    option deprecated = true;
-    option (method).resource = "Actor";
-  }
-
   // Resume an actor from its latest snapshot.
   rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {
     option (method).resource = "Actor";
@@ -1776,16 +1766,6 @@ enum DurabilityMode {
   // storage continues in the background.
   DURABILITY_MODE_ASYNCHRONOUS = 2;
   // Keep this in sync with SuspendOptions.mode's maximum.
-}
-
-message PauseActorRequest {
-  // +k8s:required
-  // +k8s:subfield(atespace)=+k8s:required
-  ObjectRef actor = 1;
-}
-
-message PauseActorResponse {
-  Actor actor = 1;
 }
 
 message ResumeActorRequest {

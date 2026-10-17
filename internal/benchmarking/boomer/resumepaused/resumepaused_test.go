@@ -439,14 +439,14 @@ func TestIterateFailsAResumeOfARunningActor(t *testing.T) {
 	fake.setState(name, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	fake.resetCalls()
 	before := requestCount(t, "ResumeActorCold", "failure")
-	recoveries := requestCount(t, "PauseActorRecovery", "success")
+	recoveries := requestCount(t, "SuspendActorAsyncRecovery", "success")
 
 	r.iterate()
 	if got := requestCount(t, "ResumeActorCold", "failure") - before; got != 1 {
 		t.Errorf("ResumeActorCold failures grew by %v, want 1", got)
 	}
-	if got := requestCount(t, "PauseActorRecovery", "success") - recoveries; got != 1 {
-		t.Errorf("PauseActorRecovery successes grew by %v, want 1", got)
+	if got := requestCount(t, "SuspendActorAsyncRecovery", "success") - recoveries; got != 1 {
+		t.Errorf("SuspendActorAsyncRecovery successes grew by %v, want 1", got)
 	}
 	// Recovery pauses the running actor.
 	want := []string{"ResumeActor " + name, "SuspendActor(async) " + name}
@@ -498,9 +498,9 @@ func TestIterateRecordsTheRecoveryPauseOfAPausedActorAsASuccess(t *testing.T) {
 	fake.resetCalls()
 	fake.resumeErr = status.Error(codes.Aborted, "lease held")
 	resumeFailures := requestCount(t, "ResumeActorCold", "failure")
-	pauseFailures := requestCount(t, "PauseActor", "failure")
-	recoverySuccesses := requestCount(t, "PauseActorRecovery", "success")
-	recoveryFailures := requestCount(t, "PauseActorRecovery", "failure")
+	pauseFailures := requestCount(t, "SuspendActorAsync", "failure")
+	recoverySuccesses := requestCount(t, "SuspendActorAsyncRecovery", "success")
+	recoveryFailures := requestCount(t, "SuspendActorAsyncRecovery", "failure")
 
 	// The resume fails with the actor still paused, so the recovery pause
 	// finds it paused: a success, as the actor is cold.
@@ -511,14 +511,14 @@ func TestIterateRecordsTheRecoveryPauseOfAPausedActorAsASuccess(t *testing.T) {
 	if got := requestCount(t, "ResumeActorCold", "failure") - resumeFailures; got != 1 {
 		t.Errorf("ResumeActorCold failures grew by %v, want 1", got)
 	}
-	if got := requestCount(t, "PauseActor", "failure") - pauseFailures; got != 0 {
-		t.Errorf("PauseActor failures grew by %v, want 0", got)
+	if got := requestCount(t, "SuspendActorAsync", "failure") - pauseFailures; got != 0 {
+		t.Errorf("SuspendActorAsync failures grew by %v, want 0", got)
 	}
-	if got := requestCount(t, "PauseActorRecovery", "success") - recoverySuccesses; got != 1 {
-		t.Errorf("PauseActorRecovery successes grew by %v, want 1", got)
+	if got := requestCount(t, "SuspendActorAsyncRecovery", "success") - recoverySuccesses; got != 1 {
+		t.Errorf("SuspendActorAsyncRecovery successes grew by %v, want 1", got)
 	}
-	if got := requestCount(t, "PauseActorRecovery", "failure") - recoveryFailures; got != 0 {
-		t.Errorf("PauseActorRecovery failures grew by %v, want 0", got)
+	if got := requestCount(t, "SuspendActorAsyncRecovery", "failure") - recoveryFailures; got != 0 {
+		t.Errorf("SuspendActorAsyncRecovery failures grew by %v, want 0", got)
 	}
 }
 
@@ -527,17 +527,17 @@ func TestIterateRecordsAFailedRecoveryPause(t *testing.T) {
 	r := newTestRuntime(fake)
 	r.iterate()
 	fake.pauseErr = status.Error(codes.Unavailable, "down")
-	pauseFailures := requestCount(t, "PauseActor", "failure")
-	recoveryFailures := requestCount(t, "PauseActorRecovery", "failure")
+	pauseFailures := requestCount(t, "SuspendActorAsync", "failure")
+	recoveryFailures := requestCount(t, "SuspendActorAsyncRecovery", "failure")
 
 	// The resume succeeds, the measured pause fails, and so does the
 	// recovery pause of the running actor.
 	r.iterate()
-	if got := requestCount(t, "PauseActor", "failure") - pauseFailures; got != 1 {
-		t.Errorf("PauseActor failures grew by %v, want 1", got)
+	if got := requestCount(t, "SuspendActorAsync", "failure") - pauseFailures; got != 1 {
+		t.Errorf("SuspendActorAsync failures grew by %v, want 1", got)
 	}
-	if got := requestCount(t, "PauseActorRecovery", "failure") - recoveryFailures; got != 1 {
-		t.Errorf("PauseActorRecovery failures grew by %v, want 1", got)
+	if got := requestCount(t, "SuspendActorAsyncRecovery", "failure") - recoveryFailures; got != 1 {
+		t.Errorf("SuspendActorAsyncRecovery failures grew by %v, want 1", got)
 	}
 }
 

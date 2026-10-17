@@ -465,28 +465,6 @@ func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	return s.store.DeleteActor(ctx, actorRef, precondition)
 }
 
-func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
-	if errs := apivalidation.ValidatePauseActorRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToAPIError(errs)
-	}
-	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-	setSpanActorRefAttributes(ctx, actorRef)
-
-	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendAsync)
-	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, err
-	}
-
-	setSpanActorAttributes(ctx, actor)
-	return &ateapipb.PauseActorResponse{Actor: actor}, nil
-}
-
 func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
 	if errs := apivalidation.ValidateResumeActorRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)

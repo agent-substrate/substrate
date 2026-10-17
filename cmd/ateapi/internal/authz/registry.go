@@ -250,10 +250,6 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 
 	// Actor lifecycle.
-	// TODO: delete this entry together with the PauseActor RPC. Every served RPC needs an entry here until then.
-	ateapipb.Control_PauseActor_FullMethodName: rule(checksOf(func(r *ateapipb.PauseActorRequest) ([]check, field.ErrorList) {
-		return onActor(RelationCanSuspend, r.GetActor(), field.NewPath("actor"))
-	})),
 	ateapipb.Control_ResumeActor_FullMethodName: rule(checksOf(func(r *ateapipb.ResumeActorRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanResume, r.GetActor(), field.NewPath("actor"))
 	})),

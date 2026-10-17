@@ -173,7 +173,7 @@ ateapi's `Actor state changed` is written once per committed actor state transit
 
 `ate.actor.state` takes the `ateapipb.ActorState` values lowercased, so the log vocabulary and the state machine cannot fork. The last record for an actor's uid is the state it is in now, and its timestamp is when that state began. Query it per actor, not in aggregate: neither key is a metric label, because both only ever appear beside actor identity, which [the cardinality rules](#the-metric-registry) keep off metrics entirely.
 
-`ate.actor.operation.name` says which operation drove the transition, which the state alone does not: an actor reaches `suspended` both when it is created and when it is suspended. SuspendActor in either durability mode and PauseActor are one operation and are all labeled `suspend`.
+`ate.actor.operation.name` says which operation drove the transition, which the state alone does not: an actor reaches `suspended` both when it is created and when it is suspended. SuspendActor in either durability mode is one operation, labeled `suspend`.
 
 The record goes out after the store commit, never before, and the state is read straight off the committed record rather than named by the caller. Every state commit has a version check too, so if two writers race, the one that lost writes nothing. You will never see a state here that the store did not actually hold.
 
