@@ -234,6 +234,9 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	if apierror.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("assignWorkerAttempt() error = %v, want ResourceExhausted (no worker has room)", err)
 	}
+	if got := apierror.Reason(err); got != apierror.ReasonNoCapacity {
+		t.Errorf("reason = %q, want %q", got, apierror.ReasonNoCapacity)
+	}
 
 	stored := firstAssignment(t, persistence, testWorkerUID("pod-1"))
 	if got := stored.GetActorUid(); got != "team-b-actor-uid" {
@@ -643,6 +646,13 @@ func TestEnsureWorkerAssigned_RejectsNonResumableStates(t *testing.T) {
 		actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: st}, Metadata: &ateapipb.ResourceMetadata{Name: "id1", Uid: "actor-uid-1"}}
 		_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Name: "id1"}, actor, &ateapipb.ActorTemplate{})
 		assertPrerequisiteResult(t, st, err, false)
+		want := apierror.ReasonInTransition
+		if st == ateapipb.ActorState_ACTOR_STATE_CRASHED || st == ateapipb.ActorState_ACTOR_STATE_DELETING {
+			want = apierror.ReasonTerminalState
+		}
+		if got := apierror.Reason(err); got != want {
+			t.Errorf("%v: reason = %q, want %q", st, got, want)
+		}
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
@@ -165,14 +166,18 @@ func NewActorResumer(apiClient ateapipb.ControlClient, opts ...resumerOption) *A
 // momentary condition into a bounded wait instead of an immediate failure — a
 // parked request should ride out a blip, not fail on it with budget remaining.
 // FailedPrecondition stays retryable too: it no longer carries saturation, but
-// it does cover states a concurrent operation can move the actor out of.
+// it does cover states a concurrent operation can move the actor out of. A
+// TERMINAL_STATE reason (CRASHED, DELETING) is the exception: nothing moves the
+// actor but a revert, so the caller fails at once.
 // All other codes (NotFound, DeadlineExceeded, PermissionDenied, ...) are
 // returned to the caller so the HTTP boundary can map them with full fidelity.
 func (r *ActorResumer) retryable(err error) bool {
 	switch status.Code(err) {
 	case codes.Aborted:
 		return true
-	case codes.ResourceExhausted, codes.FailedPrecondition, codes.Unavailable:
+	case codes.FailedPrecondition:
+		return r.parkEnabled && reasonOf(err) != apierror.ReasonTerminalState
+	case codes.ResourceExhausted, codes.Unavailable:
 		return r.parkEnabled
 	default:
 		return false

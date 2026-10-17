@@ -505,7 +505,7 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorR
 	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return nil, apierror.WithReason(apierror.Aborted("concurrent update conflict, please retry"), apierror.ReasonConflict)
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("Actor %s not found", actorRef)

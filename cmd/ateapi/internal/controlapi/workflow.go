@@ -226,7 +226,7 @@ func acquireLease(ctx context.Context, holder leaseHolder, key, subject string) 
 	lease, err := holder.AcquireLease(ctx, key)
 	if err != nil {
 		if errors.Is(err, store.ErrLeaseConflict) {
-			return nil, nil, apierror.Aborted("another operation is in progress for this %s", subject)
+			return nil, nil, apierror.WithReason(apierror.Aborted("another operation is in progress for this %s", subject), apierror.ReasonConflict)
 		}
 		return nil, nil, fmt.Errorf("while acquiring lease: %w", err)
 	}
