@@ -188,8 +188,8 @@ spec:
           capabilities:
             drop:
             - ALL
-        # Same reservation as atelet and no limits: the plugin now does the
-        # zstd work atelet used to, and must not get less CPU for it.
+        # No limits: the plugin does the zstd work atelet used to, and must
+        # not get less CPU for it.
         resources:
           requests:
             cpu: 50m
@@ -249,12 +249,12 @@ spec:
             - ALL
             add:
             - DAC_OVERRIDE
-        # Keep per-node reservations small; omit limits to allow usage to grow
-        # with the number of hosted actors.
+        # Reserve enough CPU to answer probes on a node packed with sandboxes;
+        # omit limits to allow usage to grow with the number of hosted actors.
         resources:
           requests:
-            cpu: 50m
-            memory: 128Mi
+            cpu: 100m
+            memory: 256Mi
         env:
         - name: NODE_NAME
           valueFrom:
@@ -295,7 +295,8 @@ spec:
             port: health
           initialDelaySeconds: 5
           periodSeconds: 2
-          failureThreshold: 3
+          timeoutSeconds: 5
+          failureThreshold: 6
         # /healthz stays 200 while a terminating pod drains; /readyz turns 503,
         # so liveness and readiness diverge correctly during shutdown.
         livenessProbe:
@@ -304,6 +305,8 @@ spec:
             port: health
           initialDelaySeconds: 10
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
         volumeMounts:
         - name: ate-base
           mountPath: /var/lib/ate
