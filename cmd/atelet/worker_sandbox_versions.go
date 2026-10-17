@@ -117,6 +117,15 @@ func poolConfigName(pool *v1alpha1.WorkerPool) string {
 // a pod in no pool, every failure can succeed once an informer catches up or
 // the atecontroller resolves the pool.
 func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (*v1alpha1.SandboxConfig, error) {
+	pool, err := r.pool(pod)
+	if err != nil {
+		return nil, err
+	}
+	return r.config(pool)
+}
+
+// pool returns the WorkerPool a worker pod on this node belongs to.
+func (r *workerSandboxResolver) pool(pod *corev1.Pod) (*v1alpha1.WorkerPool, error) {
 	poolName := pod.Labels[workerPoolLabel]
 	if poolName == "" {
 		return nil, fmt.Errorf("%w: worker pod %s/%s has no %s label", errPermanent, pod.Namespace, pod.Name, workerPoolLabel)
@@ -125,9 +134,14 @@ func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (*v1alpha1.SandboxConfi
 	if err != nil {
 		return nil, fmt.Errorf("%w: while getting WorkerPool %s/%s: %w", errUnresolved, pod.Namespace, poolName, err)
 	}
+	return pool, nil
+}
+
+// config returns the SandboxConfig the workers of pool run.
+func (r *workerSandboxResolver) config(pool *v1alpha1.WorkerPool) (*v1alpha1.SandboxConfig, error) {
 	configName := poolConfigName(pool)
 	if configName == "" {
-		return nil, fmt.Errorf("%w: WorkerPool %s/%s has not resolved a SandboxConfig for sandbox class %q", errUnresolved, pod.Namespace, poolName, pool.Spec.DefaultSandboxClass())
+		return nil, fmt.Errorf("%w: WorkerPool %s/%s has not resolved a SandboxConfig for sandbox class %q", errUnresolved, pool.Namespace, pool.Name, pool.Spec.DefaultSandboxClass())
 	}
 	cfg, err := r.configs.Get(configName)
 	if err != nil {
@@ -138,7 +152,17 @@ func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (*v1alpha1.SandboxConfi
 
 // plan resolves pod's SandboxConfig and the versions of it this node can run.
 func (r *workerSandboxResolver) plan(pod *corev1.Pod) (*sandboxPlan, error) {
-	cfg, err := r.resolve(pod)
+	pool, err := r.pool(pod)
+	if err != nil {
+		return nil, err
+	}
+	return r.planPool(pool)
+}
+
+// planPool is plan for a pool already in hand: the config its workers run
+// and the versions of it this node can run.
+func (r *workerSandboxResolver) planPool(pool *v1alpha1.WorkerPool) (*sandboxPlan, error) {
+	cfg, err := r.config(pool)
 	if err != nil {
 		return nil, err
 	}
@@ -195,14 +219,41 @@ func recordForArch(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConf
 	return rec, true
 }
 
-// buildFile returns the file content naming the runtimes of the versions in
-// plan. A version whose bundle hash equals an earlier one's is left out, so
-// the file lists each runtime once. The default version's failure fails the
-// sync, which leaves the existing file in place until a retry succeeds. A
-// restorable version whose attributes cannot be built is left out; when the
-// failure is transient the file is returned with an error wrapping
-// errIncomplete, so the caller writes the runtimes that resolved right away
-// and retries for the rest.
+// hashedVersion is one version of a plan with its bundle hash.
+type hashedVersion struct {
+	versionPlan
+	hash string
+}
+
+// hashVersions hashes each version of plan. The hashes come from the
+// SandboxConfig spec alone, so it does no IO. A version that cannot be
+// hashed is left out, unless it is the default, without which no worker of
+// the pool could start actors on this node.
+func hashVersions(ctx context.Context, plan *sandboxPlan) ([]hashedVersion, error) {
+	hashed := make([]hashedVersion, 0, len(plan.versions))
+	for _, v := range plan.versions {
+		h, err := versionBundleHash(v.rec)
+		if err != nil {
+			err = fmt.Errorf("SandboxConfig %q, version %q: %w", plan.config, v.name, err)
+			if v.isDefault {
+				return nil, fmt.Errorf("%w: %w", errPermanent, err)
+			}
+			slog.WarnContext(ctx, "Leaving a sandbox version out of the worker sandbox runtimes file", slog.Any("err", err))
+			continue
+		}
+		hashed = append(hashed, hashedVersion{versionPlan: v, hash: h})
+	}
+	return hashed, nil
+}
+
+// buildFile returns the file content naming the runtimes of the hashed
+// versions, the default first. A version whose bundle hash equals an
+// earlier one's is left out, so the file lists each runtime once. The
+// default version's failure fails the sync, which leaves the existing file
+// in place until a retry succeeds. A restorable version whose attributes
+// cannot be built is left out; when the failure is transient the file is
+// returned with an error wrapping errIncomplete, so the caller writes the
+// runtimes that resolved right away and retries for the rest.
 //
 // TODO: write the file as soon as the default version's attributes are known
 // and add restorable runtimes on a later pass. On a fresh node the first
@@ -214,19 +265,15 @@ func recordForArch(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConf
 // not its pause image, and nothing of a microVM version. The prewarmer
 // fetches each config's default version, and Run/Restore fetch any other
 // version on demand.
-func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan) (*sandboxruntimes.File, error) {
+func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, hashed []hashedVersion) (*sandboxruntimes.File, error) {
 	out := &sandboxruntimes.File{}
-	seen := make(map[string]bool, len(plan.versions))
+	seen := make(map[string]bool, len(hashed))
 	var incomplete error
-	for _, v := range plan.versions {
-		h, err := versionBundleHash(v.rec)
-		if err == nil && seen[h] {
+	for _, v := range hashed {
+		if seen[v.hash] {
 			continue
 		}
-		var attrs sandboxruntimes.Attributes
-		if err == nil {
-			attrs, err = s.versionAttrs(ctx, plan.sandboxClass, v.rec, h)
-		}
+		attrs, err := s.versionAttrs(ctx, plan.sandboxClass, v.rec, v.hash)
 		if err != nil {
 			err = fmt.Errorf("SandboxConfig %q, version %q: %w", plan.config, v.name, err)
 			if v.isDefault {
@@ -242,7 +289,7 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan) 
 			}
 			continue
 		}
-		seen[h] = true
+		seen[v.hash] = true
 		if v.isDefault {
 			out.DefaultRuntime = attrs
 		} else {
@@ -429,8 +476,11 @@ func bundleHash(rec *sandboxAssetsRecord, pauseDigest string) string {
 
 // syncPod writes pod's sandbox runtimes file:
 //   - plan: resolve the pool's config and its versions for this node
-//   - build: hash and probe each version's runtime
-//   - write: replace the file if its content changed
+//   - hash: hash each version's runtime, and make each resolvable by its
+//     hash before the file can let the worker register it
+//   - build: probe what a snapshot taken on each runtime must find again
+//   - write: replace the file if its content changed, then record what
+//     the worker now advertises in the index
 //
 // A file missing restorable runtimes for a transient reason is written all
 // the same, and the errIncomplete from build is returned so finish retries.
@@ -439,14 +489,47 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 	if err != nil {
 		return err
 	}
-	want, buildErr := s.buildFile(ctx, plan)
+	hashed, err := hashVersions(ctx, plan)
+	if err != nil {
+		return err
+	}
+	// Resolvable, and on disk, before the file can let the worker register
+	// any of them.
+	if err := s.index.registerRuntimes(plan.config, hashed); err != nil {
+		return err
+	}
+	want, buildErr := s.buildFile(ctx, plan, hashed)
 	if buildErr != nil && !errors.Is(buildErr, errIncomplete) {
 		return buildErr
 	}
 	if err := s.write(ctx, string(pod.UID), plan.config, want); err != nil {
 		return err
 	}
+	// What the worker advertises is what its file now says: a sync that
+	// failed before the write left the previous entry, and one that wrote
+	// a partial file names only the runtimes in it. One class per pool
+	// today; a pool that runs several will yield one plan per class here.
+	if err := s.index.register(string(pod.UID), advertisedClass{class: plan.sandboxClass, config: plan.config, hashed: writtenVersions(hashed, want)}); err != nil {
+		return err
+	}
 	return buildErr
+}
+
+// writtenVersions returns the versions of hashed whose runtime file names,
+// in hashed's order: every version whose attributes were built.
+func writtenVersions(hashed []hashedVersion, file *sandboxruntimes.File) []hashedVersion {
+	written := make(map[string]bool, 1+len(file.RestorableRuntimes))
+	written[file.DefaultRuntime[hardware.AttrSandboxBundleHash]] = true
+	for _, attrs := range file.RestorableRuntimes {
+		written[attrs[hardware.AttrSandboxBundleHash]] = true
+	}
+	out := make([]hashedVersion, 0, len(hashed))
+	for _, v := range hashed {
+		if written[v.hash] {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func (s *workerSandboxSyncer) write(ctx context.Context, uid, config string, want *sandboxruntimes.File) error {

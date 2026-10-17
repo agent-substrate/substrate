@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -351,7 +352,11 @@ func planAndBuild(s *workerSandboxSyncer, pod *corev1.Pod) (*sandboxruntimes.Fil
 	if err != nil {
 		return nil, err
 	}
-	return s.buildFile(context.Background(), plan)
+	hashed, err := hashVersions(context.Background(), plan)
+	if err != nil {
+		return nil, err
+	}
+	return s.buildFile(context.Background(), plan, hashed)
 }
 
 func TestPlanAndBuild(t *testing.T) {
@@ -741,4 +746,70 @@ func TestRunRunscCPUFeatures(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errPermanent) {
 		t.Errorf("runRunscCPUFeatures() on a hanging binary = %v, want context.DeadlineExceeded", err)
 	}
+}
+
+// TestSyncPodAdvertisesWhatItWrote pins when a worker's index entry changes:
+// with its file. A sync that fails before the write leaves the entry of the
+// file still on disk, and one that writes a partial file names only the
+// runtimes in it, while every hashed runtime resolves either way.
+func TestSyncPodAdvertisesWhatItWrote(t *testing.T) {
+	ctx := context.Background()
+	pod := workerPod("pod-a", "pool")
+	hashOf := func(name string) string { return wantRuntime(name)[hardware.AttrSandboxBundleHash] }
+	advertised := func(t *testing.T, s *workerSandboxSyncer) *classRuntime {
+		t.Helper()
+		wr, ok := s.index.worker("pod-a")
+		if !ok {
+			t.Fatal("pod-a has no index entry")
+		}
+		cr, ok := wr.class(v1alpha1.SandboxClassGvisor)
+		if !ok {
+			t.Fatal("pod-a advertises nothing for gvisor")
+		}
+		return cr
+	}
+
+	t.Run("a failed sync keeps the entry of the file on disk", func(t *testing.T) {
+		s := newTestSyncer(t, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+		if err := s.syncPod(ctx, pod); err != nil {
+			t.Fatalf("syncPod: %v", err)
+		}
+		before := advertised(t, s)
+		if before.defaultHash != hashOf("v2") || !slices.Equal(before.hashes, []string{hashOf("v2"), hashOf("v1")}) {
+			t.Fatalf("after a full sync pod-a advertises default %s, hashes %v; want v2 and [v2 v1]", before.defaultHash, before.hashes)
+		}
+
+		// The default's probe now fails permanently: nothing is written.
+		s.mu.Lock()
+		s.cpuFeatures = map[string]string{}
+		s.mu.Unlock()
+		s.runCPUFeatures = func(context.Context, string) ([]string, error) { return []string{"not_a_known_feature"}, nil }
+		if err := s.syncPod(ctx, pod); !errors.Is(err, errPermanent) {
+			t.Fatalf("syncPod with the default's probe failing = %v, want errPermanent", err)
+		}
+		if after := advertised(t, s); after.defaultHash != before.defaultHash || !slices.Equal(after.hashes, before.hashes) {
+			t.Errorf("a sync that wrote nothing changed pod-a's entry: default %s, hashes %v", after.defaultHash, after.hashes)
+		}
+	})
+
+	t.Run("a partial file advertises only its runtimes", func(t *testing.T) {
+		s := newTestSyncer(t, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+		s.assets = &fakeAssetFetcher{
+			fn: func(_ context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+				if sha := rec.Assets[gvisorAssetName].SHA256; sha != "sha-v2" {
+					return nil, fmt.Errorf("temporary download failure for %s", sha)
+				}
+				return map[string]string{gvisorAssetName: "sha-v2"}, nil
+			},
+		}
+		if err := s.syncPod(ctx, pod); !errors.Is(err, errIncomplete) {
+			t.Fatalf("syncPod with a restorable version failing = %v, want errIncomplete", err)
+		}
+		if cr := advertised(t, s); cr.defaultHash != hashOf("v2") || !slices.Equal(cr.hashes, []string{hashOf("v2")}) {
+			t.Errorf("pod-a advertises default %s, hashes %v; want only the written v2", cr.defaultHash, cr.hashes)
+		}
+		if _, ok := s.index.lookup(hashOf("v1")); !ok {
+			t.Error("the runtime left out of the partial file does not resolve; it must, before the retry writes it")
+		}
+	})
 }

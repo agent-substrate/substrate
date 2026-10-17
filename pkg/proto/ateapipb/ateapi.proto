@@ -1736,10 +1736,40 @@ message SuspendActorRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
+
+  // options controls how SuspendActor persists the actor's snapshot.
+  //
+  // +k8s:optional
+  SuspendOptions options = 2;
 }
 
 message SuspendActorResponse {
   Actor actor = 1;
+}
+
+// SuspendOptions tunes how SuspendActor persists the actor's snapshot.
+message SuspendOptions {
+  // mode selects when SuspendActor returns relative to the snapshot reaching
+  // durable storage. If unspecified, defaults to DURABILITY_MODE_ASYNCHRONOUS.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the DurabilityMode enum
+  DurabilityMode mode = 1;
+}
+
+// DurabilityMode selects when a suspend is acknowledged relative to its
+// snapshot being stored durably.
+enum DurabilityMode {
+  DURABILITY_MODE_UNSPECIFIED = 0;
+
+  // Return only after the snapshot is complete in durable storage.
+  DURABILITY_MODE_SYNCHRONOUS = 1;
+
+  // Return once the snapshot is captured on the node. The upload to durable
+  // storage continues in the background.
+  DURABILITY_MODE_ASYNCHRONOUS = 2;
+  // Keep this in sync with SuspendOptions.mode's maximum.
 }
 
 message PauseActorRequest {
