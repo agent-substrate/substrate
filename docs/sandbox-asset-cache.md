@@ -89,9 +89,10 @@ another enabled version a worker advertises pays that version's download.
 
 ## Eviction
 
-An eviction pass runs every `--sandbox-asset-cache-gc-period`. It sizes the
-cache, and when that exceeds `--sandbox-asset-cache-max-bytes` it asks the
-store to free down to 90% of the budget. The store applies three rules to
+With a budget set, an eviction pass runs every
+`--sandbox-asset-cache-gc-period`. It sizes the cache, and when that exceeds
+`--sandbox-asset-cache-max-bytes` it asks the store to free down to 90% of
+the budget. The store applies three rules to
 each entry, in order:
 
 1. **Linked, never evicted.** Any hard link from an actor's directory or a pin
