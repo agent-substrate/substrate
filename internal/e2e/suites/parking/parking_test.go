@@ -58,7 +58,7 @@ func TestRequestParking(t *testing.T) {
 		createActor(ctx, t, clients, at, name)
 	}
 
-	router, err := e2e.NewRouterClient(ctx)
+	router, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("creating router client: %v", err)
 	}
