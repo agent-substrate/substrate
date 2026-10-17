@@ -505,8 +505,8 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// connection dialed after resume: the restored guest's containers are alive, so
 	// ReadStdout/ReadStderr pick up where they left off.
 	attribution := p.actorAttribution()
-	for _, c := range containers {
-		s.startActorLogForwarding(guestAC, attribution, c.GetName(), c.GetName())
+	for _, c := range ctrs {
+		s.startActorLogForwarding(guestAC, attribution, c.id, c.name)
 	}
 
 	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {

@@ -67,21 +67,21 @@ func SharedDir(id string) string {
 func VirtiofsdSocketPath(id string) string { return filepath.Join(VMDir(id), "virtiofsd.sock") }
 
 // UpperWorkDirs returns the HOST overlay upperdir and workdir for one container
-// under the actor's rootfs-upper base dir: SIBLING directories, <cid>/fs and
-// <cid>/work. Both properties are load-bearing — the kernel requires upperdir
+// under the actor's rootfs-upper base dir: SIBLING directories, <name>/fs and
+// <name>/work. Both properties are load-bearing — the kernel requires upperdir
 // and workdir on the same filesystem and rejects a nested workdir. The
 // snapshot only carries each upperdir's contents (see
 // cmd/ateworker-microvm/rootfsupper.go); ateworker creates this layout itself.
 // Covered by regression tests.
-func UpperWorkDirs(upperBase, containerID string) (upper, work string) {
-	return filepath.Join(upperBase, containerID, "fs"), filepath.Join(upperBase, containerID, "work")
+func UpperWorkDirs(upperBase, name string) (upper, work string) {
+	return filepath.Join(upperBase, name, "fs"), filepath.Join(upperBase, name, "work")
 }
 
 // MkdirUpperWorkDirs creates UpperWorkDirs under upperBase, which must exist.
-// Only root uses <cid> and the workdir, so they are 0700. The upperdir is
+// Only root uses <name> and the workdir, so they are 0700. The upperdir is
 // 0755: overlayfs presents its mode as the container's /.
-func MkdirUpperWorkDirs(upperBase, containerID string) (upper, work string, err error) {
-	upper, work = UpperWorkDirs(upperBase, containerID)
+func MkdirUpperWorkDirs(upperBase, name string) (upper, work string, err error) {
+	upper, work = UpperWorkDirs(upperBase, name)
 	for _, d := range []struct {
 		path string
 		mode os.FileMode
@@ -240,7 +240,7 @@ func StageImageVolume(ctx context.Context, src, id, cid, volumeName string) erro
 }
 
 // StageMergedRootfs mounts overlay(lower = the OCI image bundle rootfs, upper/work =
-// the actor's host rootfs-upper dirs for cid) at SharedDir(restoreID)/<cid>/rootfs —
+// the actor's host rootfs-upper dirs for name) at SharedDir(restoreID)/<cid>/rootfs —
 // the merged tree the ONE virtiofsd serves and the guest runs the container on
 // directly. The host kernel owns the overlay (the canonical ext4-upper case: no
 // special mount options, whiteouts/opaque markers are ordinary trusted.overlay.*
@@ -249,12 +249,12 @@ func StageImageVolume(ctx context.Context, src, id, cid, volumeName string) erro
 // The merged path is identical on every node — find-paths migration re-opens the
 // guest's open files by path — given a deterministic image unpack plus the upper
 // re-materialized from the snapshot tar (see cmd/ateworker-microvm/rootfsupper.go).
-func StageMergedRootfs(ctx context.Context, bundleRootfs, upperBase, restoreID, cid string) error {
-	if cid == "" {
-		return fmt.Errorf("StageMergedRootfs: empty container id")
+func StageMergedRootfs(ctx context.Context, bundleRootfs, upperBase, name, restoreID, cid string) error {
+	if name == "" || cid == "" {
+		return fmt.Errorf("StageMergedRootfs: empty container name or id")
 	}
 	dst := filepath.Join(SharedDir(restoreID), cid, "rootfs")
-	_, work := UpperWorkDirs(upperBase, cid)
+	_, work := UpperWorkDirs(upperBase, name)
 	// Drop any stale mount first (lazy if busy), then ensure clean mountpoints.
 	Unmount(dst)
 	// The workdir is scratch: wipe it so a volatile mount is never refused by a
@@ -265,7 +265,7 @@ func StageMergedRootfs(ctx context.Context, bundleRootfs, upperBase, restoreID, 
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("creating %q: %w", dst, err)
 	}
-	upper, work, err := MkdirUpperWorkDirs(upperBase, cid)
+	upper, work, err := MkdirUpperWorkDirs(upperBase, name)
 	if err != nil {
 		return err
 	}
