@@ -64,10 +64,10 @@ func parse(path string) (totals, error) {
 	return out, nil
 }
 
-// expand resolves each argument to JUnit files. A directory contributes the
-// *.xml inside it; anything else passes through literally, so a missing file
-// reaches parse() and is reported.
-func expand(args []string) ([]string, error) {
+// expand resolves each argument to files. A directory contributes the files
+// inside it with extension ext; anything else passes through literally, so a
+// missing file is reported by whatever reads it.
+func expand(args []string, ext string) ([]string, error) {
 	var out []string
 	for _, a := range args {
 		info, err := os.Stat(a)
@@ -75,7 +75,7 @@ func expand(args []string) ([]string, error) {
 			out = append(out, a)
 			continue
 		}
-		matches, err := filepath.Glob(filepath.Join(a, "*.xml"))
+		matches, err := filepath.Glob(filepath.Join(a, "*"+ext))
 		if err != nil {
 			return nil, fmt.Errorf("expanding %s: %w", a, err)
 		}
