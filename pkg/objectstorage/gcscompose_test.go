@@ -18,10 +18,16 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"io"
 	"math/rand/v2"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"cloud.google.com/go/storage"
@@ -118,6 +124,87 @@ func TestPutObjectCompositeRoundTrip(t *testing.T) {
 		}
 		if strings.Contains(attrs.Name, ".part-") || strings.Contains(attrs.Name, ".compose-") {
 			t.Errorf("upload left scratch object %q behind", attrs.Name)
+		}
+	}
+}
+
+// fakeObjects is an in-memory GCS that serves only what composeAll sends: compose
+// (concatenation, capped at maxComposeSources like GCS) and delete.
+type fakeObjects struct {
+	mu   sync.Mutex
+	objs map[string][]byte
+}
+
+func (f *fakeObjects) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	rest, ok := strings.CutPrefix(r.URL.EscapedPath(), "/storage/v1/b/test/o/")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case r.Method == http.MethodPost && strings.HasSuffix(rest, "/compose"):
+		name, _ := url.PathUnescape(strings.TrimSuffix(rest, "/compose"))
+		var req struct {
+			SourceObjects []struct{ Name string } `json:"sourceObjects"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.SourceObjects) > maxComposeSources {
+			http.Error(w, "bad compose", http.StatusBadRequest)
+			return
+		}
+		var data []byte
+		for _, src := range req.SourceObjects {
+			b, ok := f.objs[src.Name]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			data = append(data, b...)
+		}
+		f.objs[name] = data
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"name": name, "bucket": "test"})
+	case r.Method == http.MethodDelete:
+		name, _ := url.PathUnescape(rest)
+		if _, ok := f.objs[name]; !ok {
+			http.NotFound(w, r)
+			return
+		}
+		delete(f.objs, name)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// Folding more than maxComposeSources parts goes through intermediate objects, and
+// none may outlive the compose, including the ones the final compose consumes.
+func TestComposeAllRemovesIntermediates(t *testing.T) {
+	const partSize = 1 << 10
+	want := body((maxComposeSources + 8) * partSize)
+	fake := &fakeObjects{objs: map[string][]byte{}}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	bkt := fakeGCSClient(t, srv).client.Bucket("test")
+
+	var parts []*storage.ObjectHandle
+	for i := 0; i < len(want); i += partSize {
+		name := fmt.Sprintf("fold/obj.part-run-%04d", i/partSize)
+		fake.objs[name] = want[i : i+partSize]
+		parts = append(parts, bkt.Object(name))
+	}
+
+	if err := composeAll(context.Background(), bkt, "fold/obj", parts, "run"); err != nil {
+		t.Fatalf("composeAll: %v", err)
+	}
+
+	if got := fake.objs["fold/obj"]; !bytes.Equal(got, want) {
+		t.Errorf("composed %d bytes differ from the %d uploaded", len(got), len(want))
+	}
+	for name := range fake.objs {
+		if strings.Contains(name, ".compose-") {
+			t.Errorf("composeAll left intermediate %q behind", name)
 		}
 	}
 }

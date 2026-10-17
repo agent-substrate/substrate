@@ -25,6 +25,19 @@ import (
 	"testing"
 )
 
+// fakeGCSClient returns a production-configured client bound to srv.
+func fakeGCSClient(t *testing.T, srv *httptest.Server) *gcsClient {
+	t.Helper()
+	t.Setenv("STORAGE_EMULATOR_HOST", srv.URL)
+	store, err := NewGCSClient(context.Background())
+	if err != nil {
+		t.Fatalf("storage client: %v", err)
+	}
+	g := store.(*gcsClient)
+	t.Cleanup(func() { g.client.Close() })
+	return g
+}
+
 // A transient 429 on an upload must be retried, not surfaced: GCS sheds write
 // bursts with rateLimitExceeded while it scales a bucket's key ranges, and the
 // default client policy (RetryIdempotent) would fail the whole snapshot on the
@@ -68,14 +81,8 @@ func TestPutObjectRetriesTransient429(t *testing.T) {
 	defer srv.Close()
 	srvURL = srv.URL
 
-	// The storage client routes everything, uploads included, at the emulator.
-	t.Setenv("STORAGE_EMULATOR_HOST", srv.URL)
+	store := fakeGCSClient(t, srv)
 	ctx := context.Background()
-	store, err := NewGCSClient(ctx)
-	if err != nil {
-		t.Fatalf("storage client: %v", err)
-	}
-	defer store.(*gcsClient).client.Close()
 
 	if err := store.PutObject(ctx, "snapshots", "snap/pages.img.zstd", strings.NewReader("payload")); err != nil {
 		t.Fatalf("PutObject after a transient 429: %v", err)
