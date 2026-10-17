@@ -742,7 +742,9 @@ type Snapshot struct {
 	// +k8s:format=k8s-long-name
 	Locality string `protobuf:"bytes,6,opt,name=locality,proto3" json:"locality,omitempty"`
 	// durable_snapshot holds the durable storage representation of this snapshot.
-	// Unset when the snapshot only exists locally.
+	// PENDING while the snapshot is uploaded, including a pause's snapshot that
+	// so far exists only on the node named by locality. COMPLETED once the
+	// upload is recorded.
 	//
 	// +k8s:optional
 	DurableSnapshot *SnapshotStorage `protobuf:"bytes,7,opt,name=durable_snapshot,json=durableSnapshot,proto3" json:"durable_snapshot,omitempty"`

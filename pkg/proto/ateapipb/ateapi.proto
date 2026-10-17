@@ -371,7 +371,9 @@ message Snapshot {
   string locality = 6;
 
   // durable_snapshot holds the durable storage representation of this snapshot.
-  // Unset when the snapshot only exists locally.
+  // PENDING while the snapshot is uploaded, including a pause's snapshot that
+  // so far exists only on the node named by locality. COMPLETED once the
+  // upload is recorded.
   //
   // +k8s:optional
   SnapshotStorage durable_snapshot = 7;

@@ -260,54 +260,78 @@ func TestPauseActor_Finalized_RecordsFidelity(t *testing.T) {
 	}
 }
 
-// TestPauseActor_Finalized_MissingLocalSnapshotClearsAssignment verifies that if the
-// latest generation snapshot entry is missing when the pause finalizes, the
-// actor transitions to CRASHED and clears WorkerAssignment after releasing
-// the worker rather than getting stuck SUSPENDING, and the pause fails.
-func TestPauseActor_Finalized_MissingLocalSnapshotClearsAssignment(t *testing.T) {
-	ctx := context.Background()
-	st := newTestPersistence(t)
-	seedSuspendTemplate(t, ctx, st, nil)
-	w, atelet := newWireCaptureWorkflow(t, st)
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-	records := crashRecords(t)
-
-	created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		ActorTemplate: suspendTestTemplateRef(),
-		Status: &ateapipb.ActorStatus{
-			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-			AssignedNode:           "node-1",
-			WorkerAssignment:       wireTestAssignment(),
-			LastAssignedGeneration: 1,
-			Snapshots: []*ateapipb.Snapshot{
-				newInProgressSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "local-snap-1"),
-			},
+// TestPauseActor_Finalized_MissingSnapshotClearsAssignment verifies that if the
+// latest generation snapshot entry, or its PENDING durable copy, is missing
+// when the pause finalizes, the actor transitions to CRASHED and clears
+// WorkerAssignment after releasing the worker rather than getting stuck
+// SUSPENDING, and the pause fails.
+func TestPauseActor_Finalized_MissingSnapshotClearsAssignment(t *testing.T) {
+	tests := []struct {
+		name string
+		// clobber rewrites the record while atelet checkpoints.
+		clobber          func(s *ateapipb.ActorStatus)
+		wantCrashMessage string
+	}{
+		{
+			name:             "no snapshot at the latest generation",
+			clobber:          func(s *ateapipb.ActorStatus) { s.Snapshots = nil },
+			wantCrashMessage: "suspend failed: " + crashMessageLocalSnapshotMissing,
 		},
-	})
-	seedWireWorker(t, ctx, st, assignmentOf(created))
-	updateDuringCheckpoint(t, atelet, st, actorRef, func(s *ateapipb.ActorStatus) {
-		s.Snapshots = nil
-	})
+		{
+			name: "no durable copy of the latest snapshot",
+			clobber: func(s *ateapipb.ActorStatus) {
+				for _, snap := range s.Snapshots {
+					snap.DurableSnapshot = nil
+				}
+			},
+			wantCrashMessage: "suspend failed: " + crashMessageDurableSnapshotMissing,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := newTestPersistence(t)
+			seedSuspendTemplate(t, ctx, st, nil)
+			w, atelet := newWireCaptureWorkflow(t, st)
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			records := crashRecords(t)
 
-	if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("Async SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
-	}
-	got := mustReadActor(t, ctx, st, actorRef)
-	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
-	}
-	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageLocalSnapshotMissing; msg != want {
-		t.Errorf("crash message = %q, want %q", msg, want)
-	}
-	if got.GetStatus().GetWorkerAssignment() != nil {
-		t.Errorf("WorkerAssignment = %v, want nil", got.GetStatus().GetWorkerAssignment())
-	}
-	if len(*records) != 1 {
-		t.Fatalf("got %d crash records, want 1", len(*records))
-	}
-	if got := (*records)[0].attrs[string(ateattr.ActorOperationNameKey)]; got != ateattr.OperationSuspend {
-		t.Errorf("crash record %s = %q, want %q", ateattr.ActorOperationNameKey, got, ateattr.OperationSuspend)
+			created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: suspendTestTemplateRef(),
+				Status: &ateapipb.ActorStatus{
+					State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+					AssignedNode:           "node-1",
+					WorkerAssignment:       wireTestAssignment(),
+					LastAssignedGeneration: 1,
+					Snapshots: []*ateapipb.Snapshot{
+						newInProgressSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "local-snap-1"),
+					},
+				},
+			})
+			seedWireWorker(t, ctx, st, assignmentOf(created))
+			updateDuringCheckpoint(t, atelet, st, actorRef, tt.clobber)
+
+			if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("Async SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
+			}
+			got := mustReadActor(t, ctx, st, actorRef)
+			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
+			}
+			if msg := got.GetStatus().GetCrash().GetMessage(); msg != tt.wantCrashMessage {
+				t.Errorf("crash message = %q, want %q", msg, tt.wantCrashMessage)
+			}
+			if got.GetStatus().GetWorkerAssignment() != nil {
+				t.Errorf("WorkerAssignment = %v, want nil", got.GetStatus().GetWorkerAssignment())
+			}
+			if len(*records) != 1 {
+				t.Fatalf("got %d crash records, want 1", len(*records))
+			}
+			if got := (*records)[0].attrs[string(ateattr.ActorOperationNameKey)]; got != ateattr.OperationSuspend {
+				t.Errorf("crash record %s = %q, want %q", ateattr.ActorOperationNameKey, got, ateattr.OperationSuspend)
+			}
+		})
 	}
 }
 

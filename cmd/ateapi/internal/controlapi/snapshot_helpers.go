@@ -109,7 +109,7 @@ func clearLocalSnapshots(status *ateapipb.ActorStatus) {
 //     An earlier pause's PENDING copy is dropped: whatever atelet uploaded of
 //     it stays under the actor's prefix until DeleteActor collects it.
 //   - On revert finalization, ensureInProgressSnapshotDiscarded has already
-//     deleted any in-flight durable snapshot objects.
+//     deleted the objects of every PENDING durable snapshot.
 //   - On suspend finalization, the latest snapshot has already been marked
 //     COMPLETED.
 //
