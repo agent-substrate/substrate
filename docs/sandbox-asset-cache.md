@@ -139,8 +139,8 @@ metrics suite asserts that one.
 2. `shortfall`: list `/var/lib/ate/sandbox-asset-pins/` for the defaults held,
    and `ls -l /var/lib/ate/actors/*/sandbox-assets/` for what actors hold. If
    those account for the size, raise the budget or reduce the runtimes the
-   node's pools and templates use. Do not delete pins by hand: the prewarmer
-   rebuilds them, and a running actor's links are its runtime.
+   node's pools run. Do not delete pins by hand: the prewarmer rebuilds
+   them, and a running actor's links are its runtime.
 3. `skipped`: `atelet`'s log names the error from sizing the cache directory.
 4. No passes at all while over budget: the period is `0`, or `atelet` is
    older than the budget flag. The startup log line `Sandbox asset cache has
@@ -156,9 +156,10 @@ metrics suite asserts that one.
 - **One GC driver for both caches.** The image layer cache has its own
   eviction loop with the same shape but no metrics. Sharing the driver would
   give it the pass and eviction instruments; it is a follow-up.
-- **Placement by config.** ate-api-server places a fresh actor on any worker
-  of the right class and sends the runtime that worker registered. A template
-  pinned to one `SandboxConfig` can therefore run on a worker whose pool runs
-  another; that is a scheduler concern, outside this cache.
+- **Which runtime an actor gets.** The `WorkerPool` resolves the
+  `SandboxConfig`, the worker registers the config's versions, and
+  ate-api-server sends the runtime the assigned worker registered. An
+  `ActorTemplate` has no say in it. The cache serves whatever runtime the
+  request names and has no part in choosing it.
 - **Releasing index entries.** The runtime index never forgets a hash; a node
   sees a handful of configs in its lifetime, and the file stays small.
