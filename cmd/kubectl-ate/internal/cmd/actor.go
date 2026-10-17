@@ -49,7 +49,6 @@ var (
 	createActorTagFlag       string
 	deleteActorAtespaceFlag  string
 	deleteActorAnyStateFlag  bool
-	pauseActorAtespaceFlag   string
 	resumeActorAtespaceFlag  string
 	suspendActorAtespaceFlag string
 	suspendActorModeFlag     string
@@ -166,28 +165,6 @@ var deleteActorCmd = &cobra.Command{
 	},
 }
 
-var pauseActorCmd = &cobra.Command{
-	Use:   "actor <actor-name>",
-	Short: "Pause an actor",
-	Args:  exactlyOneArg("<actor-name>", "atespace"),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := cmd.Context()
-		apiClient, err := newAPIClient(cmd)
-		if err != nil {
-			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
-		}
-		defer apiClient.Close()
-
-		actorRef := resources.ActorRef{Atespace: pauseActorAtespaceFlag, Name: args[0]}
-		resp, err := apiClient.SuspendActor(ctx, buildSuspendActorRequest(actorRef, ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS))
-		if err != nil {
-			return fmt.Errorf("failed to pause actor: %w", err)
-		}
-
-		return printer.PrintActorTo(cmd.OutOrStdout(), resp.GetActor(), outputFmt)
-	},
-}
-
 var resumeActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
 	Short: "Resume an actor",
@@ -263,7 +240,7 @@ func parseSuspendMode(mode string) (ateapipb.DurabilityMode, error) {
 	}
 }
 
-// buildSuspendActorRequest builds the request behind both pause and suspend.
+// buildSuspendActorRequest builds the SuspendActor request for an actor.
 func buildSuspendActorRequest(actorRef resources.ActorRef, mode ateapipb.DurabilityMode) *ateapipb.SuspendActorRequest {
 	return &ateapipb.SuspendActorRequest{
 		Actor:   actorRef.ToObjectRef(),
@@ -772,9 +749,6 @@ func init() {
 	deleteActorCmd.Flags().StringVarP(&deleteActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
 	deleteActorCmd.Flags().BoolVar(&deleteActorAnyStateFlag, "any-state", false, "delete the actor regardless of current state")
 	deleteCmd.AddCommand(deleteActorCmd)
-
-	pauseActorCmd.Flags().StringVarP(&pauseActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
-	pauseCmd.AddCommand(pauseActorCmd)
 
 	resumeActorCmd.Flags().StringVarP(&resumeActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
 	resumeCmd.AddCommand(resumeActorCmd)
