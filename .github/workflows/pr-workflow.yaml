@@ -62,22 +62,28 @@ jobs:
     # NOTE: no -v with gotestsum, it replaces the -test.v=test2json that -json
     # sets, which marks t.Error output for the failure report below
     - name: unit tests
-      run: hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit.xml"
-        --jsonfile "${ARTIFACTS}/unit.json" --format standard-verbose
-        -- -race ./...
+      run: |
+        go -C tools/junittool run . register "${ARTIFACTS}/unit.xml"
+        hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit.xml" \
+          --jsonfile "${ARTIFACTS}/unit.json" --format standard-verbose \
+          -- -race ./...
     # tools/apitool has its own module so we need to run it explicitly.
     # run-tool.sh resolves the repo root itself, so it works from the subdir.
     - name: apitool tests
       working-directory: tools/apitool
-      run: ../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/apitool.xml"
-        --jsonfile "${ARTIFACTS}/apitool.json" --format standard-verbose
-        -- -race ./...
+      run: |
+        go -C ../junittool run . register "${ARTIFACTS}/apitool.xml"
+        ../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/apitool.xml" \
+          --jsonfile "${ARTIFACTS}/apitool.json" --format standard-verbose \
+          -- -race ./...
     # Kept apart from the root module so it can move to its own repository.
     - name: gcp-secret-manager credential provider tests
       working-directory: internal/plugins/gcp-secret-manager
-      run: ../../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/gcp-secret-manager.xml"
-        --jsonfile "${ARTIFACTS}/gcp-secret-manager.json" --format standard-verbose
-        -- -race ./...
+      run: |
+        go -C ../../../tools/junittool run . register "${ARTIFACTS}/gcp-secret-manager.xml"
+        ../../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/gcp-secret-manager.xml" \
+          --jsonfile "${ARTIFACTS}/gcp-secret-manager.json" --format standard-verbose \
+          -- -race ./...
     # The root verifiers stop at the module's go.mod, so it gets its own run:
     # gofmt, go vet and the tidy check, then golangci-lint with the root config.
     - name: gcp-secret-manager credential provider verify
