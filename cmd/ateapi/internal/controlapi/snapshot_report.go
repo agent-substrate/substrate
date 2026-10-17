@@ -26,6 +26,7 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/snapshotstate"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
@@ -168,7 +169,7 @@ func applyActorSnapshotState(ctx context.Context, status *ateapipb.ActorStatus, 
 // snapshot is not a detach. The workflow that made the call records where its
 // snapshot lives.
 func applyCheckpointState(ctx context.Context, status *ateapipb.ActorStatus, state *ateletpb.ActorSnapshotState, pauseURI pauseURIFunc) error {
-	return applyLatestDurable(ctx, status, snapshotReportFromAtelet(state.GetLatestDurable()), pauseURI)
+	return applyLatestDurable(ctx, status, snapshotstate.ReportToAPI(state.GetLatestDurable()), pauseURI)
 }
 
 // pauseURIFunc builds the upload URI a pause gave atelet for the Actor's
