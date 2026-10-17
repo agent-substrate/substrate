@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -168,6 +169,8 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 		workerPools: listersv1alpha1.NewWorkerPoolLister(pools),
 		configs:     listersv1alpha1.NewSandboxConfigLister(configs),
 	}, pods, newTestAssetFetcher(), t.TempDir(), newRuntimeIndex(), nil)
+	// The queue starts a goroutine; stop it with the test.
+	t.Cleanup(s.queue.ShutDown)
 	s.scratchDir = t.TempDir() // the runsc probe stages the binary there
 	s.probeCPUIdentity = func() (string, string, error) { return testCPUVendor, testCPUModel, nil }
 	s.runCPUFeatures = func(context.Context, string) ([]string, error) { return testCPUFeatures(), nil }
@@ -348,16 +351,21 @@ func TestWorkerSandboxSyncerJitter(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := newTestSyncer(t, append(pods, pool)...)
-			s.maxJitter = 50 * time.Millisecond
-			tt.event(s)
-			if diff := cmp.Diff(tt.want, drain(s)); diff != "" {
-				t.Errorf("UIDs enqueued right away mismatch (-want +got):\n%s", diff)
-			}
-			time.Sleep(2 * s.maxJitter)
-			if diff := cmp.Diff(tt.wantLater, drain(s)); diff != "" {
-				t.Errorf("UIDs enqueued after the jitter mismatch (-want +got):\n%s", diff)
-			}
+			// On the bubble's clock the sleep fires every delay at once.
+			synctest.Test(t, func(t *testing.T) {
+				s := newTestSyncer(t, append(pods, pool)...)
+				s.maxJitter = syncMaxJitter
+				tt.event(s)
+				synctest.Wait()
+				if diff := cmp.Diff(tt.want, drain(s)); diff != "" {
+					t.Errorf("UIDs enqueued right away mismatch (-want +got):\n%s", diff)
+				}
+				time.Sleep(s.maxJitter)
+				synctest.Wait()
+				if diff := cmp.Diff(tt.wantLater, drain(s)); diff != "" {
+					t.Errorf("UIDs enqueued after the jitter mismatch (-want +got):\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -367,40 +375,44 @@ func TestWorkerSandboxSyncerJitter(t *testing.T) {
 // runtimes resolve as soon as the event is handled, while the file, and
 // with it what the worker advertises, waits for the sync.
 func TestWorkerSandboxSyncerRegistersAheadOfJitter(t *testing.T) {
-	// Two pods of one pool: the pool is planned once, both pods are delayed.
-	pod := workerPod("pod-a", "pool")
-	s := newTestSyncer(t, pod, workerPod("pod-b", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
-	s.maxJitter = 50 * time.Millisecond
+	synctest.Test(t, func(t *testing.T) {
+		// Two pods of one pool: the pool is planned once, both pods are delayed.
+		pod := workerPod("pod-a", "pool")
+		s := newTestSyncer(t, pod, workerPod("pod-b", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+		s.maxJitter = syncMaxJitter
 
-	cfg := multiVersionConfig()
-	cfg.Generation = 2
-	s.sandboxConfigHandler().OnUpdate(multiVersionConfig(), cfg)
+		cfg := multiVersionConfig()
+		cfg.Generation = 2
+		s.sandboxConfigHandler().OnUpdate(multiVersionConfig(), cfg)
+		synctest.Wait()
 
-	plan, err := s.resolver.plan(pod)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hashed, err := hashVersions(context.Background(), plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, v := range hashed {
-		if _, ok := s.index.lookup(v.hash); !ok {
-			t.Errorf("runtime %s (%s) does not resolve before the jittered sync", v.name, v.hash)
+		plan, err := s.resolver.plan(pod)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	for _, uid := range []string{"pod-a", "pod-b"} {
-		if _, ok := s.index.worker(uid); ok {
-			t.Errorf("%s advertises runtimes before its file is written", uid)
+		hashed, err := hashVersions(context.Background(), plan)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if got := drain(s); len(got) != 0 {
-		t.Errorf("enqueued %v right away, want the jittered delay", got)
-	}
-	time.Sleep(2 * s.maxJitter)
-	if diff := cmp.Diff([]string{"pod-a", "pod-b"}, drain(s)); diff != "" {
-		t.Errorf("UIDs enqueued after the jitter mismatch (-want +got):\n%s", diff)
-	}
+		for _, v := range hashed {
+			if _, ok := s.index.lookup(v.hash); !ok {
+				t.Errorf("runtime %s (%s) does not resolve before the jittered sync", v.name, v.hash)
+			}
+		}
+		for _, uid := range []string{"pod-a", "pod-b"} {
+			if _, ok := s.index.worker(uid); ok {
+				t.Errorf("%s advertises runtimes before its file is written", uid)
+			}
+		}
+		if got := drain(s); len(got) != 0 {
+			t.Errorf("enqueued %v right away, want the jittered delay", got)
+		}
+		time.Sleep(s.maxJitter)
+		synctest.Wait()
+		if diff := cmp.Diff([]string{"pod-a", "pod-b"}, drain(s)); diff != "" {
+			t.Errorf("UIDs enqueued after the jitter mismatch (-want +got):\n%s", diff)
+		}
+	})
 }
 
 func TestWorkerSandboxSyncerProcess(t *testing.T) {
@@ -636,38 +648,45 @@ func TestWorkerSandboxSyncerExistingDirs(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := newTestSyncer(t)
-			// Short enough to observe a delayed enqueue.
-			s.minAge = 50 * time.Millisecond
-			if tt.entries == nil {
-				s.workersDir = filepath.Join(s.workersDir, "missing")
-			}
-			for name, kind := range tt.entries {
-				path := filepath.Join(s.workersDir, name)
-				var err error
-				switch kind {
-				case file:
-					err = os.WriteFile(path, nil, 0o600)
-				case youngDir:
-					err = os.Mkdir(path, 0o700)
-				case oldDir:
-					if err = os.Mkdir(path, 0o700); err == nil {
-						old := time.Now().Add(-2 * orphanMinAge)
-						err = os.Chtimes(path, old, old)
+			// On the bubble's clock the sleep fires the delayed enqueue at
+			// once. Directory ages are stamped from that clock too.
+			synctest.Test(t, func(t *testing.T) {
+				s := newTestSyncer(t)
+				if tt.entries == nil {
+					s.workersDir = filepath.Join(s.workersDir, "missing")
+				}
+				now := time.Now()
+				for name, kind := range tt.entries {
+					path := filepath.Join(s.workersDir, name)
+					var err error
+					switch kind {
+					case file:
+						err = os.WriteFile(path, nil, 0o600)
+					case youngDir:
+						if err = os.Mkdir(path, 0o700); err == nil {
+							err = os.Chtimes(path, now, now)
+						}
+					case oldDir:
+						if err = os.Mkdir(path, 0o700); err == nil {
+							old := now.Add(-2 * s.minAge)
+							err = os.Chtimes(path, old, old)
+						}
+					}
+					if err != nil {
+						t.Fatal(err)
 					}
 				}
-				if err != nil {
-					t.Fatal(err)
+				s.enqueueExistingDirs(context.Background())
+				synctest.Wait()
+				if diff := cmp.Diff(tt.want, drain(s)); diff != "" {
+					t.Errorf("enqueued UIDs mismatch (-want +got):\n%s", diff)
 				}
-			}
-			s.enqueueExistingDirs(context.Background())
-			if diff := cmp.Diff(tt.want, drain(s)); diff != "" {
-				t.Errorf("enqueued UIDs mismatch (-want +got):\n%s", diff)
-			}
-			time.Sleep(2 * s.minAge)
-			if diff := cmp.Diff(tt.wantLater, drain(s)); diff != "" {
-				t.Errorf("UIDs enqueued after minAge mismatch (-want +got):\n%s", diff)
-			}
+				time.Sleep(s.minAge)
+				synctest.Wait()
+				if diff := cmp.Diff(tt.wantLater, drain(s)); diff != "" {
+					t.Errorf("UIDs enqueued after minAge mismatch (-want +got):\n%s", diff)
+				}
+			})
 		})
 	}
 }
