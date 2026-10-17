@@ -395,6 +395,15 @@ message TerminateRequest {
   //
   // +k8s:optional
   WorkloadSpec spec = 7;
+
+  // When true and atelet holds a local snapshot for the actor, keep the
+  // actor's local snapshots, snapshot state, and staged sandbox assets on the
+  // node, resetting only the runtime directories. When false, or when atelet
+  // holds no local snapshot for the actor, forget the actor's snapshot state,
+  // prune its local checkpoints, and remove the actor's directory.
+  //
+  // +k8s:optional
+  bool keep_local_snapshots = 8;
 }
 
 message TerminateResponse {
