@@ -16,14 +16,17 @@ package glutton
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -313,5 +316,35 @@ func TestNoteFailureIgnoresRetryLater(t *testing.T) {
 	}
 	if a.consecutiveFailures != 0 {
 		t.Errorf("consecutiveFailures = %d, want 0", a.consecutiveFailures)
+	}
+}
+
+// A call cut short by a canceled context records nothing, as when a runtime
+// stops its VUs, but one that runs out of time is a failure like any other.
+func TestTracedCallRecordsDeadlinesButNotCancels(t *testing.T) {
+	a := &gluttonActor{cfg: newTestConfig(t, &fake.Server{}, nil), actorName: "sb-x"}
+	waitForCtx := func(ctx context.Context, _ *metadata.MD) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	timedOut, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	before := requestCount(t, "grpc", "TimedOutCall", "failure")
+	if err := a.tracedCall(timedOut, "TimedOutCall", waitForCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("tracedCall = %v, want DeadlineExceeded", err)
+	}
+	if got := requestCount(t, "grpc", "TimedOutCall", "failure") - before; got != 1 {
+		t.Errorf("TimedOutCall failure rows: got %v, want 1", got)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	before = requestCount(t, "grpc", "CanceledCall", "failure")
+	if err := a.tracedCall(canceled, "CanceledCall", waitForCtx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("tracedCall = %v, want Canceled", err)
+	}
+	if got := requestCount(t, "grpc", "CanceledCall", "failure") - before; got != 0 {
+		t.Errorf("CanceledCall failure rows: got %v, want 0", got)
 	}
 }

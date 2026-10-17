@@ -25,6 +25,7 @@ Flag registration lives in the modules that own each flag:
   * --cpu-cores / --cpu-duty-cycle  → common.cpuload_config.add_cpuload_arguments
   * --max-pings-per-wake            → common.ping_config.add_ping_arguments
   * --target-rps                    → common.rate_config.add_rate_arguments
+  * --dc-*                          → common.diskcontention_config
 
 This module ties them together so boomer-Go workers can pick up the values
 the operator set in the web UI form:
@@ -83,6 +84,15 @@ _FLAGS = {
     "--spawn-concurrency": int,
     "--actor-deadline": float,
     "--target-rps": float,
+    "--dc-probe-users": int,
+    "--dc-noise-mode": str,
+    "--dc-noise-template": str,
+    "--dc-noise-write-size-bytes": int,
+    "--dc-noise-files": int,
+    "--dc-noise-rate-mbps": float,
+    "--dc-noise-no-fsync": int,
+    "--dc-probe-min-wait-time": float,
+    "--dc-probe-max-wait-time": float,
 }
 
 
@@ -160,6 +170,7 @@ def init_boomer_config() -> None:
 
     from common.agentsession_config import add_agentsession_arguments  # noqa: F401
     from common.cpuload_config import add_cpuload_arguments
+    from common.diskcontention_config import add_diskcontention_arguments  # noqa: F401
     from common.durdir_config import add_durdir_arguments
     from common.lifecycle_mode import add_lifecycle_mode_arguments
     from common.memload_config import add_memload_arguments

@@ -20,6 +20,7 @@ package glutton
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -95,6 +96,33 @@ func initPing(cfg *userclass.Config) (taskFn func(), shutdown func(context.Conte
 type taskRuntime struct {
 	cfg   *userclass.Config
 	users sync.Map // goroutineID → *gluttonUser
+	// metricPrefix is prepended to the lifecycle rows (ResumeActor,
+	// SuspendActor, ...) so another user class can run these actors next
+	// to its own and keep the two sets of rows apart. Empty for GluttonUser.
+	metricPrefix string
+	// userClassName overrides the user_class Prometheus label when another
+	// user class embeds taskRuntime; defaults to userClass ("GluttonUser").
+	userClassName string
+	// waitFn, when set, replaces the [MinWait, MaxWait] think time.
+	waitFn func() time.Duration
+	// sleepFn, when set, replaces time.Sleep so an embedding runtime can wake
+	// sleeping VUs on shutdown.
+	sleepFn func(time.Duration)
+}
+
+func (r *taskRuntime) sleep(d time.Duration) {
+	if r.sleepFn != nil {
+		r.sleepFn(d)
+		return
+	}
+	time.Sleep(d)
+}
+
+func (r *taskRuntime) effectiveUserClass() string {
+	if r.userClassName != "" {
+		return r.userClassName
+	}
+	return userClass
 }
 
 // iterate is the task function boomer calls in a loop on each VU goroutine.
@@ -109,7 +137,7 @@ func (r *taskRuntime) iterate() {
 	// failing startUser / resume / crashed actor from looping on boomer's
 	// zero-delay re-entry and hammering ate-api-server.
 	defer func() {
-		time.Sleep(r.dynamicWait())
+		r.sleep(r.dynamicWait())
 	}()
 
 	gid := boomerutil.GoroutineID()
@@ -191,11 +219,11 @@ func (r *taskRuntime) iterate() {
 		if time.Now().Add(gap).After(deadline) {
 			break
 		}
-		time.Sleep(gap)
+		r.sleep(gap)
 		actor.ping(ctx)
 	}
 	if remaining := time.Until(deadline); remaining > 0 {
-		time.Sleep(remaining)
+		r.sleep(remaining)
 	}
 	if err := actor.hibernate(ctx); err != nil && actor.noteFailure(err) {
 		user.replaceActor(ctx, actor)
@@ -208,20 +236,23 @@ func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
 		n = 1
 	}
 	u := &gluttonUser{actors: make([]*gluttonActor, 0, n)}
-	bmetrics.UpdateUsers(userClass, 1)
+	uc := r.effectiveUserClass()
+	bmetrics.UpdateUsers(uc, 1)
 	var lastCreateErr error
 	for i := 0; i < n; i++ {
 		a := &gluttonActor{
-			cfg:         r.cfg,
-			actorName:   "sb-" + uuid.NewString(),
-			firstResume: true,
+			cfg:           r.cfg,
+			actorName:     "sb-" + uuid.NewString(),
+			firstResume:   true,
+			metricPrefix:  r.metricPrefix,
+			userClassName: uc,
 		}
 		// Ensuring the atespace is idempotent (swallows AlreadyExists), so
 		// doing it once per VU is enough — subsequent actors would just make
 		// the same round-trip return AlreadyExists.
 		if i == 0 {
 			if err := a.ensureAtespace(ctx); err != nil {
-				bmetrics.UpdateUsers(userClass, -1)
+				bmetrics.UpdateUsers(uc, -1)
 				return nil, err
 			}
 		}
@@ -237,7 +268,7 @@ func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
 		u.actors = append(u.actors, a)
 	}
 	if len(u.actors) == 0 {
-		bmetrics.UpdateUsers(userClass, -1)
+		bmetrics.UpdateUsers(uc, -1)
 		return nil, fmt.Errorf("no actors created: %w", lastCreateErr)
 	}
 	return u, nil
@@ -248,6 +279,7 @@ func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
 // leaks actors until shutdown — acceptable for benchmark runs that ramp up,
 // hold, then tear down cleanly.
 func (r *taskRuntime) shutdown(ctx context.Context) {
+	uc := r.effectiveUserClass()
 	r.users.Range(func(_, val any) bool {
 		u := val.(*gluttonUser)
 		for _, a := range u.actors {
@@ -260,7 +292,7 @@ func (r *taskRuntime) shutdown(ctx context.Context) {
 			}
 			a.delete(ctx)
 		}
-		bmetrics.UpdateUsers(userClass, -1)
+		bmetrics.UpdateUsers(uc, -1)
 		return true
 	})
 }
@@ -268,6 +300,9 @@ func (r *taskRuntime) shutdown(ctx context.Context) {
 // dynamicWait is the gap between suspending one actor and resuming the
 // VU's next one, drawn uniformly from [MinWait, MaxWait].
 func (r *taskRuntime) dynamicWait() time.Duration {
+	if r.waitFn != nil {
+		return r.waitFn()
+	}
 	return dynconfig.Get[gluttonKnobs](r.cfg.Dyn).WaitTime.Draw()
 }
 
@@ -309,9 +344,11 @@ func (u *gluttonUser) replaceActor(ctx context.Context, broken *gluttonActor) {
 		broken.deleted = true
 	}
 	replacement := &gluttonActor{
-		cfg:         broken.cfg,
-		actorName:   "sb-" + uuid.NewString(),
-		firstResume: true,
+		cfg:           broken.cfg,
+		actorName:     "sb-" + uuid.NewString(),
+		firstResume:   true,
+		metricPrefix:  broken.metricPrefix,
+		userClassName: broken.userClassName,
 	}
 	if err := replacement.create(ctx); err != nil {
 		slog.Warn("glutton actor replacement create failed; will retry on next failure",
@@ -349,6 +386,19 @@ type gluttonActor struct {
 	// consecutiveFailures counts replaceIfPersistent failures since the last
 	// success. See noteFailure.
 	consecutiveFailures int
+	// metricPrefix is taskRuntime.metricPrefix, copied so each lifecycle
+	// row of this actor carries it.
+	metricPrefix string
+	// userClassName overrides the user_class Prometheus label; defaults to
+	// userClass ("GluttonUser") when empty.
+	userClassName string
+}
+
+func (u *gluttonActor) effectiveUserClass() string {
+	if u.userClassName != "" {
+		return u.userClassName
+	}
+	return userClass
 }
 
 // noteFailure records a failed lifecycle RPC against the actor and reports
@@ -417,9 +467,9 @@ func (u *gluttonActor) create(ctx context.Context) error {
 }
 
 func (u *gluttonActor) resume(ctx context.Context) error {
-	metricName := "ResumeActor"
+	metricName := u.metricPrefix + "ResumeActor"
 	if u.firstResume {
-		metricName = "ResumeActorFirstResume"
+		metricName = u.metricPrefix + "ResumeActorFirstResume"
 	}
 	err := u.tracedCall(ctx, metricName, func(callCtx context.Context, tr *metadata.MD) error {
 		// Retry Aborted "concurrent update conflict" transparently — it's a
@@ -440,7 +490,7 @@ func (u *gluttonActor) resume(ctx context.Context) error {
 		// locust stats table.
 		if boomerutil.IsCrashed(err) {
 			u.crashed = true
-			bmetrics.RecordFailure("actor", "CrashCount", userClass, 0, "actor entered ACTOR_STATE_CRASHED")
+			bmetrics.RecordFailure("actor", "CrashCount", u.effectiveUserClass(), 0, "actor entered ACTOR_STATE_CRASHED")
 			slog.Warn("glutton actor crashed; will stop sending requests",
 				slog.String("actor", u.actorName),
 				slog.String("err", err.Error()))
@@ -469,7 +519,7 @@ func (u *gluttonActor) hibernate(ctx context.Context) error {
 }
 
 func (u *gluttonActor) pause(ctx context.Context) error {
-	err := u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, u.metricPrefix+"PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			Actor:   u.ref(),
 			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
@@ -485,7 +535,7 @@ func (u *gluttonActor) pause(ctx context.Context) error {
 }
 
 func (u *gluttonActor) suspend(ctx context.Context) error {
-	err := u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, u.metricPrefix+"SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
@@ -513,7 +563,10 @@ func (u *gluttonActor) delete(ctx context.Context) {
 // reporting. The reported latency is client wall clock, so it covers
 // retries inside do, queueing, and the network. The server-side elapsed
 // time from ateinterceptors.ServerUnaryInterceptor's trailer, when present,
-// goes on the span only: it measures the last attempt alone.
+// goes on the span only: it measures the last attempt alone. A call cut
+// short because ctx was canceled, as a runtime does to stop its VUs, records
+// nothing; one that runs out of time (DeadlineExceeded) is still recorded,
+// so a teardown call that times out shows up.
 func (u *gluttonActor) tracedCall(ctx context.Context, name string, do func(context.Context, *metadata.MD) error) error {
 	ctx, span := u.cfg.Tracer.Start(ctx, name)
 	defer span.End()
@@ -526,29 +579,33 @@ func (u *gluttonActor) tracedCall(ctx context.Context, name string, do func(cont
 	if serverLatency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, 0); source == boomerutil.SourceServer {
 		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(serverLatency)))
 	}
-	boomerutil.LogSampledTrace(span, name, latency, boomerutil.SourceClient, err)
-	if err != nil {
-		bmetrics.RecordFailure("grpc", name, userClass, latency, err.Error())
+	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
 		return err
 	}
-	bmetrics.RecordSuccess("grpc", name, userClass, latency, 0)
+	boomerutil.LogSampledTrace(span, name, latency, boomerutil.SourceClient, err)
+	if err != nil {
+		bmetrics.RecordFailure("grpc", name, u.effectiveUserClass(), latency, err.Error())
+		return err
+	}
+	bmetrics.RecordSuccess("grpc", name, u.effectiveUserClass(), latency, 0)
 	return nil
 }
 
 func (u *gluttonActor) ping(ctx context.Context) {
 	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonPing")
 	defer span.End()
+	uc := u.effectiveUserClass()
 
 	message := uuid.NewString()
 	body, err := proto.Marshal(&gluttonpb.PingRequest{Message: message})
 	if err != nil {
-		bmetrics.RecordFailure("http", "GluttonPing", userClass, 0, err.Error())
+		bmetrics.RecordFailure("http", "GluttonPing", uc, 0, err.Error())
 		return
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.cfg.RouterURL+pingPath, bytes.NewReader(body))
 	if err != nil {
-		bmetrics.RecordFailure("http", "GluttonPing", userClass, 0, err.Error())
+		bmetrics.RecordFailure("http", "GluttonPing", uc, 0, err.Error())
 		return
 	}
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
@@ -559,38 +616,38 @@ func (u *gluttonActor) ping(ctx context.Context) {
 	resp, err := u.cfg.HTTPClient.Do(httpReq)
 	clientLatency := time.Since(start)
 	if err != nil {
-		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, err.Error())
+		bmetrics.RecordFailure("http", "GluttonPing", uc, clientLatency, err.Error())
 		return
 	}
 	defer resp.Body.Close()
 
 	respBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, readErr.Error())
+		bmetrics.RecordFailure("http", "GluttonPing", uc, clientLatency, readErr.Error())
 		return
 	}
 
 	if resp.StatusCode >= 400 {
 		httpErr := fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		boomerutil.LogSampledTrace(span, "GluttonPing", clientLatency, boomerutil.SourceClient, httpErr)
-		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, httpErr.Error())
+		bmetrics.RecordFailure("http", "GluttonPing", uc, clientLatency, httpErr.Error())
 		return
 	}
 
 	pong := &gluttonpb.PingResponse{}
 	if err := proto.Unmarshal(respBody, pong); err != nil {
 		boomerutil.LogSampledTrace(span, "GluttonPing", clientLatency, boomerutil.SourceClient, err)
-		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, err.Error())
+		bmetrics.RecordFailure("http", "GluttonPing", uc, clientLatency, err.Error())
 		return
 	}
 	if pong.Message != message {
 		mismatch := fmt.Errorf("ping echo mismatch: sent=%q recv=%q", message, pong.Message)
 		boomerutil.LogSampledTrace(span, "GluttonPing", clientLatency, boomerutil.SourceClient, mismatch)
-		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, mismatch.Error())
+		bmetrics.RecordFailure("http", "GluttonPing", uc, clientLatency, mismatch.Error())
 		return
 	}
 	boomerutil.LogSampledTrace(span, "GluttonPing", clientLatency, boomerutil.SourceClient, nil)
-	bmetrics.RecordSuccess("http", "GluttonPing", userClass, clientLatency, int64(len(respBody)))
+	bmetrics.RecordSuccess("http", "GluttonPing", uc, clientLatency, int64(len(respBody)))
 }
 
 // ensureRAMFilled grows the actor's resident working set to the configured
@@ -613,16 +670,17 @@ func (u *gluttonActor) ensureRAMFilled(ctx context.Context) {
 	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonFillRAM")
 	defer span.End()
 	start := time.Now()
+	uc := u.effectiveUserClass()
 
 	err := u.writeRAM(ctx, memLoadKey, target, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE)
 	clientLatency := time.Since(start)
 	boomerutil.LogSampledTrace(span, "GluttonFillRAM", clientLatency, boomerutil.SourceClient, err)
 	if err != nil {
-		bmetrics.RecordFailure("http", "GluttonFillRAM", userClass, clientLatency, err.Error())
+		bmetrics.RecordFailure("http", "GluttonFillRAM", uc, clientLatency, err.Error())
 		return
 	}
 	u.ramFilled = true
-	bmetrics.RecordSuccess("http", "GluttonFillRAM", userClass, clientLatency, 0)
+	bmetrics.RecordSuccess("http", "GluttonFillRAM", uc, clientLatency, 0)
 }
 
 // ensureCPULoad starts cpu_cores goroutines in the actor, each burning
@@ -644,6 +702,7 @@ func (u *gluttonActor) ensureCPULoad(ctx context.Context) {
 	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonUseCPU")
 	defer span.End()
 	start := time.Now()
+	uc := u.effectiveUserClass()
 
 	err := u.postProto(ctx, useCPUPath, &gluttonpb.UseCPURequest{
 		NumCores:  int32(knobs.CPUCores),
@@ -652,11 +711,11 @@ func (u *gluttonActor) ensureCPULoad(ctx context.Context) {
 	clientLatency := time.Since(start)
 	boomerutil.LogSampledTrace(span, "GluttonUseCPU", clientLatency, boomerutil.SourceClient, err)
 	if err != nil {
-		bmetrics.RecordFailure("http", "GluttonUseCPU", userClass, clientLatency, err.Error())
+		bmetrics.RecordFailure("http", "GluttonUseCPU", uc, clientLatency, err.Error())
 		return
 	}
 	u.cpuLoaded = true
-	bmetrics.RecordSuccess("http", "GluttonUseCPU", userClass, clientLatency, 0)
+	bmetrics.RecordSuccess("http", "GluttonUseCPU", uc, clientLatency, 0)
 }
 
 // churnRAM re-randomizes mem_churn bytes of the working set in place
@@ -677,15 +736,16 @@ func (u *gluttonActor) churnRAM(ctx context.Context) {
 	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonChurnRAM")
 	defer span.End()
 	start := time.Now()
+	uc := u.effectiveUserClass()
 
 	err := u.writeRAM(ctx, memLoadKey, churn, gluttonpb.WriteMode_WRITE_MODE_OVERWRITE_ROTATE)
 	clientLatency := time.Since(start)
 	boomerutil.LogSampledTrace(span, "GluttonChurnRAM", clientLatency, boomerutil.SourceClient, err)
 	if err != nil {
-		bmetrics.RecordFailure("http", "GluttonChurnRAM", userClass, clientLatency, err.Error())
+		bmetrics.RecordFailure("http", "GluttonChurnRAM", uc, clientLatency, err.Error())
 		return
 	}
-	bmetrics.RecordSuccess("http", "GluttonChurnRAM", userClass, clientLatency, 0)
+	bmetrics.RecordSuccess("http", "GluttonChurnRAM", uc, clientLatency, 0)
 }
 
 // readRAM walks mem_read bytes of the working set (memReadAll walks all of
@@ -707,16 +767,17 @@ func (u *gluttonActor) readRAM(ctx context.Context) {
 	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonReadRAM")
 	defer span.End()
 	start := time.Now()
+	uc := u.effectiveUserClass()
 
 	resp := &gluttonpb.ReadRAMResponse{}
 	err := u.postProto(ctx, readRAMPath, &gluttonpb.ReadRAMRequest{Key: memLoadKey, Size: size}, resp)
 	clientLatency := time.Since(start)
 	boomerutil.LogSampledTrace(span, "GluttonReadRAM", clientLatency, boomerutil.SourceClient, err)
 	if err != nil {
-		bmetrics.RecordFailure("http", "GluttonReadRAM", userClass, clientLatency, err.Error())
+		bmetrics.RecordFailure("http", "GluttonReadRAM", uc, clientLatency, err.Error())
 		return
 	}
-	bmetrics.RecordSuccess("http", "GluttonReadRAM", userClass, clientLatency, resp.GetSize())
+	bmetrics.RecordSuccess("http", "GluttonReadRAM", uc, clientLatency, resp.GetSize())
 }
 
 // writeRAM POSTs one WriteRAM request to the actor through the router,

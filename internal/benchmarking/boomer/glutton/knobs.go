@@ -22,10 +22,11 @@ import (
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 )
 
-// The three user classes in this package each read their own slice of the
-// runtime config. The structs below name the keys; the sections carry the
-// defaults a missing key falls back to and the rules a fetched value must
-// pass before the worker takes it on.
+// The user classes in this package each read their own slice of the
+// runtime config; DiskContentionUser's dcKnobs live in diskcontention.go.
+// The structs below name the keys; the sections carry the defaults a
+// missing key falls back to and the rules a fetched value must pass before
+// the worker takes it on.
 
 // gluttonKnobs is the GluttonUser slice: the wait and live windows, the
 // lifecycle modes, the working-set sizes, the CPU load, and the ping cap.

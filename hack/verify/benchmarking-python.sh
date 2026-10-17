@@ -31,6 +31,7 @@ source hack/util/venv.sh
 SUITES=(
   "benchmarking/analysis ."
   "benchmarking/automation ."
+  "benchmarking/diskcontention ."
   "benchmarking/locust unit_tests"
   "benchmarking/nighthawk-ingress tests"
   "benchmarking/workloads/manifests/sweperf ."

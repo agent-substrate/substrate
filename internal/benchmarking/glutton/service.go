@@ -268,7 +268,7 @@ func (s *Service) WriteDisk(ctx context.Context, req *gluttonpb.WriteDiskRequest
 	if err := streamRandomBytes(io.MultiWriter(f, h), size); err != nil {
 		return nil, status.Errorf(codes.Internal, "write %s: %v", path, err)
 	}
-	if s.syncWrites {
+	if s.syncWrites || req.GetFsync() {
 		if err := f.Sync(); err != nil {
 			return nil, status.Errorf(codes.Internal, "sync %s: %v", path, err)
 		}
