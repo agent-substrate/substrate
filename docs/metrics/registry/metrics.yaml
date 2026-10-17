@@ -501,13 +501,21 @@ groups:
               value: unavailable
               brief: >
                 The request got an Unavailable status, or a 503 without a gRPC
-                cause. For example, a denied egress request, a failed policy or
-                credential lookup, or a full parking lot when the resume did not
-                fail with ResourceExhausted.
+                cause. For example, a failed policy or credential lookup, or a
+                full parking lot when the resume did not fail with
+                ResourceExhausted.
             - id: rate_limited
               stability: development
               value: rate_limited
               brief: The router limited the rate of the request.
+            - id: denied
+              stability: development
+              value: denied
+              brief: >
+                The router refused the request by policy, with a 403 or a
+                PermissionDenied status. For example, an egress request that
+                the actor's egress policy does not allow. It is a policy
+                decision, not a defect.
             - id: resume_error
               stability: development
               value: resume_error
