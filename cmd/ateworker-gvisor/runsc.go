@@ -19,6 +19,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -252,18 +253,27 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 	return nil
 }
 
-func (r *runsc) cmdState(ctx context.Context, containerName string) error {
+// cmdState returns the container's OCI status ("running", "stopped", ...),
+// or an error when runsc has no record of it.
+func (r *runsc) cmdState(ctx context.Context, containerName string) (string, error) {
 	cmd := exec.CommandContext(
 		ctx,
 		r.path,
 		r.buildArgs("state", containerName)...,
 	)
-	cmd.Stdout = os.Stdout
+	var out bytes.Buffer
+	cmd.Stdout = &out
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("while running `runsc state`: %w", err)
+		return "", fmt.Errorf("while running `runsc state`: %w", err)
 	}
-	return nil
+	var state struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &state); err != nil {
+		return "", fmt.Errorf("while parsing `runsc state` output: %w", err)
+	}
+	return state.Status, nil
 }
 
 // cmdList returns the container IDs runsc has a record of.
