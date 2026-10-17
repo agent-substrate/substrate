@@ -100,6 +100,7 @@ type WorkerPoolSyncer struct {
 	pods               corev1client.PodsGetter
 	workerInformer     cache.SharedIndexInformer
 	workerPoolInformer cache.SharedIndexInformer
+	watchNamespace     string
 	queue              workqueue.TypedRateLimitingInterface[workerKey]
 	workerCount        int
 
@@ -111,13 +112,15 @@ type WorkerPoolSyncer struct {
 }
 
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer. pods is used to delete
-// worker pods that have reached a terminal phase.
-func NewWorkerPoolSyncer(client ateapipb.ControlClient, pods corev1client.PodsGetter, workerInformer, workerPoolInformer cache.SharedIndexInformer, workerCount int) *WorkerPoolSyncer {
+// worker pods that have reached a terminal phase. watchNamespace must match the
+// informers' namespace; empty watches all namespaces.
+func NewWorkerPoolSyncer(client ateapipb.ControlClient, pods corev1client.PodsGetter, workerInformer, workerPoolInformer cache.SharedIndexInformer, watchNamespace string, workerCount int) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		client:             client,
 		pods:               pods,
 		workerInformer:     workerInformer,
 		workerPoolInformer: workerPoolInformer,
+		watchNamespace:     watchNamespace,
 		queue:              workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
 		workerCount:        workerCount,
 		listBackoff:        defaultListBackoff,
@@ -249,6 +252,15 @@ func (s *WorkerPoolSyncer) processNextWorkItem(ctx context.Context) bool {
 // reconcile converges the registry record for key with the current pod state in
 // the informer cache. Returning an error requeues the key with backoff.
 func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
+	// The pod informer only delivers keys in the watched namespace and the
+	// startup scan filters its keys the same way, so a key outside it means
+	// one of those invariants broke. Error, and drop the key: silence would
+	// hide the regression, and requeueing would retry it forever.
+	if s.watchNamespace != "" && key.namespace != s.watchNamespace {
+		slog.ErrorContext(ctx, "Syncer: reconcile key outside watch namespace; this should not happen",
+			append(key.logAttrs(), slog.String("watch-namespace", s.watchNamespace))...)
+		return nil
+	}
 	obj, exists, err := s.workerInformer.GetIndexer().GetByKey(key.namespace + "/" + key.name)
 	if err != nil {
 		return err
@@ -523,7 +535,8 @@ const (
 )
 
 // enqueueRegisteredWorkers enqueues a key for every worker record in the
-// registry. Records whose pods are live and unchanged reconcile to a no-op;
+// watched namespace, or all namespaces when unset. Records whose pods are live
+// and unchanged reconcile to a no-op;
 // orphaned records (pod gone, or its name reused by a new pod UID) get cleaned
 // up.
 //
@@ -534,6 +547,12 @@ const (
 // enqueued as they are read, so the whole worker set is never held in memory at
 // once and a late failure does not re-scan the pages already enqueued.
 func (s *WorkerPoolSyncer) enqueueRegisteredWorkers(ctx context.Context) {
+	var skipped int
+	defer func() {
+		if skipped > 0 {
+			slog.WarnContext(ctx, "Syncer: skipped registered workers outside the watched namespace; drain these workers before narrowing the watch scope", "count", skipped, "watch-namespace", s.watchNamespace)
+		}
+	}()
 	var pageToken string
 	for {
 		page, err := s.listWorkersPageWithRetry(ctx, pageToken)
@@ -545,6 +564,11 @@ func (s *WorkerPoolSyncer) enqueueRegisteredWorkers(ctx context.Context) {
 			return
 		}
 		for _, w := range page.GetWorkers() {
+			// Workers outside our Pod cache are not evidence of deleted Pods.
+			if s.watchNamespace != "" && w.GetWorkerNamespace() != s.watchNamespace {
+				skipped++
+				continue
+			}
 			// The key is a pod identity, so it is rebuilt from the recorded pod
 			// fields rather than from the Worker's name.
 			s.queue.Add(workerKey{

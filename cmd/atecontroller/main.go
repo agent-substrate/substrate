@@ -18,12 +18,14 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
 	"go.ate.dev/substrate/cmd/atecontroller/internal/controllers"
 	"go.ate.dev/substrate/cmd/atecontroller/internal/workersync"
 	"go.ate.dev/substrate/internal/ateapiauth"
+	"go.ate.dev/substrate/internal/cachesync"
 	"go.ate.dev/substrate/internal/egresspolicy"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/preview"
@@ -35,16 +37,12 @@ import (
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -58,6 +56,8 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 
 	ateAPIConnSpec = pflag.String("ateapi-conn-spec", "k8s:///api.ate-system.svc:443", "")
+
+	watchNamespace = pflag.String("watch-namespace", "", "Namespace containing the WorkerPools to manage. Empty watches all namespaces. Does not change the system namespace or cluster-scoped resources.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -105,6 +105,9 @@ const (
 	// turns it off.
 	metricsPullAddr = ":8080"
 	metricsOffAddr  = "0"
+
+	// cacheSyncTimeout bounds the startup wait for the worker-sync caches.
+	cacheSyncTimeout = time.Minute
 )
 
 // logr verbosity V(n) maps to slog level -n, so V(1) stays below Info until
@@ -123,21 +126,11 @@ func metricsBindAddr(servePull bool) string {
 }
 
 // managerOptions configures the controller-runtime manager.
-func managerOptions(egressMITMCAPool types.NamespacedName, servePull bool) ctrl.Options {
+func managerOptions(watchNamespace, systemNamespace string, servePull bool) ctrl.Options {
 	return ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsserver.Options{BindAddress: metricsBindAddr(servePull)},
-		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Secret{}: {
-					Namespaces: map[string]cache.Config{
-						egressMITMCAPool.Namespace: {
-							FieldSelector: fields.OneTermEqualSelector("metadata.name", egressMITMCAPool.Name),
-						},
-					},
-				},
-			},
-		},
+		Cache:   controllers.CacheOptions(watchNamespace, systemNamespace),
 	}
 }
 
@@ -155,6 +148,10 @@ func main() {
 	if err := preview.Init(*previewFlags...); err != nil {
 		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
+	if err := serverboot.ValidateWatchNamespace(*watchNamespace); err != nil {
+		serverboot.Fatal(ctx, "Invalid --watch-namespace", err)
+	}
+	slog.InfoContext(ctx, "Resolved workload watch scope", "watch-namespace", *watchNamespace, "all-namespaces", *watchNamespace == "")
 	slog.InfoContext(ctx, "atecontroller starting", slog.String("version", version.Version))
 	ctrl.SetLogger(newControllerRuntimeLogger(slog.Default().Handler()))
 
@@ -235,10 +232,8 @@ func main() {
 		}
 	}
 
-	// EgressMITMTrustReconciler watches the Secret `egress-mitm-ca-pool`.
 	systemNamespace := installdefaults.NamespaceFromPodEnv()
-	egressMITMCAPool := controllers.EgressMITMCAPoolRef(systemNamespace)
-	mgr, err := ctrl.NewManager(k8sConfig, managerOptions(egressMITMCAPool, servePull))
+	mgr, err := ctrl.NewManager(k8sConfig, managerOptions(*watchNamespace, systemNamespace, servePull))
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
@@ -265,8 +260,9 @@ func main() {
 	}
 
 	if err = (&controllers.SandboxConfigProtectionReconciler{
-		Client:    mgr.GetClient(),
-		APIReader: mgr.GetAPIReader(),
+		Client:         mgr.GetClient(),
+		APIReader:      mgr.GetAPIReader(),
+		WatchNamespace: *watchNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SandboxConfigProtection")
 		os.Exit(1)
@@ -307,19 +303,27 @@ func main() {
 	// without a pod event, and an informer's resync period is a property of the
 	// informer, so asking the shared cache for one would impose it on every other
 	// controller here too.
-	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
+	ateFactory := externalversions.NewSharedInformerFactoryWithOptions(ateClient, 0, externalversions.WithNamespace(*watchNamespace))
 	workerPoolInformer := ateFactory.Api().V1alpha1().WorkerPools()
-	workerPodInformerFactory, workerPodInformer := workersync.WorkerPodInformer(k8sClient)
+	workerPodInformerFactory, workerPodInformer := workersync.WorkerPodInformer(k8sClient, *watchNamespace)
 
 	// Start registers the informer event handlers, so it has to run before the
 	// factory does: the initial list then synthesizes an Add for every pod that
 	// already exists, and no explicit startup re-list is needed.
-	workersync.NewWorkerPoolSyncer(ateapiClient, k8sClient.CoreV1(), workerPodInformer, workerPoolInformer.Informer(), *workerSyncConcurrency).Start(runCtx)
+	workersync.NewWorkerPoolSyncer(ateapiClient, k8sClient.CoreV1(), workerPodInformer, workerPoolInformer.Informer(), *watchNamespace, *workerSyncConcurrency).Start(runCtx)
 
 	workerPodInformerFactory.Start(runCtx.Done())
 	ateFactory.Start(runCtx.Done())
-	workerPodInformerFactory.WaitForCacheSync(runCtx.Done())
-	ateFactory.WaitForCacheSync(runCtx.Done())
+	// Fatal, like the manager's own caches: controller-runtime fails the
+	// process a cache misses its CacheSyncTimeout in, and a controller blind
+	// to workers has nothing to run half-alive for.
+	if err := cachesync.WaitForCacheSync(runCtx, cacheSyncTimeout, map[string]cache.InformerSynced{
+		"worker Pods": workerPodInformer.HasSynced,
+		"WorkerPools": workerPoolInformer.Informer().HasSynced,
+	}); err != nil {
+		setupLog.Error(err, "worker-sync caches not synced")
+		os.Exit(1)
+	}
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(runCtx); err != nil {
