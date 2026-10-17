@@ -604,43 +604,65 @@ func TestLoadAPILogLevel(t *testing.T) {
 }
 
 func TestLoadAPIAuthz(t *testing.T) {
-	const (
-		clientOwner = "system:serviceaccount:ate-system:ate-client"
-		owners      = "alice@example.com,bob@example.com"
-	)
+	const clientOwner = "system:serviceaccount:ate-system:ate-client"
 	for _, tc := range []struct {
 		name        string
 		env         map[string]string
 		wantEnabled bool
-		wantOwners  string
-		wantErr     bool
+		wantOwners  []string
+		wantErr     string
 	}{
 		{
 			name:        "on by default, owned by the client ServiceAccount",
 			wantEnabled: true,
-			wantOwners:  clientOwner,
+			wantOwners:  []string{clientOwner},
 		},
 		{
 			name:        "default owner follows the namespace",
 			env:         map[string]string{"ATE_NAMESPACE": "custom"},
 			wantEnabled: true,
-			wantOwners:  "system:serviceaccount:custom:ate-client",
+			wantOwners:  []string{"system:serviceaccount:custom:ate-client"},
 		},
 		{
 			name:        "explicit owners replace the default",
-			env:         map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": owners},
+			env:         map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": "alice@example.com,bob@example.com"},
 			wantEnabled: true,
-			wantOwners:  owners,
+			wantOwners:  []string{"alice@example.com", "bob@example.com"},
+		},
+		{
+			name:        "whitespace around owners is ignored",
+			env:         map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": " alice , bob "},
+			wantEnabled: true,
+			wantOwners:  []string{"alice", "bob"},
+		},
+		{
+			name:        "an owner that contains a comma is quoted",
+			env:         map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": `"Doe, Jane", bob`},
+			wantEnabled: true,
+			wantOwners:  []string{"Doe, Jane", "bob"},
 		},
 		{
 			name:       "turned off",
 			env:        map[string]string{"ATE_API_EXPERIMENTAL_ENABLE_AUTHZ": "false"},
-			wantOwners: clientOwner,
+			wantOwners: []string{clientOwner},
 		},
 		{
 			name:    "enabled with only separators",
 			env:     map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": " , "},
-			wantErr: true,
+			wantErr: "bootstrap owner",
+		},
+		{
+			name:    "an unterminated quote",
+			env:     map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": `"alice`},
+			wantErr: "ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
+		},
+		{
+			name: "an unterminated quote with authorization off",
+			env: map[string]string{
+				"ATE_API_EXPERIMENTAL_ENABLE_AUTHZ": "false",
+				"ATE_API_AUTHZ_BOOTSTRAP_OWNERS":    `"alice`,
+			},
+			wantErr: "invalid principal list",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -649,16 +671,16 @@ func TestLoadAPIAuthz(t *testing.T) {
 				t.Setenv(name, value)
 			}
 			cfg, err := Load(Options{})
-			if tc.wantErr {
-				if err == nil || !strings.Contains(err.Error(), "bootstrap owner") {
-					t.Fatalf("Load() error = %v, want the missing bootstrap owner error", err)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Load() error = %v, want it to contain %q", err, tc.wantErr)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if cfg.APIExperimentalEnableAuthz != tc.wantEnabled || cfg.APIAuthzBootstrapOwners != tc.wantOwners {
+			if cfg.APIExperimentalEnableAuthz != tc.wantEnabled || !slices.Equal(cfg.APIAuthzBootstrapOwners, tc.wantOwners) {
 				t.Errorf("authz = %v, %q, want %v, %q", cfg.APIExperimentalEnableAuthz, cfg.APIAuthzBootstrapOwners, tc.wantEnabled, tc.wantOwners)
 			}
 		})
