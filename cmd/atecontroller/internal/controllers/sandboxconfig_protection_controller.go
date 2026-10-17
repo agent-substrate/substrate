@@ -41,6 +41,12 @@ type SandboxConfigProtectionReconciler struct {
 	// can lag behind a pool that just started using a config, so a finalizer
 	// is only removed after a live list finds no user.
 	APIReader client.Reader
+	// WatchNamespace scopes the live list, which bypasses the (already
+	// scoped) manager cache and would otherwise reach for every namespace.
+	// A scoped deployment's RBAC cannot list beyond it, and pools outside
+	// the scope are another deployment's responsibility. Empty means all
+	// namespaces.
+	WatchNamespace string
 }
 
 //+kubebuilder:rbac:groups=ate.dev,resources=sandboxconfigs,verbs=get;list;watch;patch
@@ -91,7 +97,7 @@ func (r *SandboxConfigProtectionReconciler) usedByWorkerPool(ctx context.Context
 		return true, nil
 	}
 	var pools atev1.WorkerPoolList
-	if err := r.APIReader.List(ctx, &pools); err != nil {
+	if err := r.APIReader.List(ctx, &pools, client.InNamespace(r.WatchNamespace)); err != nil {
 		return false, fmt.Errorf("failed to list WorkerPools: %w", err)
 	}
 	for i := range pools.Items {
