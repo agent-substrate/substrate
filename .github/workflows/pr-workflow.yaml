@@ -51,6 +51,16 @@ jobs:
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: 'go.mod'
+    # Anonymous Docker Hub pulls are rate limited per runner IP. mirror.gcr.io
+    # is meant to be used as a daemon mirror; images it lacks still come from
+    # Docker Hub.
+    - name: Use the Docker Hub mirror
+      run: |
+        cfg=/etc/docker/daemon.json
+        [ -s "$cfg" ] || echo '{}' | sudo tee "$cfg" >/dev/null
+        sudo jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' "$cfg" | sudo tee "$cfg.new" >/dev/null
+        sudo mv "$cfg.new" "$cfg"
+        sudo systemctl restart docker
     # Unconditional: a released migration becoming permanent is exactly what
     # this guards, and that happens on the push to main, not on the PR.
     - name: Verify immutable PostgreSQL migrations
