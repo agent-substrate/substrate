@@ -15,7 +15,7 @@
 package controlapi
 
 import (
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // findSnapshotByGeneration returns the Snapshot in snapshots with the given
@@ -65,6 +65,46 @@ func findLatestLocalSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
 	return latestSnapshot(status, func(snap *ateapipb.Snapshot) bool {
 		return snap.GetLocality() != ""
 	})
+}
+
+// latestSnapshotIsLocal reports whether the snapshot at the actor's latest
+// generation is node-local: the shape a pause leaves behind, which atelet's
+// upload of the snapshot doesn't change. A paused actor is SUSPENDED with this
+// shape, and resumes only on the node named by Locality; a suspend of such an
+// actor uploads that snapshot, unless atelet already has, instead of
+// checkpointing a workload. A RUNNING actor resumed from pause keeps the local
+// snapshot too, so callers that need "at rest" check the state as well.
+func latestSnapshotIsLocal(status *ateapipb.ActorStatus) bool {
+	return snapshotAtLatestGeneration(status).GetLocality() != ""
+}
+
+// latestSnapshotIsLocalOnly reports whether the snapshot at the actor's latest
+// generation is node-local with no durable copy: a pause's snapshot with no
+// upload recorded.
+func latestSnapshotIsLocalOnly(status *ateapipb.ActorStatus) bool {
+	snap := snapshotAtLatestGeneration(status)
+	return snap.GetLocality() != "" && snap.GetDurableSnapshot() == nil
+}
+
+// latestSnapshotIsPendingLocal reports whether the snapshot at the actor's
+// latest generation is node-local but not yet captured: it has no locality and
+// no durable copy. This is the shape a pause in progress has, and what tells a
+// SUSPENDING pause from a SUSPENDING suspend, whose latest snapshot has a
+// pending durable copy.
+func latestSnapshotIsPendingLocal(status *ateapipb.ActorStatus) bool {
+	snap := snapshotAtLatestGeneration(status)
+	return snap != nil && snap.GetLocality() == "" && snap.GetDurableSnapshot() == nil
+}
+
+// latestSnapshotIsLocalNotYetDurable reports whether the snapshot at the
+// actor's latest generation is a local checkpoint with no COMPLETED durable
+// copy. A pause leaves it with no durable copy at all, and a suspend of the
+// paused actor marks the copy PENDING before it asks the node to upload, so
+// both shapes mean the node holding the checkpoint still acts for the actor.
+func latestSnapshotIsLocalNotYetDurable(status *ateapipb.ActorStatus) bool {
+	snap := snapshotAtLatestGeneration(status)
+	return snap.GetLocality() != "" &&
+		snap.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 }
 
 // clearLocalSnapshots clears Locality across all Snapshots in status.Snapshots

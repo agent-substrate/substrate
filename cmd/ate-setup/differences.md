@@ -111,7 +111,7 @@ Manifests carry `ko://<import path>` references either way. With `--image-repo`
 each is looked up in `images.Components` and rewritten to
 `<repo>/<base of the import path>:<tag>`, which is ko's own
 `--base-import-paths` naming and so is how the release images are already
-published — `ateapi`, `atelet`, `atenet`, `ateom-gvisor`, and the rest.
+published — `ateapi`, `atelet`, `atenet`, `ateworker-gvisor`, and the rest.
 `--image-tag` supplies the tag. Each of the two requires the other: a tag with
 no repository to pull from would be dropped, leaving a build from source that
 looks like the release the tag names.
@@ -127,13 +127,7 @@ unpinned reference is rejected by admission and every demo fails to deploy.
 Pinning also gives a pre-built install the property a `ko` install had for free,
 that a tag moving afterwards cannot change what is running.
 
-That tag also becomes the substrate version, which names the atelet DaemonSet
-and sets the node label partitioning nodes across coexisting versions. It has
-to: that label must describe the atelet actually running, which came from the
-image, not the checkout `git describe` happens to be sitting on. `VERSION`
-overrides it, as it always has.
-
-The rewrite is textual, one token at a time, matching `SubstituteVersion` above.
+The rewrite is textual, one token at a time.
 A reference is replaced wherever it appears, so the code needs no list of which
 fields hold images — `workerImage:` in a CRD spec is rewritten like any other —
 and the applied manifest differs from the checked-in YAML only in the image

@@ -26,14 +26,14 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// Dial opens the ateom half of the relay: a gRPC connection over atelet's unix
+// Dial opens the worker half of the relay: a gRPC connection over atelet's unix
 // socket, to be handed to the OTLP exporters via serverboot's ExporterConn.
 //
 // It returns (nil, nil) when sockPath is empty or absent, which the caller reads
 // as "export directly instead". The existence check is what makes the fallback
 // deterministic at startup: grpc.NewClient is lazy, so a connection to a missing
 // socket would be created happily and only fail later, per export, with the
-// telemetry already lost. Losing spans is not worth failing ateom over either,
+// telemetry already lost. Losing spans is not worth failing worker over either,
 // hence a fallback rather than an error.
 //
 // The connection is plaintext by design. A unix socket cannot leave the node, so

@@ -19,6 +19,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -27,9 +29,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 )
 
 // credentialInjectionPolicySample injects "authorization: Bearer <secret>" from
@@ -114,11 +116,11 @@ func TestInjectionOnRequestLegs(t *testing.T) {
 // A request that does not carry the header a rule replaces goes out unchanged:
 // nothing is fetched, added, or denied, even where injecting would fail.
 func TestInjectionSkippedWithoutHeader(t *testing.T) {
-	jwtPolicy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HTTPSRule{
+	jwtPolicy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HttpsRule{
 		Hostnames: []string{"api.example.com"},
 		Effects: &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{{
 			Header:   "authorization",
-			ActorJwt: &ateapipb.ActorJWTSource{Audiences: []string{"https://api.example.com"}},
+			ActorJwt: &ateapipb.ActorJwtSource{Audiences: []string{"https://api.example.com"}},
 		}}},
 	}}}}
 	for _, tc := range []struct {
@@ -154,7 +156,7 @@ func TestInjectionSkippedWithoutHeader(t *testing.T) {
 // Of a rule's replacements, only those whose header the request carries are
 // applied, matching the header name case-insensitively.
 func TestInjectionReplacesOnlyCarriedHeaders(t *testing.T) {
-	policy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HTTPSRule{
+	policy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HttpsRule{
 		Hostnames: []string{"api.example.com"},
 		Effects: &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{
 			{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token"},
@@ -254,12 +256,35 @@ func TestInjectionDenials(t *testing.T) {
 	}
 }
 
+// blockingProvider never answers, like a provider stuck dialing
+type blockingProvider struct{}
+
+func (blockingProvider) FetchSecret(ctx context.Context, _ *credproviderpb.FetchSecretRequest, _ ...grpc.CallOption) (*credproviderpb.FetchSecretResponse, error) {
+	<-ctx.Done()
+	return nil, status.FromContextError(ctx.Err()).Err()
+}
+
+// a hung provider must be a retryable 503 before Envoy's ext_proc
+// message_timeout turns it into a 504
+func TestInjectionProviderHangs(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := injectionHandlerFor(credentialInjectionPolicySample("api.example.com"), blockingProvider{}, injectionProviderName)
+		start := time.Now()
+		_, err := h.HandleRequestHeaders(context.Background(),
+			withAuthorization(innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil)))
+		wantStatus(t, err, envoy_type.StatusCode_ServiceUnavailable)
+		if took := time.Since(start); took >= 5*time.Second {
+			t.Errorf("denied after %v, want under the 5s ext_proc message_timeout", took)
+		}
+	})
+}
+
 // actorJWTHeader replaces header with an actor JWT bound to api.example.com.
 func actorJWTHeader(header string) *ateapipb.CredentialHeader {
 	return &ateapipb.CredentialHeader{
 		Header:   header,
 		Prefix:   "Bearer ",
-		ActorJwt: &ateapipb.ActorJWTSource{Audiences: []string{"https://api.example.com"}, ExpirationSeconds: 900},
+		ActorJwt: &ateapipb.ActorJwtSource{Audiences: []string{"https://api.example.com"}, ExpirationSeconds: 900},
 	}
 }
 
@@ -270,9 +295,9 @@ func replaceHeadersPolicy(leg string, entries ...*ateapipb.CredentialHeader) *at
 	hosts := []string{"api.example.com"}
 	effects := &ateapipb.HttpRuleEffects{ReplaceHeaders: entries}
 	if leg == extproc.EgressCleartextFilterChainName {
-		return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{Hostnames: hosts, Effects: effects}}}}
+		return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: hosts, Effects: effects}}}}
 	}
-	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HTTPSRule{Hostnames: hosts, Effects: effects}}}}
+	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HttpsRule{Hostnames: hosts, Effects: effects}}}}
 }
 
 var requestLegs = []string{extproc.EgressTLSMITMFilterChainName, extproc.EgressCleartextFilterChainName}
@@ -308,13 +333,13 @@ func TestActorJWTInjection(t *testing.T) {
 			if h0.GetAppendAction() != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
 				t.Errorf("append action = %v, want OVERWRITE_IF_EXISTS_OR_ADD", h0.GetAppendAction())
 			}
-			want := &ateapipb.MintActorJWTRequest{
+			want := &ateapipb.MintActorJwtRequest{
 				Actor:             &ateapipb.ObjectRef{Atespace: testEgressAtespace, Name: testEgressActor},
 				Audiences:         []string{"https://api.example.com"},
 				ExpirationSeconds: 900,
 			}
 			if got := client.lastMint.Load(); !proto.Equal(got, want) {
-				t.Errorf("MintActorJWT request = %v, want %v", got, want)
+				t.Errorf("MintActorJwt request = %v, want %v", got, want)
 			}
 		})
 	}
@@ -332,7 +357,7 @@ func TestActorJWTInjectionSkippedWithoutHeader(t *testing.T) {
 		t.Errorf("got %d injected headers, want 0", len(got))
 	}
 	if calls := client.mintCalls.Load(); calls != 0 {
-		t.Errorf("MintActorJWT calls = %d, want 0", calls)
+		t.Errorf("MintActorJwt calls = %d, want 0", calls)
 	}
 }
 

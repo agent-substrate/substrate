@@ -29,7 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // TestSandboxConfigProtectionReconcile checks that the reconciler never adds
@@ -46,7 +46,7 @@ func TestSandboxConfigProtectionReconcile(t *testing.T) {
 	// using returns a pool whose status has one sandbox class per name, each
 	// using the named config, or no config when the name is "".
 	using := func(names ...string) *atev1alpha1.WorkerPool {
-		wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+		wp := makeWorkerPool("pool", "default", 1, "worker:v1")
 		for _, name := range names {
 			s := atev1alpha1.WorkerPoolSandboxClassStatus{Name: atev1alpha1.SandboxClassGvisor}
 			if name != "" {

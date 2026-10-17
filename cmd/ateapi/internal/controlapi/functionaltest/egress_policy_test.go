@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -49,7 +49,7 @@ func functionalEgressPolicy() *ateapipb.EgressPolicy {
 	return &ateapipb.EgressPolicy{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
 		Rules: []*ateapipb.EgressRule{{
-			Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}},
+			Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}},
 		}},
 	}
 }
@@ -131,7 +131,7 @@ func TestUpdateActorEgressPolicy(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-update-egress-policy")
 	created := createEgressPolicy(t, tc, actor)
 	toUpdate := proto.Clone(created).(*ateapipb.EgressPolicy)
-	toUpdate.Rules = []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}
+	toUpdate.Rules = []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}
 
 	updated, err := tc.client.UpdateActorEgressPolicy(context.Background(), &ateapipb.UpdateActorEgressPolicyRequest{
 		Actor:        actor,

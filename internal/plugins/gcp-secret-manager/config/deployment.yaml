@@ -36,7 +36,7 @@ spec:
         runAsNonRoot: true
       containers:
       - name: gsm-credential-provider
-        image: ko://github.com/agent-substrate/substrate/internal/plugins/gcp-secret-manager/cmd/gsm-credential-provider
+        image: ko://go.ate.dev/substrate/internal/plugins/gcp-secret-manager/cmd/gsm-credential-provider
         args:
         - "--listen-address=:50051"
         - "--health-address=:9090"

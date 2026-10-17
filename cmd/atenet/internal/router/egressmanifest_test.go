@@ -16,10 +16,12 @@ package router
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"sigs.k8s.io/yaml"
 )
 
@@ -150,4 +152,82 @@ func envoyConfigFrom(t *testing.T, path, configMap string) string {
 	}
 	t.Fatalf("%s has no ConfigMap named %s", path, configMap)
 	return ""
+}
+
+// wantSampledLogFilter is the filter on the access logs of the per-request legs.
+const wantSampledLogFilter = `
+or_filter:
+  filters:
+  - status_code_filter:
+      comparison:
+        op: GE
+        value: {default_value: 400, runtime_key: access_log.min_status}
+  - response_flag_filter: {}
+  - and_filter:
+      filters:
+      - header_filter:
+          header:
+            name: content-type
+            string_match: {prefix: application/grpc}
+      - grpc_status_filter: {exclude: true, statuses: [OK]}
+  - runtime_filter:
+      runtime_key: access_log.sample
+      percent_sampled: {numerator: 1, denominator: HUNDRED}
+      use_independent_randomness: true
+`
+
+// Every actor request lands in the mitm or cleartext access log, so both keep
+// failures and a sample of the rest behind runtime keys an operator can flip.
+// No other filter chain's access log may filter, since each is the only record
+// of its events.
+func TestEgressManifestsSampleThePerRequestAccessLogs(t *testing.T) {
+	t.Parallel()
+	var want node
+	if err := yaml.Unmarshal([]byte(wantSampledLogFilter), &want); err != nil {
+		t.Fatalf("parsing wantSampledLogFilter: %v", err)
+	}
+	logs := chainAccessLogsByLeg(bootstrapTree(t, egressManifest))
+	sampledLegs := []string{"mitm", "cleartext"}
+	for _, leg := range sampledLegs {
+		t.Run(leg, func(t *testing.T) {
+			t.Parallel()
+			if len(logs[leg]) == 0 {
+				t.Fatalf("no access log with leg %q; the manifest changed shape and this test is checking nothing", leg)
+			}
+			for _, al := range logs[leg] {
+				if diff := cmp.Diff(want, child(al, "filter")); diff != "" {
+					t.Errorf("access log %q filter mismatch (-want +got):\n%s", leg, diff)
+				}
+			}
+		})
+	}
+	for leg, als := range logs {
+		if slices.Contains(sampledLegs, leg) {
+			continue
+		}
+		for _, al := range als {
+			if _, ok := al["filter"]; ok {
+				t.Errorf("access log %q has a filter; only %v may", leg, sampledLegs)
+			}
+		}
+	}
+}
+
+// chainAccessLogsByLeg groups the access logs of every network filter in every
+// filter chain by their json_format leg. The CONNECT log has a text format and
+// no leg, so it is grouped as "connect".
+func chainAccessLogsByLeg(tree node) map[string][]node {
+	out := map[string][]node{}
+	for _, lc := range allChains(tree) {
+		for _, f := range list(lc.chain, "filters") {
+			for _, al := range list(child(f, "typed_config"), "access_log") {
+				leg := str(child(child(child(al, "typed_config"), "log_format"), "json_format"), "leg")
+				if leg == "" {
+					leg = "connect"
+				}
+				out[leg] = append(out[leg], al)
+			}
+		}
+	}
+	return out
 }

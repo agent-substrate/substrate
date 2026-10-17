@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"net/netip"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -39,6 +41,29 @@ func validateSingletonName(fldPath *field.Path, name string) field.ErrorList {
 		return nil
 	}
 	return field.ErrorList{field.Invalid(fldPath, name, fmt.Sprintf("must be %q", resources.SingletonName)).WithOrigin("custom=default")}
+}
+
+// MakeCreateOp returns an operation.Operation for a create operation. If ctx
+// has opted-out of preview features, the returned operation will have all
+// preview gates disabled (see preview.Header).
+func MakeCreateOp(ctx context.Context) operation.Operation {
+	return operation.Operation{Type: operation.Create, Options: optionsFor(ctx)}
+}
+
+// MakeUpdateOp returns an operation.Operation for an update operation. If ctx
+// has opted-out of preview features, the returned operation will have all
+// preview gates disabled (see preview.Header).
+func MakeUpdateOp(ctx context.Context) operation.Operation {
+	return operation.Operation{Type: operation.Update, Options: optionsFor(ctx)}
+}
+
+// optionsFor returns the preview gates enabled for ctx.
+// The returned map MUST NOT be modified.
+func optionsFor(ctx context.Context) map[string]bool {
+	if preview.IsOptedOut(ctx) {
+		return preview.DisabledMap()
+	}
+	return preview.AsMap()
 }
 
 // ValidateCustom_ResourceMetadata checks the server-stamped timestamps: each,
@@ -94,4 +119,13 @@ func validateDualStackIPs(fldPath *field.Path, ips []string) field.ErrorList {
 		*seen = true
 	}
 	return errs
+}
+
+// validateSPIFFEID checks that id is a SPIFFE ID. Presence and length are
+// enforced by tags.
+func validateSPIFFEID(fldPath *field.Path, id string) field.ErrorList {
+	if _, err := spiffeid.FromString(id); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, id, err.Error())}
+	}
+	return nil
 }

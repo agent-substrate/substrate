@@ -28,12 +28,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"k8s.io/apimachinery/pkg/labels"
@@ -295,6 +296,18 @@ func TestResolveTLSConfigRejectsManualCerts(t *testing.T) {
 
 	if _, err := resolveTLSConfig(cfg, defaultTLSPaths); err == nil {
 		t.Fatal("resolveTLSConfig accepted usePodIdentity=false; manual certificates are unsupported")
+	}
+}
+
+func TestResolveTLSConfigRejectsEmptyServerName(t *testing.T) {
+	t.Parallel()
+	cfg := driverConfig("", &v1alpha1.CSIDriverTLSConfig{Enabled: true, UsePodIdentity: true})
+	_, err := resolveTLSConfig(cfg, defaultTLSPaths)
+	if err == nil {
+		t.Fatal("resolveTLSConfig accepted empty serverName when TLS is enabled")
+	}
+	if want := "tls.serverName is required when TLS is enabled"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("resolveTLSConfig error = %v, want substring %q", err, want)
 	}
 }
 

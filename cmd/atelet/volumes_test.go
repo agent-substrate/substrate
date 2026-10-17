@@ -23,13 +23,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/volume"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/volume"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -91,32 +91,26 @@ func TestUnmountExternalVolumes(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-1",
-				VolumeType:      "mock-driver",
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-1",
+			VolumeType:      "mock-driver",
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-2",
-				VolumeType:      "mock-driver",
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-2",
+			VolumeType:      "mock-driver",
 		},
 	}
 	durableVol := &ateletpb.Volume{
-		Name: "durable-1",
-		Source: &ateletpb.Volume_DurableDir{
-			DurableDir: &ateletpb.DurableDirVolume{},
-		},
+		Name:       "durable-1",
+		DurableDir: &ateletpb.DurableDirVolumeSource{},
 	}
 
 	t.Run("success", func(t *testing.T) {
 		fake := &fakeWorkerPlugin{}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -135,7 +129,7 @@ func TestUnmountExternalVolumes(t *testing.T) {
 		fake := &fakeWorkerPlugin{
 			unmountErr: errors.New("device or resource busy"),
 		}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -154,7 +148,7 @@ func TestUnmountExternalVolumes(t *testing.T) {
 		fake := &fakeWorkerPlugin{
 			unmountErr: fmt.Errorf("unmount failed"),
 		}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -177,36 +171,30 @@ func TestMountExternalVolumes(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-1",
-				VolumeType:      "mock-driver",
-				VolumeContext:   map[string]string{"key": "val1"},
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-1",
+			VolumeType:      "mock-driver",
+			VolumeContext:   map[string]string{"key": "val1"},
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-2",
-				VolumeType:      "mock-driver",
-				VolumeContext:   map[string]string{"key": "val2"},
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-2",
+			VolumeType:      "mock-driver",
+			VolumeContext:   map[string]string{"key": "val2"},
 		},
 	}
 	durableVol := &ateletpb.Volume{
-		Name: "durable-1",
-		Source: &ateletpb.Volume_DurableDir{
-			DurableDir: &ateletpb.DurableDirVolume{},
-		},
+		Name:       "durable-1",
+		DurableDir: &ateletpb.DurableDirVolumeSource{},
 	}
 
 	t.Run("success mounts external volumes and creates mount directory", func(t *testing.T) {
 		withTempActorsDir(t)
 
 		fake := &fakeWorkerPlugin{}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -221,8 +209,8 @@ func TestMountExternalVolumes(t *testing.T) {
 			t.Fatalf("mountCalls count = %d, want 2", len(fake.mountCalls))
 		}
 
-		expectedPath1 := ateletpath.VolumeHostPath(actorUID, "vol-1")
-		expectedPath2 := ateletpath.VolumeHostPath(actorUID, "vol-2")
+		expectedPath1 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
+		expectedPath2 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-2")
 
 		for _, path := range []string{expectedPath1, expectedPath2} {
 			info, err := os.Stat(path)
@@ -249,13 +237,13 @@ func TestMountExternalVolumes(t *testing.T) {
 	t.Run("target directory already exists is handled cleanly", func(t *testing.T) {
 		withTempActorsDir(t)
 
-		expectedPath := ateletpath.VolumeHostPath(actorUID, "vol-1")
+		expectedPath := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
 		if err := os.MkdirAll(expectedPath, 0o750); err != nil {
 			t.Fatalf("pre-creating mount point: %v", err)
 		}
 
 		fake := &fakeWorkerPlugin{}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -275,15 +263,13 @@ func TestMountExternalVolumes(t *testing.T) {
 
 		unknownVol := &ateletpb.Volume{
 			Name: "vol-unknown",
-			Source: &ateletpb.Volume_External{
-				External: &ateletpb.ExternalVolumeSource{
-					StorageVolumeId: "mock-vol-unknown",
-					VolumeType:      "unknown-driver",
-				},
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: "mock-vol-unknown",
+				VolumeType:      "unknown-driver",
 			},
 		}
 
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{},
 		}
 
@@ -302,7 +288,7 @@ func TestMountExternalVolumes(t *testing.T) {
 		fake := &fakeWorkerPlugin{
 			mountErr: errors.New("mount operation failed: device or resource busy"),
 		}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -323,7 +309,7 @@ func TestMountExternalVolumes(t *testing.T) {
 		fake := &fakeWorkerPlugin{
 			mountErr: errors.New("cannot mount volume"),
 		}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -341,15 +327,15 @@ func TestMountExternalVolumes(t *testing.T) {
 	t.Run("multi-volume partial failure does not roll back already mounted volume", func(t *testing.T) {
 		withTempActorsDir(t)
 
-		expectedPath1 := ateletpath.VolumeHostPath(actorUID, "vol-1")
-		expectedPath2 := ateletpath.VolumeHostPath(actorUID, "vol-2")
+		expectedPath1 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
+		expectedPath2 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-2")
 
 		fake := &fakeWorkerPlugin{
 			mountErrs: map[string]error{
 				"mock-vol-2": errors.New("simulated mount error on vol-2"),
 			},
 		}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -394,20 +380,16 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-1",
-				VolumeType:      "mock-driver",
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-1",
+			VolumeType:      "mock-driver",
 		},
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		Source: &ateletpb.Volume_External{
-			External: &ateletpb.ExternalVolumeSource{
-				StorageVolumeId: "mock-vol-2",
-				VolumeType:      "mock-driver",
-			},
+		External: &ateletpb.ExternalVolumeSource{
+			StorageVolumeId: "mock-vol-2",
+			VolumeType:      "mock-driver",
 		},
 	}
 
@@ -415,7 +397,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		withTempActorsDir(t)
 
 		fake := &fakeWorkerPlugin{}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -425,8 +407,8 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 			t.Fatalf("mountExternalVolumes failed: %v", err)
 		}
 
-		path1 := ateletpath.VolumeHostPath(actorUID, "vol-1")
-		path2 := ateletpath.VolumeHostPath(actorUID, "vol-2")
+		path1 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
+		path2 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-2")
 		for _, p := range []string{path1, path2} {
 			if _, err := os.Stat(p); err != nil {
 				t.Fatalf("expected mount path %q to exist before unmount: %v", p, err)
@@ -449,7 +431,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		withTempActorsDir(t)
 
 		fake := &fakeWorkerPlugin{}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -463,8 +445,8 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 			t.Fatalf("unmountExternalVolumes failed: %v", err)
 		}
 
-		path1 := ateletpath.VolumeHostPath(actorUID, "vol-1")
-		path2 := ateletpath.VolumeHostPath(actorUID, "vol-2")
+		path1 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
+		path2 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-2")
 		for _, p := range []string{path1, path2} {
 			if _, err := os.Stat(p); err != nil {
 				t.Fatalf("expected mount path %q to exist before reset: %v", p, err)
@@ -483,7 +465,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		}
 
 		// The parent volumes directory is preserved and empty.
-		volumesDir := ateletpath.VolumesDir(actorUID)
+		volumesDir := ateletpath.ExternalVolumeMountsDir(actorUID)
 		entries, err := os.ReadDir(volumesDir)
 		if err != nil {
 			t.Fatalf("ReadDir(%q) failed: %v", volumesDir, err)
@@ -497,7 +479,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		withTempActorsDir(t)
 
 		fake := &fakeWorkerPlugin{}
-		s := &AteomHerder{
+		s := &Atelet{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
 			},
@@ -508,7 +490,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		}
 
 		// Simulate lingering content in the volume mount point (e.g. unmount failed or data present).
-		path1 := ateletpath.VolumeHostPath(actorUID, "vol-1")
+		path1 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
 		filePath := filepath.Join(path1, "lingering.txt")
 		if err := os.WriteFile(filePath, []byte("volume data"), 0o600); err != nil {
 			t.Fatalf("writing test file: %v", err)
@@ -535,7 +517,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 			t.Fatalf("resetActorDirs failed when volumes dir does not exist: %v", err)
 		}
 
-		volumesDir := ateletpath.VolumesDir(actorUID)
+		volumesDir := ateletpath.ExternalVolumeMountsDir(actorUID)
 		if info, err := os.Stat(volumesDir); err != nil || !info.IsDir() {
 			t.Errorf("expected volumes dir %q to be created, stat err = %v", volumesDir, err)
 		}

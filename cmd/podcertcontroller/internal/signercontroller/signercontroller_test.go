@@ -18,7 +18,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
+	"go.ate.dev/substrate/internal/clustertrustbundle"
 	certsv1 "k8s.io/api/certificates/v1"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -37,6 +38,14 @@ var requiredBetaAPIs = []string{
 	"certificates.k8s.io/v1beta1/clustertrustbundles",
 }
 
+var requiredNodeSysctls = map[string]string{
+	"net.ipv4.neigh.default.gc_thresh1": "4096",
+	"net.ipv4.neigh.default.gc_thresh2": "16384",
+	"net.ipv4.neigh.default.gc_thresh3": "32768",
+	"fs.inotify.max_user_instances":     "65536",
+	"fs.inotify.max_user_watches":       "1048576",
+}
+
 func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateClusterRequest {
 	var networkConfig *containerpb.NetworkConfig
 	if cfg.EnableDataplaneV2 {
@@ -46,6 +55,9 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 	}
 	nodeConfig := &containerpb.NodeConfig{
 		MachineType: cfg.MachineType,
+		LinuxNodeConfig: &containerpb.LinuxNodeConfig{
+			Sysctls: maps.Clone(requiredNodeSysctls),
+		},
 	}
 	if cfg.EnableNestedVirtualization {
 		nodeConfig.AdvancedMachineFeatures = &containerpb.AdvancedMachineFeatures{
@@ -129,6 +141,28 @@ func checkExistingCluster(cluster *containerpb.Cluster, cfg *Config) error {
 	}
 	return fmt.Errorf("cluster %q exists but %s; setup-gcp does not replace an existing cluster, so set the variables to match it or delete it first",
 		cfg.ClusterName, strings.Join(mismatches, "; "))
+}
+
+// nodeSysctlsConfigured reports whether any node pool carries all
+// requiredNodeSysctls keys in its LinuxNodeConfig.
+func nodeSysctlsConfigured(cluster *containerpb.Cluster) bool {
+	for _, pool := range cluster.GetNodePools() {
+		sysctls := pool.GetConfig().GetLinuxNodeConfig().GetSysctls()
+		if len(sysctls) == 0 {
+			continue
+		}
+		allPresent := true
+		for k := range requiredNodeSysctls {
+			if _, ok := sysctls[k]; !ok {
+				allPresent = false
+				break
+			}
+		}
+		if allPresent {
+			return true
+		}
+	}
+	return false
 }
 
 func createClusterInternal(ctx context.Context, cfg *Config, client *container.ClusterManagerClient, parent string) error {
@@ -288,6 +322,12 @@ func createClusterIdempotent(ctx context.Context, cfg *Config) error {
 		slog.Warn("Cluster has no node pool with nested virtualization; --enable-nested-virtualization only applies to a cluster this tool creates",
 			slog.String("cluster", cfg.ClusterName),
 			slog.String("remedy", "recreate the cluster, or add a node pool with nested virtualization"))
+	}
+
+	if !nodeSysctlsConfigured(cluster) {
+		slog.Warn("Cluster has no node pool with high-density node sysctls; create cluster only sets them on a cluster it creates",
+			slog.String("cluster", cfg.ClusterName),
+			slog.String("remedy", "run gcloud container node-pools update --system-config-from-file (see tools/setup-gcp/README.md; this warning is expected to remain if using the in-place DaemonSet)"))
 	}
 
 	return nil

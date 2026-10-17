@@ -20,10 +20,10 @@ metadata:
   name: glutton-durdir-full
 workerSelector:
   matchLabels:
-    workload: benchmark-ateom
+    workload: benchmark-worker
 containers:
 - name: glutton
-  image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
+  image: ko://go.ate.dev/substrate/cmd/benchmarking/glutton
   command:
   - "/ko-app/glutton"
   - "--grpc-listen-addr=:80"
@@ -40,9 +40,13 @@ containers:
 volumes:
 - name: data
   durableDir: {}
+# Sandbox size: see the note on the sleep template.
+resources:
+  limits:
+  - name: cpu
+    quantity: "${ACTOR_CPU}"
+  - name: memory
+    quantity: "${ACTOR_MEMORY}"
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton-durdir-full/
-sandboxConfig:
-  sandboxClass: ${SANDBOX_CLASS_ENUM}
-  configName: ${SANDBOX_CONFIG_NAME}

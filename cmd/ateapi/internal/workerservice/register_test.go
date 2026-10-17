@@ -23,11 +23,11 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"google.golang.org/protobuf/testing/protocmp"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 )
 
@@ -57,11 +57,11 @@ func setRequest(actors int32) *ateapipb.RegisterWorkerRequest {
 }
 
 // The point of the whole path: a Worker moves from what it reported before to
-// what its ateom reports now.
+// what its worker reports now.
 func TestRegisterWorker(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(2000, 0)})
 
 	got, err := s.RegisterWorker(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)), setRequest(4094))
@@ -85,7 +85,7 @@ func TestRegisterWorker(t *testing.T) {
 func TestRegisterWorker_Runtimes(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
 	gvisorAMD64, gvisorARM64 := testRuntime("gvisor", "amd64"), testRuntime("gvisor", "arm64")
@@ -220,7 +220,7 @@ func TestRegisterWorker_Runtimes(t *testing.T) {
 func TestRegisterWorker_OtherNodeIsNotFound(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 
 	_, err := s.RegisterWorker(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "some-other-node")), setRequest(4094))
@@ -238,13 +238,13 @@ func TestRegisterWorker_OtherNodeIsNotFound(t *testing.T) {
 	}
 }
 
-// Re-sending the same capacity is not an update. An ateom reports once, but it
+// Re-sending the same capacity is not an update. A worker reports once, but it
 // retries until accepted and reports again if it restarts, so a repeat must not
 // churn the Worker's version.
 func TestRegisterWorker_UnchangedDoesNotWrite(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	seeded := seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 4094})
 
 	for range 3 {
@@ -267,7 +267,7 @@ func TestRegisterWorker_UnchangedDoesNotWrite(t *testing.T) {
 func TestRegisterWorker_SortsAttributes(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
@@ -293,15 +293,15 @@ func TestRegisterWorker_SortsAttributes(t *testing.T) {
 		return got.GetWorker()
 	}
 
-	first := register(runtimeWith("cpu_features", "architecture"), runtimeWith("gvisor_asset_hash", "architecture"))
+	first := register(runtimeWith("cpu_features", "architecture"), runtimeWith("sandbox_bundle_hash", "architecture"))
 	if diff := cmp.Diff(runtimeWith("architecture", "cpu_features"), first.GetStatus().GetDefaultRuntime(), protocmp.Transform()); diff != "" {
 		t.Errorf("default_runtime not stored sorted by key (-want +got):\n%s", diff)
 	}
-	if diff := cmp.Diff([]*ateapipb.SandboxRuntime{runtimeWith("architecture", "gvisor_asset_hash")}, first.GetStatus().GetRestorableRuntimes(), protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff([]*ateapipb.SandboxRuntime{runtimeWith("architecture", "sandbox_bundle_hash")}, first.GetStatus().GetRestorableRuntimes(), protocmp.Transform()); diff != "" {
 		t.Errorf("restorable_runtimes not stored sorted by key (-want +got):\n%s", diff)
 	}
 
-	again := register(runtimeWith("architecture", "cpu_features"), runtimeWith("architecture", "gvisor_asset_hash"))
+	again := register(runtimeWith("architecture", "cpu_features"), runtimeWith("architecture", "sandbox_bundle_hash"))
 	if got, want := again.GetMetadata().GetVersion(), first.GetMetadata().GetVersion(); got != want {
 		t.Errorf("version = %d after a reordered repeat, want %d unchanged", got, want)
 	}
@@ -310,7 +310,7 @@ func TestRegisterWorker_SortsAttributes(t *testing.T) {
 func TestRegisterWorker_Errors(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
@@ -355,7 +355,7 @@ func TestRegisterWorker_Errors(t *testing.T) {
 func TestRegisterWorker_RejectsNonsense(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil, "", nil)
 	seeded := seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 4094})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 

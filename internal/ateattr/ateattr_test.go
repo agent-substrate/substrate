@@ -21,11 +21,11 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 func toMap(kvs []attribute.KeyValue) map[attribute.Key]attribute.Value {
@@ -377,8 +377,8 @@ func TestMetricLabelValues(t *testing.T) {
 		{OperationCreate, "create"},
 		{OperationResume, "resume"},
 		{OperationSuspend, "suspend"},
-		{OperationPause, "pause"},
 		{OperationDelete, "delete"},
+		{OperationRevert, "revert"},
 		{OperationUnknown, "unknown"},
 
 		{ImageCacheOutcomeHit, "hit"},
@@ -406,9 +406,10 @@ func TestMetricLabelValues(t *testing.T) {
 		{SnapshotPhaseSandboxAssets, "sandbox_assets"},
 		{SnapshotPhaseDownload, "download"},
 		{SnapshotPhaseOCIUnpack, "oci_unpack"},
-		{SnapshotPhaseAteomRestore, "ateom_restore"},
-		{SnapshotPhaseAteomCheckpoint, "ateom_checkpoint"},
+		{SnapshotPhaseWorkerRestore, "worker_restore"},
+		{SnapshotPhaseWorkerCheckpoint, "worker_checkpoint"},
 		{SnapshotPhasePersist, "persist"},
+		{SnapshotPhaseCleanup, "cleanup"},
 		{SnapshotPhaseTotal, "total"},
 
 		{SandboxClassUnknown, "unknown"},
@@ -603,8 +604,6 @@ func TestActorStateValues(t *testing.T) {
 		{ActorStateRunning, "running"},
 		{ActorStateSuspending, "suspending"},
 		{ActorStateSuspended, "suspended"},
-		{ActorStatePausing, "pausing"},
-		{ActorStatePaused, "paused"},
 		{ActorStateCrashed, "crashed"},
 		{ActorStateDeleting, "deleting"},
 		{ActorStateDeleted, "deleted"},
@@ -631,8 +630,6 @@ func TestActorStateValue(t *testing.T) {
 		{name: "running", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, want: ActorStateRunning},
 		{name: "suspending", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, want: ActorStateSuspending},
 		{name: "suspended", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, want: ActorStateSuspended},
-		{name: "pausing", state: ateapipb.ActorState_ACTOR_STATE_PAUSING, want: ActorStatePausing},
-		{name: "paused", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, want: ActorStatePaused},
 		{name: "crashed", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, want: ActorStateCrashed},
 		{name: "deleting", state: ateapipb.ActorState_ACTOR_STATE_DELETING, want: ActorStateDeleting},
 		{name: "reverting", state: ateapipb.ActorState_ACTOR_STATE_REVERTING, want: ActorStateReverting},
@@ -665,8 +662,6 @@ func TestActorStateValuesMirrorActorState(t *testing.T) {
 		ActorStateRunning:    true,
 		ActorStateSuspending: true,
 		ActorStateSuspended:  true,
-		ActorStatePausing:    true,
-		ActorStatePaused:     true,
 		ActorStateCrashed:    true,
 		ActorStateDeleting:   true,
 		ActorStateReverting:  true,
@@ -727,8 +722,9 @@ func TestNormalizeOperationName(t *testing.T) {
 		{OperationCreate, OperationCreate},
 		{OperationResume, OperationResume},
 		{OperationSuspend, OperationSuspend},
-		{OperationPause, OperationPause},
+		{"pause", OperationUnknown},
 		{OperationDelete, OperationDelete},
+		{OperationRevert, OperationRevert},
 		{"", OperationUnknown},
 		{"invalid", OperationUnknown},
 		{"crash", OperationUnknown},

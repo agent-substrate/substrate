@@ -73,7 +73,7 @@ func TestGetFileCopyToMutationIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The consumer rewrites its staged file in place — the whole reason copy
-	// mode exists (ateom-microvm does this to config.json).
+	// mode exists (ateworker-microvm does this to config.json).
 	if err := os.WriteFile(first, []byte("mutated by consumer"), 0o600); err != nil {
 		t.Fatalf("consumer write to its copy: %v", err)
 	}

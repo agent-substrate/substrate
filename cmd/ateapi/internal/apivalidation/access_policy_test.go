@@ -19,9 +19,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -113,6 +113,13 @@ func TestValidateCreateGlobalAccessPolicyRequest(t *testing.T) {
 		name: "unknown role",
 		req: &ateapipb.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
 			p.Bindings[1].Role = "admin"
+		})},
+		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(1).Child("role"), "", nil)},
+	}, {
+		// System component roles are granted only by ateapi's configuration.
+		name: "system component role",
+		req: &ateapipb.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Bindings[1].Role = authz.RoleIngressRouter
 		})},
 		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(1).Child("role"), "", nil)},
 	}, {
@@ -283,6 +290,12 @@ func TestValidateCreateAtespaceAccessPolicyRequest(t *testing.T) {
 		name: "unknown role",
 		req: &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
 			p.Bindings[0].Role = "admin"
+		})},
+		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(0).Child("role"), "", nil)},
+	}, {
+		name: "system component role",
+		req: &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Bindings[0].Role = authz.RoleEgressGateway
 		})},
 		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(0).Child("role"), "", nil)},
 	}, {

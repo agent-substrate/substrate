@@ -27,10 +27,6 @@
 # `microvm` SandboxConfig referencing those assets. Every asset sha256 is
 # pinned in the manifest, so the apply only substitutes the bucket name.
 #
-# ActorTemplates must reference the SandboxConfig explicitly via
-# sandboxConfig.configName: microvm. This avoids a dirty teardown silently
-# binding new templates to a stale config.
-#
 # On --delete: removes the SandboxConfig from the cluster. The delete is best
 # effort. A SandboxConfig that a WorkerPool uses carries a protection
 # finalizer, which atecontroller releases only once no pool's status names
@@ -120,6 +116,14 @@ run_kubectl() {
 
 MANIFEST_TEMPLATE="manifests/microvm/sandboxconfig-microvm.yaml.tmpl"
 
+# The asset URLs' scheme: the node's object-store plugin serves only its own
+# backend's, which is S3 (rustfs) on kind and GCS on GKE.
+if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
+  BUCKET_SCHEME="s3"
+else
+  BUCKET_SCHEME="gs"
+fi
+
 if [[ "${action}" == "delete" ]]; then
   # A WorkerPool that uses the config holds it. The delete would only mark
   # the config Terminating, and `kubectl delete` would wait for it without
@@ -149,7 +153,7 @@ if [[ "${action}" == "delete" ]]; then
     echo "       again." >&2
     exit 1
   fi
-  log "Done. (Bucket assets at gs://${BUCKET_NAME}/kata-assets/ left in place.)"
+  log "Done. (Bucket assets at ${BUCKET_SCHEME}://${BUCKET_NAME}/kata-assets/ left in place.)"
   exit 0
 fi
 
@@ -208,10 +212,12 @@ fi
 
 # --- 3. apply the cluster-wide microvm SandboxConfig -----------------------
 # Every asset is downloaded rather than built, so all four carry committed,
-# reproducible per-arch shas and the bucket name is the only substitution left.
+# reproducible per-arch shas and the bucket's scheme and name are the only
+# substitutions left.
 log "Applying microvm SandboxConfig from ${MANIFEST_TEMPLATE}..."
-sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+sed -e "s|\${BUCKET_SCHEME}|${BUCKET_SCHEME}|g" \
+    -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
     "${MANIFEST_TEMPLATE}" \
   | run_kubectl apply -f -
 
-log "Done. ActorTemplates must reference this SandboxConfig by name (sandboxConfig.configName: microvm)."
+log "Done. Installed cluster-wide microvm SandboxConfig."

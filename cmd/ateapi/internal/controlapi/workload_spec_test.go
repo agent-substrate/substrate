@@ -17,9 +17,9 @@ package controlapi
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -50,8 +50,8 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			want: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
 					{
-						Name:   "home",
-						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
+						Name:       "home",
+						DurableDir: &ateletpb.DurableDirVolumeSource{},
 					},
 				},
 				Containers: []*ateletpb.Container{
@@ -100,19 +100,15 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name: "system-info",
-						Source: &ateletpb.Volume_SystemInfo{
-							SystemInfo: &ateletpb.SystemInfoVolume{
-								DataSources: []*ateletpb.SystemInfoDataSource{
-									{DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
-										ActorMetadata: &ateletpb.ActorMetadataDataSource{
-											Items: []*ateletpb.ActorMetadataItem{
-												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
-												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
-												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
-											},
-										},
-									}},
-								},
+						SystemInfo: &ateletpb.SystemInfoVolumeSource{
+							DataSources: []*ateletpb.SystemInfoDataSource{
+								{ActorMetadata: &ateletpb.ActorMetadataDataSource{
+									Items: []*ateletpb.ActorMetadataItem{
+										{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
+										{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
+										{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
+									},
+								}},
 							},
 						},
 					},
@@ -150,12 +146,12 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			want: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
 					{
-						Name:   "home",
-						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
+						Name:       "home",
+						DurableDir: &ateletpb.DurableDirVolumeSource{},
 					},
 					{
-						Name:   "agent",
-						Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: "example.com/agent@sha256:abc"}},
+						Name:  "agent",
+						Image: &ateletpb.ImageVolumeSource{Reference: "example.com/agent@sha256:abc"},
 					},
 				},
 				Containers: []*ateletpb.Container{
@@ -200,13 +196,9 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name: "system-info",
-						Source: &ateletpb.Volume_SystemInfo{
-							SystemInfo: &ateletpb.SystemInfoVolume{
-								DataSources: []*ateletpb.SystemInfoDataSource{
-									{DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
-										TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{"egress-trust"}, Path: "trust/ca.pem"},
-									}},
-								},
+						SystemInfo: &ateletpb.SystemInfoVolumeSource{
+							DataSources: []*ateletpb.SystemInfoDataSource{
+								{TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{"egress-trust"}, Path: "trust/ca.pem"}},
 							},
 						},
 					},
@@ -243,8 +235,8 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			want: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
 					{
-						Name:   "home",
-						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
+						Name:       "home",
+						DurableDir: &ateletpb.DurableDirVolumeSource{},
 					},
 				},
 				Containers: []*ateletpb.Container{
@@ -272,8 +264,8 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			want: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
 					{
-						Name:   "home",
-						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
+						Name:       "home",
+						DurableDir: &ateletpb.DurableDirVolumeSource{},
 					},
 				},
 				Containers: []*ateletpb.Container{{Name: "main", Image: "main"}},
@@ -298,7 +290,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Containers: []*ateletpb.Container{{
 					Name:  "main",
 					Image: "main",
-					Env: []*ateletpb.EnvEntry{
+					Env: []*ateletpb.EnvVar{
 						{Name: "LITERAL", Value: "plain"},
 						{Name: "EMPTY", Value: ""},
 					},
@@ -349,8 +341,8 @@ func TestWorkloadSpecFromActorTemplatePropagatesWakeupProbe(t *testing.T) {
 			{
 				Name:  "with-probe",
 				Image: "main",
-				WakeupProbe: &ateapipb.ContainerWakeupProbe{
-					HttpGet:        &ateapipb.HTTPGetAction{Path: "/health", Port: 8080},
+				WakeupProbe: &ateapipb.WakeupProbe{
+					HttpGet:        &ateapipb.HttpGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},
 			},
@@ -370,7 +362,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesWakeupProbe(t *testing.T) {
 				Name:  "with-probe",
 				Image: "main",
 				WakeupProbe: &ateletpb.WakeupProbe{
-					HttpGet:        &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
+					HttpGet:        &ateletpb.HttpGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},
 			},
@@ -456,13 +448,11 @@ func TestAppendExternalVolumes(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name: "vol-1",
-						Source: &ateletpb.Volume_External{
-							External: &ateletpb.ExternalVolumeSource{
-								StorageVolumeId: "vol-gce-pd-123",
-								VolumeType:      "pd-standard",
-								VolumeContext:   map[string]string{"foo": "bar"},
-								PublishContext:  tt.wantPublishCtx,
-							},
+						External: &ateletpb.ExternalVolumeSource{
+							StorageVolumeId: "vol-gce-pd-123",
+							VolumeType:      "pd-standard",
+							VolumeContext:   map[string]string{"foo": "bar"},
+							PublishContext:  tt.wantPublishCtx,
 						},
 					},
 				},
@@ -617,8 +607,7 @@ func TestToAteletResources(t *testing.T) {
 // ate-api-server.
 func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
 	got, err := workloadSpecFromActorTemplate(&ateapipb.ActorTemplate{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-limits"},
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM},
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-limits"},
 		Containers: []*ateapipb.Container{
 			{
 				Name:  "limited",

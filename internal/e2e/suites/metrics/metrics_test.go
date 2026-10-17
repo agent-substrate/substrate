@@ -27,10 +27,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -50,7 +50,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScrapeCollectorMetrics for the lifecycle baseline: %v", err)
 	}
-	lifecycleBaseline := e2e.LifecycleEventCounts(baselineScrape)
+	lifecycleBaseline := e2e.LifecycleEventSeries(baselineScrape)
 
 	// CreateActor requires the atespace to exist first; ignore AlreadyExists.
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
@@ -98,7 +98,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 
 	// The actor lifecycle events the steps above must have produced. The crash
 	// is the one state only ateapi can report, so it is what proves the events
-	// carry more than the ateom plane could.
+	// carry more than the worker plane could.
 	wantStates := []string{
 		ateattr.ActorStateResuming,
 		ateattr.ActorStateRunning,
@@ -110,7 +110,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	dataplane := e2e.CurrentAtenetDataplane()
 	prefixes := dataplane.PlatformMetricPrefixes(e2e.PlatformMetricPrefixes)
 	var missing []string
-	var ateomSeen, controllerSeen, routeDurationSeen, lifecycleSeen bool
+	var workerSeen, controllerSeen, routeDurationSeen, lifecycleSeen bool
 	var missingStates []string
 	var lastLabelErr error
 	for time.Now().Before(deadline) {
@@ -123,9 +123,9 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		if err != nil {
 			t.Fatalf("checking route-duration metric: %v", err)
 		}
-		missingStates = e2e.StatesNotAdvanced(lifecycleBaseline, e2e.LifecycleEventCounts(scrape), wantStates)
+		missingStates = e2e.StatesNotAdvanced(lifecycleBaseline, e2e.LifecycleEventSeries(scrape), wantStates)
 		lifecycleSeen = len(missingStates) == 0
-		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
+		workerSeen = e2e.CollectorHasService(scrape, "ateworker-gvisor", "ateworker-microvm")
 		// atecontroller bridges controller-runtime's Prometheus registry onto its OTLP
 		// reader, so the reconcile families are what prove the bridge, not just that
 		// some series arrived. Substring, not prefix: the collector's Prometheus
@@ -133,7 +133,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		controllerSeen = e2e.CollectorHasService(scrape, "atecontroller") &&
 			strings.Contains(scrape, "controller_runtime_")
 
-		if len(missing) == 0 && ateomSeen && controllerSeen && routeDurationSeen && lifecycleSeen {
+		if len(missing) == 0 && workerSeen && controllerSeen && routeDurationSeen && lifecycleSeen {
 			var errs []string
 
 			// Verify ate_workerpool_desired_workers carries required namespaced attributes.
@@ -200,7 +200,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					if opVal == "" {
 						crashErrs = append(crashErrs, "ate_actor_operation_name label is missing or empty")
 					} else if ateattr.NormalizeOperationName(opVal) != opVal {
-						crashErrs = append(crashErrs, fmt.Sprintf("ate_actor_operation_name %q is invalid (must be one of {create, resume, suspend, pause, delete, unknown})", opVal))
+						crashErrs = append(crashErrs, fmt.Sprintf("ate_actor_operation_name %q is invalid (must be one of {create, resume, suspend, delete, revert, unknown})", opVal))
 					}
 
 					if tmplAtespaceVal == "" {
@@ -253,11 +253,11 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	}
 
 	if lastLabelErr != nil {
-		t.Fatalf("platform telemetry validation failed: missing metrics %v, missing lifecycle states %v, ateom pushed=%v, atecontroller pushed=%v, error detail: %v",
-			missing, missingStates, ateomSeen, controllerSeen, lastLabelErr)
+		t.Fatalf("platform telemetry validation failed: missing metrics %v, missing lifecycle states %v, worker pushed=%v, atecontroller pushed=%v, error detail: %v",
+			missing, missingStates, workerSeen, controllerSeen, lastLabelErr)
 	}
-	t.Fatalf("platform telemetry validation failed: collector missing metrics %v, missing lifecycle states %v, AgentGateway route duration seen=%v, ateom pushed=%v, atecontroller pushed=%v",
-		missing, missingStates, routeDurationSeen, ateomSeen, controllerSeen)
+	t.Fatalf("platform telemetry validation failed: collector missing metrics %v, missing lifecycle states %v, AgentGateway route duration seen=%v, worker pushed=%v, atecontroller pushed=%v",
+		missing, missingStates, routeDurationSeen, workerSeen, controllerSeen)
 }
 
 func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
@@ -328,12 +328,12 @@ func validateSnapshotPhaseLabels(scrape string) error {
 }
 
 // validateNodeAttribution guards k8s.node.name on the node-scoped resources.
-// atelet takes it from the Downward API in its DaemonSet, ateom from the worker
+// atelet takes it from the Downward API in its DaemonSet, worker from the worker
 // pod ate-controller builds. No deployed collector runs k8sattributes, so an
 // unexpanded or dropped attribute has nothing downstream to restore it.
 func validateNodeAttribution(scrape string) error {
 	var checked int
-	for _, svc := range []string{"atelet", "ateom-gvisor", "ateom-microvm"} {
+	for _, svc := range []string{"atelet", "ateworker-gvisor", "ateworker-microvm"} {
 		if !e2e.CollectorHasService(scrape, svc) {
 			continue
 		}
@@ -342,7 +342,7 @@ func validateNodeAttribution(scrape string) error {
 			return fmt.Errorf("%s published telemetry with no k8s_node_name on its target_info; OTEL_RESOURCE_ATTRIBUTES lost k8s.node.name or its $(NODE_NAME) did not expand", svc)
 		}
 	}
-	// Only one ateom runtime runs per cluster, so the set is checked as it is
+	// Only one worker runtime runs per cluster, so the set is checked as it is
 	// found; zero of them means the assertion above proved nothing.
 	if checked == 0 {
 		return fmt.Errorf("no node-scoped service reached the collector, so k8s_node_name went unchecked")

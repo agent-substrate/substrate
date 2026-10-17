@@ -20,15 +20,17 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/testenv"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/atelet"
+	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/testenv"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
@@ -85,12 +87,13 @@ func TestMain(m *testing.M) {
 		log.Fatalf("%v", err)
 	}
 
-	// Start Fake Atelet Server on port 8085
+	// Start Fake Atelet Server on the port ateapi dials.
 	ateletGrpcServer := grpc.NewServer()
-	ateletpb.RegisterAteomHerderServer(ateletGrpcServer, fakeAtelet)
-	ateletLis, err := net.Listen("tcp", "127.0.0.1:8085")
+	ateletpb.RegisterAteletServer(ateletGrpcServer, fakeAtelet)
+	ateletAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(atelet.DefaultPort))
+	ateletLis, err := net.Listen("tcp", ateletAddr)
 	if err != nil {
-		log.Fatalf("listen on 127.0.0.1:8085: %v", err)
+		log.Fatalf("listen on %s: %v", ateletAddr, err)
 	}
 	go func() {
 		if err := ateletGrpcServer.Serve(ateletLis); err != nil {
@@ -111,7 +114,7 @@ func TestMain(m *testing.M) {
 
 // FakeAteletServer implements ateletpb.WorkersServer
 type FakeAteletServer struct {
-	ateletpb.UnimplementedAteomHerderServer
+	ateletpb.UnimplementedAteletServer
 
 	Lock sync.Mutex
 
@@ -128,9 +131,9 @@ type FakeAteletServer struct {
 	FailRestore    error
 	RestoreDelay   time.Duration
 
-	UploadCalled  bool
-	UploadRequest *ateletpb.UploadPausedCheckpointRequest
-	FailUpload    error
+	PromoteCalled  bool
+	PromoteRequest *ateletpb.PromoteSnapshotRequest
+	FailPromote    error
 
 	TerminateCalled  bool
 	TerminateRequest *ateletpb.TerminateRequest
@@ -180,9 +183,9 @@ func (f *FakeAteletServer) Reset() {
 	f.FailRestore = nil
 	f.RestoreDelay = 0
 
-	f.UploadCalled = false
-	f.UploadRequest = nil
-	f.FailUpload = nil
+	f.PromoteCalled = false
+	f.PromoteRequest = nil
+	f.FailPromote = nil
 
 	f.TerminateCalled = false
 	f.TerminateRequest = nil
@@ -191,19 +194,19 @@ func (f *FakeAteletServer) Reset() {
 	f.objectStore = nil
 }
 
-func (f *FakeAteletServer) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (*ateletpb.UploadPausedCheckpointResponse, error) {
+func (f *FakeAteletServer) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (*ateletpb.PromoteSnapshotResponse, error) {
 	f.Lock.Lock()
 	defer f.Lock.Unlock()
 
-	f.UploadCalled = true
-	f.UploadRequest = proto.Clone(req).(*ateletpb.UploadPausedCheckpointRequest)
-	if f.FailUpload != nil {
-		return nil, f.FailUpload
+	f.PromoteCalled = true
+	f.PromoteRequest = proto.Clone(req).(*ateletpb.PromoteSnapshotRequest)
+	if f.FailPromote != nil {
+		return nil, f.FailPromote
 	}
-	if err := f.writeSnapshot(req.GetDestinationSnapshotUri()); err != nil {
+	if err := f.writeSnapshot(req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
-	return &ateletpb.UploadPausedCheckpointResponse{}, nil
+	return &ateletpb.PromoteSnapshotResponse{}, nil
 }
 
 func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
@@ -229,8 +232,12 @@ func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.Checkpo
 		return nil, f.FailCheckpoint
 	}
 
-	if err := f.writeSnapshot(req.GetExternalConfig().GetSnapshotUri()); err != nil {
-		return nil, err
+	// Only an immediate upload is in object storage when Checkpoint returns;
+	// atelet does not upload deferred snapshots yet.
+	if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
+		if err := f.writeSnapshot(req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
+			return nil, err
+		}
 	}
 	return &ateletpb.CheckpointResponse{}, nil
 }
@@ -270,4 +277,13 @@ func (f *FakeAteletServer) lastRestoreRequest() *ateletpb.RestoreRequest {
 		return nil
 	}
 	return proto.Clone(f.RestoreRequest).(*ateletpb.RestoreRequest)
+}
+
+func (f *FakeAteletServer) lastRestoreVolumePublishContext(volumeName string) map[string]string {
+	for _, v := range f.lastRestoreRequest().GetSpec().GetVolumes() {
+		if v.GetName() == volumeName {
+			return v.GetExternal().GetPublishContext()
+		}
+	}
+	return nil
 }

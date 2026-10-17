@@ -19,12 +19,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/principal"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/principal"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
@@ -42,13 +42,13 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 
 	// alice@example.com is a bootstrap owner: a global owner through server
 	// configuration, never through a stored AccessPolicy.
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, []string{"alice@example.com"})
+	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, []string{"alice@example.com"}, storetest.DefaultSystemPrincipals())
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
 	persistence.SetPolicyManager(policyManager)
 
-	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, nil, "", nil, nil, "", nil, nil)
+	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, "", nil, nil)
 	interceptor := authz.UnaryServerInterceptor(authorizer, true)
 
 	userCtx := func(id string) context.Context {
@@ -196,7 +196,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	// 6. Removing Alice from the bootstrap owners (a restart with a different
 	// configuration) leaves only her stored grant; once that is gone too she
 	// is denied, while the new bootstrap owner is allowed.
-	restarted, _, err := authz.New(ctx, pool, fgaServer, []string{"charlie@example.com"})
+	restarted, _, err := authz.New(ctx, pool, fgaServer, []string{"charlie@example.com"}, storetest.DefaultSystemPrincipals())
 	if err != nil {
 		t.Fatalf("authz.New after restart failed: %v", err)
 	}

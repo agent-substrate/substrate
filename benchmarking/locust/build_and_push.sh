@@ -24,12 +24,18 @@ if [[ -f .ate-dev-env.sh ]]; then
   source .ate-dev-env.sh
 fi
 
-if [ -z "${PROJECT_ID:-}" ]; then
-  echo "Error: PROJECT_ID environment variable must be set." >&2
+if [[ -z "${PROJECT_ID:-}" && -z "${KO_DOCKER_REPO:-}" && -z "${LOCUST_IMAGE:-}" ]]; then
+  echo "Error: PROJECT_ID or KO_DOCKER_REPO environment variable must be set." >&2
   exit 1
 fi
 
-IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest"
+if [[ -n "${LOCUST_IMAGE:-}" ]]; then
+  IMAGE="${LOCUST_IMAGE}"
+elif [[ -n "${KO_DOCKER_REPO:-}" ]]; then
+  IMAGE="${KO_DOCKER_REPO}/locust-test:latest"
+else
+  IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest"
+fi
 
 # Target platform must match the cluster's nodes, not the build host.
 PLATFORM="${LOCUST_IMAGE_PLATFORM:-linux/amd64}"

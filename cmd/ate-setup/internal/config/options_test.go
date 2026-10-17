@@ -39,6 +39,8 @@ type Options struct {
 	EnvoyConcurrency               int
 	ClusterSize                    string
 	CordonControlPlane             bool
+	FakeDataPlane                  bool
+	IngressAuthMode                string
 	AdditionalEgressExtprocService string
 	CredentialProvider             string
 	OtlpEndpoint                   string
@@ -87,6 +89,7 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 		{"atenet-dataplane", opts.Router},
 		{"rollout-timeout", opts.RolloutTimeout},
 		{"cluster-size", opts.ClusterSize},
+		{"ingress-auth-mode", opts.IngressAuthMode},
 		{"experimental-additional-egress-extproc-service", opts.AdditionalEgressExtprocService},
 		{"credential-provider", opts.CredentialProvider},
 		{"otlp-endpoint", opts.OtlpEndpoint},
@@ -103,6 +106,7 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 	}{
 		{"kind", opts.Kind},
 		{"cordon-control-plane", opts.CordonControlPlane},
+		{"fake-data-plane", opts.FakeDataPlane},
 	} {
 		if kv.val {
 			if err := fs.Set(kv.flag, "true"); err != nil {

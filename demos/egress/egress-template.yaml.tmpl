@@ -30,7 +30,7 @@ workerSelector:
     workload: egress
 containers:
 - name: egress
-  image: ko://github.com/agent-substrate/substrate/demos/egress
+  image: ko://go.ate.dev/substrate/demos/egress
   command: ["/ko-app/egress"]
   env:
   - name: SSL_CERT_DIR
@@ -53,9 +53,14 @@ volumes:
         - egress-mitm.ate.dev
         - system-roots.ate.dev
         path: egress-trust-bundle/trust-bundle.pem
-sandboxConfig:
-  sandboxClass: SANDBOX_CLASS_GVISOR
-  configName: gvisor-default
+# Sandbox size. The pool sets no worker limits, so the worker offers the
+# node's allocatable and these only need to fit the node.
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/ate-demo-egress/
