@@ -29,8 +29,9 @@ Usage: $0 [target-path ...] [go-test-flags] [-args [e2e-flags]]
 
 Runs End-to-End tests.
 
-Any argument before "-args" that starts with "./internal/e2e" or "internal/e2e"
-is a "target-path", and may sit before, between or after the go test flags.
+Any argument before "-args" that starts with "./internal/e2e", "internal/e2e"
+or "<module>/internal/e2e" is a "target-path", and may sit before, between or
+after the go test flags.
 Without one, it defaults to "./internal/e2e/suites/...".
 
 Other arguments before "-args" are passed directly to "go test".
@@ -68,8 +69,10 @@ See "go help testflag" for more Go test flags.
 EOF
 }
 
+module_path="$(sed -n 's/^module //p' go.mod)"
+
 is_target_path() {
-    [[ "$1" == "./internal/e2e"* || "$1" == "internal/e2e"* ]]
+    [[ "$1" == "./internal/e2e"* || "$1" == "internal/e2e"* || "$1" == "${module_path}/internal/e2e"* ]]
 }
 
 if [[ "$#" -gt 0 ]]; then
@@ -80,7 +83,7 @@ if [[ "$#" -gt 0 ]]; then
 
     if [[ "$1" != -* ]] && ! is_target_path "$1"; then
         echo "Error: Invalid target path '$1'." >&2
-        echo "The first argument must be a valid E2E path starting with './internal/e2e' or a flag starting with '-'." >&2
+        echo "The first argument must be a valid E2E path starting with './internal/e2e', '${module_path}/internal/e2e' or a flag starting with '-'." >&2
         echo "Use '$0 -h' for help." >&2
         exit 1
     fi
