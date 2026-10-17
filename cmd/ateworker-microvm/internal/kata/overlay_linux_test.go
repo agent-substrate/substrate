@@ -89,9 +89,12 @@ func TestVirtiofsdArgs(t *testing.T) {
 		t.Errorf("args %v do not contain --cache=auto", args)
 	}
 	// The host kernel owns the overlay; the guest needs no xattr passthrough, so
-	// the flag must never be emitted.
+	// the flag is only emitted for a guest overlay on the share.
 	if slices.Contains(args, "--xattr") {
 		t.Errorf("args %v contain --xattr; the guest has no overlay to feed it to", args)
+	}
+	if args := virtiofsdArgs(VirtiofsdOptions{Xattr: true}); !slices.Contains(args, "--xattr") {
+		t.Errorf("args %v lack --xattr with Xattr set", args)
 	}
 	// With the default (abort), a guest holding a reference to an unlinked
 	// inode, such as a live-rotated trust bundle, could never be restored.
@@ -185,5 +188,74 @@ func TestSetNosuidNodev(t *testing.T) {
 		if gotRO := st.Flags&unix.ST_RDONLY != 0; gotRO != wantRO {
 			t.Errorf("%q: read-only = %v, want %v", path, gotRO, wantRO)
 		}
+	}
+}
+
+// The share must come first (the per-container rootfs binds live under it), and
+// a pmem mount must reach the agent under the handler that mounts its Source
+// as given, with the filesystem and options unchanged.
+func TestSandboxStoragesPMEM(t *testing.T) {
+	got := sandboxStorages(CreateSandboxOpts{
+		SandboxID: "sb",
+		Pmem: []PmemMount{{
+			Device: "/dev/pmem1", Fstype: "erofs", Options: []string{"ro", "dax"}, MountPoint: "/run/kata-containers/shared-image",
+		}},
+	})
+	if len(got) != 2 {
+		t.Fatalf("sandboxStorages returned %d storages, want 2", len(got))
+	}
+	if got[0].Source != FsTag || got[0].MountPoint != guestSharedDir {
+		t.Errorf("first storage = %v, want the %s share at %s", got[0], FsTag, guestSharedDir)
+	}
+	pm := got[1]
+	if pm.Driver != virtioFSDriver || pm.Source != "/dev/pmem1" || pm.Fstype != "erofs" ||
+		!slices.Equal(pm.Options, []string{"ro", "dax"}) || pm.MountPoint != "/run/kata-containers/shared-image" {
+		t.Errorf("pmem storage = %v, want /dev/pmem1 mounted as erofs ro,dax through the %s handler", pm, virtioFSDriver)
+	}
+	if got := sandboxStorages(CreateSandboxOpts{SandboxID: "sb"}); len(got) != 1 {
+		t.Errorf("sandboxStorages without pmem returned %d storages, want only the share", len(got))
+	}
+}
+
+// The guest overlay reaches the agent as the container's own storage, mounted
+// at the path setup_bundle looks for so the agent binds nothing over it, with
+// the lowers top-first and the upper and work directories under the one rw
+// bind of the container's share subtree.
+func TestGuestOverlayStorage(t *testing.T) {
+	ovl := NewGuestOverlay("web", []string{EROFSLayerMountPoint(2), EROFSLayerMountPoint(0)})
+	st := ovl.storage("web")
+	if st.Driver != overlayfsDriver || st.Fstype != "overlay" || st.Source != "overlay" {
+		t.Errorf("storage = %v, want an overlay through the %s driver", st, overlayfsDriver)
+	}
+	if st.MountPoint != "/run/kata-containers/web/rootfs" || st.MountPoint != GuestContainerRootfs("web") {
+		t.Errorf("mount point = %q, want the agent's container rootfs path", st.MountPoint)
+	}
+	want := []string{
+		"lowerdir=/run/kata-containers/erofs/2:/run/kata-containers/erofs/0",
+		"upperdir=/run/kata-containers/shared/containers/web/rw/fs",
+		"workdir=/run/kata-containers/shared/containers/web/rw/work",
+		"metacopy=off", "index=off", "volatile", "userxattr",
+	}
+	if !slices.Equal(st.Options, want) {
+		t.Errorf("options = %v, want %v", st.Options, want)
+	}
+	// The guest's upperdir and workdir are the host's UpperWorkDirs, seen
+	// through the <cid>/rw bind of their common parent.
+	upper, work := UpperWorkDirs("/base", "web")
+	if filepath.Base(upper) != filepath.Base(ovl.UpperDir) || filepath.Base(work) != filepath.Base(ovl.WorkDir) {
+		t.Errorf("guest upper/work %q %q do not mirror host %q %q", ovl.UpperDir, ovl.WorkDir, upper, work)
+	}
+	if filepath.Dir(ovl.UpperDir) != filepath.Dir(ovl.WorkDir) {
+		t.Errorf("upperdir %q and workdir %q must be siblings", ovl.UpperDir, ovl.WorkDir)
+	}
+}
+
+// A layer mount names the pmem slot its image occupies in the VM config, not
+// the layer's own index: the guest numbers /dev/pmem* by slot.
+func TestEROFSLayerMount(t *testing.T) {
+	m := EROFSLayerMount(3, 4)
+	if m.Device != "/dev/pmem4" || m.Fstype != "erofs" || !slices.Equal(m.Options, []string{"ro", "dax"}) ||
+		m.MountPoint != "/run/kata-containers/erofs/3" {
+		t.Errorf("EROFSLayerMount(3, 4) = %+v", m)
 	}
 }

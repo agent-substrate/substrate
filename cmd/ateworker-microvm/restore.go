@@ -266,7 +266,8 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	}
 	tPrep := time.Now()
 
-	// MEMORY snapshots carry each container's upper as a tar (rootfsUpperTarFile).
+	// MEMORY snapshots carry each container's upper as a tar (rootfsUpperTarFile;
+	// the record says which layout a container's tar holds).
 	// Start re-materializing the upper contents NOW, in the background: the
 	// untar scales with the actor's data and is joined right before the host
 	// overlay mounts need it, so it hides behind the bundle preparation below.
@@ -274,10 +275,14 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// An error return between here and the join MUST drain the goroutine (the
 	// deferred receive below): returning with the untar still writing would let
 	// a retried restore's own untar race it inside the same directory.
+	erofsRec, err := readEROFSLayers(restoreDir)
+	if err != nil {
+		return err
+	}
 	untarDone := make(chan error, 1)
 	untarJoined := false
 	go func() {
-		untarDone <- untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir, containerNames(p.containers))
+		untarDone <- untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir, containerNames(p.containers), erofsRec)
 	}()
 	defer func() {
 		if !untarJoined {
@@ -291,11 +296,16 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// sockets in the snapshot config are repointed to this VMDir by
 	// rewriteSnapshotPaths above. Cross-node consistency relies on a
 	// deterministic unpack of the same image at the same <cid>/rootfs path
-	// (plus, for merged rootfs, the upper re-materialized from the tar).
+	// (plus, for merged rootfs, the upper re-materialized from the tar). A
+	// guest-merged rootfs instead needs the layer images the guest mapped,
+	// byte for byte, at the paths in the snapshot config: verified below.
 	containers := p.containers
-	ctrs, err := s.buildActorContainers(p.actorUID, p.actorDirs, containers)
+	ctrs, err := s.buildActorContainers(ctx, p.actorUID, p.actorDirs, containers, erofsRec)
 	if err != nil {
 		return err
+	}
+	if err := erofsRec.verify(ctrs); err != nil {
+		return fmt.Errorf("while checking the snapshot's layer images: %w", err)
 	}
 	tBundles := time.Now()
 	// The overlay mounts need the upper on disk: join the background untar (still
@@ -549,7 +559,9 @@ func maybeDropStagedMemoryImage(ctx context.Context, restoreDir, memMode string,
 // image, which atelet stages under each actor's own directory and removes
 // with the actor, so the source actor's copies may be gone. How atelet
 // identifies the runtime (asset URLs today, a SandboxConfig hash later)
-// changes none of this. The overlay has no per-actor disk to repoint.
+// changes none of this. The overlay has no per-actor disk to repoint, and
+// EROFS layer images (erofs.go) sit in the node-wide image cache, so they
+// stay as recorded.
 func rewriteSnapshotPaths(snapshotDir, id, kernel, image string) error {
 	cfgPath := filepath.Join(snapshotDir, "config.json")
 	b, err := os.ReadFile(cfgPath)
@@ -635,6 +647,12 @@ func rewriteSnapshotPaths(snapshotDir, id, kernel, image string) error {
 				changed = true
 			}
 		default:
+			if strings.HasPrefix(pmID, erofsPmemIDPrefix) {
+				// A layer image (erofs.go): the image cache holds it at the
+				// same path on every node, and erofsLayers.verify has checked
+				// that this node's copy is the one the snapshot ran on.
+				continue
+			}
 			return fmt.Errorf("snapshot config %q has pmem device with unknown id %q", cfgPath, pmID)
 		}
 	}

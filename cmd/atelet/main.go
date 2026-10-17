@@ -740,7 +740,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 		return nil, err
 	}
 	containerSpecs, err := s.prepareOCIBundles(ctx, actorUID, actorRef,
-		req.GetSpec(), sandboxRec.PauseImage,
+		req.GetSpec(), sandboxRec.PauseImage, rootfsForm(sandboxRec.SandboxClass),
 	)
 	if err != nil {
 		return nil, err
@@ -1003,6 +1003,14 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	dCleanup += time.Since(tCleanup)
 
 	return &ateletpb.CheckpointResponse{State: state}, nil
+}
+
+// rootfsForm is the layer form an actor's container images are cached in:
+// EROFS images the guest maps over virtio-pmem with DAX for micro-VM
+// actors, the fs/ trees the host merges for everything else. A micro-VM
+// snapshot is always of a guest on EROFS layers, so a restore pulls the same.
+func rootfsForm(class string) imagecache.Form {
+	return imagecache.Form{EROFS: class == string(atev1alpha1.SandboxClassMicroVM)}
 }
 
 func checkpointSnapshotFiles(resp *ateworkerpb.CheckpointWorkloadResponse, required bool) (files, dataFiles []string, err error) {
@@ -1493,7 +1501,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 			return err
 		}
 		t := time.Now()
-		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage)
+		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage, rootfsForm(runtimeRec.SandboxClass))
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -1785,6 +1793,7 @@ func (s *Atelet) prepareOCIBundles(
 	actorRef resources.ActorRef,
 	spec *ateletpb.WorkloadSpec,
 	pauseImage string,
+	form imagecache.Form,
 ) ([]*ateworkerpb.ContainerSpec, error) {
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
@@ -1800,7 +1809,7 @@ func (s *Atelet) prepareOCIBundles(
 	if pauseImage != "" {
 		g.Go(func() error {
 			// pause is sandbox infra; it mounts no volumes.
-			if _, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ocispec.PauseContainer, pauseImage, nil, nil); err != nil {
+			if _, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ocispec.PauseContainer, pauseImage, imagecache.Form{}, nil, nil); err != nil {
 				return wrapFileSystemErr("while creating pause OCI bundle", err)
 			}
 			return nil
@@ -1815,7 +1824,7 @@ func (s *Atelet) prepareOCIBundles(
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
 		g.Go(func() error {
-			imageConfig, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
+			imageConfig, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), form, spec.GetVolumes(), ctr.GetVolumeMounts())
 			if err != nil {
 				return wrapFileSystemErr(fmt.Sprintf("while creating %q OCI bundle", ctr.GetName()), err)
 			}
