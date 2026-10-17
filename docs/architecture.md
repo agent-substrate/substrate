@@ -481,13 +481,18 @@ Triggered by an explicit `SuspendActor` call.
 
   1. **Checkpoint**: The `atelet` instructs `ateworker` to freeze the process and capture a memory+disk snapshot.
 
-  2. **Persistence**: The `atelet` streams the snapshot from the pod to durable storage (e.g., GCS).
+  2. **Persistence**: The `atelet` uploads the snapshot to durable storage
+     (e.g., GCS). With `DURABILITY_MODE_SYNCHRONOUS` the upload finishes before
+     `SuspendActor` returns. With the asynchronous default the snapshot stays
+     on the node and `atelet` uploads it in the background.
 
   3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
 
-  4. **Release**: The external snapshot the Actor held before this suspend is
-     deleted from object storage. An Actor owns one snapshot at a time; one it
-     borrowed from a tag is left alone, since the tag owns it.
+  4. **Release**: A synchronous suspend deletes the external snapshot the
+     Actor held before it from object storage. An asynchronous suspend keeps
+     that snapshot, since its own is not yet durable. It is deleted by the
+     first suspend after a newer snapshot is durable, or by `DeleteActor`. A
+     snapshot borrowed from a tag is left alone, since the tag owns it.
 
   5. **State**: State transitions back to `ACTOR_STATE_SUSPENDED`, and the Actor's
      `status.snapshots` records the external snapshot it resumes from.
