@@ -667,6 +667,10 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 		return scheduling.Constraints{}, fmt.Errorf("invalid template resource limits: %w", err)
 	}
 	var requiredNodes []string
+	// A paused Actor stays pinned to its node until atelet detaches the local
+	// snapshot, so it cannot resume while that node is full.
+	// TODO: when the node has no room, detach the Actor there and resume it on
+	// another node from the durable snapshot.
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
 		requiredNodes = []string{node}
 	}

@@ -247,7 +247,8 @@ func (u *durDirUser) hibernateAndDelete(ctx context.Context, dynCfg durDirKnobs)
 		})
 	} else {
 		_, _ = u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			Actor: u.ref(),
+			Actor:   u.ref(),
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 		})
 	}
 	u.delete(ctx)
