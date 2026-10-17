@@ -62,8 +62,8 @@ The same operations are also reachable from the top-level installer for
 convenience:
 
 ```bash
-./hack/install-ate.sh --deploy-benchmarks
-./hack/install-ate.sh --delete-benchmarks
+go run ./cmd/ate-setup deploy benchmarks
+go run ./cmd/ate-setup delete benchmarks
 ```
 
 `--skip-build` and `--worker-memory` are only available when invoking
