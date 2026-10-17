@@ -1087,7 +1087,8 @@ type Actor struct {
 	ActorTemplate *ObjectRef `protobuf:"bytes,4,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	// worker_selector is the per-actor placement constraint. The scheduler
 	// evaluates the AND of this selector and the template's workerSelector to
-	// find eligible pools.
+	// find eligible pools. It narrows the template's selection; pinning a
+	// sandbox class belongs on the template's worker_selector.
 	// Changes take effect on the next ResumeActor call.
 	//
 	// +k8s:optional
@@ -2572,7 +2573,13 @@ type ActorTemplate struct {
 	// +k8s:subfield(atespace)=+k8s:required
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// worker_selector restricts which worker pools actors from this template
-	// may use.
+	// may use, by matching the pools' labels. Unset, every pool is eligible.
+	//
+	// The pool decides the sandbox class an actor runs in, so this selector is
+	// also how a template pins one: if the cluster runs pools of more than one
+	// sandbox class and the workload needs a particular one, select only pools
+	// of that class. An actor booting with no snapshot and no selector may land
+	// on a pool of any class, and keeps that class from its first checkpoint on.
 	//
 	// +k8s:optional
 	WorkerSelector *Selector `protobuf:"bytes,2,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
