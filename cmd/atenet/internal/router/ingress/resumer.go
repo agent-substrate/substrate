@@ -70,10 +70,13 @@ func (e *budgetExhaustedError) Unwrap() error { return e.lastErr }
 type ResumeOutcome string
 
 const (
-	ResumeOutcomeNone      ResumeOutcome = ateattr.RouterResumeNone
-	ResumeOutcomeTriggered ResumeOutcome = ateattr.RouterResumeTriggered
-	ResumeOutcomeJoined    ResumeOutcome = ateattr.RouterResumeJoined
-	ResumeOutcomeUnknown   ResumeOutcome = ateattr.RouterResumeUnknown
+	ResumeOutcomeNone            ResumeOutcome = ateattr.RouterResumeNone
+	ResumeOutcomeTriggered       ResumeOutcome = ateattr.RouterResumeTriggered
+	ResumeOutcomeJoined          ResumeOutcome = ateattr.RouterResumeJoined
+	ResumeOutcomeParkedExhausted ResumeOutcome = ateattr.RouterResumeParkedExhausted
+	ResumeOutcomeParkedRejected  ResumeOutcome = ateattr.RouterResumeParkedRejected
+	ResumeOutcomeCanceled        ResumeOutcome = ateattr.RouterResumeCanceled
+	ResumeOutcomeUnknown         ResumeOutcome = ateattr.RouterResumeUnknown
 )
 
 type resumeCallResult struct {
@@ -274,10 +277,10 @@ func flightResult(bgCtx context.Context, resumeResp *ateapipb.ResumeActorRespons
 func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, actorRef resources.ActorRef, reqID uint64) (*ateapipb.Actor, ResumeOutcome, error) {
 	select {
 	case <-ctx.Done():
-		// The caller's request context was canceled before the shared resume
+		// The caller's request context ended before the shared resume
 		// completed. The flight continues and may still activate the actor, so
-		// the outcome is "unknown", not "none".
-		return nil, ResumeOutcomeUnknown, ctx.Err()
+		// the outcome is "canceled", not "none".
+		return nil, ResumeOutcomeCanceled, ctx.Err()
 	case <-f.done:
 		// Fast path: the flight finished without ever retrying, or before this
 		// caller saw retrying. The lot is never touched.
@@ -298,7 +301,7 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, ac
 	retryErr := f.retryErr()
 	release, ok := r.enterLot(ctx, shedOutcome(retryErr))
 	if !ok {
-		return nil, ResumeOutcomeUnknown, parkingFullErr(actorRef.String(), retryErr)
+		return nil, ResumeOutcomeParkedRejected, parkingFullErr(actorRef.String(), retryErr)
 	}
 	var finalErr error
 	defer func() { release(parkOutcomeFor(finalErr)) }()
@@ -306,7 +309,7 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, ac
 	select {
 	case <-ctx.Done():
 		finalErr = ctx.Err()
-		return nil, ResumeOutcomeUnknown, finalErr
+		return nil, ResumeOutcomeCanceled, finalErr
 	case <-f.done:
 		actor, outcome, err := f.callerResult(reqID)
 		finalErr = err

@@ -180,8 +180,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("expected context.Canceled, got %v", err)
 		}
-		if outcome != ResumeOutcomeUnknown {
-			t.Errorf("expected outcome %q on a canceled caller, got %q", ResumeOutcomeUnknown, outcome)
+		if outcome != ResumeOutcomeCanceled {
+			t.Errorf("expected outcome %q on a canceled caller, got %q", ResumeOutcomeCanceled, outcome)
 		}
 	})
 
@@ -368,7 +368,7 @@ func TestActorResumer_Parking(t *testing.T) {
 			// Budget large enough for a few ~100ms-spaced retries before it elapses;
 			// the pool never frees up.
 			resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 1500 * time.Millisecond}))
-			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
+			_, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
 			// The client must see the meaningful capacity error, not a generic
 			// timeout: status.Code must unwrap through the budget-exhaustion marker.
 			if got := status.Code(err); got != codes.FailedPrecondition {
@@ -377,6 +377,9 @@ func TestActorResumer_Parking(t *testing.T) {
 			var budget *budgetExhaustedError
 			if !errors.As(err, &budget) {
 				t.Errorf("expected the error to be marked as budget exhaustion, got %T (%v)", err, err)
+			}
+			if outcome != ResumeOutcomeParkedExhausted {
+				t.Errorf("expected outcome %q after park budget elapsed, got %q", ResumeOutcomeParkedExhausted, outcome)
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -564,13 +567,16 @@ func TestActorResumer_Parking(t *testing.T) {
 			}
 
 			resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: budget}))
-			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
+			_, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
 			if got := status.Code(err); got != codes.ResourceExhausted {
 				t.Errorf("expected ResourceExhausted after a late retryable failure, got %v (err=%v)", got, err)
 			}
 			var budgetErr *budgetExhaustedError
 			if !errors.As(err, &budgetErr) {
 				t.Errorf("expected the error to be marked as budget exhaustion, got %T (%v)", err, err)
+			}
+			if outcome != ResumeOutcomeParkedExhausted {
+				t.Errorf("expected outcome %q after a late retryable failure, got %q", ResumeOutcomeParkedExhausted, outcome)
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -836,8 +842,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			if !errors.As(err, &reqErr) || reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
 				t.Fatalf("expected a 503 router-at-capacity denial, got %v", err)
 			}
-			if outcome != ResumeOutcomeUnknown {
-				t.Errorf("shed caller outcome = %q, want %q", outcome, ResumeOutcomeUnknown)
+			if outcome != ResumeOutcomeParkedRejected {
+				t.Errorf("shed caller outcome = %q, want %q", outcome, ResumeOutcomeParkedRejected)
 			}
 			// The caller was turned away at the transition: exactly one attempt
 			// had run.
@@ -901,8 +907,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			if !errors.As(err, &reqErr) || reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
 				t.Fatalf("joiner: expected a 503 router-at-capacity denial, got %v", err)
 			}
-			if outcome != ResumeOutcomeUnknown {
-				t.Errorf("joiner outcome = %q, want %q", outcome, ResumeOutcomeUnknown)
+			if outcome != ResumeOutcomeParkedRejected {
+				t.Errorf("joiner outcome = %q, want %q", outcome, ResumeOutcomeParkedRejected)
 			}
 
 			close(proceed)

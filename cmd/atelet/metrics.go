@@ -34,8 +34,8 @@ const (
 
 // snapshotPhaseBuckets have to cover both ends of a phase breakdown: a warm OCI
 // unpack or a local rename lands in single-digit milliseconds, while a cold node
-// fetching a multi-GiB snapshot runs for tens of seconds.
-var snapshotPhaseBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60}
+// fetching a multi-GiB snapshot from a remote store runs for minutes.
+var snapshotPhaseBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600, 1800}
 
 // Instruments holds atelet's cold-start histograms. A nil *Instruments is a
 // valid no-op, so call sites need no guard.
