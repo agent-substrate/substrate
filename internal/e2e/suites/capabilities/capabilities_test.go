@@ -39,6 +39,7 @@ type capabilitiesResponse struct {
 	Permitted   []string `json:"permitted"`
 	Inheritable []string `json:"inheritable"`
 	Ambient     []string `json:"ambient"`
+	NoNewPrivs  bool     `json:"noNewPrivs"`
 	Error       string   `json:"error"`
 }
 
@@ -76,6 +77,12 @@ func TestActorCapabilities(t *testing.T) {
 		name:     "drop ALL plus add yields exactly the added capability",
 		template: "caps-exact",
 		want:     []string{"NET_BIND_SERVICE"},
+	}, {
+		// The probe listens on port 80, so the resume alone proves a low port
+		// binds without NET_BIND_SERVICE on this runtime.
+		name:     "drop ALL still binds port 80",
+		template: "caps-none",
+		want:     nil,
 	}}
 
 	for _, tt := range tests {
@@ -109,6 +116,10 @@ func TestActorCapabilities(t *testing.T) {
 			}
 			if len(got.Ambient) != 0 {
 				t.Errorf("ambient = %v, want empty (ambient capabilities are not supported)", got.Ambient)
+			}
+			// Neither runtime sets no_new_privileges; gVisor runs with --allow-suid.
+			if got.NoNewPrivs {
+				t.Error("no_new_privs = 1, want 0")
 			}
 		})
 	}
