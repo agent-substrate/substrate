@@ -129,6 +129,10 @@ message WriteDiskRequest {
   int32 size = 2;
 
   WriteMode write_mode = 3;
+
+  // fsync the file before replying, so the bytes reach the disk instead of
+  // sitting in a page cache. Lets a benchmark generate real disk traffic.
+  bool fsync = 4;
 }
 
 message WriteDiskResponse {

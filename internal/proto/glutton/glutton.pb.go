@@ -351,8 +351,11 @@ type WriteDiskRequest struct {
 	// name of the file to be written to
 	Key string `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	// size of bytes to be written
-	Size          int32     `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
-	WriteMode     WriteMode `protobuf:"varint,3,opt,name=write_mode,json=writeMode,proto3,enum=glutton.WriteMode" json:"write_mode,omitempty"`
+	Size      int32     `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
+	WriteMode WriteMode `protobuf:"varint,3,opt,name=write_mode,json=writeMode,proto3,enum=glutton.WriteMode" json:"write_mode,omitempty"`
+	// fsync the file before replying, so the bytes reach the disk instead of
+	// sitting in a page cache. Lets a benchmark generate real disk traffic.
+	Fsync         bool `protobuf:"varint,4,opt,name=fsync,proto3" json:"fsync,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -406,6 +409,13 @@ func (x *WriteDiskRequest) GetWriteMode() WriteMode {
 		return x.WriteMode
 	}
 	return WriteMode_WRITE_MODE_TRUNCATE
+}
+
+func (x *WriteDiskRequest) GetFsync() bool {
+	if x != nil {
+		return x.Fsync
+	}
+	return false
 }
 
 type WriteDiskResponse struct {
@@ -1238,12 +1248,13 @@ const file_glutton_proto_rawDesc = "" +
 	"\x04size\x18\x02 \x01(\tR\x04size\"A\n" +
 	"\x0fReadRAMResponse\x12\x12\n" +
 	"\x04size\x18\x01 \x01(\x03R\x04size\x12\x1a\n" +
-	"\bchecksum\x18\x02 \x01(\rR\bchecksum\"k\n" +
+	"\bchecksum\x18\x02 \x01(\rR\bchecksum\"\x81\x01\n" +
 	"\x10WriteDiskRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x05R\x04size\x121\n" +
 	"\n" +
-	"write_mode\x18\x03 \x01(\x0e2\x12.glutton.WriteModeR\twriteMode\"?\n" +
+	"write_mode\x18\x03 \x01(\x0e2\x12.glutton.WriteModeR\twriteMode\x12\x14\n" +
+	"\x05fsync\x18\x04 \x01(\bR\x05fsync\"?\n" +
 	"\x11WriteDiskResponse\x12\x12\n" +
 	"\x04size\x18\x01 \x01(\x03R\x04size\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\fR\x06sha256\"S\n" +

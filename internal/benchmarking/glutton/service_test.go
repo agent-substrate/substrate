@@ -53,6 +53,7 @@ func TestWriteDiskReadDiskRoundTrip(t *testing.T) {
 				Key:       tt.key,
 				Size:      tt.size,
 				WriteMode: gluttonpb.WriteMode_WRITE_MODE_TRUNCATE,
+				Fsync:     true,
 			})
 			if err != nil {
 				t.Fatalf("WriteDisk failed: %v", err)
