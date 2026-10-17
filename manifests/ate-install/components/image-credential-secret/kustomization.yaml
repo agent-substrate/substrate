@@ -1,0 +1,106 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Lets atelet pull actor (and image-volume) images from PRIVATE registries with an ordinary Kubernetes
+# Secret, on any cluster — no node files, no cloud-specific plugin.
+#
+# atelet authenticates image pulls only through kubelet credential-provider exec plugins (#917/#2104). The
+# base manifest wires them to GKE's node paths (/home/kubernetes/bin, /etc/srv/kubernetes/cri_auth_config.yaml),
+# which other clusters do not have (#2669). This component replaces both host paths:
+#   - the plugin directory becomes an emptyDir, filled by an init container with
+#     cmd/dockerconfig-credential-provider (it copies itself: `install <dir>`);
+#   - the CredentialProviderConfig comes from the ConfigMap below (credential-provider-config.yaml);
+#   - the credentials come from the Secret atelet-registry-auth (type kubernetes.io/dockerconfigjson, the
+#     same shape as an imagePullSecret), mounted read-only; the plugin reads it on every call, so a rotated
+#     Secret applies without restarting atelet. The Secret is optional: atelet starts (pulling anonymously)
+#     before it exists.
+#
+#   kubectl -n ate-system create secret docker-registry atelet-registry-auth \
+#     --docker-server=<registry> --docker-username=<user> --docker-password=<token>
+#
+# The two --image-credential-provider-* flags are appended because overlays such as ../../kind drop them;
+# where the base already sets them the values are identical (the last one wins).
+#
+# Scope: the credentials are node-level — every actor on a node can pull what the Secret can read (the same
+# boundary as a node's own credential provider; per-tenant pull secrets are #868 / #2080). Narrow
+# matchImages in credential-provider-config.yaml to the registries the Secret serves.
+
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - credential-provider-config.yaml
+
+patches:
+  - target:
+      kind: DaemonSet
+      name: atelet
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --image-credential-provider-config=/run/image-credential-provider/config.yaml
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --image-credential-provider-bin-dir=/run/image-credential-provider/bin
+  - patch: |-
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: atelet
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            initContainers:
+            - name: install-credential-providers
+              image: ko://go.ate.dev/substrate/cmd/dockerconfig-credential-provider
+              args: ["install", "/run/image-credential-provider/bin"]
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 65532
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+              - name: image-credential-provider-bin
+                mountPath: /run/image-credential-provider/bin
+            containers:
+            - name: atelet
+              volumeMounts:
+              - name: image-credential-provider-bin
+                mountPath: /run/image-credential-provider/bin
+                readOnly: true
+              - name: image-credential-provider-config
+                mountPath: /run/image-credential-provider/config.yaml
+                subPath: config.yaml
+                readOnly: true
+              - name: image-credential-provider-registry
+                mountPath: /run/image-credential-provider/registry
+                readOnly: true
+            volumes:
+            - name: image-credential-provider-bin
+              hostPath: null
+              emptyDir: {}
+            - name: image-credential-provider-config
+              hostPath: null
+              configMap:
+                name: atelet-image-credential-provider
+            - name: image-credential-provider-registry
+              secret:
+                secretName: atelet-registry-auth
+                optional: true
+                items:
+                - key: .dockerconfigjson
+                  path: config.json
