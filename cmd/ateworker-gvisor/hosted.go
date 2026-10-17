@@ -73,9 +73,6 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution) (*
 // hostActor sets up the actor's network, replacing any stale one.
 func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, actorDirs *ateworkerpb.ActorDirs) (*hostedActor, error) {
 	uid := attribution.UID
-	if uid == "" {
-		return nil, fmt.Errorf("actor UID is required")
-	}
 
 	hosted, stale, err := s.admitActor(attribution)
 	if err != nil {

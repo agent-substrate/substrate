@@ -56,3 +56,16 @@ def add_agentsession_arguments(parser: LocustArgumentParser) -> None:
         ),
         include_in_web_ui=True,
     )
+    parser.add_argument(
+        "--agentsession-snapshot-steps",
+        type=str,
+        default="",
+        env_var="LOCUST_AGENTSESSION_SNAPSHOT_STEPS",
+        help=(
+            "Comma-separated 1-based step numbers after which the actor is "
+            "hibernated (per --lifecycle-mode). When empty (default), the "
+            "actor is hibernated after every step unless --lifecycle-mode is "
+            "'none'."
+        ),
+        include_in_web_ui=True,
+    )

@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/ateworker/phaselog"
+	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/workerstats"
@@ -66,7 +67,7 @@ import (
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
 func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (_ *ateworkerpb.CheckpointWorkloadResponse, err error) {
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+	if err := ateworkervalidation.ValidateCheckpointWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
 	if err := validateFidelity(req.GetFidelity()); err != nil {
@@ -407,7 +408,7 @@ func (s *AteWorkerService) teardownActor(ctx context.Context, id string, actorDi
 // TerminateWorkload stops the running actor, tears down its VMM, and cleans up
 // networking and overlays.
 func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+	if err := ateworkervalidation.ValidateTerminateWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {

@@ -19,6 +19,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -252,6 +254,29 @@ func TestInjectionDenials(t *testing.T) {
 			}
 		})
 	}
+}
+
+// blockingProvider never answers, like a provider stuck dialing
+type blockingProvider struct{}
+
+func (blockingProvider) FetchSecret(ctx context.Context, _ *credproviderpb.FetchSecretRequest, _ ...grpc.CallOption) (*credproviderpb.FetchSecretResponse, error) {
+	<-ctx.Done()
+	return nil, status.FromContextError(ctx.Err()).Err()
+}
+
+// a hung provider must be a retryable 503 before Envoy's ext_proc
+// message_timeout turns it into a 504
+func TestInjectionProviderHangs(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := injectionHandlerFor(credentialInjectionPolicySample("api.example.com"), blockingProvider{}, injectionProviderName)
+		start := time.Now()
+		_, err := h.HandleRequestHeaders(context.Background(),
+			withAuthorization(innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil)))
+		wantStatus(t, err, envoy_type.StatusCode_ServiceUnavailable)
+		if took := time.Since(start); took >= 5*time.Second {
+			t.Errorf("denied after %v, want under the 5s ext_proc message_timeout", took)
+		}
+	})
 }
 
 // actorJWTHeader replaces header with an actor JWT bound to api.example.com.

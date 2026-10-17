@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -47,6 +48,26 @@ func TestToAPIError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "actor_name") {
 		t.Errorf("message %q does not name the field", err.Error())
+	}
+}
+
+func TestToAPIErrorEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		errs field.ErrorList
+	}{
+		{
+			name: "nil",
+			errs: nil,
+		},
+		{
+			name: "empty",
+			errs: field.ErrorList{},
+		},
+	} {
+		if err := ToAPIError(tc.errs); err != nil {
+			t.Errorf("%s: ToAPIError = %v, want nil", tc.name, err)
+		}
 	}
 }
 
@@ -321,7 +342,8 @@ func testActorDirs() *ateworkerpb.ActorDirs {
 		RestoreDir:                "/node/actors/a/restore-state",
 		DurableDirVolumeMountsDir: "/node/actors/a/durable-dir",
 		SystemInfoVolumeRootsDir:  "/node/actors/a/system-info",
-		VolumesDir:                "/node/actors/a/volumes",
+		ExternalVolumeMountsDir:   "/node/actors/a/volumes",
+		SandboxAssetsDir:          "/node/actors/a/sandbox-assets",
 	}
 }
 
@@ -366,11 +388,12 @@ func TestValidateActorDirs(t *testing.T) {
 		wantField string
 	}{
 		{"valid", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs { return actorDirs }, ""},
-		{"nil", func(*ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs { return nil }, "actor_dirs"},
+		// Presence is the tags' job: nil and empty are not this check's to report.
+		{"nil", func(*ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs { return nil }, ""},
 		{"missing dir", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs {
 			actorDirs.RestoreDir = ""
 			return actorDirs
-		}, "actor_dirs.restore_dir"},
+		}, ""},
 		{"relative dir", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs {
 			actorDirs.OciBundleDir = "bundles"
 			return actorDirs
@@ -608,6 +631,20 @@ func TestValidateNestedMountPaths(t *testing.T) {
 	}
 }
 
+// TestValidateNestedMountPathsAt pins that each finding lands on the field
+// the caller maps its index to, which is how a caller spanning several lists
+// points at the right one.
+func TestValidateNestedMountPathsAt(t *testing.T) {
+	fields := []*field.Path{
+		field.NewPath("external_volume_mounts").Index(0).Child("mount_path"),
+		field.NewPath("image_volume_mounts").Index(0).Child("mount_path"),
+		field.NewPath("image_volume_mounts").Index(1).Child("mount_path"),
+	}
+	got := ValidateNestedMountPathsAt([]string{"/a", "/b", "/a/c"}, func(i int) *field.Path { return fields[i] })
+	want := field.ErrorList{field.Invalid(fields[2], nil, "")}
+	field.ErrorMatcher{}.ByType().ByField().Test(t, want, got)
+}
+
 func TestValidateCSIMap(t *testing.T) {
 	path := field.NewPath("publish_context")
 	many := make(map[string]string, 100)
@@ -651,4 +688,30 @@ func TestValidateHostPort(t *testing.T) {
 		{name: "named port", value: "egress.example:https", wantErr: true},
 		{name: "unbracketed ipv6", value: "fd00::1:443", wantErr: true},
 	})
+}
+
+func TestValidateSandboxAssetsDir(t *testing.T) {
+	orig := nodepath.ActorsDir
+	nodepath.ActorsDir = "/node/actors"
+	t.Cleanup(func() { nodepath.ActorsDir = orig })
+	for _, tc := range []struct {
+		name     string
+		actorUID string
+		dir      string
+		wantErr  bool
+	}{
+		{"the actor's own dir", "actor-a", "/node/actors/actor-a/sandbox-assets", false},
+		{"another actor's dir", "actor-a", "/node/actors/actor-b/sandbox-assets", true},
+		{"a dir elsewhere", "actor-a", "/usr/bin", true},
+		{"the root", "actor-a", "/", true},
+		{"a traversing uid", "../etc", "/node/etc/sandbox-assets", true},
+		{"an empty uid", "", "/node/actors/sandbox-assets", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ValidateSandboxAssetsDir(tc.actorUID, tc.dir, field.NewPath("actor_dirs", "sandbox_assets_dir"))
+			if (len(errs) > 0) != tc.wantErr {
+				t.Errorf("ValidateSandboxAssetsDir(%q, %q) = %v, wantErr %v", tc.actorUID, tc.dir, errs, tc.wantErr)
+			}
+		})
+	}
 }

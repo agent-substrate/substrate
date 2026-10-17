@@ -15,6 +15,8 @@
 package cmd
 
 import (
+	"maps"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -105,6 +107,36 @@ func TestBuildCreateClusterRequest_NodeConfig(t *testing.T) {
 			}
 			if nodeConfig.DiskType != tt.wantDiskType {
 				t.Errorf("DiskType = %q, want %q", nodeConfig.DiskType, tt.wantDiskType)
+			}
+
+			sysctls := nodeConfig.GetLinuxNodeConfig().GetSysctls()
+			wantKeys := []string{
+				"net.ipv4.neigh.default.gc_thresh1",
+				"net.ipv4.neigh.default.gc_thresh2",
+				"net.ipv4.neigh.default.gc_thresh3",
+				"fs.inotify.max_user_instances",
+				"fs.inotify.max_user_watches",
+			}
+			parsed := make(map[string]int, len(wantKeys))
+			for _, k := range wantKeys {
+				raw, ok := sysctls[k]
+				if !ok {
+					t.Fatalf("missing required sysctl key %q", k)
+				}
+				v, err := strconv.Atoi(raw)
+				if err != nil || v <= 0 {
+					t.Fatalf("sysctl %q = %q, want positive integer: %v", k, raw, err)
+				}
+				parsed[k] = v
+			}
+			t1 := parsed["net.ipv4.neigh.default.gc_thresh1"]
+			t2 := parsed["net.ipv4.neigh.default.gc_thresh2"]
+			t3 := parsed["net.ipv4.neigh.default.gc_thresh3"]
+			if !(1024 < t1 && t1 < t2 && t2 < t3) {
+				t.Errorf("expected 1024 < gc_thresh1 (%d) < gc_thresh2 (%d) < gc_thresh3 (%d)", t1, t2, t3)
+			}
+			if watches := parsed["fs.inotify.max_user_watches"]; watches > 1048576 {
+				t.Errorf("fs.inotify.max_user_watches = %d, exceeds GKE cap of 1048576", watches)
 			}
 		})
 	}
@@ -227,6 +259,77 @@ func TestNestedVirtualizationEnabled(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := nestedVirtualizationEnabled(tt.cluster); got != tt.want {
 				t.Errorf("nestedVirtualizationEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNodeSysctlsConfigured(t *testing.T) {
+	poolWith := func(sysctls map[string]string) *containerpb.NodePool {
+		return &containerpb.NodePool{
+			Config: &containerpb.NodeConfig{
+				LinuxNodeConfig: &containerpb.LinuxNodeConfig{
+					Sysctls: sysctls,
+				},
+			},
+		}
+	}
+
+	partialSysctls := maps.Clone(requiredNodeSysctls)
+	delete(partialSysctls, "fs.inotify.max_user_watches")
+
+	tests := []struct {
+		name    string
+		cluster *containerpb.Cluster
+		want    bool
+	}{
+		{
+			name:    "nil cluster",
+			cluster: nil,
+			want:    false,
+		},
+		{
+			name:    "no node pools",
+			cluster: &containerpb.Cluster{},
+			want:    false,
+		},
+		{
+			name: "pool without linux node config",
+			cluster: &containerpb.Cluster{
+				NodePools: []*containerpb.NodePool{{Config: &containerpb.NodeConfig{}}},
+			},
+			want: false,
+		},
+		{
+			name: "pool missing required sysctl",
+			cluster: &containerpb.Cluster{
+				NodePools: []*containerpb.NodePool{poolWith(partialSysctls)},
+			},
+			want: false,
+		},
+		{
+			name: "single pool with required sysctls",
+			cluster: &containerpb.Cluster{
+				NodePools: []*containerpb.NodePool{poolWith(maps.Clone(requiredNodeSysctls))},
+			},
+			want: true,
+		},
+		{
+			name: "second pool carries required sysctls",
+			cluster: &containerpb.Cluster{
+				NodePools: []*containerpb.NodePool{
+					poolWith(nil),
+					poolWith(maps.Clone(requiredNodeSysctls)),
+				},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nodeSysctlsConfigured(tt.cluster); got != tt.want {
+				t.Errorf("nodeSysctlsConfigured() = %v, want %v", got, tt.want)
 			}
 		})
 	}

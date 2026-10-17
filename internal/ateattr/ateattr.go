@@ -360,6 +360,7 @@ const (
 	// Persist is one step with two destinations (upload for external, rename
 	// for local); SnapshotKindKey already says which.
 	SnapshotPhasePersist = "persist"
+	SnapshotPhaseCleanup = "cleanup"
 	SnapshotPhaseTotal   = "total"
 )
 
@@ -382,7 +383,8 @@ func NormalizeSandboxClass(class string) string {
 // helper and not through SandboxClassKey.
 //
 // To omit the attribute while the class is unknown is a different choice, and
-// two emitters make it: recordSchedulerAssignment and snapshotOp.attrs.
+// three emitters make it: lifecycleOpAttrs, recordSchedulerAssignment and
+// snapshotOp.attrs.
 func SandboxClassAttribute(class string) attribute.KeyValue {
 	return SandboxClassKey.String(NormalizeSandboxClass(class))
 }

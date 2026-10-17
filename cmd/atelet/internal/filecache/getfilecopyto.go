@@ -35,7 +35,10 @@ import (
 // copy in progress reads a held-open handle, so a concurrent eviction
 // cannot corrupt it.
 func (s *Store) GetFileCopyTo(ctx context.Context, key Key, dst string, fetch FileFetcher) error {
-	return s.getTo(ctx, key, dst, fetch, s.copyOut)
+	if fetch == nil {
+		return errors.New("filecache: nil FileFetcher")
+	}
+	return s.getTo(ctx, key, dst, fetchFunc(fetch), kindFile, s.copyOut)
 }
 
 // copyOut copies key's published data file to dst, reporting false (and no
@@ -83,6 +86,13 @@ func (s *Store) openData(key Key) (*os.File, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while opening cached %v: %w", key, err)
+	}
+	if fi, err := f.Stat(); err != nil || fi.IsDir() {
+		_ = f.Close()
+		if err != nil {
+			return nil, fmt.Errorf("while checking cached %v: %w", key, err)
+		}
+		return nil, fmt.Errorf("entry for %v is a directory tree, not a file (use GetDirTo)", key)
 	}
 	// Last-use touch for eviction's LRU ordering; best-effort, a miss only
 	// ages the entry.

@@ -331,7 +331,7 @@ The node-level subsystem manages the physical execution of sandboxes and the mov
 
 ### Sandbox Classes
 
-A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` herder image. The sandbox binaries themselves are not baked into the worker image — they, and the pause image holding the sandbox's namespaces, come at runtime from a cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-the-sandbox-itself) the `ActorTemplate` names in its sandbox config (naming one is currently required; per-class cluster defaults are planned) and are pinned into each snapshot's manifest so restores stay reproducible across runtime upgrades.
+A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` herder image. The sandbox binaries themselves are not baked into the worker image — they, and the pause image holding the sandbox's namespaces, come at runtime from the cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-the-sandbox-itself) the `WorkerPool` resolves for its class (an explicit `configRef`, else the class default) and are pinned into each snapshot's manifest so restores stay reproducible across runtime upgrades.
 
   * **gVisor** (`ateworker-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree.
 
@@ -421,7 +421,7 @@ stateDiagram-v2
     RESUMING --> RUNNING : restore / boot complete
     RUNNING --> SUSPENDING : SuspendActor
     SUSPENDING --> SUSPENDED : checkpoint complete
-    RUNNING --> SUSPENDING : PauseActor
+    RUNNING --> SUSPENDING : SuspendActor (async: keeps the snapshot on the node)
     SUSPENDED --> SUSPENDING : SuspendActor (paused: uploads the node-local snapshot)
     SUSPENDED --> [*] : DeleteActor
 ```

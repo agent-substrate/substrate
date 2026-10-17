@@ -70,18 +70,9 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		nil,
 	}, {
-		// Only the micro-VM runtime captures rootfs changes without memory;
-		// the fixture is a gVisor template.
-		"rootfs fidelity on gvisor rejected",
+		"valid rootfs fidelity",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
-		})},
-		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "preferred_fidelity"), "SNAPSHOT_FIDELITY_ROOTFS", "")},
-	}, {
-		"rootfs fidelity on microvm accepted",
-		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
-			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: "microvm", ConfigName: "microvm-default"}
 		})},
 		nil,
 	}, {
@@ -161,24 +152,6 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		field.ErrorList{
 			field.Required(field.NewPath("actor_template", "snapshot_config", "preferred_fidelity"), ""),
 		},
-	}, {
-		"missing sandbox_config",
-		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SandboxConfig = nil
-		})},
-		field.ErrorList{field.Required(field.NewPath("actor_template", "sandbox_config"), "")},
-	}, {
-		"missing sandbox_config.sandbox_class",
-		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SandboxConfig.SandboxClass = ""
-		})},
-		field.ErrorList{field.Required(field.NewPath("actor_template", "sandbox_config", "sandbox_class"), "")},
-	}, {
-		"missing sandbox_config.config_name",
-		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SandboxConfig.ConfigName = ""
-		})},
-		field.ErrorList{field.Required(field.NewPath("actor_template", "sandbox_config", "config_name"), "")},
 	}, {
 		"missing resources",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -385,40 +358,6 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "Not Valid"}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_selector", "match_labels").Key("tier"), nil, "").WithOrigin("format=k8s-label-value")},
-	}, {
-		name:   "missing sandbox_config",
-		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig = nil },
-		want:   field.ErrorList{field.Required(field.NewPath("sandbox_config"), "")},
-	}, {
-		name:   "missing sandbox_class",
-		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = "" },
-		want:   field.ErrorList{field.Required(field.NewPath("sandbox_config", "sandbox_class"), "")},
-	}, {
-		name:   "microvm sandbox_class",
-		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = "microvm" },
-	}, {
-		name:   "unsupported sandbox_class",
-		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = "kata" },
-		want:   field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_config", "sandbox_class"), nil, nil)},
-	}, {
-		name:   "sandbox_class is case-sensitive",
-		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = "GVISOR" },
-		want:   field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_config", "sandbox_class"), nil, nil)},
-	}, {
-		name:   "sandbox_class too long",
-		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = strings.Repeat("g", 64) },
-		want: field.ErrorList{
-			field.TooLong(field.NewPath("sandbox_config", "sandbox_class"), nil, 63).WithOrigin("maxLength"),
-			field.NotSupported[string](field.NewPath("sandbox_config", "sandbox_class"), nil, nil),
-		},
-	}, {
-		name:   "missing config_name",
-		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.ConfigName = "" },
-		want:   field.ErrorList{field.Required(field.NewPath("sandbox_config", "config_name"), "")},
-	}, {
-		name:   "invalid config_name",
-		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.ConfigName = "NOT_A_NAME" },
-		want:   field.ErrorList{field.Invalid(field.NewPath("sandbox_config", "config_name"), nil, "").WithOrigin("format=k8s-long-name")},
 	}, {
 		name:   "missing snapshot_config",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig = nil },
@@ -965,8 +904,7 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 			StorageLocation:   "gs://my-bucket/snapshots",
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
-		Resources:     resources.CPUMemory(1000, 512<<20),
+		Resources: resources.CPUMemory(1000, 512<<20),
 	}
 	for _, m := range mutations {
 		m(template)

@@ -409,6 +409,7 @@ func TestMetricLabelValues(t *testing.T) {
 		{SnapshotPhaseWorkerRestore, "worker_restore"},
 		{SnapshotPhaseWorkerCheckpoint, "worker_checkpoint"},
 		{SnapshotPhasePersist, "persist"},
+		{SnapshotPhaseCleanup, "cleanup"},
 		{SnapshotPhaseTotal, "total"},
 
 		{SandboxClassUnknown, "unknown"},

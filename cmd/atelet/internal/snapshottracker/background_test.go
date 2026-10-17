@@ -61,7 +61,7 @@ func beginOp(t *testing.T, tr *Tracker, target SnapshotRef) (context.Context, *a
 	t.Helper()
 	tr.lock(trackedActorUID)
 	defer tr.unlock(trackedActorUID)
-	ctx, op := tr.beginOpLocked(tr.findOrAddLocked(trackedActorUID), target)
+	ctx, op := tr.beginOpLocked(tr.ctx, tr.findOrAddLocked(trackedActorUID), target)
 	if op == nil {
 		t.Fatal("beginOpLocked: the actor already has an operation in progress")
 	}
@@ -97,7 +97,7 @@ func inMemory(tr *Tracker) bool {
 func TestWorkersStopWhenContextEnds(t *testing.T) {
 	useTempNodeDirs(t)
 	ctx, cancel := context.WithCancel(t.Context())
-	tr := New(ctx, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)))
+	tr := New(ctx, nil, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)))
 	tr.Start()
 	tr.lock(trackedActorUID)
 	defer tr.unlock(trackedActorUID)
@@ -260,7 +260,7 @@ func TestBeginOpLockedAllowsOneOpPerActor(t *testing.T) {
 	_, op := beginOp(t, tr, s1)
 
 	tr.lock(trackedActorUID)
-	_, second := tr.beginOpLocked(tr.findOrAddLocked(trackedActorUID), s1)
+	_, second := tr.beginOpLocked(tr.ctx, tr.findOrAddLocked(trackedActorUID), s1)
 	tr.unlock(trackedActorUID)
 	if second != nil {
 		t.Error("beginOpLocked began a second operation for the actor, want none")
@@ -268,7 +268,7 @@ func TestBeginOpLockedAllowsOneOpPerActor(t *testing.T) {
 
 	const otherActorUID = "other-actor-uid"
 	tr.lock(otherActorUID)
-	_, other := tr.beginOpLocked(tr.findOrAddLocked(otherActorUID), s1)
+	_, other := tr.beginOpLocked(tr.ctx, tr.findOrAddLocked(otherActorUID), s1)
 	tr.unlock(otherActorUID)
 	if other == nil {
 		t.Error("beginOpLocked for another actor = nil, want an operation")
@@ -291,11 +291,11 @@ func TestBeginOpLockedAllowsOneOpPerActor(t *testing.T) {
 func TestTrackerBackoff(t *testing.T) {
 	useActorDir(t)
 	clk := clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0))
-	tr := New(t.Context(), clk)
+	tr := New(t.Context(), nil, clk)
 	fail := func() time.Duration {
 		tr.lock(trackedActorUID)
 		defer tr.unlock(trackedActorUID)
-		return tr.backOffLocked(trackedActorUID).Sub(clk.Now())
+		return tr.backOffLocked(tr.findOrAddLocked(trackedActorUID)).Sub(clk.Now())
 	}
 	for i, want := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 10 * time.Minute, 10 * time.Minute} {
 		if got := fail(); got != want {

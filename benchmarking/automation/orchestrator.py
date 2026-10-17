@@ -420,8 +420,8 @@ def teardown_substrate() -> None:
 
 def install_microvm_deps() -> None:
     """Stage kata/cloud-hypervisor assets and apply the cluster-wide
-    microvm SandboxConfig. Required before a microvm ActorTemplate can
-    boot; must run after deploy_substrate() (which installs the CRDs)."""
+    microvm SandboxConfig. Required before a microvm WorkerPool can run
+    actors; must run after deploy_substrate() (which installs the CRDs)."""
     run(["hack/install-microvm-deps.sh", "--install"])
 
 

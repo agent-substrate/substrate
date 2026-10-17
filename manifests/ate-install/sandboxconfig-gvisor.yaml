@@ -13,12 +13,12 @@
 # limitations under the License.
 
 # Cluster-wide SandboxConfig for the gVisor (runsc) sandbox class, shipped with
-# the platform so gVisor ActorTemplates have a config to name via
-# sandboxConfig.configName. atelet fetches the gVisor release tarball
+# the platform as the class default so gVisor WorkerPools resolve it unless
+# they pin a specific configRef. atelet fetches the gVisor release tarball
 # (gvisor.tar.zstd: runsc plus the gvisor-bin/ helpers runsc requires next to
 # it) matching the worker node's architecture and extracts it locally. To pin a
 # different release, add a version below and point defaultVersion at it, or
-# create another SandboxConfig and name it from the ActorTemplate.
+# create another SandboxConfig and reference it from the WorkerPool.
 apiVersion: ate.dev/v1alpha1
 kind: SandboxConfig
 metadata:

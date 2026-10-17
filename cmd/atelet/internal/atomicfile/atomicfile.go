@@ -24,10 +24,20 @@ import (
 // renaming it over the target so readers never observe a truncated or
 // partially written value.
 //
-// TODO: Write does not fsync, so after a node crash path can be empty or still
-// hold its old contents. Investigate an opt-in sync for callers whose files
-// must survive a crash; other callers don't need it.
+// Write does not fsync, so after a node crash path can be empty or still
+// hold its old contents; WriteSync is for a file that must survive one.
 func Write(path string, data []byte, perm os.FileMode) error {
+	return write(path, data, perm, false)
+}
+
+// WriteSync is Write for a file that must survive a node crash: the data is
+// synced to disk before the rename, and the directory after it, so once
+// WriteSync returns the file is durable with exactly this content.
+func WriteSync(path string, data []byte, perm os.FileMode) error {
+	return write(path, data, perm, true)
+}
+
+func write(path string, data []byte, perm os.FileMode, sync bool) error {
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
@@ -42,8 +52,25 @@ func Write(path string, data []byte, perm os.FileMode) error {
 		f.Close()
 		return err
 	}
+	if sync {
+		if err := f.Sync(); err != nil {
+			f.Close()
+			return err
+		}
+	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	if err := os.Rename(f.Name(), path); err != nil {
+		return err
+	}
+	if !sync {
+		return nil
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }

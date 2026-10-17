@@ -12,14 +12,16 @@ This runbook upgrades a running Agent Substrate install to a newer release.
 
 If an upgrade goes wrong, you can roll back to the release you upgraded from, and no further.
 
-<!-- TODO: Link the compatibility policy, which these rules come from, and the version skew policy, which sets the step order below, once both are in the repository. -->
+These rules and the step order below come from the [version skew policy](version-skew-policy.md).
+
+<!-- TODO: Link the compatibility policy once it is in the repository. -->
 
 | Step | What changes | What running actors see | How long |
 |---|---|---|---|
 | 1 | podcertificate-controller | Nothing | A minute |
 | 2 | atelet, one node at a time | Nothing | Seconds to about 6 minutes per node |
 | 3 | workers | `SIGTERM`, then a 30-minute window to be suspended before `SIGKILL` | Seconds to hours per pool |
-| 4 | ate-api-server, the CRDs and ate-controller, atenet, SandboxConfig, then the rest of the system bundle | API calls, long requests and outbound connections can be cut once; workers may get `SIGTERM` again. See step 4 | A few minutes, or as long as step 3 if workers roll again |
+| 4 | ate-api-server, the CRDs and ate-controller, atenet, SandboxConfig, then the rest of the system bundle | API calls, long requests and outbound connections can be cut once. See step 4 | A few minutes |
 
 Rollback is the same list in reverse, from the old release. An actor that crashes along the way goes back to its last snapshot with `kubectl ate revert actor <name> -a <atespace>`.
 
@@ -192,14 +194,11 @@ kubectl ate get actors -A
 
 ```bash
 go run ./cmd/ate-setup deploy ate-controller --config ~/ate-upgrade/new.yaml
-kubectl get deploy -A -l ate.dev/worker-pool
 ```
 
-This applies the new CRDs and ate-controller's RBAC, then deploys the new `ate-controller`. Rerunning is safe. If this release changes the worker pod template, the new ate-controller rolls every pool again, with another round of `SIGTERM`: wait as in step 3.
+This applies the new CRDs and ate-controller's RBAC, then deploys the new `ate-controller`. Rerunning is safe. Within a major the worker pod template stays the same, so no pool rolls.
 
-<!-- TODO: Depends on the version skew policy: whether a compatible release may change the worker pod template. If it may not, the pools never roll in this step, and this check and the second roll in the rollback go away. -->
-
-- **Done:** the command exits 0, `kubectl -n ate-system get pods -l app=ate-controller` shows one pod, Running, with RESTARTS 0, and every pool shows READY `n/n` with UP-TO-DATE and AVAILABLE `n`. Check the pools a minute after the new pod starts: a second roll begins only once it reconciles them.
+- **Done:** the command exits 0, `kubectl -n ate-system get pods -l app=ate-controller` shows one pod, Running, with RESTARTS 0, and a minute later `kubectl get pods -A -l ate.dev/worker-pool` shows no worker pod younger than this step.
 - **Stuck:** the new ate-controller pod keeps restarting. [Roll back step 4](#roll-back-step-4).
 
 #### 4c. atenet
@@ -278,7 +277,7 @@ go run ./cmd/ate-setup deploy apiserver --config ~/ate-upgrade/old.yaml
 go install ./cmd/kubectl-ate
 ```
 
-`deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. If the release changed the worker pod template, every pool rolls again: wait as in step 3. Fields the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
+`deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. Fields the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
 
 The database schema stays new; the old API server drops fields it does not know when it rewrites a record. Step 4e is not undone either: the NetworkPolicies and the bundled PostgreSQL stay as the new release left them.
 

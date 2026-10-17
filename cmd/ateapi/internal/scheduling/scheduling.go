@@ -30,8 +30,12 @@ import (
 
 // Constraints describes what a worker must satisfy to host an actor.
 type Constraints struct {
-	// SandboxClass must equal the worker's sandbox class. Snapshots are not
-	// portable across sandbox classes, so this is never relaxed.
+	// SandboxClass, when set, is the sandbox class of the snapshot the actor
+	// restores from, and the worker's must equal it. A snapshot's files, its
+	// durable volumes included, are written by one class's worker and read
+	// back by the same, so unlike RequiredRuntime this holds for every
+	// fidelity and is never relaxed. Empty for an actor with no snapshot,
+	// which boots on whichever class its selectors pick.
 	SandboxClass string
 
 	// RequiredRuntime, when it names a runtime, restricts placement to
@@ -221,7 +225,10 @@ func quantitiesUtilization(capQ, usedQ resources.Quantities) float64 {
 }
 
 func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bool {
-	if worker.GetSandboxClass() != constraints.SandboxClass {
+	if worker.GetSandboxClass() == "" {
+		return false
+	}
+	if constraints.SandboxClass != "" && worker.GetSandboxClass() != constraints.SandboxClass {
 		return false
 	}
 

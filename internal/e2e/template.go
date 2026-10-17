@@ -60,8 +60,8 @@ func CreateSubstrateCounterTemplate(ctx context.Context, t *testing.T, clients *
 }
 
 // CreateSubstrateTemplateFrom creates a per-test WorkerPool CRD plus a
-// substrate ActorTemplate copying the resolved runtime (sandbox config, worker
-// image, container images, sandbox size) from the installed fixture src. It
+// substrate ActorTemplate copying the resolved runtime (worker image,
+// container images, sandbox size) from the installed fixture src. It
 // registers cleanup of the template (which does not ride the k8s namespace GC
 // the CRD templates did) and blocks until the golden snapshot exists.
 func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Clients, namespace string, src SubstrateFixture, opts SubstrateTemplateOptions) *ateapipb.ActorTemplate {
@@ -108,10 +108,7 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 		WorkerSelector: &ateapipb.Selector{MatchLabels: opts.Labels},
 		Containers:     srcTmpl.GetContainers(),
 		// The source's limits size the sandbox, and the API requires them.
-		Resources: srcTmpl.GetResources(),
-		// The source carries the sandbox_class/config_name pair for the
-		// class under test.
-		SandboxConfig:  srcTmpl.GetSandboxConfig(),
+		Resources:      srcTmpl.GetResources(),
 		SnapshotConfig: snapshots,
 		Volumes:        srcTmpl.GetVolumes(),
 	}

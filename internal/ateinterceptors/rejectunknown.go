@@ -18,7 +18,7 @@ import (
 	"context"
 	"strconv"
 
-	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -33,7 +33,7 @@ import (
 func RejectUnknownFieldsUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 	if msg, ok := req.(proto.Message); ok {
 		if errs := findUnknownFields(msg); len(errs) > 0 {
-			return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
+			return nil, resources.ToAPIError(errs)
 		}
 	}
 	return handler(ctx, req)

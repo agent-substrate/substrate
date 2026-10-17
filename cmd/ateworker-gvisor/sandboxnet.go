@@ -26,6 +26,8 @@ import (
 	"path/filepath"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
@@ -43,6 +45,20 @@ func actorResolvConf(actorDirs *ateworkerpb.ActorDirs) (string, error) {
 		return "", fmt.Errorf("writing the actor resolv.conf: %w", err)
 	}
 	return path, nil
+}
+
+// setupAppRootfs composes an application container's bundle rootfs and writes
+// its /etc/hosts there.
+//
+// This is the base layer under the sandbox's restored rootfs writes, so
+// rewriting it on every activation keeps the actor's own edits. Writing it
+// after restore instead would clobber them.
+func setupAppRootfs(actorDirs *ateworkerpb.ActorDirs, containerName string) error {
+	bundle := ociBundlePath(actorDirs, containerName)
+	if err := imagecache.SetupBundleRootfs(bundle); err != nil {
+		return err
+	}
+	return actornet.WriteRootfsHosts(filepath.Join(bundle, "rootfs"), actornet.SandboxHosts(ocispec.Hostname, actornet.ActorVethIP))
 }
 
 // removeActorResolvConf drops the file with the actor's network; atelet's

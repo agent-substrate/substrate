@@ -14,8 +14,6 @@
 
 # ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the glutton
 # benchmark workload, created through the ate API by workloads/deploy.sh.
-# The sandbox class must match the WorkerPool's so snapshots stay within a
-# class.
 metadata:
   atespace: benchmark-workloads
   name: glutton
@@ -64,6 +62,3 @@ resources:
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton/
-sandboxConfig:
-  sandboxClass: ${SANDBOX_CLASS}
-  configName: ${SANDBOX_CONFIG_NAME}
