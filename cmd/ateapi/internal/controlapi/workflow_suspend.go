@@ -42,8 +42,9 @@ const (
 	// the actor ends SUSPENDED holding a durable snapshot (SuspendActor).
 	suspendSync suspendMode = iota
 	// suspendAsync leaves the snapshot on the worker's node, to be uploaded
-	// later: the actor ends SUSPENDED holding a node-local snapshot and
-	// pinned to that node (PauseActor). Nothing uploads it yet.
+	// later: the actor ends SUSPENDED holding a node-local snapshot, with its
+	// upload URI recorded as PENDING, and pinned to that node (PauseActor).
+	// atelet uploads it in the background.
 	suspendAsync
 )
 
@@ -111,10 +112,15 @@ func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.Act
 	// and cannot: the previous attempt released the worker, so the record
 	// names none (#957).
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		if mode == suspendAsync && latestSnapshotIsLocalOnly(actor.GetStatus()) {
+		if mode == suspendAsync && latestSnapshotOnNode(actor.GetStatus()) {
 			return actor, nil // fully paused
 		}
-		if mode == suspendSync && !latestSnapshotIsLocalOnly(actor.GetStatus()) {
+		if mode == suspendSync && !latestSnapshotIsLocalNotYetDurable(actor.GetStatus()) {
+			if latestSnapshotOnNode(actor.GetStatus()) {
+				// atelet reported the upload, so the snapshot is durable. Lift
+				// the node pin, as finalize would, so resume can go anywhere.
+				return w.releaseUploadedLocalSnapshot(leaseCtx, actorRef, actor)
+			}
 			return actor, nil // fully suspended
 		}
 		// A sync suspend of a paused actor goes on to upload its node-local
@@ -146,7 +152,7 @@ func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.Act
 	// the one requested.
 	finalAttrs = lifecycleOpAttrs(actor, "", wireFidelity)
 	var finalized *ateapipb.Actor
-	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, mode, ateletState); err != nil {
+	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, actorTemplate, mode, ateletState); err != nil {
 		return nil, err
 	}
 	actor = finalized
@@ -294,7 +300,7 @@ func preferredFidelity(atespace string, tmpl *ateapipb.ActorTemplate) ateapipb.S
 // disambiguates — running-origin suspends keep their assignment until
 // finalize, paused actors never have one.
 func isPausedOriginSuspend(actor *ateapipb.Actor) bool {
-	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocalOnly(actor.GetStatus()) {
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocalNotYetDurable(actor.GetStatus()) {
 		return true
 	}
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDING &&
@@ -313,7 +319,9 @@ func isPausedOriginSuspend(actor *ateapipb.Actor) bool {
 // the request is keyed by the actor UID, the worker pod UID, and the
 // once-minted snapshot location, so a re-entered workflow re-sends the same
 // semantic request; once atelet's Checkpoint is idempotent on those keys this
-// step becomes fully reentrant with no changes here.
+// step becomes fully reentrant. An async suspend's finalize derives the upload
+// URI again from the template, so that also relies on the template's storage
+// location not changing between attempts.
 func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, mode suspendMode) (wireFidelity string, state *ateletpb.ActorSnapshotState, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletSuspend")
 	defer func() { err = done(err) }()
@@ -478,8 +486,8 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // FailedPrecondition.
 // ateletState is the state atelet returned from Checkpoint or
 // PromoteSnapshot, applied in the same update. A state that conflicts with the
-// record fails the step before it frees the worker.
-func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, ateletState *ateletpb.ActorSnapshotState) (_ *ateapipb.Actor, err error) {
+// record crashes the actor.
+func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate, mode suspendMode, ateletState *ateletpb.ActorSnapshotState) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
 
@@ -523,12 +531,30 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		}
 	}
 
-	// Apply atelet's state before freeing the worker, so a state that
-	// conflicts with the record fails the step while a retry can still call
-	// atelet again.
 	applied := proto.CloneOf(latestActor.GetStatus())
+	// An async suspend records the upload URI its checkpoint sent atelet, so
+	// atelet's reports match it and a resume can fall back to it once atelet
+	// detaches the actor. Derived the same way as for the checkpoint, and
+	// recorded before atelet's state is applied, so a state that reports this
+	// snapshot durable marks it COMPLETED.
+	if mode == suspendAsync {
+		uploadURI, err := newInProgressSnapshotURI(actorTemplate, latestActor, snapshotAtLatestGeneration(latestActor.GetStatus()).GetUuid())
+		if err != nil {
+			return nil, err
+		}
+		snapshotAtLatestGeneration(applied).DurableSnapshot = &ateapipb.SnapshotStorage{
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: uploadURI.String()},
+		}
+	}
+
+	// A state that conflicts with the record crashes the actor. Atelet has
+	// already destroyed the workload, so a retried Checkpoint can't succeed.
 	if err := applyCheckpointState(ctx, applied, ateletState); err != nil {
-		return nil, err
+		slog.WarnContext(ctx, "Snapshot state atelet returned conflicts with the record",
+			slog.Any("actor", actorRef),
+			slog.Any("err", err))
+		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
 	}
 
 	// 1. Free the worker (if it hasn't been freed yet)
@@ -556,13 +582,13 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		case suspendSync:
 			snap.GetDurableSnapshot().Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 			// Remove all local snapshots since they are superseded by the new durable snapshot.
-			// TODO: This will change when an async suspend uploads its snapshot
-			// and both local and durable snapshots are kept.
+			// TODO: atelet keeps the local copy after an IMMEDIATE upload. Record its
+			// locality here instead, so a resume on this node can use it.
 			pruneSnapshots(toUpdate.Status, nil)
 			toUpdate.Status.AssignedNode = ""
 		case suspendAsync:
 			// Record the node locality of the local checkpoint and clear older local checkpoints.
-			// AssignedNode is kept: a paused actor resumes on that node.
+			// AssignedNode is kept: the actor resumes on that node.
 			snap.Locality = toUpdate.GetStatus().GetAssignedNode()
 			pruneSnapshots(toUpdate.Status, snap)
 		}
@@ -578,43 +604,66 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend)
 
-	// 3. Release the external snapshot this suspend replaced. Best-effort: the
-	// new snapshot is committed and the worker is gone, so failing the
-	// workflow here would only strand the actor. A failure leaves the old
-	// snapshot's objects in storage until the actor is deleted, which removes
+	// 3. Release the durable snapshots this update dropped: the one this
+	// suspend replaced, and any older upload the prune removed, PENDING or
+	// COMPLETED. Best-effort: the new snapshot is committed and the worker is
+	// gone, so failing the workflow here would only strand the actor. A failure
+	// leaves the objects in storage until the actor is deleted, which removes
 	// its whole prefix.
 	t = time.Now()
-	replaced := findLatestDurableSnapshot(latestActor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED).GetDurableSnapshot().GetObject().GetSnapshotUri()
-	current := findLatestDurableSnapshot(storedActor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED).GetDurableSnapshot().GetObject().GetSnapshotUri()
-	releaseErr := w.releaseReplacedSnapshot(ctx, latestActor, replaced, current)
+	w.releaseDroppedSnapshots(ctx, latestActor, storedActor)
 	dReleaseSnapshot = time.Since(t)
-	if releaseErr != nil {
-		slog.WarnContext(ctx, "Failed to release the external snapshot a suspend replaced; its objects are left in storage until the actor is deleted",
-			slog.Any("actor", actorRef),
-			slog.String("snapshot_uri", replaced),
-			slog.String("err", releaseErr.Error()))
-	}
 	return storedActor, nil
 }
 
-// releaseReplacedSnapshot releases previous, the URI of the external snapshot
-// the actor held before this suspend, unless it is still current. actor is
-// the record as it was before the suspend committed.
-// An actor that borrowed its current snapshot from a tag releases nothing —
-// the snapshot lives under the tag's prefix, and the tag outlives the actor.
-func (w *ActorWorkflow) releaseReplacedSnapshot(ctx context.Context, actor *ateapipb.Actor, previous, current string) (err error) {
+// releaseDroppedSnapshots releases every durable snapshot before records that
+// after no longer does. Best-effort: the update is committed, so a failure is
+// logged and leaves the objects in storage until the actor is deleted, which
+// removes its whole prefix.
+func (w *ActorWorkflow) releaseDroppedSnapshots(ctx context.Context, before, after *ateapipb.Actor) {
+	for _, dropped := range droppedSnapshotURIs(before.GetStatus(), after.GetStatus()) {
+		if err := w.releaseReplacedSnapshot(ctx, before, dropped); err != nil {
+			slog.WarnContext(ctx, "Failed to release a durable snapshot the actor no longer records; its objects are left in storage until the actor is deleted",
+				slog.Any("actor", resources.ActorRef{Atespace: before.GetMetadata().GetAtespace(), Name: before.GetMetadata().GetName()}),
+				slog.String("snapshot_uri", dropped),
+				slog.String("err", err.Error()))
+		}
+	}
+}
+
+// releaseUploadedLocalSnapshot records a suspended actor whose latest snapshot
+// atelet holds and has reported uploaded as durable only, as sync-suspend
+// finalize does: it clears the localities and the node pin, then releases the
+// snapshots that update drops.
+func (w *ActorWorkflow) releaseUploadedLocalSnapshot(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		// TODO: atelet keeps the local copy until it detaches the actor. Record its
+		// locality here instead, as for sync-suspend finalize, so atelet's detach
+		// report still finds the actor on its node.
+		pruneSnapshots(toUpdate.Status, nil)
+		toUpdate.Status.AssignedNode = ""
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
+		}
+		return nil, err
+	}
+	w.releaseDroppedSnapshots(ctx, actor, storedActor)
+	return storedActor, nil
+}
+
+// releaseReplacedSnapshot releases previous, the URI of a durable snapshot the
+// actor no longer records. actor is the record as it was before the suspend
+// committed. A snapshot borrowed from a tag is left alone: it lives under the
+// tag's prefix, and the tag outlives the actor.
+func (w *ActorWorkflow) releaseReplacedSnapshot(ctx context.Context, actor *ateapipb.Actor, previous string) (err error) {
 	ctx, done := stepSpan(ctx, "ReleaseReplacedSnapshot")
 	defer func() { err = done(err) }()
 
-	switch {
-	case w.objectStorePlugin == nil:
+	if w.objectStorePlugin == nil {
 		markSkipped(ctx, "no object store configured")
-		return nil
-	case previous == "":
-		markSkipped(ctx, "the actor held no external snapshot")
-		return nil
-	case previous == current:
-		markSkipped(ctx, "the actor's external snapshot is unchanged")
 		return nil
 	}
 	uri, err := resources.ParseSnapshotURI(previous)

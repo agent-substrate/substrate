@@ -45,7 +45,7 @@ var revertableStates = []ateapipb.ActorState{
 func isRevertable(actor *ateapipb.Actor) bool {
 	state := actor.GetStatus().GetState()
 	return slices.Contains(revertableStates, state) ||
-		(state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocalOnly(actor.GetStatus()))
+		(state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocalNotYetDurable(actor.GetStatus()))
 }
 
 // RevertActor executes the workflow to discard an actor's current execution and
@@ -260,8 +260,8 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		toUpdate.Status.AssignedNode = ""
 		// We revert back to the latest durable snapshot, so all local snapshots
 		// and pending durable snapshots are removed.
-		// We already cleaned up the node before this in ensureWorkerDiscarded,
-		// and any in-progress durable snapshot in ensureInProgressSnapshotDiscarded.
+		// We already cleaned up the node before this in ensureWorkerDiscarded.
+		// The objects of every durable snapshot this drops are released below.
 		// Even during revert, we do not decrease LastAssignedGeneration so that we
 		// can keep track of stale snapshots that need to be cleaned up.
 		pruneSnapshots(toUpdate.Status, nil)
@@ -275,5 +275,10 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		return nil, err
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationRevert)
+	// ensureInProgressSnapshotDiscarded already deleted the latest PENDING
+	// upload, as a step a retry repeats before the record forgets it. This
+	// releases every other entry the update dropped, best-effort, and finds
+	// that one's prefix empty.
+	w.releaseDroppedSnapshots(ctx, latestActor, storedActor)
 	return storedActor, nil
 }

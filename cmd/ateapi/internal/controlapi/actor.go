@@ -310,11 +310,11 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 				return apierror.FailedPrecondition(
 					"actor must be %s to change its actor template (got: %s)", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, state)
 			}
-			// A paused actor's latest snapshot is node-local and was captured
-			// from the old template's sandbox; suspend or revert it first.
-			if latestSnapshotIsLocalOnly(oldVal.GetStatus()) {
+			// Resume restores a latest snapshot held on a node from that copy,
+			// which was captured from the old template's sandbox.
+			if latestSnapshotOnNode(oldVal.GetStatus()) {
 				return apierror.FailedPrecondition(
-					"actor must hold no node-local snapshot to change its actor template: suspend or revert it first")
+					"actor must hold no node-local snapshot to change its actor template: suspend it first")
 			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
 			if err != nil {

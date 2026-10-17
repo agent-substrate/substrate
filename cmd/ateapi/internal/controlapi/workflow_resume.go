@@ -841,17 +841,13 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 			ActorTemplateName:     actor.GetActorTemplate().GetName(),
 			Spec:                  workloadSpec,
-			Snapshot: &ateletpb.Snapshot{
-				SnapshotUuid: localSnap.GetUuid(),
-				Generation:   localSnap.GetGeneration(),
-				Fidelity:     fidelity,
-			},
-			SandboxAssets:  sandboxAssets,
-			SandboxRuntime: sandboxRuntime,
-			ActorUid:       actor.GetMetadata().Uid,
-			EgressGateway:  egressGateway,
-			CpuMilli:       cpuMilli,
-			MemoryBytes:    memBytes,
+			Snapshot:              localRestoreSnapshot(localSnap, fidelity),
+			SandboxAssets:         sandboxAssets,
+			SandboxRuntime:        sandboxRuntime,
+			ActorUid:              actor.GetMetadata().Uid,
+			EgressGateway:         egressGateway,
+			CpuMilli:              cpuMilli,
+			MemoryBytes:           memBytes,
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 
@@ -965,4 +961,19 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, nil
+}
+
+// localRestoreSnapshot names a local snapshot for Restore. It carries the
+// recorded upload URI, if any, so atelet falls back to object storage when it
+// no longer holds the local copy, as after a detach.
+func localRestoreSnapshot(snap *ateapipb.Snapshot, fidelity ateletpb.SnapshotFidelity) *ateletpb.Snapshot {
+	out := &ateletpb.Snapshot{
+		SnapshotUuid: snap.GetUuid(),
+		Generation:   snap.GetGeneration(),
+		Fidelity:     fidelity,
+	}
+	if uri := snap.GetDurableSnapshot().GetObject().GetSnapshotUri(); uri != "" {
+		out.Object = &ateletpb.ObjectStorage{SnapshotUri: uri}
+	}
+	return out
 }

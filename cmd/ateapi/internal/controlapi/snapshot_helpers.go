@@ -67,16 +67,28 @@ func findLatestLocalSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
 	})
 }
 
-// latestSnapshotIsLocalOnly reports whether the snapshot at the actor's latest
-// generation is node-local with no durable copy: the shape a pause leaves
-// behind. A paused actor is SUSPENDED with this shape, and resumes only on the
-// node named by Locality; a suspend of such an actor uploads that snapshot
-// instead of checkpointing a workload. A RUNNING actor resumed from pause
-// keeps the local snapshot too, so callers that need "at rest" check the state
-// as well.
-func latestSnapshotIsLocalOnly(status *ateapipb.ActorStatus) bool {
-	snap := snapshotAtLatestGeneration(status)
-	return snap.GetLocality() != "" && snap.GetDurableSnapshot() == nil
+// latestSnapshotOnNode reports whether the snapshot at the actor's latest
+// generation is held on a node, uploaded or not. Resume restores it from that
+// node's copy.
+func latestSnapshotOnNode(status *ateapipb.ActorStatus) bool {
+	return snapshotAtLatestGeneration(status).GetLocality() != ""
+}
+
+// droppedSnapshotURIs returns the upload URIs before records that after no
+// longer does, each once.
+func droppedSnapshotURIs(before, after *ateapipb.ActorStatus) []string {
+	seen := map[string]bool{"": true}
+	for _, snap := range after.GetSnapshots() {
+		seen[snap.GetDurableSnapshot().GetObject().GetSnapshotUri()] = true
+	}
+	var dropped []string
+	for _, snap := range before.GetSnapshots() {
+		if uri := snap.GetDurableSnapshot().GetObject().GetSnapshotUri(); !seen[uri] {
+			seen[uri] = true
+			dropped = append(dropped, uri)
+		}
+	}
+	return dropped
 }
 
 // latestSnapshotIsPendingLocal reports whether the snapshot at the actor's
@@ -91,9 +103,9 @@ func latestSnapshotIsPendingLocal(status *ateapipb.ActorStatus) bool {
 
 // latestSnapshotIsLocalNotYetDurable reports whether the snapshot at the
 // actor's latest generation is a local checkpoint with no COMPLETED durable
-// copy. A pause leaves it with no durable copy at all, and a suspend of the
-// paused actor marks the copy PENDING before it asks the node to upload, so
-// both shapes mean the node holding the checkpoint still acts for the actor.
+// copy. An async suspend leaves its upload PENDING, and so does a sync suspend
+// of such an actor until the upload completes, so both mean the node holding
+// the checkpoint still acts for the actor.
 func latestSnapshotIsLocalNotYetDurable(status *ateapipb.ActorStatus) bool {
 	snap := snapshotAtLatestGeneration(status)
 	return snap.GetLocality() != "" &&
@@ -114,18 +126,9 @@ func clearLocalSnapshots(status *ateapipb.ActorStatus) {
 // snapshot, dropping all other (stale PENDING or superseded COMPLETED)
 // Snapshots. It clears Locality on every Snapshot other than local: it runs
 // in finalize steps that follow an atelet call that deleted the actor's other
-// local checkpoints from the node. Any older COMPLETED durable snapshots are
-// expected to have already been garbage collected (or captured for cleanup)
-// beforehand.
-//
-// Dropping PENDING durable snapshots is safe because:
-//   - On pause finalization, pause is only reachable from RUNNING (a failed
-//     suspend cannot resume without reverting first, which discards any
-//     in-flight upload), so no uncleaned PENDING durable snapshot exists.
-//   - On revert finalization, ensureInProgressSnapshotDiscarded has already
-//     deleted any in-flight durable snapshot objects.
-//   - On suspend finalization, the latest snapshot has already been marked
-//     COMPLETED.
+// local checkpoints from the node. Suspend and revert finalization release the
+// objects of every durable snapshot they drop, PENDING or COMPLETED (see
+// releaseDroppedSnapshots).
 //
 // status.LastAssignedGeneration is not decreased so that we can keep track of
 // stale snapshots that need to be cleaned up and discarded generation numbers

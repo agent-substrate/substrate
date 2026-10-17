@@ -230,15 +230,17 @@ func TestPauseActor_Finalized_RecordsFidelity(t *testing.T) {
 			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				t.Fatalf("state = %v, want SUSPENDED", got.GetStatus().GetState())
 			}
-			if !latestSnapshotIsLocalOnly(got.GetStatus()) {
+			if !latestSnapshotIsLocalNotYetDurable(got.GetStatus()) {
 				t.Errorf("snapshots = %v, want the latest one local only", got.GetStatus().GetSnapshots())
 			}
 			localSnap := findLatestLocalSnapshot(got.GetStatus())
 			if localSnap.GetFidelity() != tc.want {
 				t.Errorf("local Snapshot.Fidelity = %v, want %v", localSnap.GetFidelity(), tc.want)
 			}
-			if localSnap.GetDurableSnapshot() != nil {
-				t.Errorf("local DurableSnapshot = %v, want nil", localSnap.GetDurableSnapshot())
+			// The upload URI the checkpoint sent is recorded as PENDING.
+			if d := localSnap.GetDurableSnapshot(); d.GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING ||
+				!strings.HasSuffix(d.GetObject().GetSnapshotUri(), "/snapshots/"+localSnap.GetUuid()) {
+				t.Errorf("local DurableSnapshot = %v, want PENDING at the snapshot's URI", d)
 			}
 			if localSnap.GetLocality() != "node-1" {
 				t.Errorf("local Snapshot.Locality = %q, want %q", localSnap.GetLocality(), "node-1")

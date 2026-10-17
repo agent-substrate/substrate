@@ -413,6 +413,52 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 	}
 }
 
+// TestEnsureRevertedFinalized_ReleasesEveryDroppedSnapshot verifies revert
+// finalize releases the objects of every durable snapshot it drops: an async
+// suspend's PENDING upload, which atelet may have written, as well as the
+// interrupted sync suspend's. The snapshot the actor returns to survives.
+func TestEnsureRevertedFinalized_ReleasesEveryDroppedSnapshot(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_REVERTING},
+	})
+	current := mustActorSnapshotURI(t, template, actor, "current")
+	asyncUpload := mustActorSnapshotURI(t, template, actor, "async-upload")
+	syncUpload := mustActorSnapshotURI(t, template, actor, "sync-upload")
+	for _, uri := range []resources.SnapshotURI{current, asyncUpload, syncUpload} {
+		objects.PutSnapshot(t, uri, "manifest.json")
+	}
+	pending := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.LastAssignedGeneration = 3
+		asyncSnap := newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", asyncUpload.Name(), asyncUpload.String(), pending)
+		asyncSnap.Locality = "node-1"
+		s.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			asyncSnap,
+			newDurableSnapshot(3, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", syncUpload.Name(), syncUpload.String(), pending),
+		}
+	})
+
+	if _, err := w.ensureRevertedFinalized(ctx, actorRef); err != nil {
+		t.Fatalf("ensureRevertedFinalized: %v", err)
+	}
+	if len(objects.Snapshot(t, current)) == 0 {
+		t.Error("the snapshot the actor returns to was collected")
+	}
+	for _, uri := range []resources.SnapshotURI{asyncUpload, syncUpload} {
+		if len(objects.Snapshot(t, uri)) != 0 {
+			t.Errorf("%s was left in storage, want it released", uri.Name())
+		}
+	}
+}
+
 // TestEnsureRevertedFinalized_NoObjectStore covers a workflow built without an
 // object store: the discard step skips instead of failing, so the revert still
 // finalizes.
