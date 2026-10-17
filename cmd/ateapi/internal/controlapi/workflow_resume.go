@@ -566,7 +566,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	// Worker's row lock.
 	newAssignment.WorkerEpoch = assignment.GetWorkerEpoch()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
+		setActorState(toUpdate.Status, ateapipb.ActorState_ACTOR_STATE_RESUMING)
 		toUpdate.Status.WorkerAssignment = newAssignment
 		toUpdate.Status.AssignedNode = newAssignment.GetNodeName()
 		return nil
@@ -943,7 +943,7 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+		setActorState(toUpdate.Status, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 		return nil
 	})
 	if err != nil {

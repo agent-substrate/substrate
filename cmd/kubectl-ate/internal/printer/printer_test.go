@@ -68,7 +68,8 @@ func TestPrintActorsTo_Table(t *testing.T) {
 			},
 			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-1"},
 			Status: &ateapipb.ActorStatus{
-				State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+				State:               ateapipb.ActorState_ACTOR_STATE_RUNNING,
+				StateTransitionTime: timestamppb.New(now.Add(-2 * time.Minute)),
 				WorkerAssignment: &ateapipb.WorkerAssignment{
 					WorkerNamespace: "worker-ns",
 					WorkerPod:       "pod-1",
@@ -83,8 +84,8 @@ func TestPrintActorsTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `ATESPACE   NAME   TEMPLATE             STATE                 WORKER POD        WORKER IPS        VERSION   AGE
-team-a     id-1   default/template-1   ACTOR_STATE_RUNNING   worker-ns/pod-1   1.2.3.4,fd00::1   2         5m
+	expected := `ATESPACE   NAME   TEMPLATE             STATE                 IN STATE   WORKER POD        WORKER IPS        VERSION   AGE
+team-a     id-1   default/template-1   ACTOR_STATE_RUNNING   2m         worker-ns/pod-1   1.2.3.4,fd00::1   2         5m
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -183,10 +184,10 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 	}
 
 	// Sorted by atespace first, then template namespace, template name, name.
-	expected := `ATESPACE   NAME    TEMPLATE             STATE                   WORKER POD   WORKER IPS   VERSION   AGE
-team-a     alpha   default/template-1   ACTOR_STATE_RUNNING     <none>                    0         5m
-team-a     beta    other/template-2     ACTOR_STATE_SUSPENDED   <none>                    0         5h
-team-b     zebra   default/template-1   ACTOR_STATE_SUSPENDED   <none>                    0         3d
+	expected := `ATESPACE   NAME    TEMPLATE             STATE                   IN STATE    WORKER POD   WORKER IPS   VERSION   AGE
+team-a     alpha   default/template-1   ACTOR_STATE_RUNNING     <unknown>   <none>                    0         5m
+team-a     beta    other/template-2     ACTOR_STATE_SUSPENDED   <unknown>   <none>                    0         5h
+team-b     zebra   default/template-1   ACTOR_STATE_SUSPENDED   <unknown>   <none>                    0         3d
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -217,8 +218,8 @@ func TestPrintActorsTo_Table_TemplateRef(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := `ATESPACE   NAME   TEMPLATE                             STATE                   WORKER POD   WORKER IPS   VERSION   AGE
-team-a     id-1   ate-demo-counter-substrate/counter   ACTOR_STATE_SUSPENDED   <none>                    0         5m
+	expected := `ATESPACE   NAME   TEMPLATE                             STATE                   IN STATE    WORKER POD   WORKER IPS   VERSION   AGE
+team-a     id-1   ate-demo-counter-substrate/counter   ACTOR_STATE_SUSPENDED   <unknown>   <none>                    0         5m
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

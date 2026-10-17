@@ -225,7 +225,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 		return nil, err
 	}
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
+		setActorState(toUpdate.Status, ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
 		if paused {
 			// Promote the current generation's local snapshot to a pending durable snapshot.
 			snap := findLatestLocalSnapshot(toUpdate.Status)
@@ -548,7 +548,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	// since then fails the update instead of being overwritten.
 	t = time.Now()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+		setActorState(toUpdate.Status, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 		// The precondition makes toUpdate the version applied was built from.
 		toUpdate.Status.Snapshots = applied.GetSnapshots()
 		snap := snapshotAtLatestGeneration(toUpdate.Status)

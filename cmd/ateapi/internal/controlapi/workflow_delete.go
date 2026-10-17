@@ -344,7 +344,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
+		setActorState(toUpdate.Status, ateapipb.ActorState_ACTOR_STATE_DELETING)
 		return nil
 	})
 	if err != nil {
