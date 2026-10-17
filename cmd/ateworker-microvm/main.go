@@ -278,16 +278,22 @@ func do(ctx context.Context) error {
 	// Report retries every failure it can outlast, including the window before
 	// the Worker record exists; anything that reaches here is a misconfiguration
 	// no restart-in-place will fix.
+	reportConfig := register.ReportConfig{
+		SocketPath:           nodepath.WorkerSupportSocket,
+		CredentialBundlePath: tunnelConfig.CredentialBundle,
+		TrustBundlePath:      tunnelConfig.TrustBundle,
+		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
+		Actors:               *maxActors,
+		SandboxClass:         string(atev1alpha1.SandboxClassMicroVM),
+		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
+	}
+	if reporter, err := register.NewCrashReporter(reportConfig); err != nil {
+		slog.ErrorContext(ctx, "Crashed actors will not be reported", slog.Any("err", err))
+	} else {
+		ateworkerService.crashReporter = reporter
+	}
 	go func() {
-		err := register.Report(ctx, register.ReportConfig{
-			SocketPath:           nodepath.WorkerSupportSocket,
-			CredentialBundlePath: tunnelConfig.CredentialBundle,
-			TrustBundlePath:      tunnelConfig.TrustBundle,
-			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
-			Actors:               *maxActors,
-			SandboxClass:         string(atev1alpha1.SandboxClassMicroVM),
-			RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
-		})
+		err := register.Report(ctx, reportConfig)
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to register worker", err)
 		}
@@ -344,6 +350,9 @@ type AteWorkerService struct {
 	locks *actorlock.Locks
 	// Tracks lifecycle RPCs for shutdown cancellation and draining.
 	inFlight *actorlock.InFlight
+	// crashReporter reports actors whose micro-VM died. Nil if it could not
+	// be set up.
+	crashReporter crashReporter
 
 	// shuttingDown is set once SIGTERM has been received. While true, new workload
 	// RPCs are rejected with codes.Unavailable so the control plane reschedules.

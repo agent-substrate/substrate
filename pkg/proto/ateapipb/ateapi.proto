@@ -2614,6 +2614,18 @@ service WorkerService {
   // node. Returns FAILED_PRECONDITION or INVALID_ARGUMENT when the report
   // conflicts with the record; don't retry.
   rpc ReportActorSnapshotState(ReportActorSnapshotStateRequest) returns (ReportActorSnapshotStateResponse);
+
+  // ReportActorCrashed tells the control plane that the sandbox of an Actor
+  // the calling Worker hosts died on its own. Nothing else notices: the
+  // control plane only learns of a dead sandbox when an operation on the Actor
+  // fails.
+  //
+  // A RUNNING Actor is moved to ACTOR_STATE_CRASHED and its Worker is
+  // released. An Actor in any other state is left alone and the report is
+  // refused as FailedPrecondition: an operation in flight owns the Actor and
+  // fails on its own if the sandbox is gone. Authorized like
+  // RequestActorSuspend.
+  rpc ReportActorCrashed(ReportActorCrashedRequest) returns (ReportActorCrashedResponse);
 }
 
 message RegisterWorkerRequest {
@@ -2768,6 +2780,39 @@ message RequestActorSuspendRequest {
 
 message RequestActorSuspendResponse {
   // The Actor as the suspend workflow left it.
+  Actor actor = 1;
+}
+
+message ReportActorCrashedRequest {
+  // The Worker making the report. atespace is always empty; Workers are
+  // global-scoped. atelet fills this in from its caller's certificate.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef worker = 1;
+
+  // The Actor whose sandbox died. It must be assigned to worker.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 2;
+
+  // The UID of the Actor the Worker believes it is hosting, as for
+  // RequestActorSuspend.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string actor_uid = 3;
+
+  // What the Worker saw, recorded in the Actor's crash message.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096
+  string message = 4;
+}
+
+message ReportActorCrashedResponse {
+  // The Actor as the report left it.
   Actor actor = 1;
 }
 

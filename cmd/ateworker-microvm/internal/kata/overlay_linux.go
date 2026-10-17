@@ -39,6 +39,7 @@ import (
 	"time"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/child"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb"
 	"go.ate.dev/substrate/internal/ocispec"
 	"golang.org/x/sys/unix"
@@ -140,7 +141,7 @@ func virtiofsdArgs(o VirtiofsdOptions) []string {
 // StartVirtiofsd launches virtiofsd in find-paths migration mode serving o.SharedDir
 // on o.SocketPath, and waits for the socket to appear. The returned cmd outlives the
 // caller's ctx (CH demand-pages from it under the running VM); the caller owns it.
-func StartVirtiofsd(ctx context.Context, o VirtiofsdOptions) (*exec.Cmd, error) {
+func StartVirtiofsd(ctx context.Context, o VirtiofsdOptions) (*child.Process, error) {
 	bin := o.Binary
 	if bin == "" {
 		bin = "virtiofsd"
@@ -150,15 +151,15 @@ func StartVirtiofsd(ctx context.Context, o VirtiofsdOptions) (*exec.Cmd, error) 
 	cmd.Stdout = o.Log
 	cmd.Stderr = o.Log
 	cmd.SysProcAttr = o.SysProcAttr
-	if err := cmd.Start(); err != nil {
+	proc, err := child.Start(cmd)
+	if err != nil {
 		return nil, fmt.Errorf("starting virtiofsd: %w", err)
 	}
 	if err := waitForSocket(ctx, o.SocketPath, virtiofsdSocketTimeout); err != nil {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
+		proc.Stop()
 		return nil, err
 	}
-	return cmd, nil
+	return proc, nil
 }
 
 const (

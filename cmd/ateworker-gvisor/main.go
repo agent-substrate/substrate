@@ -279,16 +279,22 @@ func do(ctx context.Context) error {
 	// Report retries every failure it can outlast, including the window before
 	// the Worker record exists; anything that reaches here is a misconfiguration
 	// no restart-in-place will fix.
+	reportConfig := register.ReportConfig{
+		SocketPath:           nodepath.WorkerSupportSocket,
+		CredentialBundlePath: tunnelConfig.CredentialBundle,
+		TrustBundlePath:      tunnelConfig.TrustBundle,
+		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
+		Actors:               *maxActors,
+		SandboxClass:         string(atev1alpha1.SandboxClassGvisor),
+		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
+	}
+	if reporter, err := register.NewCrashReporter(reportConfig); err != nil {
+		slog.ErrorContext(ctx, "Crashed actors will not be reported", slog.Any("err", err))
+	} else {
+		ateworkerService.crashReporter = reporter
+	}
 	go func() {
-		err := register.Report(ctx, register.ReportConfig{
-			SocketPath:           nodepath.WorkerSupportSocket,
-			CredentialBundlePath: tunnelConfig.CredentialBundle,
-			TrustBundlePath:      tunnelConfig.TrustBundle,
-			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
-			Actors:               *maxActors,
-			SandboxClass:         string(atev1alpha1.SandboxClassGvisor),
-			RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
-		})
+		err := register.Report(ctx, reportConfig)
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to register worker", err)
 		}
@@ -325,6 +331,9 @@ type AteWorkerService struct {
 	locks *actorlock.Locks
 	// Tracks lifecycle RPCs for shutdown cancellation and draining.
 	inFlight *actorlock.InFlight
+	// crashReporter reports actors whose sandbox died. Nil if it could not be
+	// set up.
+	crashReporter crashReporter
 
 	// Guards actors and draining against concurrent stats reads.
 	actorsMu sync.RWMutex
@@ -680,6 +689,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, nil); err != nil {
 		return nil, fmt.Errorf("while creating pause container: %w", err)
 	}
+	s.pinSandbox(ctx, hosted, req.GetActorDirs())
 	if err := rcmd.cmdStart(ctx, pw, ocispec.PauseContainer); err != nil {
 		return nil, fmt.Errorf("while starting pause container: %w", err)
 	}
@@ -715,6 +725,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
 	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())})
 	s.recordInitial(ctx, hosted)
+	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
 
 	return &ateworkerpb.RunWorkloadResponse{}, nil
 }
@@ -826,14 +837,28 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		// Checkpoint pause container (root of the sandbox), splitting durable-dir
 		// volumes into <checkpointPath>/fs when present.
 		checkpointFn = func(ctx context.Context) error {
-			sandbox, sbErr := openSandboxProcess(req.GetActorDirs())
-			if sbErr != nil {
-				slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", sbErr))
-			} else {
-				defer sandbox.Close()
+			var sandbox *sandboxProcess
+			if hosted != nil {
+				hosted.stopping.Store(true)
+				sandbox = hosted.sandbox
+			}
+			if sandbox == nil {
+				// never pinned: fall back to the pidfile, still better than
+				// cleaning up before the sandbox is reaped
+				var err error
+				if sandbox, err = openSandboxProcess(req.GetActorDirs()); err != nil {
+					slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", err))
+				} else {
+					defer sandbox.Close()
+				}
 			}
 			err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
 			if err != nil {
+				// the actor may stay RUNNING, so its sandbox dying is a crash
+				// again, including if this checkpoint stopped it
+				if hosted != nil {
+					hosted.stopping.Store(false)
+				}
 				timing.checkpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing pause: %w", err)
 			}
@@ -1076,6 +1101,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		if err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
+		s.pinSandbox(ctx, hosted, req.GetActorDirs())
 		err = rcmd.cmdStart(ctx, pw, ocispec.PauseContainer)
 		timing.pauseRestore = lap(&tLast)
 		if err != nil {
@@ -1089,6 +1115,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		if err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
+		s.pinSandbox(ctx, hosted, req.GetActorDirs())
 		err = rcmd.cmdRestore(ctx, pw, ocispec.PauseContainer, checkpointDir)
 		timing.pauseRestore = lap(&tLast)
 		if err != nil {
@@ -1163,6 +1190,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
 	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(containers)})
 	s.recordInitial(ctx, hosted)
+	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), containers)
 
 	return &ateworkerpb.RestoreWorkloadResponse{}, nil
 }
@@ -1197,6 +1225,9 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 }
 
 func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) error {
+	if hosted := s.lookupActor(actorUID); hosted != nil {
+		hosted.stopping.Store(true)
+	}
 	var errs []error
 	if err := s.tunnel.Deactivate(ctx, resources.ActorAttribution{Ref: actorRef, UID: actorUID}); err != nil {
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))

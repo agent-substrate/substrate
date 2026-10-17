@@ -342,6 +342,9 @@ func (s *AteWorkerService) teardownActor(ctx context.Context, id string, actorDi
 	// FAILED_PRECONDITION path ("no numbers right now") instead of surfacing a
 	// closed connection as a failed read.
 	s.setGuestStats(id, nil)
+	if ra != nil {
+		ra.stopping.Store(true)
+	}
 
 	var errs []error
 	if client != nil {
@@ -370,14 +373,12 @@ func (s *AteWorkerService) teardownActor(ctx context.Context, id string, actorDi
 		}
 
 		// Kill the CH process ateworker launched.
-		if ra.chCmd != nil && ra.chCmd.Process != nil {
-			_ = ra.chCmd.Process.Kill()
-			_, _ = ra.chCmd.Process.Wait()
+		if ra.chProc != nil {
+			ra.chProc.Stop()
 		}
 		// Kill the virtiofsd (after CH, its only client).
-		if ra.vfsdCmd != nil && ra.vfsdCmd.Process != nil {
-			_ = ra.vfsdCmd.Process.Kill()
-			_, _ = ra.vfsdCmd.Process.Wait()
+		if ra.vfsdProc != nil {
+			ra.vfsdProc.Stop()
 		}
 	}
 

@@ -29,6 +29,11 @@ func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateletpb.Reque
 	return Validate_RequestActorSuspendRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateReportActorCrashedRequest runs the generated validation for req.
+func ValidateReportActorCrashedRequest(ctx context.Context, req *ateletpb.ReportActorCrashedRequest) field.ErrorList {
+	return Validate_ReportActorCrashedRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 // ValidateGetActorEgressPolicyRequest runs the generated validation for
 // req.
 func ValidateGetActorEgressPolicyRequest(ctx context.Context, req *ateletpb.GetActorEgressPolicyRequest) field.ErrorList {

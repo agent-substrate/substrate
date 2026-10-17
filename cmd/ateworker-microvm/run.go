@@ -23,12 +23,13 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/child"
 	"go.ate.dev/substrate/internal/workerstats"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
@@ -59,13 +60,17 @@ type runningActor struct {
 	baseID string
 
 	// ateworker owns this CH process (booted at Run or relaunched at Restore).
-	chCmd *exec.Cmd
-	// vfsdCmd is the virtiofsd serving the unified share (merged rootfs overlay,
+	chProc *child.Process
+	// vfsdProc is the virtiofsd serving the unified share (merged rootfs overlay,
 	// durable-dir volumes, and CSI volumes). ateworker owns it; teardownActor
 	// kills it after the CH process.
-	vfsdCmd *exec.Cmd
+	vfsdProc *child.Process
 	// apiSocket is the CH api-socket for this ateworker-owned VMM.
 	apiSocket string
+	// stopping is set once teardown starts, so watchVM can tell an expected
+	// exit from a crash: shutting the VM down makes cloud-hypervisor exit, and
+	// virtiofsd exits once its only client is gone.
+	stopping atomic.Bool
 
 	// restoreSourceDir is the snapshot dir this actor was OnDemand-restored from
 	// (CH demand-pages its guest RAM from it). Set when restored via OnDemand.
@@ -489,20 +494,19 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		return err
 	}
 	defer leaf.Close()
-	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, p.actorDirs, ctrs, containers, leaf.SysProcAttr())
+	vfsdProc, err := s.stageMergedRootfs(ctx, rr, actorUID, p.actorDirs, ctrs, containers, leaf.SysProcAttr())
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if retErr != nil && vfsdCmd.Process != nil {
-			_ = vfsdCmd.Process.Kill()
-			_, _ = vfsdCmd.Process.Wait()
+		if retErr != nil {
+			vfsdProc.Stop()
 		}
 	}()
 
 	// Launch a bare VMM (CH + api-socket); ateworker owns this process for teardown.
 	apiSocket := filepath.Join(kata.VMDir(actorUID), "clh-api.sock")
-	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
+	chProc, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
 		Binary:      rr.chBinary,
 		APISocket:   apiSocket,
 		Stdout:      slogWriter{ctx},
@@ -513,9 +517,8 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		return fmt.Errorf("while launching VMM: %w", err)
 	}
 	defer func() {
-		if retErr != nil && chCmd.Process != nil {
-			_ = chCmd.Process.Kill()
-			_, _ = chCmd.Process.Wait()
+		if retErr != nil {
+			chProc.Stop()
 		}
 	}()
 
@@ -601,11 +604,12 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
+	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
 	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
 		return err
 	}
 	s.setRunningVM(actorUID, ra)
+	go s.watchVM(p.attribution(), p.actorDirs, ra)
 
 	// Forward each container's stdout/stderr into the pod logs, keyed by the
 	// container id (== the name; see StartRootfsContainer). The goroutines read
@@ -681,7 +685,7 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 // wipes SharedDir) and stageRootfsUpper (which owns the upper contents). The returned virtiofsd cmd outlives this call (CH
 // demand-pages from it); the caller owns it (tracked on runningActor, killed
 // in teardownActor).
-func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateworkerpb.ActorDirs, ctrs []actorContainer, containers []*ateworkerpb.Container, procAttr *syscall.SysProcAttr) (*exec.Cmd, error) {
+func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateworkerpb.ActorDirs, ctrs []actorContainer, containers []*ateworkerpb.Container, procAttr *syscall.SysProcAttr) (*child.Process, error) {
 	upperBase := rootfsUpperDir(actorDirs)
 	for _, c := range ctrs {
 		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, id, c.name); err != nil {
@@ -710,7 +714,7 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 		}
 	}
 	vfsdLog, _ := os.OpenFile(virtiofsdLogPath(id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	vfsdCmd, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
+	vfsdProc, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
 		Binary:      rr.virtiofsd,
 		SocketPath:  kata.VirtiofsdSocketPath(id),
 		SharedDir:   kata.SharedDir(id),
@@ -720,7 +724,7 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 	if err != nil {
 		return nil, fmt.Errorf("while starting virtiofsd: %w", err)
 	}
-	return vfsdCmd, nil
+	return vfsdProc, nil
 }
 
 // kernelParams returns the guest kernel params
