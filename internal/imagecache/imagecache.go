@@ -673,26 +673,38 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 
 // ensureLayer makes the unpacked tree for diffID present in the pool,
 // collapsing concurrent requests for the same layer across images.
+//
+// a joined retireLayer flight returns retirementFlight, which says nothing
+// about this layer, so we then run a flight of our own
 func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {
 	dir := s.layerDir(diffID)
-	_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
-			// Refresh the dir mtime inside the flight: retireLayer re-checks
-			// the mtime in this same flight, so a layer reused here can
-			// never be renamed away between this stat and the image record
-			// that will re-reference it.
-			now := time.Now()
-			if err := os.Chtimes(dir, now, now); err != nil {
-				slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
+	const maxFlights = 3
+	for flight := 1; ; flight++ {
+		v, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
+			if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
+				// Refresh the dir mtime inside the flight: retireLayer re-checks
+				// the mtime in this same flight, so a layer reused here can
+				// never be renamed away between this stat and the image record
+				// that will re-reference it.
+				now := time.Now()
+				if err := os.Chtimes(dir, now, now); err != nil {
+					slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
+				}
+				return nil, nil
 			}
-			return nil, nil
+			return nil, s.unpackLayerToPool(ctx, diffID, layer)
+		})
+		if _, retirement := v.(retirementFlight); !retirement {
+			if err != nil {
+				return "", err
+			}
+			return dir, nil
 		}
-		return nil, s.unpackLayerToPool(ctx, diffID, layer)
-	})
-	if err != nil {
-		return "", err
+		if flight == maxFlights {
+			return "", fmt.Errorf("layer %s: joined %d retirement flights in a row", diffID, flight)
+		}
+		slog.InfoContext(ctx, "Image cache pull joined a retirement of its layer; running its own flight", slog.String("diffid", diffID.String()))
 	}
-	return dir, nil
 }
 
 // unpackLayerToPool streams the layer (download → decompress → untar) into a
