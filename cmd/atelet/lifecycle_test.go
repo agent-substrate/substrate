@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/cmd/atelet/internal/trustbundle"
 	"go.ate.dev/substrate/internal/apierror"
@@ -76,6 +77,9 @@ type fakeWorker struct {
 	// restored holds the file contents staged into the restore dir by the
 	// most recent RestoreWorkload.
 	restored map[string]string
+	// restoreErr, if set, fails every RestoreWorkload after it recorded the
+	// request, as a worker that could not start the sandbox would.
+	restoreErr error
 	// actorDirs records the ActorDirs each RPC arrived with, by RPC name.
 	actorDirs map[string]*ateworkerpb.ActorDirs
 	// preserveRestoreDir records the PreserveRestoreDir flag from the most
@@ -136,6 +140,9 @@ func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.Restore
 	f.recordActorDirs("RestoreWorkload", req.GetActorDirs())
 	f.recordFidelity("RestoreWorkload", req.GetFidelity())
 	f.preserveRestoreDir = req.GetPreserveRestoreDir()
+	if f.restoreErr != nil {
+		return nil, f.restoreErr
+	}
 	dir := req.GetActorDirs().GetRestoreDir()
 	f.restored = map[string]string{}
 	for name := range f.snapshotFiles {
@@ -894,6 +901,85 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRestoreFailureRemovesStagedSnapshotFiles pins what a shared restore
+// that fails after its snapshot files were staged leaves behind: nothing in
+// the restore-state directory, so the links into the snapshot cache do not
+// hold its entries until a later lifecycle call resets the directory.
+func TestRestoreFailureRemovesStagedSnapshotFiles(t *testing.T) {
+	useTempNodeDirs(t)
+	const (
+		actorUID     = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a66"
+		snapshotName = "pause-snap-1"
+	)
+	worker := &fakeWorker{snapshotFiles: map[string]string{"checkpoint.img": ""}, restoreErr: status.Error(codes.Internal, "sandbox would not start")}
+	serveFakeWorker(t, worker)
+	host := imageVolumeTestRegistry(t)
+	pinnedImage := pushTestImage(t, host+"/actor:v1", singleFileLayer(t, "bin/app", "app"))
+	release := newGVisorTestRelease(t)
+	sandboxRec := testSandboxRecord(release, pinnedImage)
+	manifestRec := sandboxAssetsRecord{
+		SandboxClass:  "gvisor",
+		PauseImage:    pinnedImage,
+		Assets:        map[string]assetEntry{gvisorAssetName: release.entry},
+		SnapshotFiles: []string{"checkpoint.img"},
+	}
+	s := newPluginHerder(t, &recordingObjectStorage{})
+	s.workerDialer = newWorkerDialer(1)
+	s.imageCache = newImageVolumeStore(t)
+	s.anonGCSClient = fakeObjectStorage{data: release.tarball}
+	s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
+	// No min age, so the only thing standing between a staged entry and a
+	// pass is the restore's link.
+	cache, err := filecache.New(filepath.Join(t.TempDir(), "cache"), filecache.WithMinAge(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.snapshotCache = cache
+	uri, err := resources.ParseSnapshotURI(pausedSnapshotURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcDir := t.TempDir()
+	writeLocalSnapshot(t, srcDir, manifestRec, map[string]string{"checkpoint.img": "shared-memory"})
+	if err := s.uploadSnapshot(t.Context(), uri, srcDir, &manifestRec); err != nil {
+		t.Fatalf("uploadSnapshot: %v", err)
+	}
+	advertiseRuntime(t, s, sandboxRec)
+
+	_, err = s.Restore(t.Context(), &ateletpb.RestoreRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		WorkerPodUid:          "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+		SandboxRuntime:        runtimeFor(t, sandboxRec),
+		Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}}},
+		Snapshot: &ateletpb.Snapshot{
+			SnapshotUuid: snapshotName,
+			Generation:   1,
+			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			Object:       &ateletpb.ObjectStorage{SnapshotUri: pausedSnapshotURI, Sharing: ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED},
+		},
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("Restore = %v, want the worker's Internal", err)
+	}
+	if worker.actorDirs["RestoreWorkload"] == nil {
+		t.Fatal("the worker was never asked: the failure must come after the snapshot files were staged")
+	}
+	if entries, err := os.ReadDir(ateletpath.RestoreStateDir(actorUID)); err == nil && len(entries) != 0 {
+		t.Errorf("restore-state holds %v after a failed restore, want nothing", entries)
+	}
+	stats, err := cache.EvictUnused(t.Context(), 1<<40, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Retired != 1 || stats.SkippedLinked != 0 {
+		t.Errorf("after the failed restore a pass would retire %d entries and skip %d linked, want 1 and 0: the staged link must be gone", stats.Retired, stats.SkippedLinked)
 	}
 }
 

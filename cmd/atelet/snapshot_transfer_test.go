@@ -144,7 +144,7 @@ func TestUploadSnapshotManifestLast(t *testing.T) {
 func TestSnapshotTransferSkipsEmptyFileLists(t *testing.T) {
 	store := &orderedObjectStorage{}
 	s := newPluginHerder(t, store)
-	if err := s.downloadExternalCheckpoint(context.Background(), pausedSnapshotURI, t.TempDir(), nil); err != nil {
+	if err := s.downloadExternalCheckpoint(context.Background(), pausedSnapshotURI, t.TempDir(), nil, cacheModeOff); err != nil {
 		t.Errorf("downloadExternalCheckpoint(no files) = %v, want nil", err)
 	}
 	if err := s.uploadSnapshotFiles(context.Background(), pausedSnapshotURI, t.TempDir(), nil); err != nil {
@@ -190,7 +190,13 @@ func TestObjectStorePluginErrorCodeThroughAtelet(t *testing.T) {
 		run       func(ctx context.Context, s *Atelet) error
 	}{
 		{"download", true, func(ctx context.Context, s *Atelet) error {
-			return s.downloadExternalCheckpoint(ctx, pausedSnapshotURI, t.TempDir(), []string{"a"})
+			return s.downloadExternalCheckpoint(ctx, pausedSnapshotURI, t.TempDir(), []string{"a"}, cacheModeOff)
+		}},
+		{"cached download, link", true, func(ctx context.Context, s *Atelet) error {
+			return s.downloadExternalCheckpoint(ctx, pausedSnapshotURI, t.TempDir(), []string{"a"}, cacheModeLink)
+		}},
+		{"cached download, copy", true, func(ctx context.Context, s *Atelet) error {
+			return s.downloadExternalCheckpoint(ctx, pausedSnapshotURI, t.TempDir(), []string{"a"}, cacheModeCopy)
 		}},
 		{"paused upload", true, func(ctx context.Context, s *Atelet) error {
 			dir := t.TempDir()
@@ -216,6 +222,7 @@ func TestObjectStorePluginErrorCodeThroughAtelet(t *testing.T) {
 				s := &Atelet{
 					objectStorePlugin:  failingNodePlugin{err: status.Error(pluginCode, "plugin failed")},
 					snapshotScratchDir: t.TempDir(),
+					snapshotCache:      newTestAssetCache(t),
 				}
 				// atelet's server interceptor decides the code ate-api-server sees.
 				_, err := ateinterceptors.InternalServerUnaryInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/test"},
@@ -249,7 +256,15 @@ func TestObjectStorePluginErrorKeepsCredentialsOut(t *testing.T) {
 		run  func(ctx context.Context, s *Atelet) error
 	}{
 		{"download", signedURI, func(ctx context.Context, s *Atelet) error {
-			return s.downloadExternalCheckpoint(ctx, signedURI, t.TempDir(), []string{"a"})
+			return s.downloadExternalCheckpoint(ctx, signedURI, t.TempDir(), []string{"a"}, cacheModeOff)
+		}},
+		// The cached modes also build a cache key from the URI, which the
+		// cache quotes in its errors and logs.
+		{"cached download, link", signedURI, func(ctx context.Context, s *Atelet) error {
+			return s.downloadExternalCheckpoint(ctx, signedURI, t.TempDir(), []string{"a"}, cacheModeLink)
+		}},
+		{"cached download, copy", signedURI, func(ctx context.Context, s *Atelet) error {
+			return s.downloadExternalCheckpoint(ctx, signedURI, t.TempDir(), []string{"a"}, cacheModeCopy)
 		}},
 		{"upload", signedURI, func(ctx context.Context, s *Atelet) error {
 			return s.uploadSnapshotFiles(ctx, signedURI, t.TempDir(), []string{"a"})
@@ -272,6 +287,7 @@ func TestObjectStorePluginErrorKeepsCredentialsOut(t *testing.T) {
 				s := &Atelet{
 					objectStorePlugin:  failingNodePlugin{err: status.Error(pluginCode, "get "+signedURI+": AccountKey="+secret)},
 					snapshotScratchDir: t.TempDir(),
+					snapshotCache:      newTestAssetCache(t),
 				}
 				_, err := ateinterceptors.InternalServerUnaryInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/test"},
 					func(ctx context.Context, _ any) (any, error) { return nil, tr.run(ctx, s) })

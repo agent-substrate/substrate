@@ -688,6 +688,10 @@ type Atelet struct {
 	// restores. nil means caching is disabled (--snapshot-cache-dir=""):
 	// every restore downloads its snapshot files directly.
 	snapshotCache *filecache.Store
+	// snapshotCacheCrossMount warns once per process when a cache hit
+	// cannot be linked into a restore dir; every later hit says so at
+	// debug.
+	snapshotCacheCrossMount sync.Once
 	// runtimes resolves the runtime a Run or Restore names to the assets to
 	// stage, among those this node's workers advertise.
 	runtimes *runtimeIndex
@@ -1490,9 +1494,13 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// The record below is written last, so until then it describes the
 	// previous activation; a failed restore must not leave this one's
 	// asset links behind for a later Terminate to take for that record's.
+	// Nor its snapshot files: staged ones are links into the snapshot cache
+	// or copies, and either would hold the cache's entries, or disk, until
+	// the next lifecycle call resets the directory.
 	defer func() {
 		if err != nil {
 			_ = os.RemoveAll(ateletpath.SandboxAssetsDir(actorUID))
+			_ = os.RemoveAll(ateletpath.RestoreStateDir(actorUID))
 		}
 	}()
 
@@ -1584,7 +1592,12 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 			// readLocalSnapshot checked; no staging.
 			return nil
 		}
-		return s.downloadExternalCheckpoint(gctx, durable.GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles)
+		// Cache-eligible only when the control plane declared the snapshot
+		// shared; how a hit is served depends on the sandbox class that
+		// consumes it, the one the request resolved, which is what runs the
+		// restored workload.
+		mode := snapshotCacheMode(durable, cacheModeFor(runtimeRec.SandboxClass))
+		return s.downloadExternalCheckpoint(gctx, durable.GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, mode)
 	})
 	g.Go(func() (err error) {
 		defer func() { prepErr = err }()
@@ -1885,8 +1898,19 @@ func copyRootFile(root *os.Root, src, dst string) (int64, error) {
 	return nBytes, errors.Join(err, destination.Close())
 }
 
-func (s *Atelet) downloadExternalCheckpoint(ctx context.Context, snapshotURI string, dstDir string, files []string) error {
-	if err := s.fetchSnapshotFiles(ctx, snapshotURI, dstDir, files); err != nil {
+// downloadExternalCheckpoint stages files of one snapshot into dstDir. With
+// a mode other than cacheModeOff and the snapshot cache enabled, each file
+// is served from the cache (see downloadSnapshotFilesCached): the caller
+// asserts the snapshot is immutable at its URI. Otherwise the files are
+// downloaded into the restore directory directly.
+func (s *Atelet) downloadExternalCheckpoint(ctx context.Context, snapshotURI string, dstDir string, files []string, mode cacheMode) error {
+	var err error
+	if mode != cacheModeOff && s.snapshotCache != nil {
+		err = s.downloadSnapshotFilesCached(ctx, snapshotURI, dstDir, files, mode)
+	} else {
+		err = s.fetchSnapshotFiles(ctx, snapshotURI, dstDir, files)
+	}
+	if err != nil {
 		return fmt.Errorf("while downloading snapshot files: %w", err)
 	}
 	return nil
