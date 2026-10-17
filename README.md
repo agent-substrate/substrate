@@ -119,10 +119,10 @@ To quickly set up the complete environment:
 hack/create-kind-cluster.sh
 
 # install ate, PostgreSQL, rustfs
-hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}'
 
 # install counter demo
-hack/install-ate-kind.sh --deploy-demo-counter
+hack/install-ate-kind.sh deploy demo-counter
 
 # install kubectl-ate
 go install ./cmd/kubectl-ate
