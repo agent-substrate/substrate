@@ -651,17 +651,11 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 
-	// Resolved before any on-node work, BeginStart included, so an invalid
-	// request changes nothing.
-	//
-	// TODO: drop this projection, and the hashing inside
-	// advertisedSandboxAssets, once RunRequest carries the sandbox runtime
-	// hash instead of sandbox_assets; the hash then goes straight to the index.
-	requested, err := recordFromRequest(req.GetSandboxAssets())
-	if err != nil {
-		return nil, apierror.InvalidArgument("%v", err)
-	}
-	sandboxRec, err := s.advertisedSandboxAssets(ctx, requested)
+	// The sandbox (binaries + pause image) is the runtime the control plane
+	// assigned the actor to, resolved through the index. Resolved before any
+	// on-node work, BeginStart included, so an invalid request changes
+	// nothing.
+	sandboxRec, err := s.advertisedRuntime(ctx, req.GetSandboxRuntime())
 	if err != nil {
 		return nil, err
 	}
@@ -1310,20 +1304,12 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 
-	// The sandbox (binaries + pause image) that runs the restored workload
-	// comes from the request, resolved by the control plane from the
-	// ActorTemplate's SandboxConfig. The snapshot manifests only supply the
-	// files to restore and the actor identity. Resolved before any on-node
-	// work so an invalid request changes nothing.
-	// TODO: drop this projection, and the hashing inside
-	// advertisedSandboxAssets, once RestoreRequest carries the sandbox
-	// runtime hash instead of sandbox_assets; the hash then goes straight to
-	// the index.
-	requested, err := recordFromRequest(req.GetSandboxAssets())
-	if err != nil {
-		return nil, apierror.InvalidArgument("invalid sandbox_assets: %v", err)
-	}
-	runtimeRec, err := s.advertisedSandboxAssets(ctx, requested)
+	// The sandbox (binaries + pause image) that runs the restored workload is
+	// the runtime the control plane assigned the actor to, resolved through
+	// the index. The snapshot manifests only supply the files to restore and
+	// the actor identity. Resolved before any on-node work so an invalid
+	// request changes nothing.
+	runtimeRec, err := s.advertisedRuntime(ctx, req.GetSandboxRuntime())
 	if err != nil {
 		return nil, err
 	}
