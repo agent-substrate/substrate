@@ -353,11 +353,10 @@ func (s *workerSandboxSyncer) hostCPUIdentity() (vendor, model string, err error
 // The first time this atelet sees the binary's digest it fetches the binary
 // into the local asset cache and runs `<runsc> cpu-features`.
 func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandboxAssetsRecord) (string, error) {
-	asset, ok := runscAssetOf(rec)
-	if !ok {
-		return "", fmt.Errorf("%w: gvisor version has no %q or %q asset", errPermanent, gvisorAssetName, runscAssetName)
+	digest := rec.Assets[gvisorAssetName].SHA256
+	if digest == "" {
+		return "", fmt.Errorf("%w: gvisor version has no %q asset", errPermanent, gvisorAssetName)
 	}
-	digest := rec.Assets[asset].SHA256
 	s.mu.Lock()
 	mask, ok := s.cpuFeatures[digest]
 	s.mu.Unlock()
@@ -378,7 +377,7 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 	if err != nil {
 		return "", err
 	}
-	names, err := s.runCPUFeatures(ctx, paths[asset])
+	names, err := s.runCPUFeatures(ctx, runscPathFor(paths))
 	if err != nil {
 		return "", err
 	}
@@ -390,17 +389,6 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 	s.cpuFeatures[digest] = mask
 	s.mu.Unlock()
 	return mask, nil
-}
-
-// runscAssetOf returns the name of the asset in rec that carries runsc, the
-// most preferred of runscAssetNames that is present with a digest.
-func runscAssetOf(rec *sandboxAssetsRecord) (string, bool) {
-	for _, name := range runscAssetNames {
-		if a, ok := rec.Assets[name]; ok && a.SHA256 != "" {
-			return name, true
-		}
-	}
-	return "", false
 }
 
 // probeFetchTimeout bounds the fetch of a runsc binary for its probe, from

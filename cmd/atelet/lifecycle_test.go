@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -214,14 +213,12 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 	image := host + "/actor:v1"
 	pinnedImage := pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
 
-	// A single "runsc" asset served from a fake bucket: enough to exercise the
-	// content-addressed asset fetch without a gVisor release tarball.
-	runsc := []byte("runsc binary")
+	release := newGVisorTestRelease(t)
 	s := &Atelet{
 		workerDialer:      newWorkerDialer(1),
 		imageCache:        newImageVolumeStore(t),
 		sandboxAssetCache: newTestAssetCache(t),
-		anonGCSClient:     fakeObjectStorage{data: runsc},
+		anonGCSClient:     fakeObjectStorage{data: release.tarball},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 	}
@@ -230,10 +227,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 		PauseImage:   pinnedImage,
 		Assets: map[string]*ateletpb.ArchAssets{
 			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-				runscAssetName: {
-					Url:    "gs://test-bucket/runsc",
-					Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
-				},
+				gvisorAssetName: release.proto(),
 			}},
 		},
 	}
@@ -276,7 +270,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 	}
 	// A paused actor stays resumable on this node, so it keeps its staged
 	// assets, and with them its binaries in the cache.
-	if _, err := os.Stat(filepath.Join(ateletpath.SandboxAssetsDir(actorUID), runscAssetName)); err != nil {
+	if _, err := os.Stat(stagedRunsc(actorUID)); err != nil {
 		t.Errorf("paused actor lost its staged runsc: %v", err)
 	}
 	st := resp.GetState()
@@ -308,7 +302,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 	if got := worker.restored["checkpoint.img"]; got != "guest-memory" {
 		t.Fatalf("restore staged %q for worker, want the pause snapshot's %q", got, "guest-memory")
 	}
-	if _, err := os.Stat(filepath.Join(ateletpath.SandboxAssetsDir(actorUID), runscAssetName)); err != nil {
+	if _, err := os.Stat(stagedRunsc(actorUID)); err != nil {
 		t.Errorf("resumed actor has no staged runsc: %v", err)
 	}
 	for _, rpc := range []string{"CheckpointWorkload", "RestoreWorkload"} {
@@ -418,12 +412,12 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	checkpointPause := pushTestImage(t, host+"/pause:v1", singleFileLayer(t, "pause", "pause-v1"))
 	restorePause := pushTestImage(t, host+"/pause:v2", singleFileLayer(t, "pause", "pause-v2"))
 
-	runsc := []byte("runsc binary")
+	release := newGVisorTestRelease(t)
 	s := &Atelet{
 		workerDialer:      newWorkerDialer(1),
 		imageCache:        newImageVolumeStore(t),
 		sandboxAssetCache: newTestAssetCache(t),
-		anonGCSClient:     fakeObjectStorage{data: runsc},
+		anonGCSClient:     fakeObjectStorage{data: release.tarball},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 	}
@@ -433,10 +427,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 			PauseImage:   pause,
 			Assets: map[string]*ateletpb.ArchAssets{
 				runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-					runscAssetName: {
-						Url:    "gs://test-bucket/runsc",
-						Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
-					},
+					gvisorAssetName: release.proto(),
 				}},
 			},
 		}
@@ -551,12 +542,11 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 				t.Fatalf("initial projection = %q, %v; want cert A", got, err)
 			}
 
-			content := []byte("runsc binary")
-			assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
+			release := newGVisorTestRelease(t)
 			if tc.restore && tc.failure != "manifest" {
 				writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
 					SandboxClass: "gvisor", PauseImage: testPauseImage,
-					Assets:        map[string]assetEntry{"runsc": {URL: "gs://test-bucket/runsc", SHA256: assetHash}},
+					Assets:        map[string]assetEntry{gvisorAssetName: release.entry},
 					SnapshotFiles: []string{"checkpoint.img"},
 				}, map[string]string{"checkpoint.img": "guest-memory"})
 			}
@@ -579,14 +569,14 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			// The live activation's staged binary: a Run that fails before
 			// it swaps its own set in must leave it, and a Run that fails
 			// after must still leave nothing half-staged behind.
-			liveAsset := filepath.Join(ateletpath.SandboxAssetsDir(actorUID), "runsc")
+			liveAsset := stagedRunsc(actorUID)
 			if err := os.MkdirAll(filepath.Dir(liveAsset), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(liveAsset, []byte("live runsc"), 0o555); err != nil {
 				t.Fatal(err)
 			}
-			storage := fakeObjectStorage{data: content}
+			storage := fakeObjectStorage{data: release.tarball}
 			if tc.failure == "asset" {
 				storage.err = fmt.Errorf("asset unavailable")
 			}
@@ -594,7 +584,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			assets := &ateletpb.SandboxAssets{
 				SandboxClass: "gvisor", PauseImage: testPauseImage,
 				Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-					runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
+					gvisorAssetName: release.proto(),
 				}}},
 			}
 			advertiseRuntime(t, s, assets)
@@ -643,7 +633,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, e := range entries {
-					if got, err := os.ReadFile(liveAsset); e.Name() != "runsc" || err != nil || string(got) != "live runsc" {
+					if got, err := os.ReadFile(liveAsset); e.Name() != gvisorAssetName || err != nil || string(got) != "live runsc" {
 						t.Errorf("failed activation left %q behind in the assets dir", e.Name())
 					}
 				}
@@ -678,12 +668,11 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
 	refresher := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
-	content := []byte("runsc binary")
-	assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
+	release := newGVisorTestRelease(t)
 	const actorUID = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a62"
 	s := &Atelet{
 		sandboxAssetCache: newTestAssetCache(t),
-		anonGCSClient:     fakeObjectStorage{data: content},
+		anonGCSClient:     fakeObjectStorage{data: release.tarball},
 		imageCache:        newImageVolumeStore(t),
 		systemInfoVolumes: refresher,
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
@@ -698,7 +687,7 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		SandboxClass: "gvisor",
 		PauseImage:   missingPauseImage(t),
 		Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-			runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
+			gvisorAssetName: release.proto(),
 		}}},
 	}
 	advertiseRuntime(t, s, assets)
@@ -739,12 +728,11 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
 	refresher := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
-	content := []byte("runsc binary")
-	assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
+	release := newGVisorTestRelease(t)
 	writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
 		PauseImage:    pauseImage,
-		Assets:        map[string]assetEntry{"runsc": {URL: "gs://test-bucket/runsc", SHA256: assetHash}},
+		Assets:        map[string]assetEntry{gvisorAssetName: release.entry},
 		SnapshotFiles: []string{"checkpoint.img"},
 	}, map[string]string{"checkpoint.img": "guest-memory"})
 
@@ -754,7 +742,7 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	}}}
 	s := &Atelet{
 		sandboxAssetCache: newTestAssetCache(t),
-		anonGCSClient:     fakeObjectStorage{data: content},
+		anonGCSClient:     fakeObjectStorage{data: release.tarball},
 		imageCache:        newImageVolumeStore(t),
 		systemInfoVolumes: refresher,
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
@@ -763,7 +751,7 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		SandboxClass: "gvisor",
 		PauseImage:   pauseImage,
 		Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-			runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
+			gvisorAssetName: release.proto(),
 		}}},
 	}
 	advertiseRuntime(t, s, assets)
@@ -811,17 +799,13 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 	host := imageVolumeTestRegistry(t)
 	pinnedImage := pushTestImage(t, host+"/actor:v1", singleFileLayer(t, "bin/app", "app"))
 
-	runsc := []byte("runsc binary")
-	assetHash := fmt.Sprintf("%x", sha256.Sum256(runsc))
+	release := newGVisorTestRelease(t)
 	sandboxAssets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
 		PauseImage:   pinnedImage,
 		Assets: map[string]*ateletpb.ArchAssets{
 			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-				runscAssetName: {
-					Url:    "gs://test-bucket/runsc",
-					Sha256: assetHash,
-				},
+				gvisorAssetName: release.proto(),
 			}},
 		},
 	}
@@ -831,7 +815,7 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 	manifestRec := sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
 		PauseImage:    pinnedImage,
-		Assets:        map[string]assetEntry{runscAssetName: {URL: "gs://test-bucket/runsc", SHA256: assetHash}},
+		Assets:        map[string]assetEntry{gvisorAssetName: release.entry},
 		SnapshotFiles: []string{"checkpoint.img"},
 	}
 
@@ -841,7 +825,7 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 	s := newPluginHerder(t, objStore)
 	s.workerDialer = newWorkerDialer(1)
 	s.imageCache = newImageVolumeStore(t)
-	s.anonGCSClient = fakeObjectStorage{data: runsc}
+	s.anonGCSClient = fakeObjectStorage{data: release.tarball}
 	s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
 
 	uri, err := resources.ParseSnapshotURI(pausedSnapshotURI)
@@ -957,11 +941,11 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 		actorUID     = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a65"
 		snapshotName = "pause-snap-1"
 	)
-	assetHash := fmt.Sprintf("%x", sha256.Sum256([]byte("runsc binary")))
+	release := newGVisorTestRelease(t)
 	assets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor", PauseImage: testPauseImage,
 		Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-			runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
+			gvisorAssetName: release.proto(),
 		}}},
 	}
 	for _, tc := range []struct {
@@ -1116,22 +1100,19 @@ func runPluginActor(t *testing.T) *pluginActor {
 	image := host + "/actor:v1"
 	pinnedImage := pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
 
-	runsc := []byte("runsc binary")
+	release := newGVisorTestRelease(t)
 	a.s = newPluginHerder(t, a.store)
 	a.s.workerDialer = newWorkerDialer(1)
 	a.s.imageCache = newImageVolumeStore(t)
 	a.s.sandboxAssetCache = newTestAssetCache(t)
-	a.s.anonGCSClient = fakeObjectStorage{data: runsc}
+	a.s.anonGCSClient = fakeObjectStorage{data: release.tarball}
 	a.s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
 	a.assets = &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
 		PauseImage:   pinnedImage,
 		Assets: map[string]*ateletpb.ArchAssets{
 			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-				runscAssetName: {
-					Url:    "gs://test-bucket/runsc",
-					Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
-				},
+				gvisorAssetName: release.proto(),
 			}},
 		},
 	}
@@ -1355,13 +1336,13 @@ func TestConcurrentRunsShareOneAssetDownload(t *testing.T) {
 	host := imageVolumeTestRegistry(t)
 	pinnedImage := pushTestImage(t, host+"/actor:v1", singleFileLayer(t, "bin/app", "app"))
 
-	runsc := []byte("runsc binary")
+	release := newGVisorTestRelease(t)
 	var gets atomic.Int32
 	s := &Atelet{
 		workerDialer:      newWorkerDialer(2),
 		imageCache:        newImageVolumeStore(t),
 		sandboxAssetCache: newTestAssetCache(t),
-		anonGCSClient:     fakeObjectStorage{data: runsc, gets: &gets, delay: 200 * time.Millisecond},
+		anonGCSClient:     fakeObjectStorage{data: release.tarball, gets: &gets, delay: 200 * time.Millisecond},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 	}
@@ -1370,7 +1351,7 @@ func TestConcurrentRunsShareOneAssetDownload(t *testing.T) {
 		PauseImage:   pinnedImage,
 		Assets: map[string]*ateletpb.ArchAssets{
 			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-				runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc))},
+				gvisorAssetName: release.proto(),
 			}},
 		},
 	}
@@ -1408,10 +1389,10 @@ func TestConcurrentRunsShareOneAssetDownload(t *testing.T) {
 
 	var infos []os.FileInfo
 	for _, uid := range actorUIDs {
-		staged := filepath.Join(ateletpath.SandboxAssetsDir(uid), runscAssetName)
+		staged := stagedRunsc(uid)
 		got, err := os.ReadFile(staged)
-		if err != nil || string(got) != string(runsc) {
-			t.Fatalf("actor %s staged runsc = %q, %v; want the asset bytes", uid, got, err)
+		if err != nil || string(got) != "runsc bytes" {
+			t.Fatalf("actor %s staged runsc = %q, %v; want the release's runsc", uid, got, err)
 		}
 		fi, err := os.Stat(staged)
 		if err != nil {
@@ -1437,28 +1418,29 @@ func TestCommitSandboxAssetsChecksPathsBeforeMoving(t *testing.T) {
 	useTempNodeDirs(t)
 	const actorUID = "01234567-89ab-cdef-0123-456789abcdef"
 	staging, final := ateletpath.SandboxAssetsStagingDir(actorUID), ateletpath.SandboxAssetsDir(actorUID)
-	for _, dir := range []string{staging, final} {
+	runsc := filepath.Join(gvisorAssetName, "runsc")
+	for _, dir := range []string{filepath.Join(staging, gvisorAssetName), filepath.Join(final, gvisorAssetName)} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(staging, "runsc"), []byte("new"), 0o555); err != nil {
+	if err := os.WriteFile(filepath.Join(staging, runsc), []byte("new"), 0o555); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(final, "runsc"), []byte("previous"), 0o555); err != nil {
+	if err := os.WriteFile(filepath.Join(final, runsc), []byte("previous"), 0o555); err != nil {
 		t.Fatal(err)
 	}
-	paths := map[string]string{runscAssetName: filepath.Join(staging, "runsc"), "stray": "/elsewhere/kernel"}
+	paths := map[string]string{gvisorAssetName: filepath.Join(staging, runsc), "stray": "/elsewhere/kernel"}
 	if err := commitSandboxAssets(actorUID, staging, paths); err == nil {
 		t.Fatal("commitSandboxAssets accepted a path outside the staging dir")
 	}
-	if got, err := os.ReadFile(filepath.Join(final, "runsc")); err != nil || string(got) != "previous" {
+	if got, err := os.ReadFile(filepath.Join(final, runsc)); err != nil || string(got) != "previous" {
 		t.Errorf("assets dir changed by a refused commit: %q, %v", got, err)
 	}
-	if _, err := os.Stat(filepath.Join(staging, "runsc")); err != nil {
+	if _, err := os.Stat(filepath.Join(staging, runsc)); err != nil {
 		t.Errorf("staged set gone after a refused commit: %v", err)
 	}
-	if paths[runscAssetName] != filepath.Join(staging, "runsc") {
+	if paths[gvisorAssetName] != filepath.Join(staging, runsc) {
 		t.Errorf("paths rewritten by a refused commit: %v", paths)
 	}
 
@@ -1466,10 +1448,10 @@ func TestCommitSandboxAssetsChecksPathsBeforeMoving(t *testing.T) {
 	if err := commitSandboxAssets(actorUID, staging, paths); err != nil {
 		t.Fatalf("commitSandboxAssets: %v", err)
 	}
-	if got, err := os.ReadFile(filepath.Join(final, "runsc")); err != nil || string(got) != "new" {
+	if got, err := os.ReadFile(filepath.Join(final, runsc)); err != nil || string(got) != "new" {
 		t.Errorf("assets dir after commit = %q, %v; want the staged set", got, err)
 	}
-	if paths[runscAssetName] != filepath.Join(final, "runsc") {
+	if paths[gvisorAssetName] != filepath.Join(final, runsc) {
 		t.Errorf("paths after commit = %v, want them under %s", paths, final)
 	}
 	if _, err := os.Lstat(staging); !os.IsNotExist(err) {
@@ -1730,18 +1712,19 @@ func advertiseRuntime(t *testing.T, s *Atelet, sa *ateletpb.SandboxAssets) {
 func TestRunRejectsUnadvertisedRuntime(t *testing.T) {
 	useTempNodeDirs(t)
 	const actorUID = "01234567-89ab-cdef-0123-456789abcdef"
+	release := newGVisorTestRelease(t)
 	var gets atomic.Int32
 	s := &Atelet{
 		runtimes:          newRuntimeIndex(),
 		sandboxAssetCache: newTestAssetCache(t),
-		anonGCSClient:     fakeObjectStorage{data: []byte("runsc binary"), gets: &gets},
+		anonGCSClient:     fakeObjectStorage{data: release.tarball, gets: &gets},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 	}
 	assets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
 		PauseImage:   testPauseImage,
 		Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-			runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: fmt.Sprintf("%x", sha256.Sum256([]byte("runsc binary")))},
+			gvisorAssetName: release.proto(),
 		}}},
 	}
 	_, err := s.Run(t.Context(), &ateletpb.RunRequest{

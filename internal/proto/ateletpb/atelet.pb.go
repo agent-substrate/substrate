@@ -1806,7 +1806,7 @@ func (x *ArchAssets) GetFiles() map[string]*AssetFile {
 // an actor runs in: a sandbox class, the pause image holding its namespaces,
 // and binaries keyed first by architecture (GOARCH) and then by asset name.
 // atelet's backend code interprets the asset names (gVisor expects "gvisor",
-// the release tarball; legacy "runsc", a bare binary, is still accepted).
+// the release tarball).
 type SandboxAssets struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required

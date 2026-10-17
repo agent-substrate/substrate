@@ -312,13 +312,20 @@ func stageTestAsset(t *testing.T, s *Atelet, root string, entry assetEntry) (str
 // next to a gvisor-bin/ helper, as the real release ships them.
 func gvisorReleaseTarball(t *testing.T) []byte {
 	t.Helper()
+	return gvisorReleaseTarballWith(t, "runsc bytes")
+}
+
+// gvisorReleaseTarballWith is gvisorReleaseTarball with the given runsc
+// contents, for releases that must differ in digest.
+func gvisorReleaseTarballWith(t *testing.T, runsc string) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for _, f := range []struct {
 		name, body string
 		mode       int64
 	}{
-		{"runsc", "runsc bytes", 0o755},
+		{"runsc", runsc, 0o755},
 		{"gvisor-bin/containerd-shim", "shim bytes", 0o755},
 	} {
 		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: f.mode, Size: int64(len(f.body))}); err != nil {
@@ -332,6 +339,33 @@ func gvisorReleaseTarball(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+// gvisorTestRelease is a gVisor release tarball with the asset entry that
+// names it: the one asset a gvisor sandbox record carries.
+type gvisorTestRelease struct {
+	tarball []byte
+	entry   assetEntry
+}
+
+func newGVisorTestRelease(t *testing.T) gvisorTestRelease {
+	t.Helper()
+	tarball := gvisorReleaseTarball(t)
+	return gvisorTestRelease{
+		tarball: tarball,
+		entry:   assetEntry{URL: "gs://test-bucket/gvisor.tar", SHA256: fmt.Sprintf("%x", sha256.Sum256(tarball))},
+	}
+}
+
+// proto is the asset as a Run or Restore request carries it.
+func (r gvisorTestRelease) proto() *ateletpb.AssetFile {
+	return &ateletpb.AssetFile{Url: r.entry.URL, Sha256: r.entry.SHA256}
+}
+
+// stagedRunsc is where an actor's staged copy of the release's runsc sits
+// under its sandbox assets dir.
+func stagedRunsc(actorUID string) string {
+	return filepath.Join(ateletpath.SandboxAssetsDir(actorUID), gvisorAssetName, "runsc")
 }
 
 // TestStageGVisorRelease stages the release tree through the asset cache:
