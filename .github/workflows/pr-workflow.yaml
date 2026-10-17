@@ -59,13 +59,16 @@ jobs:
     - name: build for arm64
       run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
     # gotestsum wraps go test to emit JUnit and the go test -json stream.
+    # the log only gets a line per package and failed test output, the full
+    # output is in the uploaded json
     # NOTE: no -v with gotestsum, it replaces the -test.v=test2json that -json
     # sets, which marks t.Error output for the failure report below
     - name: unit tests
       run: |
         go -C tools/junittool run . register "${ARTIFACTS}/unit.xml"
         hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit.xml" \
-          --jsonfile "${ARTIFACTS}/unit.json" --format standard-verbose \
+          --jsonfile "${ARTIFACTS}/unit.json" \
+          --format pkgname-and-test-fails --format-hide-empty-pkg \
           -- -race ./...
     # tools/apitool has its own module so we need to run it explicitly.
     # run-tool.sh resolves the repo root itself, so it works from the subdir.
@@ -74,7 +77,8 @@ jobs:
       run: |
         go -C ../junittool run . register "${ARTIFACTS}/apitool.xml"
         ../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/apitool.xml" \
-          --jsonfile "${ARTIFACTS}/apitool.json" --format standard-verbose \
+          --jsonfile "${ARTIFACTS}/apitool.json" \
+          --format pkgname-and-test-fails --format-hide-empty-pkg \
           -- -race ./...
     # Kept apart from the root module so it can move to its own repository.
     - name: gcp-secret-manager credential provider tests
@@ -82,7 +86,8 @@ jobs:
       run: |
         go -C ../../../tools/junittool run . register "${ARTIFACTS}/gcp-secret-manager.xml"
         ../../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/gcp-secret-manager.xml" \
-          --jsonfile "${ARTIFACTS}/gcp-secret-manager.json" --format standard-verbose \
+          --jsonfile "${ARTIFACTS}/gcp-secret-manager.json" \
+          --format pkgname-and-test-fails --format-hide-empty-pkg \
           -- -race ./...
     # The root verifiers stop at the module's go.mod, so it gets its own run:
     # gofmt, go vet and the tidy check, then golangci-lint with the root config.
