@@ -25,14 +25,16 @@ fi
 
 show_help() {
     cat <<EOF
-Usage: $0 [target-path] [go-test-flags] [-args [e2e-flags]]
+Usage: $0 [target-path ...] [go-test-flags] [-args [e2e-flags]]
 
 Runs End-to-End tests.
 
-The optional "target-path" must be the first argument and must start with
-"./internal/e2e" or "internal/e2e". It defaults to "./internal/e2e/suites/...".
+Any argument before "-args" that starts with "./internal/e2e", "internal/e2e"
+or "<module>/internal/e2e" is a "target-path", and may sit before, between or
+after the go test flags.
+Without one, it defaults to "./internal/e2e/suites/...".
 
-Arguments before "-args" (excluding the target-path) are passed directly to "go test".
+Other arguments before "-args" are passed directly to "go test".
 Arguments after "-args" are passed to the test binary.
 
 Example:
@@ -67,7 +69,11 @@ See "go help testflag" for more Go test flags.
 EOF
 }
 
-target_path="./internal/e2e/suites/..."
+module_path="$(sed -n 's/^module //p' go.mod)"
+
+is_target_path() {
+    [[ "$1" == "./internal/e2e"* || "$1" == "internal/e2e"* || "$1" == "${module_path}/internal/e2e"* ]]
+}
 
 if [[ "$#" -gt 0 ]]; then
     if [[ "$1" == "-h" || "$1" == "--help" ]]; then
@@ -75,20 +81,15 @@ if [[ "$#" -gt 0 ]]; then
         exit 0
     fi
 
-    if [[ "$1" == "./internal/e2e"* || "$1" == "internal/e2e"* ]]; then
-        target_path="$1"
-        shift
-    elif [[ "$1" == -* ]]; then
-        # It's a flag, keep default target_path, don't shift
-        :
-    else
+    if [[ "$1" != -* ]] && ! is_target_path "$1"; then
         echo "Error: Invalid target path '$1'." >&2
-        echo "The first argument must be a valid E2E path starting with './internal/e2e' or a flag starting with '-'." >&2
+        echo "The first argument must be a valid E2E path starting with './internal/e2e', '${module_path}/internal/e2e' or a flag starting with '-'." >&2
         echo "Use '$0 -h' for help." >&2
         exit 1
     fi
 fi
 
+target_paths=()
 go_test_args=()
 e2e_args=()
 found_args_sep=false
@@ -108,6 +109,8 @@ for arg in "$@"; do
 
     if [[ "$found_args_sep" == "true" ]]; then
         e2e_args+=("$arg")
+    elif is_target_path "$arg"; then
+        target_paths+=("$arg")
     else
         # Both spellings: go's flag package accepts -flag, --flag, and either with =value.
         case "$arg" in
@@ -118,6 +121,10 @@ for arg in "$@"; do
         go_test_args+=("$arg")
     fi
 done
+
+if [[ "${#target_paths[@]}" -eq 0 ]]; then
+    target_paths=("./internal/e2e/suites/...")
+fi
 
 extra_e2e_args=()
 if [[ -n "${KUBECTL_CONTEXT:-}" ]]; then
@@ -152,7 +159,7 @@ if [[ "${has_timeout_flag}" == "false" ]]; then
 fi
 
 # Assembled once so the two execution paths below cannot drift apart.
-test_argv=("$target_path")
+test_argv=("${target_paths[@]}")
 test_argv+=(${default_go_test_args[@]+"${default_go_test_args[@]}"})
 test_argv+=(${go_test_args[@]+"${go_test_args[@]}"})
 test_argv+=(-args --e2e)
