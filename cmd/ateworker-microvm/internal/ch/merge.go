@@ -109,8 +109,8 @@ func MergeSparseOverlay(ctx context.Context, baseFile, deltaFile, outFile string
 // overlay deltaFile's (small) faulted pages onto it, and swap it into deltaFile's
 // place — turning an O(working-set) copy into an O(delta) write plus two renames.
 //
-// baseFile and deltaFile are siblings under the actor dir (restore-state/ and
-// checkpoint-state/), so the renames are same-filesystem (metadata-only). If they
+// baseFile and deltaFile are siblings under the actor snapshot dir (restore-state/
+// and checkpoint-state/), so the renames are same-filesystem (metadata-only). If they
 // straddle a mount boundary (EXDEV) it falls back to the copying MergeSparseOverlay
 // (baseFile is untouched until the first rename succeeds), as it does when baseFile
 // carries a second link and so cannot be overlaid in place.

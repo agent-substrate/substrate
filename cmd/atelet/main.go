@@ -37,7 +37,6 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/credentialprovider"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
-	"go.ate.dev/substrate/cmd/atelet/internal/sparsefile"
 	"go.ate.dev/substrate/cmd/atelet/internal/trustbundle"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateapiauth"
@@ -71,7 +70,6 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sys/unix"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -1037,19 +1035,19 @@ func toWorkerFidelity(fidelity ateletpb.SnapshotFidelity) ateworkerpb.SnapshotFi
 }
 
 func (s *Atelet) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, rec *sandboxAssetsRecord) error {
-	actorDir := ateletpath.ActorPath(req.GetActorUid())
-	root, err := os.OpenRoot(actorDir)
+	snapshotRoot := ateletpath.ActorSnapshotPath(req.GetActorUid())
+	root, err := os.OpenRoot(snapshotRoot)
 	if err != nil {
-		return fmt.Errorf("while opening actor directory: %w", err)
+		return fmt.Errorf("while opening actor snapshot directory: %w", err)
 	}
 	defer root.Close()
 
-	checkpointDir, err := filepath.Rel(actorDir, ateletpath.CheckpointStateDir(req.GetActorUid()))
+	checkpointDir, err := filepath.Rel(snapshotRoot, ateletpath.CheckpointStateDir(req.GetActorUid()))
 	if err != nil {
 		return err
 	}
 	snapshotName := req.GetSnapshot().GetSnapshotUuid()
-	localDir, err := filepath.Rel(actorDir, ateletpath.LocalSnapshotDir(req.GetActorUid(), snapshotName))
+	localDir, err := filepath.Rel(snapshotRoot, ateletpath.LocalSnapshotDir(req.GetActorUid(), snapshotName))
 	if err != nil {
 		return err
 	}
@@ -1663,94 +1661,6 @@ func checkLocalSnapshotFiles(dir string, files []string) error {
 	return nil
 }
 
-// copyLocalCheckpoint stages files from the local checkpoint snapshotName under
-// srcDir into dstDir. Both must be inside actorDir, which confines every access.
-func (s *Atelet) copyLocalCheckpoint(ctx context.Context, actorDir, snapshotName, srcDir, dstDir string, files []string) error {
-	root, err := os.OpenRoot(actorDir)
-	if err != nil {
-		return fmt.Errorf("while opening actor directory: %w", err)
-	}
-	defer root.Close()
-	srcDir, err = filepath.Rel(actorDir, filepath.Join(srcDir, snapshotName))
-	if err != nil {
-		return err
-	}
-	dstDir, err = filepath.Rel(actorDir, dstDir)
-	if err != nil {
-		return err
-	}
-
-	for _, fileName := range files {
-		if ctx.Err() != nil {
-			return fmt.Errorf("context cancelled: %w", ctx.Err())
-		}
-		src := filepath.Join(srcDir, fileName)
-		dst := filepath.Join(dstDir, fileName)
-		// A link to a symlink would be followed later, outside the root.
-		info, err := root.Lstat(src)
-		if err != nil {
-			return fmt.Errorf("while inspecting %s: %w", src, err)
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("%s is not a regular file", src)
-		}
-		if err := root.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-			return fmt.Errorf("while creating parent directory for %s: %w", dst, err)
-		}
-		// Link rather than copy. The local checkpoint lives under the same actor dir
-		// as the restore staging area, so this stages the memory image in constant
-		// time instead of re-writing its whole working set. Nothing rewrites the
-		// shared inode: CH demand-pages from the staged image read-only,
-		// rewriteSnapshotSocketPaths renames its rewritten config.json into place
-		// rather than truncating, and MergeDeltaIntoBase refuses its in-place overlay
-		// once the image carries a second link.
-		//
-		// EXDEV alone falls back to copying, so an unexpected link failure surfaces
-		// instead of silently reverting to the full copy this exists to remove. It
-		// also keeps copyRootFile off a dst that is already a link to src, where its
-		// O_TRUNC would empty both and report a successful copy of the old size.
-		switch err := linkFile(root, src, dst); {
-		case err == nil:
-			continue
-		case !errors.Is(err, unix.EXDEV):
-			return fmt.Errorf("failed to link %s to %s: %w", src, dst, err)
-		}
-		slog.WarnContext(ctx, "local checkpoint and restore dir are on different filesystems; copying instead of linking",
-			slog.String("src", src), slog.String("dst", dst))
-		if _, err := copyRootFile(root, src, dst); err != nil {
-			return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
-		}
-	}
-
-	return nil
-}
-
-// linkFile is os.Root.Link, indirected so a test can force the cross-filesystem
-// fallback in copyLocalCheckpoint without mounting a second filesystem.
-var linkFile = (*os.Root).Link
-
-func copyRootFile(root *os.Root, src, dst string) (int64, error) {
-	source, err := root.Open(src)
-	if err != nil {
-		return 0, err
-	}
-	defer source.Close()
-	info, err := source.Stat()
-	if err != nil {
-		return 0, err
-	}
-	if !info.Mode().IsRegular() {
-		return 0, fmt.Errorf("%s is not a regular file", src)
-	}
-
-	destination, err := root.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
-	if err != nil {
-		return 0, err
-	}
-	nBytes, err := sparsefile.Copy(source, destination)
-	return nBytes, errors.Join(err, destination.Close())
-}
-
 func (s *Atelet) downloadExternalCheckpoint(ctx context.Context, snapshotURI string, dstDir string, files []string) error {
 	if err := s.fetchSnapshotFiles(ctx, snapshotURI, dstDir, files); err != nil {
 		return fmt.Errorf("while downloading snapshot files: %w", err)
@@ -2099,8 +2009,9 @@ func resetDir(what, dir string, remove func(string) error, mode os.FileMode) err
 	return nil
 }
 
-// removeActorDirs reclaims the actor's whole directory tree, root included:
-// nothing else on the node deletes it, and no later activation will look here.
+// removeActorDirs reclaims both of the actor's directory trees, roots
+// included: nothing else on the node deletes them, and no later activation
+// will look there.
 //
 // resetActorDirs runs first for the care a blanket RemoveAll lacks. It refuses
 // to proceed while a volume directory is still populated, so a failed unmount
@@ -2109,6 +2020,11 @@ func resetDir(what, dir string, remove func(string) error, mode os.FileMode) err
 func removeActorDirs(actorUID string) error {
 	if err := resetActorDirs(actorUID); err != nil {
 		return err
+	}
+	// The actor dir holds sandbox-assets.json, which a retried Terminate needs,
+	// so remove it last.
+	if err := os.RemoveAll(ateletpath.ActorSnapshotPath(actorUID)); err != nil {
+		return wrapFileSystemErr("while deleting actor snapshot dir", err)
 	}
 	if err := os.RemoveAll(ateletpath.ActorPath(actorUID)); err != nil {
 		return wrapFileSystemErr("while deleting actor dir", err)
