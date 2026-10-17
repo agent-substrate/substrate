@@ -108,6 +108,30 @@ func TestBuildCreateActorRequest(t *testing.T) {
 	}
 }
 
+func TestBuildSuspendActorRequest(t *testing.T) {
+	tests := []struct {
+		name     string
+		pause    bool
+		wantMode ateapipb.DurabilityMode
+	}{
+		{name: "pause", pause: true, wantMode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+		{name: "suspend", pause: false, wantMode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := buildSuspendActorRequest(resources.ActorRef{Atespace: "demo", Name: "my-counter"}, test.pause)
+			want := &ateapipb.SuspendActorRequest{
+				Actor:   &ateapipb.ObjectRef{Atespace: "demo", Name: "my-counter"},
+				Options: &ateapipb.SuspendOptions{Mode: test.wantMode},
+			}
+			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("request mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestFilterAndDisplayLogLine(t *testing.T) {
 	tests := []struct {
 		name        string

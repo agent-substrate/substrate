@@ -32,6 +32,7 @@ type fakeControlClient struct {
 	mu             sync.Mutex
 	calls          []string
 	deleteRequests []*ateapipb.DeleteActorRequest
+	suspendReqs    []*ateapipb.SuspendActorRequest
 	// resumeErrs is returned by successive ResumeActor calls, in order, until
 	// it is drained; every call after that succeeds.
 	resumeErrs []error
@@ -92,6 +93,7 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, suspendCallName(in))
+	f.suspendReqs = append(f.suspendReqs, in)
 	if err := nextErr(&f.suspendErrs); err != nil {
 		return nil, err
 	}
@@ -119,6 +121,12 @@ func (f *fakeControlClient) recordedCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.calls...)
+}
+
+func (f *fakeControlClient) recordedSuspendRequests() []*ateapipb.SuspendActorRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*ateapipb.SuspendActorRequest(nil), f.suspendReqs...)
 }
 
 func (f *fakeControlClient) recordedDeleteRequests() []*ateapipb.DeleteActorRequest {

@@ -220,7 +220,8 @@ func testTagScopeBoundary(t *testing.T, ctx context.Context, clients *e2e.Client
 	t.Helper()
 
 	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: ns.a, Name: source},
+		Actor:   &ateapipb.ObjectRef{Atespace: ns.a, Name: source},
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	})
 	if err != nil {
 		t.Fatalf("SuspendActor %s/%s: %v", ns.a, source, err)

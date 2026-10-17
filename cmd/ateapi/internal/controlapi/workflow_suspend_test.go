@@ -959,8 +959,8 @@ func TestSuspendModeFromOptions(t *testing.T) {
 		opts *ateapipb.SuspendOptions
 		want suspendMode
 	}{
-		{"no options", nil, suspendSync},
-		{"mode unspecified", &ateapipb.SuspendOptions{}, suspendSync},
+		{"no options", nil, suspendAsync},
+		{"mode unspecified", &ateapipb.SuspendOptions{}, suspendAsync},
 		{"synchronous", &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}, suspendSync},
 		{"asynchronous", &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}, suspendAsync},
 	}

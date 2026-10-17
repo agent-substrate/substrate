@@ -215,7 +215,8 @@ func TestGracefulWorkerTerminationSuspend(t *testing.T) {
 	// Suspend the actor.
 	t.Logf("Suspending actor %q during termination", actorID)
 	_, suspendErr := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		Actor:   &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	})
 	wantState := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 	switch status.Code(suspendErr) {

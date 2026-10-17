@@ -178,10 +178,7 @@ var pauseActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		actorRef := resources.ActorRef{Atespace: pauseActorAtespaceFlag, Name: args[0]}
-		resp, err := apiClient.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			Actor:   actorRef.ToObjectRef(),
-			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
-		})
+		resp, err := apiClient.SuspendActor(ctx, buildSuspendActorRequest(actorRef, true))
 		if err != nil {
 			return fmt.Errorf("failed to pause actor: %w", err)
 		}
@@ -227,9 +224,7 @@ var suspendActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		actorRef := resources.ActorRef{Atespace: suspendActorAtespaceFlag, Name: args[0]}
-		resp, err := apiClient.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			Actor: actorRef.ToObjectRef(),
-		})
+		resp, err := apiClient.SuspendActor(ctx, buildSuspendActorRequest(actorRef, false))
 		if err != nil {
 			return fmt.Errorf("failed to suspend actor: %w", err)
 		}
@@ -243,6 +238,20 @@ var logsActorsCmd = &cobra.Command{
 	Short: "Stream logs for a specific actor",
 	Args:  exactlyOneArg("<actor-name>", "atespace"),
 	RunE:  runLogsActor,
+}
+
+// buildSuspendActorRequest builds the request behind both pause and suspend.
+// A pause leaves the snapshot on the node, a suspend waits for it to reach
+// object storage.
+func buildSuspendActorRequest(actorRef resources.ActorRef, pause bool) *ateapipb.SuspendActorRequest {
+	mode := ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS
+	if pause {
+		mode = ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS
+	}
+	return &ateapipb.SuspendActorRequest{
+		Actor:   actorRef.ToObjectRef(),
+		Options: &ateapipb.SuspendOptions{Mode: mode},
+	}
 }
 
 func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapipb.CreateActorRequest, error) {

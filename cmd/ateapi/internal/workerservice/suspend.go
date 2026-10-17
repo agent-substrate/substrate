@@ -92,7 +92,12 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 	// the workflow to acquire the lease, the Actor can be resumed onto another
 	// Worker, or deleted and recreated under the same name, and the workflow
 	// suspends whatever the reference resolves to by then. See #1773.
-	resp, err := s.suspender.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: req.GetActor()})
+	// An idle Actor is likely to resume on this node, so leave the snapshot
+	// here and let atelet upload it in the background.
+	resp, err := s.suspender.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   req.GetActor(),
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	})
 	if err != nil {
 		return nil, err
 	}

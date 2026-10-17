@@ -170,7 +170,10 @@ class CounterUser(User):
         try:
             with traced_grpc("SuspendActor", self.__class__.__name__) as metadata:
                 _, metadata.call = self.stub.SuspendActor.with_call(
-                    ateapi_pb2.SuspendActorRequest(actor=self.actor_ref),
+                    ateapi_pb2.SuspendActorRequest(
+                        actor=self.actor_ref,
+                        options=ateapi_pb2.SuspendOptions(mode=ateapi_pb2.DURABILITY_MODE_SYNCHRONOUS),
+                    ),
                     metadata=metadata,
                 )
         except Exception:

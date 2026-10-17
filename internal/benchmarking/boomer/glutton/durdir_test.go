@@ -29,6 +29,7 @@ import (
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
 	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 func TestDurDirLoopSequence(t *testing.T) {
@@ -38,18 +39,21 @@ func TestDurDirLoopSequence(t *testing.T) {
 		lifecycleMode string
 		wantGRPCCall  []string
 		wantHTTPCall  []string
+		wantMode      ateapipb.DurabilityMode
 	}{
 		{
 			name:         "explicit resume mode",
 			resumeMode:   dynconfig.ResumeModeExplicit,
 			wantGRPCCall: []string{"SuspendActor", "ResumeActor"},
 			wantHTTPCall: []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
+			wantMode:     ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS,
 		},
 		{
 			name:         "implicit resume mode",
 			resumeMode:   dynconfig.ResumeModeImplicit,
 			wantGRPCCall: []string{"SuspendActor"}, // No ResumeActor RPC!
 			wantHTTPCall: []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
+			wantMode:     ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS,
 		},
 		{
 			name:          "pause lifecycle mode",
@@ -57,6 +61,7 @@ func TestDurDirLoopSequence(t *testing.T) {
 			resumeMode:    dynconfig.ResumeModeExplicit,
 			wantGRPCCall:  []string{"SuspendActor(async)", "ResumeActor"},
 			wantHTTPCall:  []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
+			wantMode:      ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
 		},
 	}
 
@@ -80,6 +85,11 @@ func TestDurDirLoopSequence(t *testing.T) {
 			}
 			if got := srv.RecordedPaths(); !reflect.DeepEqual(got, tc.wantHTTPCall) {
 				t.Errorf("HTTP calls: got %v, want %v", got, tc.wantHTTPCall)
+			}
+			for _, req := range fakeCtrl.recordedSuspendRequests() {
+				if got := req.GetOptions().GetMode(); got != tc.wantMode {
+					t.Errorf("suspend mode = %v, want %v", got, tc.wantMode)
+				}
 			}
 		})
 	}

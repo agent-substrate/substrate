@@ -49,14 +49,12 @@ const (
 )
 
 // suspendModeFromOptions maps a SuspendActor request's options to the
-// workflow mode.
-// TODO: default to suspendAsync once callers that need a durable snapshot ask
-// for DURABILITY_MODE_SYNCHRONOUS.
+// workflow mode. An unset mode runs an async suspend.
 func suspendModeFromOptions(opts *ateapipb.SuspendOptions) suspendMode {
-	if opts.GetMode() == ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
-		return suspendAsync
+	if opts.GetMode() == ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS {
+		return suspendSync
 	}
-	return suspendSync
+	return suspendAsync
 }
 
 // uploadMode is when atelet makes the checkpoint durable.
