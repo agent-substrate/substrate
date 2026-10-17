@@ -387,6 +387,29 @@ groups:
               stability: development
               value: total
               brief: The full operation. Use this value as the denominator. Do not add the phases together.
+      - id: ate.snapshot.upload_overdue_band
+        stability: development
+        brief: >
+          How long past the upload delay (--snapshot-upload-delay) an undurable
+          local snapshot has waited for a durable upload.
+        type:
+          members:
+            - id: under_1m
+              stability: development
+              value: under_1m
+              brief: Overdue by up to 1 minute.
+            - id: 1m_to_5m
+              stability: development
+              value: 1m_to_5m
+              brief: Overdue by more than 1 minute and up to 5 minutes.
+            - id: 5m_to_15m
+              stability: development
+              value: 5m_to_15m
+              brief: Overdue by more than 5 minutes and up to 15 minutes.
+            - id: over_15m
+              stability: development
+              value: over_15m
+              brief: Overdue by more than 15 minutes.
 
   - id: registry.ate.scheduler
     type: attribute_group
@@ -1094,6 +1117,57 @@ groups:
         code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
         buckets: [0.1, 1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600]
         cuj: Local snapshots stay on a node after the detach delay. Are the detach workers saturated?
+    attributes: []
+
+  - id: metric.atelet.snapshot.upload.overdue.actors
+    type: metric
+    metric_name: atelet.snapshot.upload.overdue.actors
+    instrument: updowncounter
+    unit: "{actor}"
+    stability: development
+    brief: The number of actors on the node whose local snapshot is past the upload delay and not durable yet, by overdue band.
+    note: >
+      atelet reads this value with a callback. It counts each actor with a
+      snapshot state file on the node, and not only the actors in memory.
+      Overdue time counts from when the state of the actor stopped being
+      durable plus the upload delay (--snapshot-upload-delay). An actor leaves
+      the count only when its upload completes or the tracker drops it, so a
+      stuck or retrying upload keeps moving into higher bands. An undurable
+      snapshot with no object storage location to upload to does not enter this
+      count. The sum across bands is the number of actors on the node with an
+      overdue upload. atelet sets all four band values, also when they are 0.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation, errors]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        cuj: How many actors on a node have overdue snapshot uploads, and how far behind are they?
+    attributes:
+      - ref: ate.snapshot.upload_overdue_band
+        requirement_level: required
+
+  - id: metric.atelet.snapshot.undurable.age.max
+    type: metric
+    metric_name: atelet.snapshot.undurable.age.max
+    instrument: gauge
+    unit: s
+    stability: development
+    brief: The age of the oldest local snapshot on the node that object storage does not hold yet.
+    note: >
+      atelet reads this value with a callback. This instrument has no labels.
+      The age counts from when the state of the actor on the node stopped being
+      durable. The upload delay (--snapshot-upload-delay) counts from the same
+      time. The value is 0 if object storage holds each local snapshot. On a
+      correct node the value stays below the upload delay plus the time of one
+      upload. A larger value means that the uploads fail, wait for a worker, or
+      hang, or that a local snapshot has no object storage location to upload
+      it to.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation, errors]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        cuj: Do background uploads keep up on a node, or would a loss of the node lose old actor state?
     attributes: []
 
   - id: metric.ate.actor.stats.cpu.time

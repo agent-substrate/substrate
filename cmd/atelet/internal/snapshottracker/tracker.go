@@ -119,10 +119,14 @@ type Tracker struct {
 	// this node before atelet detaches it: DefaultDetachDelay unless
 	// WithDetachDelay sets it.
 	detachDelay time.Duration
-	// instruments records the background uploads and detaches: how late they
-	// start, how long they take, and how they end. Nil without
-	// WithInstruments.
+	// instruments records the background uploads and detaches (how late they
+	// start, how long they take, and how they end) and reports
+	// undurableActorsTally. Nil without WithInstruments.
 	instruments *Instruments
+	// undurableActorsTally tallies the actors that hold an undurable local
+	// snapshot on this node, for instruments to report. Nil without
+	// instruments.
+	undurableActorsTally *undurableActorsTally
 	// retries says how long an actor's background work is held back after a
 	// failure: longer with each consecutive failure for the actor.
 	retries workqueue.TypedRateLimiter[string]
@@ -187,8 +191,9 @@ func WithDetachWorkers(n int) Option {
 	}
 }
 
-// WithInstruments attaches the instruments the tracker records background
-// uploads and detaches on. A nil *Instruments is a no-op.
+// WithInstruments attaches the instruments that record the tracker's
+// background uploads and detaches, and report the undurable local snapshots on
+// this node. A nil *Instruments is a no-op.
 func WithInstruments(inst *Instruments) Option {
 	return func(t *Tracker) {
 		t.instruments = inst
@@ -243,6 +248,10 @@ func New(ctx context.Context, store Store, clk clock.WithTicker, opts ...Option)
 	}
 	if t.reporting.workers <= 0 {
 		t.reporting.reporter = nil
+	}
+	if t.instruments != nil {
+		t.undurableActorsTally = newUndurableActorsTally(clk, t.uploadDelay, t.store != nil)
+		t.instruments.watch(t.undurableActorsTally)
 	}
 	context.AfterFunc(ctx, func() {
 		for _, q := range t.queues {

@@ -43,8 +43,12 @@ func (t *Tracker) writeStateLocked(a *actorSnapshots) error {
 	if _, err := os.Stat(ateletpath.ActorPath(a.actorUID)); errors.Is(err, os.ErrNotExist) {
 		slog.Warn("Dropping the snapshot state of an actor whose directory is gone", slog.String("actorUID", a.actorUID))
 		a.unsaved = false
+		t.undurableActorsTally.forget(a.actorUID)
 		return nil
 	}
+	// The tally follows the entry, which atelet carries on from even if the
+	// write fails.
+	t.undurableActorsTally.observe(a)
 	data, err := json.Marshal(a.actorSnapshotsRecord)
 	if err == nil {
 		err = atomicfile.Write(ateletpath.ActorSnapshotStateFile(a.actorUID), data, 0o600)

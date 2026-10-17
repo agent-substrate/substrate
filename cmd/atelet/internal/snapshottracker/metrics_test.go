@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
@@ -96,8 +98,7 @@ func TestUploadDurationShape(t *testing.T) {
 	store := newFakeSnapshotStore()
 	store.setBlocking(true)
 	useActorDir(t)
-	tr := newStoreTracker(t, store)
-	tr.instruments = inst
+	tr := newStoreTracker(t, store, WithInstruments(inst))
 	tr.Start()
 
 	ref := testRef("s1", 1, tr.clock.Now())
@@ -145,8 +146,7 @@ func TestUploadDurationFailureAndUnknownFidelity(t *testing.T) {
 	store := newFakeSnapshotStore()
 	store.setBlocking(true)
 	useActorDir(t)
-	tr := newStoreTracker(t, store)
-	tr.instruments = inst
+	tr := newStoreTracker(t, store, WithInstruments(inst))
 	tr.Start()
 
 	ref := testRef("s1", 1, tr.clock.Now())
@@ -182,8 +182,7 @@ func TestUploadDurationSkipsNonUploadingPaths(t *testing.T) {
 		inst, reader := newTestInstruments(t)
 		store := newFakeSnapshotStore()
 		useActorDir(t)
-		tr := newStoreTracker(t, store)
-		tr.instruments = inst
+		tr := newStoreTracker(t, store, WithInstruments(inst))
 		setWorkers(tr, 0, DefaultDetachWorkers)
 		tr.Start()
 
@@ -206,8 +205,7 @@ func TestUploadDurationSkipsNonUploadingPaths(t *testing.T) {
 		inst, reader := newTestInstruments(t)
 		store := newFakeSnapshotStore()
 		useActorDir(t)
-		tr := newStoreTracker(t, store)
-		tr.instruments = inst
+		tr := newStoreTracker(t, store, WithInstruments(inst))
 		tr.Start()
 
 		tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
@@ -223,8 +221,7 @@ func TestUploadDurationSkipsNonUploadingPaths(t *testing.T) {
 		inst, reader := newTestInstruments(t)
 		store := newFakeSnapshotStore()
 		useActorDir(t)
-		tr := newStoreTracker(t, store)
-		tr.instruments = inst
+		tr := newStoreTracker(t, store, WithInstruments(inst))
 		tr.Start()
 
 		ref := testRef("s1", 1, tr.clock.Now())
@@ -241,8 +238,7 @@ func TestUploadDurationSkipsNonUploadingPaths(t *testing.T) {
 		store := newFakeSnapshotStore()
 		store.setBlocking(true)
 		useActorDir(t)
-		tr := newStoreTracker(t, store)
-		tr.instruments = inst
+		tr := newStoreTracker(t, store, WithInstruments(inst))
 		tr.Start()
 
 		ref := testRef("s1", 1, tr.clock.Now())
@@ -348,8 +344,7 @@ func TestDetachDurationShape(t *testing.T) {
 	store := newFakeSnapshotStore()
 	store.setBlocking(true)
 	useActorDir(t)
-	tr := newStoreTracker(t, store)
-	tr.instruments = inst
+	tr := newStoreTracker(t, store, WithInstruments(inst))
 	setWorkers(tr, 0, DefaultDetachWorkers)
 	tr.Start()
 
@@ -392,8 +387,7 @@ func TestDetachDurationOutcomes(t *testing.T) {
 		t.Helper()
 		inst, reader := newTestInstruments(t)
 		useActorDir(t)
-		tr := newStoreTracker(t, store)
-		tr.instruments = inst
+		tr := newStoreTracker(t, store, WithInstruments(inst))
 		setWorkers(tr, 0, DefaultDetachWorkers)
 		tr.Start()
 		return tr, reader
@@ -491,8 +485,7 @@ func TestOverdueDuration(t *testing.T) {
 	store := newFakeSnapshotStore()
 	store.setBlocking(true)
 	useActorDir(t)
-	tr := newStoreTracker(t, store)
-	tr.instruments = inst
+	tr := newStoreTracker(t, store, WithInstruments(inst))
 	tr.Start()
 
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
@@ -525,5 +518,272 @@ func TestOverdueDuration(t *testing.T) {
 		if dp.Count != 1 || dp.Sum != tc.want {
 			t.Errorf("%s count = %d, sum = %v, want 1 and %v", tc.metric, dp.Count, dp.Sum, tc.want)
 		}
+	}
+}
+
+// undurableReading is what the undurable actors instruments report.
+type undurableReading struct {
+	under1m, m1to5, m5to15, over15 int64
+	// age is the age of the oldest undurable local snapshot, in seconds.
+	age float64
+}
+
+// readUndurable collects the undurable actors instruments from reader, failing
+// the test unless each has the shape the registry gives it.
+func readUndurable(t *testing.T, reader *sdkmetric.ManualReader) undurableReading {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	var got undurableReading
+	var overdueSeen, ageSeen bool
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			switch m.Name {
+			case uploadOverdueActorsMetric:
+				overdueSeen = true
+				if m.Unit != "{actor}" {
+					t.Errorf("%s unit = %q, want {actor}", m.Name, m.Unit)
+				}
+				sum, ok := m.Data.(metricdata.Sum[int64])
+				if !ok || sum.IsMonotonic {
+					t.Fatalf("%s is %T, want a non-monotonic int64 sum", m.Name, m.Data)
+				}
+				if len(sum.DataPoints) != int(numOverdueBands) {
+					t.Errorf("%s has %d series, want %d", m.Name, len(sum.DataPoints), numOverdueBands)
+				}
+				for _, dp := range sum.DataPoints {
+					if dp.Attributes.Len() != 1 {
+						t.Errorf("%s series has labels %v, want only %s", m.Name, dp.Attributes.ToSlice(), ateattr.SnapshotUploadOverdueBandKey)
+					}
+					switch v, _ := dp.Attributes.Value(ateattr.SnapshotUploadOverdueBandKey); v.AsString() {
+					case ateattr.SnapshotUploadOverdueBandUnder1m:
+						got.under1m = dp.Value
+					case ateattr.SnapshotUploadOverdueBand1mTo5m:
+						got.m1to5 = dp.Value
+					case ateattr.SnapshotUploadOverdueBand5mTo15m:
+						got.m5to15 = dp.Value
+					case ateattr.SnapshotUploadOverdueBandOver15m:
+						got.over15 = dp.Value
+					default:
+						t.Errorf("%s band = %q", m.Name, v.AsString())
+					}
+				}
+			case undurableAgeMaxMetric:
+				ageSeen = true
+				if m.Unit != "s" {
+					t.Errorf("%s unit = %q, want s", m.Name, m.Unit)
+				}
+				gauge, ok := m.Data.(metricdata.Gauge[float64])
+				if !ok || len(gauge.DataPoints) != 1 || gauge.DataPoints[0].Attributes.Len() != 0 {
+					t.Fatalf("%s is %+v, want a float64 gauge with one unlabeled series", m.Name, m.Data)
+				}
+				got.age = gauge.DataPoints[0].Value
+			}
+		}
+	}
+	if !overdueSeen || !ageSeen {
+		t.Fatalf("collected %s: %v, %s: %v; want both",
+			uploadOverdueActorsMetric, overdueSeen, undurableAgeMaxMetric, ageSeen)
+	}
+	return got
+}
+
+// The undurable actors instruments bucket the actors whose upload is past
+// uploadDelay by how long it has been overdue, and report how long the oldest
+// undurable snapshot has been undurable, as checkpoints and an upload change
+// what the node holds.
+func TestUndurableActorsInstruments(t *testing.T) {
+	inst, reader := newTestInstruments(t)
+	store := newFakeSnapshotStore()
+	store.setBlocking(true)
+	useActorDir(t)
+	tr := newStoreTracker(t, store, WithInstruments(inst))
+	tr.Start()
+	t0 := tr.clock.Now()
+
+	if got, want := readUndurable(t, reader), (undurableReading{}); got != want {
+		t.Errorf("with nothing held: %+v, want %+v", got, want)
+	}
+
+	// A newer checkpoint before the upload leaves the age running from the
+	// first.
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
+	stepTo(tr, t0.Add(10*time.Minute))
+	tr.CommitLocal(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
+	if got, want := readUndurable(t, reader), (undurableReading{age: (10 * time.Minute).Seconds()}); got != want {
+		t.Errorf("before uploadDelay: %+v, want %+v", got, want)
+	}
+
+	stepTo(tr, t0.Add(testUploadDelay+30*time.Second))
+	waitStarted(t, store)
+	if got, want := readUndurable(t, reader), (undurableReading{under1m: 1, age: (testUploadDelay + 30*time.Second).Seconds()}); got != want {
+		t.Errorf("30s past uploadDelay: %+v, want %+v", got, want)
+	}
+
+	stepTo(tr, t0.Add(testUploadDelay+5*time.Minute))
+	if got, want := readUndurable(t, reader), (undurableReading{m1to5: 1, age: (testUploadDelay + 5*time.Minute).Seconds()}); got != want {
+		t.Errorf("5m past uploadDelay: %+v, want %+v", got, want)
+	}
+
+	stepTo(tr, t0.Add(testUploadDelay+10*time.Minute))
+	if got, want := readUndurable(t, reader), (undurableReading{m5to15: 1, age: (testUploadDelay + 10*time.Minute).Seconds()}); got != want {
+		t.Errorf("10m past uploadDelay: %+v, want %+v", got, want)
+	}
+
+	stepTo(tr, t0.Add(testUploadDelay+20*time.Minute))
+	if got, want := readUndurable(t, reader), (undurableReading{over15: 1, age: (testUploadDelay + 20*time.Minute).Seconds()}); got != want {
+		t.Errorf("20m past uploadDelay: %+v, want %+v", got, want)
+	}
+
+	done := opDone(t, tr, trackedActorUID)
+	store.release <- nil
+	waitClosed(t, done, "the upload")
+	if got, want := readUndurable(t, reader), (undurableReading{}); got != want {
+		t.Errorf("after the upload: %+v, want %+v", got, want)
+	}
+}
+
+// An undurable local snapshot with no object storage URI still advances
+// undurable.age.max, while upload.overdue.actors does not count it because no
+// background upload can run for it.
+func TestUndurableActorsInstrumentsUnuploadable(t *testing.T) {
+	inst, reader := newTestInstruments(t)
+	useActorDir(t)
+	tr := newStoreTracker(t, newFakeSnapshotStore(), WithInstruments(inst))
+	tr.Start()
+	t0 := tr.clock.Now()
+
+	ref := testRef("s1", 1, t0)
+	ref.Snapshot.Object = nil
+	tr.CommitLocal(trackedActorUID, ref)
+	stepTo(tr, t0.Add(testUploadDelay+10*time.Minute))
+	if got, want := readUndurable(t, reader), (undurableReading{age: (testUploadDelay + 10*time.Minute).Seconds()}); got != want {
+		t.Errorf("unuploadable snapshot 10m past uploadDelay: %+v, want %+v", got, want)
+	}
+}
+
+// Forget, as Terminate calls it, drops the actor from the undurable actors
+// instruments, as does a save that finds the actor's directory gone.
+func TestUndurableActorsInstrumentsDropActor(t *testing.T) {
+	t.Run("forget", func(t *testing.T) {
+		inst, reader := newTestInstruments(t)
+		useActorDir(t)
+		tr := newStoreTracker(t, newFakeSnapshotStore(), WithInstruments(inst))
+		tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+		stepTo(tr, tr.clock.Now().Add(time.Minute))
+		if got, want := readUndurable(t, reader), (undurableReading{age: 60}); got != want {
+			t.Errorf("before Forget: %+v, want %+v", got, want)
+		}
+		if err := tr.Forget(trackedActorUID); err != nil {
+			t.Fatalf("Forget: %v", err)
+		}
+		if got, want := readUndurable(t, reader), (undurableReading{}); got != want {
+			t.Errorf("after Forget: %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("directory gone", func(t *testing.T) {
+		inst, reader := newTestInstruments(t)
+		useActorDir(t)
+		tr := newStoreTracker(t, newFakeSnapshotStore(), WithInstruments(inst))
+		tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+		stepTo(tr, tr.clock.Now().Add(time.Minute))
+		if got, want := readUndurable(t, reader), (undurableReading{age: 60}); got != want {
+			t.Errorf("before directory removal: %+v, want %+v", got, want)
+		}
+		if err := os.RemoveAll(ateletpath.ActorPath(trackedActorUID)); err != nil {
+			t.Fatal(err)
+		}
+		tr.CommitLocal(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
+		if got, want := readUndurable(t, reader), (undurableReading{}); got != want {
+			t.Errorf("after a save without the actor's directory: %+v, want %+v", got, want)
+		}
+	})
+}
+
+// After an atelet restart, Start counts the undurable local snapshots that the
+// actors' snapshot state files record, before any worker reads them.
+func TestUndurableActorsInstrumentsAfterRestart(t *testing.T) {
+	useActorDir(t)
+	store := newFakeSnapshotStore()
+	before := newStoreTracker(t, store)
+	before.CommitLocal(trackedActorUID, testRef("s1", 1, before.clock.Now()))
+
+	inst, reader := newTestInstruments(t)
+	after := newStoreTracker(t, store, WithInstruments(inst))
+	stepTo(after, after.clock.Now().Add(time.Minute))
+	if got, want := readUndurable(t, reader), (undurableReading{}); got != want {
+		t.Errorf("before Start: %+v, want %+v", got, want)
+	}
+	after.Start()
+	if got, want := readUndurable(t, reader), (undurableReading{age: 60}); got != want {
+		t.Errorf("after Start: %+v, want %+v", got, want)
+	}
+}
+
+// When UndurableSince is zero, observe falls back to Uploading.CommitTime
+// before LatestLocal.CommitTime, matching uploadDue.
+func TestUndurableActorsInstrumentsZeroUndurableSince(t *testing.T) {
+	inst, reader := newTestInstruments(t)
+	useActorDir(t)
+	tr := newStoreTracker(t, newFakeSnapshotStore(), WithInstruments(inst))
+	t0 := tr.clock.Now()
+	stepTo(tr, t0.Add(2*time.Minute))
+	tr.undurableActorsTally.observe(&actorSnapshots{
+		actorUID: trackedActorUID,
+		actorSnapshotsRecord: actorSnapshotsRecord{
+			Uploading:   testRef("s1", 1, t0).clone(),
+			LatestLocal: testRef("s2", 2, t0.Add(30*time.Second)).clone(),
+		},
+	})
+	if got, want := readUndurable(t, reader), (undurableReading{age: 120}); got != want {
+		t.Errorf("zero UndurableSince with Uploading: %+v, want %+v", got, want)
+	}
+}
+
+// With more than one undurable actor on the node, upload.overdue.actors sums
+// them by band and undurable.age.max reports the oldest one, falling back to
+// the next oldest once the oldest leaves.
+func TestUndurableActorsInstrumentsMultipleActors(t *testing.T) {
+	const secondActorUID = "actor-uid-2"
+	inst, reader := newTestInstruments(t)
+	useActorDir(t)
+	if err := os.MkdirAll(ateletpath.ActorPath(secondActorUID), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tr := newStoreTracker(t, newFakeSnapshotStore(), WithInstruments(inst))
+	t0 := tr.clock.Now()
+
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
+	stepTo(tr, t0.Add(30*time.Second))
+	tr.CommitLocal(secondActorUID, testRef("s2", 1, tr.clock.Now()))
+
+	stepTo(tr, t0.Add(testUploadDelay+45*time.Second))
+	if got, want := readUndurable(t, reader), (undurableReading{
+		under1m: 2,
+		age:     (testUploadDelay + 45*time.Second).Seconds(),
+	}); got != want {
+		t.Errorf("both in under_1m: %+v, want %+v", got, want)
+	}
+
+	stepTo(tr, t0.Add(testUploadDelay+time.Minute+15*time.Second))
+	if got, want := readUndurable(t, reader), (undurableReading{
+		under1m: 1,
+		m1to5:   1,
+		age:     (testUploadDelay + time.Minute + 15*time.Second).Seconds(),
+	}); got != want {
+		t.Errorf("split across bands: %+v, want %+v", got, want)
+	}
+
+	if err := tr.Forget(trackedActorUID); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	if got, want := readUndurable(t, reader), (undurableReading{
+		under1m: 1,
+		age:     (testUploadDelay + 45*time.Second).Seconds(),
+	}); got != want {
+		t.Errorf("after dropping the oldest actor: %+v, want %+v", got, want)
 	}
 }

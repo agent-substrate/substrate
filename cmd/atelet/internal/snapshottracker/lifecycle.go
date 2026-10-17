@@ -291,6 +291,7 @@ func (t *Tracker) Forget(actorUID string) error {
 	t.retries.Forget(actorUID)
 	t.reporting.retries.Forget(actorUID)
 	t.dropLocked(actorUID)
+	t.undurableActorsTally.forget(actorUID)
 	return removeSnapshotState(actorUID)
 }
 
