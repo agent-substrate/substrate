@@ -1,7 +1,7 @@
 # Micro-VM runtime assets + counter demo (kind, fetch-not-bake)
 
-The `microvm` runtime (`cmd/ateom-microvm`, kata + cloud-hypervisor) fetches its
-toolchain at runtime — nothing kata-specific is baked into the worker image. ateom drives
+The `microvm` runtime (`cmd/ateworker-microvm`, kata + cloud-hypervisor) fetches its
+toolchain at runtime — nothing kata-specific is baked into the worker image. ateworker drives
 the kata-agent directly (no kata shim, no containerd). Each actor container's rootfs is an
 overlay of a read-only lower (the OCI image, served into the guest over virtio-fs by
 `virtiofsd`) and a writable upper on a guest tmpfs, so `virtiofsd` is part of the asset
@@ -42,11 +42,15 @@ it as a device, which is what places micro-VM workers there.
 
 4. **Apply the demo + drive it:**
    ```sh
-   BUCKET_NAME=ate-snapshots SUBSTRATE_VERSION="$(git describe --tags --always --dirty)" envsubst < demos/counter/counter-microvm.yaml.tmpl | kubectl apply -f -   # the pool pins workers to nodes labeled with this version
+   BUCKET_NAME=ate-snapshots envsubst < demos/counter/counter-microvm.yaml.tmpl | kubectl apply -f -
    ```
    Create an actor from `counter-microvm`, hit the in-RAM counter to increment it, suspend
    (checkpoint), resume on a different worker pod, and confirm the count continues — proving the
    guest-memory snapshot round-tripped across pods.
 
 ## Notes
+- Assets may share the snapshot bucket, but must not be stored under a snapshot location
+  (an ActorTemplate's `snapshotConfig.location` followed by `/atespaces/`): the node's
+  object-store plugin refuses to serve anything there as an asset. The staging scripts use
+  `kata-assets/`, which is outside it.
 - `assets` is single-arch (unlike runsc's amd64/arm64): stage assets matching the node arch.

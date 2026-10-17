@@ -26,7 +26,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateattr"
 )
 
 // ServiceName is the OpenTelemetry service name and instrumentation scope
@@ -105,8 +105,9 @@ func classifyOutcome(err error) string {
 			// The switch above already reports no_capacity for a wrapped
 			// ResourceExhausted cause, since status.Code unwraps through
 			// ReqError.Cause. A 503 that reaches here has no such cause: a
-			// full parking lot, a denied egress request, or a failed policy
-			// or credential lookup. None of these mean the fleet is full.
+			// shed request whose resume did not fail with ResourceExhausted,
+			// a denied egress request, or a failed policy or credential
+			// lookup. None of these mean the fleet is full.
 			return ateattr.RouterOutcomeUnavailable
 		case envoy_type.StatusCode_GatewayTimeout:
 			return ateattr.RouterOutcomeTimeout

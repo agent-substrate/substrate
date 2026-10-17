@@ -21,13 +21,13 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 func TestWorkerPoolCreatesNetworkPolicy(t *testing.T) {
 	ctx := t.Context()
-	wp := makeWorkerPool("test-netpolicy-create", "default", 2, "ateom:v1")
+	wp := makeWorkerPool("test-netpolicy-create", "default", 2, "worker:v1")
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
 	}

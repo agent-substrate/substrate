@@ -22,9 +22,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // defaultCapabilities mirrors atelet's default set (cmd/atelet/oci.go). It is
@@ -138,7 +138,7 @@ func deployFixture(t *testing.T, ctx context.Context, clients *e2e.Clients, buck
 	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
 		Template: "internal/e2e/fixtures/capabilities/capabilities-templates.yaml.tmpl",
-	}, bucket, "capabilities", false)
+	}, bucket, "capabilities", nil)
 	return atespace
 }
 

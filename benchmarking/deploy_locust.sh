@@ -31,8 +31,11 @@ SKIP_BUILD=0
 OTLP_ENDPOINT=""
 # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm minimum).
 ACTOR_MEMORY=""
+# Empty keeps the default in workloads/deploy.sh (1 CPU).
+ACTOR_CPU=""
 # Empty leaves the WorkerPool pods unsized.
 WORKER_MEMORY=""
+STORAGE_CLASS_NAME=""
 WAIT_TIMEOUT_SECS=""
 
 usage() {
@@ -48,10 +51,14 @@ usage() {
   echo "                          instrumented actor container sends telemetry."
   echo "  --actor-memory SIZE     Forwarded to workloads/deploy.sh. Memory limit for the"
   echo "                          benchmark ActorTemplates (default: 256Mi, the microvm minimum)."
+  echo "  --actor-cpu CPU         Forwarded to workloads/deploy.sh. CPU limit for the benchmark"
+  echo "                          ActorTemplates (default: 1)."
   echo "  --worker-memory SIZE    Forwarded to workloads/deploy.sh. Memory request and limit"
   echo "                          for each WorkerPool pod (default: unset, the pod is unsized)."
+  echo "  --storage-class-name S  Forwarded to workloads/deploy.sh. StorageClass for the glutton-storage"
+  echo "                          external volume; setting it deploys glutton-storage."
   echo "  --wait-timeout SECONDS  Forwarded to workloads/deploy.sh. The timeout in seconds for"
-  echo "                          waiting for the ateom workers to be ready (default: 300)"
+  echo "                          waiting for the workers to be ready (default: 300)"
   echo "  --skip-build            Skip locust image build/push (use the existing :latest image)"
   echo "  -h|--help               Show this help message"
   echo ""
@@ -78,8 +85,12 @@ while [[ "$#" -gt 0 ]]; do
     --otlp-endpoint=*) OTLP_ENDPOINT="${1#*=}" ;;
     --actor-memory) shift; ACTOR_MEMORY="$1" ;;
     --actor-memory=*) ACTOR_MEMORY="${1#*=}" ;;
+    --actor-cpu) shift; ACTOR_CPU="$1" ;;
+    --actor-cpu=*) ACTOR_CPU="${1#*=}" ;;
     --worker-memory) shift; WORKER_MEMORY="$1" ;;
     --worker-memory=*) WORKER_MEMORY="${1#*=}" ;;
+    --storage-class-name) shift; STORAGE_CLASS_NAME="$1" ;;
+    --storage-class-name=*) STORAGE_CLASS_NAME="${1#*=}" ;;
     --wait-timeout) shift; WAIT_TIMEOUT_SECS="$1" ;;
     --wait-timeout=*) WAIT_TIMEOUT_SECS="${1#*=}" ;;
     --skip-build) SKIP_BUILD=1 ;;
@@ -118,8 +129,14 @@ if [[ "${action}" == "deploy" ]]; then
   if [[ -n "${ACTOR_MEMORY}" ]]; then
     workload_args+=(--actor-memory "${ACTOR_MEMORY}")
   fi
+  if [[ -n "${ACTOR_CPU}" ]]; then
+    workload_args+=(--actor-cpu "${ACTOR_CPU}")
+  fi
   if [[ -n "${WORKER_MEMORY}" ]]; then
     workload_args+=(--worker-memory "${WORKER_MEMORY}")
+  fi
+  if [[ -n "${STORAGE_CLASS_NAME}" ]]; then
+    workload_args+=(--storage-class-name "${STORAGE_CLASS_NAME}")
   fi
   if [[ -n "${WAIT_TIMEOUT_SECS}" ]]; then
     workload_args+=(--wait-timeout "${WAIT_TIMEOUT_SECS}")

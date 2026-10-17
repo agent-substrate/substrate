@@ -31,7 +31,7 @@ are **atespace-scoped**, whereas `Atespace` resources are naturally **global-sco
 ### 2.1 Identity and scope
 
 * Atespace-scoped resources belong to an atespace. Their identity is `(atespace, name)`, unique within the resource type.
-* Global-scoped resources are global across the entire deployment and do not belong to any atespace. For these, the identity is `name` alone.
+* Global-scoped resources are global across the entire Substrate installation and do not belong to any atespace. For these, the identity is `name` alone.
 
 In both cases, a `metadata` field contains both `atespace` and `name`. For global resources, the `atespace` must always be empty.
 
@@ -119,6 +119,36 @@ Note that this assumes that ActorTemplates are also resources in the substrate g
 
 TODO: Decide the convention for cross-references that point to a resource in the *same* atespace as the referrer: whether the caller must fill in `atespace` explicitly, or leaves it empty and the server resolves/validates it against the referrer's atespace. Current leaning is to require it be filled in.
 
+### 2.4 Subresources
+
+A **subresource** is a resource nested under a parent resource. It exists only in the context of that parent, is reached through the parent, and is deleted with it. Examples are `EgressPolicy` under `Actor`, `AccessPolicy` under `Atespace`, and `ActorAssignment` under `Worker`.
+
+A subresource's parent may also be **Global**, the implicit root that stands for the whole Substrate installation. The global `AccessPolicy` is a subresource of Global.
+
+A resource that only *lives in* an atespace is not a subresource of the `Atespace`. `Actor` is atespace-scoped but top-level, with its own standard methods and its own `ObjectRef`. A resource that only *references* another is not its subresource either. A `Tag` references its source `Actor` through `source_actor`, but outlives it.
+
+Rules:
+- Each instance has exactly one parent instance, which never changes. A subresource type may allow more than one parent type, including Global.
+- Deleting the parent **must** delete its subresources.
+- A subresource has the same scope as its parent. `metadata.atespace` **must** equal the parent's atespace. For an `EgressPolicy` that is the Actor's atespace. For an `AccessPolicy` under an `Atespace` it is empty, because `Atespace` is global-scoped, and it is empty for every subresource of Global.
+- `metadata.name` **must** be unique among the parent's subresources of that type. A singleton is named `default` (see section #2.5).
+- The message **must** be named for the subresource itself, without the parent type. Use `EgressPolicy`, not `ActorEgressPolicy`. A subresource that allows more than one parent type uses the same message under each, and the RPC names tell the parents apart (`AccessPolicy` under Global and under `Atespace`).
+- RPC names **must** be the standard verb, then the parent type, then the subresource type, as in `GetActorEgressPolicy`, `CreateAtespaceAccessPolicy` and `ListWorkerActorAssignments`. For a subresource of Global, the parent type is `Global`, as in `GetGlobalAccessPolicy`.
+- The request **must** identify the parent with an `ObjectRef` field named after the parent type (`actor`, `atespace`, `worker`). Get and Delete requests **must** also carry a `name` field holding the subresource's name, and for a singleton `name` **must** be `default`. A request for a subresource of Global carries no parent reference, since Global has no identity.
+- On Create and Update, the subresource is embedded in a field named after its snake_case type (`egress_policy`, `access_policy`). Its `metadata` **must** agree with the parent, and a mismatch returns `INVALID_ARGUMENT`.
+- A subresource may be managed by the system, such as `ActorAssignment`. The system creates and deletes it as part of other operations, and the API exposes only List and, optionally, Get.
+- Subresource's methods follow section #3. Update replaces the whole object with `uid` and `version` preconditions, Delete takes `DeleteOptions`, and List is paginated.
+
+### 2.5 Singletons
+
+A **singleton** is a resource type that allows at most one instance per parent. For example, each `Actor` has at most one `EgressPolicy`, and each `Atespace` has at most one `AccessPolicy`, as does Global.
+
+Rules:
+- Clients **must** always set `metadata.name` to `default`. Any other value, including an empty one, fails with `INVALID_ARGUMENT`.
+- A singleton **must not** have a List method.
+- Get **must** return `NOT_FOUND` until the singleton has been created.
+- Create **must** return `ALREADY_EXISTS` if the singleton exists. It is never an upsert.
+
 ---
 
 ## 3. Standard Methods
@@ -143,11 +173,12 @@ Rules:
 - Response **must** be the resource itself — not a `GetActorResponse` wrapper.
 - Request **must** identify the resource with a single `ObjectRef` field (for both atespace-scoped and global-scoped resources).
 - That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `tag` for `Tag`), not a generic name like `name` or `ref`.
+- The request **must** have no other fields. A subresource's Get request carries its parent's `ObjectRef` and a `name` instead (see section #2.4).
 - If the resource does not exist: return `NOT_FOUND`.
 
 ### 3.2 List
 
-*Follows [AIP-132](https://google.aip.dev/132).*
+*Adapted from [AIP-132](https://google.aip.dev/132).*
 
 ```proto
 rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
@@ -156,14 +187,19 @@ message ListActorsRequest {
   // The atespace to list actors from.
   string atespace = 1;
 
-  // Maximum number of actors to return. The server may return fewer.
+  // Pagination controls. Reused across every List<Type>Request.
+  ListOptions options = 2;
+}
+
+message ListOptions {
+  // Maximum number of resources to return. The server may return fewer.
   // If unspecified, defaults to a server-chosen value.
   // The maximum value is 1000; values above 1000 are coerced to 1000.
-  int32 page_size = 2;
+  int32 page_size = 1;
 
-  // Pagination token from a previous ListActors response.
+  // Pagination token from a previous response of the same List method.
   // Omit or leave empty for the first request.
-  string page_token = 3;
+  string page_token = 2;
 }
 
 message ListActorsResponse {
@@ -176,13 +212,16 @@ message ListActorsResponse {
 ```
 
 Rules:
-- RPC name **must** begin with `List` followed by the **plural** resource name.
+- RPC name **must** begin with `List` followed by the **plural** resource name, as its `(resource)` option declares it (see section #11.1).
 - Both the request and response message names **must** match the RPC name with `Request`/`Response` suffixes. (Unlike Get/Create/Update, List responses are not the resource itself.)
+- `page_size` and `page_token` **must** be carried in a `ListOptions` field named `options`. Further non-resource "control" fields belong in `ListOptions`, not as loose top-level fields on the request.
 - `next_page_token` **must** be present on every List response message. It **must** be empty when there are no further pages.
 - The repeated resource field **must** use the plural form of the resource name (e.g., `actors`, not `actor`).
 - If a user provides a `page_size` above the maximum, coerce it silently. If a user provides a negative value, return `INVALID_ARGUMENT`.
 - Sorting and filtering as specified in AIP-132 are not supported.
 - Clients must iterate over all pages until an empty `next_page_token` is returned. Clients should not assume that an empty result (i.e. len(actors) == 0) means the end of the stream.
+
+**Divergence from AIP-132:** AIP-132 puts `page_size` and `page_token` at the top level of the request. Substrate groups them in a shared `ListOptions` message, following the `DeleteOptions` pattern (section #3.5), so every List method carries the same controls with the same validation.
 
 ### 3.3 Create
 
@@ -242,7 +281,8 @@ Rules:
   - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`, and the whole `status` submessage). Whatever the request carries in them is ignored and the server's own values are kept.
   - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`, and resource-specific ones such as an actor's `source_snapshot_tag`). A request that changes one - including by omitting it, which would clear it - **must** return `INVALID_ARGUMENT` naming the field.
 - The embedded resource field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`), not a generic name like `resource` or `body`.
-- Unknown fields in the request are preserved, so a client built against a newer schema does not lose data by round-tripping through an older one.
+- The request **must** have no other fields, apart from its parent's `ObjectRef` for a subresource (see section #2.4).
+- A request carrying a field the server does not know, at any level of nesting, **must** return `INVALID_ARGUMENT` naming the field, as for every RPC. Fields only the client does not know are a different case: a client that modifies the resource it read sends them back unchanged, so an update from an older client does not clear fields a newer server set.
 - The resource's `atespace` and `name` identify the resource to update; they are not themselves updatable.
 - If the resource does not exist: return `NOT_FOUND`.
 - The `version` and `uid` fields in the embedded resource's `metadata` are **required** preconditions (see section #7). A request that leaves either unset is a blind write and **must** return `INVALID_ARGUMENT`. They are control fields the client echoes back as guards, not fields it edits.
@@ -263,8 +303,7 @@ message DeleteActorRequest {
 
 // DeleteOptions carries per-delete controls. Today it holds optional
 // preconditions that guard against acting on a resource that is not in the
-// state the caller expects (see section #7). Future delete-specific controls
-// (e.g. dry-run) should be added here.
+// state the caller expects (see section #7).
 message DeleteOptions {
   // If non-zero, delete only if the server's current version matches.
   int64 version = 1;
@@ -282,6 +321,7 @@ Rules:
 - If the resource does not exist: return `NOT_FOUND`.
 - `version` and `uid` preconditions are honored via a `DeleteOptions` field (see section #7). Both are optional; the zero value skips the check.
 - Further non-resource "control" fields (e.g. dry-run) belong in `DeleteOptions`, not as loose top-level fields on the request.
+- `DeleteOptions` **must** have only the fields defined above. This list may be extended in the future with options such as `dry_run` or `force`.
 
 
 TODO: Delete operations are synchronous, but might revisit this and introduce the concept of soft-deletion to 
@@ -296,18 +336,23 @@ allow external controllers and upstream systems / automations to react to resour
 Custom methods are for operations that don't map cleanly to CRUD: lifecycle transitions (Suspend, Resume, Pause), long-running actions, or commands with side effects that standard Update semantics would misrepresent.
 
 ```proto
-rpc SuspendActor(SuspendActorRequest) returns (Actor) {}
+rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
 
 message SuspendActorRequest {
   ObjectRef actor = 1;
+}
+
+message SuspendActorResponse {
+  Actor actor = 1;
 }
 ```
 
 Rules:
 - RPC name **must** be a verb phrase: `{Verb}{Resource}` (e.g., `SuspendActor`, `ResumeActor`).
+- RPC name **must not** start with a standard verb (`Get`, `List`, `Create`, `Update`, `Delete`). A method named with one is a standard method and follows section #3.
 - Request message name **must** match the RPC name with a `Request` suffix.
 - The request **must** identify the target resource using an `ObjectRef` field (for both atespace-scoped and global-scoped resources).
-- Custom methods should return a response message matching the RPC name, with a Response suffix. When operating on a specific resource, a custom method may return the resource itself.
+- Response message name **must** match the RPC name with a `Response` suffix. A custom method **must not** return the resource directly; put it in a field of the response, so method-specific output can be added later (e.g., `ResumeActorResponse.resumed`).
 
 ---
 
@@ -323,6 +368,7 @@ Rules:
 - Use standard abbreviations where well-established: `config`, `spec`, `id`, `info`, `stats`.
 - Adjectives come before the noun: `suspended_actors`, not `actors_suspended`.
 - Avoid prepositions in field names: `error_reason`, not `reason_for_error`.
+- `google.protobuf.Timestamp` fields **must** end in `_time`, following [AIP-142](https://google.aip.dev/142): use `create_time`, `expire_time`, or `crash_time`, not `created_at` or `expires_at`.
 
 ### 5.1 Enum naming
 
@@ -330,7 +376,7 @@ Rules:
 
 - Enum type names **must** use `PascalCase`, like message names: `ActorState`.
 - Enum values **must** use `UPPER_SNAKE_CASE`.
-- Package-level enum values **must** be prefixed with the enum name. Some languages (including C++) hoist enum values into the parent namespace, which can cause conflicts between enums in the same proto package. (Values of a *nested* enum **must not** be prefixed.)
+- Enum values **must** be prefixed with the enum name, for top-level and nested enums alike. Some languages (including C++) hoist enum values into the parent namespace, which can cause conflicts between enums in the same proto package or message.
 - The zero value **must** be `{ENUM_NAME}_UNSPECIFIED` and mean "not set."
 
 ```proto
@@ -605,3 +651,94 @@ Rules:
 
 All fields of all APIs must be validated.  We use
 [validation-gen](https://github.com/kubernetes/code-generator/tree/master/cmd/validation-gen) to generate validation code for our APIs.  See [the guidelines for validation](api-validation.md) for more information.
+
+---
+
+## 11. Annotations
+
+Resources and methods carry proto options that say which messages are resources, how they nest, and which resource each RPC operates on.
+
+### 11.1 Resources
+
+Every resource message **must** carry a `(resource)` option:
+
+```proto
+message Actor {
+  option (resource) = {
+    scope : SCOPE_ATESPACE
+    plural : "Actors"
+  };
+
+  // ... fields
+}
+
+message EgressPolicy {
+  option (resource) = {
+    parents : "Actor"
+    singleton : true
+    plural : "EgressPolicies"
+  };
+
+  // ... fields
+}
+
+message AccessPolicy {
+  option (resource) = {
+    parents : [ "Global", "Atespace" ]
+    singleton : true
+    plural : "AccessPolicies"
+  };
+
+  // ... fields
+}
+```
+
+Rules:
+- `parents` lists the resource types the resource is a subresource of (see section #2.4): another resource's message name, or `Global`. A top-level resource has no `parents`.
+- `singleton` is `true` for a singleton (see section #2.5).
+- `scope` **must** be set on a top-level resource: `SCOPE_ATESPACE` or `SCOPE_GLOBAL` (see section #2.1). A subresource **must not** set it, because it has its parent's scope.
+- `plural` **must** be set on every resource, singletons included. It is the plural that List methods and their repeated resource field use (see section #3).
+- A message that is not a resource, such as a request, a status message, or `ObjectRef`, carries no `(resource)` option.
+- When you add, remove, or re-parent a resource, update [the resource model](resource-model.md) too.
+
+### 11.2 Methods
+
+Every RPC of the `Control` service **must** carry a `(method)` option naming the resource it operates on, for standard and custom methods alike:
+
+```proto
+rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (EgressPolicy) {
+  option (method).resource = "EgressPolicy";
+}
+
+rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {
+  option (method).resource = "Actor";
+}
+```
+
+Rules:
+- `resource` is the resource's message name, and that message **must** carry a `(resource)` option.
+- A subresource's method names the subresource, not its parent: `EgressPolicy` for `GetActorEgressPolicy`.
+
+---
+
+## 12. Sensitive Fields (`debug_redact`)
+
+*Substrate-specific. No AIP covers this.*
+
+A field that holds a secret **must** carry the standard protobuf `debug_redact` option. Components that log through Substrate's shared log handler mask labeled fields, so request and response bodies can be logged without leaking the secrets in them.
+
+```proto
+message EnvVar {
+  string name = 1;
+  string value = 2 [ debug_redact = true ];
+}
+```
+
+Rules:
+- Label a field whose value grants access to something, or is secret material provided by the user: bearer tokens and JWTs (`MintActorJwtResponse.actor_jwt`), keys, passwords, secret bytes, and user-supplied values that may hold secrets (`EnvVar.value`).
+- Do not label a reference to a secret, such as an `ate-secret://` URI (`CredentialHeader.credential_uri`). It names the secret and grants nothing by itself. Do not label identifiers, names, or list cursors (`page_token`).
+- Label a URL that grants access by itself, such as a signed URL, even when it points to a secret.
+- Prefer labeling the leaf field over the message that contains it, so the rest of the message stays readable in logs: a log line still shows which env var was set, but not its value. Label a message-typed field only when the whole message is secret.
+- Add the label in the same change that adds the field. A label added later does not help lines already logged.
+
+Which processes use the shared log handler, and what it does and does not cover, is described in [Logging Best Practices](dev/best-practices/logging.md#logging-protos-that-hold-secrets).

@@ -45,16 +45,16 @@ connections ≈ QPS × mean latency in seconds
             ≈ 10,000 req/s × 0.006 s ≈ 60 active connections
 ```
 
-Provision ~2× headroom for bursts. This setting does not affect the owner and
-watch pools; their fixed limits add up to 5 connections per replica beyond the
-read/write pool limit (e.g. 4 replicas with
+Provision ~2× headroom for bursts. This setting does not affect the owner,
+watch, and readiness probe pools; their fixed limits add up to 6 connections per
+replica beyond the read/write pool limit (e.g. 4 replicas with
 `ATE_API_POSTGRES_POOL_MAX_CONNS=32` can open up to
-4 × (32 + 2 + 3) = 148 connections).
+4 × (32 + 2 + 3 + 1) = 152 connections).
 An undersized pool causes client-side queuing inside `pgx` rather than database errors.
 Ensure total connections across all replicas stay within Cloud SQL's limit:
 
 ```
-replicas × (pool_max_conns + 5)  ≤  max_connections − slack (superuser, maintenance)
+replicas × (pool_max_conns + 6)  ≤  max_connections − slack (superuser, maintenance)
 ```
 
 Exceeding

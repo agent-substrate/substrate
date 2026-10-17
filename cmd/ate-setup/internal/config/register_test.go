@@ -161,8 +161,6 @@ func TestBindFlagsSkipsScopedSettings(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
-	// TODO: add a case for a command-registered setting colliding with one the
-	// installer owns, once Registry declares any.
 	for _, tc := range []struct {
 		name    string
 		add     []Setting
@@ -196,6 +194,11 @@ func TestValidate(t *testing.T) {
 		},
 
 		{
+			name:    "collides with a setting the installer owns",
+			add:     []Setting{testSetting("test.a", "ATE_NAMESPACE", "test-a", "deploy thing")},
+			wantErr: true, wantIn: "namespace",
+		},
+		{
 			name:    "missing environment variable",
 			add:     []Setting{{Key: "test.a", Flag: "test-a", Kind: KindString, Usage: "u"}},
 			wantErr: true, wantIn: "no environment variable",
@@ -217,5 +220,35 @@ func TestValidate(t *testing.T) {
 				t.Errorf("Validate() = %q, missing %q", err, tc.wantIn)
 			}
 		})
+	}
+}
+
+// A secret must not reach the command line even when its declaration names a
+// flag. Validate reports such a declaration as a registry defect, but that
+// only helps a caller who ran Validate: the property has to hold at the point
+// the flag would be created, on the root and on an owning command alike.
+func TestBindingRefusesSecretsThatDeclareAFlag(t *testing.T) {
+	useSettings(t,
+		Setting{
+			Key: "test.secret", Env: "ATE_TEST_SECRET", Flag: "test-secret",
+			Kind: KindString, Secret: true, Usage: "a secret that wrongly declares a flag",
+		},
+		Setting{
+			Key: "test.scopedSecret", Env: "ATE_TEST_SCOPED_SECRET", Flag: "test-scoped-secret",
+			Kind: KindString, Secret: true, Usage: "the same, scoped to one command",
+			Commands: []string{"deploy thing"},
+		},
+	)
+
+	root := pflag.NewFlagSet("root", pflag.ContinueOnError)
+	BindFlags(root)
+	if root.Lookup("test-secret") != nil {
+		t.Error("BindFlags registered --test-secret; a credential must not be a flag")
+	}
+
+	own := pflag.NewFlagSet("own", pflag.ContinueOnError)
+	BindCommandFlags("deploy thing", own)
+	if own.Lookup("test-scoped-secret") != nil {
+		t.Error("BindCommandFlags registered --test-scoped-secret; a credential must not be a flag")
 	}
 }

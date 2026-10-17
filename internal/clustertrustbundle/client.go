@@ -17,6 +17,7 @@ package clustertrustbundle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -35,6 +36,9 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+// ErrNotServed reports that the cluster serves no ClusterTrustBundle API.
+var ErrNotServed = errors.New("neither v1 nor v1beta1 ClusterTrustBundle is served")
+
 // Discover prefers v1 and falls back only when discovery reports it absent.
 func Discover(d discovery.DiscoveryInterface) (schema.GroupVersion, error) {
 	for _, gv := range []schema.GroupVersion{certsv1.SchemeGroupVersion, certsv1beta1.SchemeGroupVersion} {
@@ -51,7 +55,7 @@ func Discover(d discovery.DiscoveryInterface) (schema.GroupVersion, error) {
 			}
 		}
 	}
-	return schema.GroupVersion{}, fmt.Errorf("neither v1 nor v1beta1 ClusterTrustBundle is served")
+	return schema.GroupVersion{}, ErrNotServed
 }
 
 // Client uses one API version for live operations and its native informer cache.
@@ -155,4 +159,11 @@ func (c *Client) Update(ctx context.Context, bundle *certsv1.ClusterTrustBundle,
 	}
 	result, err := c.kc.CertificatesV1beta1().ClusterTrustBundles().Update(ctx, ToBeta(bundle), opts)
 	return ToV1(result), err
+}
+
+func (c *Client) Delete(ctx context.Context, name string, opts metav1.DeleteOptions) error {
+	if c.v1 {
+		return c.kc.CertificatesV1().ClusterTrustBundles().Delete(ctx, name, opts)
+	}
+	return c.kc.CertificatesV1beta1().ClusterTrustBundles().Delete(ctx, name, opts)
 }

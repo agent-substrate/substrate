@@ -1,0 +1,117 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ate-idp-server serves the OpenID discovery document and key set relying
+# parties use to verify actor JWTs. It needs no Kubernetes API access.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ate-idp-server
+  namespace: ate-system
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-idp-server
+  namespace: ate-system
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: ate-idp-server
+  template:
+    metadata:
+      labels:
+        app: ate-idp-server
+    spec:
+      serviceAccountName: ate-idp-server
+      containers:
+      - name: ate-idp-server
+        image: ko://go.ate.dev/substrate/cmd/ate-idp-server
+        args:
+        - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
+        - --server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem
+        ports:
+        - name: https
+          containerPort: 8443
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: https
+            scheme: HTTPS
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: https
+            scheme: HTTPS
+          periodSeconds: 10
+        securityContext:
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        # The serving certificate, with a DNS SAN for each Service that
+        # selects the pod: idp.ate-system.svc.
+        - name: servicedns
+          mountPath: /run/servicedns.podcert.ate.dev
+        - name: actor-id-jwt-pool
+          mountPath: /run/actor-id-jwt-pool
+      volumes:
+      - name: servicedns
+        projected:
+          sources:
+          - podCertificate:
+              signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+      # The pool ate-api-server signs with.
+      - name: actor-id-jwt-pool
+        projected:
+          sources:
+          - secret:
+              name: actor-id-jwt-pool
+              items:
+              - key: pool
+                path: pool.json
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ate-idp-server
+  namespace: ate-system
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: ate-idp-server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: idp
+  namespace: ate-system
+spec:
+  selector:
+    app: ate-idp-server
+  ports:
+  - name: https
+    port: 443
+    targetPort: https
+    appProtocol: https

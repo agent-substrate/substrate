@@ -35,14 +35,16 @@ func TestRequiredErrorNamesEveryChannel(t *testing.T) {
 
 // Every setting must produce a message naming its own three channels, so the
 // format cannot rot for settings nobody hand-checked.
-// TODO: vacuous until Registry declares settings. It is the check that the
-// message format cannot rot for a setting nobody hand-wrote a case for, so it
-// only earns its place once there are settings to cover.
 func TestRequiredErrorCoversEverySetting(t *testing.T) {
 	for _, s := range Registry {
 		t.Run(s.Key, func(t *testing.T) {
 			got := (&RequiredError{Setting: s}).Error()
-			for _, want := range []string{s.Env, "config." + s.Key, "--" + s.Flag} {
+			want := []string{s.Env, "config." + s.Key}
+			// A secret has no flag to name.
+			if s.Flag != "" {
+				want = append(want, "--"+s.Flag)
+			}
+			for _, want := range want {
 				if !strings.Contains(got, want) {
 					t.Errorf("Error() = %q, missing %q", got, want)
 				}
@@ -186,4 +188,77 @@ func asRequiredError(err error, target **RequiredError) bool {
 		*target = re
 	}
 	return ok
+}
+
+// Every rejection an operator can trigger has to name the channel the value
+// came from. A message naming only a flag sends a reader who configured by
+// file or by export to something they never typed.
+func TestValidationErrorsNameTheSupplyingChannel(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		env    map[string]string
+		wantIn []string
+	}{
+		{
+			name:   "extproc service is malformed",
+			env:    map[string]string{"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE": "nope"},
+			wantIn: []string{"atenet.egress.additionalExtprocService", "<namespace>/<service>:<port>", `"nope"`, "ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"},
+		},
+		{
+			name:   "extproc port is out of range",
+			env:    map[string]string{"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE": "ns/svc:99999"},
+			wantIn: []string{"atenet.egress.additionalExtprocService", "1-65535", "ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"},
+		},
+		{
+			name:   "image tag without a repository",
+			env:    map[string]string{"ATE_IMAGE_TAG": "v1"},
+			wantIn: []string{"images.tag", "ATE_IMAGE_TAG", "images.repo", "the tag names nothing"},
+		},
+		{
+			name:   "image repository without a tag",
+			env:    map[string]string{"ATE_IMAGE_REPO": "example.com/substrate"},
+			wantIn: []string{"images.repo", "ATE_IMAGE_REPO", "images.tag", "needs a tag"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			_, err := Load(Options{})
+			if err == nil {
+				t.Fatal("Load() = nil error, want one")
+			}
+			for _, want := range tc.wantIn {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Load() = %q, missing %q", err, want)
+				}
+			}
+			// The pre-uniform-config messages named a flag and nothing else.
+			if strings.HasPrefix(err.Error(), "--") {
+				t.Errorf("Load() = %q, which leads with a flag and names no channel", err)
+			}
+		})
+	}
+}
+
+// Every rejection names the three channels a setting can come from, so a
+// reader who used the file is not sent to look for a flag. The
+// credential-provider message predates the file channel and names only two.
+func TestCredentialProviderErrorNamesTheFileChannel(t *testing.T) {
+	useFixtures(t)
+	cfg := &Config{}
+	_, err := cfg.CredentialProvider()
+	if err == nil {
+		t.Fatal("CredentialProvider() with nothing set returned no error")
+	}
+	for _, want := range []string{
+		"--credential-provider",
+		"ATE_CREDENTIAL_PROVIDER",
+		"config.atenet.egress.credentialProvider",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q does not name %s", err, want)
+		}
+	}
 }

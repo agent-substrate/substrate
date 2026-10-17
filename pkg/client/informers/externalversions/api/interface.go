@@ -17,8 +17,8 @@
 package api
 
 import (
-	v1alpha1 "github.com/agent-substrate/substrate/pkg/client/informers/externalversions/api/v1alpha1"
-	internalinterfaces "github.com/agent-substrate/substrate/pkg/client/informers/externalversions/internalinterfaces"
+	v1alpha1 "go.ate.dev/substrate/pkg/client/informers/externalversions/api/v1alpha1"
+	internalinterfaces "go.ate.dev/substrate/pkg/client/informers/externalversions/internalinterfaces"
 )
 
 // Interface provides access to each of this group's versions.

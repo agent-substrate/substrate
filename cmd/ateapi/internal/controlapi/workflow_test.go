@@ -16,15 +16,14 @@ package controlapi
 
 import (
 	"context"
-	"maps"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/actorevent"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/actorevent"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestActorStateChangeRecords drives each transition that commits a new state
@@ -39,6 +38,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 	tests := []struct {
 		name      string
 		seedState ateapipb.ActorState
+		seedOpts  []func(*ateapipb.Actor)
 		// transition runs the workflow step that commits the new state.
 		transition func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate)
 		wantOp     string
@@ -48,26 +48,41 @@ func TestActorStateChangeRecords(t *testing.T) {
 		{
 			name:      "suspend marks the actor suspending",
 			seedState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) {
-				if _, err := w.ensureMarkedSuspending(context.Background(), ref, actor, tmpl); err != nil {
-					t.Fatalf("ensureMarkedSuspending: %v", err)
-				}
+			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
+				markOnly(t, w, ref, actor, suspendSync)
 			},
 			wantOp:     ateattr.OperationSuspend,
 			wantState:  ateattr.ActorStateSuspending,
 			wantStored: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
 		},
 		{
-			name:      "pause marks the actor pausing",
+			name:      "pause marks the actor suspending",
 			seedState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
-				if _, err := w.ensureMarkedPausing(context.Background(), ref, actor); err != nil {
-					t.Fatalf("ensureMarkedPausing: %v", err)
+				markOnly(t, w, ref, actor, suspendAsync)
+			},
+			wantOp:     ateattr.OperationSuspend,
+			wantState:  ateattr.ActorStateSuspending,
+			wantStored: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+		},
+		{
+			name:      "finalize pause marks the actor suspended",
+			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			seedOpts: []func(*ateapipb.Actor){
+				withPauseInProgress(),
+				func(a *ateapipb.Actor) {
+					a.Status.AssignedNode = "node-1"
+					a.Status.WorkerAssignment = wireTestAssignment()
+				},
+			},
+			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, _ *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
+				if _, err := w.SuspendActor(context.Background(), ref, suspendAsync); err != nil {
+					t.Fatalf("SuspendActor: %v", err)
 				}
 			},
-			wantOp:     ateattr.OperationPause,
-			wantState:  ateattr.ActorStatePausing,
-			wantStored: ateapipb.ActorState_ACTOR_STATE_PAUSING,
+			wantOp:     ateattr.OperationSuspend,
+			wantState:  ateattr.ActorStateSuspended,
+			wantStored: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 		},
 		{
 			name:      "delete marks the actor deleting",
@@ -95,14 +110,13 @@ func TestActorStateChangeRecords(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Atespace: tmplAtespace, Name: tmplName},
 				SnapshotConfig: &ateapipb.SnapshotConfig{
 					StorageLocation: testStorageLocation,
-					OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				},
 			}); err != nil {
 				t.Fatalf("create template: %v", err)
 			}
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-			seedWorkflowActor(t, ctx, persistence, actorRef, tmplAtespace, tmplName, tt.seedState)
+			seedWorkflowActor(t, ctx, persistence, actorRef, tmplAtespace, tmplName, tt.seedState, tt.seedOpts...)
 			actor, err := persistence.GetActor(ctx, actorRef)
 			if err != nil {
 				t.Fatalf("get actor: %v", err)
@@ -112,13 +126,19 @@ func TestActorStateChangeRecords(t *testing.T) {
 				t.Fatalf("get template: %v", err)
 			}
 
-			w := &ActorWorkflow{store: persistence}
+			w, _ := newWireCaptureWorkflow(t, persistence)
 			tt.transition(t, w, actorRef, actor, tmpl)
 
-			if len(*records) != 1 {
-				t.Fatalf("got %d state records, want 1: %v", len(*records), *records)
+			// The logs exporter is on, so the record goes to OTLP only.
+			if len(*records) != 0 {
+				t.Errorf("got %d stdout state records with the exporter on, want 0: %v", len(*records), *records)
 			}
-			got := (*records)[0].attrs
+			gotEvents := events()
+			if len(gotEvents) != 1 {
+				t.Fatalf("got %d state events, want 1: %v", len(gotEvents), gotEvents)
+			}
+			assertEvent(t, gotEvents[0], actorevent.StateChanged)
+			got := gotEvents[0].attrs
 			want := map[string]string{
 				string(ateattr.AtespaceKey):           actorRef.Atespace,
 				string(ateattr.ActorNameKey):          actorRef.Name,
@@ -137,20 +157,6 @@ func TestActorStateChangeRecords(t *testing.T) {
 				t.Errorf("got %d attributes, want %d: %v", len(got), len(want), got)
 			}
 
-			// The OTLP copy is the same record under an event name. One call writes
-			// both, so anything either copy holds alone is a bug in actorevent.Log.
-			gotEvents := events()
-			if len(gotEvents) != 1 {
-				t.Fatalf("got %d state events, want 1: %v", len(gotEvents), gotEvents)
-			}
-			if gotEvents[0].name != actorevent.StateChanged.Name {
-				t.Errorf("event name = %q, want %q", gotEvents[0].name, actorevent.StateChanged.Name)
-			}
-			if !maps.Equal(gotEvents[0].attrs, got) {
-				t.Errorf("state event attributes = %v, want the stdout record's %v", gotEvents[0].attrs, got)
-			}
-			assertCopiesAgree(t, (*records)[0], gotEvents[0], actorevent.StateChanged)
-
 			stored, err := persistence.GetActor(ctx, actorRef)
 			if err != nil {
 				t.Fatalf("reload actor: %v", err)
@@ -160,6 +166,23 @@ func TestActorStateChangeRecords(t *testing.T) {
 			}
 		})
 	}
+}
+
+// markOnly runs a suspend or pause on a RUNNING actor only as far as its mark
+// step: the actor gets a worker to checkpoint on, but the atelet dial fails,
+// so the SUSPENDING mark is the only transition the workflow commits.
+func markOnly(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, mode suspendMode) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := w.store.UpdateActor(ctx, ref, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status.WorkerAssignment = wireTestAssignment()
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateActor: %v", err)
+	}
+	w.dialer = newDanglingDialer()
+	_, err := w.SuspendActor(ctx, ref, mode)
+	assertStoppedAtDial(t, err)
 }
 
 // TestActorCreatedRecord covers creation. An actor created and never resumed
@@ -268,7 +291,10 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 
 	// Bump the stored version so the workflow's precondition is stale.
 	if _, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(stale), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.InProgressSnapshotUri = someActorSnapshotURI(t, testStorageLocation, "team-a", "someone-else")
+		toUpdate.Status.LastAssignedGeneration = 1
+		toUpdate.Status.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "someone-else", someActorSnapshotURI(t, testStorageLocation, "team-a", "someone-else"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+		}
 		return nil
 	}); err != nil {
 		t.Fatalf("bump version: %v", err)

@@ -26,8 +26,7 @@ type RequiredError struct {
 }
 
 func (e *RequiredError) Error() string {
-	return fmt.Sprintf("at least one of %s, config.%s or --%s must be set, got none",
-		e.Setting.Env, e.Setting.Key, e.Setting.Flag)
+	return fmt.Sprintf("at least one of %s must be set, got none", e.Setting.Channels())
 }
 
 // InvalidError reports a value that is not valid for its setting, naming the

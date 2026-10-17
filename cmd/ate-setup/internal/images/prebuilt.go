@@ -22,8 +22,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 )
 
 // koRef matches a whole ko:// reference: the prefix plus everything up to the
@@ -68,19 +66,6 @@ func NewPrebuilt(src Source, digest Digester) *Prebuilt {
 	return &Prebuilt{src: src, digest: digest, pinned: make(map[string]string)}
 }
 
-// ResolvePath rewrites the manifests a path covers.
-func (p *Prebuilt) ResolvePath(ctx context.Context, path string) ([]byte, error) {
-	manifest, err := kube.ReadPath(path)
-	if err != nil {
-		return nil, err
-	}
-	out, err := p.rewrite(ctx, manifest)
-	if err != nil {
-		return nil, fmt.Errorf("in %s: %w", path, err)
-	}
-	return out, nil
-}
-
 // ResolveBytes rewrites an in-memory manifest, such as kustomize output.
 func (p *Prebuilt) ResolveBytes(ctx context.Context, manifest []byte) ([]byte, error) {
 	return p.rewrite(ctx, manifest)
@@ -123,11 +108,10 @@ func (p *Prebuilt) Pin(ctx context.Context, image string) (string, error) {
 
 // rewrite replaces every ko:// reference with the image it maps to.
 //
-// Substitution is textual, the same way SubstituteVersion fills
-// ${SUBSTRATE_VERSION}. References appear in CRD fields as well as pod specs (a
-// WorkerPool's spec.workerImage, an ActorTemplate's image), so a schema walk
-// would need to know every such field, and rewriting the bytes leaves
-// everything else -- the multi-kilobyte Envoy configuration blocks in
+// Substitution is textual. References appear in CRD fields as well as pod
+// specs (a WorkerPool's spec.workerImage, an ActorTemplate's image), so a
+// schema walk would need to know every such field, and rewriting the bytes
+// leaves everything else -- the multi-kilobyte Envoy configuration blocks in
 // particular -- exactly as committed.
 func (p *Prebuilt) rewrite(ctx context.Context, manifest []byte) ([]byte, error) {
 	// Collect the failures rather than stopping at the first. Diagnosing them

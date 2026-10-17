@@ -17,6 +17,7 @@ package objectstorage
 import (
 	"io"
 	"runtime"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -47,12 +48,13 @@ type parZstd struct {
 	dst     io.Writer
 	workers int
 
-	buf     []byte
-	free    chan []byte
-	jobs    chan parZstdJob
-	ordered chan chan []byte
-	done    chan struct{}
-	err     error
+	buf      []byte
+	free     chan []byte
+	jobs     chan parZstdJob
+	ordered  chan chan []byte
+	done     chan struct{}
+	err      error
+	workerWG sync.WaitGroup
 }
 
 type parZstdJob struct {
@@ -77,7 +79,7 @@ func newParZstd(dst io.Writer, workers int) *parZstd {
 		p.free <- make([]byte, 0, parZstdChunk)
 	}
 	for range workers {
-		go p.worker()
+		p.workerWG.Go(p.worker)
 	}
 	go p.writer()
 	p.buf = <-p.free
@@ -142,6 +144,7 @@ func (p *parZstd) Close() error {
 	close(p.jobs)
 	close(p.ordered)
 	<-p.done
+	p.workerWG.Wait()
 	return p.err
 }
 

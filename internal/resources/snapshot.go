@@ -52,6 +52,23 @@ func (p StoragePrefix) IsZero() bool { return p == StoragePrefix{} }
 
 func (p StoragePrefix) String() string { return p.uri }
 
+// ParseStoragePrefix parses a storage prefix received as a string, such as a
+// snapshot URI or an owner's prefix. It rejects a bare bucket, so a prefix
+// can never name every object in a bucket.
+func ParseStoragePrefix(uri string) (StoragePrefix, error) {
+	if err := ValidateSnapshotLocation(uri); err != nil {
+		return StoragePrefix{}, err
+	}
+	u, err := url.Parse(uri)
+	if err != nil {
+		return StoragePrefix{}, fmt.Errorf("invalid storage prefix %q: %v", uri, err)
+	}
+	if strings.Trim(u.Path, "/") == "" {
+		return StoragePrefix{}, fmt.Errorf("invalid storage prefix %q: missing path", uri)
+	}
+	return StoragePrefix{uri: uri}, nil
+}
+
 // SnapshotOwner is the resource whose objects a snapshot's prefix holds: the
 // Actor that took it, or the Tag that copied it. Deletion is expressed as
 // "collect everything under my own prefix", so an owner cannot name another's

@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -107,6 +108,10 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	// CAP_DAC_OVERRIDE. Keyed by name so a repeated dir entry's last mode wins.
 	dirModes := map[string]os.FileMode{}
 
+	// Records each directory's tar mtime to restore after extraction, since
+	// creating child entries updates the parent directory's mtime.
+	dirModTimes := map[string]time.Time{}
+
 	// Ancestors an entry needed vs. directories the tar declared: the
 	// difference is recorded as ImplicitDirs (attrs fabricated, see the
 	// whiteoutSet field doc). Whiteout/opaque markers count too — their
@@ -120,6 +125,27 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				implicit[p] = true
 			}
 		}
+	}
+
+	// replaceExisting removes whatever is at name ("later entry wins" within a
+	// layer) and drops any deferred dir mode/mtime restore for name and its
+	// subtree so the restore pass does not chmod a removed directory.
+	replaceExisting := func(name, before string) error {
+		if _, err := root.Lstat(name); err == nil {
+			if err := root.RemoveAll(name); err != nil {
+				return fmt.Errorf("while replacing existing path at %q before %s: %w", name, before, err)
+			}
+			prefix := name + "/"
+			for d := range dirModes {
+				if d == name || strings.HasPrefix(d, prefix) {
+					delete(dirModes, d)
+					delete(dirModTimes, d)
+				}
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("while checking existing path at %q before %s: %w", name, before, err)
+		}
+		return nil
 	}
 
 	tarReader := tar.NewReader(tarData)
@@ -155,6 +181,16 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			continue
 		}
 
+		// Skip device nodes like rootless containerd does: an image must never
+		// grant device access, and the runtime provides /dev.
+		if hdr.Typeflag == tar.TypeChar || hdr.Typeflag == tar.TypeBlock {
+			if err := replaceExisting(name, "device node"); err != nil {
+				return nil, err
+			}
+			slog.DebugContext(ctx, "Skipping device node in image layer", slog.String("name", name))
+			continue
+		}
+
 		mode := hdr.FileInfo().Mode().Perm()
 
 		// A layer tar routinely omits entries for parent directories that
@@ -176,12 +212,8 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			// 1. If it's a symlink, we don't write through it (security vulnerability / incorrectness).
 			// 2. If it's a hardlink, we unlink it instead of truncating the shared inode.
 			// 3. If it's a directory, we recursively remove it so we can write the file.
-			if _, err := root.Lstat(name); err == nil {
-				if err := root.RemoveAll(name); err != nil {
-					return nil, fmt.Errorf("while replacing existing path at %q before regular file: %w", name, err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return nil, fmt.Errorf("while checking existing path at %q before regular file: %w", name, err)
+			if err := replaceExisting(name, "regular file"); err != nil {
+				return nil, err
 			}
 
 			// Stream directly from tarReader to target file to avoid buffering in memory.
@@ -199,6 +231,9 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			if closeErr != nil {
 				return nil, fmt.Errorf("while closing file %q: %w", name, closeErr)
 			}
+			if err := restoreModTime(root, name, hdr.ModTime); err != nil {
+				return nil, err
+			}
 
 		case tar.TypeDir:
 			// Create owner-writable so children can be written even when the image
@@ -213,6 +248,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				return nil, fmt.Errorf("while creating directory=%q, mode=%v: %w", name, mode, err)
 			}
 			dirModes[name] = mode
+			dirModTimes[name] = hdr.ModTime
 			declared[name] = true
 			delete(implicit, name)
 
@@ -227,19 +263,19 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 						continue
 					}
 				}
-				// Root.RemoveAll removes the symlink entry itself; it does NOT
-				// traverse and remove the directory the symlink points to.
-				// That's the desired semantic here — replace this path's
-				// entry without touching whatever the prior symlink targeted.
-				if err := root.RemoveAll(name); err != nil {
-					return nil, fmt.Errorf("while replacing existing path at %q before symlink: %w", name, err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return nil, fmt.Errorf("while checking existing path at %q before symlink: %w", name, err)
+			}
+			// Root.RemoveAll removes the symlink entry itself; it does NOT
+			// traverse and remove the directory the symlink points to.
+			// That's the desired semantic here — replace this path's
+			// entry without touching whatever the prior symlink targeted.
+			if err := replaceExisting(name, "symlink"); err != nil {
+				return nil, err
 			}
 			if err := root.Symlink(hdr.Linkname, name); err != nil {
 				return nil, fmt.Errorf("while creating symlink src=%q target=%q: %w", name, hdr.Linkname, err)
 			}
+			// The symlink's own mtime is not restored: Chtimes follows the link,
+			// so it would stamp the target instead.
 
 		case tar.TypeLink:
 			linkname, linkSkip, err := validateTarName(hdr.Linkname)
@@ -250,25 +286,23 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				return nil, fmt.Errorf("invalid hardlink target for %q: empty", name)
 			}
 			// Same "later entry wins" handling as TypeSymlink: replace existing entry.
-			if _, err := root.Lstat(name); err == nil {
-				if err := root.RemoveAll(name); err != nil {
-					return nil, fmt.Errorf("while replacing existing path at %q before hardlink: %w", name, err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return nil, fmt.Errorf("while checking existing path at %q before hardlink: %w", name, err)
+			if err := replaceExisting(name, "hardlink"); err != nil {
+				return nil, err
 			}
 			if err := root.Link(linkname, name); err != nil {
 				return nil, fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
 			}
+			// No mtime to restore: the link shares the target's inode, which
+			// already has the target entry's mtime.
 
 		default:
 			tfStr := string([]byte{hdr.Typeflag})
-			slog.ErrorContext(ctx, "Unhandled tar entry typeflag", slog.String("typeflag", tfStr), slog.Any("hdr", hdr))
-			return nil, fmt.Errorf("unhandled tar entry typeflag %q", tfStr)
+			slog.ErrorContext(ctx, "Unhandled tar entry typeflag", slog.String("typeflag", tfStr), slog.String("name", name), slog.Any("hdr", hdr))
+			return nil, fmt.Errorf("unhandled tar entry typeflag %q at %q", tfStr, name)
 		}
 	}
 
-	// Restore the image's intended directory modes now that every child exists.
+	// Restore the image's intended directory modes and mtime now that every child exists.
 	// Deepest paths first: a child's path is always longer than its parent's, so
 	// length-descending order guarantees a directory is restored before any of its
 	// ancestors — restoring a parent to a non-traversable mode then can't block
@@ -281,6 +315,9 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	for _, name := range dirs {
 		if err := root.Chmod(name, dirModes[name]); err != nil {
 			return nil, fmt.Errorf("while restoring mode %v on directory %q: %w", dirModes[name], name, err)
+		}
+		if err := restoreModTime(root, name, dirModTimes[name]); err != nil {
+			return nil, err
 		}
 	}
 
@@ -312,4 +349,17 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	sort.Strings(wh.ImplicitDirs)
 
 	return wh, nil
+}
+
+// restoreModTime sets the atime and mtime of an unpacked path to the mtime its
+// tar entry records, so that every node unpacks a layer to the same tree (see
+// the deterministic-unpack note in cmd/ateworker-microvm/restore.go).
+func restoreModTime(root *os.Root, name string, modTime time.Time) error {
+	if modTime.IsZero() {
+		return nil
+	}
+	if err := root.Chtimes(name, modTime, modTime); err != nil {
+		return fmt.Errorf("while restoring mtime on %q: %w", name, err)
+	}
+	return nil
 }

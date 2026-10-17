@@ -16,9 +16,10 @@ package e2e
 
 import (
 	"context"
+	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // ProbeName is the name of the probe fixture's WorkerPool and ActorTemplate,
@@ -35,18 +36,30 @@ var probeManifests = SubstrateFixtureManifests{
 // ProbeOption adjusts what DeployProbe installs.
 type ProbeOption func(*probeConfig)
 
-type probeConfig struct{ trustBundle bool }
+type probeConfig struct{ trustBundles []string }
+
+// The allowlisted names atelet resolves trust bundles by.
+const (
+	egressTrustBundleName = "egress-mitm.ate.dev"
+	systemRootsBundleName = "system-roots.ate.dev"
+)
 
 // WithTrustBundle projects the egress trust bundle into the probe's
 // system-info volume, ensuring the cluster-scoped bundle exists first.
 //
-// Only suites that ASSERT the projection ask for it. The bundle is derived
-// from a single cluster-wide Secret, so a suite that merely needs a probe must
-// not depend on it: it would then fail whenever the suite that owns the pool
-// finishes and takes the bundle with it. For the same reason two suites that
-// opt in must not run concurrently — CI runs the egress ones in their own
-// step, leaving the identity suite the only opt-in in the standard lanes.
-func WithTrustBundle() ProbeOption { return func(c *probeConfig) { c.trustBundle = true } }
+// Only suites that test the bundle should ask for it. An actor whose template
+// includes the bundle won't start if the bundle is missing, so a suite that
+// just needs a probe shouldn't depend on it.
+func WithTrustBundle() ProbeOption {
+	return func(c *probeConfig) { c.trustBundles = append(c.trustBundles, egressTrustBundleName) }
+}
+
+// WithSystemRoots adds the WebPKI roots atelet ships to the probe's projected
+// trust file, as the egress demo's template combines them with the egress
+// trust bundle.
+func WithSystemRoots() ProbeOption {
+	return func(c *probeConfig) { c.trustBundles = append(c.trustBundles, systemRootsBundleName) }
+}
 
 // DeployProbe builds the probe fixture image and installs the fixture for the
 // sandbox class under test, removing it when the test ends. name
@@ -62,12 +75,12 @@ func DeployProbe(t *testing.T, bucket, name string, opts ...ProbeOption) (string
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	if cfg.trustBundle {
+	if slices.Contains(cfg.trustBundles, egressTrustBundleName) {
 		// Every actor from this template — the fixture's golden boot included —
 		// fails closed while the bundle is missing, so it has to exist first.
 		EnsureEgressTrustBundle(t, context.Background(), GetClients())
 	}
 
-	atespace, templates := DeploySubstrateFixture(t, context.Background(), GetClients(), probeManifests, bucket, name, cfg.trustBundle)
+	atespace, templates := DeploySubstrateFixture(t, context.Background(), GetClients(), probeManifests, bucket, name, cfg.trustBundles)
 	return atespace, templates[0]
 }

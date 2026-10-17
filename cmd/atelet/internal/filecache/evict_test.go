@@ -18,6 +18,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -385,5 +386,106 @@ func TestRetireEntryRetiresUnchangedEntry(t *testing.T) {
 	}
 	if stats.RetiredRemoved != 1 {
 		t.Errorf("sweep stats = %+v, want RetiredRemoved=1", stats)
+	}
+}
+
+// cacheTree materializes a tree entry through GetDirTo, backdates its
+// last-use clock by age, and returns its key and the consumer's directory.
+// keepFiles is the subset of the tree the consumer keeps linked (nil: the
+// whole consumer dir is removed, as when an actor dir is wiped).
+func cacheTree(t *testing.T, s *Store, name string, age time.Duration, keepFiles []string) (Key, string) {
+	t.Helper()
+	key := URIKey("test://tree/" + name)
+	fetch, _ := treeFetcher(releaseTree)
+	dst := dstPath(t, s, "evict-tree-"+name)
+	if err := s.GetDirTo(context.Background(), key, dst, fetch); err != nil {
+		t.Fatalf("GetDirTo(%s): %v", name, err)
+	}
+	if keepFiles == nil {
+		if err := os.RemoveAll(dst); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		for rel := range releaseTree {
+			if slices.Contains(keepFiles, rel) {
+				continue
+			}
+			if err := os.Remove(filepath.Join(dst, rel)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	stale := time.Now().Add(-age)
+	if err := os.Chtimes(s.entryDir(key), stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	return key, dst
+}
+
+func TestEvictUnusedUnlinkedTreeFreesItsBytes(t *testing.T) {
+	s := newTestStore(t, WithMinAge(0))
+	key, _ := cacheTree(t, s, "gone", time.Hour, nil)
+	size, linked, err := s.sizeEntry(s.entryDir(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linked {
+		t.Fatal("tree with no consumer links reported linked")
+	}
+
+	stats, err := s.EvictUnused(context.Background(), evictAll, false)
+	if err != nil {
+		t.Fatalf("EvictUnused: %v", err)
+	}
+	if stats.Retired != 1 || stats.FreedBytes != size || stats.PendingBytes != 0 {
+		t.Errorf("stats = %+v, want one eviction freeing %d bytes", stats, size)
+	}
+	if entryExists(t, s, key) {
+		t.Error("entry still published after eviction")
+	}
+	noRetiredLeftovers(t, s)
+}
+
+// TestEvictUnusedPartlyLinkedTreeIsSafeForConsumer pins that a tree counts
+// as linked while a consumer keeps any one of its files, and that evicting
+// it leaves the consumer's files intact.
+func TestEvictUnusedPartlyLinkedTreeIsSafeForConsumer(t *testing.T) {
+	s := newTestStore(t, WithMinAge(0))
+	key, dst := cacheTree(t, s, "held", time.Hour, []string{"gvisor-bin/LICENSE"})
+	if _, linked, err := s.sizeEntry(s.entryDir(key)); err != nil || !linked {
+		t.Fatalf("tree with one consumer link reported linked=%v, %v; want true", linked, err)
+	}
+
+	stats, err := s.EvictUnused(context.Background(), evictAll, false)
+	if err != nil {
+		t.Fatalf("EvictUnused: %v", err)
+	}
+	if stats.Retired != 1 || stats.FreedBytes != 0 || stats.PendingBytes == 0 {
+		t.Errorf("stats = %+v, want one eviction counted as pending bytes", stats)
+	}
+	if entryExists(t, s, key) {
+		t.Error("entry still published after eviction")
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "gvisor-bin", "LICENSE"))
+	if err != nil || string(got) != releaseTree["gvisor-bin/LICENSE"].content {
+		t.Errorf("consumer's kept file after eviction: %q, %v", got, err)
+	}
+	noRetiredLeftovers(t, s)
+}
+
+func TestEvictUnusedPrefersUnlinkedTreeOverOlderLinkedTree(t *testing.T) {
+	s := newTestStore(t, WithMinAge(0))
+	linkedKey, _ := cacheTree(t, s, "old-linked", 3*time.Hour, []string{"runsc"})
+	unlinkedKey, _ := cacheTree(t, s, "new-unlinked", time.Hour, nil)
+
+	stats, err := s.EvictUnused(context.Background(), 1, false)
+	if err != nil {
+		t.Fatalf("EvictUnused: %v", err)
+	}
+	if stats.Retired != 1 {
+		t.Fatalf("stats = %+v, want exactly one eviction", stats)
+	}
+	if entryExists(t, s, unlinkedKey) || !entryExists(t, s, linkedKey) {
+		t.Error("evicted the older linked tree instead of the newer unlinked one")
 	}
 }

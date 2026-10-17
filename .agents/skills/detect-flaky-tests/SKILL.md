@@ -51,7 +51,7 @@ For each run, you need logs from **two jobs**:
 | Job name | Coverage |
 |---|---|
 | `run-tests` | Unit + integration tests (`go test -race -v ./...`) |
-| `e2e-test` | E2E suite, both sandbox classes — two sequential steps in the one job |
+| `e2e-test`, `e2e-test (envoy, preview)` | E2E suite, both sandbox classes — two sequential steps in each job |
 
 ```bash
 # List all jobs for a run
@@ -62,10 +62,17 @@ gh api "repos/agent-substrate/substrate/actions/runs/<RUN_ID>/jobs" \
 gh api "repos/agent-substrate/substrate/actions/jobs/<JOB_ID>/logs" > /tmp/job_<JOB_ID>.log
 ```
 
-The two e2e lanes are NOT a matrix — `e2e-test` is a single job that runs the step
+`e2e-test` is a matrix over preview mode: `e2e-test` runs with no preview features,
+skipping their tests, and `e2e-test (envoy, preview)` runs with every one on. Other
+dataplanes, where they run, are named `e2e-test (<dataplane>)` and `e2e-test
+(<dataplane>, preview)`. Match all of them by the `e2e-test` prefix, and keep the
+preview mode with each result: a test that fails only without preview features is a
+gating bug, not a flake.
+
+The two sandbox-class lanes are NOT a matrix — each `e2e-test` job runs the step
 "Run E2E tests (gVisor)" followed by "Run E2E tests (micro-VM)" (same
 `hack/run-e2e-kind.sh` command, the second with `E2E_SANDBOX_CLASS: microvm`). Split the
-one `e2e-test` job log at the "Run E2E tests (micro-VM)" step boundary: PASS/FAIL lines
+each `e2e-test` job log at the "Run E2E tests (micro-VM)" step boundary: PASS/FAIL lines
 before it belong to the gVisor lane, lines after it to the microVM lane. Because the
 steps are sequential, a gVisor-lane failure means the micro-VM step never ran — record
 no microVM results for that run rather than counting them as failures.
@@ -77,7 +84,8 @@ grep -E '^--- (PASS|FAIL): ' /tmp/job_<JOB_ID>.log \
 ```
 
 Track results per (test_name, job_type) where job_type is one of:
-`unit`, `e2e-gvisor`, `e2e-microvm`.
+`unit`, `e2e-gvisor`, `e2e-microvm`, `e2e-gvisor-preview`, `e2e-microvm-preview`. The
+`-preview` job types come from the preview jobs; the others from the jobs without.
 
 ---
 
@@ -167,7 +175,7 @@ gh issue create \
 ## Flaky test detected
 
 **Test:** `<TEST_NAME>`
-**Job:** `<e2e-gvisor | e2e-microvm | unit>`
+**Job:** `<e2e-gvisor | e2e-microvm | e2e-gvisor-preview | e2e-microvm-preview | unit>`
 
 ### Evidence (last 7 days)
 
@@ -219,7 +227,7 @@ gh issue create \
 ## Recurring infrastructure failure in CI
 
 **Pattern:** `<infra error pattern>`
-**Job type:** `<unit | e2e-gvisor | e2e-microvm>`
+**Job type:** `<unit | e2e-gvisor | e2e-microvm | e2e-gvisor-preview | e2e-microvm-preview>`
 
 ### Evidence
 

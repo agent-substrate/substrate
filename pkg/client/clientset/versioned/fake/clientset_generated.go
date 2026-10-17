@@ -17,9 +17,9 @@
 package fake
 
 import (
-	clientset "github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
-	apiv1alpha1 "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/typed/api/v1alpha1"
-	fakeapiv1alpha1 "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/typed/api/v1alpha1/fake"
+	clientset "go.ate.dev/substrate/pkg/client/clientset/versioned"
+	apiv1alpha1 "go.ate.dev/substrate/pkg/client/clientset/versioned/typed/api/v1alpha1"
+	fakeapiv1alpha1 "go.ate.dev/substrate/pkg/client/clientset/versioned/typed/api/v1alpha1/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"

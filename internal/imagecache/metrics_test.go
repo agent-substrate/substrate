@@ -29,7 +29,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateattr"
 )
 
 // newMeteredStore opens a store against a local ManualReader-backed provider,

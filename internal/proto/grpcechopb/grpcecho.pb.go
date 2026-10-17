@@ -206,7 +206,7 @@ const file_grpcecho_proto_rawDesc = "" +
 	"\x04Echo\x12\x15.grpcecho.EchoRequest\x1a\x16.grpcecho.EchoResponse\"\x00\x12E\n" +
 	"\n" +
 	"EchoStream\x12\x1b.grpcecho.EchoStreamRequest\x1a\x16.grpcecho.EchoResponse\"\x000\x01\x12?\n" +
-	"\bEchoBidi\x12\x15.grpcecho.EchoRequest\x1a\x16.grpcecho.EchoResponse\"\x00(\x010\x01B@Z>github.com/agent-substrate/substrate/internal/proto/grpcechopbb\x06proto3"
+	"\bEchoBidi\x12\x15.grpcecho.EchoRequest\x1a\x16.grpcecho.EchoResponse\"\x00(\x010\x01B0Z.go.ate.dev/substrate/internal/proto/grpcechopbb\x06proto3"
 
 var (
 	file_grpcecho_proto_rawDescOnce sync.Once

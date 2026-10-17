@@ -16,6 +16,7 @@ package objectstorage
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -59,7 +60,7 @@ const sparseEndOffset int64 = -1
 // compress from "scan the whole logical image" (e.g. 2GiB) to "scan the resident
 // set" (e.g. ~150MiB). Returns the logical size and the populated (pre-compression)
 // byte count. All integers are little-endian.
-func writeSparseZstd(dst io.Writer, src *os.File) (logical, dataBytes int64, err error) {
+func writeSparseZstd(ctx context.Context, dst io.Writer, src *os.File, workers int) (logical, dataBytes int64, err error) {
 	fi, err := src.Stat()
 	if err != nil {
 		return 0, 0, err
@@ -78,14 +79,14 @@ func writeSparseZstd(dst io.Writer, src *os.File) (logical, dataBytes int64, err
 		return 0, 0, err
 	}
 
-	// One worker per chunk the file can fill, so a small object does not pay for a pool.
-	zw := newParZstd(dst, int(size/parZstdChunk)+1)
+	zw := newParZstd(dst, workers)
+	cw := contextWriter{ctx: ctx, dst: zw}
 	// fail closes the encoder before returning err (Close flushes/frees state).
 	fail := func(e error) (int64, int64, error) {
 		zw.Close()
 		return 0, 0, e
 	}
-	if err := binary.Write(zw, binary.LittleEndian, size); err != nil {
+	if err := binary.Write(cw, binary.LittleEndian, size); err != nil {
 		return fail(err)
 	}
 
@@ -104,23 +105,23 @@ func writeSparseZstd(dst io.Writer, src *os.File) (logical, dataBytes int64, err
 			return fail(fmt.Errorf("SEEK_HOLE: %w", serr))
 		}
 		length := de - ds
-		if err := binary.Write(zw, binary.LittleEndian, ds); err != nil {
+		if err := binary.Write(cw, binary.LittleEndian, ds); err != nil {
 			return fail(err)
 		}
-		if err := binary.Write(zw, binary.LittleEndian, length); err != nil {
+		if err := binary.Write(cw, binary.LittleEndian, length); err != nil {
 			return fail(err)
 		}
 		if _, err := src.Seek(ds, io.SeekStart); err != nil {
 			return fail(err)
 		}
-		n, cerr := io.CopyN(zw, src, length)
+		n, cerr := io.CopyN(cw, src, length)
 		dataBytes += n
 		if cerr != nil {
 			return fail(fmt.Errorf("reading extent @%d+%d: %w", ds, length, cerr))
 		}
 		off = de
 	}
-	if err := binary.Write(zw, binary.LittleEndian, sparseEndOffset); err != nil {
+	if err := binary.Write(cw, binary.LittleEndian, sparseEndOffset); err != nil {
 		return fail(err)
 	}
 	if err := zw.Close(); err != nil {

@@ -37,10 +37,10 @@ import (
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 
-	"github.com/agent-substrate/substrate/internal/plugins/gcp-secret-manager/internal/mtls"
-	"github.com/agent-substrate/substrate/internal/plugins/gcp-secret-manager/internal/provider"
+	"go.ate.dev/substrate/internal/plugins/gcp-secret-manager/internal/mtls"
+	"go.ate.dev/substrate/internal/plugins/gcp-secret-manager/internal/provider"
 )
 
 var (

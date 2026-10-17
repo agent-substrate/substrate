@@ -17,8 +17,9 @@ package controlapi
 import (
 	"errors"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/apierror"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const maxPageSize = 1000
@@ -30,6 +31,10 @@ func effectivePageSize(requested int32) int32 {
 		return maxPageSize
 	}
 	return requested
+}
+
+func toStoreListOptions(opts *ateapipb.ListOptions) store.ListOptions {
+	return store.ListOptions{PageSize: effectivePageSize(opts.GetPageSize()), PageToken: opts.GetPageToken()}
 }
 
 func mapListError(err error) error {

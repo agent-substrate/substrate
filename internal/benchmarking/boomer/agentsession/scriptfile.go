@@ -80,15 +80,16 @@ type opArgs struct {
 
 // opSpec says which arguments an op kind takes.
 type opSpec struct {
-	kind   opKind
-	key    bool // takes key
-	size   bool // takes size
-	millis bool // takes millis and parallel
+	kind     opKind
+	key      bool // takes key
+	size     bool // takes size
+	millis   bool // takes millis
+	parallel bool // takes parallel (implies millis)
 }
 
 var opSpecs = map[string]opSpec{
 	"ingest":           {kind: opIngest, key: true, size: true},
-	"burn_cpu":         {kind: opBurnCPU, millis: true},
+	"burn_cpu":         {kind: opBurnCPU, millis: true, parallel: true},
 	"write_disk":       {kind: opWriteDisk, key: true, size: true},
 	"read_disk_digest": {kind: opReadDiskDigest, key: true},
 	"read_disk_data":   {kind: opReadDiskData, key: true},
@@ -96,6 +97,7 @@ var opSpecs = map[string]opSpec{
 	"churn_ram":        {kind: opChurnRAM, key: true, size: true},
 	"walk_ram":         {kind: opWalkRAM, key: true},
 	"ping":             {kind: opPing},
+	"dwell":            {kind: opDwell, millis: true},
 }
 
 // opNames is the inverse of opSpecs, for encoding and messages.
@@ -205,13 +207,17 @@ func decodeOp(od opDoc) (op, error) {
 		if args.Millis <= 0 {
 			return op{}, fmt.Errorf("%s: millis must be positive", name)
 		}
+		o.millis = args.Millis
+	} else if args.Millis != 0 {
+		return op{}, fmt.Errorf("%s: takes no millis", name)
+	}
+	if spec.parallel {
 		if args.Parallel < 0 {
 			return op{}, fmt.Errorf("%s: parallel cannot be negative", name)
 		}
-		o.millis = args.Millis
 		o.parallel = max(args.Parallel, 1)
-	} else if args.Millis != 0 || args.Parallel != 0 {
-		return op{}, fmt.Errorf("%s: takes no millis or parallel", name)
+	} else if args.Parallel != 0 {
+		return op{}, fmt.Errorf("%s: takes no parallel", name)
 	}
 	return o, nil
 }
@@ -283,6 +289,8 @@ func encodeOp(o op) (*yaml.Node, error) {
 	}
 	if spec.millis {
 		addScalar(args, "millis", strconv.FormatInt(o.millis, 10))
+	}
+	if spec.parallel {
 		addScalar(args, "parallel", strconv.Itoa(int(o.parallel)))
 	}
 	wrapper := &yaml.Node{Kind: yaml.MappingNode}

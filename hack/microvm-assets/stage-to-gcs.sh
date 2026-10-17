@@ -15,8 +15,11 @@
 # limitations under the License.
 
 # Stage the assembled micro-VM asset set into the GCS snapshot bucket under
-# kata-assets/, where atelet fetches it (per demos/counter/counter-microvm.yaml.tmpl).
-# The GKE counterpart of stage-to-rustfs.sh. Run after assemble.sh has produced $OUT.
+# kata-assets/, where atelet fetches it through the node's object-store plugin
+# (per manifests/microvm/sandboxconfig-microvm.yaml.tmpl). The plugin refuses
+# assets stored under a snapshot location (<snapshotConfig.location>/atespaces/),
+# so keep them outside it. The GKE counterpart of stage-to-rustfs.sh. Run after
+# assemble.sh has produced $OUT.
 #
 # Requires the `gcloud` CLI authenticated for the bucket's project. Env: OUT (asset
 # dir, default ./bin/microvm-assets/amd64), BUCKET (default ate-snapshots),

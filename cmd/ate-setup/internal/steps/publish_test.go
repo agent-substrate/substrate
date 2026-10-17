@@ -15,11 +15,12 @@
 package steps
 
 import (
+	"io"
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 )
 
 // TestKoRunnerPrebuilt covers the one resolver that cannot build. A pre-built
@@ -39,5 +40,16 @@ func TestKoRunnerPrebuilt(t *testing.T) {
 	// the thing they have to drop.
 	if !strings.Contains(err.Error(), "--image-repo") {
 		t.Errorf("koRunner() error = %q; want it to name --image-repo", err)
+	}
+}
+
+// Without a registry ko would fall back to its own default, so the release
+// command refuses before building anything.
+func TestPublishReleaseImagesNeedsARegistry(t *testing.T) {
+	e := &Env{Cfg: &config.Config{Root: t.TempDir()}}
+
+	err := e.PublishReleaseImages(t.Context(), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "KO_DOCKER_REPO") {
+		t.Errorf("PublishReleaseImages() error = %v, want one naming KO_DOCKER_REPO", err)
 	}
 }

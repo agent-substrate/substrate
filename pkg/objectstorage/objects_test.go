@@ -17,6 +17,7 @@ package objectstorage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -45,6 +46,53 @@ func (s *memStore) GetObject(_ context.Context, bucket, object string) (io.ReadC
 		return nil, fmt.Errorf("object %q/%q not found", bucket, object)
 	}
 	return io.NopCloser(bytes.NewReader(b)), nil
+}
+
+type closeErrorReader struct {
+	io.ReadCloser
+	closeErr error
+}
+
+func (r *closeErrorReader) Close() error {
+	return errors.Join(r.ReadCloser.Close(), r.closeErr)
+}
+
+type closeErrorStore struct {
+	*memStore
+	closeErr error
+}
+
+func (s *closeErrorStore) GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
+	r, err := s.memStore.GetObject(ctx, bucket, object)
+	if err != nil {
+		return nil, err
+	}
+	return &closeErrorReader{ReadCloser: r, closeErr: s.closeErr}, nil
+}
+
+func TestFetchFromGCSWithZstdCloseError(t *testing.T) {
+	var compressed bytes.Buffer
+	if _, err := writeContent(context.Background(), &compressed, bytes.NewBufferString("snapshot payload"), 2); err != nil {
+		t.Fatal(err)
+	}
+	closeErr := errors.New("object reader close failed")
+	for _, tc := range []struct {
+		name    string
+		data    []byte
+		wantErr error
+	}{
+		{name: "successful decode", data: compressed.Bytes(), wantErr: closeErr},
+		{name: "truncated object", data: compressed.Bytes()[:compressed.Len()-1], wantErr: io.ErrUnexpectedEOF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &closeErrorStore{memStore: newMemStore(), closeErr: closeErr}
+			store.m["bucket/snapshot"] = tc.data
+			err := fetchFromGCSWithZstd(context.Background(), store, "gs://bucket/snapshot", io.Discard)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("fetchFromGCSWithZstd() error = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
 }
 
 // streamingMemStore is a memStore that advertises streaming PutObject support, so
@@ -205,7 +253,7 @@ func TestSparseVersionRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if _, _, err := writeSparseZstd(&buf, f); err != nil {
+	if _, _, err := writeSparseZstd(context.Background(), &buf, f, 2); err != nil {
 		t.Fatalf("writeSparseZstd: %v", err)
 	}
 	f.Close()
@@ -259,7 +307,7 @@ func TestWriteSparseZstdSkipsHoles(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	logical, dataBytes, err := writeSparseZstd(&buf, src)
+	logical, dataBytes, err := writeSparseZstd(context.Background(), &buf, src, 2)
 	if err != nil {
 		t.Fatalf("writeSparseZstd: %v", err)
 	}
@@ -280,8 +328,7 @@ func TestPlainZstdBackwardCompatRoundTrip(t *testing.T) {
 	store := newMemStore()
 	ctx := context.Background()
 	const gsURL = "gs://bucket/snap/config.json.zstd"
-	// SendBytesToGCS is uncompressed; use sendZstd with a non-file reader to
-	// hit the plain-zstd branch (no magic).
+	// Use a non-file reader to hit the plain-zstd branch (no magic).
 	if err := sendZstd(ctx, store, gsURL, bytes.NewReader(want)); err != nil {
 		t.Fatalf("upload: %v", err)
 	}
@@ -403,7 +450,7 @@ func TestWriteDecodeContentRoundTrip(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		wres, err := writeContent(&buf, src)
+		wres, err := writeContent(context.Background(), &buf, src, 2)
 		if err != nil {
 			t.Fatalf("writeContent: %v", err)
 		}
@@ -447,7 +494,7 @@ func TestWriteDecodeContentRoundTrip(t *testing.T) {
 	t.Run("plain reader", func(t *testing.T) {
 		want := bytes.Repeat([]byte("substrate payload\n"), 1000)
 		var buf bytes.Buffer
-		wres, err := writeContent(&buf, bytes.NewReader(want))
+		wres, err := writeContent(context.Background(), &buf, bytes.NewReader(want), 2)
 		if err != nil {
 			t.Fatalf("writeContent: %v", err)
 		}

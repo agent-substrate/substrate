@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -242,14 +242,15 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 	actor := &ateapipb.Actor{
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-agents", Name: "support-agent"},
 		Status: &ateapipb.ActorStatus{
-			WorkerAssignment: &ateapipb.WorkerAssignment{WorkerNamespace: "ate-workers", WorkerPool: "pool-a"},
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				WorkerNamespace: "ate-workers",
+				WorkerPool:      "pool-a",
+				SandboxRuntime:  &ateapipb.SandboxRuntime{SandboxClass: "gvisor"},
+			},
 		},
 	}
-	template := &ateapipb.ActorTemplate{
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
-	}
 	inst.recordLifecycleOp(context.Background(), ateattr.OperationResume, time.Now(), nil,
-		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest, ateattr.SnapshotScopeData)...)
+		lifecycleOpAttrs(actor, ateattr.SnapshotKindLatest, ateattr.SnapshotFidelityVolumes)...)
 
 	dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)
 	assertAttrKeys(t, dp,
@@ -260,7 +261,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 		ateattr.WorkerPoolNameKey,
 		ateattr.SandboxClassKey,
 		ateattr.SnapshotKindKey,
-		ateattr.SnapshotScopeKey,
+		ateattr.SnapshotFidelityKey,
 	)
 	if op, _ := attrString(dp, ateattr.ActorOperationNameKey); op != ateattr.OperationResume {
 		t.Errorf("operation = %q, want %q", op, ateattr.OperationResume)
@@ -272,8 +273,8 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 	}
 	// Kind and scope are independent: a data restore of the actor's
 	// own latest snapshot must stay distinguishable from one of a local snapshot.
-	if scope, _ := attrString(dp, ateattr.SnapshotScopeKey); scope != ateattr.SnapshotScopeData {
-		t.Errorf("snapshot scope = %q, want %q", scope, ateattr.SnapshotScopeData)
+	if scope, _ := attrString(dp, ateattr.SnapshotFidelityKey); scope != ateattr.SnapshotFidelityVolumes {
+		t.Errorf("snapshot fidelity = %q, want %q", scope, ateattr.SnapshotFidelityVolumes)
 	}
 	if kind, _ := attrString(dp, ateattr.SnapshotKindKey); kind != ateattr.SnapshotKindLatest {
 		t.Errorf("snapshot kind = %q, want %q", kind, ateattr.SnapshotKindLatest)
@@ -286,11 +287,21 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 // pins the pool pair: a failure before the assign step emits neither key.
 func TestLifecycleOpAttrsOmitsUnknownScope(t *testing.T) {
 	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-agents", Name: "support-agent"}}
-	for _, kv := range lifecycleOpAttrs(actor, nil, "", "") {
+	for _, kv := range lifecycleOpAttrs(actor, "", "") {
 		switch kv.Key {
-		case ateattr.SnapshotScopeKey, ateattr.SnapshotKindKey, ateattr.WorkerPoolNamespaceKey, ateattr.WorkerPoolNameKey:
+		case ateattr.SnapshotFidelityKey, ateattr.SnapshotKindKey, ateattr.WorkerPoolNamespaceKey, ateattr.WorkerPoolNameKey, ateattr.SandboxClassKey:
 			t.Errorf("attribute %s must be omitted while unknown, got %q", kv.Key, kv.Value.AsString())
 		}
+	}
+}
+
+// TestLifecycleOpAttrsOmitsTemplateBeforeLoad guards a failure before or in the
+// load step, such as lease contention or a missing ActorTemplate: the workflow
+// holds no actor, so the template keys are omitted, as on a failed delete,
+// rather than recorded as the empty string.
+func TestLifecycleOpAttrsOmitsTemplateBeforeLoad(t *testing.T) {
+	if got := lifecycleOpAttrs(nil, "", ""); len(got) != 0 {
+		t.Errorf("lifecycleOpAttrs(nil actor) = %v, want no attributes", got)
 	}
 }
 
@@ -311,7 +322,7 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 		{name: "wrapped apierror", op: ateattr.OperationResume, err: fmt.Errorf("workflow failed at step Load: %w", apierror.NotFound("missing")), wantErrorType: "NotFound"},
 		{name: "upstream status is what the caller gets", op: ateattr.OperationResume, err: fmt.Errorf("actor crashed: %w", status.Error(codes.Unavailable, "atelet down")), wantErrorType: "Internal"},
 		{name: "context deadline", op: ateattr.OperationSuspend, err: fmt.Errorf("while checkpointing: %w", context.DeadlineExceeded), wantErrorType: "DeadlineExceeded"},
-		{name: "plain error", op: ateattr.OperationPause, err: errors.New("store is down"), wantErrorType: "Internal"},
+		{name: "plain error", op: ateattr.OperationSuspend, err: errors.New("store is down"), wantErrorType: "Internal"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -365,7 +376,7 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 			outcome:  ateattr.SchedulerOutcomeNoCapacity,
 			pool:     "",
 			class:    "gvisor",
-			err:      apierror.FailedPrecondition("no free workers available"),
+			err:      apierror.FailedPrecondition("no worker has room for the actor"),
 			wantKeys: []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.SandboxClassKey},
 		},
 		{
@@ -381,7 +392,7 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			inst, reader := newTestInstruments(t)
-			inst.recordSchedulerAssignment(context.Background(), time.Now(), tt.outcome, tt.poolNamespace, tt.pool, tt.class, tt.err)
+			inst.recordSchedulerAssignment(context.Background(), 0, tt.outcome, tt.poolNamespace, tt.pool, tt.class, tt.err)
 
 			dp := singleHistogramDP(t, reader, schedulerAssignmentMetric)
 			assertAttrKeys(t, dp, tt.wantKeys...)
@@ -400,7 +411,7 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 func workerPool(namespace, name string, class atev1alpha1.SandboxClass) *atev1alpha1.WorkerPool {
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
-		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClass: class},
+		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: class}}},
 	}
 }
 

@@ -32,6 +32,8 @@ cd "${ROOT}"
 export NO_DEV_ENV="true"
 # images are pushed to the local registry
 export KO_DOCKER_REPO="${KO_DOCKER_REPO:-localhost:5001}"
+# only build fixtures for the host arch, like install-ate-kind.sh
+export KO_DEFAULTPLATFORMS="${KO_DEFAULTPLATFORMS:-linux/$(go env GOARCH)}"
 # default bucket name for local deployment (served by in-cluster rustfs)
 export BUCKET_NAME="${BUCKET_NAME:-ate-snapshots}"
 # target the local Kind cluster's context

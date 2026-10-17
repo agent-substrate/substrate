@@ -27,8 +27,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/internal/resources"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 const (

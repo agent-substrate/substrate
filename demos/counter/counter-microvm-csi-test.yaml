@@ -32,5 +32,6 @@ metadata:
     workload: counter-microvm-csi
 spec:
   replicas: 1
-  sandboxClass: microvm
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
+  sandboxClasses:
+  - name: microvm
+  workerImage: ko://go.ate.dev/substrate/cmd/ateworker-microvm

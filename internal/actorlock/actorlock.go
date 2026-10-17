@@ -83,6 +83,17 @@ func (l *Locks) Lock(ctx context.Context, actorUID string) bool {
 	return false
 }
 
+// Busy reports whether a lifecycle RPC holds or is waiting for the named
+// actor's lock. It never blocks, so a reader that must not take the lock can
+// still tell whether the actor is mid-operation. The answer may be stale by the
+// time it returns: use it for advisory checks, not to decide lifecycle actions.
+func (l *Locks) Busy(actorUID string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, ok := l.held[actorUID]
+	return ok
+}
+
 // Unlock releases the named actor's lock.
 func (l *Locks) Unlock(actorUID string) {
 	l.release(actorUID, true)

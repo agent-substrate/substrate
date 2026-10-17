@@ -20,9 +20,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,8 +32,8 @@ import (
 	"go.opentelemetry.io/otel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 )
 
 var BuildTag = "dev"
@@ -61,6 +63,17 @@ type FormattedQuery struct {
 	Action    string `json:"action"`
 	Target    string `json:"target"`
 	Duration  string `json:"duration"`
+}
+
+// listenStatus binds the /statusz listener on --status-address and
+// --status-port.
+func (c routerConfig) listenStatus() (net.Listener, error) {
+	addr := net.JoinHostPort(c.StatusAddr, strconv.Itoa(c.StatusPort))
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed binding Router HTTP status server address %q: %w", addr, err)
+	}
+	return lis, nil
 }
 
 func (s *RouterServer) getRouterIP(ctx context.Context) string {

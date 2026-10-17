@@ -30,10 +30,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/cmd"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/cmd"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/demos"
 	// Registers every bundled demo, so demos.All() is the real list.
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/all"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/all"
 )
 
 // stubGo is a `go` that records the arguments of every `go run ./cmd/ate-setup`
@@ -214,9 +215,20 @@ func TestShimTranslatesFlags(t *testing.T) {
 		args: []string{"--deploy-ate-system", "--cluster-size", "size10", "--cordon-control-plane"},
 		want: []string{"--cluster-size=size10 --cordon-control-plane deploy ate-system --setup-csi=none"},
 	}, {
+		name: "--fake-data-plane is forwarded to every action",
+		args: []string{"--deploy-ate-system", "--fake-data-plane", "--deploy-atelet"},
+		want: []string{
+			"--fake-data-plane deploy ate-system --setup-csi=none",
+			"--fake-data-plane deploy atelet",
+		},
+	}, {
 		name: "--cluster-size takes an attached value",
 		args: []string{"--cluster-size=size10", "--deploy-ate-apiserver"},
 		want: []string{"--cluster-size=size10 deploy apiserver"},
+	}, {
+		name: "--ateapi-log-level is forwarded in either value form",
+		args: []string{"--ateapi-log-level", "debug", "--deploy-ate-apiserver", "--ateapi-log-level=warn"},
+		want: []string{"--ateapi-log-level=debug --ateapi-log-level=warn deploy apiserver"},
 	}, {
 		name: "--credential-provider is forwarded with a separate value",
 		args: []string{"--deploy-atenet", "--credential-provider", `{"name":"custom","address":"cred.ate-system.svc:50051"}`},
@@ -243,6 +255,7 @@ func TestShimTranslatesFlags(t *testing.T) {
 			"--create-podcertificate-controller-cas",
 			"--create-api-server-env-vars",
 			"--create-api-authentication-config",
+			"--create-api-config",
 		},
 		want: []string{
 			"create jwt-authority-pool",
@@ -252,6 +265,7 @@ func TestShimTranslatesFlags(t *testing.T) {
 			"create podcertificate-controller-cas",
 			"create api-server-env-vars",
 			"create api-authentication-config",
+			"create api-config",
 		},
 	}, {
 		name: "delete flags",
@@ -424,4 +438,161 @@ func shimUsage(t *testing.T) string {
 		t.Fatalf("install-ate.sh --help: %v", err)
 	}
 	return string(out)
+}
+
+// Settings register from each command package's init, so the merged set only
+// exists in a binary that links the whole command tree. Package config cannot
+// check it: the commands that register are the ones config does not import.
+// This package does import them, which is what makes the check possible here
+// and nowhere below it.
+func TestSettingRegistryIsValidAcrossEveryCommand(t *testing.T) {
+	if err := config.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Command-scoped settings exist so a flag appears only where it applies. A
+// setting that named a command nobody built would silently never bind.
+func TestEveryScopedSettingNamesARealCommand(t *testing.T) {
+	for _, s := range config.All() {
+		for _, path := range s.Commands {
+			t.Run(s.Key+" on "+path, func(t *testing.T) {
+				target, _, err := cmd.Root().Find(strings.Fields(path))
+				if err != nil {
+					t.Fatalf("Find(%q): %v", path, err)
+				}
+				if target.CommandPath() != "ate-setup "+path {
+					t.Fatalf("%q resolved to %q, which is not that command", path, target.CommandPath())
+				}
+				if target.Flags().Lookup(s.Flag) == nil {
+					t.Errorf("--%s is not bound to %q", s.Flag, path)
+				}
+			})
+		}
+	}
+}
+
+// docPath resolves a repository path from this package's directory.
+func docPath(t *testing.T, rel string) string {
+	t.Helper()
+	root, err := config.RepoRoot()
+	if err != nil {
+		t.Fatalf("RepoRoot: %v", err)
+	}
+	return filepath.Join(root, rel)
+}
+
+// The worked example is the first thing an operator copies, so a renamed or
+// removed key has to break the build rather than their install.
+func TestExampleConfigurationParses(t *testing.T) {
+	path := docPath(t, "docs/examples/substrate-install.yaml")
+	f, err := config.ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile(%s) = %v", path, err)
+	}
+	if len(f.Keys()) == 0 {
+		t.Error("the example sets no settings, so it demonstrates nothing")
+	}
+}
+
+const operatorDoc = "docs/operator-install.md"
+
+// settingDocs maps a key prefix to the document that lists the settings under
+// it. Demo, benchmark, and e2e settings are documented with what uses them,
+// so the operator page lists only what an install uses.
+var settingDocs = []struct{ prefix, doc string }{
+	{"demo.counter.", "demos/counter/README.md"},
+	{"demo.anthropicAPIKey", "demos/claude-code-multiplex/README.md"},
+	{"benchmark.", "benchmarking/README.md"},
+	{"e2e.", "internal/e2e/README.md"},
+}
+
+// settingDoc returns the document that lists the setting with this key.
+func settingDoc(key string) string {
+	for _, d := range settingDocs {
+		if strings.HasPrefix(key, d.prefix) {
+			return d.doc
+		}
+	}
+	return operatorDoc
+}
+
+// readDoc returns the contents of a repository file, by relative path.
+func readDoc(t *testing.T, rel string) string {
+	t.Helper()
+	raw, err := os.ReadFile(docPath(t, rel))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	return string(raw)
+}
+
+// The settings tables are written by hand, so a setting added without
+// documenting it is the drift this catches. A demo, benchmark, or e2e setting
+// must also stay out of the operator page.
+func TestDocsListEverySetting(t *testing.T) {
+	docs := map[string]string{operatorDoc: readDoc(t, operatorDoc)}
+	for _, d := range settingDocs {
+		docs[d.doc] = readDoc(t, d.doc)
+	}
+
+	for _, s := range config.All() {
+		t.Run(s.Key, func(t *testing.T) {
+			rel := settingDoc(s.Key)
+			want := []string{"`" + s.Key + "`", "`" + s.Env + "`"}
+			// A secret has no flag, so the docs have none to name.
+			if s.Flag != "" {
+				want = append(want, "`--"+s.Flag+"`")
+			}
+			for _, want := range want {
+				if !strings.Contains(docs[rel], want) {
+					t.Errorf("%s does not mention %s", rel, want)
+				}
+			}
+			if rel != operatorDoc && strings.Contains(docs[operatorDoc], "`"+s.Key+"`") {
+				t.Errorf("%s lists %s, which belongs in %s", operatorDoc, s.Key, rel)
+			}
+		})
+	}
+}
+
+// The settings documentation must not name a setting that no longer exists:
+// following it would configure nothing and the install would silently use a
+// default.
+func TestDocsNameNoRemovedSetting(t *testing.T) {
+	// The two controls that select how configuration is read and reported.
+	// They are not settings themselves, so no registry entry declares them.
+	notSettings := map[string]bool{
+		"ATE_CONFIG":             true,
+		"ATE_NO_REPORT_DEFAULTS": true,
+	}
+
+	declared := map[string]bool{}
+	for _, s := range config.All() {
+		declared[s.Env] = true
+	}
+
+	root, err := config.RepoRoot()
+	if err != nil {
+		t.Fatalf("RepoRoot: %v", err)
+	}
+	files := []string{operatorDoc, "docs/examples/substrate-install.yaml"}
+	for _, d := range settingDocs {
+		files = append(files, d.doc)
+	}
+	for _, rel := range files {
+		raw, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", rel, err)
+		}
+		seen := map[string]bool{}
+		for _, m := range regexp.MustCompile(`\b(ATE_[A-Z0-9_]{3,})\b`).FindAllStringSubmatch(string(raw), -1) {
+			name := m[1]
+			if declared[name] || notSettings[name] || seen[name] {
+				continue
+			}
+			seen[name] = true
+			t.Errorf("%s names %s, which no setting declares", rel, name)
+		}
+	}
 }

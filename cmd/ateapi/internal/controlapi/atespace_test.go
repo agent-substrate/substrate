@@ -18,14 +18,14 @@ import (
 	"context"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/principal"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/principal"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
@@ -58,7 +58,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, nil)
+	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, nil, storetest.DefaultSystemPrincipals())
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}

@@ -25,9 +25,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // counterExtraPort is the counter demo's second listener (see
@@ -40,7 +40,7 @@ const counterExtraPort = 9090
 // other than an actor's primary one via HTTP CONNECT, with the target port
 // carried in the CONNECT authority (e.g. "<actor-dns>:9090") rather than a
 // separate header -- see ingress.Handler.HandleRequestHeaders and
-// atunnel.TargetPortHeader.
+// TargetPortHeader in internal/atunnel/ingress.
 //
 // CONNECT establishment itself (RouterClient.Connect) succeeds as soon as
 // atenet-router's connect_terminate listener reinjects the tunnel into
@@ -124,6 +124,28 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 			t.Fatalf("tunneled request to an unlisted port unexpectedly returned HTTP 200; body: %s", body)
 		}
 		t.Logf("tunneled request to an unlisted port correctly returned HTTP %d; body: %s", resp.StatusCode, body)
+	})
+
+	t.Run("duplicate actor header rejected on CONNECT", func(t *testing.T) {
+		headers := http.Header{
+			atenet.TargetActorHeader: []string{actorRef.String(), "untrusted/actor"},
+		}
+		conn, err := router.ConnectWithHeaders(ctx, actorRef, counterExtraPort, headers)
+		if err != nil {
+			// A rejected CONNECT handshake is a valid rejection.
+			t.Logf("CONNECT with duplicate headers rejected: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		resp, body, err := requestTunneled(conn, actorRef.Name)
+		if err != nil {
+			t.Logf("tunneled request with duplicate CONNECT headers correctly failed: %v", err)
+			return
+		}
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("request through CONNECT with duplicate actor headers returned %d, want 404; body: %s", resp.StatusCode, body)
+		}
 	})
 }
 

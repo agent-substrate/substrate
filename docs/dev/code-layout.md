@@ -26,12 +26,12 @@ substrate/
 
 **`pkg/`** is for Go packages with an external API contract — code that users or
 third-party tools may import directly from
-`github.com/agent-substrate/substrate/pkg/...`. Putting a package here signals
+`go.ate.dev/substrate/pkg/...`. Putting a package here signals
 a commitment to backwards-compatibility and discoverability.
 
 **`internal/`** is for Go packages that are shared across multiple binaries
 within this module but are not part of any external API. The Go toolchain
-enforces that nothing outside `github.com/agent-substrate/substrate` can import
+enforces that nothing outside `go.ate.dev/substrate` can import
 these. The exception is [`internal/plugins/`](../../internal/plugins/README.md):
 self-contained plugins, each a Go module of its own, in a temporary location
 that nothing else in the repo should depend on or import.
@@ -53,8 +53,8 @@ Each subdirectory of `cmd/` corresponds to one compiled binary:
 | `cmd/atecontroller`  | Kubernetes controller for WorkerPools (and network/egress resources) |
 | `cmd/atelet`         | Node supervisor (DaemonSet)                           |
 | `cmd/atenet`         | Network proxy / Envoy external-processing server      |
-| `cmd/ateom-gvisor`   | In-pod gVisor container image entry point             |
-| `cmd/ateom-microvm`  | In-pod kata + cloud-hypervisor micro-VM container image entry point |
+| `cmd/ateworker-gvisor`   | In-pod gVisor container image entry point             |
+| `cmd/ateworker-microvm`  | In-pod kata + cloud-hypervisor micro-VM container image entry point |
 | `cmd/kubectl-ate`    | `kubectl` plugin for interacting with Substrate       |
 | `cmd/podcertcontroller` | Controller that issues pod TLS certificates        |
 
@@ -101,5 +101,5 @@ When adding a new Go package, ask:
 3. **Is it a deliberately public API for external users?** → `pkg/<pkg>`
 4. **Is it a protobuf-generated package?**
    - Public gRPC API (control plane) → `pkg/proto/<name>`
-   - Internal gRPC API (atelet, ateom) → `internal/proto/<name>`
+   - Internal gRPC API (atelet, ateworker) → `internal/proto/<name>`
 5. **Is it a script or dev tool?** → `hack/` (shell) or `tools/<name>` (Go)

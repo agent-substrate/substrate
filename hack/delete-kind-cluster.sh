@@ -30,6 +30,22 @@ if [ "$#" -gt 0 ]; then
   esac
 fi
 
+# Unmount NFS volumes (e.g. from --setup-csi=nfs) before deleting. The NFS
+# server runs in the cluster, and once it is gone the node's hard mounts retry
+# forever, leaving the node stuck and impossible to remove. So stop everything
+# but the server and unmount while it is still up.
+for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}" 2>/dev/null); do
+  docker exec "${node}" sh -c '
+    grep -qE "^[^ ]+ [^ ]+ nfs4? " /proc/mounts || exit 0
+    systemctl stop kubelet
+    server="$(crictl pods -q --label app=nfs-server)"
+    for pod in $(crictl pods -q); do
+      case "${server}" in *"${pod}"*) ;; *) crictl stopp "${pod}" >/dev/null ;; esac
+    done
+    awk "\$3 ~ /^nfs4?\$/ {print \$2}" /proc/mounts | sort -r | xargs -r umount -l
+  ' || true
+done
+
 echo "Deleting kind cluster '${KIND_CLUSTER_NAME}'..."
 "${ROOT}"/hack/kind.sh delete cluster --name "${KIND_CLUSTER_NAME}"
 

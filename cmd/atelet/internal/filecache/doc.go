@@ -39,6 +39,10 @@
 //   - GetFileTo serves a hit as a hard link, created in the same locked
 //     step that resolves the hit. Evicting the entry later removes only the
 //     cache's own link; the consumer's file stays valid.
+//   - GetDirTo serves a hit as a directory the consumer owns, in which every
+//     file is a hard link, built in that same locked step. The consumer's
+//     tree stays valid after eviction, and the entry counts as linked while
+//     any of its files is.
 //   - GetFileCopyTo serves a private copy. The consumer owns the inode and
 //     may mutate it, and a copy in progress reads a held-open handle, so a
 //     concurrent eviction cannot corrupt it.
@@ -46,9 +50,10 @@
 //     than the window between publication and a consumer's use becoming
 //     visible. Size it for the slowest consumer.
 //
-// Entries are published read-only (0444): a consumer writing through its
-// hard link fails with EACCES instead of corrupting the shared bytes.
-// Consumers that must mutate a file use GetFileCopyTo.
+// Files are published read-only (0444, keeping any execute bits so a cached
+// binary stays runnable): a consumer writing through its hard link fails
+// with EACCES instead of corrupting the shared bytes. Consumers that must
+// mutate a file use GetFileCopyTo.
 //
 // Keys are identities, not addresses. The store never invalidates: a key
 // must name content that is immutable at its source (see URIKey); changed

@@ -15,7 +15,10 @@
 # limitations under the License.
 
 # Stage the assembled micro-VM asset set into the kind cluster's rustfs S3 bucket
-# under kata-assets/, where atelet fetches it (per manifests/microvm/sandboxconfig-microvm.yaml.tmpl).
+# under kata-assets/, where atelet fetches it through the node's object-store
+# plugin (per manifests/microvm/sandboxconfig-microvm.yaml.tmpl). The plugin
+# refuses assets stored under a snapshot location
+# (<snapshotConfig.location>/atespaces/), so keep them outside it.
 # Run after the cluster is up (hack/install-ate-kind.sh) and assemble.sh has produced $OUT.
 #
 # The S3 client runs in a throwaway container (the same pinned amazon/aws-cli

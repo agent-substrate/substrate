@@ -21,11 +21,11 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 func toMap(kvs []attribute.KeyValue) map[attribute.Key]attribute.Value {
@@ -160,7 +160,7 @@ func TestKeySpellings(t *testing.T) {
 		{WorkerStateKey, "ate.worker.state"},
 		{SandboxClassKey, "ate.sandbox.class"},
 		{SnapshotKindKey, "ate.snapshot.kind"},
-		{SnapshotScopeKey, "ate.snapshot.scope"},
+		{SnapshotFidelityKey, "ate.snapshot.fidelity"},
 		{SnapshotPhaseKey, "ate.snapshot.phase"},
 		{ImageCacheOutcomeKey, "ate.imagecache.outcome"},
 		{SchedulerOutcomeKey, "ate.scheduler.outcome"},
@@ -377,8 +377,8 @@ func TestMetricLabelValues(t *testing.T) {
 		{OperationCreate, "create"},
 		{OperationResume, "resume"},
 		{OperationSuspend, "suspend"},
-		{OperationPause, "pause"},
 		{OperationDelete, "delete"},
+		{OperationRevert, "revert"},
 		{OperationUnknown, "unknown"},
 
 		{ImageCacheOutcomeHit, "hit"},
@@ -396,18 +396,20 @@ func TestMetricLabelValues(t *testing.T) {
 		{SnapshotKindLocal, "local"},
 		{SnapshotKindBoot, "boot"},
 
-		{SnapshotScopeFull, "full"},
-		{SnapshotScopeData, "data"},
-		{SnapshotScopeUnknown, "unknown"},
+		{SnapshotFidelityMemory, "memory"},
+		{SnapshotFidelityVolumes, "volumes"},
+		{SnapshotFidelityRootfs, "rootfs"},
+		{SnapshotFidelityUnknown, "unknown"},
 
 		{SnapshotPhaseVolumeMount, "volume_mount"},
 		{SnapshotPhaseManifestFetch, "manifest_fetch"},
 		{SnapshotPhaseSandboxAssets, "sandbox_assets"},
 		{SnapshotPhaseDownload, "download"},
 		{SnapshotPhaseOCIUnpack, "oci_unpack"},
-		{SnapshotPhaseAteomRestore, "ateom_restore"},
-		{SnapshotPhaseAteomCheckpoint, "ateom_checkpoint"},
+		{SnapshotPhaseWorkerRestore, "worker_restore"},
+		{SnapshotPhaseWorkerCheckpoint, "worker_checkpoint"},
 		{SnapshotPhasePersist, "persist"},
+		{SnapshotPhaseCleanup, "cleanup"},
 		{SnapshotPhaseTotal, "total"},
 
 		{SandboxClassUnknown, "unknown"},
@@ -568,24 +570,25 @@ func TestWorkerPoolAttributes(t *testing.T) {
 	})
 }
 
-// TestSnapshotScopeValue pins the enum-to-label mapping ateapi and atelet share.
+// TestSnapshotFidelityValue pins the enum-to-label mapping ateapi and atelet share.
 // An unmapped enum value must report unknown rather than its stringified form,
 // which would let a wire value widen the label set.
-func TestSnapshotScopeValue(t *testing.T) {
+func TestSnapshotFidelityValue(t *testing.T) {
 	tests := []struct {
 		name  string
-		scope ateletpb.SnapshotScope
+		scope ateletpb.SnapshotFidelity
 		want  string
 	}{
-		{name: "full", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, want: SnapshotScopeFull},
-		{name: "data", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA, want: SnapshotScopeData},
-		{name: "unspecified", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED, want: SnapshotScopeUnknown},
-		{name: "value outside the enum", scope: ateletpb.SnapshotScope(9999), want: SnapshotScopeUnknown},
+		{name: "memory", scope: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, want: SnapshotFidelityMemory},
+		{name: "volumes", scope: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, want: SnapshotFidelityVolumes},
+		{name: "rootfs", scope: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, want: SnapshotFidelityRootfs},
+		{name: "unspecified", scope: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, want: SnapshotFidelityUnknown},
+		{name: "value outside the enum", scope: ateletpb.SnapshotFidelity(9999), want: SnapshotFidelityUnknown},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := SnapshotScopeValue(tt.scope); got != tt.want {
-				t.Errorf("SnapshotScopeValue(%v) = %q, want %q", tt.scope, got, tt.want)
+			if got := SnapshotFidelityValue(tt.scope); got != tt.want {
+				t.Errorf("SnapshotFidelityValue(%v) = %q, want %q", tt.scope, got, tt.want)
 			}
 		})
 	}
@@ -601,8 +604,6 @@ func TestActorStateValues(t *testing.T) {
 		{ActorStateRunning, "running"},
 		{ActorStateSuspending, "suspending"},
 		{ActorStateSuspended, "suspended"},
-		{ActorStatePausing, "pausing"},
-		{ActorStatePaused, "paused"},
 		{ActorStateCrashed, "crashed"},
 		{ActorStateDeleting, "deleting"},
 		{ActorStateDeleted, "deleted"},
@@ -629,8 +630,6 @@ func TestActorStateValue(t *testing.T) {
 		{name: "running", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, want: ActorStateRunning},
 		{name: "suspending", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, want: ActorStateSuspending},
 		{name: "suspended", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, want: ActorStateSuspended},
-		{name: "pausing", state: ateapipb.ActorState_ACTOR_STATE_PAUSING, want: ActorStatePausing},
-		{name: "paused", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, want: ActorStatePaused},
 		{name: "crashed", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, want: ActorStateCrashed},
 		{name: "deleting", state: ateapipb.ActorState_ACTOR_STATE_DELETING, want: ActorStateDeleting},
 		{name: "reverting", state: ateapipb.ActorState_ACTOR_STATE_REVERTING, want: ActorStateReverting},
@@ -663,8 +662,6 @@ func TestActorStateValuesMirrorActorState(t *testing.T) {
 		ActorStateRunning:    true,
 		ActorStateSuspending: true,
 		ActorStateSuspended:  true,
-		ActorStatePausing:    true,
-		ActorStatePaused:     true,
 		ActorStateCrashed:    true,
 		ActorStateDeleting:   true,
 		ActorStateReverting:  true,
@@ -725,8 +722,9 @@ func TestNormalizeOperationName(t *testing.T) {
 		{OperationCreate, OperationCreate},
 		{OperationResume, OperationResume},
 		{OperationSuspend, OperationSuspend},
-		{OperationPause, OperationPause},
+		{"pause", OperationUnknown},
 		{OperationDelete, OperationDelete},
+		{OperationRevert, OperationRevert},
 		{"", OperationUnknown},
 		{"invalid", OperationUnknown},
 		{"crash", OperationUnknown},

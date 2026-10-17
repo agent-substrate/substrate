@@ -34,7 +34,7 @@ metadata:
     workload: probe-parking
 spec:
   replicas: 1
-  workerImage: ${ATEOM_IMAGE}
+  workerImage: ${WORKER_IMAGE}
   template:
     # One worker holding one actor: the limits are what it advertises as
     # capacity, and they are one actor's worth of CPU, so the suite's second

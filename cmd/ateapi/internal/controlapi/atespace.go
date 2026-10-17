@@ -19,12 +19,12 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
+	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 func (s *RPCService) CreateAtespace(ctx context.Context, req *ateapipb.CreateAtespaceRequest) (*ateapipb.Atespace, error) {
@@ -85,7 +85,7 @@ func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespa
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListAtespaces(ctx, store.ListOptions{PageSize: req.PageSize, PageToken: req.PageToken})
+	page, err := s.impl.ListAtespaces(ctx, toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,6 @@ func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespa
 }
 
 func (s *ServiceImpl) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error) {
-	opts.PageSize = effectivePageSize(opts.PageSize)
 	page, err := s.store.ListAtespaces(ctx, opts)
 	if err != nil {
 		return page, mapListError(fmt.Errorf("while listing atespaces in db: %w", err))

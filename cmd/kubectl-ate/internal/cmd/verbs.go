@@ -33,5 +33,8 @@ var (
 )
 
 func init() {
-	rootCmd.AddCommand(getCmd, createCmd, updateCmd, deleteCmd, pauseCmd, resumeCmd, suspendCmd, logsCmd, topCmd)
+	for _, c := range []*cobra.Command{getCmd, createCmd, updateCmd, deleteCmd, pauseCmd, resumeCmd, suspendCmd, logsCmd, topCmd} {
+		requireSubcommand(c)
+		rootCmd.AddCommand(c)
+	}
 }

@@ -39,11 +39,12 @@ spec:
   # Two workers: one for the demo actor, one spare for the golden actor the
   # template reconciler runs while building the golden snapshot.
   replicas: 2
-  sandboxClass: microvm
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
+  sandboxClasses:
+  - name: microvm
+    configRef:
+      name: microvm
+  workerImage: ko://go.ate.dev/substrate/cmd/ateworker-microvm
   template:
-    nodeSelector:
-      ate.dev/substrate-version: "${SUBSTRATE_VERSION}"
     # Per-worker resources: these size the worker POD and advertise its
     # scheduling capacity (the per-actor ceiling). The micro-VM sandbox itself is
     # sized by the ActorTemplate's resources in counter-microvm-template.yaml.tmpl,

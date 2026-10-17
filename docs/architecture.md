@@ -4,7 +4,7 @@ NOTE: Much of this architecture is aspirational, and is not yet implemented!
 
 ## Overview
 
-Agent Substrate is a secure-by-default agent execution runtime engineered to run millions of sandboxes with 10x higher density than standard container runtimes. The agent substrate control plane provides full lifecycle management for agent sandboxes, delivering sub-second agent resume/suspend operations, and allows heavy multiplexing of agents onto the same compute infrastructure. It supports multiple sandbox technologies including microVMs and gVisor, enabling consistent lifecycle operations for all sandbox types.
+Agent Substrate is a security-hardened, zero-trust runtime for sandboxed agents, engineered to safely run millions of agents and tools with 10x higher density than standard containers. Purpose-built for the era of autonomous agents, Substrate delivers fast resume operations in less than 400ms, with more than 1500 activations per second. Agents get isolated compute, identity, networking, and storage. Sensitive credentials are kept out of reach from untrusted code. It supports multiple sandbox technologies, including microVMs and gVisor, while enabling a consistent lifecycle and management of all sandboxes.
 
 At its core, Agent Substrate maps a larger set of “actors” (applications such
 as agents) onto a smaller set of ready “workers”, relying on
@@ -256,9 +256,9 @@ and Performance:
       SandboxConfigs) as Kubernetes objects allows platform teams to apply
       familiar RBAC, auditing, and policy enforcement to the underlying
       infrastructure, while workload definitions (ActorTemplates) are managed
-      through the substrate API instead, which authenticates callers itself
-      but does not yet implement authorization (see
-      [authentication.md](authentication.md)).
+      through the substrate API instead, which authenticates and authorizes
+      callers itself (see [authentication.md](authentication.md) and
+      [authorization.md](authorization.md)).
 
 ### Resource Model
 
@@ -273,7 +273,7 @@ classDiagram
         }
         class Deployment
         class WorkerPod {
-            ateom
+            ateworker
             runsc
         }
     }
@@ -317,25 +317,25 @@ manage actor lifecycles.
   * **Workflow Engine**: Orchestrates the multi-step Resume/Suspend sequences
     (lock acquisition, storage download, sandbox restore).
 
-### Node Supervisor (`atelet` + `ateom`)
+### Node Supervisor (`atelet` + `ateworker`)
 
 The node-level subsystem manages the physical execution of sandboxes and the movement of snapshots.
 
   * **atelet**: A lightweight supervisor running on each node as a DaemonSet. It acts as the "Herder," managing a pool of physical pods and communicating with the Control Plane.
 
-  * **ateom**: A specialized sandbox-herder container image — one per sandbox class (`ateom-gvisor`, `ateom-microvm`) — that runs inside the physical worker pods. It provides a gRPC interface for `atelet` to trigger `RunWorkload`, `CheckpointWorkload`, and `RestoreWorkload` operations. This separation ensures that the physical pod lifecycle remains decoupled from the sandboxed agent process.
+  * **ateworker**: A specialized sandbox-herder container image — one per sandbox class (`ateworker-gvisor`, `ateworker-microvm`) — that runs inside the physical worker pods. It provides a gRPC interface for `atelet` to trigger `RunWorkload`, `CheckpointWorkload`, and `RestoreWorkload` operations. This separation ensures that the physical pod lifecycle remains decoupled from the sandboxed agent process.
 
-  * **Lifecycle Management**: The `ateom` process invokes the sandbox runtime to checkpoint or restore processes within the physical pod boundaries — `runsc` for gVisor, or the Kata + Cloud Hypervisor stack for micro-VMs. (Note: the gVisor backend currently requires a `runsc` version with the `--allow-connected-on-save` flag to work around a bug in networking resumption during checkpointing.)
+  * **Lifecycle Management**: The `ateworker` process invokes the sandbox runtime to checkpoint or restore processes within the physical pod boundaries — `runsc` for gVisor, or the Kata + Cloud Hypervisor stack for micro-VMs. (Note: the gVisor backend currently requires a `runsc` version with the `--allow-connected-on-save` flag to work around a bug in networking resumption during checkpointing.)
 
-  * **Storage Mover**: The `atelet` streams snapshots to and from GCS/S3, ensuring process state is persistent and portable across the cluster.
+  * **Storage Mover**: External snapshots move through an *object-store plugin*, a sidecar that serves the `objectstore.v1` gRPC API over a Unix socket in its pod. `atelet`'s sidecar (`NodeProvider`) uploads and fetches a snapshot's files; `ate-api-server`'s sidecar (`ControlProvider`) copies and deletes whole snapshots. Neither main process talks to object storage for snapshots. The in-tree plugin, `cmd/objectstore-plugin`, backs the API with GCS or S3; `ATE_STORAGE_BACKEND` on the sidecar (unset or `gcs`, or `s3` with the `AWS_*` variables) selects which, see `manifests/ate-install/atelet.yaml`, `ate-api-server.yaml`, and the kind overlay for an S3 example. The same `atelet` sidecar serves `AssetProvider`, which fetches every sandbox asset; `atelet` reads a `gs://` asset anonymously only when the plugin cannot serve it, which covers public buckets such as `gs://gvisor`. The plugin stages each download where `atelet` cannot read it, and copies it into `atelet`'s cache only if its sha256 matches; it refuses any URL under a snapshot location. `atelet` verifies the sha256 again and has no object storage credentials or settings of its own.
 
 ### Sandbox Classes
 
-A `WorkerPool` selects a **sandbox class** (`spec.sandboxClass`), and each class has a matching `ateom` herder image. The sandbox binaries themselves are not baked into the worker image — they, and the pause image holding the sandbox's namespaces, come at runtime from a cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-the-sandbox-itself) the `ActorTemplate` names in its sandbox config (naming one is currently required; per-class cluster defaults are planned) and are pinned into each snapshot's manifest so restores stay reproducible across runtime upgrades.
+A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` herder image. The sandbox binaries themselves are not baked into the worker image — they, and the pause image holding the sandbox's namespaces, come at runtime from the cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-the-sandbox-itself) the `WorkerPool` resolves for its class (an explicit `configRef`, else the class default) and are pinned into each snapshot's manifest so restores stay reproducible across runtime upgrades.
 
-  * **gVisor** (`ateom-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree.
+  * **gVisor** (`ateworker-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree.
 
-  * **micro-VM** (`ateom-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging. Container rootfs writes are host-backed: the overlay is assembled on the host (read-only OCI image lower plus a per-actor writable upper) and served to the guest over the single virtio-fs share, so they cost reclaimable host page cache rather than guest RAM, and a `Full` snapshot ships the upper as its own tar. `DurableDir` volumes travel over that same share and are likewise shipped as a tar, so a `Data`-scope snapshot can capture them without any guest memory. Each volume is a subdirectory of the share, so an actor can have several at no extra cost in devices, which is why the micro-VM class lifts the single-`DurableDir` limit that still applies to gVisor.
+  * **micro-VM** (`ateworker-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging. Container rootfs writes are host-backed: the overlay is assembled on the host (read-only OCI image lower plus a per-actor writable upper) and served to the guest over the single virtio-fs share, so they cost reclaimable host page cache rather than guest RAM, and `ROOTFS` and `MEMORY` snapshots ship the upper as its own tar (a `ROOTFS` restore puts it back and cold-boots on it). `DurableDir` volumes travel over that same share and are likewise shipped as a tar, so a `VOLUMES` snapshot can capture them without any guest memory. Each volume is a subdirectory of the share, so an actor can have several at no extra cost in devices, which is why the micro-VM class lifts the single-`DurableDir` limit that still applies to gVisor.
 
 ### Networking Stack (`atenet` + `atunnel`)
 
@@ -349,10 +349,11 @@ Handles actor-aware routing and automatic re-animation.
     not select the Actor.
 
   * **Worker Tunnel**: After resolving the assignment, `atenet-router` opens an
-    authenticated TLS tunnel to the worker's `atunnel` listener on port 443.
-    `atunnel`, hosted by `ateom`, forwards the request to the active Actor over
+    mTLS `CONNECT` tunnel to the worker's `atunnel` listener on port 8443.
+    `atunnel`, hosted by `ateworker`, forwards the request to the active Actor over
     its private veth interface. Worker pod port 80 is not a direct Actor ingress
-    path.
+    path. With `--upstream-connect=false`, the Envoy router instead reaches
+    `atunnel` over HTTPS on port 443.
 
   * **Arbitrary-Port Ingress**: A client reaches a port on the Actor other than
     its default (80) with an HTTP `CONNECT` request naming the port in the
@@ -390,7 +391,7 @@ sequenceDiagram
     participant Gateway as atenet-router
     participant API as ate-api-server
     participant Atelet as atelet
-    participant Tunnel as ateom / atunnel
+    participant Tunnel as ateworker / atunnel
     participant A as Actor
     participant Store as snapshot storage
 
@@ -420,12 +421,18 @@ stateDiagram-v2
     RESUMING --> RUNNING : restore / boot complete
     RUNNING --> SUSPENDING : SuspendActor
     SUSPENDING --> SUSPENDED : checkpoint complete
-    RUNNING --> PAUSING : PauseActor
-    PAUSING --> PAUSED : node-local checkpoint complete
-    PAUSED --> RESUMING : ResumeActor (pinned to the snapshot's node)
-    PAUSED --> SUSPENDING : SuspendActor (uploads the node-local snapshot)
+    RUNNING --> SUSPENDING : SuspendActor (async: keeps the snapshot on the node)
+    SUSPENDED --> SUSPENDING : SuspendActor (paused: uploads the node-local snapshot)
     SUSPENDED --> [*] : DeleteActor
 ```
+
+A pause and a suspend both pass through `SUSPENDING`, and a paused actor and
+a suspended actor are both `SUSPENDED`. They differ only in the shape of
+`status.snapshots`: after a pause the latest snapshot has a
+`locality` (the node holding its files) and no `durableSnapshot`, and
+`status.assignedNode` pins the actor to that node, so `ResumeActor` restores
+it there from the local files. After a suspend the latest snapshot has a
+`COMPLETED` `durableSnapshot` and the actor is pinned to no node.
 
 ### Phase 1: Creation (`CreateActor`)
 
@@ -450,7 +457,7 @@ Triggered by an inbound request at the Gateway or an explicit API call.
   2. **Assignment**: The Control Plane claims a warm worker from the
      `WorkerPool`.
 
-  3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the ActorTemplate's golden external snapshot (for first-run) or the Actor's own external snapshot (for recurring runs) into the sandbox.
+  3. **Hydration**: The `atelet` supervisor coordinates with the `ateworker` process inside the worker pod to restore the ActorTemplate's golden external snapshot (for first-run) or the Actor's own external snapshot (for recurring runs) into the sandbox.
 
   4. **State**: State transitions to `ACTOR_STATE_RUNNING`. The actor now has an
      active Worker IP.
@@ -463,7 +470,7 @@ Triggered by an inbound request at the Gateway or an explicit API call.
 
 Triggered by an explicit `SuspendActor` call.
 
-  1. **Checkpoint**: The `atelet` instructs `ateom` to freeze the process and capture a memory+disk snapshot.
+  1. **Checkpoint**: The `atelet` instructs `ateworker` to freeze the process and capture a memory+disk snapshot.
 
   2. **Persistence**: The `atelet` streams the snapshot from the pod to durable storage (e.g., GCS).
 
@@ -474,7 +481,7 @@ Triggered by an explicit `SuspendActor` call.
      borrowed from a tag is left alone, since the tag owns it.
 
   5. **State**: State transitions back to `ACTOR_STATE_SUSPENDED`, and the Actor's
-     `status.externalSnapshot` names the external snapshot it resumes from.
+     `status.snapshots` records the external snapshot it resumes from.
 
 Snapshots may be given tags owned and addressed by an Atespace. The same tag 
 name may exist in different Atespaces. A tag is an immutable alias and retention pin:
@@ -485,9 +492,9 @@ tags cannot be deleted until they are.
 
 ### Phase 4: Recovery (`RevertActor`) and Deletion (`DeleteActor`)
 
-An actor in `ACTOR_STATE_RUNNING`, `ACTOR_STATE_PAUSED`, or `ACTOR_STATE_CRASHED` can be reverted back to `ACTOR_STATE_SUSPENDED` via `RevertActor`. Reverting terminates any active sandbox, discards any local pause checkpoint or partial in-progress snapshot, and preserves the actor's last completed external snapshot so a subsequent `ResumeActor` restores from that checkpoint.
+An actor in `ACTOR_STATE_RUNNING` or `ACTOR_STATE_CRASHED`, or a paused actor (`ACTOR_STATE_SUSPENDED` with a node-local latest snapshot), can be reverted back to `ACTOR_STATE_SUSPENDED` at its durable snapshot via `RevertActor`. Reverting terminates any active sandbox, discards any local pause checkpoint or partial in-progress snapshot, and preserves the actor's last completed external snapshot so a subsequent `ResumeActor` restores from that checkpoint.
 
-By default, only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` state can be deleted from the Control Plane. With the `any_state` flag enabled, an actor in any state (such as `ACTOR_STATE_RUNNING` or `ACTOR_STATE_PAUSED`) can be deleted directly; the workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
+By default, only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` state can be deleted from the Control Plane. With the `any_state` flag enabled, an actor in any state (such as `ACTOR_STATE_RUNNING`) can be deleted directly; the workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
 
 After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage collected.
 

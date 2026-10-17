@@ -22,11 +22,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestListTags checks the atespace scoping and the paging of the
@@ -63,7 +63,7 @@ func TestListTags(t *testing.T) {
 			if resp.GetNextPageToken() == "" {
 				return got
 			}
-			req.PageToken = resp.GetNextPageToken()
+			req.Options = &ateapipb.ListOptions{PageSize: req.GetOptions().GetPageSize(), PageToken: resp.GetNextPageToken()}
 		}
 	}
 
@@ -84,7 +84,7 @@ func TestListTags(t *testing.T) {
 		},
 		{
 			name: "one tag per page",
-			req:  &ateapipb.ListTagsRequest{PageSize: 1},
+			req:  &ateapipb.ListTagsRequest{Options: &ateapipb.ListOptions{PageSize: 1}},
 			want: []string{otherAtespace + "/v1", testAtespace + "/v1", testAtespace + "/v2"},
 		},
 		{
@@ -101,7 +101,7 @@ func TestListTags(t *testing.T) {
 		})
 	}
 
-	_, err := svc.ListTags(ctx, &ateapipb.ListTagsRequest{PageToken: "not-a-token"})
+	_, err := svc.ListTags(ctx, &ateapipb.ListTagsRequest{Options: &ateapipb.ListOptions{PageToken: "not-a-token"}})
 	if code := apierror.Code(err); code != codes.InvalidArgument {
 		t.Errorf("ListTags(bad page_token) error = %v (code %v), want code InvalidArgument", err, code)
 	}
@@ -135,7 +135,7 @@ func TestUpdateTag(t *testing.T) {
 			req: &ateapipb.Tag{
 				Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 				Status: &ateapipb.TagStatus{
-					Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: "gs://attacker/elsewhere", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
+					Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, "", "elsewhere", "gs://attacker/elsewhere", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 					ActorTemplateUid: "other-template-uid",
 				},
 			},
@@ -249,7 +249,10 @@ func newTestSuspendedActor(t *testing.T, ctx context.Context, st store.Interface
 		t.Fatalf("NewActorSnapshotURI: %v", err)
 	}
 	return mustUpdateActorStatus(t, ctx, st, actor, func(status *ateapipb.ActorStatus) {
-		status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
+		status.LastAssignedGeneration = 1
+		status.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		}
 	})
 }
 
@@ -263,27 +266,24 @@ func newTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapipb.Tag 
 	if err != nil {
 		t.Fatalf("NewTagSnapshotURI: %v", err)
 	}
+	actorSnap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	return &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
 		Status: &ateapipb.TagStatus{
-			Snapshot: &ateapipb.ExternalSnapshot{
-				SnapshotUri:  uri.String(),
-				ContentScope: actor.GetStatus().GetExternalSnapshot().GetContentScope(),
-			},
+			Snapshot: newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, actorSnap.GetFidelity(), actorSnap.GetActorTemplateUid(), uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 		},
 	}
 }
 
 // newPendingTestTag builds the tag a create leaves behind when it dies between
 // reserving the name and finishing the copy: the row names the prefix it was
-// writing into, and nothing else.
+// writing into as PENDING.
 func newPendingTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapipb.Tag {
 	t.Helper()
 	tag := newTestTag(t, name, actor)
-	tag.Status.StorageLocation = testStorageLocation
-	tag.Status.Snapshot = nil
+	tag.Status.Snapshot.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
 	return tag
 }
 

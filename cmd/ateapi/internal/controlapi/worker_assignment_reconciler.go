@@ -21,8 +21,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/workqueue"
 )
@@ -41,7 +41,7 @@ type workerWatcher interface {
 
 // WorkerAssignmentReconciler keeps the Actors assigned to a Worker in line with
 // its epoch. It watches for Workers whose epoch has risen past
-// status.observed_epoch, and crashes the Actors a restarted ateom took with it.
+// status.observed_epoch, and crashes the Actors a restarted worker took with it.
 //
 // TODO: Every ateapi replica runs this reconciler and queues every Worker, with
 // only a per-Worker lease keeping them from releasing the same one at once.

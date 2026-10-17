@@ -32,7 +32,8 @@ func TestActorDirs(t *testing.T) {
 		"restore_dir":                   actorDirs.GetRestoreDir(),
 		"durable_dir_volume_mounts_dir": actorDirs.GetDurableDirVolumeMountsDir(),
 		"system_info_volume_roots_dir":  actorDirs.GetSystemInfoVolumeRootsDir(),
-		"volumes_dir":                   actorDirs.GetVolumesDir(),
+		"external_volume_mounts_dir":    actorDirs.GetExternalVolumeMountsDir(),
+		"sandbox_assets_dir":            actorDirs.GetSandboxAssetsDir(),
 	}
 	seen := map[string]string{}
 	for field, dir := range under {

@@ -25,7 +25,8 @@ def add_lifecycle_mode_arguments(parser: LocustArgumentParser) -> None:
         "--lifecycle-mode",
         type=str,
         default="suspend",
-        choices=["suspend", "pause"],
+        choices=["suspend", "pause", "none"],
         help="Lifecycle mode: 'suspend' uses SuspendActor (persists snapshot to storage); "
-        "'pause' uses PauseActor (keeps snapshot on local node) (default: suspend)",
+        "'pause' uses an asynchronous SuspendActor (keeps snapshot on local node); "
+        "'none' keeps actors resident in memory between steps (default: suspend)",
     )

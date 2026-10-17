@@ -17,11 +17,11 @@ Envoy --(ext_proc RequestHeaders)--> router.handleRequestHeaders
     --> ActorResumer.ResumeActor --> ateapi ResumeActor (gRPC)
 ```
 
-`ateapi`'s `AssignWorkerStep` claims a free worker from the actor's `WorkerPool`.
+`ateapi`'s `AssignWorkerStep` claims a worker from the actor's `WorkerPool`.
 In an oversubscribed system — the core premise of Substrate, where many actors
 multiplex onto few workers — a burst of traffic can momentarily exhaust the
-pool. `AssignWorkerStep` then returns `ResourceExhausted: "no free workers
-available"`.
+pool. `AssignWorkerStep` then returns `ResourceExhausted: "no worker has room
+for the actor"`.
 
 Previously the router mapped that straight to an HTTP `503` and failed the
 request. But such saturation is usually momentary: another actor suspends within
@@ -41,7 +41,7 @@ keeps retrying with exponential backoff until either
   is then routed normally; or
 - the **park budget** (`--parked-request-budget`, default `5s`) elapses — the
   underlying capacity error is returned, surfacing as `503 "actor <id>
-  unavailable: no free workers available"`.
+  unavailable: no worker has room for the actor"`.
 
 **The budget bounds retries, not a committed resume.** When the budget elapses
 the router stops starting new resume attempts, but an attempt already in
@@ -112,7 +112,7 @@ waiting are returned immediately (fail fast):
 | -------------------------------------- | --------------------------------- |
 | `OK`                                   | Route to worker                   |
 | `Aborted` (concurrent resume)          | Retry (always)                    |
-| `ResourceExhausted` (no free worker)   | **Park & retry** (when enabled)   |
+| `ResourceExhausted` (no room)          | **Park & retry** (when enabled)   |
 | `FailedPrecondition` (transient state) | **Park & retry** (when enabled)   |
 | `Unavailable` (control-plane blip)     | **Park & retry** (when enabled)   |
 | `NotFound`                             | Fail fast → `404`                 |
@@ -170,7 +170,12 @@ bounds the wait.
   | `error`            | The resume failed with a non-retryable error (`NotFound`, `PermissionDenied`, ...). |
 
 - `atenet.router.parking.rejected` — counter: requests shed because the lot was
-  full.
+  full. On `atenet.router.route.duration`, a shed request reports `no_capacity`
+  when its resume failed with `ResourceExhausted`, and `unavailable` otherwise.
+  The `ate.router.outcome` label of this counter has the same value. Because
+  `no_capacity` combines fast shed requests with requests that waited out the
+  parking budget, use `atenet.router.parking.rejected{ate_router_outcome="no_capacity"}`
+  to count the shed requests in it.
 
 **Status page** (`/statusz`): a "Request Parking" card shows whether parking is
 enabled, the current vs. maximum parked count, and the max wait.

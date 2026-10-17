@@ -287,10 +287,12 @@ func (s *Store) listCandidates(ctx context.Context) ([]evictCandidate, error) {
 }
 
 // sizeEntry sums an entry's regular files' allocated bytes and reports
-// whether its data file carries consumer hard links (a directory-tree entry
-// cannot, so it reports unlinked and relies on the min age and, later, a
-// root set). Files that vanish mid-walk (a concurrent retire) are skipped.
+// whether its data carries consumer hard links: the data file itself, or
+// for a tree entry any file under it, since a consumer that keeps part of a
+// mirrored tree still depends on the entry. Files that vanish mid-walk (a
+// concurrent retire) are skipped.
 func (s *Store) sizeEntry(entryDir string) (size int64, linked bool, err error) {
+	dataPath := filepath.Join(entryDir, dataName)
 	err = filepath.WalkDir(entryDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -309,7 +311,7 @@ func (s *Store) sizeEntry(entryDir string) (size int64, linked bool, err error) 
 			return err
 		}
 		size += allocatedSize(info)
-		if path == filepath.Join(entryDir, dataName) {
+		if path == dataPath || strings.HasPrefix(path, dataPath+string(filepath.Separator)) {
 			if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
 				linked = true
 			}

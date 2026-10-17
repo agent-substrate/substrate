@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
-	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/internal/clustertrustbundle"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"

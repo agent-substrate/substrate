@@ -30,7 +30,7 @@ const (
 	ModeHTTP = "http"
 )
 
-// Routes the HTTP-mode mux serves. ReadyzRoute is served in both modes: ateom
+// Routes the HTTP-mode mux serves. ReadyzRoute is served in both modes: worker
 // blocks RestoreWorkload until it answers 200, so ResumeActor cannot report
 // success before the listener is reachable. The fake in ./fake aliases these,
 // which is what keeps the stand-in and the real mux from drifting apart.

@@ -21,13 +21,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/portforward"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/portforward"
 	"k8s.io/client-go/kubernetes"
 )
 
-// routerStatusPort is the atenet-router Service port for the router's
-// --status-port (the "status" container port).
+// routerStatusPort is the router's --status-port. The router binds it to
+// loopback and the Service does not publish it, so the client forwards to a
+// router pod directly.
 const routerStatusPort = 4040
 
 // StatuszClient reads the atenet router's /statusz page over a
@@ -51,7 +52,7 @@ func NewStatuszClient(ctx context.Context) (*StatuszClient, error) {
 		return nil, fmt.Errorf("creating k8s client: %w", err)
 	}
 
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, SystemNamespace(), ResourceName("atenet-router"), routerStatusPort)
+	localPort, stop, err := portforward.ServicePodPortForward(ctx, config, clientset, SystemNamespace(), ResourceName("atenet-router"), routerStatusPort)
 	if err != nil {
 		return nil, err
 	}

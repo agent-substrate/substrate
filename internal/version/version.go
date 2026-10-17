@@ -50,6 +50,7 @@ func init() {
 			}
 		}
 	}
+	Version = info.Main.Path + ".Version=" + info.Main.Version
 }
 
 // String returns a human-readable single-line version summary,

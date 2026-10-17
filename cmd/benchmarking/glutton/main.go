@@ -26,9 +26,9 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/glutton"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/version"
+	"go.ate.dev/substrate/internal/benchmarking/glutton"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/version"
 )
 
 var (
@@ -36,6 +36,8 @@ var (
 	metricsListenAddr = pflag.String("metrics-listen-addr", ":9090", "Address and port the Prometheus metrics server should listen on.")
 	dataDir           = pflag.String("data-dir", "", "Directory under which WriteDisk files are stored. Required.")
 	mode              = pflag.String("mode", glutton.ModeGRPC, "Wire protocol for the main listener: grpc (default) or http.")
+	syncWrites        = pflag.Bool("sync-writes", false, "Fsync each WriteDisk file before returning, so the write includes the flush to the backing volume.")
+	writableReadyz    = pflag.Bool("readyz-require-writable-data-dir", false, "Fail /readyz until --data-dir is writable, so a resume waits for an external volume mount.")
 
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
@@ -73,7 +75,14 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create data directory", fmt.Errorf("%s: %w", *dataDir, err))
 	}
 
-	svc, err := glutton.New(*dataDir)
+	var opts []glutton.Option
+	if *syncWrites {
+		opts = append(opts, glutton.WithSyncWrites())
+	}
+	if *writableReadyz {
+		opts = append(opts, glutton.WithWritableReadyz())
+	}
+	svc, err := glutton.New(*dataDir, opts...)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to construct glutton service", err)
 	}
@@ -84,10 +93,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to start listener", fmt.Errorf("%s: %w", *listenAddr, err))
 	}
 
-	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
-		Addr:      *metricsListenAddr,
-		Readiness: &serverboot.Readiness{},
-	})
+	go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
 
 	slog.InfoContext(ctx, "glutton starting",
 		slog.String("listen-addr", *listenAddr),

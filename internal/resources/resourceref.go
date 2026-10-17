@@ -18,7 +18,7 @@ import (
 	"log/slog"
 	"reflect"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // Resource is any Atespaced resource message carrying the common metadata.

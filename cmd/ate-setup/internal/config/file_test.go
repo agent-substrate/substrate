@@ -245,8 +245,6 @@ func TestParseFileNullIsEmptyNotAbsent(t *testing.T) {
 
 // Every registry key must be expressible in the file, or the file is not a
 // complete channel.
-//
-// TODO: vacuous until Registry declares settings.
 func TestEveryRegistryKeyIsAcceptedByTheParser(t *testing.T) {
 	var b strings.Builder
 	b.WriteString(validHeader)

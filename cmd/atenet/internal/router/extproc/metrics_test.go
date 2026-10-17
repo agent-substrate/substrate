@@ -27,7 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateattr"
 )
 
 func TestClassifyOutcome(t *testing.T) {
@@ -73,7 +73,7 @@ func TestClassifyOutcome(t *testing.T) {
 		},
 		{
 			name:     "ResourceExhausted gRPC code maps to no_capacity",
-			err:      status.Error(codes.ResourceExhausted, "no free workers available"),
+			err:      status.Error(codes.ResourceExhausted, "no worker has room for the actor"),
 			expected: "no_capacity",
 		},
 		{
@@ -93,7 +93,7 @@ func TestClassifyOutcome(t *testing.T) {
 		},
 		{
 			name:     "StatusCode_ServiceUnavailable ReqError wrapping ResourceExhausted maps to no_capacity",
-			err:      WrapReqError(envoy_type.StatusCode_ServiceUnavailable, status.Error(codes.ResourceExhausted, "no free workers available"), "actor unavailable"),
+			err:      WrapReqError(envoy_type.StatusCode_ServiceUnavailable, status.Error(codes.ResourceExhausted, "no worker has room for the actor"), "actor unavailable"),
 			expected: "no_capacity",
 		},
 		{

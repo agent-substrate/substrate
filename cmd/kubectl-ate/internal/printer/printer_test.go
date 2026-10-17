@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -434,10 +434,6 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 				Version:    1,
 				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 			},
-			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
-				ConfigName:   "gvisor-default",
-			},
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
 					GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
@@ -450,10 +446,6 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 				Name:       "counter-microvm",
 				Version:    1,
 				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
-			},
-			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM,
-				ConfigName:   "microvm",
 			},
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
@@ -468,9 +460,15 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 				Version:    1,
 				CreateTime: timestamppb.New(now.Add(-72 * time.Hour)),
 			},
-			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
-				ConfigName:   "gvisor-default",
+		},
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "ate-demo-counter-substrate",
+				Name:       "counter-3",
+				CreateTime: timestamppb.New(now.Add(-15 * time.Minute)),
+			},
+			SnapshotConfig: &ateapipb.SnapshotConfig{
+				GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
 			},
 		},
 	}
@@ -481,10 +479,11 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 
 	// Sorted by atespace, then name. The ERROR column only flags that an
 	// error message exists; the full text is available via json/yaml.
-	expected := `ATESPACE                             NAME              SANDBOX CLASS           GOLDEN TAG   ERROR   AGE
-ate-demo-counter-substrate           counter           SANDBOX_CLASS_GVISOR    golden-tag           5m
-ate-demo-counter-substrate           counter-2         SANDBOX_CLASS_GVISOR                         3d
-ate-demo-counter-substrate-microvm   counter-microvm   SANDBOX_CLASS_MICROVM                ERROR   5h
+	expected := `ATESPACE                             NAME              GOLDEN TAG   ERROR   AGE
+ate-demo-counter-substrate           counter           golden-tag           5m
+ate-demo-counter-substrate           counter-2                              3d
+ate-demo-counter-substrate           counter-3         DISABLED             15m
+ate-demo-counter-substrate-microvm   counter-microvm                ERROR   5h
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -599,7 +598,13 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			},
 			Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 			Status: &ateapipb.TagStatus{
-				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+				Snapshot: &ateapipb.Snapshot{
+					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					DurableSnapshot: &ateapipb.SnapshotStorage{
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2"},
+					},
+				},
 			},
 		},
 		{
@@ -610,7 +615,13 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			},
 			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			Status: &ateapipb.TagStatus{
-				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+				Snapshot: &ateapipb.Snapshot{
+					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					DurableSnapshot: &ateapipb.SnapshotStorage{
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1"},
+					},
+				},
 			},
 		},
 		{
@@ -623,7 +634,13 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			},
 			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			Status: &ateapipb.TagStatus{
-				StorageLocation: "gs://private",
+				Snapshot: &ateapipb.Snapshot{
+					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					DurableSnapshot: &ateapipb.SnapshotStorage{
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v3"},
+					},
+				},
 			},
 		},
 	}
@@ -633,10 +650,10 @@ func TestPrintTagsTo_Table(t *testing.T) {
 	}
 
 	// Sorted by atespace, then name.
-	expected := `ATESPACE   NAME   SCOPE                 STATE     SNAPSHOT                                CONTENT SCOPE                 AGE
-team-a     v1     TAG_SCOPE_ATESPACE    Ready     gs://private/atespaces/team-a/tags/v1   SNAPSHOT_CONTENT_SCOPE_FULL   5h
-team-a     v2     TAG_SCOPE_PUBLISHED   Ready     gs://private/atespaces/team-a/tags/v2   SNAPSHOT_CONTENT_SCOPE_FULL   5m
-team-a     v3     TAG_SCOPE_ATESPACE    Pending   <none>                                  <none>                        30s
+	expected := `ATESPACE   NAME   SCOPE                 STATE     SNAPSHOT                                FIDELITY                   AGE
+team-a     v1     TAG_SCOPE_ATESPACE    Ready     gs://private/atespaces/team-a/tags/v1   SNAPSHOT_FIDELITY_MEMORY   5h
+team-a     v2     TAG_SCOPE_PUBLISHED   Ready     gs://private/atespaces/team-a/tags/v2   SNAPSHOT_FIDELITY_MEMORY   5m
+team-a     v3     TAG_SCOPE_ATESPACE    Pending   <none>                                  <none>                     30s
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

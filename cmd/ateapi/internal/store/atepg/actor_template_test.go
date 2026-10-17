@@ -20,10 +20,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -97,8 +97,8 @@ func TestGetActorTemplate_BackfillsDefaults(t *testing.T) {
 		t.Fatalf("GetActorTemplate failed: %v", err)
 	}
 	want := &ateapipb.SnapshotConfig{
-		OnPause:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-		OnCommit: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+		PreferredFidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 	}
 	if diff := cmp.Diff(want, got.GetSnapshotConfig(), protocmp.Transform()); diff != "" {
 		t.Errorf("GetActorTemplate did not backfill snapshot_config defaults (-want +got):\n%s", diff)

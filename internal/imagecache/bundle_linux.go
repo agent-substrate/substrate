@@ -15,7 +15,7 @@
 // limitations under the License.
 
 // The consumer half of the image cache: everything in this file runs in the
-// privileged ateom pods (which own all mounts on the node), never in atelet.
+// privileged worker pods (which own all mounts on the node), never in atelet.
 
 package imagecache
 
@@ -228,11 +228,11 @@ func fsContextLog(fsfd int) string {
 
 // FinalizeLayer materializes the whiteout state recorded at unpack time:
 // 0:0 char devices for whiteouts and trusted.overlay.opaque=y on opaque
-// dirs. This runs in ateom rather than atelet because mknod needs CAP_MKNOD
+// dirs. This runs in worker rather than atelet because mknod needs CAP_MKNOD
 // and trusted.* xattrs need CAP_SYS_ADMIN, both of which atelet deliberately
 // drops.
 //
-// Idempotent and safe under concurrent callers (multiple ateom pods share
+// Idempotent and safe under concurrent callers (multiple worker pods share
 // the node's pool): EEXIST from mknod is success, setxattr is naturally
 // idempotent, and the marker is written last.
 func FinalizeLayer(layerDir string) error {

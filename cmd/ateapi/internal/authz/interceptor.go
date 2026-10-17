@@ -17,37 +17,44 @@ package authz
 import (
 	"context"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/principal"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/principal"
 	"google.golang.org/grpc"
 )
 
 // UnaryServerInterceptor returns a gRPC unary interceptor that enforces per-RPC
 // permissions registered in defaultRPCPermissions using authorizer. When
-// enforce is false, only rules marked alwaysEnforce are checked.
+// enforce is false, only rules marked alwaysEnforce are checked. When enforce
+// is true, an RPC with no rule is denied.
 func UnaryServerInterceptor(authorizer *Authorizer, enforce bool) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if IsBypassed(ctx) {
 			return handler(ctx, req)
 		}
 		rule, registered := defaultRPCPermissions[info.FullMethod]
-		if !registered || (!enforce && !rule.alwaysEnforce) {
+		if registered && rule.authorizedInHandler != "" {
 			return handler(ctx, req)
 		}
+		if !enforce && !rule.alwaysEnforce {
+			return handler(ctx, req)
+		}
+		if !registered {
+			return nil, apierror.PermissionDenied("permission denied: no authorization rule for %s", info.FullMethod)
+		}
 
-		relation, object, err := rule.extract(req)
+		// Authenticate first, so an unauthenticated caller gets Unauthenticated
+		// rather than a validation error for its request.
+		if p, ok := principal.FromContext(ctx); !ok || p.ID == "" {
+			return nil, apierror.Unauthenticated("unauthenticated: missing principal in context")
+		}
+		checks, err := rule.extract(req)
 		if err != nil {
 			return nil, err
 		}
-		if relation == "" || object == "" {
-			p, hasPrincipal := principal.FromContext(ctx)
-			if !hasPrincipal || p.ID == "" {
-				return nil, apierror.Unauthenticated("unauthenticated: missing principal in context")
+		for _, c := range checks {
+			if err := authorizer.Check(ctx, c.relation, c.object); err != nil {
+				return nil, err
 			}
-			return handler(ctx, req)
-		}
-		if err := authorizer.Check(ctx, relation, object); err != nil {
-			return nil, err
 		}
 
 		return handler(ctx, req)

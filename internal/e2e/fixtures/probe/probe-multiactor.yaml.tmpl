@@ -30,7 +30,7 @@ metadata:
     workload: probe-multiactor
 spec:
   replicas: 1
-  workerImage: ${ATEOM_IMAGE}
+  workerImage: ${WORKER_IMAGE}
   template:
     # A worker's limits are its capacity, which placement weighs along with
     # the actor count. Two actors' worth of CPU: the pair fits, a third does not.

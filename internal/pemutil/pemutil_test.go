@@ -66,7 +66,7 @@ func TestSanitizeCertificateBundle(t *testing.T) {
 			certB,
 			certA, // duplicate
 		}, nil)
-		got, err := SanitizeCertificateBundle(in)
+		got, err := SanitizeCertificateBundle(in, 1)
 		if err != nil {
 			t.Fatalf("SanitizeCertificateBundle: %v", err)
 		}
@@ -79,21 +79,40 @@ func TestSanitizeCertificateBundle(t *testing.T) {
 		}
 	})
 
-	t.Run("output order is a shuffle, not source order", func(t *testing.T) {
-		certs := [][]byte{certA, certB, selfSignedCertPEM(t, "c"), selfSignedCertPEM(t, "d")}
+	certs := [][]byte{certA, certB, selfSignedCertPEM(t, "c"), selfSignedCertPEM(t, "d")}
+
+	t.Run("output order is a shuffle that varies with the seed", func(t *testing.T) {
 		in := bytes.Join(certs, nil)
 		orders := map[string]bool{}
-		for i := 0; i < 32; i++ {
-			got, err := SanitizeCertificateBundle(in)
+		for seed := range int64(32) {
+			got, err := SanitizeCertificateBundle(in, seed)
 			if err != nil {
 				t.Fatalf("SanitizeCertificateBundle: %v", err)
 			}
 			orders[string(got)] = true
 		}
-		// 4 anchors have 24 orderings; 32 draws landing on one ordering has
-		// probability (1/24)^31 — if this fires, the shuffle is gone.
+		// 4 anchors have 24 orderings; 32 seeds all landing on one ordering
+		// means the shuffle is gone.
 		if len(orders) < 2 {
-			t.Errorf("32 sanitizations produced a single ordering; anchors are no longer shuffled")
+			t.Errorf("32 seeds produced a single ordering; anchors are no longer shuffled")
+		}
+	})
+
+	t.Run("same certificates and seed yield the same output, whatever the input order", func(t *testing.T) {
+		const seed = 42
+		want, err := SanitizeCertificateBundle(bytes.Join(certs, nil), seed)
+		if err != nil {
+			t.Fatalf("SanitizeCertificateBundle: %v", err)
+		}
+		reordered := bytes.Join([][]byte{certs[3], certs[1], certs[0], certs[2], certs[1]}, nil)
+		for range 8 {
+			got, err := SanitizeCertificateBundle(reordered, seed)
+			if err != nil {
+				t.Fatalf("SanitizeCertificateBundle: %v", err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("output differs for the same certificates and seed")
+			}
 		}
 	})
 
@@ -103,7 +122,7 @@ func TestSanitizeCertificateBundle(t *testing.T) {
 			"junk only": junkKey,
 			"not pem":   []byte("hello"),
 		} {
-			if _, err := SanitizeCertificateBundle(in); err == nil {
+			if _, err := SanitizeCertificateBundle(in, 1); err == nil {
 				t.Errorf("%s: SanitizeCertificateBundle = nil error, want error", name)
 			}
 		}

@@ -70,7 +70,7 @@ const (
 //
 // When a request targets a suspended actor, the router resumes it via the
 // control plane before routing. If the worker pool is momentarily saturated the
-// control plane returns ResourceExhausted ("no free workers available"). With
+// control plane returns ResourceExhausted (no worker has room). With
 // parking enabled the router holds ("parks") such a request and keeps retrying
 // the resume until the actor becomes routable or Budget elapses, instead of
 // failing the request immediately. Max bounds how many requests may be parked
@@ -158,9 +158,10 @@ func newParkingLot(cfg ParkedRequestConfig, m *ParkingMetrics) *parkingLot {
 // func and ok=true; the caller MUST invoke release exactly once (passing the
 // request outcome, e.g. parkOutcomeServed) when the resume attempt completes.
 // ok=false means the lot is full and the request should be shed without
-// waiting. When parking is disabled every request is admitted and no slot
-// accounting or metrics are recorded.
-func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcome), ok bool) {
+// waiting; the rejection is counted with shedOutcome as its route outcome.
+// When parking is disabled every request is admitted and no slot accounting
+// or metrics are recorded.
+func (l *parkingLot) enter(ctx context.Context, shedOutcome string) (release func(outcome parkOutcome), ok bool) {
 	if !l.cfg.Enabled() {
 		return func(parkOutcome) {}, true
 	}
@@ -168,7 +169,7 @@ func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcom
 	l.mu.Lock()
 	if l.active >= l.cfg.Max {
 		l.mu.Unlock()
-		l.metrics.recordRejected(ctx)
+		l.metrics.recordRejected(ctx, shedOutcome)
 		return nil, false
 	}
 	l.active++

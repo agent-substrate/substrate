@@ -15,27 +15,58 @@
 package controlapi
 
 import (
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
-func actorSnapshotContentScopeToAtelet(in ateapipb.SnapshotContentScope) ateletpb.SnapshotScope {
-	if in == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
-		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+// fidelityToAtelet maps the public fidelity ladder onto the identical atelet
+// wire enum, level by level. Anything else, including UNSPECIFIED, goes out
+// as UNSPECIFIED, which atelet rejects, rather than being silently promoted.
+func fidelityToAtelet(in ateapipb.SnapshotFidelity) ateletpb.SnapshotFidelity {
+	switch in {
+	case ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	case ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	case ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	default:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 	}
-	return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 }
 
-// sandboxClassString renders the proto enum in the CRD's lower-case string
-// form, which the scheduler and the metric labels share.
-func sandboxClassString(in ateapipb.SandboxClass) string {
+// fidelityFromAtelet maps atelet's fidelity enum back onto the identical
+// public one. Anything else comes back UNSPECIFIED.
+func fidelityFromAtelet(in ateletpb.SnapshotFidelity) ateapipb.SnapshotFidelity {
 	switch in {
-	case ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR:
-		return string(atev1alpha1.SandboxClassGvisor)
-	case ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM:
-		return string(atev1alpha1.SandboxClassMicroVM)
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	default:
-		return ""
+		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 	}
+}
+
+// snapshotReportFromAtelet converts a snapshot atelet reports into the form
+// ReportActorSnapshotState takes, which carries the snapshot's fields inline.
+// A report that names no snapshot converts to nil.
+func snapshotReportFromAtelet(r *ateletpb.SnapshotReport) *ateapipb.SnapshotReport {
+	if r.GetSnapshot() == nil {
+		return nil
+	}
+	snap := r.GetSnapshot()
+	out := &ateapipb.SnapshotReport{
+		Uuid:                snap.GetSnapshotUuid(),
+		Generation:          snap.GetGeneration(),
+		Fidelity:            fidelityFromAtelet(snap.GetFidelity()),
+		LocalCommitTime:     r.GetLocalCommitTime(),
+		DurableCompleteTime: r.GetDurableCompleteTime(),
+	}
+	if obj := snap.GetObject(); obj != nil {
+		out.Object = &ateapipb.ObjectSnapshot{SnapshotUri: obj.GetSnapshotUri()}
+	}
+	return out
 }

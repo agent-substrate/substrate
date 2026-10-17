@@ -29,8 +29,9 @@ if [[ $# -gt 0 ]]; then
       echo "Creates the kind cluster '${KIND_CLUSTER_NAME}' and a local registry container on port ${reg_port}."
       echo
       echo "Configured through the environment:"
-      echo "  KIND_CLUSTER_NAME  Name of the cluster to create (default: kind)."
-      echo "  IP_FAMILY          Address families for pods and Services: ipv4, ipv6 or dual (default: ipv4)."
+      echo "  KIND_CLUSTER_NAME      Name of the cluster to create (default: kind)."
+      echo "  IP_FAMILY              Address families for pods and Services: ipv4, ipv6 or dual (default: ipv4)."
+      echo "  ATE_KIND_RESERVED_CPU  CPU reserved for the kubelet and the system on each node (default: none)."
       exit 0
       ;;
   esac
@@ -124,6 +125,17 @@ kubeadmConfigPatches:
   serializeImagePulls: false
   maxParallelImagePulls: 4
 EOF
+# Hundreds of sandboxes per node can starve the kubelet's node heartbeat; after
+# the 300 s toleration the taint manager evicts every pod on the node. Opt in to
+# a CPU reservation for the kubelet and the system, e.g. ATE_KIND_RESERVED_CPU=2.
+if [[ -n "${ATE_KIND_RESERVED_CPU:-}" ]]; then
+cat <<EOF >> "${ROOT}/bin/kind-config.yaml"
+  systemReserved:
+    cpu: "${ATE_KIND_RESERVED_CPU}"
+  kubeReserved:
+    cpu: "${ATE_KIND_RESERVED_CPU}"
+EOF
+fi
 
 echo "Deleting existing kind cluster '${KIND_CLUSTER_NAME}' if it exists..."
 "${ROOT}"/hack/kind.sh delete cluster --name "${KIND_CLUSTER_NAME}" || true
@@ -169,6 +181,16 @@ if [[ "${IP_FAMILY}" == "ipv6" ]]; then
     kubectl config set-cluster "${KUBECTL_CONTEXT}" \
       --server="https://localhost:${server##*:}" >/dev/null
   fi
+fi
+
+# 2.4 Every sandbox gets a link-local address, and the kernel's neighbor table
+# ceiling is global across network namespaces: at its default of 1024 entries a
+# host with about a thousand sandboxes overflows it ("neighbour: arp_cache:
+# neighbor table overflow!" in dmesg) and connections to sandboxes time out while
+# the host sits idle. Only Linux hosts expose the sysctl; warn, do not change it.
+if thresh3="$(sysctl -n net.ipv4.neigh.default.gc_thresh3 2>/dev/null)" && [ "${thresh3}" -le 1024 ]; then
+  echo "warning: net.ipv4.neigh.default.gc_thresh3=${thresh3}; above about 1000 sandboxes on this host set" >&2
+  echo "         net.ipv4.neigh.default.gc_thresh1=4096 gc_thresh2=16384 gc_thresh3=32768 (sysctl -w, as root)" >&2
 fi
 
 # 2.5 Enable Proxy ARP/NDP on kind nodes for gVisor loopback pod-to-pod networking
