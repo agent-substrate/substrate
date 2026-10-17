@@ -249,18 +249,15 @@ func TestRuntimePrewarmAssetFailureStillPullsImage(t *testing.T) {
 }
 
 // TestRuntimePrewarmAttemptTimeout verifies a single attempt is bounded by
-// prewarmAttemptTimeout: the queue has one worker, so an attempt that never
-// returned would block every other runtime's prewarm.
+// the prewarmer's attempt timeout: the queue has one worker, so an attempt
+// that never returned would block every other runtime's prewarm.
 func TestRuntimePrewarmAttemptTimeout(t *testing.T) {
 	useTempAssetScratch(t)
-	orig := prewarmAttemptTimeout
-	prewarmAttemptTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { prewarmAttemptTimeout = orig })
-
 	index := newRuntimeIndex()
 	hash := indexedTestRuntime(t, index, []byte("hung runsc"), "")
 	rt, _ := index.lookup(hash)
 	p := newRuntimePrewarmer(index, &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: hangingObjectStorage{}}, newTestImageStore(t))
+	p.attemptTimeout = 50 * time.Millisecond
 
 	done := make(chan error, 1)
 	go func() { done <- p.prewarm(context.Background(), hash, rt) }()
@@ -330,12 +327,11 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 // cache without any Run/Restore request.
 func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 	useTempAssetScratch(t)
-	origFinished := prewarmFinished
 	// The worker's own prewarm call returns only when the asset has landed
 	// and the pause-image pull has finished. Waiting for the call keeps the
 	// pull's last writes from racing the TempDir cleanup.
 	prewarmed := make(chan error, 1)
-	prewarmFinished = func(_ string, err error) {
+	onFinished := func(_ string, err error) {
 		// Non-blocking: a failed attempt is retried, and the worker must not
 		// block on a result nobody reads.
 		select {
@@ -343,7 +339,6 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 		default:
 		}
 	}
-	t.Cleanup(func() { prewarmFinished = origFinished })
 
 	pauseRef, _ := pauseImageInTestRegistry(t)
 	content := []byte("runsc binary bytes")
@@ -360,9 +355,9 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 	index := newRuntimeIndex()
 	herder := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
 	p := newRuntimePrewarmer(index, herder, newTestImageStore(t))
+	p.onFinished = onFinished
 	go p.run(ctx)
-	// t.Context()-style ordering: the worker reads patched globals, so join
-	// it before cleanups restore them.
+	// Join the worker before the TempDir cleanups remove what it writes into.
 	t.Cleanup(func() {
 		cancel()
 		p.wait()

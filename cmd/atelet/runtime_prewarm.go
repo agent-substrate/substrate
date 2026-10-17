@@ -29,12 +29,12 @@ import (
 	"go.ate.dev/substrate/internal/imagecache"
 )
 
-// prewarmAttemptTimeout bounds one prewarm attempt. The queue is drained by
-// one worker, so an attempt that never returned would block every other
-// runtime's prewarm. The asset downloads are bounded by the asset cache's
-// own fetch timeout; this covers the pause image pull beside them. A var so
-// tests can shorten it.
-var prewarmAttemptTimeout = 10 * time.Minute
+// defaultPrewarmAttemptTimeout bounds one prewarm attempt. The queue is
+// drained by one worker, so an attempt that never returned would block
+// every other runtime's prewarm. The asset downloads are bounded by the
+// asset cache's own fetch timeout; this covers the pause image pull beside
+// them.
+const defaultPrewarmAttemptTimeout = 10 * time.Minute
 
 // prewarmMaxRetries bounds how often one runtime's failed prewarm is retried
 // before it is dropped until a worker advertises it again (or first use,
@@ -42,12 +42,6 @@ var prewarmAttemptTimeout = 10 * time.Minute
 // so this covers transient bucket or registry outages of several minutes
 // without hammering a permanently broken runtime forever.
 const prewarmMaxRetries = 8
-
-// prewarmFinished observes the result of each prewarm attempt, by runtime
-// hash, once the worker's call has returned. A no-op in production; a var so
-// a test can wait for the worker's own prewarm call to return before it tears
-// down what that call writes into.
-var prewarmFinished = func(string, error) {}
 
 // sandboxAssetFetcher is the one slice of Atelet the prewarmer needs.
 // Prewarming through the same method as the Run/Restore path keeps the two
@@ -87,13 +81,21 @@ type runtimePrewarmer struct {
 	prewarmed map[string]bool
 	// done is closed when the worker goroutine exits; wait blocks on it.
 	done chan struct{}
+
+	// attemptTimeout is defaultPrewarmAttemptTimeout. Shortened in tests.
+	attemptTimeout time.Duration
+	// onFinished, if set, observes the result of each prewarm attempt, by
+	// runtime hash, once the worker's call has returned. Tests set it to
+	// wait for that call before tearing down what it writes into.
+	onFinished func(hash string, err error)
 }
 
 func newRuntimePrewarmer(index *runtimeIndex, assets sandboxAssetFetcher, images *imagecache.Store) *runtimePrewarmer {
 	return &runtimePrewarmer{
-		index:  index,
-		assets: assets,
-		images: images,
+		index:          index,
+		assets:         assets,
+		images:         images,
+		attemptTimeout: defaultPrewarmAttemptTimeout,
 		// Downloads fail on the scale of network timeouts, not API conflicts,
 		// so back off in seconds and cap in minutes rather than the
 		// millisecond-based controller default.
@@ -142,8 +144,8 @@ func (p *runtimePrewarmer) run(ctx context.Context) {
 }
 
 // wait blocks until the worker has exited, which happens after the context
-// given to run is canceled and the in-flight item finishes. Tests that patch
-// package globals the worker reads must wait here before restoring them.
+// given to run is canceled and the in-flight item finishes. Tests wait here
+// before tearing down what the worker writes into.
 func (p *runtimePrewarmer) wait() {
 	<-p.done
 }
@@ -161,7 +163,9 @@ func (p *runtimePrewarmer) process(ctx context.Context, hash string) {
 		return
 	}
 	err := p.prewarm(ctx, hash, rt)
-	prewarmFinished(hash, err)
+	if p.onFinished != nil {
+		p.onFinished(hash, err)
+	}
 	if err == nil {
 		p.markPrewarmed(hash)
 		p.queue.Forget(hash)
@@ -194,7 +198,7 @@ func (p *runtimePrewarmer) process(ctx context.Context, hash string) {
 // Prewarm has no actor to link the assets into, so it stages them into a
 // scratch directory it removes again; the cache keeps the entries.
 func (p *runtimePrewarmer) prewarm(ctx context.Context, hash string, rt *indexedRuntime) error {
-	ctx, cancel := context.WithTimeout(ctx, prewarmAttemptTimeout)
+	ctx, cancel := context.WithTimeout(ctx, p.attemptTimeout)
 	defer cancel()
 	t := time.Now()
 

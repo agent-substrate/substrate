@@ -364,9 +364,8 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 	if ok {
 		return mask, nil
 	}
-	// A download that hangs would hold a sync worker; prewarmAttemptTimeout
-	// bounds the fetch for the same reason it bounds prewarming.
-	ctx, cancel := context.WithTimeout(ctx, prewarmAttemptTimeout)
+	// Backstop for the sync worker this runs on; see probeFetchTimeout.
+	ctx, cancel := context.WithTimeout(ctx, probeFetchTimeout)
 	defer cancel()
 	// The probe has no actor to stage the binary for: it links it into a
 	// scratch dir it removes again, and the cache keeps the entry.
@@ -403,6 +402,15 @@ func runscAssetOf(rec *sandboxAssetsRecord) (string, bool) {
 	}
 	return "", false
 }
+
+// probeFetchTimeout bounds the fetch of a runsc binary for its probe, from
+// the first cache lookup to the staged link. The asset cache bounds each
+// download with its own fetch timeout, and the exec below has
+// cpuFeaturesTimeout; this is the backstop for everything around them,
+// such as waiting on a download another caller started, so a probe cannot
+// hold one of the syncer's few workers for longer than one download may
+// take.
+const probeFetchTimeout = 5 * time.Minute
 
 // cpuFeaturesTimeout bounds one `runsc cpu-features` run, which takes
 // milliseconds. A runsc that hangs would hold a sync worker. A var so tests
