@@ -119,7 +119,8 @@ type Tracker struct {
 	// this node before atelet detaches it: DefaultDetachDelay unless
 	// WithDetachDelay sets it.
 	detachDelay time.Duration
-	// instruments records background upload duration and outcome. Nil without
+	// instruments records the background uploads and detaches: how late they
+	// start, how long they take, and how they end. Nil without
 	// WithInstruments.
 	instruments *Instruments
 	// retries says how long an actor's background work is held back after a
@@ -187,7 +188,7 @@ func WithDetachWorkers(n int) Option {
 }
 
 // WithInstruments attaches the instruments the tracker records background
-// uploads on. A nil *Instruments is a no-op.
+// uploads and detaches on. A nil *Instruments is a no-op.
 func WithInstruments(inst *Instruments) Option {
 	return func(t *Tracker) {
 		t.instruments = inst

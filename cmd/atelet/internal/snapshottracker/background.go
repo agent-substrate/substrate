@@ -226,6 +226,7 @@ func (t *Tracker) beginDueWork(actorUID string, kind opKind) func() {
 				return nil
 			}
 			if finish, err := t.beginDetachLocked(t.ctx, a, true); err == nil {
+				t.instruments.recordDetachOverdue(t.ctx, now.Sub(due))
 				return func() { _, _ = finish() }
 			}
 		}
@@ -236,7 +237,9 @@ func (t *Tracker) beginDueWork(actorUID string, kind opKind) func() {
 				// the actor again when it ends (see holdLocked).
 				return nil
 			}
-			return t.beginUploadLocked(t.ctx, a)
+			run := t.beginUploadLocked(t.ctx, a)
+			t.instruments.recordUploadOverdue(t.ctx, now.Sub(due))
+			return run
 		}
 		// beginUploadLocked clears any superseded Uploading snapshot before
 		// starting the next upload. When no upload runs (for example after an

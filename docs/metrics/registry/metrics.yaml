@@ -1006,7 +1006,7 @@ groups:
         emitted_by: [atelet]
         golden_signals: [latency, errors]
         code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
-        buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
+        buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
         cuj: Are background snapshot uploads slow or failing on a node?
     attributes:
       - ref: ate.snapshot.fidelity
@@ -1014,6 +1014,87 @@ groups:
       - ref: error.type
         requirement_level:
           conditionally_required: The upload failed. If this key is absent, the upload was correct.
+
+  - id: metric.atelet.snapshot.detach.duration
+    type: metric
+    metric_name: atelet.snapshot.detach.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time of deleting the local snapshots of an actor during a background detach on atelet, excluding any snapshot upload.
+    note: >
+      atelet detaches an actor once it stays suspended on the node for the
+      detach delay. If object storage does not hold the latest local snapshot
+      yet, the detach uploads it first and records that upload on
+      atelet.snapshot.upload.duration; a detach whose upload fails stops there
+      and is not recorded here. Once the snapshot is durable, the detach deletes
+      the local snapshots of the actor, which is what this histogram times. A
+      detach that Terminate or an atelet shutdown cancels records error.type
+      Canceled. A failed detach keeps the local snapshots, and atelet tries it
+      again later. A detach that a DetachActor call asks for is not recorded.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [latency, errors]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
+        cuj: Local snapshots stay on a node after the detach delay. Do the detaches fail?
+    attributes:
+      - ref: ate.snapshot.fidelity
+        requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The detach failed. If this key is absent, the detach was correct.
+
+  - id: metric.atelet.snapshot.upload.overdue.duration
+    type: metric
+    metric_name: atelet.snapshot.upload.overdue.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time from when a background snapshot upload on atelet is due to when a worker starts it.
+    note: >
+      This instrument has no labels. An upload is due the upload delay
+      (--snapshot-upload-delay) after the state of the actor on the node
+      stopped being durable, or when the retry delay ends after a failure. A
+      fixed number of upload workers (--snapshot-upload-workers) runs uploads
+      on each node, separate from the detach workers. The value stays near zero
+      while an upload worker is free. It grows when every upload worker is
+      busy, while a detach or a PromoteSnapshot of the actor runs, and after an
+      atelet restart for the uploads that came due while atelet was down.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        buckets: [0.1, 1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600]
+        cuj: Background uploads fall behind on a node. Are the upload workers saturated?
+    attributes: []
+
+  - id: metric.atelet.snapshot.detach.overdue.duration
+    type: metric
+    metric_name: atelet.snapshot.detach.overdue.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time from when a background detach on atelet is due to when a worker starts it.
+    note: >
+      This instrument has no labels. A detach is due the detach delay
+      (--snapshot-detach-delay) after the latest checkpoint of the actor, or
+      when the retry delay ends after a failed detach. A fixed number of detach
+      workers (--snapshot-detach-workers) runs detaches on each node, separate
+      from the upload workers. The value stays near zero while a detach worker
+      is free. It grows when every detach worker is busy, while an upload, Run,
+      Restore, Checkpoint, or PromoteSnapshot of the actor runs, and after an
+      atelet restart for the detaches that came due while atelet was down.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        buckets: [0.1, 1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600]
+        cuj: Local snapshots stay on a node after the detach delay. Are the detach workers saturated?
+    attributes: []
 
   - id: metric.ate.actor.stats.cpu.time
     type: metric
