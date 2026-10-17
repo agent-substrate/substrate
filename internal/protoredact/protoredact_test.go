@@ -27,6 +27,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/proto/glutton"
 	"go.ate.dev/substrate/internal/proto/grpcechopb"
+	"go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
 	"go.ate.dev/substrate/internal/protoredact"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.ate.dev/substrate/pkg/proto/ateconfigpb"
@@ -385,6 +386,7 @@ var ourProtoFiles = []protoreflect.FileDescriptor{
 	credproviderpb.File_credprovider_proto,
 	glutton.File_glutton_proto,
 	grpcechopb.File_grpcecho_proto,
+	objectstoreexchangepb.File_exchange_proto,
 	objectstorev1.File_objectstore_proto,
 }
 
@@ -417,16 +419,18 @@ func isDebugRedact(fd protoreflect.FieldDescriptor) bool {
 // change is reviewed as a deliberate decision about what the logs may show.
 func TestDebugRedactFieldsArePinned(t *testing.T) {
 	want := map[string]bool{
-		"ateapi.EnvVar.value":                            true,
-		"ateapi.MintActorJwtResponse.actor_jwt":          true,
-		"ateapi.MintWorkerActorJwtResponse.actor_jwt":    true,
-		"atelet.AssetFile.url":                           true,
-		"atelet.EnvVar.value":                            true,
-		"ateworker.ContainerSpec.env":                    true,
-		"credprovider.FetchSecretResponse.opaque_bytes":  true,
-		"objectstore.v1.FetchAssetRequest.asset_uri":     true,
-		"objectstore.v1.FetchSnapshotRequest.actor_jwt":  true,
-		"objectstore.v1.UploadSnapshotRequest.actor_jwt": true,
+		"ateapi.EnvVar.value":                                       true,
+		"ateapi.MintActorJwtResponse.actor_jwt":                     true,
+		"ateapi.MintWorkerActorJwtResponse.actor_jwt":               true,
+		"atelet.AssetFile.url":                                      true,
+		"atelet.EnvVar.value":                                       true,
+		"ateworker.ContainerSpec.env":                               true,
+		"credprovider.FetchSecretResponse.opaque_bytes":             true,
+		"objectstore.v1.FetchAssetRequest.asset_uri":                true,
+		"objectstore.v1.FetchSnapshotRequest.actor_jwt":             true,
+		"objectstore.v1.UploadSnapshotRequest.actor_jwt":            true,
+		"objectstoreexchange.ExchangeActorJwtRequest.actor_jwt":     true,
+		"objectstoreexchange.ExchangeActorJwtResponse.access_token": true,
 	}
 	got := map[string]bool{}
 	forEachField(func(fd protoreflect.FieldDescriptor) {

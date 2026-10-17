@@ -32,6 +32,7 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/objectstore"
 	"go.ate.dev/substrate/internal/objectstoreplugin"
@@ -62,6 +63,15 @@ func main() {
 	assetStagingDir := flags.String("asset-staging-dir", "/var/lib/objectstore-plugin/asset-staging", "node mode: directory sandbox assets are downloaded into and verified before they are copied below --root; must not be below --root or readable by the caller")
 	assetStagingCapacity := flags.String("asset-staging-capacity", "8Gi", "node mode: the most sandbox asset downloads in --asset-staging-dir may hold at once, as a Kubernetes quantity; downloads wait for space, and an asset larger than this is refused")
 	timeout := flags.Duration("timeout", 5*time.Second, "healthcheck mode: how long to wait for the plugin to report that it is serving")
+	var xcfg exchangeConfig
+	flags.StringVar(&xcfg.listen, "exchange-listen", "", "control mode: TCP address to serve the credential exchange on over TLS, for example :8445. Empty leaves it unserved.")
+	flags.StringVar(&xcfg.credBundle, "exchange-cred-bundle", "/run/servicedns.podcert.ate.dev/credential-bundle.pem", "control mode: PEM credential bundle the exchange serves with, the pod's service DNS certificate")
+	flags.StringVar(&xcfg.issuer, "actor-jwt-issuer", "", "control mode: issuer URL of the actor JWTs the exchange accepts, the value ate-api-server runs with")
+	flags.StringVar(&xcfg.jwksFile, "actor-jwt-jwks-file", "/run/actor-id-jwt-jwks/jwks.json", "control mode: JWK set file holding the public keys actor JWTs are verified with")
+	flags.StringVar(&xcfg.ateapi.Address, "ateapi-address", "127.0.0.1:443", "control mode: ate-api-server gRPC address, the loopback in the shared pod")
+	flags.StringVar(&xcfg.ateapi.CAFile, "ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "control mode: CA bundle used to verify ate-api-server")
+	flags.StringVar(&xcfg.ateapi.ServerName, "ateapi-server-name", installdefaults.APIServiceHost(installdefaults.NamespaceFromPodEnv()), "control mode: DNS name expected on the ate-api-server certificate, the API Service in the pod's namespace")
+	flags.StringVar(&xcfg.ateapi.ClientCredBundle, "ateapi-client-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "control mode: PEM credential bundle presented to ate-api-server, the pod identity certificate")
 	previewFlags := flags.StringSlice("preview", nil, "Preview gates to enable.")
 	_ = flags.Parse(os.Args[2:])
 
@@ -126,6 +136,13 @@ func main() {
 			serverboot.Fatal(ctx, "Failed to set up the object storage backend", err)
 		}
 		objectstorev1.RegisterControlProviderServer(srv, objectstoreplugin.NewControlPlugin(store))
+		if xcfg.listen != "" {
+			stop, err := serveExchange(ctx, xcfg)
+			if err != nil {
+				serverboot.Fatal(ctx, "Failed to serve the credential exchange", err)
+			}
+			defer stop()
+		}
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)

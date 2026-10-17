@@ -35,9 +35,12 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"golang.org/x/oauth2/google/downscope"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/utils/lru"
 
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
+	"go.ate.dev/substrate/internal/objectstoreplugin/credential"
 	"go.ate.dev/substrate/internal/objectstoreplugin/gcsboundary"
 )
 
@@ -58,12 +61,6 @@ const (
 	stsTimeout = 30 * time.Second
 )
 
-// Token is a downscoped GCS access token and when it expires.
-type Token struct {
-	AccessToken string
-	Expiry      time.Time
-}
-
 // Issuer exchanges the pod's credential for per-actor downscoped tokens and
 // caches them by actor UID.
 type Issuer struct {
@@ -76,7 +73,7 @@ type Issuer struct {
 // entry is a cached token with the grants it was minted for, so a request can
 // tell whether the token covers it.
 type entry struct {
-	token  Token
+	token  credential.Token
 	grants []actorscope.Grant
 }
 
@@ -140,11 +137,14 @@ func New(ctx context.Context, opts ...Option) (*Issuer, error) {
 // widen when a never-suspended actor is repointed to another storage
 // location, and the cached token lacks it, a mint. So the common path costs
 // nothing and a repoint never hands out a token GCS would refuse.
-func (i *Issuer) Issue(ctx context.Context, actorUID string, grants []actorscope.Grant, force bool) (Token, error) {
+//
+// A grant set the access boundary cannot express fails with codes.Internal.
+// Every other failure is an STS or network error and carries no code.
+func (i *Issuer) Issue(ctx context.Context, actorUID string, grants []actorscope.Grant, force bool) (credential.Token, error) {
 	if len(grants) == 0 {
 		// Checked before the cache: an empty set is covered by any cached
 		// token, but an actor with no grants must get nothing.
-		return Token{}, errors.New("actor has no storage grants")
+		return credential.Token{}, status.Error(codes.Internal, "actor has no storage grants")
 	}
 	if !force {
 		if v, ok := i.cache.Get(actorUID); ok {
@@ -155,7 +155,7 @@ func (i *Issuer) Issue(ctx context.Context, actorUID string, grants []actorscope
 	}
 	tok, err := i.mint(ctx, grants)
 	if err != nil {
-		return Token{}, err
+		return credential.Token{}, err
 	}
 	if tok.Expiry.Sub(i.now()) >= minServeLifetime {
 		i.cache.Add(actorUID, entry{token: tok, grants: slices.Clone(grants)})
@@ -178,10 +178,10 @@ func covers(cached, requested []actorscope.Grant) bool {
 	return true
 }
 
-func (i *Issuer) mint(ctx context.Context, grants []actorscope.Grant) (Token, error) {
+func (i *Issuer) mint(ctx context.Context, grants []actorscope.Grant) (credential.Token, error) {
 	rules, err := gcsboundary.FromGrants(grants)
 	if err != nil {
-		return Token{}, fmt.Errorf("while building the access boundary: %w", err)
+		return credential.Token{}, status.Errorf(codes.Internal, "while building the access boundary: %v", err)
 	}
 	// The downscope package reads its HTTP client from the context but sends
 	// the STS request without one, so the caller's deadline is attached by the
@@ -192,21 +192,21 @@ func (i *Issuer) mint(ctx context.Context, grants []actorscope.Grant) (Token, er
 	})
 	ts, err := downscope.NewTokenSource(ctx, downscope.DownscopingConfig{RootSource: i.source, Rules: rules})
 	if err != nil {
-		return Token{}, fmt.Errorf("while building the access boundary: %w", err)
+		return credential.Token{}, status.Errorf(codes.Internal, "while building the access boundary: %v", err)
 	}
 	tok, err := ts.Token()
 	if err != nil {
-		return Token{}, fmt.Errorf("while exchanging at STS: %w", err)
+		return credential.Token{}, fmt.Errorf("while exchanging at STS: %w", err)
 	}
 	if tok.AccessToken == "" {
-		return Token{}, errors.New("STS returned no access token")
+		return credential.Token{}, errors.New("STS returned no access token")
 	}
 	if tok.Expiry.IsZero() {
 		// Without an expiry the node plugin could not know when to stop using
 		// the token.
-		return Token{}, errors.New("downscoped token has no expiry")
+		return credential.Token{}, errors.New("downscoped token has no expiry")
 	}
-	return Token{AccessToken: tok.AccessToken, Expiry: tok.Expiry}, nil
+	return credential.Token{AccessToken: tok.AccessToken, Expiry: tok.Expiry}, nil
 }
 
 // contextTransport sends every request with ctx, so a cancelled or expired

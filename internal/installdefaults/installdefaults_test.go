@@ -88,6 +88,17 @@ func TestAPIServerSPIFFEID(t *testing.T) {
 	}
 }
 
+func TestAPIServiceHost(t *testing.T) {
+	for _, tt := range []struct{ namespace, want string }{
+		{"ate-system", "api.ate-system.svc"},
+		{"substrate-prod", "api.substrate-prod.svc"},
+	} {
+		if got := APIServiceHost(tt.namespace); got != tt.want {
+			t.Errorf("APIServiceHost(%q) = %q, want %q", tt.namespace, got, tt.want)
+		}
+	}
+}
+
 func TestActorJWTIssuer(t *testing.T) {
 	tests := []struct {
 		name      string
