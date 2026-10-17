@@ -832,7 +832,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 			} else {
 				defer sandbox.Close()
 			}
-			err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
+			err := rcmd.checkpointRunningWorkload(ctx, req.GetSpec().GetContainers(), checkpointPath, durablePaths)
 			if err != nil {
 				timing.checkpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing pause: %w", err)

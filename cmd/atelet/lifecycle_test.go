@@ -43,6 +43,7 @@ import (
 	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/utils/clock"
 	clocktesting "k8s.io/utils/clock/testing"
@@ -69,6 +70,8 @@ type fakeWorker struct {
 	ateworkerpb.UnimplementedWorkerServer
 	// mu guards the record maps: concurrent RPCs record at the same time.
 	mu sync.Mutex
+
+	checkpointErr error
 	// snapshotFiles are written at checkpoint and reported back to atelet as
 	// the exact set the snapshot consists of.
 	snapshotFiles map[string]string
@@ -111,6 +114,9 @@ func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkload
 func (f *fakeWorker) CheckpointWorkload(_ context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (*ateworkerpb.CheckpointWorkloadResponse, error) {
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
 	f.recordFidelity("CheckpointWorkload", req.GetFidelity())
+	if f.checkpointErr != nil {
+		return nil, f.checkpointErr
+	}
 	dir := req.GetActorDirs().GetCheckpointDir()
 	names := make([]string, 0, len(f.snapshotFiles))
 	for name, body := range f.snapshotFiles {
@@ -120,6 +126,38 @@ func (f *fakeWorker) CheckpointWorkload(_ context.Context, req *ateworkerpb.Chec
 		names = append(names, name)
 	}
 	return &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: names}, nil
+}
+
+func TestCheckpointPreservesApplicationExitCode(t *testing.T) {
+	useTempNodeDirs(t)
+	const message = `application container "app" exited before checkpoint (exit code 1)`
+	serveFakeWorker(t, &fakeWorker{checkpointErr: status.Error(codes.FailedPrecondition, message)})
+	req := validCheckpointRequest()
+	req.Spec.Containers[0].Image = "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	runsc := []byte("runsc binary")
+	if err := writeSandboxRecord(req.ActorUid, &sandboxAssetsRecord{
+		SandboxClass: "gvisor", PauseImage: "registry.k8s.io/pause:3.9",
+		Assets: map[string]assetEntry{runscAssetName: {
+			URL: "gs://test-bucket/runsc", SHA256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Atelet{
+		workerDialer:      newWorkerDialer(1),
+		imageCache:        newImageVolumeStore(t),
+		sandboxAssetCache: newTestAssetCache(t),
+		anonGCSClient:     fakeObjectStorage{data: runsc},
+		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+	}
+	resp, err := s.Checkpoint(t.Context(), req)
+	if resp != nil || apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("Checkpoint = %v, %v; want FailedPrecondition", resp, err)
+	}
+	if !strings.Contains(err.Error(), message) {
+		t.Fatalf("checkpoint error %q lost the application exit diagnostic", err)
+	}
 }
 
 func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.RestoreWorkloadRequest) (*ateworkerpb.RestoreWorkloadResponse, error) {
