@@ -128,9 +128,18 @@ func (s *sidecar) dialReady(wait time.Duration) (*grpc.ClientConn, objectstorev1
 // starts on a lost connection rather than racing the loss.
 func (s *sidecar) lose(conn *grpc.ClientConn) {
 	s.t.Helper()
-	s.stop()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	// A served call does not mean conn reports Ready yet: gRPC installs the
+	// picker that serves calls before it updates the connectivity state.
+	// Wait for Ready first, or the loop below returns at once and the next
+	// call races the loss after all.
+	for state := conn.GetState(); state != connectivity.Ready; state = conn.GetState() {
+		if !conn.WaitForStateChange(ctx, state) {
+			s.t.Fatalf("connection not ready 10s after the readiness check (state %s)", state)
+		}
+	}
+	s.stop()
 	for conn.GetState() == connectivity.Ready {
 		if !conn.WaitForStateChange(ctx, connectivity.Ready) {
 			s.t.Fatal("connection still ready 10s after the plugin stopped")
