@@ -73,21 +73,6 @@ linters:
 
   exclusions:
     rules:
-      # TEMPORARY: every current commentstart, conditions, defaultorrequired,
-      # optionalorrequired and defaults finding, excluded file-wide so this
-      # PR only introduces the tool with no content changes, per review on
-      # #416. A follow-up PR removes these and fixes the findings by class.
-      - path: 'pkg/api/v1alpha1/.*_types\.go'
-        text: '^commentstart:'
-      - path: 'pkg/api/v1alpha1/.*_types\.go'
-        text: '^conditions:'
-      - path: 'pkg/api/v1alpha1/.*_types\.go'
-        text: '^defaultorrequired:'
-      - path: 'pkg/api/v1alpha1/.*_types\.go'
-        text: '^optionalorrequired:'
-      - path: 'pkg/api/v1alpha1/.*_types\.go'
-        text: '^defaults:'
-
       # Pre-existing findings from rules that require Go API changes
       # (pointer fields, omitempty/omitzero tags, map-to-list refactors)
       # on the existing v1alpha1 types. Each rule names the fields it
@@ -110,7 +95,7 @@ linters:
       - path: 'pkg/api/v1alpha1/csidriverconfig_types\.go'
         text: '^optionalfields: .*\bCSIDriverTLSConfig\.(ServerName|UsePodIdentity)\b'
       - path: 'pkg/api/v1alpha1/csidriverconfig_types\.go'
-        text: '^nonpointerstructs: .*\bCSIDriverConfig\.Spec\b'
+        text: '^(nonpointerstructs|requiredfields): .*\bCSIDriverConfig\.Spec\b'
       - path: 'pkg/api/v1alpha1/workerpool_types\.go'
         text: '^optionalfields: .*\bWorkerPoolPodTemplate\.PriorityClassName\b'
       - path: 'pkg/api/v1alpha1/workerpool_types\.go'

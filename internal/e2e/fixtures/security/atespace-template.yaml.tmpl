@@ -37,7 +37,7 @@ workerSelector:
     workload: ate-e2e-security
 containers:
 - name: probe
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
   volumeMounts:
   # The probe expects its identity files under /run/ate. The mount also makes
@@ -70,7 +70,11 @@ volumes:
           path: actor-uid
 - name: data
   durableDir: {}
-${TEMPLATE_RESOURCES}
-${TEMPLATE_SANDBOX_CONFIG}
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e${FIXTURE_SUFFIX}/

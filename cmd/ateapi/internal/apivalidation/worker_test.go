@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -142,6 +142,23 @@ func TestValidateCreateWorkerRequest(t *testing.T) {
 			w.Ips = []string{"10.1.2.3", "fd00::1", "10.1.2.4"}
 		})),
 		want: field.ErrorList{field.TooMany(field.NewPath("worker", "ips"), 3, 2).WithOrigin("maxItems")},
+	}, {
+		name: "valid worker_spiffe_id",
+		req: validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) {
+			w.WorkerSpiffeId = "spiffe://cluster.local/ns/ate-system/sa/ateworker"
+		})),
+	}, {
+		name: "invalid worker_spiffe_id",
+		req: validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) {
+			w.WorkerSpiffeId = "https://cluster.local/ns/ate-system/sa/ateworker"
+		})),
+		want: field.ErrorList{field.Invalid(field.NewPath("worker", "worker_spiffe_id"), nil, "")},
+	}, {
+		name: "worker_spiffe_id too long",
+		req: validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) {
+			w.WorkerSpiffeId = "spiffe://cluster.local/" + strings.Repeat("a", 2048)
+		})),
+		want: field.ErrorList{field.TooLong(field.NewPath("worker", "worker_spiffe_id"), nil, 2048).WithOrigin("maxLength")},
 	}, {
 		name: "sandbox_class too long",
 		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.SandboxClass = strings.Repeat("x", 64) })),
@@ -697,8 +714,14 @@ func TestValidateReportActorSnapshotStateRequest(t *testing.T) {
 			r.State.UploadDueTime = nil
 		}),
 	}, {
-		name: "valid empty state",
+		name: "empty state",
 		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.State = &ateapipb.ActorSnapshotState{} }),
+		want: field.ErrorList{field.Required(field.NewPath("state", "latest_durable"), "")},
+	}, {
+		name: "valid upload in flight with no local snapshot",
+		req: valid(func(r *ateapipb.ReportActorSnapshotStateRequest) {
+			r.State = &ateapipb.ActorSnapshotState{Uploading: r.State.GetUploading()}
+		}),
 	}, {
 		name: "missing actor",
 		req:  valid(func(r *ateapipb.ReportActorSnapshotStateRequest) { r.Actor = nil }),

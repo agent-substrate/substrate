@@ -26,9 +26,9 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const (
@@ -153,19 +153,82 @@ func TestCheckpointDurationShape(t *testing.T) {
 		kind:              ateattr.SnapshotKindLocal,
 		fidelity:          ateattr.SnapshotFidelityMemory,
 		sandboxClass:      "microvm",
-	}, phase{ateattr.SnapshotPhasePersist, time.Second})
+	},
+		phase{ateattr.SnapshotPhasePersist, time.Second},
+		phase{ateattr.SnapshotPhaseCleanup, 20 * time.Millisecond},
+	)
 
 	m := collectHistogram(t, reader, checkpointDurationMetric)
 	if m.Unit != "s" {
 		t.Errorf("unit = %q, want %q", m.Unit, "s")
 	}
-	set := phaseValues(t, m)[ateattr.SnapshotPhasePersist]
-	if v := attrString(t, set, ateattr.SnapshotKindKey); v != ateattr.SnapshotKindLocal {
-		t.Errorf("snapshot kind = %q, want %q", v, ateattr.SnapshotKindLocal)
+	byPhase := phaseValues(t, m)
+	for _, wantPhase := range []string{ateattr.SnapshotPhasePersist, ateattr.SnapshotPhaseCleanup} {
+		set, ok := byPhase[wantPhase]
+		if !ok {
+			t.Fatalf("missing phase %q", wantPhase)
+		}
+		if v := attrString(t, set, ateattr.SnapshotKindKey); v != ateattr.SnapshotKindLocal {
+			t.Errorf("%s snapshot kind = %q, want %q", wantPhase, v, ateattr.SnapshotKindLocal)
+		}
+		if v := attrString(t, set, ateattr.SandboxClassKey); v != "microvm" {
+			t.Errorf("%s sandbox class = %q, want microvm", wantPhase, v)
+		}
 	}
-	if v := attrString(t, set, ateattr.SandboxClassKey); v != "microvm" {
-		t.Errorf("sandbox class = %q, want microvm", v)
+}
+
+// TestCheckpointRecordsCleanup drives a Checkpoint: the node cleanup it does
+// lands in the cleanup phase, even when the upload then fails, and the phases
+// fit in the total.
+func TestCheckpointRecordsCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		putErr error
+	}{
+		{name: "succeeded"},
+		{name: "upload failed", putErr: errors.New("object store unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := runPluginActor(t)
+			var reader *sdkmetric.ManualReader
+			a.s.instruments, reader = newTestInstruments(t)
+			a.store.putErr = tc.putErr
+			_, err := a.checkpoint(t, a.snapshot("suspend-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE)
+			if (err != nil) != (tc.putErr != nil) {
+				t.Fatalf("Checkpoint = %v, want an error only from the upload", err)
+			}
+
+			sums := phaseSums(t, collectHistogram(t, reader, checkpointDurationMetric))
+			if sums[ateattr.SnapshotPhaseCleanup] <= 0 {
+				t.Errorf("cleanup = %vs, want the node cleanup timed", sums[ateattr.SnapshotPhaseCleanup])
+			}
+			var parts float64
+			for name, v := range sums {
+				if name != ateattr.SnapshotPhaseTotal {
+					parts += v
+				}
+			}
+			if total := sums[ateattr.SnapshotPhaseTotal]; parts > total {
+				t.Errorf("phases sum to %vs, more than the %vs total", parts, total)
+			}
+		})
 	}
+}
+
+// phaseSums maps each recorded phase to the sum of its observations.
+func phaseSums(t *testing.T, m metricdata.Metrics) map[string]float64 {
+	t.Helper()
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("%s is %T, want a float64 histogram", m.Name, m.Data)
+	}
+	sums := make(map[string]float64, len(hist.DataPoints))
+	for _, dp := range hist.DataPoints {
+		if v, ok := dp.Attributes.Value(ateattr.SnapshotPhaseKey); ok {
+			sums[v.AsString()] += dp.Sum
+		}
+	}
+	return sums
 }
 
 // TestRecordPhasesSkipsZeroPhases pins the absence rule: a phase that never
@@ -177,11 +240,11 @@ func TestRecordPhasesSkipsZeroPhases(t *testing.T) {
 		snapshotOp{fidelity: ateattr.SnapshotFidelityMemory},
 		phase{ateattr.SnapshotPhaseManifestFetch, 50 * time.Millisecond},
 		phase{ateattr.SnapshotPhaseDownload, 2 * time.Second},
-		phase{ateattr.SnapshotPhaseAteomRestore, 0},
+		phase{ateattr.SnapshotPhaseWorkerRestore, 0},
 		phase{ateattr.SnapshotPhaseTotal, 2 * time.Second})
 
 	byPhase := phaseValues(t, collectHistogram(t, reader, restoreDurationMetric))
-	if _, ok := byPhase[ateattr.SnapshotPhaseAteomRestore]; ok {
+	if _, ok := byPhase[ateattr.SnapshotPhaseWorkerRestore]; ok {
 		t.Error("a phase that never started was recorded as a zero observation")
 	}
 	if len(byPhase) != 3 {

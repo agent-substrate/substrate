@@ -20,18 +20,18 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/volume"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/volume"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
-// initialActorVolumes constructs the actor's volume objects before volume
+// initialExternalVolumes constructs the actor's volume objects before volume
 // creation. A volume has no storage volume ID until it is provisioned.
-func initialActorVolumes(ctx context.Context, scLister storagev1listers.StorageClassLister, template *ateapipb.ActorTemplate) ([]*ateapipb.ExternalVolume, error) {
+func initialExternalVolumes(ctx context.Context, scLister storagev1listers.StorageClassLister, template *ateapipb.ActorTemplate) ([]*ateapipb.ExternalVolume, error) {
 	if template == nil {
 		return nil, apierror.InvalidArgument("template is required")
 	}

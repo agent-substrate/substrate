@@ -111,7 +111,7 @@ Manifests carry `ko://<import path>` references either way. With `--image-repo`
 each is looked up in `images.Components` and rewritten to
 `<repo>/<base of the import path>:<tag>`, which is ko's own
 `--base-import-paths` naming and so is how the release images are already
-published — `ateapi`, `atelet`, `atenet`, `ateom-gvisor`, and the rest.
+published — `ateapi`, `atelet`, `atenet`, `ateworker-gvisor`, and the rest.
 `--image-tag` supplies the tag. Each of the two requires the other: a tag with
 no repository to pull from would be dropped, leaving a build from source that
 looks like the release the tag names.

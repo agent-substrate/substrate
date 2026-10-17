@@ -18,7 +18,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/ko"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/ko"
 )
 
 // SubstrateVersion returns the build version, the same one ko stamps into the

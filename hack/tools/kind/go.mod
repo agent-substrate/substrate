@@ -1,4 +1,4 @@
-module github.com/agent-substrate/substrate/hack/tools/kind
+module go.ate.dev/substrate/hack/tools/kind
 
 go 1.27.0
 

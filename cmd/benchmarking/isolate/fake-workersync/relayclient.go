@@ -23,9 +23,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/benchmarking/isolate/internal/fakeworker"
-	"github.com/agent-substrate/substrate/internal/credbundle"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
+	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -34,7 +34,7 @@ import (
 const reportTimeout = 10 * time.Second
 
 // grpcRelay sends capacity reports to the fake-atelet relay on a Worker's
-// node, as ateom sends them to the atelet on its own node. A rejected report
+// node, as worker sends them to the atelet on its own node. A rejected report
 // carries ate-api-server's status unchanged.
 type grpcRelay struct {
 	creds credentials.TransportCredentials

@@ -90,6 +90,7 @@ usage() {
   echo "Overall infrastructure (all infrastructure components):"
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
+  echo "  --preview GATES                        Enable preview gates (comma-separated, ALL for all, '' for none)"
   echo "  --setup-csi[=DRIVER]                   Setup CSI driver: nfs, hostpath, both, none (default: none;"
   echo "                                         a bare --setup-csi means nfs; hostpath is Kind only)"
   echo "  --delete-ate-system                    Delete core system"
@@ -103,8 +104,16 @@ usage() {
   echo "  --fake-data-plane                      Install fake-atelet in place of atelet and fake-workersync in place of"
   echo "                                         ate-controller, for control-plane benchmarks. Actors do not exist; never"
   echo "                                         use it on a cluster that serves real actors"
+  echo "  --ingress-auth-mode=deprecated-insecure|static-mtls"
+  echo "                                         How the ingress router authenticates clients (default: deprecated-insecure)."
+  echo "                                         Both check a client certificate on the TLS ports against the podidentity CA and"
+  echo "                                         the SPIFFE IDs listed in manifests/ate-install/atenet-router.yaml."
+  echo "                                         deprecated-insecure also accepts TLS clients without one and serves plaintext"
+  echo "                                         ports; static-mtls requires the certificate and --atenet-dataplane=envoy."
   echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
+  echo "  --ateapi-log-level LEVEL               ate-api-server log level: debug, info, warn, or error"
+  echo "                                         (default: keep the installed level, else info)"
   echo ""
   echo "Experiments:"
   echo ""
@@ -140,6 +149,7 @@ usage() {
   echo "  --create-podcertificate-controller-cas Create podcertificate controller CAs"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
   echo "  --create-api-authentication-config     Create the default ate-api-server authentication config"
+  echo "  --create-api-config                    Create the ate-api-server config file (log level from --ateapi-log-level)"
   echo ""
   echo "PostgreSQL configuration (a connection DSN or Cloud SQL instance selects"
   echo "an external database and skips the bundled instance):"
@@ -168,8 +178,15 @@ usage() {
   echo "                                         else the cluster's OIDC discovery document"
   echo "  ACTOR_JWT_ALGORITHM                    Signing algorithm of a newly created actor JWT pool: ES256 (default) | RS256."
   echo "                                         Use RS256 (a 4096-bit RSA key) for relying parties that don't support ES256. Has no effect once the pool exists."
-  echo "  ACTOR_JWT_ISSUER                       iss claim of actor JWTs, verbatim. Relying parties fetch <issuer>/.well-known/openid-configuration."
+  echo "  ACTOR_JWT_ISSUER                       iss claim of actor JWTs, as https://<host> with no path. Relying parties fetch <issuer>/.well-known/openid-configuration."
   echo "                                         Default: https://idp.<namespace>.svc"
+  echo ""
+  echo "Authorization configuration:"
+  echo ""
+  echo "  ATE_API_EXPERIMENTAL_ENABLE_AUTHZ      false turns off ate-api-server's runtime authorization. Default: true"
+  echo "  ATE_API_AUTHZ_BOOTSTRAP_OWNERS         Comma-separated principals that are always global owners."
+  echo "                                         Default: kubectl-ate's, system:serviceaccount:<namespace>:ate-client"
+  echo "                                         See docs/authorization.md."
   echo ""
   echo "Benchmarks (see benchmarking/README.md for details and customization):"
   echo ""
@@ -271,6 +288,14 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       GLOBAL_FLAGS+=("--atenet-dataplane=${prescan_args[$((i + 1))]}")
       ;;
+    --preview=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
+    --preview)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --preview requires a value" >&2
+        exit 1
+      fi
+      GLOBAL_FLAGS+=("--preview=${prescan_args[$((i + 1))]}")
+      ;;
     --experimental-additional-egress-extproc-service=*)
       GLOBAL_FLAGS+=("${prescan_args[i]}")
       ;;
@@ -307,6 +332,14 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       ;;
     --cordon-control-plane|--cordon-control-plane=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
     --fake-data-plane|--fake-data-plane=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
+    --ingress-auth-mode=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
+    --ingress-auth-mode)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --ingress-auth-mode requires deprecated-insecure or static-mtls" >&2
+        exit 1
+      fi
+      GLOBAL_FLAGS+=("--ingress-auth-mode=${prescan_args[$((i + 1))]}")
+      ;;
     --rollout-timeout=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
     --rollout-timeout)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -322,6 +355,14 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
         exit 1
       fi
       GLOBAL_FLAGS+=("--otlp-endpoint=${prescan_args[$((i + 1))]}")
+      ;;
+    --ateapi-log-level=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
+    --ateapi-log-level)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --ateapi-log-level requires debug, info, warn, or error" >&2
+        exit 1
+      fi
+      GLOBAL_FLAGS+=("--ateapi-log-level=${prescan_args[$((i + 1))]}")
       ;;
     --benchmark-worker-count=*) BENCHMARK_FLAGS+=("--worker-count=${prescan_args[i]#*=}") ;;
     --benchmark-worker-count)
@@ -363,16 +404,20 @@ while [[ "$#" -gt 0 ]]; do
     # Captured in the pre-scan above; matched here only so the `*)` branch does
     # not reject them, and so a separated value is consumed with its flag.
     --atenet-dataplane|--podcert-workers-per-signer|--rollout-timeout|--otlp-endpoint) shift ;;
-    --cluster-size) shift ;;
+    --cluster-size|--ingress-auth-mode) shift ;;
     --experimental-additional-egress-extproc-service) shift ;;
     --credential-provider) shift ;;
+    --ateapi-log-level) shift ;;
     --benchmark-worker-count|--benchmark-sandbox-class|--benchmark-actor-memory) shift ;;
     --atenet-dataplane=*|--podcert-workers-per-signer=*|--rollout-timeout=*|--otlp-endpoint=*) ;;
-    --cluster-size=*|--cordon-control-plane|--cordon-control-plane=*) ;;
     --fake-data-plane|--fake-data-plane=*) ;;
+    --cluster-size=*|--cordon-control-plane|--cordon-control-plane=*|--ingress-auth-mode=*) ;;
     --experimental-additional-egress-extproc-service=*) ;;
     --credential-provider=*) ;;
+    --ateapi-log-level=*) ;;
     --benchmark-worker-count=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;
+    --preview) shift ;;
+    --preview=*) ;;
 
     --deploy-ate-system) ate_setup deploy ate-system "--setup-csi=${SETUP_CSI}" ;;
     --setup-csi=*) ate_setup setup csi "${SETUP_CSI}" ;;
@@ -401,6 +446,7 @@ while [[ "$#" -gt 0 ]]; do
     --create-podcertificate-controller-cas) ate_setup create podcertificate-controller-cas ;;
     --create-api-server-env-vars) ate_setup create api-server-env-vars ;;
     --create-api-authentication-config) ate_setup create api-authentication-config ;;
+    --create-api-config) ate_setup create api-config ;;
 
     # The one demo flag that is not just a demo name.
     --deploy-demo-counter-with-external-volume)

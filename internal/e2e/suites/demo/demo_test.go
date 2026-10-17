@@ -23,14 +23,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/hardware"
-	"github.com/agent-substrate/substrate/internal/resources"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -424,6 +425,7 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 }
 
 func TestExternalVolumeLifecycle(t *testing.T) {
+	e2e.RequirePreview(t, preview.GateExternalVolumes)
 	t.Parallel()
 
 	tests := []struct {
@@ -451,6 +453,7 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 }
 
 func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
+	e2e.RequirePreview(t, preview.GateExternalVolumes)
 	t.Parallel()
 	ctx := context.Background()
 	clients := e2e.GetClients()
@@ -514,6 +517,7 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 }
 
 func TestExternalVolume_NodeMigration(t *testing.T) {
+	e2e.RequirePreview(t, preview.GateExternalVolumes)
 	t.Parallel()
 	if e2e.IsMicroVM() {
 		t.Skip("Skipping TestExternalVolume_NodeMigration for microVM environment")
@@ -673,7 +677,8 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	t.Logf("Successfully created Actor: %s", createResp.GetMetadata().GetName())
 	defer func() {
 		clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+			Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+			AnyState: true,
 		})
 	}()
 
@@ -707,8 +712,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	// Pausing the actor
 	//
 	t.Logf("Pausing Actor %q...", actorID)
-	paused, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	paused, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 	})
 	if err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
@@ -749,8 +755,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	//
 	if tc.suspendWhilePaused {
 		t.Logf("Pausing Actor %q before suspending...", actorID)
-		if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+			Actor:   &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		}); err != nil {
 			t.Fatalf("failed to pause Actor before suspend: %v", err)
 		}
@@ -1013,8 +1020,9 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 
 	// Pausing the actor
 	t.Logf("Pausing Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
@@ -1219,7 +1227,7 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	// Revert from paused. Resume prefers a local snapshot over the external
 	// one, so clearing LocalSnapshot is what prevents this pause's count=2
 	// checkpoint from restoring on the next resume.
-	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: actorRef}); err != nil {
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef, Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
 	waitForActorPaused(ctx, t, clients, actorName)
@@ -1376,8 +1384,9 @@ func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.C
 
 	// 3. Pausing the actor
 	t.Logf("Pausing Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}

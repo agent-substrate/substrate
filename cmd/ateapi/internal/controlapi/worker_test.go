@@ -20,11 +20,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -880,7 +880,7 @@ func TestCreateWorker_HoldsNoCapacityUntilReported(t *testing.T) {
 		t.Fatalf("CreateWorker() failed: %v", err)
 	}
 	if capacity := got.GetStatus().GetCapacity(); capacity != nil {
-		t.Errorf("created worker capacity = %v, want none until its ateom reports", capacity)
+		t.Errorf("created worker capacity = %v, want none until its worker reports", capacity)
 	}
 
 	// Capacity is status, so a request cannot bring its own: a Worker only

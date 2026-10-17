@@ -15,7 +15,7 @@
 package lint
 
 import (
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 var NoOneofs = Rule{

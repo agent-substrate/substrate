@@ -19,8 +19,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // HostingNode is the node that holds the actor, and "" when no node does. The
@@ -29,9 +29,12 @@ import (
 // worker (delete its row in the store's worker assignments) before they clear
 // status.worker_assignment, and a crash keeps status.assigned_node as a record
 // of the last node. The rules:
-//   - SUSPENDED or SUSPENDING with no worker and a local-only latest
-//     snapshot, the shape of a paused actor: assigned_node, the node holding
-//     that snapshot.
+//   - No worker, SUSPENDED or SUSPENDING, and the latest generation is a
+//     local checkpoint (locality set) that is not yet in object storage (no
+//     durable copy, or one still PENDING): assigned_node. This is a paused
+//     actor, or a paused actor whose checkpoint a suspend is uploading from
+//     that node. A COMPLETED durable copy ends it: the node has nothing left
+//     to do for the actor.
 //   - RESUMING, RUNNING and SUSPENDING with status.worker_assignment set: the
 //     worker's node, but only while the store's worker assignment row binds
 //     that worker to this actor's UID; "" once it is released or the worker
@@ -46,7 +49,7 @@ func HostingNode(ctx context.Context, st store.Interface, actor *ateapipb.Actor)
 	if assignment == nil {
 		switch status.GetState() {
 		case ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
-			if latestSnapshotIsLocalOnly(status) {
+			if latestSnapshotIsLocalNotYetDurable(status) {
 				return status.GetAssignedNode(), nil
 			}
 		}

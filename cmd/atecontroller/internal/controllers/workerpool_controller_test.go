@@ -43,10 +43,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/testenv"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/testenv"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 var (
@@ -130,7 +130,7 @@ func TestMain(m *testing.M) {
 func TestWorkerPoolCreatesDeployment(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-create", "default", 3, "ateom:v1")
+	wp := makeWorkerPool("test-create", "default", 3, "worker:v1")
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestWorkerPoolCreatesDeployment(t *testing.T) {
 			return false, nil
 		}
 		container := dep.Spec.Template.Spec.Containers[0]
-		if container.Image != "ateom:v1" || container.Name != "ateom" {
+		if container.Image != "worker:v1" || container.Name != "worker" {
 			return false, nil
 		}
 		if dep.Spec.Template.Labels["ate.dev/worker-pool"] != wp.Name {
@@ -158,8 +158,8 @@ func TestWorkerPoolCreatesDeployment(t *testing.T) {
 			return false, nil
 		}
 		return len(dep.Spec.Template.Spec.Volumes) == 4 &&
-			dep.Spec.Template.Spec.Volumes[0].Name == ateomCapacityVolume &&
-			dep.Spec.Template.Spec.Volumes[1].Name == "run-ateom" &&
+			dep.Spec.Template.Spec.Volumes[0].Name == workerCapacityVolume &&
+			dep.Spec.Template.Spec.Volumes[1].Name == "ate-base" &&
 			dep.Spec.Template.Spec.Volumes[2].Name == atunnelIdentityVolume &&
 			dep.Spec.Template.Spec.Volumes[3].Name == atunnelEgressTrustVolume, nil
 	})
@@ -170,7 +170,7 @@ func TestWorkerPoolCreatesDeployment(t *testing.T) {
 func TestWorkerPoolReplicasUpdate(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-replicas", "default", 2, "ateom:v1")
+	wp := makeWorkerPool("test-replicas", "default", 2, "worker:v1")
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestWorkerPoolReplicasUpdate(t *testing.T) {
 func TestWorkerPoolImageUpdate(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-image", "default", 1, "ateom:v1")
+	wp := makeWorkerPool("test-image", "default", 1, "worker:v1")
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestWorkerPoolImageUpdate(t *testing.T) {
 	})
 
 	updateWorkerPoolSpec(t, ctx, wp, "update WorkerPool image", func(current *atev1alpha1.WorkerPool) {
-		current.Spec.WorkerImage = "ateom:v2"
+		current.Spec.WorkerImage = "worker:v2"
 	})
 
 	eventually(t, func(ctx context.Context) (bool, error) {
@@ -219,7 +219,7 @@ func TestWorkerPoolImageUpdate(t *testing.T) {
 		if err != nil || len(dep.Spec.Template.Spec.Containers) == 0 {
 			return false, nil
 		}
-		return dep.Spec.Template.Spec.Containers[0].Image == "ateom:v2", nil
+		return dep.Spec.Template.Spec.Containers[0].Image == "worker:v2", nil
 	})
 }
 
@@ -228,7 +228,7 @@ func TestWorkerPoolImageUpdate(t *testing.T) {
 func TestSSAPreservesUnownedFields(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-ssa-unowned", "default", 2, "ateom:v1")
+	wp := makeWorkerPool("test-ssa-unowned", "default", 2, "worker:v1")
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestSSAPreservesUnownedFields(t *testing.T) {
 func TestSSARevertsOwnedFields(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-ssa-owned", "default", 2, "ateom:v1")
+	wp := makeWorkerPool("test-ssa-owned", "default", 2, "worker:v1")
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestSSARevertsOwnedFields(t *testing.T) {
 func TestDeletedDeploymentRecreated(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-recreate", "default", 2, "ateom:v1")
+	wp := makeWorkerPool("test-recreate", "default", 2, "worker:v1")
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestDeletedDeploymentRecreated(t *testing.T) {
 func TestStatusReplicasPropagation(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-status", "default", 3, "ateom:v1")
+	wp := makeWorkerPool("test-status", "default", 3, "worker:v1")
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
 	}
@@ -390,12 +390,72 @@ func sampleWorkerPoolPodTemplate() *atev1alpha1.WorkerPoolPodTemplate {
 	}
 }
 
+// TestWorkerPoolRunsWorkersAsWorkerServiceAccount checks that a pool naming no
+// ServiceAccount runs its workers as the default one, which the controller
+// creates.
+func TestWorkerPoolRunsWorkersAsWorkerServiceAccount(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	wp := makeWorkerPool("test-worker-sa", "default", 1, "worker:v1")
+	if err := k8sClient.Create(ctx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	deleteOnCleanup(t, wp)
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		if err != nil {
+			return false, nil
+		}
+		return dep.Spec.Template.Spec.ServiceAccountName == installdefaults.WorkerServiceAccount, nil
+	})
+	// Applied before the Deployment, so it exists by now.
+	sa := &corev1.ServiceAccount{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: installdefaults.WorkerServiceAccount, Namespace: wp.Namespace}, sa); err != nil {
+		t.Fatalf("get worker ServiceAccount: %v", err)
+	}
+	// Pools share it, so deleting one must not delete it.
+	if len(sa.OwnerReferences) != 0 {
+		t.Errorf("worker ServiceAccount has owners %v, want none", sa.OwnerReferences)
+	}
+}
+
+// TestWorkerPoolWithServiceAccountSkipsDefault checks that a pool naming its own
+// ServiceAccount does not get the default one created.
+func TestWorkerPoolWithServiceAccountSkipsDefault(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	// A namespace of its own, so no other pool creates the default account.
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "test-custom-worker-sa"}}
+	if err := client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns)); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+	wp := makeWorkerPool("test-custom-sa", ns.Name, 1, "worker:v1")
+	wp.Spec.Template = &atev1alpha1.WorkerPoolPodTemplate{ServiceAccountName: ptr.To("substrate-worker")}
+	if err := k8sClient.Create(ctx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	deleteOnCleanup(t, wp)
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		if err != nil {
+			return false, nil
+		}
+		return dep.Spec.Template.Spec.ServiceAccountName == "substrate-worker", nil
+	})
+	err := k8sClient.Get(ctx, types.NamespacedName{Name: installdefaults.WorkerServiceAccount, Namespace: ns.Name}, &corev1.ServiceAccount{})
+	if !k8errors.IsNotFound(err) {
+		t.Errorf("get default worker ServiceAccount: %v, want NotFound", err)
+	}
+}
+
 // TestWorkerPoolPodTemplatePropagation verifies that template fields propagate
 // to the managed Deployment pod template.
 func TestWorkerPoolPodTemplatePropagation(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-template-propagate", "default", 1, "ateom:v1")
+	wp := makeWorkerPool("test-template-propagate", "default", 1, "worker:v1")
 	wp.Spec.Template = sampleWorkerPoolPodTemplate()
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
@@ -445,7 +505,7 @@ func TestWorkerPoolPodTemplatePropagation(t *testing.T) {
 func TestWorkerPoolPodTemplateUpdate(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-template-update", "default", 1, "ateom:v1")
+	wp := makeWorkerPool("test-template-update", "default", 1, "worker:v1")
 	wp.Spec.Template = sampleWorkerPoolPodTemplate()
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
@@ -477,7 +537,7 @@ func TestWorkerPoolPodTemplateUpdate(t *testing.T) {
 func TestWorkerPoolPodTemplateClear(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-template-clear", "default", 1, "ateom:v1")
+	wp := makeWorkerPool("test-template-clear", "default", 1, "worker:v1")
 	wp.Spec.Template = sampleWorkerPoolPodTemplate()
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
@@ -507,7 +567,7 @@ func TestWorkerPoolPodTemplateClear(t *testing.T) {
 func TestWorkerPoolPodTemplateClearAll(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-template-clear-all", "default", 1, "ateom:v1")
+	wp := makeWorkerPool("test-template-clear-all", "default", 1, "worker:v1")
 	wp.Spec.Template = sampleWorkerPoolPodTemplate()
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
@@ -547,7 +607,7 @@ func TestWorkerPoolPodTemplateClearAll(t *testing.T) {
 			len(podSpec.Tolerations) == 1 &&
 			podSpec.Tolerations[0].Key == sandboxClassTaintKey &&
 			podSpec.PriorityClassName == "" &&
-			podSpec.ServiceAccountName == "default" &&
+			podSpec.ServiceAccountName == "ateworker" &&
 			(podSpec.Affinity == nil || podSpec.Affinity.NodeAffinity == nil) &&
 			len(container.Resources.Limits) == 0 &&
 			len(container.Resources.Requests) == 0, nil
@@ -560,7 +620,7 @@ func TestWorkerPoolPodTemplateClearAll(t *testing.T) {
 func TestSSARevertsOwnedPodTemplateFields(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-ssa-template", "default", 1, "ateom:v1")
+	wp := makeWorkerPool("test-ssa-template", "default", 1, "worker:v1")
 	wp.Spec.Template = sampleWorkerPoolPodTemplate()
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
@@ -590,7 +650,7 @@ func TestSSARevertsOwnedPodTemplateFields(t *testing.T) {
 func TestReplicasValidationRejectsNegative(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-neg-replicas", "default", -1, "ateom:v1")
+	wp := makeWorkerPool("test-neg-replicas", "default", -1, "worker:v1")
 	err := k8sClient.Create(ctx, wp)
 	if err == nil {
 		deleteOnCleanup(t, wp)
@@ -699,7 +759,7 @@ func eventually(t *testing.T, condition func(ctx context.Context) (bool, error))
 func TestSyncStatus_ReadyReplicas(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	wp := makeWorkerPool("test-sync-ready", "default", 3, "ateom:v1")
+	wp := makeWorkerPool("test-sync-ready", "default", 3, "worker:v1")
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
 	}
@@ -732,7 +792,7 @@ func TestWorkerPoolMetrics(t *testing.T) {
 	if err := atev1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
-	wp := makeWorkerPool("test-metrics", "default", 4, "ateom:v1")
+	wp := makeWorkerPool("test-metrics", "default", 4, "worker:v1")
 	wp.Status = atev1alpha1.WorkerPoolStatus{Replicas: 4, ReadyReplicas: 2}
 	reader := sdkmetric.NewManualReader()
 	r := &WorkerPoolReconciler{

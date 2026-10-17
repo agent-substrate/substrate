@@ -21,9 +21,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/benchmarking/isolate/internal/fakeworker/fakeworkertest"
-	"github.com/agent-substrate/substrate/internal/credbundle"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker/fakeworkertest"
+	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -87,9 +87,9 @@ func TestRelayPassesThroughAteAPIServersStatus(t *testing.T) {
 // nothing but capacity reports: a minted actor certificate, say, would hand
 // fake-workersync an identity it does not hold.
 func TestRelayServesOnlyCapacityReports(t *testing.T) {
-	_, err := (&relay{client: &recordingWorkerService{}}).MintAteomActorCertificate(context.Background(), &ateapipb.MintAteomActorCertificateRequest{})
+	_, err := (&relay{client: &recordingWorkerService{}}).MintWorkerActorCertificate(context.Background(), &ateapipb.MintWorkerActorCertificateRequest{})
 	if got := status.Code(err); got != codes.Unimplemented {
-		t.Errorf("MintAteomActorCertificate code = %v, want Unimplemented", got)
+		t.Errorf("MintWorkerActorCertificate code = %v, want Unimplemented", got)
 	}
 }
 

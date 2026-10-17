@@ -27,35 +27,40 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
-	"github.com/agent-substrate/substrate/internal/pluginsocket"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/objectstoreplugin"
+	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"go.ate.dev/substrate/internal/pluginsocket"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/objectstorage"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
+	"k8s.io/utils/clock"
 )
 
-// newPluginHerder returns an AteomHerder whose snapshots go through the
+// newPluginHerder returns an Atelet whose snapshots go through the
 // object-store plugin backed by store.
-func newPluginHerder(t *testing.T, store objectstorage.ObjectStorage) *AteomHerder {
+func newPluginHerder(t *testing.T, store objectstorage.ObjectStorage) *Atelet {
 	t.Helper()
 	// Test directories come from t.TempDir, so admit any absolute path.
-	plugin, err := objectstoreplugin.NewNodePlugin(store, "/")
+	plugin, err := objectstoreplugin.NewNodePlugin(store, "/", objectstorage.DefaultUploadMemory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &AteomHerder{
+	return &Atelet{
 		objectStorePlugin:  objectstoreplugintest.NodeClient(plugin),
 		snapshotScratchDir: t.TempDir(),
+		snapshots:          snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+		sandboxAssetCache:  newTestAssetCache(t),
+		runtimes:           newRuntimeIndex(),
 	}
 }
 
@@ -106,7 +111,7 @@ func TestUploadSnapshotManifestLast(t *testing.T) {
 		}
 	}
 
-	if err := s.uploadSnapshot(context.Background(), uri, dir, &rec, "ate-demo", "counter"); err != nil {
+	if err := s.uploadSnapshot(context.Background(), uri, dir, &rec); err != nil {
 		t.Fatalf("uploadSnapshot: %v", err)
 	}
 	if len(store.puts) != 4 {
@@ -182,18 +187,18 @@ func TestObjectStorePluginErrorCodeThroughAtelet(t *testing.T) {
 	transfers := []struct {
 		name      string
 		retryable bool
-		run       func(ctx context.Context, s *AteomHerder) error
+		run       func(ctx context.Context, s *Atelet) error
 	}{
-		{"download", true, func(ctx context.Context, s *AteomHerder) error {
+		{"download", true, func(ctx context.Context, s *Atelet) error {
 			return s.downloadExternalCheckpoint(ctx, pausedSnapshotURI, t.TempDir(), []string{"a"})
 		}},
-		{"paused upload", true, func(ctx context.Context, s *AteomHerder) error {
+		{"paused upload", true, func(ctx context.Context, s *Atelet) error {
 			dir := t.TempDir()
 			writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
-			_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+			_, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
 			return err
 		}},
-		{"checkpoint upload", false, func(ctx context.Context, s *AteomHerder) error {
+		{"checkpoint upload", false, func(ctx context.Context, s *Atelet) error {
 			dir := t.TempDir()
 			if err := os.WriteFile(filepath.Join(dir, "a"), []byte("a"), 0o600); err != nil {
 				return err
@@ -208,7 +213,7 @@ func TestObjectStorePluginErrorCodeThroughAtelet(t *testing.T) {
 				if pluginCode == codes.Unavailable && tr.retryable {
 					want = codes.Unavailable
 				}
-				s := &AteomHerder{
+				s := &Atelet{
 					objectStorePlugin:  failingNodePlugin{err: status.Error(pluginCode, "plugin failed")},
 					snapshotScratchDir: t.TempDir(),
 				}
@@ -241,22 +246,22 @@ func TestObjectStorePluginErrorKeepsCredentialsOut(t *testing.T) {
 	transfers := []struct {
 		name string
 		uri  string // the URI the transfer names in its error, when it takes one
-		run  func(ctx context.Context, s *AteomHerder) error
+		run  func(ctx context.Context, s *Atelet) error
 	}{
-		{"download", signedURI, func(ctx context.Context, s *AteomHerder) error {
+		{"download", signedURI, func(ctx context.Context, s *Atelet) error {
 			return s.downloadExternalCheckpoint(ctx, signedURI, t.TempDir(), []string{"a"})
 		}},
-		{"upload", signedURI, func(ctx context.Context, s *AteomHerder) error {
+		{"upload", signedURI, func(ctx context.Context, s *Atelet) error {
 			return s.uploadSnapshotFiles(ctx, signedURI, t.TempDir(), []string{"a"})
 		}},
-		{"manifest fetch", signedURI, func(ctx context.Context, s *AteomHerder) error {
+		{"manifest fetch", signedURI, func(ctx context.Context, s *Atelet) error {
 			_, err := s.fetchManifest(ctx, signedURI)
 			return err
 		}},
-		{"paused upload", "", func(ctx context.Context, s *AteomHerder) error {
+		{"paused upload", "", func(ctx context.Context, s *Atelet) error {
 			dir := t.TempDir()
 			writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
-			_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+			_, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
 			return err
 		}},
 	}
@@ -264,7 +269,7 @@ func TestObjectStorePluginErrorKeepsCredentialsOut(t *testing.T) {
 		for _, tr := range transfers {
 			t.Run(pluginCode.String()+"/"+tr.name, func(t *testing.T) {
 				logs := captureLogs(t)
-				s := &AteomHerder{
+				s := &Atelet{
 					objectStorePlugin:  failingNodePlugin{err: status.Error(pluginCode, "get "+signedURI+": AccountKey="+secret)},
 					snapshotScratchDir: t.TempDir(),
 				}
@@ -317,7 +322,7 @@ type pluginSidecar struct {
 
 func newPluginSidecar(t *testing.T, store objectstorage.ObjectStorage) *pluginSidecar {
 	t.Helper()
-	plugin, err := objectstoreplugin.NewNodePlugin(store, "/")
+	plugin, err := objectstoreplugin.NewNodePlugin(store, "/", objectstorage.DefaultUploadMemory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +383,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 	if err := pluginsocket.WaitReady(ctx, conn); err != nil {
 		t.Fatalf("WaitReady = %v", err)
 	}
-	s := &AteomHerder{
+	s := &Atelet{
 		objectStorePlugin:  objectstorev1.NewNodeProviderClient(conn),
 		snapshotScratchDir: t.TempDir(),
 	}
@@ -408,7 +413,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 		}
 	}
 
-	if _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), pausedDir, uri); apierror.Code(err) != codes.Unavailable {
+	if _, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), pausedDir, uri); apierror.Code(err) != codes.Unavailable {
 		t.Fatalf("paused upload during the outage = %v, want %s", err, codes.Unavailable)
 	}
 
@@ -439,7 +444,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 // fetchManifest keeps the plugin's NotFound readable, which the paused
 // snapshot upload uses to tell a missing snapshot from a failed probe.
 func TestFetchManifestKeepsNotFound(t *testing.T) {
-	s := &AteomHerder{
+	s := &Atelet{
 		objectStorePlugin:  failingNodePlugin{err: status.Error(codes.NotFound, "no manifest")},
 		snapshotScratchDir: t.TempDir(),
 	}

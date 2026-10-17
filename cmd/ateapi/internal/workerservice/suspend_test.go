@@ -22,12 +22,12 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const (
@@ -93,7 +93,7 @@ func TestRequestActorSuspend(t *testing.T) {
 	if diff := cmp.Diff(want, suspender.calls, protocmp.Transform()); diff != "" {
 		t.Errorf("suspend calls mismatch (-want +got):\n%s", diff)
 	}
-	// The caller gets the actor as the workflow left it, so an ateom can see
+	// The caller gets the actor as the workflow left it, so a worker can see
 	// whether the suspend it asked for actually happened.
 	if diff := cmp.Diff(suspended, got.GetActor(), protocmp.Transform()); diff != "" {
 		t.Errorf("returned actor mismatch (-want +got):\n%s", diff)

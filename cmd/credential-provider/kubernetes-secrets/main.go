@@ -39,11 +39,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
-	"github.com/agent-substrate/substrate/internal/credbundle"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/version"
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/version"
+	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 )
 
 const serviceName = "credprovider"
@@ -64,6 +65,7 @@ var (
 	drainGrace       = pflag.Duration("drain-grace", 5*time.Second, "how long to wait for in-flight RPCs on shutdown before a hard stop")
 	kubeAPIQPS       = pflag.Float32("kube-api-qps", 50, "Sustained queries per second allowed against the Kubernetes API.")
 	kubeAPIBurst     = pflag.Int("kube-api-burst", 100, "Burst queries allowed against the Kubernetes API.")
+	previewFlags     = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 )
 
 func main() {
@@ -73,6 +75,9 @@ func main() {
 	serverboot.InitLogger()
 	if err := serverboot.SetLogLevel(*logLevel); err != nil {
 		serverboot.Fatal(ctx, "invalid --log-level", err)
+	}
+	if err := preview.Init(*previewFlags...); err != nil {
+		serverboot.Fatal(ctx, "invalid --preview", err)
 	}
 
 	slog.InfoContext(ctx, "starting credprovider", slog.String("version", version.String()))

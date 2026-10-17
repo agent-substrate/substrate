@@ -20,9 +20,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/agent-substrate/substrate/pkg/assetfetch"
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/pkg/assetfetch"
+	"go.ate.dev/substrate/pkg/objectstorage"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

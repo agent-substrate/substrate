@@ -16,6 +16,7 @@ package objectstorage
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"math/rand"
 	"os"
@@ -57,7 +58,7 @@ func TestSparsePartsRoundTrip(t *testing.T) {
 
 			// The parts must land the same bytes as the single-stream writer.
 			var want bytes.Buffer
-			if _, _, err := writeSparseZstd(&want, src); err != nil {
+			if _, _, err := writeSparseZstd(context.Background(), &want, src, 2); err != nil {
 				t.Fatal(err)
 			}
 			if g, w := decodeSparse(t, &got), decodeSparse(t, &want); !bytes.Equal(g, w) {

@@ -29,15 +29,19 @@ workerSelector:
     workload: caps
 containers:
 - name: probe
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
   wakeupProbe:
     httpGet:
       path: /healthz
       port: 80
     timeoutSeconds: 60
-${TEMPLATE_RESOURCES}
-${TEMPLATE_SANDBOX_CONFIG}
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-default${FIXTURE_SUFFIX}/
 
@@ -54,7 +58,7 @@ workerSelector:
     workload: caps
 containers:
 - name: probe
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
   # The probe binds :80, which is exactly what NET_BIND_SERVICE permits, so
   # this template also proves the granted capability is usable and not merely
@@ -68,7 +72,11 @@ containers:
       path: /healthz
       port: 80
     timeoutSeconds: 60
-${TEMPLATE_RESOURCES}
-${TEMPLATE_SANDBOX_CONFIG}
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-exact${FIXTURE_SUFFIX}/

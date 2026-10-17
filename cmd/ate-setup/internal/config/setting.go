@@ -24,7 +24,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/installdefaults"
 )
 
 // ValueKind is the type of a setting's value.
@@ -125,8 +125,8 @@ var Registry = []Setting{
 	{
 		// The default depends on the namespace, so buildConfig applies it.
 		Key: "actorJWT.issuer", Env: "ACTOR_JWT_ISSUER", Flag: "actor-jwt-issuer", Kind: KindString,
-		Usage: "iss claim of actor JWTs, verbatim. Relying parties fetch <issuer>/.well-known/openid-configuration " +
-			"(default https://idp.<namespace>.svc)",
+		Usage: "iss claim of actor JWTs, as https://<host> with no path. Relying parties fetch " +
+			"<issuer>/.well-known/openid-configuration (default https://idp.<namespace>.svc)",
 	},
 	{
 		// Whitespace-separated, as the environment variable is. The registry
@@ -163,9 +163,26 @@ var Registry = []Setting{
 	},
 
 	{
+		// No default: an unset level keeps the one an existing install has,
+		// and a new install gets ate-setup's default.
+		Key: "ateapi.logLevel", Env: "ATE_API_LOG_LEVEL", Flag: "ateapi-log-level", Kind: KindString,
+		Usage: "ate-api-server log level: debug, info, warn, or error (default: keep the installed level, else info)",
+	},
+	{
 		Key: "ateapi.expectedJWTIssuer", Env: "EXPECTED_JWT_ISSUER", Flag: "ateapi-expected-jwt-issuer",
 		Kind:  KindString,
 		Usage: "Service account token issuer ate-api-server trusts, overriding derivation and discovery",
+	},
+	{
+		Key: "ateapi.authz.enabled", Env: "ATE_API_EXPERIMENTAL_ENABLE_AUTHZ",
+		Flag: "ateapi-experimental-enable-authz", Kind: KindBool, Default: "true",
+		Usage: "Enforce ate-api-server's runtime authorization",
+	},
+	{
+		Key: "ateapi.authz.bootstrapOwners", Env: "ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
+		Flag: "ateapi-authz-bootstrap-owners", Kind: KindString,
+		Usage: "Comma-separated principals that always hold owner on global:root when authorization is enforced. " +
+			"Unset means kubectl-ate's ServiceAccount, system:serviceaccount:<namespace>:ate-client",
 	},
 	{
 		// The egress gateway's credential provider, as a JSON object. Upstream
@@ -280,8 +297,24 @@ var Registry = []Setting{
 			"use it on a cluster that serves real actors",
 	},
 	{
+		Key: "ingressAuthMode", Env: "ATE_INGRESS_AUTH_MODE", Flag: "ingress-auth-mode", Kind: KindString,
+		Default: IngressAuthDeprecatedInsecure,
+		Usage: "How the ingress router authenticates clients: deprecated-insecure or static-mtls. Both check a " +
+			"client certificate on the router's TLS ports against the podidentity CA and the SPIFFE IDs listed in " +
+			"manifests/ate-install/atenet-router.yaml; deprecated-insecure also lets through TLS clients without one " +
+			"and serves plaintext ports, while static-mtls requires the certificate and --atenet-dataplane=envoy",
+	},
+	{
 		Key: "otlpEndpoint", Env: "ATE_OTLP_ENDPOINT", Flag: "otlp-endpoint", Kind: KindString,
 		Usage: "Send control plane telemetry to this OTLP collector instead of the cluster default",
+	},
+
+	{
+		// Comma-separated, as the components' own --preview flag is. The
+		// registry has no list kind, so the value is carried as written and
+		// split where it is used.
+		Key: "preview", Env: "ATE_PREVIEW", Flag: "preview", Kind: KindString,
+		Usage: "Preview gates every substrate component runs with, comma-separated; ALL enables all",
 	},
 
 	{

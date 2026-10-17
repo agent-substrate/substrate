@@ -12,14 +12,16 @@ This runbook upgrades a running Agent Substrate install to a newer release.
 
 If an upgrade goes wrong, you can roll back to the release you upgraded from, and no further.
 
-<!-- TODO: Link the compatibility policy, which these rules come from, and the version skew policy, which sets the step order below, once both are in the repository. -->
+These rules and the step order below come from the [version skew policy](version-skew-policy.md).
+
+<!-- TODO: Link the compatibility policy once it is in the repository. -->
 
 | Step | What changes | What running actors see | How long |
 |---|---|---|---|
 | 1 | podcertificate-controller | Nothing | A minute |
 | 2 | atelet, one node at a time | Nothing | Seconds to about 6 minutes per node |
 | 3 | workers | `SIGTERM`, then a 30-minute window to be suspended before `SIGKILL` | Seconds to hours per pool |
-| 4 | ate-api-server, the CRDs and ate-controller, atenet, SandboxConfig, then the rest of the system bundle | API calls, long requests and outbound connections can be cut once; workers may get `SIGTERM` again. See step 4 | A few minutes, or as long as step 3 if workers roll again |
+| 4 | ate-api-server, the CRDs and ate-controller, atenet, SandboxConfig, then the rest of the system bundle | API calls, long requests and outbound connections can be cut once. See step 4 | A few minutes |
 
 Rollback is the same list in reverse, from the old release. An actor that crashes along the way goes back to its last snapshot with `kubectl ate revert actor <name> -a <atespace>`.
 
@@ -119,7 +121,7 @@ Before you patch any pool, list the pools and save the list for rollback. Each p
 kubectl get workerpools -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,CLASS:.spec.sandboxClasses[0].name,IMAGE:.spec.workerImage' | tee ~/ate-upgrade/before-workerpools.txt
 ```
 
-If you build from source, build and push both worker images once. This touches nothing in the cluster and ends by printing `ateom-gvisor: <ref>` and `ateom-microvm: <ref>`:
+If you build from source, build and push both worker images once. This touches nothing in the cluster and ends by printing `ateworker-gvisor: <ref>` and `ateworker-microvm: <ref>`:
 
 ```bash
 go run ./cmd/ate-setup publish worker-images --config ~/ate-upgrade/new.yaml | tee ~/ate-upgrade/worker-images.txt
@@ -135,20 +137,20 @@ Then move the pools, starting with a small pool of each CLASS that you can affor
    CLASS=$(kubectl -n $NS get workerpool $WORKERPOOL -o jsonpath='{.spec.sandboxClasses[0].name}')
    ```
 
-2. Set its new image. From source, take the ref after `ateom-$CLASS: ` in `~/ate-upgrade/worker-images.txt`:
+2. Set its new image. From source, take the ref after `ateworker-$CLASS: ` in `~/ate-upgrade/worker-images.txt`:
 
    ```bash
-   NEW_IMAGE=$(sed -n "s/^ateom-$CLASS: //p" ~/ate-upgrade/worker-images.txt)
+   NEW_IMAGE=$(sed -n "s/^ateworker-$CLASS: //p" ~/ate-upgrade/worker-images.txt)
    ```
 
-   With prebuilt images, take `ateom-$CLASS` from your image repo at the new tag, pinned by digest:
+   With prebuilt images, take `ateworker-$CLASS` from your image repo at the new tag, pinned by digest:
 
    ```bash
-   NEW_IMAGE=$(sed -n 's/^  repo: //p' ~/ate-upgrade/new.yaml)/ateom-$CLASS:$NEW_RELEASE
+   NEW_IMAGE=$(sed -n 's/^  repo: //p' ~/ate-upgrade/new.yaml)/ateworker-$CLASS:$NEW_RELEASE
    NEW_IMAGE=$NEW_IMAGE@$(crane digest $NEW_IMAGE)
    ```
 
-3. Check that `echo "$NS/$WORKERPOOL $CLASS $NEW_IMAGE"` shows `ateom-` plus the pool's CLASS and a full `@sha256:` digest. A bad image still removes the pool's first old worker.
+3. Check that `echo "$NS/$WORKERPOOL $CLASS $NEW_IMAGE"` shows `ateworker-` plus the pool's CLASS and a full `@sha256:` digest. A bad image still removes the pool's first old worker.
 4. Patch the worker pool and wait until ate-controller moves its Deployment to the new image:
 
    ```bash
@@ -192,14 +194,11 @@ kubectl ate get actors -A
 
 ```bash
 go run ./cmd/ate-setup deploy ate-controller --config ~/ate-upgrade/new.yaml
-kubectl get deploy -A -l ate.dev/worker-pool
 ```
 
-This applies the new CRDs and ate-controller's RBAC, then deploys the new `ate-controller`. Rerunning is safe. If this release changes the worker pod template, the new ate-controller rolls every pool again, with another round of `SIGTERM`: wait as in step 3.
+This applies the new CRDs and ate-controller's RBAC, then deploys the new `ate-controller`. Rerunning is safe. Within a major the worker pod template stays the same, so no pool rolls.
 
-<!-- TODO: Depends on the version skew policy: whether a compatible release may change the worker pod template. If it may not, the pools never roll in this step, and this check and the second roll in the rollback go away. -->
-
-- **Done:** the command exits 0, `kubectl -n ate-system get pods -l app=ate-controller` shows one pod, Running, with RESTARTS 0, and every pool shows READY `n/n` with UP-TO-DATE and AVAILABLE `n`. Check the pools a minute after the new pod starts: a second roll begins only once it reconciles them.
+- **Done:** the command exits 0, `kubectl -n ate-system get pods -l app=ate-controller` shows one pod, Running, with RESTARTS 0, and a minute later `kubectl get pods -A -l ate.dev/worker-pool` shows no worker pod younger than this step.
 - **Stuck:** the new ate-controller pod keeps restarting. [Roll back step 4](#roll-back-step-4).
 
 #### 4c. atenet
@@ -278,7 +277,7 @@ go run ./cmd/ate-setup deploy apiserver --config ~/ate-upgrade/old.yaml
 go install ./cmd/kubectl-ate
 ```
 
-`deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. If the release changed the worker pod template, every pool rolls again: wait as in step 3. Fields the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
+`deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. Fields the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
 
 The database schema stays new; the old API server drops fields it does not know when it rewrites a record. Step 4e is not undone either: the NetworkPolicies and the bundled PostgreSQL stay as the new release left them.
 

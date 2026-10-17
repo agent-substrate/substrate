@@ -18,7 +18,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 )
 
 // deploy_locust.sh takes these as flags only, so anything not forwarded here is

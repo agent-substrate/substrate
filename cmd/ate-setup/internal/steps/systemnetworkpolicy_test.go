@@ -27,9 +27,9 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kustomize"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
 )
 
 // systemPod is one ate-system workload's pod template, as the NetworkPolicies
@@ -113,7 +113,7 @@ func loadSystemInstall(t *testing.T, cfg *config.Config) systemInstall {
 		objs = append(objs, decoded...)
 	}
 	system := filepath.Join(root, SystemOverlay(cfg))
-	rendered, err := e.renderDataPlane(system)
+	rendered, err := e.render(system)
 	add(system, rendered, err)
 	rendered, err = e.render(e.postgresManifestPath())
 	add(e.postgresManifestPath(), rendered, err)

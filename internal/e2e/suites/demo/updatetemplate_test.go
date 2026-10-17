@@ -20,9 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestUpdateTemplateLifecycle covers repointing a suspended actor at a
@@ -205,8 +205,9 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	// can only be updated while SUSPENDED) and preserves the in-memory counter
 	// when preferredFidelity is MEMORY.
 	t.Logf("Pausing Actor %q under template B...", actorID)
-	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 	}); err != nil {
 		t.Fatalf("failed to pause Actor under template B: %v", err)
 	}

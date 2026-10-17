@@ -34,7 +34,7 @@ gateway. Instead, the sandbox's DNS relay forwards a query to the worker pod's
 resolvers, which are the host cluster's configured DNS servers, only when the
 queried hostname matches a host or host wildcard in the actor's egress policy:
 queries from an actor without a policy, or for a hostname not matched by any
-rule, are answered `REFUSED`.
+rule, are answered `NXDOMAIN`.
 
 ## Configuring a workload to trust public and man-in-the-middle CAs
 

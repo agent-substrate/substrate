@@ -18,9 +18,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // clearAll truncates every table so the next test starts from an empty store
@@ -56,9 +56,11 @@ func setTestPolicyManager(t *testing.T, p *Persistence) {
 	}
 	t.Cleanup(fgaServer.Close)
 	_, policyManager, err := authz.New(t.Context(), p.pool, fgaServer, nil, authz.SystemPrincipals{
-		ControllerSPIFFEID:    installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
-		EgressGatewaySPIFFEID: installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace),
-		IngressRouterSPIFFEID: installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
+		ControllerSPIFFEID:       installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
+		EgressGatewaySPIFFEID:    installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace),
+		IngressRouterSPIFFEID:    installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
+		AteletSPIFFEID:           installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
+		APIServerSidecarSPIFFEID: installdefaults.APIServerSPIFFEID(installdefaults.SystemNamespace),
 	})
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)

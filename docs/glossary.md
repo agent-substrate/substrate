@@ -61,13 +61,15 @@ for etcd.
   example, it turns a `WorkerPool` into a `Deployment`).
 
 - **atelet**: the node-level supervisor, run as a DaemonSet. It pulls images,
-  assembles OCI bundles, drives the sandbox lifecycle on the node via ateom,
+  assembles OCI bundles, drives the sandbox lifecycle on the node via ateworker,
   and streams snapshots to and from snapshot storage.
 
-- **ateom**: the coordinator that runs inside each worker pod and drives the
+- **ateworker**: the coordinator that runs inside each worker pod and drives the
   sandbox runtime on behalf of atelet. This decouples the physical pod
   lifecycle from the sandboxed agent process. It embeds a networking service
   called `atunnel` that handles network traffic for the sandboxed Actor.
+  ateworker is Substrate's worker implementation, one binary per sandbox class
+  (`ateworker-gvisor`, `ateworker-microvm`).
 
 - **atenet**: the networking stack. Its router resumes suspended Actors on
   demand and routes traffic to the right worker pod.
@@ -102,11 +104,11 @@ for etcd.
   containers, potentially at different paths. This is the per-Actor
   application-data surface.
 
-  How many an `ActorTemplate` may declare depends on its `sandboxClass`:
-  a `microvm` template may declare several (they are subdirectories of one
-  virtio-fs share, so they cost nothing extra per volume), while a `gvisor`
-  template is limited to one until gVisor can accept more than a single
-  durable mount.
+  How many an `ActorTemplate` may declare depends on the sandbox class of
+  the `WorkerPool` its actors run on: a `microvm` worker supports several
+  (they are subdirectories of one virtio-fs share, so they cost nothing
+  extra per volume), while a `gvisor` worker is limited to one until gVisor
+  can accept more than a single durable mount.
 
 ## Snapshots
 

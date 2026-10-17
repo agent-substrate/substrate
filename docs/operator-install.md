@@ -263,6 +263,8 @@ changes it.
 
 Defaults are also shown by `ate-setup --help` and by `--help` on the owning
 command. A setting with no default is unset unless something supplies it.
+The `ateapi.authz.*` settings are described in
+[authorization.md](authorization.md).
 
 Settings for the demos, benchmarks, and e2e tests are listed with them: the
 [counter](../demos/counter/README.md#settings) and
@@ -274,7 +276,10 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 |----------------------------------------------|-------------------------------------------------|----------------------------------------------------|-----------------------|------------------------------------------|
 | `actorJWT.algorithm`                         | `ACTOR_JWT_ALGORITHM`                           | `--actor-jwt-algorithm`                            | `ES256`               | (global)                                 |
 | `actorJWT.issuer`                            | `ACTOR_JWT_ISSUER`                              | `--actor-jwt-issuer`                               | —                     | (global)                                 |
+| `ateapi.authz.bootstrapOwners`               | `ATE_API_AUTHZ_BOOTSTRAP_OWNERS`                | `--ateapi-authz-bootstrap-owners`                  | `system:serviceaccount:<namespace>:ate-client` | (global)                                 |
+| `ateapi.authz.enabled`                       | `ATE_API_EXPERIMENTAL_ENABLE_AUTHZ`             | `--ateapi-experimental-enable-authz`               | `true`                | (global)                                 |
 | `ateapi.expectedJWTIssuer`                   | `EXPECTED_JWT_ISSUER`                           | `--ateapi-expected-jwt-issuer`                     | —                     | (global)                                 |
+| `ateapi.logLevel`                            | `ATE_API_LOG_LEVEL`                             | `--ateapi-log-level`                               | —                     | (global)                                 |
 | `ateapi.postgres.cloudsql.gsa`               | `ATE_API_POSTGRES_CLOUDSQL_GSA`                 | `--ateapi-postgres-cloudsql-gsa`                   | —                     | (global)                                 |
 | `ateapi.postgres.cloudsql.iamAuth`           | `ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH`            | `--ateapi-postgres-cloudsql-iam-auth`              | —                     | (global)                                 |
 | `ateapi.postgres.cloudsql.instance`          | `ATE_API_POSTGRES_CLOUDSQL_INSTANCE`            | `--ateapi-postgres-cloudsql-instance`              | —                     | (global)                                 |
@@ -301,6 +306,7 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `gcp.projectID`                              | `PROJECT_ID`                                    | `--gcp-project-id`                                 | —                     | (global)                                 |
 | `images.repo`                                | `ATE_IMAGE_REPO`                                | `--image-repo`                                     | —                     | (global)                                 |
 | `images.tag`                                 | `ATE_IMAGE_TAG`                                 | `--image-tag`                                      | —                     | (global)                                 |
+| `ingressAuthMode`                            | `ATE_INGRESS_AUTH_MODE`                         | `--ingress-auth-mode`                              | `deprecated-insecure` | (global)                                 |
 | `kindCluster.enabled`                        | `ATE_INSTALL_KIND`                              | `--kind`                                           | `false`               | (global)                                 |
 | `kindCluster.name`                           | `KIND_CLUSTER_NAME`                             | `--kind-cluster-name`                              | `kind`                | (global)                                 |
 | `ko.defaultPlatforms`                        | `KO_DEFAULTPLATFORMS`                           | `--ko-default-platforms`                           | —                     | (global)                                 |
@@ -309,6 +315,7 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `namespace`                                  | `ATE_NAMESPACE`                                 | `--namespace`                                      | `ate-system`          | (global)                                 |
 | `otlpEndpoint`                               | `ATE_OTLP_ENDPOINT`                             | `--otlp-endpoint`                                  | —                     | (global)                                 |
 | `podcert.workersPerSigner`                   | `ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER`        | `--podcert-workers-per-signer`                     | `0`                   | (global)                                 |
+| `preview`                                    | `ATE_PREVIEW`                                   | `--preview`                                        | —                     | (global)                                 |
 | `record.dir`                                 | `ATE_RECORD_DIR`                                | `--record-dir`                                     | —                     | (global)                                 |
 | `rolloutTimeout`                             | `ATE_INSTALL_ROLLOUT_TIMEOUT`                   | `--rollout-timeout`                                | `1m0s`                | (global)                                 |
 | `storage.bucketName`                         | `BUCKET_NAME`                                   | `--storage-bucket-name`                            | —                     | (global)                                 |

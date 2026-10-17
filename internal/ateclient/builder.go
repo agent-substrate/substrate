@@ -24,10 +24,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/portforward"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/clustertrustbundle"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/portforward"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -72,6 +72,13 @@ func clientServiceAccount() string {
 		return n
 	}
 	return installdefaults.ClientServiceAccount
+}
+
+// FallbackPrincipal is the principal a client authenticates as when it is
+// given no token file: the ServiceAccount it mints a token from. Every caller
+// relying on the fallback is this same principal.
+func FallbackPrincipal() string {
+	return fmt.Sprintf("system:serviceaccount:%s:%s", systemNamespace(), clientServiceAccount())
 }
 
 // systemNamespace is the namespace the client expects ateapi to be running in.
@@ -126,8 +133,16 @@ func (c *Client) Close() {
 	}
 }
 
+// WorkerService returns a WorkerService client on the same connection. Only
+// atelet is permitted to call WorkerService; this exists so tests can check
+// that other callers are rejected.
+func (c *Client) WorkerService() ateapipb.WorkerServiceClient {
+	return ateapipb.NewWorkerServiceClient(c.conn)
+}
+
 // NewClient creates a new Ate API client. If endpoint is empty, it automatically
 // port-forwards to the ate-api-server pod in substrate's system namespace.
+// extraOpts are appended to the options used to dial the server.
 func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool, extraOpts ...grpc.DialOption) (*Client, error) {
 	tp, err := initTracing(ctx, traceEnabled)
 	if err != nil {
@@ -301,6 +316,10 @@ func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.
 
 // bearerTokenDialOption attaches the configured token, or mints an ate-client
 // ServiceAccount token when tokenFile is empty.
+//
+// The minted token authenticates as FallbackPrincipal, not as whoever runs
+// the client: anyone Kubernetes RBAC lets create a token for that
+// ServiceAccount gets the same identity, and whatever it is granted.
 func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset, tokenFile string) (grpc.DialOption, error) {
 	if tokenFile == "-" {
 		creds, err := readBearerToken(os.Stdin)

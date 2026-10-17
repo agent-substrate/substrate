@@ -24,9 +24,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -217,7 +217,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","logging.googleapis.com/labels":{"app":"my-app"},"msg":"Hello"}`,
 		},
 		{
-			// ateom drops these at the producer; the CLI strips the whole reserved
+			// worker drops these at the producer; the CLI strips the whole reserved
 			// namespace too, so a label that reached the stream some other way is
 			// never printed as platform attribution.
 			name:        "matching actor, label in substrate's reserved namespace is stripped",
