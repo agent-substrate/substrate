@@ -25,6 +25,22 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
+func TestRootfsFSCheckpointPaths(t *testing.T) {
+	containers := []*ateworkerpb.Container{
+		{Name: "app"},
+		{Name: "sidecar"},
+	}
+
+	got := rootfsFSCheckpointPaths(containers)
+	want := []string{
+		"rootfs/=app:/",
+		"rootfs/=sidecar:/",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("rootfsFSCheckpointPaths() = %v, want %v", got, want)
+	}
+}
+
 func TestDurableFSCheckpointPaths(t *testing.T) {
 	containers := []*ateworkerpb.Container{
 		{
@@ -44,9 +60,9 @@ func TestDurableFSCheckpointPaths(t *testing.T) {
 
 	got := durableFSCheckpointPaths(containers)
 	want := []string{
-		"app:/var/data",
-		"app:/var/cache",
-		"sidecar:/var/log/app",
+		"fs/=app:/var/data",
+		"fs/=app:/var/cache",
+		"fs/=sidecar:/var/log/app",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("durableFSCheckpointPaths() = %v, want %v", got, want)
@@ -62,6 +78,10 @@ func TestDurableSnapshotFiles(t *testing.T) {
 		"fs/pages_meta.img",
 		"pages.img",
 		"pages_meta.img",
+		"rootfs/fscheckpoint.pb",
+		"rootfs/multitar.img",
+		"rootfs/pages.img",
+		"rootfs/pages_meta.img",
 	}
 
 	got := durableSnapshotFiles(snapshotFiles)
@@ -78,14 +98,19 @@ func TestDurableSnapshotFiles(t *testing.T) {
 
 func TestListSnapshotFilesWithFSSubdir(t *testing.T) {
 	checkpointDir := t.TempDir()
-	fsDir := filepath.Join(checkpointDir, "fs")
-	if err := os.MkdirAll(fsDir, 0o700); err != nil {
-		t.Fatal(err)
+	for _, sub := range []string{"fs", "rootfs"} {
+		if err := os.MkdirAll(filepath.Join(checkpointDir, sub), 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, rel := range []string{
 		"checkpoint.img",
 		"pages.img",
 		"pages_meta.img",
+		"rootfs/fscheckpoint.pb",
+		"rootfs/multitar.img",
+		"rootfs/pages.img",
+		"rootfs/pages_meta.img",
 		"fs/fscheckpoint.pb",
 		"fs/multitar.img",
 		"fs/pages.img",
@@ -108,6 +133,10 @@ func TestListSnapshotFilesWithFSSubdir(t *testing.T) {
 		"fs/pages_meta.img",
 		"pages.img",
 		"pages_meta.img",
+		"rootfs/fscheckpoint.pb",
+		"rootfs/multitar.img",
+		"rootfs/pages.img",
+		"rootfs/pages_meta.img",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("listSnapshotFiles() = %v, want %v", got, want)
@@ -117,7 +146,7 @@ func TestListSnapshotFilesWithFSSubdir(t *testing.T) {
 func TestFSRestoreArgs(t *testing.T) {
 	t.Run("no fs checkpoint present", func(t *testing.T) {
 		checkpointDir := t.TempDir()
-		got, err := fsRestoreArgs(checkpointDir)
+		got, err := fsRestoreArgs(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
 		if err != nil {
 			t.Fatalf("fsRestoreArgs() = %v", err)
 		}
@@ -126,7 +155,42 @@ func TestFSRestoreArgs(t *testing.T) {
 		}
 	})
 
-	t.Run("fs checkpoint present in fs subdir", func(t *testing.T) {
+	t.Run("only rootfs checkpoint present", func(t *testing.T) {
+		checkpointDir := t.TempDir()
+		rootfsDir := filepath.Join(checkpointDir, "rootfs")
+		if err := os.MkdirAll(rootfsDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(rootfsDir, "fscheckpoint.pb"), []byte("manifest"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, fidelity := range []ateworkerpb.SnapshotFidelity{
+			ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		} {
+			got, err := fsRestoreArgs(checkpointDir, fidelity)
+			if err != nil {
+				t.Fatalf("fsRestoreArgs(%v) = %v", fidelity, err)
+			}
+			want := []string{
+				"--fs-restore-image-path", rootfsDir,
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("fsRestoreArgs(%v) = %v, want %v", fidelity, got, want)
+			}
+		}
+
+		gotVolumes, err := fsRestoreArgs(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES)
+		if err != nil {
+			t.Fatalf("fsRestoreArgs(VOLUMES) = %v", err)
+		}
+		if len(gotVolumes) != 0 {
+			t.Errorf("fsRestoreArgs(VOLUMES) = %v, want empty", gotVolumes)
+		}
+	})
+
+	t.Run("ROOTFS with only fs checkpoint present fails", func(t *testing.T) {
 		checkpointDir := t.TempDir()
 		fsDir := filepath.Join(checkpointDir, "fs")
 		if err := os.MkdirAll(fsDir, 0o700); err != nil {
@@ -136,15 +200,54 @@ func TestFSRestoreArgs(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got, err := fsRestoreArgs(checkpointDir)
-		if err != nil {
-			t.Fatalf("fsRestoreArgs() = %v", err)
+		if got, err := fsRestoreArgs(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS); err == nil {
+			t.Errorf("fsRestoreArgs(ROOTFS) = (%v, nil), want error when rootfs/ is missing", got)
 		}
-		want := []string{
+	})
+
+	t.Run("both rootfs and fs subdir checkpoints present", func(t *testing.T) {
+		checkpointDir := t.TempDir()
+		rootfsDir := filepath.Join(checkpointDir, "rootfs")
+		if err := os.MkdirAll(rootfsDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(rootfsDir, "fscheckpoint.pb"), []byte("manifest"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		fsDir := filepath.Join(checkpointDir, "fs")
+		if err := os.MkdirAll(fsDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(fsDir, "fscheckpoint.pb"), []byte("manifest"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, fidelity := range []ateworkerpb.SnapshotFidelity{
+			ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		} {
+			got, err := fsRestoreArgs(checkpointDir, fidelity)
+			if err != nil {
+				t.Fatalf("fsRestoreArgs(%v) = %v", fidelity, err)
+			}
+			want := []string{
+				"--fs-restore-image-path", rootfsDir,
+				"--fs-restore-image-path", fsDir,
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("fsRestoreArgs(%v) = %v, want %v", fidelity, got, want)
+			}
+		}
+
+		gotVolumes, err := fsRestoreArgs(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES)
+		if err != nil {
+			t.Fatalf("fsRestoreArgs(VOLUMES) = %v", err)
+		}
+		wantVolumes := []string{
 			"--fs-restore-image-path", fsDir,
 		}
-		if !slices.Equal(got, want) {
-			t.Errorf("fsRestoreArgs() = %v, want %v", got, want)
+		if !slices.Equal(gotVolumes, wantVolumes) {
+			t.Errorf("fsRestoreArgs(VOLUMES) = %v, want %v", gotVolumes, wantVolumes)
 		}
 	})
 }

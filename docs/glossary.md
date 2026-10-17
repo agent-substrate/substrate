@@ -104,11 +104,7 @@ for etcd.
   containers, potentially at different paths. This is the per-Actor
   application-data surface.
 
-  How many an `ActorTemplate` may declare depends on the sandbox class of
-  the `WorkerPool` its actors run on: a `microvm` worker supports several
-  (they are subdirectories of one virtio-fs share, so they cost nothing
-  extra per volume), while a `gvisor` worker is limited to one until gVisor
-  can accept more than a single durable mount.
+  An `ActorTemplate` may declare several, on either sandbox class.
 
 ## Snapshots
 
@@ -121,9 +117,7 @@ for etcd.
     afresh from the OCI image with the `DurableDir` contents restored.
   - **`ROOTFS`**: volumes plus the root filesystem changes made since boot.
     Process memory is discarded; on Resume the containers cold-boot from the
-    OCI image with their rootfs writes back in place. Served by the micro-VM
-    sandbox class only: gVisor keeps rootfs changes inside its memory
-    checkpoint, so a gVisor template that requests it is rejected.
+    OCI image with their rootfs writes back in place.
   - **`MEMORY`**: volumes, rootfs changes, and process memory. Used to
     capture everything needed to resume hot.
 

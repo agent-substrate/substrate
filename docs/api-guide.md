@@ -100,8 +100,8 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | :--- | :--- | :--- |
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). The pool decides the sandbox class, so this is also how a template pins one: if your cluster has pools of more than one sandbox class and the workload needs a particular class, make sure the selector points only at pools of that class. An actor booting with no snapshot and no selector may land on any class, and keeps it from its first checkpoint on. |
-| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures (`SNAPSHOT_FIDELITY_ROOTFS` is supported on `microvm` pools), and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
-| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` worker supports several `durableDir` volumes; a `gvisor` worker is limited to one. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
+| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
 | `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpu` and `memory` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
 The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary and `pauseImage`, or a micro-VM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-compute-foundation) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the worker's active `SandboxRuntime` is stamped onto the actor's assignment and snapshots so subsequent resumes prefer runtime-compatible workers.
@@ -488,20 +488,20 @@ metadata:
     sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: gvisor
-  defaultVersion: v3
+  defaultVersion: v4
   versions:
-  - name: v3
+  - name: v4
     state: Enabled
     pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
     assets:
       amd64:
         gvisor:
-          url: "gs://gvisor/releases/nightly/2026-10-10/x86_64/gvisor.tar.zstd"
-          sha256: "4ae7fab988c3647d2a835d6c3c70c6a99021c562db97827592562b6c51c3e88c"
+          url: "gs://gvisor/releases/nightly/2026-10-17/x86_64/gvisor.tar.zstd"
+          sha256: "fa72f0d45756c69a30beec21222c78241b0d330c36f4f2185648617cc23415c8"
       arm64:
         gvisor:
-          url: "gs://gvisor/releases/nightly/2026-10-10/aarch64/gvisor.tar.zstd"
-          sha256: "aaf414f06eea7960238e43165c691f0a36cefc0593fb141e011e96211c7b6f57"
+          url: "gs://gvisor/releases/nightly/2026-10-17/aarch64/gvisor.tar.zstd"
+          sha256: "238634978d99f0dd3e631c4f88eae7b19fb36937065428467f0b6d6b10697689"
 ```
 
 ### Micro-VM SandboxConfig

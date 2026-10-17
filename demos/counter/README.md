@@ -27,10 +27,9 @@ The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, whil
 
 The in-RAM-counter suspend/resume-continuity demo be run on the micro-VM
 sandbox class (`ateworker-microvm`: a Kata guest on Cloud Hypervisor).
-The micro-VM class is the one that serves `SNAPSHOT_FIDELITY_ROOTFS`, a
-snapshot of the volumes and each container's rootfs writes without guest
-memory; this template keeps `MEMORY` because the in-RAM counter is the point of
-the demo.
+The micro-VM class also serves `SNAPSHOT_FIDELITY_ROOTFS`, a snapshot of the
+volumes and each container's rootfs writes without guest memory; this template
+keeps `MEMORY` because the in-RAM counter is the point of the demo.
 
 - [`demos/counter/counter-microvm.yaml.tmpl`](counter-microvm.yaml.tmpl) —
   the `WorkerPool` for the micro-VM sandbox class.

@@ -151,8 +151,7 @@ const (
 	// from the OCI image with the volumes restored.
 	SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES SnapshotFidelity = 1
 	// Volumes plus the root filesystem changes made since boot. The actor
-	// cold-boots on resume with its rootfs writes back in place. Served by the
-	// micro-VM sandbox class only.
+	// cold-boots on resume with its rootfs writes back in place.
 	SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS SnapshotFidelity = 2
 	// Volumes, root filesystem changes, and process memory. The actor resumes
 	// where it left off.

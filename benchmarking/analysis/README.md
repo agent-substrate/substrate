@@ -82,9 +82,10 @@ restore between `volume_mount`, `manifest_fetch`, `sandbox_assets`,
 `worker_*` phase further with the runtime's own phases: for micro-VM
 `prep` / `pause` / `snapshot` / `durable_dir` / `rootfs_upper` / `teardown`
 on a checkpoint and `prep` / … / `vm_restore` / `wakeup_probe` on a restore;
-for gVisor `pause` / `checkpoint` / `durable_dir` / `resume` / `teardown` and
-`prep` / `net_setup` / … / `pause_restore` / `app_restore` / `wakeup_probe` /
-`activate` (the full lists are in `cmd/ateworker-*/phaselog.go`). The ateworker
+for gVisor `pause` / `checkpoint` / `durable_dir` / `fs_checkpoint` / `resume` /
+`teardown` and `prep` / `net_setup` / … / `pause_restore` / `app_restore` /
+`wakeup_probe` / `activate` (the full lists are in
+`cmd/ateworker-*/phaselog.go`). The ateworker
 records carry no sandbox class or kind of their own; a paired one takes both
 from its atelet record, so both layers split into the same rows.
 
