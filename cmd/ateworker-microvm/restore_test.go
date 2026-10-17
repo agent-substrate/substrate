@@ -22,8 +22,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 
@@ -31,6 +33,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
@@ -46,6 +49,8 @@ func writeSnapshotConfig(t *testing.T, fsDevices []map[string]any) string {
 		"console": map[string]any{"mode": "File", "file": "/run/vc/vm/golden/console.log"},
 		"serial":  map[string]any{"mode": "File", "file": "/run/vc/vm/golden/serial.log"},
 		"fs":      fsDevices,
+		"payload": map[string]any{"kernel": "/var/lib/ate/actors/golden/sandbox-assets/kata-kernel", "cmdline": "console=hvc0"},
+		"pmem":    []map[string]any{{"id": guestImagePmemID, "file": "/var/lib/ate/actors/golden/sandbox-assets/kata-image", "discard_writes": true}},
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {
@@ -55,6 +60,28 @@ func writeSnapshotConfig(t *testing.T, fsDevices []map[string]any) string {
 		t.Fatalf("writing config.json: %v", err)
 	}
 	return dir
+}
+
+// mutateSnapshotConfig rewrites dir's config.json through mutate.
+func mutateSnapshotConfig(t *testing.T, dir string, mutate func(cfg map[string]any)) {
+	t.Helper()
+	cfgPath := filepath.Join(dir, "config.json")
+	b, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	mutate(cfg)
+	b, err = json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // readFsSockets returns the rewritten config's fs sockets keyed by device tag.
@@ -82,15 +109,20 @@ func readFsSockets(t *testing.T, dir string) map[string]string {
 	return got
 }
 
-func TestRewriteSnapshotSocketPaths(t *testing.T) {
+func TestRewriteSnapshotPaths(t *testing.T) {
 	const id = "actor-uid"
+	// The restoring actor's own staged kernel and guest image.
+	const (
+		kernel = "/var/lib/ate/actors/actor-uid/sandbox-assets/kata-kernel"
+		image  = "/var/lib/ate/actors/actor-uid/sandbox-assets/kata-image"
+	)
 
 	t.Run("overlay lower only", func(t *testing.T) {
 		dir := writeSnapshotConfig(t, []map[string]any{
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 		})
-		if err := rewriteSnapshotSocketPaths(dir, id); err != nil {
-			t.Fatalf("rewriteSnapshotSocketPaths: %v", err)
+		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 		if got, want := readFsSockets(t, dir)[kata.FsTag], kata.VirtiofsdSocketPath(id); got != want {
 			t.Errorf("%s socket = %q, want %q", kata.FsTag, got, want)
@@ -105,18 +137,65 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 			dir := writeSnapshotConfig(t, []map[string]any{
 				{"tag": tag, "socket": "/run/vc/vm/golden/other.sock"},
 			})
-			if err := rewriteSnapshotSocketPaths(dir, id); err == nil {
-				t.Fatalf("rewriteSnapshotSocketPaths accepted fs tag %q, want an error", tag)
+			if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
+				t.Fatalf("rewriteSnapshotPaths accepted fs tag %q, want an error", tag)
 			}
 		}
 	})
 
-	t.Run("vsock and console devices are repointed", func(t *testing.T) {
+	// A snapshot config that lacks or mangles the two per-actor boot paths
+	// is broken: skipping their rewrite would restore with the source
+	// actor's, so each shape is an error.
+	for name, mutate := range map[string]func(cfg map[string]any){
+		"missing payload":            func(cfg map[string]any) { delete(cfg, "payload") },
+		"malformed payload":          func(cfg map[string]any) { cfg["payload"] = "vmlinux" },
+		"malformed pmem entry":       func(cfg map[string]any) { cfg["pmem"] = []any{"not a device"} },
+		"missing pmem list":          func(cfg map[string]any) { delete(cfg, "pmem") },
+		"missing guest image device": func(cfg map[string]any) { cfg["pmem"] = []any{} },
+	} {
+		t.Run(name+" is an error", func(t *testing.T) {
+			dir := writeSnapshotConfig(t, []map[string]any{
+				{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
+			})
+			mutateSnapshotConfig(t, dir, mutate)
+			if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
+				t.Fatalf("rewriteSnapshotPaths accepted a config with %s, want an error", name)
+			}
+		})
+	}
+
+	t.Run("unknown pmem device is an error", func(t *testing.T) {
 		dir := writeSnapshotConfig(t, []map[string]any{
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 		})
-		if err := rewriteSnapshotSocketPaths(dir, id); err != nil {
-			t.Fatalf("rewriteSnapshotSocketPaths: %v", err)
+		cfgPath := filepath.Join(dir, "config.json")
+		b, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg map[string]any
+		if err := json.Unmarshal(b, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		cfg["pmem"] = []map[string]any{{"id": "scratch-disk", "file": "/somewhere/else"}}
+		b, err = json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := rewriteSnapshotPaths(dir, id, kernel, image); err == nil {
+			t.Fatal("rewriteSnapshotPaths accepted a pmem device it does not know, want an error")
+		}
+	})
+
+	t.Run("vsock, console, kernel and image are repointed", func(t *testing.T) {
+		dir := writeSnapshotConfig(t, []map[string]any{
+			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
+		})
+		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 		b, err := os.ReadFile(filepath.Join(dir, "config.json"))
 		if err != nil {
@@ -126,12 +205,25 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 			Vsock   struct{ Socket string } `json:"vsock"`
 			Console struct{ File string }   `json:"console"`
 			Serial  struct{ File string }   `json:"serial"`
+			Payload struct{ Kernel string } `json:"payload"`
+			Pmem    []struct {
+				ID   string `json:"id"`
+				File string `json:"file"`
+			} `json:"pmem"`
 		}
 		if err := json.Unmarshal(b, &cfg); err != nil {
 			t.Fatalf("parsing rewritten config: %v", err)
 		}
 		if want := kata.VsockSocketPath(id); cfg.Vsock.Socket != want {
 			t.Errorf("vsock socket = %q, want %q", cfg.Vsock.Socket, want)
+		}
+		// The source actor's staged kernel and image may be gone; the
+		// snapshot must boot from this actor's.
+		if cfg.Payload.Kernel != kernel {
+			t.Errorf("payload kernel = %q, want %q", cfg.Payload.Kernel, kernel)
+		}
+		if len(cfg.Pmem) != 1 || cfg.Pmem[0].ID != guestImagePmemID || cfg.Pmem[0].File != image {
+			t.Errorf("pmem = %+v, want the %q device at %q", cfg.Pmem, guestImagePmemID, image)
 		}
 		if want := kata.ConsoleLogPath(id); cfg.Console.File != want {
 			t.Errorf("console file = %q, want %q", cfg.Console.File, want)
@@ -158,8 +250,8 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 			t.Fatalf("linking config.json: %v", err)
 		}
 
-		if err := rewriteSnapshotSocketPaths(dir, id); err != nil {
-			t.Fatalf("rewriteSnapshotSocketPaths: %v", err)
+		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 		if got, want := readFsSockets(t, dir)[kata.FsTag], kata.VirtiofsdSocketPath(id); got != want {
 			t.Errorf("%s socket = %q, want %q", kata.FsTag, got, want)
@@ -193,6 +285,8 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 			"fs": []map[string]any{
 				{"tag": kata.FsTag, "socket": kata.VirtiofsdSocketPath(id)},
 			},
+			"payload": map[string]any{"kernel": kernel, "cmdline": "console=hvc0"},
+			"pmem":    []map[string]any{{"id": guestImagePmemID, "file": image, "discard_writes": true}},
 		}
 		b, err := json.Marshal(cfg)
 		if err != nil {
@@ -207,8 +301,8 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 		}
 		inoBefore := fiBefore.Sys().(*syscall.Stat_t).Ino
 
-		if err := rewriteSnapshotSocketPaths(dir, id); err != nil {
-			t.Fatalf("rewriteSnapshotSocketPaths: %v", err)
+		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+			t.Fatalf("rewriteSnapshotPaths: %v", err)
 		}
 
 		fiAfter, err := os.Stat(cfgPath)
@@ -228,33 +322,22 @@ func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
 		inFlight: actorlock.NewInFlight(),
 	}
 
+	noDirs := validRestoreRequest()
+	noDirs.ActorDirs = nil
+	noRestoreDir := validRestoreRequest()
+	noRestoreDir.ActorDirs.RestoreDir = ""
 	for _, tc := range []struct {
 		name string
 		req  *ateworkerpb.RestoreWorkloadRequest
+		want string
 	}{
-		{
-			name: "nil actor_dirs",
-			req:  &ateworkerpb.RestoreWorkloadRequest{ActorUid: "actor-a"},
-		},
-		{
-			name: "empty restore_dir",
-			req: &ateworkerpb.RestoreWorkloadRequest{
-				ActorUid: "actor-a",
-				ActorDirs: &ateworkerpb.ActorDirs{
-					RootDir:                   "/node/actors/actor-a",
-					OciBundleDir:              "/node/actors/actor-a/bundle",
-					CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
-					DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
-					SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
-					VolumesDir:                "/node/actors/actor-a/volumes",
-				},
-			},
-		},
+		{name: "nil actor_dirs", req: noDirs, want: "actor_dirs"},
+		{name: "empty restore_dir", req: noRestoreDir, want: "restore_dir"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.RestoreWorkload(context.Background(), tc.req)
-			if apierror.Code(err) != codes.InvalidArgument {
-				t.Fatalf("RestoreWorkload() code = %v, want %v (err: %v)", apierror.Code(err), codes.InvalidArgument, err)
+			if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("RestoreWorkload() = %v, want InvalidArgument naming %s", err, tc.want)
 			}
 		})
 	}
@@ -410,28 +493,87 @@ func TestNewReseedNonce(t *testing.T) {
 func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
 	s := &AteWorkerService{}
 	ctx := context.Background()
-	dirs := &ateworkerpb.ActorDirs{
-		RootDir:                   "/node/actors/actor-a",
-		OciBundleDir:              "/node/actors/actor-a/bundle",
-		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
-		RestoreDir:                "/node/actors/actor-a/restore",
-		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
-		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
-		VolumesDir:                "/node/actors/actor-a/volumes",
-	}
 	assets := map[string]string{assetCH: "/bin/sh"}
 	for name, call := range map[string]func() error{
 		"RunWorkload": func() error {
-			_, err := s.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{ActorDirs: dirs, RuntimeAssetPaths: assets})
+			req := validRunRequest()
+			req.RuntimeAssetPaths = assets
+			_, err := s.RunWorkload(ctx, req)
 			return err
 		},
 		"RestoreWorkload": func() error {
-			_, err := s.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{ActorDirs: dirs, RuntimeAssetPaths: assets})
+			req := validRestoreRequest()
+			req.RuntimeAssetPaths = assets
+			_, err := s.RestoreWorkload(ctx, req)
 			return err
 		},
 	} {
-		if got := apierror.Code(call()); got != codes.InvalidArgument {
-			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
+		err := call()
+		if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "runtime_asset_paths") {
+			t.Errorf("%s() = %v, want InvalidArgument naming runtime_asset_paths", name, err)
 		}
+	}
+}
+
+// TestValidateRuntimeAssetPathsRequiresTheActorsOwnDir pins that the root
+// the asset paths are checked against is derived from the actor UID, not
+// taken from the request.
+func TestValidateRuntimeAssetPathsRequiresTheActorsOwnDir(t *testing.T) {
+	orig := nodepath.ActorsDir
+	nodepath.ActorsDir = t.TempDir()
+	t.Cleanup(func() { nodepath.ActorsDir = orig })
+	stage := func(t *testing.T, actorUID string) string {
+		t.Helper()
+		dir := nodepath.ActorSandboxAssetsDir(actorUID)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, assetCH), nil, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	own, other := stage(t, "actor-a"), stage(t, "actor-b")
+	for _, tc := range []struct {
+		name    string
+		dir     string
+		asset   string
+		wantErr bool
+	}{
+		{"asset in the actor's own dir", own, filepath.Join(own, assetCH), false},
+		{"asset outside the actor's dir", own, "/bin/sh", true},
+		{"another actor's dir named as the root", other, filepath.Join(other, assetCH), true},
+		{"the root named as the root", "/", "/bin/sh", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRuntimeAssetPaths("actor-a", &ateworkerpb.ActorDirs{SandboxAssetsDir: tc.dir}, map[string]string{assetCH: tc.asset})
+			if (err != nil) != tc.wantErr {
+				t.Errorf("validateRuntimeAssetPaths(actor-a, %q, %q) = %v, wantErr %v", tc.dir, tc.asset, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestRestoreMemoryFidelityRequiresKernelAndImage pins that a memory restore
+// without the kernel or the guest image among its asset paths fails before
+// it prepares or cleans up anything: the snapshot's boot paths are repointed
+// at them, so there is nothing to restore with.
+func TestRestoreMemoryFidelityRequiresKernelAndImage(t *testing.T) {
+	// A zero service cannot prepare egress or clean up sandbox state; the
+	// check must come first for this test to return at all.
+	s := &AteWorkerService{}
+	for name, paths := range map[string]map[string]string{
+		"no assets":  nil,
+		"no kernel":  {assetImage: "/node/actors/actor-a/sandbox-assets/kata-image"},
+		"no image":   {assetKernel: "/node/actors/actor-a/sandbox-assets/kata-kernel"},
+		"empty path": {assetKernel: "", assetImage: "/node/actors/actor-a/sandbox-assets/kata-image"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := actorBootParams{actorUID: "actor-a", assetPaths: paths}
+			err := s.restoreMemoryFidelity(t.Context(), p, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, t.TempDir(), false, time.Now())
+			if err == nil || !strings.Contains(err.Error(), assetKernel) || !strings.Contains(err.Error(), assetImage) {
+				t.Fatalf("restoreMemoryFidelity with %s = %v, want an error naming %q and %q", name, err, assetKernel, assetImage)
+			}
+		})
 	}
 }

@@ -29,7 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/workerstats"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
@@ -38,6 +37,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb"
+	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
@@ -119,6 +119,10 @@ const (
 	assetKernel    = "kata-kernel"
 	assetImage     = "kata-image"
 	assetVirtiofsd = "virtiofsd"
+
+	// guestImagePmemID names the virtio-pmem device that carries the guest
+	// image, in the VM config and so in every snapshot's config.json.
+	guestImagePmemID = "guest-image"
 )
 
 // kataAgentPath is where the kata guest image keeps the agent binary. buildVMConfig
@@ -157,10 +161,6 @@ const vmmMemReserveMiB = 128
 // binary needs more, and this floor cannot know how much.
 const minGuestMemMiB = 128
 
-// maxActorContainers is a sanity cap on containers per actor (all share the one
-// micro-VM + virtiofsd). 25 is far above any real pod.
-const maxActorContainers = 25
-
 // workloadIDs returns the guest container ids for the actor's containers, in
 // order. Recorded on runningActor so the SIGTERM handler knows which guest
 // workloads to signal and wait on, and it must name what the guest actually
@@ -188,7 +188,7 @@ type actorContainer struct {
 	// spec is the container's OCI spec shaped for micro-VM execution.
 	spec *specs.Spec
 	// imageMounts are the image volumes this container mounts, and where.
-	imageMounts []*ateworkerpb.ImageVolumeMount
+	imageMounts []*ateworkerpb.VolumeMount
 }
 
 // resolvedRuntime holds the concrete binary paths for a request, taken from fetched
@@ -232,10 +232,10 @@ func (s *AteWorkerService) resolveRuntime(paths map[string]string) resolvedRunti
 //   - Each container's bundle holds the overlay spec its rootfs/ is composed
 //     from. ateworker builds the OCI spec itself.
 func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.RunWorkloadRequest) (resp *ateworkerpb.RunWorkloadResponse, retErr error) {
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+	if err := ateworkervalidation.ValidateRunWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
-	if err := validateRuntimeAssetPaths(req.GetRuntimeAssetPaths()); err != nil {
+	if err := validateRuntimeAssetPaths(req.GetActorUid(), req.GetActorDirs(), req.GetRuntimeAssetPaths()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -382,12 +382,6 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// CreateContainer/StartContainer, driven below after the shared boot +
 	// CreateSandbox + guest networking.
 	containers := p.containers
-	if len(containers) == 0 {
-		return apierror.InvalidArgument("actor spec has no containers")
-	}
-	if len(containers) > maxActorContainers {
-		return apierror.Unimplemented("ateworker-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
-	}
 
 	// ateworker builds the CH vm.create itself, so it needs the guest kernel + image
 	// paths directly.
@@ -640,7 +634,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 }
 
 // buildActorContainers prepares each of the actor's containers for the shared
-// micro-VM: it builds the OCI spec from the request, injects guest DNS,
+// micro-VM: it builds the OCI spec from the request, injects guest DNS and hosts,
 // and records the bundle rootfs that backs the overlay's RO lower. No host disk is
 // mounted here — the merged overlays are assembled in stageMergedRootfs after the
 // sandbox state is clean. Both RunWorkload and RestoreWorkload go through here.
@@ -655,7 +649,7 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 		}
 		// Compose the bundle rootfs from the node's cached image layers (an
 		// overlay mounted in this pod's namespace; no-op for bundles without an
-		// overlay spec). Everything downstream — the resolv.conf write below,
+		// overlay spec). Everything downstream — the /etc writes below,
 		// the bind into virtiofsd's shared dir, the read-only remount — then
 		// sees the composed tree, with host-side writes landing in the bundle's
 		// private upper. The guest still builds its own writable upper on top.
@@ -663,9 +657,9 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 			return nil, fmt.Errorf("while composing rootfs for %q: %w", cn, err)
 		}
 		bundleRootfs := filepath.Join(bundle, "rootfs")
-		// Set guest DNS before serving the rootfs over virtio-fs, on boot and restore.
-		if err := writeActorResolvConf(bundleRootfs); err != nil {
-			return nil, fmt.Errorf("while writing guest resolv.conf for %q: %w", cn, err)
+		// Set guest DNS and hosts before serving the rootfs over virtio-fs, on boot and restore.
+		if err := writeActorEtcFiles(bundleRootfs); err != nil {
+			return nil, fmt.Errorf("while writing guest /etc files for %q: %w", cn, err)
 		}
 		ctrs[i] = actorContainer{
 			name:         cn,
@@ -694,9 +688,9 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 			return nil, fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
 		}
 		for _, vm := range c.imageMounts {
-			src := imagecache.ImageVolumeMountPath(c.bundle, vm.GetVolumeName())
-			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetVolumeName()); err != nil {
-				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetVolumeName(), c.name, err)
+			src := imagecache.ImageVolumeMountPath(c.bundle, vm.GetName())
+			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetName()); err != nil {
+				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetName(), c.name, err)
 			}
 		}
 	}
@@ -706,7 +700,7 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 		}
 	}
 	if hasCsiVolumes(containers) {
-		if err := s.stageCsiVolumes(ctx, id, actorDirs.GetVolumesDir()); err != nil {
+		if err := s.stageCsiVolumes(ctx, id, actorDirs.GetExternalVolumeMountsDir()); err != nil {
 			return nil, fmt.Errorf("while staging CSI volumes: %w", err)
 		}
 	}
@@ -818,8 +812,9 @@ func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus 
 		Payload: ch.PayloadConfig{Kernel: kernel, Cmdline: cmdline},
 		// The guest image is a virtio-pmem device (/dev/pmem0), mounted read-only
 		// with DAX, so its file data stays in the host page cache instead of being copied into guest RAM.
-		Pmem:     []ch.PmemConfig{{ID: "guest-image", File: image, DiscardWrites: true}},
+		Pmem:     []ch.PmemConfig{{ID: guestImagePmemID, File: image, DiscardWrites: true}},
 		Fs:       buildFsConfigs(id),
+		Balloon:  &ch.BalloonConfig{FreePageReporting: true},
 		Platform: &ch.PlatformConfig{NumPciSegments: 2},
 		Rng:      &ch.RngConfig{Src: "/dev/urandom"},
 		Console:  &ch.ConsoleConfig{Mode: "File", File: consoleLog},

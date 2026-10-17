@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 )
 
 // testWorkerUID derives a stable pod UID from a pod name, for Workers seeded
@@ -53,14 +54,10 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: "gs://snapshots",
 		},
-		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: "gvisor",
-			ConfigName:   "gvisor",
-		},
 	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("create test ActorTemplate: %v", err)
 	}
-	return NewActorWorkflow(st, nil, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objectstoretest.New()))
+	return NewActorWorkflow(st, nil, nil, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objectstoretest.New()))
 }
 
 // newFinalizeWorkflow builds an ActorWorkflow over persistence with an
@@ -173,6 +170,18 @@ func withPausedShape(node string) func(*ateapipb.Actor) {
 	}
 }
 
+// withUploadedPausedShape seeds a paused actor whose snapshot atelet has since
+// uploaded to uri: the paused shape, with a COMPLETED durable copy.
+func withUploadedPausedShape(node, uri string) func(*ateapipb.Actor) {
+	return func(a *ateapipb.Actor) {
+		withPausedShape(node)(a)
+		a.Status.Snapshots[0].DurableSnapshot = &ateapipb.SnapshotStorage{
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri},
+		}
+	}
+}
+
 // withPauseInProgress seeds the shape a pause has between marking the actor
 // SUSPENDING and finalizing it: a node-local snapshot at the latest generation
 // that has no locality yet. Pair it with ACTOR_STATE_SUSPENDING.
@@ -232,13 +241,17 @@ func seedSuspendTemplate(t *testing.T, ctx context.Context, st store.Interface, 
 	t.Helper()
 	ref := suspendTestTemplateRef()
 	storetest.MustCreateAtespace(t, ctx, st, ref.GetAtespace())
+	if snapshotConfig.GetStorageLocation() == "" {
+		if snapshotConfig == nil {
+			snapshotConfig = &ateapipb.SnapshotConfig{}
+		} else {
+			snapshotConfig = proto.CloneOf(snapshotConfig)
+		}
+		snapshotConfig.StorageLocation = testStorageLocation
+	}
 	created, err := st.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
 		Metadata:       &ateapipb.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
 		SnapshotConfig: snapshotConfig,
-		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: "gvisor",
-			ConfigName:   "gvisor",
-		},
 	})
 	if err != nil {
 		t.Fatalf("CreateActorTemplate: %v", err)

@@ -81,7 +81,7 @@ func durableVolumeNames(containers []*ateworkerpb.Container) []string {
 	var names []string
 	for _, c := range containers {
 		for _, m := range c.GetDurableDirVolumeMounts() {
-			names = append(names, m.GetVolumeName())
+			names = append(names, m.GetName())
 		}
 	}
 	slices.Sort(names)

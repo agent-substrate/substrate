@@ -52,8 +52,8 @@ var deployAteSystemCmd = &cobra.Command{
 	Long: `Deploy the whole Agent Substrate control plane.
 
 This installs the CRDs and RBAC, the podcertificate controller and the secrets
-it signs, PostgreSQL, ate-api-server, ate-controller, the atenet dataplane, and
-the atelet DaemonSet, then waits for each to roll out.
+it signs, PostgreSQL, ate-api-server, ate-idp-server, ate-controller, the atenet
+dataplane, and the atelet DaemonSet, then waits for each to roll out.
 
 The bundled PostgreSQL StatefulSet is skipped when
 ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables

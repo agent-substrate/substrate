@@ -44,10 +44,11 @@ const (
 	RoleEditor = "editor"
 	RoleViewer = "viewer"
 
-	RoleController    = "controller"
-	RoleEgressGateway = "egress_gateway"
-	RoleIngressRouter = "ingress_router"
-	RoleAtelet        = "atelet"
+	RoleController       = "controller"
+	RoleEgressGateway    = "egress_gateway"
+	RoleIngressRouter    = "ingress_router"
+	RoleAtelet           = "atelet"
+	RoleAPIServerSidecar = "api_server_sidecar"
 
 	RelationCanCreateAtespace       = "can_create_atespace"
 	RelationCanListAtespaces        = "can_list_atespaces"
@@ -61,7 +62,6 @@ const (
 	RelationCanUseTemplate          = "can_use_template"
 	RelationCanUpdate               = "can_update"
 	RelationCanDelete               = "can_delete"
-	RelationCanPause                = "can_pause"
 	RelationCanResume               = "can_resume"
 	RelationCanSuspend              = "can_suspend"
 	RelationCanRevert               = "can_revert"
@@ -232,10 +232,11 @@ func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *ser
 // The Authorizer grants each one its system component role on global:root on
 // every check, independent of any stored AccessPolicy.
 type SystemPrincipals struct {
-	ControllerSPIFFEID    string
-	EgressGatewaySPIFFEID string
-	IngressRouterSPIFFEID string
-	AteletSPIFFEID        string
+	ControllerSPIFFEID       string
+	EgressGatewaySPIFFEID    string
+	IngressRouterSPIFFEID    string
+	AteletSPIFFEID           string
+	APIServerSidecarSPIFFEID string
 }
 
 // New provisions the default OpenFGA store and authorization model via
@@ -296,6 +297,7 @@ func parseSystemPrincipals(system SystemPrincipals) (map[string][]string, error)
 		{role: RoleEgressGateway, spiffeID: system.EgressGatewaySPIFFEID},
 		{role: RoleIngressRouter, spiffeID: system.IngressRouterSPIFFEID},
 		{role: RoleAtelet, spiffeID: system.AteletSPIFFEID},
+		{role: RoleAPIServerSidecar, spiffeID: system.APIServerSidecarSPIFFEID},
 	}
 	out := make(map[string][]string, len(bindings))
 	for _, b := range bindings {

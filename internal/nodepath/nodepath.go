@@ -27,8 +27,13 @@ const BasePath = "/var/lib/ate"
 // ActorsDir is the parent of the per-actor directories atelet prepares.
 var ActorsDir = filepath.Join(BasePath, "actors")
 
-// StaticFilesDir holds things like runsc binaries.
-var StaticFilesDir = filepath.Join(BasePath, "static-files")
+// ActorSandboxAssetsDir is where atelet stages an actor's sandbox runtime
+// assets, hard-linked from its asset cache, and the only location a worker
+// runs a sandbox binary from. Both sides derive it from the actor UID, so a
+// worker can check that the directory a request names is the actor's own.
+func ActorSandboxAssetsDir(actorUID string) string {
+	return filepath.Join(ActorsDir, actorUID, "sandbox-assets")
+}
 
 // WorkerSupportSocket is the node-local atelet socket used by atunnel
 // to request credentials for the worker's current actor assignment.

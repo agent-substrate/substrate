@@ -53,6 +53,24 @@ func TestFakeUsesFuncOverride(t *testing.T) {
 	}
 }
 
+func TestFakeRecordsSuspendMode(t *testing.T) {
+	f := &Fake{}
+	ctx := context.Background()
+	async := &ateapipb.SuspendActorRequest{Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}
+	sync := &ateapipb.SuspendActorRequest{Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}}
+
+	for _, req := range []*ateapipb.SuspendActorRequest{async, sync, {}} {
+		if _, err := f.SuspendActor(ctx, req); err != nil {
+			t.Fatalf("SuspendActor() error = %v", err)
+		}
+	}
+
+	want := []string{"SuspendActor(async)", "SuspendActor", "SuspendActor"}
+	if got := f.RecordedCalls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("RecordedCalls() = %v, want %v", got, want)
+	}
+}
+
 func TestFakeRecordsDeleteActorRequests(t *testing.T) {
 	f := &Fake{}
 	req := &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Name: "a"}}

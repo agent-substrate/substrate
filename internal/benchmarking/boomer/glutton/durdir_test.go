@@ -56,7 +56,7 @@ func TestDurDirLoopSequence(t *testing.T) {
 			name:          "pause lifecycle mode",
 			lifecycleMode: dynconfig.LifecycleModePause,
 			resumeMode:    dynconfig.ResumeModeExplicit,
-			wantGRPCCall:  []string{"PauseActor", "ResumeActor"},
+			wantGRPCCall:  []string{"SuspendActor(async)", "ResumeActor"},
 			wantHTTPCall:  []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
 		},
 	}
@@ -67,16 +67,14 @@ func TestDurDirLoopSequence(t *testing.T) {
 			fakeCtrl := &controlclienttest.Fake{}
 			cfg := &userclass.Config{
 				APIStub: fakeCtrl,
-				Dyn: dynconfig.NewHolder(dynconfig.Config{
-					ResumeMode:    tc.resumeMode,
-					LifecycleMode: tc.lifecycleMode,
+				Dyn: dynconfig.Static(durDirKnobs{
+					Lifecycle: dynconfig.Lifecycle{ResumeMode: tc.resumeMode, LifecycleMode: tc.lifecycleMode},
 				}),
 			}
 			du := newTestDurDirUser(t, srv, cfg)
 			du.expectedDigest = srv.HexDigest()
 
-			dynCfg := cfg.Dyn.Load()
-			du.step(context.Background(), dynCfg)
+			du.step(context.Background(), dynconfig.Get[durDirKnobs](cfg.Dyn))
 
 			if got := fakeCtrl.RecordedCalls(); !reflect.DeepEqual(got, tc.wantGRPCCall) {
 				t.Errorf("gRPC calls: got %v, want %v", got, tc.wantGRPCCall)
@@ -196,14 +194,14 @@ func TestDurDirBootstrapUsesConfiguredResumeMode(t *testing.T) {
 			fakeCtrl := &controlclienttest.Fake{}
 			cfg := newTestConfig(t, srv, &userclass.Config{
 				APIStub: fakeCtrl,
-				Dyn: dynconfig.NewHolder(dynconfig.Config{
-					DurDirFileSize: int64(len(srv.Data)),
-					ResumeMode:     tc.resumeMode,
+				Dyn: dynconfig.Static(durDirKnobs{
+					FileSize:  int64(len(srv.Data)),
+					Lifecycle: dynconfig.Lifecycle{ResumeMode: tc.resumeMode},
 				}),
 			})
 
 			rt := &durDirRuntime{cfg: cfg}
-			_, err := rt.startUser(context.Background(), cfg.Dyn.Load())
+			_, err := rt.startUser(context.Background(), dynconfig.Get[durDirKnobs](cfg.Dyn))
 			if err != nil {
 				t.Fatalf("startUser failed: %v", err)
 			}
@@ -222,14 +220,14 @@ func TestDurDirBootstrapFailureSuspendsBeforeDelete(t *testing.T) {
 	fakeCtrl := &controlclienttest.Fake{}
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub: fakeCtrl,
-		Dyn: dynconfig.NewHolder(dynconfig.Config{
-			DurDirFileSize: 1024,
-			ResumeMode:     dynconfig.ResumeModeExplicit,
+		Dyn: dynconfig.Static(durDirKnobs{
+			FileSize:  1024,
+			Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit},
 		}),
 	})
 
 	rt := &durDirRuntime{cfg: cfg}
-	_, err := rt.startUser(context.Background(), cfg.Dyn.Load())
+	_, err := rt.startUser(context.Background(), dynconfig.Get[durDirKnobs](cfg.Dyn))
 	if err == nil {
 		t.Fatalf("startUser expected error on failing server, got nil")
 	}
@@ -244,6 +242,7 @@ func TestDurDirShutdownSuspendsBeforeDelete(t *testing.T) {
 	fakeCtrl := &controlclienttest.Fake{}
 	cfg := &userclass.Config{
 		APIStub: fakeCtrl,
+		Dyn:     dynconfig.Static(durDirKnobs{}),
 	}
 	du := newTestDurDirUser(t, &fake.Server{}, cfg)
 
@@ -265,8 +264,8 @@ func TestDurDirShutdownPausesBeforeDelete(t *testing.T) {
 	fakeCtrl := &controlclienttest.Fake{}
 	cfg := &userclass.Config{
 		APIStub: fakeCtrl,
-		Dyn: dynconfig.NewHolder(dynconfig.Config{
-			LifecycleMode: dynconfig.LifecycleModePause,
+		Dyn: dynconfig.Static(durDirKnobs{
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause},
 		}),
 	}
 	du := newTestDurDirUser(t, &fake.Server{}, cfg)
@@ -276,8 +275,8 @@ func TestDurDirShutdownPausesBeforeDelete(t *testing.T) {
 	rt.shutdown(context.Background())
 
 	calls := fakeCtrl.RecordedCalls()
-	if len(calls) < 2 || calls[len(calls)-2] != "PauseActor" || calls[len(calls)-1] != "DeleteActor" {
-		t.Errorf("RecordedCalls must end with [PauseActor, DeleteActor], got %v", calls)
+	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor(async)" || calls[len(calls)-1] != "DeleteActor" {
+		t.Errorf("RecordedCalls must end with [SuspendActor(async), DeleteActor], got %v", calls)
 	}
 	reqs := fakeCtrl.RecordedDeleteActorRequests()
 	if len(reqs) == 0 || !reqs[0].GetAnyState() {

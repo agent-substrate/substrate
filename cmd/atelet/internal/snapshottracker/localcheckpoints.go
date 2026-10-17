@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package snapshottracker
 
 import (
 	"context"
@@ -25,9 +25,9 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 )
 
-// pruneLocalCheckpoints removes every local snapshot of the actor. A missing
+// PruneLocalCheckpoints removes every local snapshot of the actor. A missing
 // directory is not an error, so retries are safe.
-func pruneLocalCheckpoints(ctx context.Context, actorUID string) error {
+func PruneLocalCheckpoints(ctx context.Context, actorUID string) error {
 	return pruneLocalCheckpointDir(ctx, ateletpath.LocalCheckpointsDir(actorUID))
 }
 

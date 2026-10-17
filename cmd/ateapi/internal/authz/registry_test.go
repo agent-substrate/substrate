@@ -174,7 +174,7 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			name:       "PauseActor",
 			fullMethod: ateapipb.Control_PauseActor_FullMethodName,
 			req:        &ateapipb.PauseActorRequest{Actor: actorRef},
-			want:       []check{{RelationCanPause, "actor:team-a/runner"}},
+			want:       []check{{RelationCanSuspend, "actor:team-a/runner"}},
 		},
 		{
 			name:       "ResumeActor",
@@ -513,9 +513,9 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 			wantField:  "actor.atespace",
 		},
 		{
-			name:       "PauseActor without an actor",
-			fullMethod: ateapipb.Control_PauseActor_FullMethodName,
-			req:        &ateapipb.PauseActorRequest{},
+			name:       "SuspendActor without an actor",
+			fullMethod: ateapipb.Control_SuspendActor_FullMethodName,
+			req:        &ateapipb.SuspendActorRequest{},
 			wantField:  "actor.atespace",
 		},
 		{

@@ -75,7 +75,8 @@ A failed atelet operation still writes its record, marked with `error.type`
 scope and phase: count, p50, p90, p95 and max. A `golden` restore downloads
 the golden image and a `latest` one the actor's own, so they are separate
 rows, as are gVisor and micro-VM operations. The atelet rows split a
-checkpoint between `sandbox_assets`, `worker_checkpoint` and `persist`, and a
+checkpoint between `sandbox_assets`, `worker_checkpoint`, `persist` and
+`cleanup`, and a
 restore between `volume_mount`, `manifest_fetch`, `sandbox_assets`,
 `download`, `oci_unpack` and `worker_restore`. The ateworker rows split the
 `worker_*` phase further with the runtime's own phases: for micro-VM

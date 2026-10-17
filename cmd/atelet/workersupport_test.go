@@ -121,7 +121,7 @@ func TestRegisterWorker(t *testing.T) {
 				SchemaVersion: "v1",
 				Attributes: []*ateletpb.AttributeEntry{
 					{Key: "architecture", Value: "amd64"},
-					{Key: "gvisor_asset_hash", Value: hash},
+					{Key: "sandbox_bundle_hash", Value: hash},
 				},
 			},
 		}
@@ -133,7 +133,7 @@ func TestRegisterWorker(t *testing.T) {
 				SchemaVersion: "v1",
 				Attributes: []*ateapipb.AttributeEntry{
 					{Key: "architecture", Value: "amd64"},
-					{Key: "gvisor_asset_hash", Value: hash},
+					{Key: "sandbox_bundle_hash", Value: hash},
 				},
 			},
 		}

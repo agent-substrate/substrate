@@ -104,11 +104,11 @@ for etcd.
   containers, potentially at different paths. This is the per-Actor
   application-data surface.
 
-  How many an `ActorTemplate` may declare depends on its `sandboxClass`:
-  a `microvm` template may declare several (they are subdirectories of one
-  virtio-fs share, so they cost nothing extra per volume), while a `gvisor`
-  template is limited to one until gVisor can accept more than a single
-  durable mount.
+  How many an `ActorTemplate` may declare depends on the sandbox class of
+  the `WorkerPool` its actors run on: a `microvm` worker supports several
+  (they are subdirectories of one virtio-fs share, so they cost nothing
+  extra per volume), while a `gvisor` worker is limited to one until gVisor
+  can accept more than a single durable mount.
 
 ## Snapshots
 

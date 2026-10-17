@@ -202,13 +202,14 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 }
 
 // lifecycleOpAttrs builds the resume/suspend/pause/revert dimensions from
-// workflow state. Nil-safe, and omits the template, pool, snapshot-kind and
-// snapshot-fidelity labels until they are known so a failure before the
-// load/assign/restore steps never emits an empty-string series. snapshotKind is empty for suspend/pause, which do not
-// restore; snapshotScope applies to all three and separates a full restore
-// from a data-only one of the same kind.
+// workflow state. Nil-safe, and omits the template, pool, sandbox-class,
+// snapshot-kind and snapshot-fidelity labels until they are known so a failure
+// before the load/assign/restore steps never emits an empty-string series.
+// snapshotKind is empty for suspend/pause, which do not restore; snapshotScope
+// applies to all three and separates a full restore from a data-only one of the
+// same kind.
 // The pool keys are set together or not at all; see ateattr.WorkerPoolAttributes.
-func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, snapshotKind, snapshotScope string) []attribute.KeyValue {
+func lifecycleOpAttrs(actor *ateapipb.Actor, snapshotKind, snapshotScope string) []attribute.KeyValue {
 	var attrs []attribute.KeyValue
 	if actor != nil {
 		attrs = append(attrs,
@@ -218,8 +219,12 @@ func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, s
 	}
 	ass := actor.GetStatus().GetWorkerAssignment()
 	attrs = append(attrs, ateattr.WorkerPoolAttributes(ass.GetWorkerNamespace(), ass.GetWorkerPool())...)
-	if template != nil {
-		attrs = append(attrs, ateattr.SandboxClassAttribute(template.GetSandboxConfig().GetSandboxClass()))
+	class := ass.GetSandboxRuntime().GetSandboxClass()
+	if class == "" {
+		class = snapshotAtLatestGeneration(actor.GetStatus()).GetSandboxRuntime().GetSandboxClass()
+	}
+	if class != "" {
+		attrs = append(attrs, ateattr.SandboxClassAttribute(class))
 	}
 	if snapshotKind != "" {
 		attrs = append(attrs, ateattr.SnapshotKindKey.String(snapshotKind))

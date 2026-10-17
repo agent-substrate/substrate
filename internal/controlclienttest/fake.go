@@ -40,7 +40,6 @@ type Fake struct {
 	CreateActorFunc    func(ctx context.Context, in *ateapipb.CreateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error)
 	ResumeActorFunc    func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error)
 	SuspendActorFunc   func(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error)
-	PauseActorFunc     func(ctx context.Context, in *ateapipb.PauseActorRequest, opts ...grpc.CallOption) (*ateapipb.PauseActorResponse, error)
 	DeleteActorFunc    func(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error)
 	ListActorsFunc     func(ctx context.Context, in *ateapipb.ListActorsRequest, opts ...grpc.CallOption) (*ateapipb.ListActorsResponse, error)
 }
@@ -89,20 +88,18 @@ func (f *Fake) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest,
 	return &ateapipb.ResumeActorResponse{}, nil
 }
 
+// SuspendActor records "SuspendActor(async)" for an asynchronous-durability
+// suspend and "SuspendActor" for any other, so tests can tell them apart.
 func (f *Fake) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
-	f.record("SuspendActor")
+	if in.GetOptions().GetMode() == ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+		f.record("SuspendActor(async)")
+	} else {
+		f.record("SuspendActor")
+	}
 	if f.SuspendActorFunc != nil {
 		return f.SuspendActorFunc(ctx, in, opts...)
 	}
 	return &ateapipb.SuspendActorResponse{}, nil
-}
-
-func (f *Fake) PauseActor(ctx context.Context, in *ateapipb.PauseActorRequest, opts ...grpc.CallOption) (*ateapipb.PauseActorResponse, error) {
-	f.record("PauseActor")
-	if f.PauseActorFunc != nil {
-		return f.PauseActorFunc(ctx, in, opts...)
-	}
-	return &ateapipb.PauseActorResponse{}, nil
 }
 
 func (f *Fake) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {

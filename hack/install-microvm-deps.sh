@@ -27,10 +27,6 @@
 # `microvm` SandboxConfig referencing those assets. Every asset sha256 is
 # pinned in the manifest, so the apply only substitutes the bucket name.
 #
-# ActorTemplates must reference the SandboxConfig explicitly via
-# sandboxConfig.configName: microvm. This avoids a dirty teardown silently
-# binding new templates to a stale config.
-#
 # On --delete: removes the SandboxConfig from the cluster. The delete is best
 # effort. A SandboxConfig that a WorkerPool uses carries a protection
 # finalizer, which atecontroller releases only once no pool's status names
@@ -224,4 +220,4 @@ sed -e "s|\${BUCKET_SCHEME}|${BUCKET_SCHEME}|g" \
     "${MANIFEST_TEMPLATE}" \
   | run_kubectl apply -f -
 
-log "Done. ActorTemplates must reference this SandboxConfig by name (sandboxConfig.configName: microvm)."
+log "Done. Installed cluster-wide microvm SandboxConfig."

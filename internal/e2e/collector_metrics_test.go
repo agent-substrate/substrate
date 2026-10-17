@@ -17,6 +17,8 @@ package e2e
 import (
 	"sort"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // A trimmed sample of what the Collector's prometheus exporter emits: HELP/TYPE
@@ -166,80 +168,109 @@ substrate_actor_state_changes_total{service_name="ateapi",ate_actor_state="crash
 substrate_spans_total{service_name="ateapi"} 40
 `
 
-func TestLifecycleEventCounts(t *testing.T) {
+func TestLifecycleEventSeries(t *testing.T) {
 	tests := []struct {
 		name   string
 		scrape string
-		want   map[string]float64
+		want   map[string]map[string]float64
 	}{
 		{
-			name:   "every counted state, summed over instances",
+			name:   "every counted state, one entry per instance",
 			scrape: sampleLifecycleScrape,
-			want:   map[string]float64{"resuming": 2, "running": 5, "crashed": 1},
+			want: map[string]map[string]float64{
+				"resuming": {`substrate_actor_state_changes_total{service_name="ateapi",ate_actor_state="resuming"}`: 2},
+				"running": {
+					`substrate_actor_state_changes_total{service_name="ateapi",ate_actor_state="running"}`:                  2,
+					`substrate_actor_state_changes_total{service_name="ateapi",instance="other",ate_actor_state="running"}`: 3,
+				},
+				"crashed": {`substrate_actor_state_changes_total{service_name="ateapi",ate_actor_state="crashed"}`: 1},
+			},
 		},
 		{
 			name:   "no events counted",
 			scrape: sampleScrape,
-			want:   map[string]float64{},
+			want:   map[string]map[string]float64{},
 		},
 		{
 			name:   "empty scrape",
 			scrape: "",
-			want:   map[string]float64{},
+			want:   map[string]map[string]float64{},
 		},
 		{
 			name:   "a series with no state label contributes nothing",
 			scrape: "substrate_actor_state_changes_total{service_name=\"ateapi\"} 3\n",
-			want:   map[string]float64{},
+			want:   map[string]map[string]float64{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := LifecycleEventCounts(tt.scrape)
-			if len(got) != len(tt.want) {
-				t.Fatalf("LifecycleEventCounts() = %v, want %v", got, tt.want)
-			}
-			for state, want := range tt.want {
-				if got[state] != want {
-					t.Errorf("LifecycleEventCounts()[%q] = %v, want %v", state, got[state], want)
-				}
+			got := LifecycleEventSeries(tt.scrape)
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("LifecycleEventSeries() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
 }
 
 func TestStatesNotAdvanced(t *testing.T) {
+	const a, b = `m{instance="a"}`, `m{instance="b"}`
+	type series = map[string]map[string]float64
 	tests := []struct {
 		name          string
-		before, after map[string]float64
+		before, after series
 		states        []string
 		want          []string
 	}{
 		{
 			name:   "every state advanced",
-			before: map[string]float64{"running": 1, "crashed": 0},
-			after:  map[string]float64{"running": 3, "crashed": 1},
+			before: series{"running": {a: 1}, "crashed": {a: 0}},
+			after:  series{"running": {a: 3}, "crashed": {a: 1}},
 			states: []string{"running", "crashed"},
 		},
 		{
 			name:   "a stale count from an earlier run is not an advance",
-			before: map[string]float64{"running": 3, "crashed": 1},
-			after:  map[string]float64{"running": 3, "crashed": 1},
+			before: series{"running": {a: 3}, "crashed": {a: 1}},
+			after:  series{"running": {a: 3}, "crashed": {a: 1}},
 			states: []string{"running", "crashed"},
 			want:   []string{"running", "crashed"},
 		},
 		{
 			name:   "a state that never appeared",
-			before: map[string]float64{},
-			after:  map[string]float64{"running": 2},
+			before: series{},
+			after:  series{"running": {a: 2}},
 			states: []string{"running", "suspended"},
 			want:   []string{"suspended"},
 		},
 		{
 			name:   "first observation of a state counts as an advance",
-			before: map[string]float64{},
-			after:  map[string]float64{"running": 1},
+			before: series{},
+			after:  series{"running": {a: 1}},
 			states: []string{"running"},
+		},
+		{
+			name:   "a new instance's series counts as an advance",
+			before: series{"crashed": {a: 3}},
+			after:  series{"crashed": {a: 3, b: 1}},
+			states: []string{"crashed"},
+		},
+		{
+			name:   "an expired series does not hide an advance on another",
+			before: series{"crashed": {a: 3, b: 1}},
+			after:  series{"crashed": {b: 2}},
+			states: []string{"crashed"},
+		},
+		{
+			name:   "an expired series alone is not an advance",
+			before: series{"crashed": {a: 3, b: 1}},
+			after:  series{"crashed": {b: 1}},
+			states: []string{"crashed"},
+			want:   []string{"crashed"},
+		},
+		{
+			name:   "a restarted stream counts as an advance",
+			before: series{"crashed": {a: 3}},
+			after:  series{"crashed": {a: 1}},
+			states: []string{"crashed"},
 		},
 	}
 	for _, tt := range tests {

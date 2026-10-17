@@ -45,6 +45,7 @@ import (
 	"go.ate.dev/substrate/internal/ateworker/pid1"
 	"go.ate.dev/substrate/internal/ateworker/register"
 	"go.ate.dev/substrate/internal/ateworker/tunnel"
+	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/ocispec"
@@ -558,20 +559,18 @@ func containerNames(containers []*ateworkerpb.Container) []string {
 	return names
 }
 
-// validateActorDirs rejects a request whose actor directories are unusable.
-// validateRunscPath ensures we only execute runsc from the static files dir
-func validateRunscPath(p string) error {
-	if errs := resources.ValidateRuntimeAssetPath(nodepath.StaticFilesDir, p, field.NewPath("runsc_path")); len(errs) > 0 {
-		return resources.ToAPIError(errs)
+// validateRunscPath ensures we only execute runsc from the actor's own
+// sandbox assets dir, where atelet staged it. The dir is derived from the
+// actor UID here and the request's sandbox_assets_dir must match it, so a
+// request cannot name a root of its own choosing. actorDirs must have passed
+// the generated validator.
+func validateRunscPath(actorUID string, actorDirs *ateworkerpb.ActorDirs, p string) error {
+	root := actorDirs.GetSandboxAssetsDir()
+	errs := resources.ValidateSandboxAssetsDir(actorUID, root, field.NewPath("actor_dirs", "sandbox_assets_dir"))
+	if len(errs) == 0 {
+		errs = resources.ValidateRuntimeAssetPath(root, p, field.NewPath("runsc_path"))
 	}
-	return nil
-}
-
-func validateActorDirs(actorDirs *ateworkerpb.ActorDirs) error {
-	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
-		return apierror.InvalidArgument("%v", errs.ToAggregate())
-	}
-	return nil
+	return resources.ToAPIError(errs)
 }
 
 // supportedFidelities are the snapshot fidelities this runtime serves. gVisor
@@ -585,17 +584,15 @@ var supportedFidelities = []ateworkerpb.SnapshotFidelity{
 // validateFidelity rejects a checkpoint or restore request whose fidelity
 // this runtime cannot serve.
 func validateFidelity(fidelity ateworkerpb.SnapshotFidelity) error {
-	if errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity")); len(errs) > 0 {
-		return apierror.InvalidArgument("%v", errs.ToAggregate())
-	}
-	return nil
+	errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity"))
+	return resources.ToAPIError(errs)
 }
 
 func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.RunWorkloadRequest) (resp *ateworkerpb.RunWorkloadResponse, retErr error) {
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+	if err := ateworkervalidation.ValidateRunWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
-	if err := validateRunscPath(req.GetRunscPath()); err != nil {
+	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -695,7 +692,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ac.GetName())); err != nil {
+		if err := setupAppRootfs(req.GetActorDirs(), ac.GetName()); err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
 		}
 		containersToDelete = append(containersToDelete, ac.GetName())
@@ -725,15 +722,15 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
 func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (_ *ateworkerpb.CheckpointWorkloadResponse, err error) {
-	// Taken before the lock, so prep covers the wait for it.
-	tStart := time.Now()
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+	if err := ateworkervalidation.ValidateCheckpointWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
+	// Taken before the lock, so prep covers the wait for it.
+	tStart := time.Now()
 	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return nil, err
 	}
-	if err := validateRunscPath(req.GetRunscPath()); err != nil {
+	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -954,15 +951,15 @@ func isContainerAlreadyGone(ctx context.Context, rcmd containerRuntime, name str
 }
 
 func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb.RestoreWorkloadRequest) (resp *ateworkerpb.RestoreWorkloadResponse, retErr error) {
-	// Taken before the lock, so prep covers the wait for it.
-	tStart := time.Now()
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+	if err := ateworkervalidation.ValidateRestoreWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
+	// Taken before the lock, so prep covers the wait for it.
+	tStart := time.Now()
 	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return nil, err
 	}
-	if err := validateRunscPath(req.GetRunscPath()); err != nil {
+	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -1109,7 +1106,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		err = imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ac.GetName()))
+		err = setupAppRootfs(req.GetActorDirs(), ac.GetName())
 		timing.appRootfs += lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
@@ -1171,10 +1168,10 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 }
 
 func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
-	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+	if err := ateworkervalidation.ValidateTerminateWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
-	if err := validateRunscPath(req.GetRunscPath()); err != nil {
+	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {

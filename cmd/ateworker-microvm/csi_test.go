@@ -38,8 +38,8 @@ func TestHasCsiVolumes(t *testing.T) {
 			containers: []*ateworkerpb.Container{
 				{
 					Name: "c1",
-					DurableDirVolumeMounts: []*ateworkerpb.DurableDirVolumeMount{
-						{VolumeName: "data", MountPath: "/data"},
+					DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{
+						{Name: "data", MountPath: "/data"},
 					},
 				},
 			},
@@ -50,8 +50,8 @@ func TestHasCsiVolumes(t *testing.T) {
 			containers: []*ateworkerpb.Container{
 				{
 					Name: "c1",
-					CsiVolumeMounts: []*ateworkerpb.VolumeMount{
-						{VolumeName: "csi-vol", MountPath: "/csi"},
+					ExternalVolumeMounts: []*ateworkerpb.VolumeMount{
+						{Name: "csi-vol", MountPath: "/csi"},
 					},
 				},
 			},
@@ -65,8 +65,8 @@ func TestHasCsiVolumes(t *testing.T) {
 				},
 				{
 					Name: "c2",
-					CsiVolumeMounts: []*ateworkerpb.VolumeMount{
-						{VolumeName: "csi-vol", MountPath: "/csi"},
+					ExternalVolumeMounts: []*ateworkerpb.VolumeMount{
+						{Name: "csi-vol", MountPath: "/csi"},
 					},
 				},
 			},
