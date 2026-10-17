@@ -264,6 +264,13 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to open sandbox asset cache", err)
 	}
+	if err := validateSnapshotCacheFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid snapshot cache flags", err)
+	}
+	snapshotCache, err := openSnapshotCache(ctx, *snapshotCacheDir, *snapshotCacheMinAge)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to open snapshot cache", err)
+	}
 
 	// Sandbox assets go through the object-store plugin; a gs:// asset it
 	// cannot serve, such as one in the public gs://gvisor bucket, is read
@@ -360,6 +367,7 @@ func main() {
 		*objectStorePluginSocket,
 		imageCache,
 		sandboxAssetCache,
+		snapshotCache,
 		runtimes,
 		instruments,
 		volPlugins,
@@ -619,6 +627,10 @@ type Atelet struct {
 	// sandboxAssetCache holds every sandbox asset on the node once; actors get hard
 	// links into their own directories (see ensureSandboxAssets).
 	sandboxAssetCache *filecache.Store
+	// snapshotCache dedupes and retains shared snapshot files across
+	// restores. nil means caching is disabled (--snapshot-cache-dir=""):
+	// every restore downloads its snapshot files directly.
+	snapshotCache *filecache.Store
 	// runtimes resolves the runtime a Run or Restore names to the assets to
 	// stage, among those this node's workers advertise.
 	runtimes *runtimeIndex
@@ -656,6 +668,7 @@ func NewService(
 	pluginSocket string,
 	imageCache *imagecache.Store,
 	sandboxAssetCache *filecache.Store,
+	snapshotCache *filecache.Store,
 	runtimes *runtimeIndex,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
@@ -667,6 +680,7 @@ func NewService(
 		workerDialer:          workerDialer,
 		imageCache:            imageCache,
 		sandboxAssetCache:     sandboxAssetCache,
+		snapshotCache:         snapshotCache,
 		runtimes:              runtimes,
 		anonGCSClient:         anonGCSClient,
 		objectStorePlugin:     objectStorePlugin,
@@ -1496,7 +1510,12 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 			// readLocalSnapshot checked; no staging.
 			return nil
 		}
-		return s.downloadExternalCheckpoint(gctx, durable.GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles)
+		// Cache-eligible only when the control plane declared the snapshot
+		// shared; how a hit is served depends on the sandbox class that
+		// consumes it, the one the request resolved, which is what runs the
+		// restored workload.
+		mode := snapshotCacheMode(durable, cacheModeFor(runtimeRec.SandboxClass))
+		return s.downloadExternalCheckpoint(gctx, durable.GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, mode)
 	})
 	g.Go(func() (err error) {
 		defer func() { prepErr = err }()
@@ -1770,8 +1789,19 @@ func copyRootFile(root *os.Root, src, dst string) (int64, error) {
 	return nBytes, errors.Join(err, destination.Close())
 }
 
-func (s *Atelet) downloadExternalCheckpoint(ctx context.Context, snapshotURI string, dstDir string, files []string) error {
-	if err := s.fetchSnapshotFiles(ctx, snapshotURI, dstDir, files); err != nil {
+// downloadExternalCheckpoint stages files of one snapshot into dstDir. With
+// a mode other than cacheModeOff and the snapshot cache enabled, each file
+// is served from the cache (see downloadSnapshotFilesCached): the caller
+// asserts the snapshot is immutable at its URI. Otherwise the files are
+// downloaded into the restore directory directly.
+func (s *Atelet) downloadExternalCheckpoint(ctx context.Context, snapshotURI string, dstDir string, files []string, mode cacheMode) error {
+	var err error
+	if mode != cacheModeOff && s.snapshotCache != nil {
+		err = s.downloadSnapshotFilesCached(ctx, snapshotURI, dstDir, files, mode)
+	} else {
+		err = s.fetchSnapshotFiles(ctx, snapshotURI, dstDir, files)
+	}
+	if err != nil {
 		return fmt.Errorf("while downloading snapshot files: %w", err)
 	}
 	return nil

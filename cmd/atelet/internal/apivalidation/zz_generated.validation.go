@@ -1937,6 +1937,37 @@ func Validate_ObjectStorage(
 		errs = append(errs, fn(fldPath.Child("snapshot_uri"), &obj.SnapshotUri, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateletpb.ObjectStorage.Sharing
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.SnapshotSharing,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 2); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.ObjectStorage) *ateletpb.SnapshotSharing {
+				return &oldObj.Sharing
+			})
+		errs = append(errs, fn(fldPath.Child("sharing"), &obj.Sharing, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
