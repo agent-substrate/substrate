@@ -76,3 +76,28 @@ resources:
     memoryBytes: 536870912 # 512Mi
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-exact${FIXTURE_SUFFIX}/
+---
+metadata:
+  atespace: ate-e2e${FIXTURE_SUFFIX}
+  name: caps-none
+workerSelector:
+  matchLabels:
+    workload: caps
+containers:
+- name: probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
+  command: ["/ko-app/probe"]
+  securityContext:
+    capabilities:
+      drop: ["ALL"]
+  wakeupProbe:
+    httpGet:
+      path: /healthz
+      port: 80
+    timeoutSeconds: 60
+resources:
+  limits:
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi
+snapshotConfig:
+  storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-none${FIXTURE_SUFFIX}/
