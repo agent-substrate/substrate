@@ -339,7 +339,9 @@ type AteletClient interface {
 	PromoteSnapshot(ctx context.Context, in *PromoteSnapshotRequest, opts ...grpc.CallOption) (*PromoteSnapshotResponse, error)
 	// DetachActor makes the actor's latest local snapshot durable, then deletes
 	// the actor's local snapshots on this node, so it can resume on any node.
-	// atelet also detaches a suspended actor on its own after its detach delay.
+	// atelet also detaches a suspended actor on its own after its detach delay,
+	// and reports that with WorkerService.ReportActorSnapshotState; it does not
+	// report a DetachActor call, whose caller reads the state from the response.
 	// Waits for an operation already in progress on the actor, such as an
 	// upload or a detach. Does nothing when atelet holds no local snapshot for
 	// the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
@@ -456,7 +458,9 @@ type AteletServer interface {
 	PromoteSnapshot(context.Context, *PromoteSnapshotRequest) (*PromoteSnapshotResponse, error)
 	// DetachActor makes the actor's latest local snapshot durable, then deletes
 	// the actor's local snapshots on this node, so it can resume on any node.
-	// atelet also detaches a suspended actor on its own after its detach delay.
+	// atelet also detaches a suspended actor on its own after its detach delay,
+	// and reports that with WorkerService.ReportActorSnapshotState; it does not
+	// report a DetachActor call, whose caller reads the state from the response.
 	// Waits for an operation already in progress on the actor, such as an
 	// upload or a detach. Does nothing when atelet holds no local snapshot for
 	// the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the

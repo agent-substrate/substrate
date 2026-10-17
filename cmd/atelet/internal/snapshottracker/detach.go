@@ -62,6 +62,9 @@ func (t *Tracker) Detach(ctx context.Context, actorUID string) (*ateletpb.ActorS
 		// done.
 		st := &ateletpb.ActorSnapshotState{}
 		if a != nil {
+			if a.reportDue() {
+				t.clearReportDueLocked(a)
+			}
 			st = t.stateLocked(a)
 		}
 		t.unlock(actorUID)
@@ -93,7 +96,9 @@ func checkNotHeld(a *actorSnapshots) error {
 // finishDetach runs op, a detach of the actor's latest local snapshot: it
 // uploads the snapshot unless already durable, then deletes the actor's local
 // snapshots. background reports whether a worker runs it, rather than a Detach
-// call. A detach Forget abandons leaves the actor alone, and fails.
+// call; a worker's detach makes a report of what it changed due, while a
+// Detach call returns the new state and cancels any pending report. A detach
+// Forget abandons leaves the actor alone, and fails.
 func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp, alreadyDurable, background bool) (*ateletpb.ActorSnapshotState, error) {
 	defer close(op.done)
 	uploaded := false
@@ -104,7 +109,9 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 		uploaded, _, err = t.uploadSnapshot(ctx, actorUID, target, background)
 		if err == nil {
 			err = t.updateOp(actorUID, op, nil, func(a *actorSnapshots) {
-				t.recordUploadLocked(a, target, uploaded)
+				if t.recordUploadLocked(a, target, uploaded) && background {
+					t.markReportDueLocked(a)
+				}
 			})
 		}
 	}
@@ -129,6 +136,11 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 		switch {
 		case err == nil:
 			t.clearLatestLocalLocked(a)
+			if background {
+				t.markReportDueLocked(a)
+			} else {
+				t.cancelReportLocked(a)
+			}
 		case ctx.Err() == nil:
 			// Detach again once the retry delay has passed, and no sooner
 			// than the detach was due.

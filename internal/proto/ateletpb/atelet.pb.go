@@ -164,6 +164,10 @@ const (
 	// detach-delay, atelet detaches it: it uploads the latest local snapshot
 	// unless that is durable already, then deletes all the local snapshots.
 	//
+	// atelet reports the actor's state with
+	// WorkerService.ReportActorSnapshotState once such an upload makes a newer
+	// snapshot durable, and once such a detach has deleted the local snapshots.
+	//
 	// atelet never uploads or detaches a snapshot it cannot make durable, such
 	// as one without `snapshot.object`.
 	UploadMode_UPLOAD_MODE_DEFERRED UploadMode = 1
@@ -3594,9 +3598,9 @@ type CheckpointResponse struct {
 	// uploading ends.
 	//
 	// TODO: Add a snapshot garbage collection system for orphaned objects in
-	// object storage. atelet reports snapshot state to ateapi only on RPC
-	// responses, so a background upload superseded before the next response
-	// leaves objects ateapi never learned were durable.
+	// object storage. atelet reports a background upload only when it records
+	// a newer durable snapshot, so an upload that a newer durable snapshot
+	// superseded while it ran leaves objects ateapi never learned were durable.
 	State         *ActorSnapshotState `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -120,10 +120,11 @@ type actorOp struct {
 }
 
 // Start reads each actor's snapshot state file on this node, queues the actor
-// for when its next background upload or detach is due, so its background work
-// resumes after an atelet restart, and starts each queue's workers.
+// for when its next background upload or detach is due and for any report due,
+// so its background work resumes after an atelet restart, and starts each
+// queue's workers and the report workers.
 func (t *Tracker) Start() {
-	if t.store != nil {
+	if t.store != nil || t.reporting.reporter != nil {
 		actorUIDs, err := savedActorUIDs()
 		if err != nil {
 			// Best-effort: each actor's next commit queues it again.
@@ -134,6 +135,7 @@ func (t *Tracker) Start() {
 				break
 			}
 			if a := t.findLocked(actorUID); a != nil {
+				t.enqueueSavedReportLocked(a)
 				t.requeueLocked(a)
 			}
 			t.unlock(actorUID)
@@ -142,6 +144,11 @@ func (t *Tracker) Start() {
 	for kind, n := range t.workers {
 		for range n {
 			t.workersDone.Go(func() { t.runWorker(opKind(kind)) })
+		}
+	}
+	if t.reporting.reporter != nil {
+		for range t.reporting.workers {
+			t.workersDone.Go(t.runReporter)
 		}
 	}
 }
@@ -351,10 +358,10 @@ func (t *Tracker) endOpLocked(actorUID string, op *actorOp) *actorSnapshots {
 	return a
 }
 
-// endOp ends op, queues the actor for its next background operation, and
-// returns the actor's state. Once Forget has abandoned op, it leaves the actor
-// alone and fails with abandonedError; otherwise it fails with opErr if
-// non-nil.
+// endOp ends op, queues the actor for its next background operation and any
+// report due, and returns the actor's state. Once Forget has abandoned op, it
+// leaves the actor alone and fails with abandonedError; otherwise it fails
+// with opErr if non-nil.
 func (t *Tracker) endOp(actorUID string, op *actorOp, opErr error) (*ateletpb.ActorSnapshotState, error) {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
@@ -363,6 +370,7 @@ func (t *Tracker) endOp(actorUID string, op *actorOp, opErr error) (*ateletpb.Ac
 		return nil, abandonedError(actorUID, opErr)
 	}
 	t.requeueLocked(a)
+	t.queueReportLocked(a)
 	if opErr != nil {
 		return nil, opErr
 	}

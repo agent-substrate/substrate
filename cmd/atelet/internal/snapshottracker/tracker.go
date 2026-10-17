@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package snapshottracker tracks each actor's snapshots on an atelet node, and
-// uploads and detaches them in the background.
+// Package snapshottracker tracks each actor's snapshots on an atelet node,
+// uploads and detaches them in the background, and reports what those change
+// to the control plane.
 package snapshottracker
 
 import (
@@ -81,6 +82,19 @@ type Store interface {
 //     Checkpoint, or PromoteSnapshot is in progress (BeginStart,
 //     BeginCheckpoint, or BeginPromote) waits for it to end, which queues the
 //     actor again.
+//  7. A background upload that records a new LatestDurable, or a background
+//     detach that records one or clears LatestLocal, makes a report of the
+//     actor's state due (ReportDueSince), saved with the change so that it
+//     survives a restart. A Checkpoint, a PromoteSnapshot while a local
+//     snapshot is kept, or a Detach call returns the latest state to the
+//     control plane, so it cancels any pending report. Report workers, apart
+//     from the upload and detach workers, spread saved reports across a
+//     startup window, send the actor's whole state through the Reporter, and
+//     retry with per-actor and
+//     queue-wide backoff until the control plane acknowledges or refuses it,
+//     a call cancels it, or reporting.giveUpAfter passes. A report waits while
+//     a Run, Restore, Checkpoint, or PromoteSnapshot is in progress, and a
+//     background change made while a report ran is reported again.
 //
 // The Detach RPC runs in the calling goroutine rather than on a worker, so an
 // explicit control-plane call does not wait behind other actors' background
@@ -118,6 +132,9 @@ type Tracker struct {
 	// queues hold the UIDs of actors with a background operation of each kind
 	// scheduled.
 	queues [numOpKinds]workqueue.TypedDelayingInterface[string]
+	// reporting holds the queue and settings for reporting snapshot state
+	// changes to the control plane.
+	reporting reportQueue
 	// workersDone counts the workers still running.
 	workersDone sync.WaitGroup
 
@@ -177,6 +194,30 @@ func WithInstruments(inst *Instruments) Option {
 	}
 }
 
+// WithReporter sets what reports an actor's snapshot state to the control
+// plane after a background upload or detach.
+func WithReporter(r Reporter) Option {
+	return func(t *Tracker) {
+		t.reporting.reporter = r
+	}
+}
+
+// WithReportWorkers sets how many background reports run at once on this node.
+// Zero disables background reporting.
+func WithReportWorkers(n int) Option {
+	return func(t *Tracker) {
+		t.reporting.workers = n
+	}
+}
+
+// WithReportGiveUpAfter sets how long atelet keeps retrying a failed report
+// since it became due before giving up on it.
+func WithReportGiveUpAfter(d time.Duration) Option {
+	return func(t *Tracker) {
+		t.reporting.giveUpAfter = d
+	}
+}
+
 // New returns a tracker over store that tracks no actor yet and measures time
 // on clk. Its workers run once Start is called, until ctx ends. A nil store
 // schedules no uploads or detaches.
@@ -189,6 +230,7 @@ func New(ctx context.Context, store Store, clk clock.WithTicker, opts ...Option)
 		detachDelay: DefaultDetachDelay,
 		retries:     workqueue.NewTypedItemExponentialFailureRateLimiter[string](snapshotRetryDelay, maxSnapshotRetryDelay),
 		workers:     [numOpKinds]int{opUpload: DefaultUploadWorkers, opDetach: DefaultDetachWorkers},
+		reporting:   newReportQueue(clk),
 		locks:       actorlock.New(),
 		actors:      map[string]*actorSnapshots{},
 	}
@@ -198,10 +240,14 @@ func New(ctx context.Context, store Store, clk clock.WithTicker, opts ...Option)
 	for _, opt := range opts {
 		opt(t)
 	}
+	if t.reporting.workers <= 0 {
+		t.reporting.reporter = nil
+	}
 	context.AfterFunc(ctx, func() {
 		for _, q := range t.queues {
 			q.ShutDown()
 		}
+		t.reporting.queue.ShutDown()
 	})
 	return t
 }

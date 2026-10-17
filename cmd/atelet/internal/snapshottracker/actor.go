@@ -172,6 +172,12 @@ type actorSnapshotsRecord struct {
 	// atelet never detaches a snapshot that no detach can make durable (see
 	// detachTarget).
 	DetachAt time.Time `json:"detachAt,omitzero"`
+	// ReportDueSince is when the latest background change atelet owes a
+	// report of (a new LatestDurable, or local snapshots cleared by a
+	// detach) finished. Zero once no report is due: the control plane
+	// acknowledged or refused it, a commit or Detach call returned the
+	// state, or atelet gave up after reportQueue.giveUpAfter.
+	ReportDueSince time.Time `json:"reportDueSince,omitzero"`
 }
 
 // actorSnapshots is what atelet tracks of one actor's snapshots on this node.
@@ -189,7 +195,7 @@ type actorSnapshots struct {
 	op *actorOp
 	// holds counts the Runs, Restores, Checkpoints, and PromoteSnapshots of
 	// the actor in progress on this node. While it is nonzero, atelet does not
-	// detach the actor, and the entry stays in memory.
+	// detach the actor or report its state, and the entry stays in memory.
 	holds int
 	// inFlight holds the snapshots of Checkpoints and PromoteSnapshots of the
 	// actor currently in progress on this node. newest includes them, so an
@@ -199,6 +205,9 @@ type actorSnapshots struct {
 	// node. While it is nonzero, atelet does not start a background upload of
 	// the actor.
 	promotes int
+	// reportDeferred is set when a report of the actor's state is held back
+	// while holds is nonzero, so holdLocked queues it once holds reaches zero.
+	reportDeferred bool
 	// retryAt holds the actor's next background upload or detach back after
 	// one failed. The entry stays in memory while retryAt is set.
 	retryAt time.Time
@@ -231,6 +240,21 @@ func (a *actorSnapshots) localNeeded(snap SnapshotRef) bool {
 		}
 	}
 	return true
+}
+
+// reportDue reports whether atelet owes the control plane a report of the
+// actor's state.
+func (a *actorSnapshots) reportDue() bool {
+	return !a.ReportDueSince.IsZero()
+}
+
+// latestDurableActor returns the actor LatestDurable belongs to, as its commit
+// named it. A report is due only once LatestDurable is set.
+func (a *actorSnapshots) latestDurableActor() resources.ActorRef {
+	if a.LatestDurable == nil {
+		return resources.ActorRef{}
+	}
+	return a.LatestDurable.Actor
 }
 
 // uploadNeeded reports whether ref still needs uploading: neither it nor a
@@ -331,11 +355,14 @@ func (a *actorSnapshots) isLatestDurable(ref SnapshotRef) (bool, error) {
 	return true, nil
 }
 
-// recordDurable records that d is durable, unless a newer snapshot already is.
-func (a *actorSnapshots) recordDurable(d *SnapshotRef) {
-	if a.LatestDurable == nil || d.generation() >= a.LatestDurable.generation() {
-		a.LatestDurable = d
+// recordDurable records that d is durable, unless that generation or a newer
+// snapshot already is, and reports whether it recorded d.
+func (a *actorSnapshots) recordDurable(d *SnapshotRef) bool {
+	if !a.uploadNeeded(*d) {
+		return false
 	}
+	a.LatestDurable = d
+	return true
 }
 
 // runningUpload returns the snapshot an opUpload goroutine is currently

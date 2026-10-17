@@ -37,7 +37,11 @@ func (t *Tracker) CommitLocal(actorUID string, snap SnapshotRef) *ateletpb.Actor
 	defer t.unlock(actorUID)
 	a := t.findOrAddLocked(actorUID)
 	if !a.localNeeded(snap) {
-		t.requeueLocked(a)
+		if a.reportDue() {
+			t.clearReportDueLocked(a)
+		} else {
+			t.requeueLocked(a)
+		}
 		return t.stateLocked(a)
 	}
 	t.setLatestLocalLocked(a, snap)
@@ -54,6 +58,7 @@ func (t *Tracker) CommitLocal(actorUID string, snap SnapshotRef) *ateletpb.Actor
 	if !a.keepUploading() || sameUUID(a.nextUploadTarget(), &snap) {
 		t.resetBackoffLocked(a)
 	}
+	t.cancelReportLocked(a)
 	t.saveLocked(a)
 	t.requeueLocked(a)
 	return t.stateLocked(a)
@@ -73,13 +78,18 @@ func (t *Tracker) CommitDurable(actorUID string, snap SnapshotRef) *ateletpb.Act
 	defer t.unlock(actorUID)
 	a := t.findOrAddLocked(actorUID)
 	if !a.uploadNeeded(snap) {
-		t.requeueLocked(a)
+		if a.reportDue() {
+			t.clearReportDueLocked(a)
+		} else {
+			t.requeueLocked(a)
+		}
 		return t.stateLocked(a)
 	}
 	a.LatestDurable = snap.clone()
 	if a.LatestLocal != nil && a.LatestLocal.generation() < snap.generation() {
 		a.clearLatestLocal()
 	}
+	t.cancelReportLocked(a)
 	t.durableCommittedLocked(a)
 	return t.stateLocked(a)
 }
@@ -120,7 +130,11 @@ func (t *Tracker) CommitPromoted(actorUID string, snap SnapshotRef) *ateletpb.Ac
 	// original CommitTime and UploadTime) or older than LatestDurable (a
 	// newer checkpoint became durable while PromoteSnapshot ran).
 	if !a.uploadNeeded(snap) {
-		t.requeueLocked(a)
+		if a.LatestLocal != nil && a.reportDue() {
+			t.clearReportDueLocked(a)
+		} else {
+			t.requeueLocked(a)
+		}
 		return t.stateLocked(a)
 	}
 	// Carry over the checkpoint commit time when promoting the tracked
@@ -130,6 +144,13 @@ func (t *Tracker) CommitPromoted(actorUID string, snap SnapshotRef) *ateletpb.Ac
 		snap.CommitTime = a.LatestLocal.CommitTime
 	}
 	a.LatestDurable = snap.clone()
+	// A promote with a local snapshot still on the node returns the latest
+	// state to the control plane. Once LatestLocal is nil, a pending detach
+	// report stays due, since the control plane does not read a promote's
+	// response as a detach.
+	if a.LatestLocal != nil {
+		t.cancelReportLocked(a)
+	}
 	t.durableCommittedLocked(a)
 	return t.stateLocked(a)
 }
@@ -218,12 +239,13 @@ func (t *Tracker) BeginPromote(ctx context.Context, actorUID string, snap Snapsh
 }
 
 // holdLocked counts a Run, Restore, Checkpoint, or PromoteSnapshot of the
-// actor in progress on its entry a, which holds detaches of the actor off (and
-// background uploads when promote is true), and returns the func that ends it
-// and queues the actor again. When snap is non-nil (Checkpoint and
-// PromoteSnapshot), it stays in a.inFlight until end runs, so newest includes
-// it. An actor atelet tracks nothing of yet (a nil a) is held too, so no
-// detach can begin on a snapshot its first Checkpoint commits before it ends.
+// actor in progress on its entry a, which holds detaches and state reports of
+// the actor off (and background uploads when promote is true), and returns the
+// func that ends it and queues the actor again. When snap is non-nil
+// (Checkpoint and PromoteSnapshot), it stays in a.inFlight until end runs, so
+// newest includes it. An actor atelet tracks nothing of yet (a nil a) is held
+// too, so no detach or report can begin on a snapshot its first Checkpoint
+// commits before it ends.
 func (t *Tracker) holdLocked(actorUID string, a *actorSnapshots, snap *SnapshotRef, promote bool) (end func()) {
 	if a == nil {
 		a = &actorSnapshots{actorUID: actorUID}
@@ -251,6 +273,9 @@ func (t *Tracker) holdLocked(actorUID string, a *actorSnapshots, snap *SnapshotR
 			// Checkpoint, or PromoteSnapshot was in progress.
 			return
 		}
+		if a.holds == 0 && a.reportDeferred {
+			t.queueReportLocked(a)
+		}
 		t.requeueLocked(a)
 	}
 }
@@ -264,6 +289,7 @@ func (t *Tracker) Forget(actorUID string) error {
 	t.abandonOpLocked(actorUID)
 	// Start the actor's backoff over; its entry, and any hold, goes below.
 	t.retries.Forget(actorUID)
+	t.reporting.retries.Forget(actorUID)
 	t.dropLocked(actorUID)
 	return removeSnapshotState(actorUID)
 }

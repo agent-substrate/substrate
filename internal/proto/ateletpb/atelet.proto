@@ -343,7 +343,9 @@ service Atelet {
 
   // DetachActor makes the actor's latest local snapshot durable, then deletes
   // the actor's local snapshots on this node, so it can resume on any node.
-  // atelet also detaches a suspended actor on its own after its detach delay.
+  // atelet also detaches a suspended actor on its own after its detach delay,
+  // and reports that with WorkerService.ReportActorSnapshotState; it does not
+  // report a DetachActor call, whose caller reads the state from the response.
   // Waits for an operation already in progress on the actor, such as an
   // upload or a detach. Does nothing when atelet holds no local snapshot for
   // the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
@@ -995,6 +997,10 @@ enum UploadMode {
   // detach-delay, atelet detaches it: it uploads the latest local snapshot
   // unless that is durable already, then deletes all the local snapshots.
   //
+  // atelet reports the actor's state with
+  // WorkerService.ReportActorSnapshotState once such an upload makes a newer
+  // snapshot durable, and once such a detach has deleted the local snapshots.
+  //
   // atelet never uploads or detaches a snapshot it cannot make durable, such
   // as one without `snapshot.object`.
   UPLOAD_MODE_DEFERRED = 1;
@@ -1069,9 +1075,9 @@ message CheckpointResponse {
   // uploading ends.
   //
   // TODO: Add a snapshot garbage collection system for orphaned objects in
-  // object storage. atelet reports snapshot state to ateapi only on RPC
-  // responses, so a background upload superseded before the next response
-  // leaves objects ateapi never learned were durable.
+  // object storage. atelet reports a background upload only when it records
+  // a newer durable snapshot, so an upload that a newer durable snapshot
+  // superseded while it ran leaves objects ateapi never learned were durable.
   ActorSnapshotState state = 1;
 }
 
