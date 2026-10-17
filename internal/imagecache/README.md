@@ -60,8 +60,14 @@ anywhere.
 <cache-root>/                        default: /var/lib/ate/image-cache
   version                            layout version marker ("1")
   layers/sha256/<diffid-hex>/
-      fs/                            the unpacked layer tree (an overlay lowerdir)
-      whiteouts.json                 whiteout state recorded at unpack time
+      fs/                            the unpacked layer tree (for consumers
+                                     asking Form{}), or
+      layer.erofs                    the layer as an EROFS image (for consumers
+                                     asking Form{EROFS: true}); a node holds
+                                     one form per layer
+      layer.erofs.sha256             its digest, for a consumer to pin
+      whiteouts.json                 whiteout and implicit-dir metadata
+                                     recorded at unpack time
       finalized                      marker written by FinalizeLayer (consumer side)
       size                           byte count recorded at unpack (lazily
                                      backfilled for older layers), so sizing
@@ -74,8 +80,8 @@ anywhere.
                                      last-use timestamp
 ```
 
-A layer directory that exists is always complete: unpack streams into a
-`.tmp-*` sibling and moves it into place with a single atomic rename.
+A layer directory that exists is complete: unpack streams into a `.tmp-*`
+sibling and moves it into place with a single atomic rename.
 Startup recovery (`New`) sweeps leftover `.tmp-*` and `.rm-*` dirs,
 verifies the layout version, and reclaims orphaned layers (see Garbage
 collection below). An "image" is nothing but a manifest record listing
@@ -107,6 +113,38 @@ layer diffIDs in order — layers shared by N images exist once.
    materialize.
 5. **Record**: the image config + diffID list is written under the
    requested digest (and the per-platform child digest for multi-arch refs).
+
+The consumer picks the layer form (`Store.EnsureImageAs` with a `Form`).
+`Form{}` is the `fs/` tree above. `Form{EROFS: true}` makes unpack write a
+reproducible, 2 MiB-aligned `layer.erofs` (4 KiB blocks, uncompressed, for a
+guest to mount over virtio-pmem with DAX) and its `layer.erofs.sha256` digest
+via `buildLayerEROFS` (`github.com/erofs/go-erofs`) instead. Whiteouts,
+opaque markers, ownership, modes, mtimes, and non-overlay xattrs are written
+directly into the EROFS image, so the build needs no privilege. The image is
+built from the layer tar by atelet and never taken from an image, template or
+request. `Image.EROFS` and `OverlaySpec.EROFS` report the form delivered.
+
+A node's consumers use one form: micro-VM nodes pull EROFS, gVisor nodes pull
+`fs/`. The pool holds a layer in the form it was first pulled in, and a pull
+asking for the other form fails naming both; converting a node between forms
+means wiping its cache.
+
+The bytes of `layer.erofs` are part of a snapshot's contract. A consumer
+that records the digest next to a memory snapshot (the micro-VM worker does,
+in `erofs-layers.json`) refuses to restore it over a layer whose digest
+differs, because the restored guest maps the image by offset (DAX), so a
+different layout under it would corrupt the processes it resumes.
+The digest is a function of the layer's diffID and of the `go-erofs` version
+that built it, so bumping `go-erofs` to a release that changes the image
+layout makes every existing memory snapshot unrestorable on a node that
+rebuilds the layer (a wiped cache or a node that joins later). Treat a
+`go-erofs` bump as a snapshot format change: pin it deliberately, and expect
+golden snapshots to be regenerated after one.
+
+With `--host-erofs-layers` on atelet (off by default; it requires EROFS in the
+host kernel, which atelet probes at startup), gVisor bundles and image volumes
+are pulled as `Form{EROFS: true}` too, and `SetupBundleRootfs` and
+`SetupBundleImageVolumes` mount the layer images on the host.
 
 `prepareOCIDirectory` in atelet then writes `rootfs-overlay.json`
 (`OverlaySpec`) into the bundle, listing the layer
@@ -161,6 +199,30 @@ bit-exact, pristine image rootfs — it just costs a mount instead of an
 extraction. The micro-VM path is nearly untouched: it bind-mounts the (now
 overlay-composed) bundle rootfs into virtiofsd's shared dir and the guest
 keeps building its own tmpfs upper, as before.
+
+## Merged view without a host mount (`PrepareEROFSUpper`)
+
+A consumer that mounts `layer.erofs` images itself has no host-side merged
+tree to write into before its first mount, yet two things must land in its
+fresh upper: the directories the host writes into (such as `etc` for
+`resolv.conf`) and the implicit-parent repairs that would otherwise leave a
+directory like `/tmp` at a fabricated 0755. `PrepareEROFSUpper(upper, spec,
+need)` resolves paths through the images with overlayfs lookup rules
+(whiteouts, opaque directories and shadowing non-directories honored) and
+creates those directories in the upper with the merged view's owner, mode,
+mtime and `user.*` / `security.capability` xattrs. `SetupBundleImageVolumes`
+composes only a bundle's image volumes, for a rootfs the consumer assembles
+itself. `SetupBundleRootfs` refuses a bundle on EROFS images: the host does
+not mount them here.
+
+On the host (`ateworker-gvisor` rootfs via `SetupBundleRootfs`, and image volumes
+via `SetupBundleImageVolumes`), each distinct `layer.erofs` is mounted
+read-only under the bundle (using file-backed EROFS on Linux 6.12+ or an
+autoclear loop device on older kernels) and passed as a lowerdir to
+`mountOverlay` (or mounted directly at the volume mount point for a
+single-layer image volume). `SetupBundleRootfs` repairs implicit parent
+directories in the bundle's upper via `PrepareEROFSUpper` before mounting the
+overlay.
 
 **Teardown**: `UnmountAllUnder(bundleDir)` lazily detaches every mount below
 an actor's bundle directory (via `/proc/self/mountinfo`) before atelet wipes

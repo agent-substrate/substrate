@@ -190,6 +190,32 @@ func TestRewriteSnapshotPaths(t *testing.T) {
 		}
 	})
 
+	t.Run("EROFS layer images stay at their image-cache paths", func(t *testing.T) {
+		dir := writeSnapshotConfig(t, []map[string]any{
+			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
+		})
+		const layer = "/var/lib/ate/image-cache/layers/sha256/abc/layer.erofs"
+		mutateSnapshotConfig(t, dir, func(cfg map[string]any) {
+			cfg["pmem"] = append(cfg["pmem"].([]any), map[string]any{"id": erofsPmemIDPrefix + "0", "file": layer, "discard_writes": true, "pci_segment": 2})
+		})
+		if err := rewriteSnapshotPaths(dir, id, kernel, image); err != nil {
+			t.Fatalf("rewriteSnapshotPaths: %v", err)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, "config.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg struct {
+			Pmem []map[string]any `json:"pmem"`
+		}
+		if err := json.Unmarshal(b, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.Pmem) != 2 || cfg.Pmem[0]["file"] != image || cfg.Pmem[1]["file"] != layer || cfg.Pmem[1]["pci_segment"] != float64(2) {
+			t.Errorf("pmem = %+v, want the guest image repointed to %q and the layer left at %q on segment 2", cfg.Pmem, image, layer)
+		}
+	})
+
 	t.Run("vsock, console, kernel and image are repointed", func(t *testing.T) {
 		dir := writeSnapshotConfig(t, []map[string]any{
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},

@@ -17,6 +17,7 @@
 package imagecache
 
 import (
+	"archive/tar"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -365,5 +366,93 @@ func TestSetupBundleRootfs_ImageVolumes(t *testing.T) {
 				t.Error("volume still shows content after unmount")
 			}
 		})
+	}
+}
+
+func TestSetupBundleRootfs_EROFS(t *testing.T) {
+	roottest.Require(t, "mount/unmount")
+
+	base := t.TempDir()
+	writeTestEROFSLayer(t, base, []*tar.Header{
+		{Name: "secret/", Typeflag: tar.TypeDir, Mode: 0o700},
+		{Name: "secret/keep.txt", Typeflag: tar.TypeReg, Size: 4},
+		{Name: "removed.txt", Typeflag: tar.TypeReg, Size: 3},
+	})
+	top := t.TempDir()
+	writeTestEROFSLayer(t, top, []*tar.Header{
+		{Name: "secret/new.txt", Typeflag: tar.TypeReg, Size: 3},
+		{Name: ".wh.removed.txt", Typeflag: tar.TypeReg},
+	})
+	volLayer := t.TempDir()
+	writeTestEROFSLayer(t, volLayer, []*tar.Header{
+		{Name: "vol.txt", Typeflag: tar.TypeReg, Size: 5},
+	})
+
+	bundle := t.TempDir()
+	if err := WriteSpec(bundle, &OverlaySpec{
+		Layers:    []string{base, top},
+		EROFS:     true,
+		ExtraDirs: []string{"/run/ate"},
+		ImageVolumes: []ImageVolumeOverlay{
+			{Name: "single", Layers: []string{volLayer}, EROFS: true},
+			{Name: "multi", Layers: []string{base, top}, EROFS: true},
+		},
+	}); err != nil {
+		t.Fatalf("WriteSpec: %v", err)
+	}
+	if err := SetupBundleRootfs(bundle); err != nil {
+		t.Fatalf("SetupBundleRootfs: %v", err)
+	}
+	t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
+
+	if _, err := os.Stat(filepath.Join(bundle, "rootfs", "secret", "keep.txt")); err != nil {
+		t.Errorf("base layer file missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bundle, "rootfs", "secret", "new.txt")); err != nil {
+		t.Errorf("top layer file missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bundle, "rootfs", "removed.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("whited-out file still visible: %v", err)
+	}
+	if fi, err := os.Lstat(filepath.Join(bundle, "rootfs", "secret")); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("merged secret mode = %v (%v), want 0700", fi, err)
+	}
+	if fi, err := os.Stat(filepath.Join(bundle, "rootfs", "run", "ate")); err != nil || !fi.IsDir() {
+		t.Errorf("ExtraDir missing in overlay: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "rootfs", "written.txt"), []byte("w"), 0o644); err != nil {
+		t.Fatalf("write through overlay: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bundle, "upper", "written.txt")); err != nil {
+		t.Errorf("write did not land in upper: %v", err)
+	}
+
+	singleMnt := filepath.Join(bundle, "volumes", "single")
+	if _, err := os.Stat(filepath.Join(singleMnt, "vol.txt")); err != nil {
+		t.Errorf("single-layer EROFS volume missing vol.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(singleMnt, "nope.txt"), []byte("x"), 0o644); !errors.Is(err, unix.EROFS) {
+		t.Errorf("write to single-layer EROFS volume = %v, want EROFS", err)
+	}
+
+	multiMnt := filepath.Join(bundle, "volumes", "multi")
+	if _, err := os.Stat(filepath.Join(multiMnt, "secret", "new.txt")); err != nil {
+		t.Errorf("multi-layer EROFS volume missing secret/new.txt: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(multiMnt, "removed.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("whited-out file visible in multi-layer EROFS volume: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(multiMnt, "nope.txt"), []byte("x"), 0o644); !errors.Is(err, unix.EROFS) {
+		t.Errorf("write to multi-layer EROFS volume = %v, want EROFS", err)
+	}
+
+	if err := UnmountAllUnder(bundle); err != nil {
+		t.Fatalf("UnmountAllUnder: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bundle, "rootfs", "secret", "keep.txt")); err == nil {
+		t.Error("rootfs still shows content after unmount")
+	}
+	if _, err := os.Stat(filepath.Join(singleMnt, "vol.txt")); err == nil {
+		t.Error("single volume still shows content after unmount")
 	}
 }

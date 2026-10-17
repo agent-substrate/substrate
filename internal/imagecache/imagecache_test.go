@@ -18,7 +18,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -26,10 +28,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	erofs "github.com/erofs/go-erofs"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -378,5 +382,113 @@ func TestRewriteLocalRegistry(t *testing.T) {
 				t.Errorf("rewriteLocalRegistry(%q) = %q; want %q", tt.ref, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEnsureImage_EROFSLayers(t *testing.T) {
+	_, host := newTestRegistry(t)
+	ref := host + "/test/erofs:latest"
+	base := layerFromEntries(t, []tarEntry{
+		{name: "bin/", typeflag: tar.TypeDir},
+		{name: "bin/sh", typeflag: tar.TypeReg, mode: 0o755, body: strings.Repeat("s", 9000)},
+	})
+	top := layerFromEntries(t, []tarEntry{
+		{name: "app/", typeflag: tar.TypeDir},
+		{name: "app/main", typeflag: tar.TypeReg, mode: 0o755, body: "main"},
+		{name: "bin/.wh.sh", typeflag: tar.TypeReg},
+	})
+	pushImage(t, ref, v1.Config{}, base, top)
+	ctx := context.Background()
+
+	// Without the option nothing changes: no image, no flag.
+	plain := newTestStore(t)
+	img, err := plain.EnsureImage(ctx, ref)
+	if err != nil {
+		t.Fatalf("EnsureImage (plain): %v", err)
+	}
+	if img.EROFS {
+		t.Error("plain store reported EROFS")
+	}
+	if _, err := os.Stat(LayerEROFSPath(img.LayerDirs[0])); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("plain store wrote %s: %v", layerEROFSFileName, err)
+	}
+
+	store := newTestStore(t)
+	img, err = store.EnsureImageAs(ctx, ref, Form{EROFS: true})
+	if err != nil {
+		t.Fatalf("EnsureImageAs: %v", err)
+	}
+	if !img.EROFS {
+		t.Error("EROFS = false, want true")
+	}
+	for i, dir := range img.LayerDirs {
+		f, err := os.Open(LayerEROFSPath(dir))
+		if err != nil {
+			t.Fatalf("layer %d: %v", i, err)
+		}
+		defer f.Close()
+		fi, err := f.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Size()%erofsImageAlign != 0 {
+			t.Errorf("layer %d image size %d not a multiple of %d", i, fi.Size(), erofsImageAlign)
+		}
+		fsys, err := erofs.Open(f)
+		if err != nil {
+			t.Fatalf("layer %d: erofs.Open: %v", i, err)
+		}
+		switch i {
+		case 0:
+			if got, err := fs.ReadFile(fsys, "bin/sh"); err != nil || len(got) != 9000 {
+				t.Errorf("layer 0 bin/sh: len=%d err=%v", len(got), err)
+			}
+		case 1:
+			if got, err := fs.ReadFile(fsys, "app/main"); err != nil || string(got) != "main" {
+				t.Errorf("layer 1 app/main = %q, %v", got, err)
+			}
+			if fi, err := fs.Lstat(fsys, "bin/sh"); err != nil || fi.Mode()&fs.ModeCharDevice == 0 {
+				t.Errorf("layer 1 bin/sh whiteout: %v, %v", fi, err)
+			}
+		}
+		if d, err := LayerEROFSDigest(dir); err != nil || !strings.HasPrefix(d, "sha256:") {
+			t.Errorf("layer %d digest = %q, %v", i, d, err)
+		}
+		// Only layer.erofs is written for an EROFS consumer.
+		n, ok, err := recordedLayerSize(dir)
+		if err != nil || !ok {
+			t.Fatalf("layer %d size: ok=%v err=%v", i, ok, err)
+		}
+		if n != fi.Size() {
+			t.Errorf("layer %d recorded size %d, want image size %d", i, n, fi.Size())
+		}
+		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("layer %d fs/ should not be unpacked for an EROFS consumer: %v", i, err)
+		}
+	}
+
+	// A fresh store over the same pool hits without touching the registry.
+	store2, err := New(store.root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	img2, err := store2.EnsureImageAs(ctx, host+"/test/erofs@"+img.Digest.String(), Form{EROFS: true})
+	if err != nil {
+		t.Fatalf("EnsureImageAs (hit): %v", err)
+	}
+	if !img2.EROFS || !slices.Equal(img2.LayerDirs, img.LayerDirs) {
+		t.Errorf("hit = %+v, want EROFS with the same layer dirs", img2)
+	}
+
+	// The other form of a cached layer is not built beside it: a node's
+	// consumers use one form, so asking for fs/ over an EROFS layer is an
+	// error that names both forms.
+	if _, err := store2.EnsureImageAs(ctx, ref, Form{}); err == nil || !strings.Contains(err.Error(), "cached as layer.erofs") {
+		t.Errorf("EnsureImageAs(fs/) over an EROFS pool = %v, want an error naming the cached form", err)
+	}
+	for i, dir := range img.LayerDirs {
+		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("layer %d grew an fs/ tree from the refused pull: %v", i, err)
+		}
 	}
 }
