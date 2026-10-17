@@ -511,7 +511,6 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 	}
 	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "runner"}
 	worker := &ateapipb.ObjectRef{Name: "w-1"}
-	pause := rpcCall{ateapipb.Control_PauseActor_FullMethodName, &ateapipb.PauseActorRequest{Actor: actor}}
 	resume := rpcCall{ateapipb.Control_ResumeActor_FullMethodName, &ateapipb.ResumeActorRequest{Actor: actor}}
 	suspend := rpcCall{ateapipb.Control_SuspendActor_FullMethodName, &ateapipb.SuspendActorRequest{Actor: actor}}
 	revert := rpcCall{ateapipb.Control_RevertActor_FullMethodName, &ateapipb.RevertActorRequest{Actor: actor}}
@@ -570,17 +569,15 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 		wantCode codes.Code
 	}{
 		// Lifecycle operations need editor on the actor's atespace.
-		{"editor pauses actor", "editor", pause, codes.OK},
 		{"editor resumes actor", "editor", resume, codes.OK},
 		{"editor suspends actor", "editor", suspend, codes.OK},
 		{"editor reverts actor", "editor", revert, codes.OK},
-		{"viewer cannot pause actor", "viewer", pause, codes.PermissionDenied},
 		{"viewer cannot resume actor", "viewer", resume, codes.PermissionDenied},
 		{"viewer cannot suspend actor", "viewer", suspend, codes.PermissionDenied},
 		{"viewer cannot revert actor", "viewer", revert, codes.PermissionDenied},
 		{"editor of another atespace cannot resume actor", "outsider", resume, codes.PermissionDenied},
 		{"global viewer cannot suspend actor", "global-viewer", suspend, codes.PermissionDenied},
-		{"global owner pauses actor", "global-owner", pause, codes.OK},
+		{"global owner suspends actor", "global-owner", suspend, codes.OK},
 		{"bootstrap owner resumes actor", "bootstrap-owner", resume, codes.OK},
 
 		// Egress policies: viewers read, editors write.
@@ -689,13 +686,15 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		egressID     = "spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
 		routerID     = "spiffe://cluster.local/ns/ate-system/sa/atenet-router"
 		ateletID     = "spiffe://cluster.local/ns/ate-system/sa/atelet"
+		pluginID     = "spiffe://cluster.local/ns/ate-system/sa/ate-api-server"
 		otherID      = "spiffe://cluster.local/ns/ate-system/sa/other"
 	)
 	authorizer, _, err := New(ctx, pool, fgaServer, nil, SystemPrincipals{
-		ControllerSPIFFEID:    controllerID,
-		EgressGatewaySPIFFEID: egressID,
-		IngressRouterSPIFFEID: routerID,
-		AteletSPIFFEID:        ateletID,
+		ControllerSPIFFEID:       controllerID,
+		EgressGatewaySPIFFEID:    egressID,
+		IngressRouterSPIFFEID:    routerID,
+		AteletSPIFFEID:           ateletID,
+		APIServerSidecarSPIFFEID: pluginID,
 	})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
@@ -711,7 +710,6 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 	deleteActor := rpcCall{ateapipb.Control_DeleteActor_FullMethodName, &ateapipb.DeleteActorRequest{Actor: actor}}
 	listAllActors := rpcCall{ateapipb.Control_ListActors_FullMethodName, &ateapipb.ListActorsRequest{}}
 	listAtespaces := rpcCall{ateapipb.Control_ListAtespaces_FullMethodName, &ateapipb.ListAtespacesRequest{}}
-	pause := rpcCall{ateapipb.Control_PauseActor_FullMethodName, &ateapipb.PauseActorRequest{Actor: actor}}
 	resume := rpcCall{ateapipb.Control_ResumeActor_FullMethodName, &ateapipb.ResumeActorRequest{Actor: actor}}
 	suspend := rpcCall{ateapipb.Control_SuspendActor_FullMethodName, &ateapipb.SuspendActorRequest{Actor: actor}}
 	getEgress := rpcCall{ateapipb.Control_GetActorEgressPolicy_FullMethodName, &ateapipb.GetActorEgressPolicyRequest{Actor: actor}}
@@ -773,7 +771,6 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"ingress router resumes actor", mtls(routerID), resume, codes.OK},
 		{"ingress router lists actors", mtls(routerID), listAllActors, codes.OK},
 		{"ingress router cannot get actor", mtls(routerID), getActor, codes.PermissionDenied},
-		{"ingress router cannot pause actor", mtls(routerID), pause, codes.PermissionDenied},
 		{"ingress router cannot suspend actor", mtls(routerID), suspend, codes.PermissionDenied},
 		{"ingress router cannot delete actor", mtls(routerID), deleteActor, codes.PermissionDenied},
 		{"ingress router cannot get egress policy", mtls(routerID), getEgress, codes.PermissionDenied},
@@ -790,6 +787,15 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"atelet cannot resume actor", mtls(ateletID), resume, codes.PermissionDenied},
 		{"atelet cannot mint actor JWT", mtls(ateletID), mintJWT, codes.PermissionDenied},
 		{"atelet cannot get worker", mtls(ateletID), getWorker, codes.PermissionDenied},
+		// The objectstore control plugin reads actors to scope their storage
+		// credentials, and nothing else.
+		{"api server sidecar gets actor", mtls(pluginID), getActor, codes.OK},
+		{"api server sidecar cannot delete actor", mtls(pluginID), deleteActor, codes.PermissionDenied},
+		{"api server sidecar cannot list actors", mtls(pluginID), listAllActors, codes.PermissionDenied},
+		{"api server sidecar cannot get egress policy", mtls(pluginID), getEgress, codes.PermissionDenied},
+		{"api server sidecar cannot resume actor", mtls(pluginID), resume, codes.PermissionDenied},
+		{"api server sidecar cannot mint actor JWT", mtls(pluginID), mintJWT, codes.PermissionDenied},
+		{"api server sidecar cannot get worker", mtls(pluginID), getWorker, codes.PermissionDenied},
 
 		// A bearer token whose subject is a granted SPIFFE ID gets nothing.
 		{"jwt with controller ID cannot create worker", jwt(controllerID), createWorker, codes.PermissionDenied},
@@ -797,6 +803,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"jwt with egress ID cannot mint actor JWT", jwt(egressID), mintJWT, codes.PermissionDenied},
 		{"jwt with router ID cannot resume actor", jwt(routerID), resume, codes.PermissionDenied},
 		{"jwt with atelet ID cannot get egress policy", jwt(ateletID), getEgress, codes.PermissionDenied},
+		{"jwt with api server sidecar ID cannot get actor", jwt(pluginID), getActor, codes.PermissionDenied},
 
 		// Other SPIFFE IDs get nothing.
 		{"other mTLS identity cannot resume actor", mtls(otherID), resume, codes.PermissionDenied},

@@ -118,9 +118,7 @@ type WorkerPoolSandboxClass struct {
 	// name selects the sandbox runtime family, which drives the worker pod
 	// shape (KVM/vhost device mounts and node placement). The concrete binary
 	// is still selected by WorkerImage. The sandbox binaries themselves come
-	// from the SandboxConfig each ActorTemplate names (required).
-	//
-	// See Also: TODOs in ActorTemplate SandboxClass
+	// from the SandboxConfig referenced by ConfigRef (or the class default).
 	//
 	// +required
 	// +kubebuilder:validation:Enum=gvisor;microvm
@@ -154,6 +152,20 @@ func (s *WorkerPoolSpec) DefaultSandboxClass() SandboxClass {
 		return ""
 	}
 	return s.SandboxClasses[0].Name
+}
+
+// ResolvedSandboxConfig returns the name of the SandboxConfig the controller
+// confirmed for the class the pool's workers run, or "" if it has not
+// resolved one yet. It never returns pendingConfigRef: that config is not
+// confirmed yet.
+func (p *WorkerPool) ResolvedSandboxConfig() string {
+	class := p.Spec.DefaultSandboxClass()
+	for _, c := range p.Status.SandboxClasses {
+		if c.Name == class && c.ConfigRef != nil {
+			return c.ConfigRef.Name
+		}
+	}
+	return ""
 }
 
 type WorkerPoolStatus struct {

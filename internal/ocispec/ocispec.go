@@ -32,8 +32,8 @@ import (
 // specFile is the OCI spec file name within a bundle.
 const specFile = "config.json"
 
-// hostname is the UTS hostname for actor containers.
-const hostname = "actor"
+// Hostname is the UTS hostname for actor containers.
+const Hostname = "actor"
 
 // Options describes one actor container.
 type Options struct {
@@ -112,7 +112,7 @@ func Build(o Options) *specs.Spec {
 			Path:     "rootfs",
 			Readonly: false,
 		},
-		Hostname: hostname,
+		Hostname: Hostname,
 		Mounts: []specs.Mount{
 			{
 				Destination: "/proc",

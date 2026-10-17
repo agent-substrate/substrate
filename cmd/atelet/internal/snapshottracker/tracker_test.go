@@ -16,6 +16,7 @@ package snapshottracker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,10 +26,9 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
-	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"google.golang.org/grpc/codes"
+	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/client-go/util/workqueue"
@@ -69,6 +69,25 @@ func testRef(uuid string, generation int32, commitTime time.Time) SnapshotRef {
 	}
 }
 
+// testActor is the actor testRef's snapshots belong to.
+var testActor = resources.ActorRef{Atespace: "ate-demo", Name: "counter"}
+
+func TestSnapshotRefJSONKeepsTheActor(t *testing.T) {
+	ref := testRef("s1", 1, time.Unix(1_700_000_000, 0).UTC())
+	ref.Actor = testActor
+	data, err := json.Marshal(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got SnapshotRef
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Actor != testActor || !proto.Equal(got.Snapshot, ref.Snapshot) || !got.CommitTime.Equal(ref.CommitTime) {
+		t.Errorf("round trip = %+v, want %+v", got, ref)
+	}
+}
+
 func timeOf(ts *timestamppb.Timestamp) time.Time {
 	if ts == nil {
 		return time.Time{}
@@ -83,6 +102,7 @@ func uuidOf(r *ateletpb.SnapshotReport) string {
 // The delays of the trackers newStoreTracker builds. Nothing is due until a
 // test advances the tracker's clock.
 const (
+	testUploadDelay   = time.Hour
 	testDetachDelay   = 4 * time.Hour
 	testRetryDelay    = 30 * time.Minute
 	testMaxRetryDelay = 2 * time.Hour
@@ -98,13 +118,14 @@ type fakeSnapshotStore struct {
 
 	mu       sync.Mutex
 	calls    []string
+	actors   map[string]resources.ActorRef
 	uploaded map[string]bool
 	blocking bool
 	err      error
 }
 
 func newFakeSnapshotStore() *fakeSnapshotStore {
-	return &fakeSnapshotStore{started: make(chan string, 100), release: make(chan error)}
+	return &fakeSnapshotStore{started: make(chan string, 100), release: make(chan error), actors: map[string]resources.ActorRef{}}
 }
 
 // setBlocking makes later calls wait for release, or their context.
@@ -127,9 +148,17 @@ func (f *fakeSnapshotStore) uploads() []string {
 	return slices.Clone(f.calls)
 }
 
+// actorOf returns the actor the upload of the snapshot acted for.
+func (f *fakeSnapshotStore) actorOf(uuid string) resources.ActorRef {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.actors[uuid]
+}
+
 func (f *fakeSnapshotStore) UploadLocalSnapshot(ctx context.Context, _ string, ref SnapshotRef) (bool, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, ref.uuid())
+	f.actors[ref.uuid()] = ref.Actor
 	blocking, err := f.blocking, f.err
 	f.mu.Unlock()
 	f.started <- ref.uuid()
@@ -145,14 +174,13 @@ func (f *fakeSnapshotStore) UploadLocalSnapshot(ctx context.Context, _ string, r
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	uri := ref.Snapshot.GetObject().GetSnapshotUri()
-	if f.uploaded[uri] {
+	if f.uploaded[ref.uri()] {
 		return false, nil
 	}
 	if f.uploaded == nil {
 		f.uploaded = map[string]bool{}
 	}
-	f.uploaded[uri] = true
+	f.uploaded[ref.uri()] = true
 	return true, nil
 }
 
@@ -162,8 +190,7 @@ func (f *fakeSnapshotStore) UploadLocalSnapshot(ctx context.Context, _ string, r
 // once the test ends, before the node directories are restored.
 func newStoreTracker(t *testing.T, store Store) *Tracker {
 	t.Helper()
-	tr := New(t.Context(), store, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)))
-	tr.detachDelay = testDetachDelay
+	tr := New(t.Context(), store, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)), WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay))
 	tr.retries = workqueue.NewTypedItemExponentialFailureRateLimiter[string](testRetryDelay, testMaxRetryDelay)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -236,23 +263,43 @@ func waitClosed(t *testing.T, done <-chan struct{}, what string) {
 	}
 }
 
-// processNext takes the next actor from the queue of a tracker whose workers
-// have not started, and runs its background work as a worker would.
-func processNext(t *testing.T, tr *Tracker) {
+// processNext takes the next actor from kind's queue of a tracker whose
+// workers have not started, and runs its background work as a worker of that
+// queue would.
+func processNext(t *testing.T, tr *Tracker, kind opKind) {
 	t.Helper()
+	q := tr.queues[kind]
 	next := make(chan string, 1)
 	go func() {
-		if actorUID, shutdown := tr.queue.Get(); !shutdown {
+		if actorUID, shutdown := q.Get(); !shutdown {
 			next <- actorUID
 		}
 	}()
 	select {
 	case actorUID := <-next:
-		tr.syncActor(actorUID)
-		tr.queue.Done(actorUID)
+		tr.syncActor(actorUID, kind)
+		q.Done(actorUID)
 	case <-time.After(10 * time.Second):
-		t.Fatal("timed out waiting for an actor to be queued")
+		t.Fatalf("timed out waiting for an actor to be queued for %s", kind)
 	}
+}
+
+// queuedNow returns how many actors tr's queues hold ready for a worker,
+// leaving out those queued for later.
+func queuedNow(tr *Tracker) int {
+	n := 0
+	for _, q := range tr.queues {
+		n += q.Len()
+	}
+	return n
+}
+
+// setWorkers gives tr uploads upload workers and detaches detach workers in
+// place of the defaults, as WithUploadWorkers and WithDetachWorkers do. Call
+// it before Start.
+func setWorkers(tr *Tracker, uploads, detaches int) {
+	WithUploadWorkers(uploads)(tr)
+	WithDetachWorkers(detaches)(tr)
 }
 
 // State reports the latest local snapshot CommitLocal records and the latest
@@ -282,8 +329,8 @@ func TestTrackerState(t *testing.T) {
 	durable := s2
 	durable.UploadTime = s2.CommitTime.Add(time.Second)
 	st = tr.CommitDurable(trackedActorUID, durable)
-	if uuidOf(st.GetLatestLocal()) != "s1" {
-		t.Errorf("latest_local = %v after CommitDurable, want s1 until CommitLocal", st.GetLatestLocal())
+	if st.GetLatestLocal() != nil {
+		t.Errorf("latest_local = %v after CommitDurable, want unset: s2 supersedes s1", st.GetLatestLocal())
 	}
 	if got := st.GetLatestDurable(); uuidOf(got) != "s2" || !timeOf(got.GetDurableCompleteTime()).Equal(durable.UploadTime) {
 		t.Errorf("latest_durable = %v, want s2 uploaded at %v", got, durable.UploadTime)
@@ -318,28 +365,33 @@ func TestTrackerState(t *testing.T) {
 	}
 }
 
-// ForgetLocal drops the local snapshot and keeps the durable one. With no
-// local snapshot to drop, it writes nothing.
-func TestTrackerForgetLocal(t *testing.T) {
-	useTempNodeDirs(t)
-	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
-		t.Fatal(err)
-	}
+// LocalSnapshotsToKeep names the latest local snapshot. CommitDurable drops an
+// older local snapshot, which the durable one supersedes, but keeps a local
+// copy of the durable snapshot itself.
+func TestTrackerCommitDurableDropsOlderLocal(t *testing.T) {
+	useActorDir(t)
 	tr := newTracker(t)
-	tr.ForgetLocal(trackedActorUID)
-	if _, err := os.Stat(ateletpath.ActorSnapshotStateFile(trackedActorUID)); !os.IsNotExist(err) {
-		t.Errorf("state file after forgetting nothing: stat = %v, want none written", err)
+	if keep := tr.LocalSnapshotsToKeep(trackedActorUID); keep != nil {
+		t.Errorf("LocalSnapshotsToKeep for an untracked actor = %v, want nil", keep)
 	}
 
 	t0 := time.Now()
-	tr.CommitDurable(trackedActorUID, testRef("s1", 1, t0))
-	tr.CommitLocal(trackedActorUID, testRef("s2", 2, t0.Add(time.Minute)))
-	tr.ForgetLocal(trackedActorUID)
-	if st := newTracker(t).State(trackedActorUID); st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s1" {
-		t.Errorf("state from the file = %v, want no local snapshot and s1 still durable", st)
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
+	if keep := tr.LocalSnapshotsToKeep(trackedActorUID); !slices.Equal(keep, []string{"s1"}) {
+		t.Errorf("LocalSnapshotsToKeep = %v, want [s1]", keep)
 	}
-	if len(tr.actors) != 0 {
-		t.Errorf("in-memory actors = %d, want 0 after writing to file", len(tr.actors))
+	s2 := testRef("s2", 2, t0.Add(time.Minute))
+	tr.CommitDurable(trackedActorUID, s2)
+	if st := newTracker(t).State(trackedActorUID); st.GetLatestLocal() != nil || uuidOf(st.GetLatestDurable()) != "s2" {
+		t.Errorf("state from the file = %v, want no local snapshot and s2 durable", st)
+	}
+	if keep := tr.LocalSnapshotsToKeep(trackedActorUID); len(keep) != 0 {
+		t.Errorf("LocalSnapshotsToKeep after CommitDurable = %v, want none", keep)
+	}
+
+	tr.CommitLocal(trackedActorUID, s2)
+	if st := tr.CommitDurable(trackedActorUID, s2); uuidOf(st.GetLatestLocal()) != "s2" {
+		t.Errorf("latest_local after CommitDurable of the same snapshot = %v, want s2 kept", st.GetLatestLocal())
 	}
 }
 
@@ -385,46 +437,6 @@ func TestTrackerCommitPromoted(t *testing.T) {
 	}
 }
 
-// IsDurable reports whether a snapshot is recorded as LatestDurable, and fails
-// with FailedPrecondition when LatestDurable has the same UUID with a
-// different generation or URI.
-func TestTrackerIsDurable(t *testing.T) {
-	useTempNodeDirs(t)
-	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	tr := newTracker(t)
-	s1 := testRef("s1", 1, time.Now())
-
-	if ok, err := tr.IsDurable(trackedActorUID, s1); err != nil || ok {
-		t.Errorf("untracked: IsDurable = (%v, %v), want (false, nil)", ok, err)
-	}
-
-	tr.CommitLocal(trackedActorUID, s1)
-	if ok, err := tr.IsDurable(trackedActorUID, s1); err != nil || ok {
-		t.Errorf("local only: IsDurable = (%v, %v), want (false, nil)", ok, err)
-	}
-
-	tr.CommitPromoted(trackedActorUID, s1)
-	if ok, err := tr.IsDurable(trackedActorUID, s1); err != nil || !ok {
-		t.Errorf("matching durable: IsDurable = (%v, %v), want (true, nil)", ok, err)
-	}
-	if ok, err := tr.IsDurable(trackedActorUID, testRef("s2", 2, time.Now())); err != nil || ok {
-		t.Errorf("other UUID: IsDurable = (%v, %v), want (false, nil)", ok, err)
-	}
-
-	wrongGen := testRef("s1", 2, time.Now())
-	if _, err := tr.IsDurable(trackedActorUID, wrongGen); apierror.Code(err) != codes.FailedPrecondition {
-		t.Errorf("mismatched generation: IsDurable = %v, want FailedPrecondition", err)
-	}
-
-	wrongURI := testRef("s1", 1, time.Now())
-	wrongURI.Snapshot.Object.SnapshotUri += "-other"
-	if _, err := tr.IsDurable(trackedActorUID, wrongURI); apierror.Code(err) != codes.FailedPrecondition {
-		t.Errorf("mismatched URI: IsDurable = %v, want FailedPrecondition", err)
-	}
-}
-
 // A promote of a paused actor's local snapshot leaves its detach schedule as
 // it is: the detach its checkpoint scheduled, or none for an actor whose Run
 // or Restore has begun since the snapshot was taken.
@@ -451,6 +463,34 @@ func TestTrackerCommitPromotedKeepsDetachSchedule(t *testing.T) {
 				t.Errorf("detachDue after the promote = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+// Promoting the latest local snapshot makes it durable and clears its upload
+// due time, whereas promoting an older snapshot while newer local snapshots
+// still need an upload keeps the upload due when the oldest of them was.
+func TestTrackerCommitPromotedClearsUploadDue(t *testing.T) {
+	tr := newIdleTestTracker(t, newFakeSnapshotStore())
+	t0 := tr.clock.Now()
+	st := tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
+	if st.GetUploadDueTime() == nil {
+		t.Fatal("upload_due_time unset before promote, want set")
+	}
+
+	promoted := testRef("s1", 1, time.Time{})
+	promoted.UploadTime = t0.Add(time.Minute)
+	if st = tr.CommitPromoted(trackedActorUID, promoted); st.GetUploadDueTime() != nil {
+		t.Errorf("upload_due_time after promoting latest local = %v, want unset", st.GetUploadDueTime())
+	}
+
+	t2 := t0.Add(2 * time.Minute)
+	tr.CommitLocal(trackedActorUID, testRef("s2", 2, t2))
+	tr.CommitLocal(trackedActorUID, testRef("s3", 3, t2.Add(time.Minute)))
+	older := testRef("s0", 0, time.Time{})
+	older.UploadTime = t2.Add(2 * time.Minute)
+	st = tr.CommitPromoted(trackedActorUID, older)
+	if got, want := timeOf(st.GetUploadDueTime()), t2.Add(testUploadDelay); !got.Equal(want) {
+		t.Errorf("upload_due_time after promoting older snapshot = %v, want %v: an upload delay after s2", got, want)
 	}
 }
 

@@ -16,6 +16,7 @@ package snapshottracker
 
 import (
 	"context"
+	"time"
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
@@ -23,15 +24,29 @@ import (
 
 // CommitLocal records snap, just stored in the actor's local checkpoint
 // directory by a Checkpoint in either upload mode, as the actor's latest local
-// snapshot, schedules the actor's detach, and returns the actor's state.
+// snapshot, schedules the actor's detach and, if snap needs an upload (see
+// uploadDue), its upload, and returns the actor's state. An older snapshot's
+// upload in progress runs on, but an Uploading that keepUploading no longer
+// keeps is dropped. The Checkpoint then prunes the local snapshots
+// LocalSnapshotsToKeep no longer names.
 func (t *Tracker) CommitLocal(actorUID string, snap SnapshotRef) *ateletpb.ActorSnapshotState {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
 	a := t.findOrAddLocked(actorUID)
 	t.setLatestLocalLocked(a, snap)
-	// TODO: Use succeededLocked here once UPLOAD_MODE_DEFERRED uploads are
-	// implemented: a deferred checkpoint is then a successful end state, which
-	// starts the actor's backoff over.
+	if a.UndurableSince.IsZero() && a.uploadNeeded(snap) {
+		a.UndurableSince = snap.CommitTime
+	}
+	// Drop a failed upload that snap replaces in this save rather than leave
+	// it for a worker: keepUploading tells it apart by uploadingFailed, which
+	// the state file does not keep, so an atelet restart would resume it from
+	// a local copy the Checkpoint's prune deletes.
+	a.clearSupersededUploading()
+	// Start the backoff over unless Uploading is still kept and snap is not
+	// the next upload target: Uploading's retry then still waits it out.
+	if !a.keepUploading() || sameUUID(a.nextUploadTarget(), &snap) {
+		t.resetBackoffLocked(a)
+	}
 	t.saveLocked(a)
 	t.requeueLocked(a)
 	return t.stateLocked(a)
@@ -39,44 +54,44 @@ func (t *Tracker) CommitLocal(actorUID string, snap SnapshotRef) *ateletpb.Actor
 
 // CommitDurable records snap, just uploaded by a Checkpoint under
 // UPLOAD_MODE_IMMEDIATE, as the actor's latest durable snapshot, and returns
-// the actor's state. The Checkpoint then records its local copy with
-// CommitLocal, if it manages to keep one.
+// the actor's state. It drops an older LatestLocal, which snap supersedes, so
+// the Checkpoint's prune deletes it even if no local copy of snap is kept. The
+// Checkpoint then records its local copy with CommitLocal, if it manages to
+// keep one. An older snapshot's upload in progress runs on, and removes that
+// snapshot's local copy when it ends (see removeSupersededLocalCopy).
 func (t *Tracker) CommitDurable(actorUID string, snap SnapshotRef) *ateletpb.ActorSnapshotState {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
 	a := t.findOrAddLocked(actorUID)
 	a.LatestDurable = snap.clone()
+	a.UndurableSince = time.Time{}
+	if a.LatestLocal != nil && a.LatestLocal.generation() < snap.generation() {
+		a.clearLatestLocal()
+	}
 	t.succeededLocked(a)
 	return t.stateLocked(a)
 }
 
-// ForgetLocal drops the actor's latest local snapshot. Call it before deleting
-// the actor's local checkpoints, so the state never names a deleted snapshot,
-// even if the caller then fails.
-func (t *Tracker) ForgetLocal(actorUID string) {
-	t.lock(actorUID)
-	defer t.unlock(actorUID)
-	a := t.findLocked(actorUID)
-	if a == nil || a.LatestLocal == nil {
-		return
-	}
-	t.clearLatestLocalLocked(a)
-	t.addLocked(a)
-	t.saveLocked(a)
-	t.requeueLocked(a)
-}
-
-// IsDurable reports whether snap is recorded as the actor's latest durable
-// snapshot. It fails with FailedPrecondition when LatestDurable has snap's
-// UUID with a different generation or URI.
-func (t *Tracker) IsDurable(actorUID string, snap SnapshotRef) (bool, error) {
+// LocalSnapshotsToKeep returns the actor's local snapshots atelet still needs:
+// LatestLocal, and Uploading while a background upload is reading it or will
+// retry it. A Checkpoint prunes every other local snapshot once it has
+// committed its own. Until the next commit, a background upload only reads one
+// of these, so the prune never deletes a snapshot an upload needs.
+func (t *Tracker) LocalSnapshotsToKeep(actorUID string) []string {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
 	a := t.findLocked(actorUID)
 	if a == nil {
-		return false, nil
+		return nil
 	}
-	return a.isLatestDurable(snap)
+	var keep []string
+	if a.LatestLocal != nil {
+		keep = append(keep, a.LatestLocal.uuid())
+	}
+	if a.keepUploading() && !sameUUID(a.Uploading, a.LatestLocal) {
+		keep = append(keep, a.Uploading.uuid())
+	}
+	return keep
 }
 
 // CommitPromoted records snap, a local snapshot PromoteSnapshot made durable or
@@ -88,15 +103,19 @@ func (t *Tracker) CommitPromoted(actorUID string, snap SnapshotRef) *ateletpb.Ac
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
 	a := t.findOrAddLocked(actorUID)
-	uuid := snap.Snapshot.GetSnapshotUuid()
-	if d := a.LatestDurable; d == nil || d.Snapshot.GetSnapshotUuid() != uuid {
-		if l := a.LatestLocal; l != nil && l.Snapshot.GetSnapshotUuid() == uuid {
-			snap.CommitTime = l.CommitTime
+	if !sameUUID(a.LatestDurable, &snap) {
+		if sameUUID(a.LatestLocal, &snap) {
+			snap.CommitTime = a.LatestLocal.CommitTime
 			// The local copy takes the promoted Snapshot, which names where
 			// it is durable.
 			a.setLatestLocal(snap, a.DetachAt)
 		}
 		a.LatestDurable = snap.clone()
+	}
+	// The promote made LatestLocal durable, unless a newer checkpoint
+	// superseded the promoted snapshot.
+	if a.LatestLocal == nil || !a.uploadNeeded(*a.LatestLocal) {
+		a.UndurableSince = time.Time{}
 	}
 	t.succeededLocked(a)
 	return t.stateLocked(a)
@@ -115,8 +134,7 @@ func (t *Tracker) CommitPromoted(actorUID string, snap SnapshotRef) *ateletpb.Ac
 func (t *Tracker) BeginStart(ctx context.Context, actorUID string) (end func(), err error) {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
-	// Every operation is a detach.
-	a, err := t.waitIdleLocked(ctx, actorUID, nil)
+	a, err := t.waitForDetachLocked(ctx, actorUID)
 	if err != nil {
 		return nil, err
 	}
@@ -131,11 +149,13 @@ func (t *Tracker) BeginStart(ctx context.Context, actorUID string) (end func(), 
 				return nil, apierror.Unavailable("while unscheduling the detach of actor %s before starting it: %v", actorUID, err)
 			}
 		}
-		// No detach is scheduled now, so the actor's failed detaches have
-		// nothing left to retry.
-		t.resetBackoffLocked(a)
+		// No detach is scheduled now, so failed detaches have nothing left
+		// to retry. Keep the backoff when an upload is still due.
+		if _, ok := t.uploadDueLocked(a); !ok {
+			t.resetBackoffLocked(a)
+		}
 	}
-	return t.holdLocked(actorUID, a), nil
+	return t.holdLocked(actorUID, a, false), nil
 }
 
 // BeginCheckpoint records that a Checkpoint of the actor is in progress on this
@@ -146,8 +166,7 @@ func (t *Tracker) BeginStart(ctx context.Context, actorUID string) (end func(), 
 func (t *Tracker) BeginCheckpoint(ctx context.Context, actorUID string) (end func(), err error) {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
-	// Every operation is a detach.
-	a, err := t.waitIdleLocked(ctx, actorUID, nil)
+	a, err := t.waitForDetachLocked(ctx, actorUID)
 	if err != nil {
 		return nil, err
 	}
@@ -155,27 +174,55 @@ func (t *Tracker) BeginCheckpoint(ctx context.Context, actorUID string) (end fun
 	// zero, because the actor's Run or Restore on this node unscheduled the
 	// detach, or this is a retry of a Checkpoint that already committed its
 	// snapshot, whose detach stays scheduled.
-	return t.holdLocked(actorUID, a), nil
+	return t.holdLocked(actorUID, a, false), nil
 }
 
-// holdLocked counts a Run, Restore, or Checkpoint of the actor in progress on
-// its entry a, which holds detaches of the actor off, and returns the func that
-// ends it and queues the actor again, for a detach that came due meanwhile. An
-// actor atelet tracks nothing of yet (a nil a) is held too, so no detach can
-// begin on a snapshot its first Checkpoint commits before it ends.
-func (t *Tracker) holdLocked(actorUID string, a *actorSnapshots) (end func()) {
+// BeginPromote records that a PromoteSnapshot of snap is in progress on this
+// node, once any detach in progress and any background upload of snap have
+// finished. It reports whether snap is already the actor's latest durable
+// snapshot, and returns the func to call when the promote ends. atelet does
+// not start a detach or a background upload of the actor in between.
+func (t *Tracker) BeginPromote(ctx context.Context, actorUID string, snap SnapshotRef) (alreadyDurable bool, end func(), err error) {
+	t.lock(actorUID)
+	defer t.unlock(actorUID)
+	a, err := t.waitForDetachOrSnapshotUploadLocked(ctx, actorUID, snap)
+	if err != nil {
+		return false, nil, err
+	}
+	if a != nil {
+		alreadyDurable, err = a.isLatestDurable(snap)
+		if err != nil {
+			return false, nil, err
+		}
+	}
+	return alreadyDurable, t.holdLocked(actorUID, a, true), nil
+}
+
+// holdLocked counts a Run, Restore, Checkpoint, or PromoteSnapshot of the
+// actor in progress on its entry a, which holds detaches of the actor off (and
+// background uploads when promote is true), and returns the func that ends it
+// and queues the actor again. An actor atelet tracks nothing of yet (a nil a)
+// is held too, so no detach can begin on a snapshot its first Checkpoint
+// commits before it ends.
+func (t *Tracker) holdLocked(actorUID string, a *actorSnapshots, promote bool) (end func()) {
 	if a == nil {
 		a = &actorSnapshots{actorUID: actorUID}
 	}
 	t.addLocked(a)
 	a.holds++
+	if promote {
+		a.promotes++
+	}
 	return func() {
 		t.lock(actorUID)
 		defer t.unlock(actorUID)
 		a.holds--
+		if promote {
+			a.promotes--
+		}
 		if !t.tracksLocked(a) {
 			// Forget (via Terminate) dropped the actor while the Run, Restore,
-			// or Checkpoint was in progress.
+			// Checkpoint, or PromoteSnapshot was in progress.
 			return
 		}
 		t.requeueLocked(a)
@@ -183,8 +230,8 @@ func (t *Tracker) holdLocked(actorUID string, a *actorSnapshots) (end func()) {
 }
 
 // Forget drops the actor's state, in memory and on disk. It does not wait for
-// the actor's detach in progress: it cancels it, and the detach finds itself
-// abandoned when it ends.
+// the actor's operation in progress, an upload or a detach: it cancels it, and
+// the operation finds itself abandoned when it ends.
 func (t *Tracker) Forget(actorUID string) error {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)
@@ -202,17 +249,21 @@ func (t *Tracker) setLatestLocalLocked(a *actorSnapshots, snap SnapshotRef) {
 }
 
 // clearLatestLocalLocked records that atelet holds no local snapshot of the
-// actor, and lifts the backoff of its failed detaches, which have nothing left
+// actor, as after Detach pruned its local checkpoints, zeroes UndurableSince,
+// and lifts the backoff of its failed background work, which has nothing left
 // to retry.
 func (t *Tracker) clearLatestLocalLocked(a *actorSnapshots) {
+	a.Uploading = nil
+	a.uploadingFailed = false
+	a.UndurableSince = time.Time{}
 	a.clearLatestLocal()
 	t.resetBackoffLocked(a)
 }
 
 // succeededLocked finishes a change that leaves the actor in a successful end
-// state, such as its latest snapshot being durable: it starts the actor's
-// backoff over, saves the actor's state, and queues the actor for its next
-// background work.
+// state, such as a new local checkpoint or a durable latest snapshot: it
+// starts the actor's backoff over, saves the actor's state, and queues the
+// actor for its next background work.
 func (t *Tracker) succeededLocked(a *actorSnapshots) {
 	t.resetBackoffLocked(a)
 	t.saveLocked(a)

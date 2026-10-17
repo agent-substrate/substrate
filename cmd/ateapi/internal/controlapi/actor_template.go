@@ -44,12 +44,6 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 		return nil, resources.ToAPIError(errs)
 	}
 
-	// config_name is required; the declarative validation has already
-	// rejected an empty one.
-	if _, err := resolveTemplateSandboxConfig(s.sandboxConfigLister, in.GetSandboxConfig()); err != nil {
-		return nil, err
-	}
-
 	templateRef := resources.ActorTemplateRefFromActorTemplate(in)
 
 	stored, err := s.impl.CreateActorTemplate(ctx, in)

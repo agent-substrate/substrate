@@ -155,6 +155,26 @@ spec:
     - protocol: TCP
       port: connect-tls
 ---
+# ate-idp-server serves the actor JWT discovery document and key set. Relying
+# parties fetch them from pods in any namespace and, through an Ingress or a
+# load balancer, from outside the cluster. Both documents are public, so the
+# port admits any source.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ate-idp-server
+  namespace: ate-system
+spec:
+  podSelector:
+    matchLabels:
+      app: ate-idp-server
+  policyTypes:
+  - Ingress
+  ingress:
+  - ports:
+    - protocol: TCP
+      port: https
+---
 # The egress gateway is reached by atunnel in worker pods, which the
 # WorkerPool controller labels ate.dev/worker-pool, in whatever namespace the
 # WorkerPool lives in.

@@ -122,8 +122,8 @@ func memoryLimit(tmpl *ateapipb.ActorTemplate) string {
 }
 
 // TestRenderSubstrateFixtures_GVisor pins the default rendering: every
-// micro-VM block is gone, no placeholder survives, and the templates name the
-// cluster-wide gvisor-default SandboxConfig.
+// micro-VM block is gone, no placeholder survives, and the templates select
+// their fixture's pool.
 func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 	t.Setenv(sandboxClassEnv, "")
 	for _, fixture := range substrateFixtures {
@@ -142,14 +142,6 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 			}
 			for _, tmpl := range templates {
 				name := tmpl.GetMetadata().GetName()
-				if got := tmpl.GetSandboxConfig().GetSandboxClass(); got != "gvisor" {
-					t.Errorf("template %s sandboxClass = %q, want gvisor", name, got)
-				}
-				// The templates name the cluster-wide gvisor-default
-				// SandboxConfig explicitly: config_name is required.
-				if got := tmpl.GetSandboxConfig().GetConfigName(); got != "gvisor-default" {
-					t.Errorf("template %s configName = %q, want gvisor-default", name, got)
-				}
 				// An inline placeholder with an empty value must substitute, not
 				// delete its line: the location is what the golden snapshot needs.
 				location := tmpl.GetSnapshotConfig().GetStorageLocation()
@@ -171,8 +163,7 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 }
 
 // TestRenderSubstrateFixtures_MicroVM pins the micro-VM rendering: the
-// templates name the cluster-wide SandboxConfig and match the pool's class
-// and carry limits, and the snapshots land under their own prefix.
+// templates carry limits and the snapshots land under their own prefix.
 func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 	t.Setenv(sandboxClassEnv, SandboxClassMicroVM)
 	for _, fixture := range substrateFixtures {
@@ -191,14 +182,6 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 			}
 			for _, tmpl := range templates {
 				name := tmpl.GetMetadata().GetName()
-				if got := tmpl.GetSandboxConfig().GetSandboxClass(); got != SandboxClassMicroVM {
-					t.Errorf("template %s sandboxClass = %q, want microvm — it must match the pool's or no worker is eligible", name, got)
-				}
-				// Named explicitly (see fixture.go), so a missing or stale
-				// microvm install fails loudly.
-				if got := tmpl.GetSandboxConfig().GetConfigName(); got != "microvm" {
-					t.Errorf("template %s configName = %q, want microvm", name, got)
-				}
 				// The API rejects a template without limits.
 				if memoryLimit(tmpl) == "" {
 					t.Errorf("template %s declares no memory limit", name)

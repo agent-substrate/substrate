@@ -293,15 +293,15 @@ func TestRegisterWorker_SortsAttributes(t *testing.T) {
 		return got.GetWorker()
 	}
 
-	first := register(runtimeWith("cpu_features", "architecture"), runtimeWith("gvisor_asset_hash", "architecture"))
+	first := register(runtimeWith("cpu_features", "architecture"), runtimeWith("sandbox_bundle_hash", "architecture"))
 	if diff := cmp.Diff(runtimeWith("architecture", "cpu_features"), first.GetStatus().GetDefaultRuntime(), protocmp.Transform()); diff != "" {
 		t.Errorf("default_runtime not stored sorted by key (-want +got):\n%s", diff)
 	}
-	if diff := cmp.Diff([]*ateapipb.SandboxRuntime{runtimeWith("architecture", "gvisor_asset_hash")}, first.GetStatus().GetRestorableRuntimes(), protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff([]*ateapipb.SandboxRuntime{runtimeWith("architecture", "sandbox_bundle_hash")}, first.GetStatus().GetRestorableRuntimes(), protocmp.Transform()); diff != "" {
 		t.Errorf("restorable_runtimes not stored sorted by key (-want +got):\n%s", diff)
 	}
 
-	again := register(runtimeWith("architecture", "cpu_features"), runtimeWith("architecture", "gvisor_asset_hash"))
+	again := register(runtimeWith("architecture", "cpu_features"), runtimeWith("architecture", "sandbox_bundle_hash"))
 	if got, want := again.GetMetadata().GetVersion(), first.GetMetadata().GetVersion(); got != want {
 		t.Errorf("version = %d after a reordered repeat, want %d unchanged", got, want)
 	}

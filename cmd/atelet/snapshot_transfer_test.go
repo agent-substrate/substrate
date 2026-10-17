@@ -60,6 +60,7 @@ func newPluginHerder(t *testing.T, store objectstorage.ObjectStorage) *Atelet {
 		snapshotScratchDir: t.TempDir(),
 		snapshots:          snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 		sandboxAssetCache:  newTestAssetCache(t),
+		runtimes:           newRuntimeIndex(),
 	}
 }
 

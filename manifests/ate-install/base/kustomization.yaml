@@ -29,6 +29,7 @@ kind: Kustomization
 # either.
 resources:
   - ../ate-api-server.yaml
+  - ../ate-idp-server.yaml
   - ../ate-controller.yaml
   - ../atelet.yaml
   - ../atenet-router.yaml

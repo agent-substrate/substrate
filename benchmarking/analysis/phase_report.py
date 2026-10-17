@@ -99,7 +99,7 @@ PHASE_ORDER = [
     "tap", "vmm_launch", "vm_restore", "resume", "wakeup_probe", "activate",
     # atelet + ateworker checkpoint
     "pause", "checkpoint", "snapshot", "durable_dir", "rootfs_upper",
-    "worker_checkpoint", "teardown", "persist", "cleanup",
+    "fs_checkpoint", "worker_checkpoint", "teardown", "persist", "cleanup",
     UNATTRIBUTED, TOTAL,
 ]
 _PHASE_RANK = {name: i for i, name in enumerate(PHASE_ORDER)}

@@ -25,10 +25,11 @@ import (
 
 func testSystemPrincipals() SystemPrincipals {
 	return SystemPrincipals{
-		ControllerSPIFFEID:    installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
-		EgressGatewaySPIFFEID: installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace),
-		IngressRouterSPIFFEID: installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
-		AteletSPIFFEID:        installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
+		ControllerSPIFFEID:       installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
+		EgressGatewaySPIFFEID:    installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace),
+		IngressRouterSPIFFEID:    installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
+		AteletSPIFFEID:           installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
+		APIServerSidecarSPIFFEID: installdefaults.APIServerSPIFFEID(installdefaults.SystemNamespace),
 	}
 }
 
@@ -94,10 +95,11 @@ func TestParseBootstrapOwners(t *testing.T) {
 func TestParseSystemPrincipals(t *testing.T) {
 	const router = "spiffe://cluster.local/ns/ate-system/sa/atenet-router"
 	got, err := parseSystemPrincipals(SystemPrincipals{
-		ControllerSPIFFEID:    "spiffe://cluster.local/ns/ate-system/sa/ate-controller",
-		EgressGatewaySPIFFEID: router,
-		IngressRouterSPIFFEID: router,
-		AteletSPIFFEID:        "spiffe://cluster.local/ns/ate-system/sa/atelet",
+		ControllerSPIFFEID:       "spiffe://cluster.local/ns/ate-system/sa/ate-controller",
+		EgressGatewaySPIFFEID:    router,
+		IngressRouterSPIFFEID:    router,
+		AteletSPIFFEID:           "spiffe://cluster.local/ns/ate-system/sa/atelet",
+		APIServerSidecarSPIFFEID: "spiffe://cluster.local/ns/ate-system/sa/ate-api-server",
 	})
 	if err != nil {
 		t.Fatalf("parseSystemPrincipals failed: %v", err)
@@ -106,6 +108,7 @@ func TestParseSystemPrincipals(t *testing.T) {
 		"user:spiffe%3A//cluster.local/ns/ate-system/sa/ate-controller": {RoleController},
 		"user:spiffe%3A//cluster.local/ns/ate-system/sa/atenet-router":  {RoleEgressGateway, RoleIngressRouter},
 		"user:spiffe%3A//cluster.local/ns/ate-system/sa/atelet":         {RoleAtelet},
+		"user:spiffe%3A//cluster.local/ns/ate-system/sa/ate-api-server": {RoleAPIServerSidecar},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("parseSystemPrincipals (-want +got):\n%s", diff)
@@ -123,6 +126,7 @@ func TestNewRejectsInvalidSystemPrincipals(t *testing.T) {
 		{"empty egress gateway SPIFFE ID", func(p *SystemPrincipals) { p.EgressGatewaySPIFFEID = "" }, "invalid egress_gateway SPIFFE ID"},
 		{"empty ingress router SPIFFE ID", func(p *SystemPrincipals) { p.IngressRouterSPIFFEID = "" }, "invalid ingress_router SPIFFE ID"},
 		{"empty atelet SPIFFE ID", func(p *SystemPrincipals) { p.AteletSPIFFEID = "" }, "invalid atelet SPIFFE ID"},
+		{"empty api server sidecar SPIFFE ID", func(p *SystemPrincipals) { p.APIServerSidecarSPIFFEID = "" }, "invalid api_server_sidecar SPIFFE ID"},
 		{"bare ServiceAccount name", func(p *SystemPrincipals) { p.ControllerSPIFFEID = "ate-controller" }, "invalid controller SPIFFE ID"},
 		{"non-spiffe URI", func(p *SystemPrincipals) {
 			p.EgressGatewaySPIFFEID = "https://cluster.local/ns/ate-system/sa/atenet-egress"

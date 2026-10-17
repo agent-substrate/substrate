@@ -152,7 +152,7 @@ if [[ "${has_timeout_flag}" == "false" ]]; then
 fi
 
 # Assembled once so the two execution paths below cannot drift apart.
-test_argv=(-v "$target_path")
+test_argv=("$target_path")
 test_argv+=(${default_go_test_args[@]+"${default_go_test_args[@]}"})
 test_argv+=(${go_test_args[@]+"${go_test_args[@]}"})
 test_argv+=(-args --e2e)
@@ -175,6 +175,8 @@ fi
 # report consumers, the JSON event stream for failure analysis. Unset, this is a
 # plain go test and gotestsum is never built, so a local run needs no toolchain
 # beyond go itself.
+# NOTE: -v is only for plain go test, with -json it replaces the
+# -test.v=test2json that marks t.Error output in the JSON
 if [[ -n "${E2E_JUNIT_FILE:-}" ]]; then
     mkdir -p "$(dirname "${E2E_JUNIT_FILE}")"
     # Claim the path before running, so a run killed part-way still owes a file
@@ -188,5 +190,5 @@ if [[ -n "${E2E_JUNIT_FILE:-}" ]]; then
         -- "${test_argv[@]}"
 fi
 
-exec go test "${test_argv[@]}"
+exec go test -v "${test_argv[@]}"
 

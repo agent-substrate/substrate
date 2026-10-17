@@ -110,7 +110,7 @@ message VersionedSandboxCompat {
   string schema_version = 1;
 
   // Key-value compatibility attributes defined by this schema version, covering
-  // both runtime assets (e.g. "sandbox_runtime_hash") and effective guest
+  // both runtime assets (e.g. "sandbox_bundle_hash") and effective guest
   // hardware features after masking (e.g. "architecture", "cpu_features").
   // Matched against a snapshot under the same schema_version: every attribute
   // on the snapshot must be present on the worker with an equal value (except
@@ -130,7 +130,7 @@ message VersionedSandboxCompat {
 
 // AttributeEntry is a single key-value compatibility attribute.
 message AttributeEntry {
-  // Attribute name (e.g. "architecture", "cpu_features", "sandbox_runtime_hash").
+  // Attribute name (e.g. "architecture", "cpu_features", "sandbox_bundle_hash").
   //
   // +k8s:required
   // +k8s:maxLength=128
@@ -320,11 +320,10 @@ service Atelet {
 
   // Checkpoint saves the workload's state as a new snapshot of the actor and
   // returns the worker to a blank state. upload_config says when the snapshot
-  // becomes durable. Once the worker has captured the workload, and before the new
-  // snapshot is uploaded or stored locally, atelet deletes the actor's older
-  // local snapshots, except one still being uploaded, which it deletes when
-  // that upload ends. A Checkpoint that then fails to upload or store the new
-  // snapshot leaves the actor with no local snapshot.
+  // becomes durable. Once the new snapshot is uploaded or stored locally,
+  // atelet deletes the actor's older local snapshots, except one still being
+  // uploaded, which it deletes after that upload ends. A Checkpoint that fails
+  // before then leaves the actor's previous local snapshot in place.
   rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
 
   // Restore restores a workload from a snapshot onto a worker.
@@ -456,6 +455,16 @@ message RunRequest {
   // +k8s:optional
   // +k8s:minimum=0
   int64 memory_bytes = 11; // Memory limit in bytes.
+
+  // The runtime the assigned worker runs this actor under, from
+  // WorkerAssignment.sandbox_runtime.
+  //
+  // TODO: atelet still runs with sandbox_assets; a follow-up resolves the
+  // SandboxConfig version from this field, makes it required, and removes
+  // sandbox_assets.
+  //
+  // +k8s:optional
+  SandboxRuntime sandbox_runtime = 12;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -858,8 +867,7 @@ enum SnapshotFidelity {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_FIDELITY_VOLUMES = 1;
-  // Volumes plus the root filesystem changes made since boot. Served by the
-  // micro-VM runtime only; other runtimes reject requests carrying it.
+  // Volumes plus the root filesystem changes made since boot.
   SNAPSHOT_FIDELITY_ROOTFS = 2;
   // Capture process memory plus the full filesystem delta on top of the OCI
   // image (including any attached DurableDir volumes).
@@ -947,10 +955,12 @@ message ActorSnapshotState {
   // latest_durable is then the actor's latest snapshot.
   SnapshotReport latest_local = 1;
 
-  // The snapshot an in-flight upload is reading, if any. If it is
-  // latest_local, its local copy stays after the upload. If it is an older
-  // snapshot, whose upload began before latest_local was taken, atelet
-  // deletes its local copy once the upload ends.
+  // The snapshot a background upload has begun making durable, if any. Once
+  // begun, atelet keeps uploading it across checkpoints and restarts until
+  // it succeeds, fails and a newer local snapshot replaces it, or a newer
+  // snapshot becomes durable. If it is latest_local, its local copy stays
+  // after the upload. If it is an older snapshot, atelet deletes its local
+  // copy once the upload ends or is replaced.
   SnapshotReport uploading = 2;
 
   // The newest snapshot atelet knows is durable, whether or not the control
@@ -959,11 +969,10 @@ message ActorSnapshotState {
   // nothing about older durable snapshots.
   SnapshotReport latest_durable = 3;
 
-  // When atelet next plans to trigger a background upload, which will upload
-  // whichever snapshot is latest_local at the time of triggering. Unset when
-  // there is no latest_local, or it is already durable or being uploaded.
-  // Advisory: a promote or detach can upload it sooner, and an older
-  // snapshot's upload can delay it.
+  // When atelet next plans to trigger a background upload, of `uploading` if
+  // it is waiting to resume or retry, or of `latest_local` otherwise. Unset
+  // when neither needs an upload. Advisory: a promote or detach can upload
+  // it sooner, and an upload or promote in progress can delay it.
   google.protobuf.Timestamp upload_due_time = 4;
 }
 
@@ -979,19 +988,17 @@ message UploadConfig {
 enum UploadMode {
   UPLOAD_MODE_UNSPECIFIED = 0;
 
-  // Keep the snapshot locally and upload it on atelet's schedule: at most
-  // for atelet's upload-delay after the oldest snapshot of the actor
-  // that is not yet durable was taken. Snapshots superseded before then
-  // are never uploaded.
+  // Keep the snapshot locally and upload it on atelet's schedule: about
+  // atelet's upload-delay after the oldest snapshot of the actor that is not
+  // yet durable was taken, or later while an upload is in progress or
+  // failing. Snapshots superseded before then are never uploaded.
   //
   // Once the actor has stayed suspended on this node for atelet's
   // detach-delay, atelet detaches it: it uploads the latest local snapshot
-  // unless that is durable already, then deletes all the local snapshots. It
-  // never detaches a snapshot it cannot make durable, such as one without
-  // `snapshot.object`.
+  // unless that is durable already, then deletes all the local snapshots.
   //
-  // TODO: Temporarily the deferred upload is unimplemented: until the
-  // detach, only PromoteSnapshot uploads the snapshot.
+  // atelet never uploads or detaches a snapshot it cannot make durable, such
+  // as one without `snapshot.object`.
   UPLOAD_MODE_DEFERRED = 1;
 
   // Upload the snapshot synchronously before Checkpoint returns, and keep a
@@ -1059,9 +1066,14 @@ message CheckpointRequest {
 
 message CheckpointResponse {
   // The actor's state once the checkpoint is taken: latest_local is the new
-  // snapshot, unless UPLOAD_MODE_IMMEDIATE could not keep a local copy. The
-  // control plane can drop its entries for any local-only generation not
-  // named here: atelet has deleted it, and will never upload it.
+  // snapshot, unless UPLOAD_MODE_IMMEDIATE could not keep a local copy.
+  // atelet has deleted any local snapshot not named here, or deletes it once
+  // uploading ends.
+  //
+  // TODO: Add a snapshot garbage collection system for orphaned objects in
+  // object storage. atelet reports snapshot state to ateapi only on RPC
+  // responses, so a background upload superseded before the next response
+  // leaves objects ateapi never learned were durable.
   ActorSnapshotState state = 1;
 }
 
@@ -1130,10 +1142,20 @@ message RestoreRequest {
   int64 memory_bytes = 15; // Memory limit in bytes.
 
   // The sandbox binaries and pause image to restore with, resolved from the
-  // ActorTemplate's SandboxConfig.
+  // assigned worker pool's SandboxConfig.
   //
   // +k8s:required
   SandboxAssets sandbox_assets = 16;
+
+  // The runtime the assigned worker restores this actor under, from
+  // WorkerAssignment.sandbox_runtime.
+  //
+  // TODO: atelet still restores with sandbox_assets; a follow-up resolves the
+  // SandboxConfig version from this field, makes it required, and removes
+  // sandbox_assets.
+  //
+  // +k8s:optional
+  SandboxRuntime sandbox_runtime = 17;
 }
 
 message RestoreResponse {

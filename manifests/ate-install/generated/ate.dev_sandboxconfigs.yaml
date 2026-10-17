@@ -45,8 +45,9 @@ spec:
       openAPIV3Schema:
         description: |-
           SandboxConfig is cluster-scoped configuration describing the versions of the
-          sandbox binaries for a sandbox runtime family. It is referenced by an
-          ActorTemplate's sandbox_config.config_name (required) and decouples sandbox
+          sandbox binaries for a sandbox runtime family. It is referenced by a
+          WorkerPool's spec.sandboxClasses[].configRef (or resolved via the
+          sandboxconfig.ate.dev/is-class-default annotation) and decouples sandbox
           binary selection from the workload definition.
         properties:
           apiVersion:
@@ -79,9 +80,9 @@ spec:
               sandboxClass:
                 default: gvisor
                 description: |-
-                  sandboxClass is the sandbox runtime family this config applies to. An
-                  ActorTemplate only uses SandboxConfigs whose SandboxClass matches its
-                  sandbox_config.sandbox_class.
+                  sandboxClass is the sandbox runtime family this config applies to. A
+                  WorkerPool only uses SandboxConfigs whose sandboxClass matches the entry
+                  in its spec.sandboxClasses.
                 enum:
                 - gvisor
                 - microvm

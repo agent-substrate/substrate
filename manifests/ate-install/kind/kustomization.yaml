@@ -28,6 +28,7 @@ kind: Kustomization
 # WORKERS_PER_SIGNER override.
 resources:
   - ./ate-api-server
+  - ../ate-idp-server.yaml
   - ../ate-controller.yaml
   - ./atelet
   - ../atenet-router.yaml

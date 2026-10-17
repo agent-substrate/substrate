@@ -53,9 +53,6 @@ func TestUpdateTemplateLifecycle(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if test.fidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS && !e2e.IsMicroVM() {
-				t.Skipf("Skipping %s: only the micro-VM runtime serves this fidelity", test.name)
-			}
 			t.Parallel()
 			runUpdateTemplateTestCase(t, test.fidelity)
 		})
@@ -205,8 +202,9 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	// can only be updated while SUSPENDED) and preserves the in-memory counter
 	// when preferredFidelity is MEMORY.
 	t.Logf("Pausing Actor %q under template B...", actorID)
-	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 	}); err != nil {
 		t.Fatalf("failed to pause Actor under template B: %v", err)
 	}

@@ -158,7 +158,7 @@ kubectl ate delete atespace <atespace>
 ### Actor Templates
 
 An **actor template** describes what an actor runs: containers, volumes,
-snapshot policy, sandbox runtime, and worker selection. Templates live in an
+snapshot policy, and worker selection. Templates live in an
 atespace and are immutable — there is no update; delete and recreate to change
 one.
 
@@ -186,7 +186,6 @@ for a complete manifest example.
 |---|---|
 | `ATESPACE` | The atespace the template belongs to. |
 | `NAME` | The template's name. |
-| `SANDBOX CLASS` | The sandbox runtime family (`gvisor` or `microvm`). |
 | `GOLDEN TAG` | The golden tag's name once it exists; `DISABLED` when the template opts out of golden snapshot creation; empty while the golden build is still running. |
 | `ERROR` | `ERROR` when the golden build failed; `-o yaml` shows the full message. |
 | `AGE` | Time elapsed since the template was created. |
