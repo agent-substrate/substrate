@@ -128,6 +128,8 @@ var (
 	objectStorePluginSocket   = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and every sandbox asset is fetched through. A gs:// asset the plugin cannot serve is then read anonymously.")
 	snapshotUploadDelay       = pflag.Duration("snapshot-upload-delay", snapshottracker.DefaultUploadDelay, "How long after an actor's oldest snapshot not yet in object storage was taken atelet uploads the actor's latest local snapshot in the background; later while an upload is in progress or failing.")
 	snapshotDetachDelay       = pflag.Duration("snapshot-detach-delay", snapshottracker.DefaultDetachDelay, "How long an actor stays suspended on this node, its latest snapshot kept locally, before atelet detaches it in the background.")
+	snapshotUploadTimeout     = pflag.Duration("snapshot-upload-timeout", snapshottracker.DefaultUploadTimeout, "How long one background snapshot upload, including the one a background detach runs first, may run before atelet cancels and retries it, on top of the time the snapshot takes at --snapshot-upload-est-throughput-mib. Each consecutive failure doubles the next attempt's timeout, to at most 8 times the first's. 0 turns the timeout off.")
+	snapshotUploadEstMiBps    = pflag.Int("snapshot-upload-est-throughput-mib", snapshottracker.DefaultUploadEstThroughput>>20, "Estimated background snapshot upload throughput, in MiB per second of the snapshot's allocated size: each upload attempt may run --snapshot-upload-timeout plus the time the snapshot takes at this rate. 0 adds no time for the snapshot's size.")
 	snapshotUploadWorkers     = pflag.Int("snapshot-upload-workers", snapshottracker.DefaultUploadWorkers, "How many background snapshot uploads atelet runs at once.")
 	snapshotDetachWorkers     = pflag.Int("snapshot-detach-workers", snapshottracker.DefaultDetachWorkers, "How many background detaches atelet runs at once.")
 	snapshotReportWorkers     = pflag.Int("snapshot-report-workers", snapshottracker.DefaultReportWorkers, "How many background snapshot state reports atelet runs at once. 0 disables background reporting.")
@@ -377,6 +379,8 @@ func main() {
 	snapshots := snapshottracker.New(trackerCtx, store, clock.RealClock{},
 		snapshottracker.WithUploadDelay(*snapshotUploadDelay),
 		snapshottracker.WithDetachDelay(*snapshotDetachDelay),
+		snapshottracker.WithUploadTimeout(*snapshotUploadTimeout),
+		snapshottracker.WithUploadEstThroughput(int64(*snapshotUploadEstMiBps)<<20),
 		snapshottracker.WithUploadWorkers(*snapshotUploadWorkers),
 		snapshottracker.WithDetachWorkers(*snapshotDetachWorkers),
 		snapshottracker.WithInstruments(trackerInstruments),
@@ -568,16 +572,30 @@ func rejectStorageEnv() error {
 	return nil
 }
 
+// maxSnapshotUploadEstMiBps bounds --snapshot-upload-est-throughput-mib at
+// 1 TiB/s, far above any upload, so its value in bytes per second cannot
+// overflow.
+const maxSnapshotUploadEstMiBps = 1 << 20
+
 // validateSnapshotDelayFlags checks --snapshot-upload-delay,
-// --snapshot-detach-delay, and --snapshot-report-give-up-after: all three must
-// be positive, and the upload delay must not exceed the detach delay, since a
-// detach uploads the latest local snapshot anyway.
+// --snapshot-detach-delay, --snapshot-upload-timeout,
+// --snapshot-upload-est-throughput-mib, and --snapshot-report-give-up-after.
+// The delays must be positive, and the upload delay must not exceed the detach
+// delay, since a detach uploads the latest local snapshot anyway. The upload
+// timeout must not be negative, and the upload throughput must be between 0
+// and maxSnapshotUploadEstMiBps: 0 turns either off.
 func validateSnapshotDelayFlags() error {
 	if *snapshotUploadDelay <= 0 {
 		return fmt.Errorf("--snapshot-upload-delay %v must be > 0", *snapshotUploadDelay)
 	}
 	if *snapshotDetachDelay <= 0 {
 		return fmt.Errorf("--snapshot-detach-delay %v must be > 0", *snapshotDetachDelay)
+	}
+	if *snapshotUploadTimeout < 0 {
+		return fmt.Errorf("--snapshot-upload-timeout %v must be >= 0", *snapshotUploadTimeout)
+	}
+	if *snapshotUploadEstMiBps < 0 || *snapshotUploadEstMiBps > maxSnapshotUploadEstMiBps {
+		return fmt.Errorf("--snapshot-upload-est-throughput-mib %d must be between 0 and %d", *snapshotUploadEstMiBps, maxSnapshotUploadEstMiBps)
 	}
 	if *snapshotUploadDelay > *snapshotDetachDelay {
 		return fmt.Errorf("--snapshot-upload-delay %v must not exceed --snapshot-detach-delay %v", *snapshotUploadDelay, *snapshotDetachDelay)
@@ -863,16 +881,6 @@ func recordSnapshotSize(ctx context.Context, file string, size int64, templateAt
 	))
 }
 
-// allocatedBytes returns the disk space allocated to info (st_blocks * 512)
-// rather than its apparent size, which for sparse snapshot images reflects the
-// guest RAM ceiling; ext4/XFS/btrfs include delalloc blocks before writeback.
-func allocatedBytes(info os.FileInfo) int64 {
-	if st, ok := info.Sys().(*syscall.Stat_t); ok {
-		return int64(st.Blocks) * 512
-	}
-	return info.Size()
-}
-
 func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (_ *ateletpb.CheckpointResponse, err error) {
 	if errs := apivalidation.ValidateCheckpointRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
@@ -1123,7 +1131,7 @@ func (s *Atelet) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Checkpoi
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("checkpoint file %s is not a regular file", fileName)
 		}
-		recordSnapshotSize(ctx, fileName, allocatedBytes(info), req.GetActorTemplateAtespace(), req.GetActorTemplateName())
+		recordSnapshotSize(ctx, fileName, sparsefile.AllocatedBytes(info), req.GetActorTemplateAtespace(), req.GetActorTemplateName())
 
 		if err := root.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return fmt.Errorf("while creating parent directory for %s: %w", dst, err)

@@ -441,3 +441,86 @@ func TestBackgroundDetachFailureLogsWarning(t *testing.T) {
 		t.Errorf("logged %v, want %v", got, want)
 	}
 }
+
+// fakeClockTimeout's contexts end with DeadlineExceeded when the fake clock
+// reaches their deadline, and with Canceled when the parent or the returned
+// cancel func ends first.
+func TestFakeClockTimeout(t *testing.T) {
+	t.Run("clock reaches the deadline", func(t *testing.T) {
+		clk := clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0))
+		ctx, cancel := fakeClockTimeout(clk)(context.Background(), time.Minute)
+		defer cancel()
+		if got, ok := ctx.Deadline(); !ok || !got.Equal(clk.Now().Add(time.Minute)) {
+			t.Fatalf("Deadline() = (%v, %v), want %v", got, ok, clk.Now().Add(time.Minute))
+		}
+		clk.Step(time.Minute)
+		waitClosed(t, ctx.Done(), "fake clock timeout")
+		if got := ctx.Err(); !errors.Is(got, context.DeadlineExceeded) {
+			t.Errorf("Err() = %v, want DeadlineExceeded", got)
+		}
+	})
+
+	t.Run("parent canceled first", func(t *testing.T) {
+		clk := clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0))
+		parent, cancelParent := context.WithCancel(context.Background())
+		ctx, cancel := fakeClockTimeout(clk)(parent, time.Minute)
+		defer cancel()
+		cancelParent()
+		waitClosed(t, ctx.Done(), "parent cancel")
+		if got := ctx.Err(); !errors.Is(got, context.Canceled) {
+			t.Errorf("Err() = %v, want Canceled", got)
+		}
+	})
+
+	t.Run("canceled first", func(t *testing.T) {
+		clk := clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0))
+		ctx, cancel := fakeClockTimeout(clk)(context.Background(), time.Minute)
+		cancel()
+		waitClosed(t, ctx.Done(), "cancel")
+		if got := ctx.Err(); !errors.Is(got, context.Canceled) {
+			t.Errorf("Err() = %v, want Canceled", got)
+		}
+	})
+}
+
+// Outside tests, a background upload attempt times out on real time, whatever
+// clock the tracker measures due times on.
+func TestUploadTimeoutRunsOnRealTime(t *testing.T) {
+	tr := New(t.Context(), nil, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)))
+	ctx, cancel := tr.withTimeout(t.Context(), time.Hour)
+	defer cancel()
+	if got, ok := ctx.Deadline(); !ok || time.Until(got) < 59*time.Minute {
+		t.Errorf("Deadline() = (%v, %v), want an hour from now", got, ok)
+	}
+}
+
+// A timed-out background upload logs a warning rather than an info
+// cancellation, because only the upload attempt timed out while the operation
+// context itself was not canceled.
+func TestBackgroundUploadTimeoutLogsWarning(t *testing.T) {
+	store := newFakeSnapshotStore()
+	store.setBlocking(true)
+	tr := newTestTracker(t, store)
+
+	h := &recordingHandler{}
+	defaultLogger := slog.Default()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() { slog.SetDefault(defaultLogger) })
+
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+	done := startUpload(t, tr, store)
+	stepTo(tr, tr.clock.Now().Add(testUploadTimeout))
+	waitClosed(t, done, "the timed-out upload")
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var got []string
+	for _, r := range h.records {
+		if strings.HasPrefix(r.Message, "Snapshot operation") {
+			got = append(got, r.Level.String()+" "+r.Message)
+		}
+	}
+	if want := []string{"WARN Snapshot operation failed"}; !slices.Equal(got, want) {
+		t.Errorf("logged %v, want %v", got, want)
+	}
+}

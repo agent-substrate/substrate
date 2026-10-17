@@ -17,6 +17,7 @@ package snapshottracker
 import (
 	"context"
 	"log/slog"
+	"math"
 	"time"
 )
 
@@ -65,15 +66,53 @@ func (t *Tracker) cleanupSupersededUploadingLocked(a *actorSnapshots) func() {
 }
 
 // uploadSnapshot uploads target from its local copy to object storage and,
-// when background is true, records the background upload metric.
+// when background is true, bounds the attempt by uploadTimeoutFor, unless
+// uploadTimeout is zero or less, and records the background upload metric.
 func (t *Tracker) uploadSnapshot(ctx context.Context, actorUID string, target SnapshotRef, background bool) (uploaded bool, elapsed time.Duration, err error) {
+	uploadCtx := ctx
+	if background && t.uploadTimeout > 0 {
+		var cancel context.CancelFunc
+		uploadCtx, cancel = t.withTimeout(ctx, t.uploadTimeoutFor(ctx, actorUID, target))
+		defer cancel()
+	}
 	start := t.clock.Now()
-	uploaded, err = t.store.UploadLocalSnapshot(ctx, actorUID, target)
+	uploaded, err = t.store.UploadLocalSnapshot(uploadCtx, actorUID, target)
 	elapsed = t.clock.Since(start)
 	if background {
-		t.instruments.recordUpload(ctx, target, elapsed, uploaded, err)
+		t.instruments.recordUpload(uploadCtx, target, elapsed, uploaded, err)
 	}
 	return uploaded, elapsed, err
+}
+
+// uploadTimeoutFor returns how long a background upload attempt of target may
+// run: uploadTimeout, plus the time target's local copy takes to upload at
+// uploadEstThroughput, doubled for each consecutive failure of the actor's
+// background work, up to maxUploadTimeoutDoublings times. A copy that is
+// gone, as when the upload only probes for a committed manifest, adds nothing,
+// as does an uploadEstThroughput of zero or less. A failure to measure the
+// copy is logged, and the timeout allows for what was measured.
+func (t *Tracker) uploadTimeoutFor(ctx context.Context, actorUID string, target SnapshotRef) time.Duration {
+	timeout := t.uploadTimeout
+	if t.uploadEstThroughput > 0 {
+		size, err := localSnapshotSize(actorUID, target.uuid())
+		if err != nil {
+			slog.WarnContext(ctx, "Failed to measure a local snapshot to bound its upload", slog.String("actorUID", actorUID), slog.String("snapshot", target.uuid()), slog.Any("err", err))
+		}
+		timeout += uploadAllowance(size, t.uploadEstThroughput)
+	}
+	n := min(t.retries.NumRequeues(actorUID), maxUploadTimeoutDoublings)
+	// Saturate: a doubled timeout that wrapped negative would end at once.
+	return min(timeout, time.Duration(math.MaxInt64)>>n) << n
+}
+
+// uploadAllowance returns how long size bytes take to upload at
+// bytesPerSecond, rounded up to a whole second: zero when either is zero or
+// less.
+func uploadAllowance(size, bytesPerSecond int64) time.Duration {
+	if size <= 0 || bytesPerSecond <= 0 {
+		return 0
+	}
+	return time.Duration((size-1)/bytesPerSecond+1) * time.Second
 }
 
 // backgroundUpload runs op, a background upload of the actor's nextUploadTarget

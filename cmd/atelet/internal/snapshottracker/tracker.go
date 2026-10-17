@@ -119,6 +119,21 @@ type Tracker struct {
 	// this node before atelet detaches it: DefaultDetachDelay unless
 	// WithDetachDelay sets it.
 	detachDelay time.Duration
+	// uploadTimeout is how long one background upload attempt may run, on
+	// top of the time its snapshot takes at uploadEstThroughput (see
+	// uploadTimeoutFor), before it is canceled and retried:
+	// DefaultUploadTimeout unless WithUploadTimeout sets it. Zero or less
+	// turns the timeout off.
+	uploadTimeout time.Duration
+	// uploadEstThroughput, in bytes per second of a snapshot's allocated
+	// local size, is how fast atelet expects a background upload to run (see
+	// uploadTimeoutFor): DefaultUploadEstThroughput unless
+	// WithUploadEstThroughput sets it.
+	uploadEstThroughput int64
+	// withTimeout derives the context a background upload attempt runs under:
+	// context.WithTimeout, unless a test on a fake clock replaces it with one
+	// that times out on that clock.
+	withTimeout func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 	// instruments records the background uploads and detaches (how late they
 	// start, how long they take, and how they end) and reports
 	// undurableActorsTally. Nil without WithInstruments.
@@ -128,7 +143,9 @@ type Tracker struct {
 	// instruments.
 	undurableActorsTally *undurableActorsTally
 	// retries says how long an actor's background work is held back after a
-	// failure: longer with each consecutive failure for the actor.
+	// failure: longer with each consecutive failure for the actor. The count
+	// of those failures also lengthens its next upload attempt's timeout (see
+	// uploadTimeoutFor).
 	retries workqueue.TypedRateLimiter[string]
 	// workers is how many workers drain each kind's queue: DefaultUploadWorkers
 	// and DefaultDetachWorkers unless WithUploadWorkers and WithDetachWorkers
@@ -173,6 +190,28 @@ func WithUploadDelay(d time.Duration) Option {
 func WithDetachDelay(d time.Duration) Option {
 	return func(t *Tracker) {
 		t.detachDelay = d
+	}
+}
+
+// WithUploadTimeout sets how long one background upload attempt may run, on
+// top of the time its snapshot takes at the estimated upload throughput (see
+// WithUploadEstThroughput), before atelet cancels and retries it. Each
+// consecutive failure doubles the next attempt's timeout, to at most 8 times
+// the first's. Zero or less turns the timeout off, the time for the
+// snapshot's size included.
+func WithUploadTimeout(d time.Duration) Option {
+	return func(t *Tracker) {
+		t.uploadTimeout = d
+	}
+}
+
+// WithUploadEstThroughput sets how fast, in bytes per second of a snapshot's
+// allocated local size, atelet expects a background upload to run. Each
+// attempt's timeout allows for the snapshot to upload at this rate, on top of
+// WithUploadTimeout's. Zero or less adds no time for the snapshot's size.
+func WithUploadEstThroughput(bytesPerSecond int64) Option {
+	return func(t *Tracker) {
+		t.uploadEstThroughput = bytesPerSecond
 	}
 }
 
@@ -229,16 +268,19 @@ func WithReportGiveUpAfter(d time.Duration) Option {
 // schedules no uploads or detaches.
 func New(ctx context.Context, store Store, clk clock.WithTicker, opts ...Option) *Tracker {
 	t := &Tracker{
-		ctx:         ctx,
-		store:       store,
-		clock:       clk,
-		uploadDelay: DefaultUploadDelay,
-		detachDelay: DefaultDetachDelay,
-		retries:     workqueue.NewTypedItemExponentialFailureRateLimiter[string](snapshotRetryDelay, maxSnapshotRetryDelay),
-		workers:     [numOpKinds]int{opUpload: DefaultUploadWorkers, opDetach: DefaultDetachWorkers},
-		reporting:   newReportQueue(clk),
-		locks:       actorlock.New(),
-		actors:      map[string]*actorSnapshots{},
+		ctx:                 ctx,
+		store:               store,
+		clock:               clk,
+		uploadDelay:         DefaultUploadDelay,
+		detachDelay:         DefaultDetachDelay,
+		uploadTimeout:       DefaultUploadTimeout,
+		uploadEstThroughput: DefaultUploadEstThroughput,
+		withTimeout:         context.WithTimeout,
+		retries:             workqueue.NewTypedItemExponentialFailureRateLimiter[string](snapshotRetryDelay, maxSnapshotRetryDelay),
+		workers:             [numOpKinds]int{opUpload: DefaultUploadWorkers, opDetach: DefaultDetachWorkers},
+		reporting:           newReportQueue(clk),
+		locks:               actorlock.New(),
+		actors:              map[string]*actorSnapshots{},
 	}
 	for k := range t.queues {
 		t.queues[k] = workqueue.NewTypedDelayingQueueWithConfig(workqueue.TypedDelayingQueueConfig[string]{Clock: clk})

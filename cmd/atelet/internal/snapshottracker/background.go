@@ -24,8 +24,9 @@ import (
 )
 
 // Background work settings. All but the Default ones, which atelet's
-// --snapshot-upload-delay, --snapshot-detach-delay, --snapshot-upload-workers,
-// and --snapshot-detach-workers override, are fixed until they become flags or
+// --snapshot-upload-delay, --snapshot-detach-delay, --snapshot-upload-timeout,
+// --snapshot-upload-est-throughput-mib, --snapshot-upload-workers, and
+// --snapshot-detach-workers override, are fixed until they become flags or
 // per-request settings on UploadConfig.
 const (
 	// DefaultUploadDelay is how long by default after the oldest
@@ -35,6 +36,22 @@ const (
 	// DefaultDetachDelay is how long an actor stays suspended on this node by
 	// default, its latest snapshot kept locally, before atelet detaches it.
 	DefaultDetachDelay = 30 * time.Minute
+	// DefaultUploadTimeout is how long one background upload attempt,
+	// including the one a background detach runs first, may run by default,
+	// on top of the time its snapshot takes at the estimated upload
+	// throughput, before atelet cancels it. It keeps a wedged object-store
+	// call from holding a background worker forever.
+	DefaultUploadTimeout = 2 * time.Minute
+	// DefaultUploadEstThroughput, in bytes per second of a snapshot's
+	// allocated local size, is how fast atelet expects a background upload to
+	// run by default. Each attempt's timeout allows for the snapshot to upload
+	// at this rate, so a large snapshot is not cut off.
+	DefaultUploadEstThroughput = 100 << 20
+	// maxUploadTimeoutDoublings caps how many times consecutive failures of
+	// an actor's background work double its next upload attempt's timeout:
+	// at most 8 times the first attempt's, so an upload slower than the
+	// estimated throughput still finishes.
+	maxUploadTimeoutDoublings = 3
 	// snapshotRetryDelay is how long atelet holds an actor's background work
 	// back after a failure. Each further consecutive failure doubles it, up to
 	// maxSnapshotRetryDelay.

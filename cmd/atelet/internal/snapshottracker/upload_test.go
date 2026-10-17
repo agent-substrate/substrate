@@ -17,7 +17,9 @@ package snapshottracker
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -1231,5 +1233,188 @@ func TestTrackerOlderLocalDoesNotSupersedeUploading(t *testing.T) {
 	}
 	if _, err := os.Stat(s2Dir); err != nil {
 		t.Errorf("s2 local dir after upload: %v, want it kept", err)
+	}
+}
+
+// A background upload that runs past the upload timeout is canceled, kept in
+// Uploading, and retried once the retry delay has passed.
+func TestTrackerBackgroundUploadTimeout(t *testing.T) {
+	store := newFakeSnapshotStore()
+	store.setBlocking(true)
+	tr := newTestTracker(t, store)
+	t0 := tr.clock.Now()
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
+
+	done := startUpload(t, tr, store)
+	stepTo(tr, tr.clock.Now().Add(testUploadTimeout))
+	waitClosed(t, done, "the timed-out upload")
+
+	st := tr.State(trackedActorUID)
+	if st.GetLatestDurable() != nil {
+		t.Errorf("latest_durable after timeout = %v, want unset", st.GetLatestDurable())
+	}
+	if got := uuidOf(st.GetUploading()); got != "s1" {
+		t.Errorf("uploading after timeout = %q, want s1 kept to retry", got)
+	}
+	if got, want := timeOf(st.GetUploadDueTime()), tr.clock.Now().Add(testRetryDelay); !got.Equal(want) {
+		t.Errorf("upload_due_time after timeout = %v, want %v", got, want)
+	}
+
+	uploadNow(t, tr, store, nil)
+	if got := uuidOf(tr.State(trackedActorUID).GetLatestDurable()); got != "s1" {
+		t.Errorf("latest_durable after retry = %q, want s1", got)
+	}
+}
+
+// A background upload, and the upload a background detach runs first, may run
+// uploadTimeout plus the time the snapshot's local copy takes at
+// uploadEstThroughput, so a large snapshot is not cut off.
+func TestTrackerUploadTimeoutScalesWithSnapshotSize(t *testing.T) {
+	// writeLocalCopy writes a local copy of s1 of testUploadEstThroughput
+	// bytes, and returns how long an upload of it may run. The filesystem
+	// decides how much space the copy takes, so that is measured: it takes at
+	// least a second at testUploadEstThroughput.
+	writeLocalCopy := func(t *testing.T) time.Duration {
+		t.Helper()
+		writeDenseFile(t, filepath.Join(ateletpath.LocalSnapshotDir(trackedActorUID, "s1"), "pages.img"), testUploadEstThroughput)
+		size, err := localSnapshotSize(trackedActorUID, "s1")
+		if err != nil {
+			t.Fatalf("localSnapshotSize: %v", err)
+		}
+		scaled := testUploadTimeout + uploadAllowance(size, testUploadEstThroughput)
+		if scaled < testUploadTimeout+time.Second {
+			t.Fatalf("a local copy of %d bytes may upload for %v, want at least %v", size, scaled, testUploadTimeout+time.Second)
+		}
+		return scaled
+	}
+
+	t.Run("upload", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		store.setBlocking(true)
+		tr := newTestTracker(t, store)
+		scaled := writeLocalCopy(t)
+		tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+
+		done := startUpload(t, tr, store)
+		start := tr.clock.Now()
+		if got := store.lastDeadline().Sub(start); got != scaled {
+			t.Errorf("upload may run %v, want %v", got, scaled)
+		}
+		stepTo(tr, start.Add(scaled))
+		waitClosed(t, done, "the timed-out upload")
+	})
+
+	t.Run("detach", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		store.setBlocking(true)
+		tr := newIdleTestTracker(t, store)
+		setWorkers(tr, 0, DefaultDetachWorkers)
+		tr.Start()
+		scaled := writeLocalCopy(t)
+		tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+
+		stepTo(tr, detachDueOf(tr, trackedActorUID))
+		waitStarted(t, store)
+		if got := store.lastDeadline().Sub(tr.clock.Now()); got != scaled {
+			t.Errorf("the detach's upload may run %v, want %v", got, scaled)
+		}
+	})
+
+	t.Run("no local copy", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		store.setBlocking(true)
+		tr := newTestTracker(t, store)
+		tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+
+		startUpload(t, tr, store)
+		if got := store.lastDeadline().Sub(tr.clock.Now()); got != testUploadTimeout {
+			t.Errorf("upload may run %v, want %v", got, testUploadTimeout)
+		}
+	})
+
+	t.Run("zero throughput adds nothing", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		store.setBlocking(true)
+		useActorDir(t)
+		tr := newStoreTracker(t, store, WithUploadEstThroughput(0))
+		tr.Start()
+		writeLocalCopy(t)
+		tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+
+		startUpload(t, tr, store)
+		if got := store.lastDeadline().Sub(tr.clock.Now()); got != testUploadTimeout {
+			t.Errorf("upload may run %v, want %v", got, testUploadTimeout)
+		}
+	})
+}
+
+// Each consecutive failure of an actor's background work doubles its next
+// upload attempt's timeout, to at most 8 times the first's, so an upload
+// slower than the estimated throughput still finishes. Once the actor's work
+// succeeds, its next upload gets the first attempt's timeout again.
+func TestTrackerUploadTimeoutGrowsWithFailures(t *testing.T) {
+	store := newFakeSnapshotStore()
+	store.setBlocking(true)
+	tr := newIdleTestTracker(t, store)
+	// Without detach workers, no detach runs between the attempts.
+	setWorkers(tr, DefaultUploadWorkers, 0)
+	tr.Start()
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+
+	for attempt, factor := range []time.Duration{1, 2, 4, 8, 8} {
+		done := startUpload(t, tr, store)
+		start := tr.clock.Now()
+		want := factor * testUploadTimeout
+		if got := store.lastDeadline().Sub(start); got != want {
+			t.Fatalf("attempt %d may run %v, want %v", attempt+1, got, want)
+		}
+		stepTo(tr, start.Add(want))
+		waitClosed(t, done, "the timed-out upload")
+	}
+
+	uploadNow(t, tr, store, nil)
+	tr.CommitLocal(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
+	startUpload(t, tr, store)
+	if got := store.lastDeadline().Sub(tr.clock.Now()); got != testUploadTimeout {
+		t.Errorf("the upload after a success may run %v, want %v", got, testUploadTimeout)
+	}
+}
+
+// A timeout too long to double saturates rather than wrapping negative, which
+// would time the upload out at once.
+func TestUploadTimeoutForSaturates(t *testing.T) {
+	useActorDir(t)
+	tr := newStoreTracker(t, newFakeSnapshotStore(), WithUploadTimeout(math.MaxInt64))
+	for range maxUploadTimeoutDoublings {
+		tr.retries.When(trackedActorUID)
+	}
+	if got := tr.uploadTimeoutFor(t.Context(), trackedActorUID, testRef("s1", 1, tr.clock.Now())); got < math.MaxInt64/2 {
+		t.Errorf("uploadTimeoutFor = %v, want it to saturate near the longest time.Duration", got)
+	}
+}
+
+// uploadAllowance rounds the time a snapshot takes to upload up to a whole
+// second, and allows none for an empty snapshot or a throughput of zero or
+// less.
+func TestUploadAllowance(t *testing.T) {
+	const mib = 1 << 20
+	for _, tc := range []struct {
+		size, bytesPerSecond int64
+		want                 time.Duration
+	}{
+		{size: 0, bytesPerSecond: 100 * mib, want: 0},
+		{size: 100 * mib, bytesPerSecond: 0, want: 0},
+		{size: 100 * mib, bytesPerSecond: -1, want: 0},
+		{size: 1, bytesPerSecond: 100 * mib, want: time.Second},
+		{size: 100 * mib, bytesPerSecond: 100 * mib, want: time.Second},
+		{size: 100*mib + 1, bytesPerSecond: 100 * mib, want: 2 * time.Second},
+		// 102.4 seconds.
+		{size: 10 << 30, bytesPerSecond: 100 * mib, want: 103 * time.Second},
+		// Too large to multiply by time.Second before dividing.
+		{size: 1 << 40, bytesPerSecond: mib, want: mib * time.Second},
+	} {
+		if got := uploadAllowance(tc.size, tc.bytesPerSecond); got != tc.want {
+			t.Errorf("uploadAllowance(%d, %d) = %v, want %v", tc.size, tc.bytesPerSecond, got, tc.want)
+		}
 	}
 }

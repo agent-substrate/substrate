@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/client-go/util/workqueue"
+	"k8s.io/utils/clock"
 	clocktesting "k8s.io/utils/clock/testing"
 )
 
@@ -107,8 +108,12 @@ func uuidOf(r *ateletpb.SnapshotReport) string {
 const (
 	testUploadDelay   = time.Hour
 	testDetachDelay   = 4 * time.Hour
+	testUploadTimeout = 45 * time.Minute
 	testRetryDelay    = 30 * time.Minute
 	testMaxRetryDelay = 2 * time.Hour
+	// testUploadEstThroughput lets a test's local copy of a few MiB add whole
+	// seconds to its upload timeout.
+	testUploadEstThroughput = 1 << 20
 )
 
 // fakeSnapshotStore is a Store that records its calls. A call for a URI it
@@ -125,6 +130,9 @@ type fakeSnapshotStore struct {
 	uploaded map[string]bool
 	blocking bool
 	err      error
+	// deadline is the deadline of the latest call's context: zero if it has
+	// none.
+	deadline time.Time
 }
 
 func newFakeSnapshotStore() *fakeSnapshotStore {
@@ -158,10 +166,19 @@ func (f *fakeSnapshotStore) actorOf(uuid string) resources.ActorRef {
 	return f.actors[uuid]
 }
 
+// lastDeadline returns the deadline of the latest call's context: zero if it
+// has none.
+func (f *fakeSnapshotStore) lastDeadline() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deadline
+}
+
 func (f *fakeSnapshotStore) UploadLocalSnapshot(ctx context.Context, _ string, ref SnapshotRef) (bool, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, ref.uuid())
 	f.actors[ref.uuid()] = ref.Actor
+	f.deadline, _ = ctx.Deadline()
 	blocking, err := f.blocking, f.err
 	f.mu.Unlock()
 	f.started <- ref.uuid()
@@ -189,13 +206,16 @@ func (f *fakeSnapshotStore) UploadLocalSnapshot(ctx context.Context, _ string, r
 
 // newStoreTracker returns a tracker over store on a fake clock, with the test
 // delays and opts, whose workers have not started: background work starts only
-// once a test advances the clock to when it is due (see stepTo). Its workers
-// stop once the test ends, before the node directories are restored.
+// once a test advances the clock to when it is due (see stepTo), and an upload
+// attempt times out once a test advances the clock past its deadline. Its
+// workers stop once the test ends, before the node directories are restored.
 func newStoreTracker(t *testing.T, store Store, opts ...Option) *Tracker {
 	t.Helper()
-	opts = append([]Option{WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay)}, opts...)
-	tr := New(t.Context(), store, clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0)), opts...)
+	opts = append([]Option{WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay), WithUploadTimeout(testUploadTimeout), WithUploadEstThroughput(testUploadEstThroughput)}, opts...)
+	clk := clocktesting.NewFakeClock(time.Unix(1_700_000_000, 0))
+	tr := New(t.Context(), store, clk, opts...)
 	tr.retries = workqueue.NewTypedItemExponentialFailureRateLimiter[string](testRetryDelay, testMaxRetryDelay)
+	tr.withTimeout = fakeClockTimeout(clk)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -204,6 +224,66 @@ func newStoreTracker(t *testing.T, store Store, opts ...Option) *Tracker {
 		}
 	})
 	return tr
+}
+
+// fakeClockTimeout returns a context.WithTimeout that times out on clk: its
+// contexts end with context.DeadlineExceeded once clk reaches their deadline,
+// which Deadline reports in clk's time. Like context.WithTimeout's, its cancel
+// stops the timer before returning, so an upload that has ended leaves no
+// waiter on clk for tests that count them.
+func fakeClockTimeout(clk clock.Clock) func(context.Context, time.Duration) (context.Context, context.CancelFunc) {
+	return func(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+		c := &clockTimerCtx{Context: parent, deadline: clk.Now().Add(d), done: make(chan struct{})}
+		if err := parent.Err(); err != nil {
+			c.finish(err)
+			return c, func() {}
+		}
+		timer := clk.NewTimer(d)
+		go func() {
+			select {
+			case <-parent.Done():
+				timer.Stop()
+				c.finish(parent.Err())
+			case <-timer.C():
+				c.finish(context.DeadlineExceeded)
+			case <-c.done:
+			}
+		}()
+		return c, func() {
+			timer.Stop()
+			c.finish(context.Canceled)
+		}
+	}
+}
+
+// clockTimerCtx is a context fakeClockTimeout returns.
+type clockTimerCtx struct {
+	context.Context
+	deadline time.Time
+	done     chan struct{}
+
+	mu  sync.Mutex
+	err error
+}
+
+func (c *clockTimerCtx) Deadline() (time.Time, bool) { return c.deadline, true }
+func (c *clockTimerCtx) Done() <-chan struct{}       { return c.done }
+
+func (c *clockTimerCtx) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+// finish ends c with err, unless it has ended already.
+func (c *clockTimerCtx) finish(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return
+	}
+	c.err = err
+	close(c.done)
 }
 
 // newIdleTestTracker returns a tracker like newStoreTracker's, on fresh node

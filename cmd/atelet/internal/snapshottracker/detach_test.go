@@ -956,3 +956,56 @@ func TestTrackerDetachActsForTheActor(t *testing.T) {
 		}
 	})
 }
+
+// A background detach whose upload runs past the upload timeout fails, backs
+// off, and keeps the local snapshot to retry; a foreground Detach RPC is
+// bounded by its caller's context instead.
+func TestTrackerDetachUploadTimeout(t *testing.T) {
+	t.Run("background", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		store.setBlocking(true)
+		tr := newIdleTestTracker(t, store)
+		setWorkers(tr, 0, DefaultDetachWorkers)
+		tr.Start()
+		tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+		due := detachDueOf(tr, trackedActorUID)
+		stepTo(tr, due)
+		waitStarted(t, store)
+		done := opDone(t, tr, trackedActorUID)
+
+		stepTo(tr, tr.clock.Now().Add(testUploadTimeout))
+		waitClosed(t, done, "the timed-out background detach")
+
+		retryAt := tr.clock.Now().Add(testRetryDelay)
+		if got := detachDueOf(tr, trackedActorUID); !got.Equal(retryAt) {
+			t.Errorf("detach due after timeout = %v, want %v", got, retryAt)
+		}
+		if got := uuidOf(tr.State(trackedActorUID).GetLatestLocal()); got != "s1" {
+			t.Errorf("latest_local after timeout = %q, want s1 kept", got)
+		}
+
+		store.setBlocking(false)
+		detachNow(t, tr)
+		if got := tr.State(trackedActorUID).GetLatestLocal(); got != nil {
+			t.Errorf("latest_local after retry = %v, want unset", got)
+		}
+	})
+
+	t.Run("foreground ignores background upload timeout", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		store.setBlocking(true)
+		tr := newTestTracker(t, store)
+		tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+
+		detached := startDetach(t, tr)
+		waitStarted(t, store)
+		if d := store.lastDeadline(); !d.IsZero() {
+			t.Errorf("foreground Detach's upload has deadline %v, want none beyond its caller's", d)
+		}
+
+		store.release <- nil
+		if err := <-detached; err != nil {
+			t.Fatalf("Detach: %v", err)
+		}
+	})
+}
