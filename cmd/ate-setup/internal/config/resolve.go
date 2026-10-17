@@ -31,6 +31,10 @@ const (
 	OriginEnv
 	OriginFile
 	OriginFlag
+	// OriginKindProfile is a value a Kind install derived for itself because
+	// no channel supplied one. It is not a channel an operator writes to: the
+	// way to override it is any of the three above.
+	OriginKindProfile
 )
 
 // Describe names the origin the way the operator would refer to it, so an
@@ -43,6 +47,8 @@ func (o Origin) Describe(s Setting) string {
 		return "config." + s.Key
 	case OriginFlag:
 		return "--" + s.Flag
+	case OriginKindProfile:
+		return "the --kind profile"
 	default:
 		return "default"
 	}
@@ -56,6 +62,8 @@ func (o Origin) String() string {
 		return "file"
 	case OriginFlag:
 		return "flag"
+	case OriginKindProfile:
+		return "kind"
 	default:
 		return "default"
 	}
@@ -144,6 +152,23 @@ func kindDescription(k ValueKind) string {
 	default:
 		return "a string"
 	}
+}
+
+// set overrides a resolved value with one the installer derived rather than
+// read from a channel. Writing it back here, instead of onto Config alone,
+// is what puts it in the configuration report and the install record: both
+// are built from the resolved set, so a value that never reaches it is one
+// the operator is never told about and the record cannot replay.
+//
+// A key outside the registry is ignored; there is no setting to describe it
+// with and nothing would report it.
+func (r *Resolved) set(key, raw string, from Origin) {
+	v, ok := r.values[key]
+	if !ok {
+		return
+	}
+	v.Raw, v.From, v.Supplied = raw, from, true
+	r.values[key] = v
 }
 
 // Value returns the resolved value for a key. The bool is false for a key that

@@ -15,12 +15,23 @@
 package protoredact_test
 
 import (
-	"errors"
+	"io/fs"
+	"path"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/protoredact"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/proto/glutton"
+	"go.ate.dev/substrate/internal/proto/grpcechopb"
+	"go.ate.dev/substrate/internal/protoredact"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateconfigpb"
+	"go.ate.dev/substrate/pkg/proto/credproviderpb"
+	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -28,10 +39,11 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// TestForLogRecursesIntoRealMapFields walks real messages whose maps hold
+// TestRedactedRecursesIntoRealMapFields walks real messages whose maps hold
 // messages (atelet sandbox assets) and strings (ateapi selectors): map values
-// are visited without panicking and non-sensitive content is left intact.
-func TestForLogRecursesIntoRealMapFields(t *testing.T) {
+// are visited without panicking, labeled fields in them are masked, and
+// non-sensitive content is left intact.
+func TestRedactedRecursesIntoRealMapFields(t *testing.T) {
 	run := &ateletpb.RunRequest{
 		SandboxAssets: &ateletpb.SandboxAssets{
 			SandboxClass: "gvisor",
@@ -43,15 +55,21 @@ func TestForLogRecursesIntoRealMapFields(t *testing.T) {
 		},
 		Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{
 			Name: "main",
-			Env:  []*ateletpb.EnvEntry{{Name: "API_KEY", Value: "sk-secret"}},
+			Env:  []*ateletpb.EnvVar{{Name: "API_KEY", Value: "sk-secret"}},
 		}}},
 	}
-	got := protoredact.ForLog(run).(*ateletpb.RunRequest)
+	redacted, _ := protoredact.Redacted(run)
+	got := redacted.(*ateletpb.RunRequest)
 	if v := got.GetSpec().GetContainers()[0].GetEnv()[0].GetValue(); v != protoredact.Placeholder {
 		t.Fatalf("env value = %q, want placeholder", v)
 	}
-	if u := got.GetSandboxAssets().GetAssets()["amd64"].GetFiles()["runsc"].GetUrl(); u != "https://assets.example/runsc" {
-		t.Fatalf("map-of-message content was altered: %q", u)
+	// Inside the map value, the labeled url is masked and the sha256 is kept.
+	file := got.GetSandboxAssets().GetAssets()["amd64"].GetFiles()["runsc"]
+	if u := file.GetUrl(); u != protoredact.Placeholder {
+		t.Fatalf("asset url in a map value = %q, want placeholder", u)
+	}
+	if sum := file.GetSha256(); sum != "abc123" {
+		t.Fatalf("map-of-message content was altered: sha256 = %q", sum)
 	}
 	if run.GetSpec().GetContainers()[0].GetEnv()[0].GetValue() != "sk-secret" {
 		t.Fatal("original mutated")
@@ -63,7 +81,8 @@ func TestForLogRecursesIntoRealMapFields(t *testing.T) {
 			Name: "c", Env: []*ateapipb.EnvVar{{Name: "TOKEN", Value: "t0p"}},
 		}},
 	}
-	gotTpl := protoredact.ForLog(tpl).(*ateapipb.ActorTemplate)
+	redactedTpl, _ := protoredact.Redacted(tpl)
+	gotTpl := redactedTpl.(*ateapipb.ActorTemplate)
 	if gotTpl.GetWorkerSelector().GetMatchLabels()["workload"] != "agent" {
 		t.Fatal("string map was altered")
 	}
@@ -159,7 +178,7 @@ func redactTestSchema(t *testing.T) protoreflect.MessageDescriptor {
 	return fd.Messages().ByName("Outer")
 }
 
-func TestRedactCoversEveryFieldShape(t *testing.T) {
+func TestRedactedCoversEveryFieldShape(t *testing.T) {
 	outerDesc := redactTestSchema(t)
 	innerDesc := outerDesc.ParentFile().Messages().ByName("Inner")
 	newInner := func(secret, name string) protoreflect.Message {
@@ -185,7 +204,8 @@ func TestRedactCoversEveryFieldShape(t *testing.T) {
 	outer.Mutable(f("secret_many")).List().Append(protoreflect.ValueOfMessage(newInner("s5", "n5")))
 	outer.Set(f("secret_choice"), protoreflect.ValueOfString("chosen-secret"))
 
-	protoredact.Redact(outer)
+	redacted, _ := protoredact.Redacted(outer)
+	outer = redacted.(*dynamicpb.Message)
 
 	secretOf := func(m protoreflect.Message) string { return m.Get(innerDesc.Fields().ByName("secret")).String() }
 	nameOf := func(m protoreflect.Message) string { return m.Get(innerDesc.Fields().ByName("name")).String() }
@@ -227,7 +247,7 @@ func TestRedactCoversEveryFieldShape(t *testing.T) {
 	}
 }
 
-func TestRedactLeavesUnsetFieldsUnset(t *testing.T) {
+func TestRedactedLeavesUnsetFieldsUnset(t *testing.T) {
 	outerDesc := redactTestSchema(t)
 	innerDesc := outerDesc.ParentFile().Messages().ByName("Inner")
 	// Inner with no secret set, nested under an unlabeled field.
@@ -237,7 +257,8 @@ func TestRedactLeavesUnsetFieldsUnset(t *testing.T) {
 	outer.Set(outerDesc.Fields().ByName("one"), protoreflect.ValueOfMessage(inner))
 	// A labeled oneof left unselected.
 
-	protoredact.Redact(outer)
+	redacted, _ := protoredact.Redacted(outer)
+	outer = redacted.(*dynamicpb.Message)
 
 	got := outer.Get(outerDesc.Fields().ByName("one")).Message()
 	if got.Has(innerDesc.Fields().ByName("secret")) {
@@ -254,17 +275,237 @@ func TestRedactLeavesUnsetFieldsUnset(t *testing.T) {
 	}
 }
 
-func TestForLogPassesThroughNonProtoValues(t *testing.T) {
-	for _, v := range []any{nil, "a string", 42, errors.New("boom"), struct{ X int }{1}} {
-		if got := protoredact.ForLog(v); got != v {
-			t.Errorf("protoredact.ForLog(%#v) = %#v, want the value unchanged", v, got)
+func TestRedactedHandlesTypedNilWithoutPanicking(t *testing.T) {
+	// A typed nil proto pointer, as a handler returns alongside an error and
+	// the interceptor then logs, must come back as a nil message of the same
+	// type, for a redactable type and for a clean one alike.
+	var jwt *ateapipb.MintActorJwtResponse
+	if r, changed := protoredact.Redacted(jwt); changed {
+		t.Errorf("typed nil redactable: reported changed, got %#v", r)
+	} else if m, ok := r.(*ateapipb.MintActorJwtResponse); !ok || m != nil {
+		t.Errorf("typed nil redactable: got %#v", r)
+	}
+	var ref *ateapipb.ObjectRef
+	if r, changed := protoredact.Redacted(ref); changed {
+		t.Errorf("typed nil clean: reported changed, got %#v", r)
+	} else if m, ok := r.(*ateapipb.ObjectRef); !ok || m != nil {
+		t.Errorf("typed nil clean: got %#v", r)
+	}
+}
+
+func TestRedactedReturnsMessagesWithNothingToMaskWithoutCopying(t *testing.T) {
+	// Types with no path to a debug_redact field, and messages of a labeled
+	// type whose labeled fields are all unset, come back as the same pointer:
+	// nothing to mask, nothing to copy.
+	for _, m := range []proto.Message{
+		&ateapipb.ListActorsResponse{Actors: []*ateapipb.Actor{{Metadata: &ateapipb.ResourceMetadata{Name: "a"}}}},
+		&ateapipb.ObjectRef{Atespace: "s", Name: "n"},
+		&ateapipb.Worker{},
+		&ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Name: "c", Image: "img"}}},
+		&ateapipb.ListActorTemplatesResponse{ActorTemplates: []*ateapipb.ActorTemplate{{Containers: []*ateapipb.Container{{Name: "c"}}}}},
+		&ateapipb.MintActorJwtResponse{},
+		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvVar{{Name: "K"}}}}}},
+	} {
+		if protoredact.NeedsRedaction(m) {
+			t.Errorf("%T: NeedsRedaction should be false", m)
+		}
+		if got, changed := protoredact.Redacted(m); changed || got != m {
+			t.Errorf("%T: expected the same message back and changed=false, got changed=%v", m, changed)
 		}
 	}
-	// A typed nil proto pointer, as a handler may return alongside an error,
-	// must not panic and must come back as a nil message.
-	var typedNil *ateapipb.MintActorJWTResponse
-	got := protoredact.ForLog(typedNil)
-	if m, ok := got.(*ateapipb.MintActorJWTResponse); !ok || m != nil {
-		t.Errorf("typed nil: got %#v", got)
+	// A populated labeled field, however deep, forces a masked copy.
+	for _, m := range []proto.Message{
+		&ateapipb.MintActorJwtResponse{ActorJwt: "t"},
+		&ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Env: []*ateapipb.EnvVar{{Name: "K", Value: "v"}}}}},
+		&ateapipb.ListActorTemplatesResponse{ActorTemplates: []*ateapipb.ActorTemplate{{}, {Containers: []*ateapipb.Container{{}, {Env: []*ateapipb.EnvVar{{Name: "K", Value: "v"}}}}}}},
+		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvVar{{Name: "K", Value: "v"}}}}}},
+	} {
+		if !protoredact.NeedsRedaction(m) {
+			t.Errorf("%T: NeedsRedaction should be true", m)
+		}
+		if got, changed := protoredact.Redacted(m); !changed || got == m {
+			t.Errorf("%T: expected a copy and changed=true, got changed=%v", m, changed)
+		}
+	}
+	if r, changed := protoredact.Redacted(nil); protoredact.NeedsRedaction(nil) || changed || r != nil {
+		t.Error("nil message should be reported clean and returned as nil")
+	}
+}
+
+func TestNeedsRedactionToleratesTypedNilOfAnyImplementation(t *testing.T) {
+	// A typed nil generated message answers ProtoReflect safely; a typed nil
+	// dynamicpb.Message returns the nil receiver, which faults on use. Both
+	// must be reported clean and returned unchanged.
+	var gen *ateapipb.MintActorJwtResponse
+	var dyn *dynamicpb.Message
+	for _, m := range []proto.Message{gen, dyn} {
+		if protoredact.NeedsRedaction(m) {
+			t.Errorf("%T typed nil: NeedsRedaction should be false", m)
+		}
+		if got, changed := protoredact.Redacted(m); changed || got != m {
+			t.Errorf("%T typed nil: got %#v (changed=%v), want the same value back", m, got, changed)
+		}
+	}
+}
+
+func TestNeedsRedactionIsSafeUnderConcurrentFirstUse(t *testing.T) {
+	// The per-type answer is memoized on first sight; many goroutines
+	// meeting several types at once must agree and not race.
+	msgs := []proto.Message{
+		&ateapipb.MintActorJwtResponse{ActorJwt: "t"},
+		&ateapipb.ListActorsResponse{},
+		&ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Env: []*ateapipb.EnvVar{{Name: "K", Value: "v"}}}}},
+		&ateapipb.Worker{},
+		&ateletpb.RunRequest{Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Env: []*ateletpb.EnvVar{{Name: "K", Value: "v"}}}}}},
+	}
+	want := []bool{true, false, true, false, true}
+	var wg sync.WaitGroup
+	for g := 0; g < 32; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i, m := range msgs {
+				if got := protoredact.NeedsRedaction(m); got != want[i] {
+					t.Errorf("%T: NeedsRedaction = %v, want %v", m, got, want[i])
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// ourProtoFiles is every proto file in this module whose messages the log
+// handler can be handed. TestOurProtoFilesAreAllListed keeps it in step with
+// the .proto files on disk.
+var ourProtoFiles = []protoreflect.FileDescriptor{
+	ateapipb.File_ateapi_proto,
+	ateletpb.File_atelet_proto,
+	ateworkerpb.File_ateworker_proto,
+	ateconfigpb.File_apiconfig_proto,
+	credproviderpb.File_credprovider_proto,
+	glutton.File_glutton_proto,
+	grpcechopb.File_grpcecho_proto,
+	objectstorev1.File_objectstore_proto,
+}
+
+// forEachField calls fn for every field of every message in ourProtoFiles,
+// nested messages included.
+func forEachField(fn func(protoreflect.FieldDescriptor)) {
+	var walk func(protoreflect.MessageDescriptors)
+	walk = func(mds protoreflect.MessageDescriptors) {
+		for i := 0; i < mds.Len(); i++ {
+			md := mds.Get(i)
+			fds := md.Fields()
+			for j := 0; j < fds.Len(); j++ {
+				fn(fds.Get(j))
+			}
+			walk(md.Messages())
+		}
+	}
+	for _, file := range ourProtoFiles {
+		walk(file.Messages())
+	}
+}
+
+func isDebugRedact(fd protoreflect.FieldDescriptor) bool {
+	opts, ok := fd.Options().(*descriptorpb.FieldOptions)
+	return ok && opts.GetDebugRedact()
+}
+
+// TestDebugRedactFieldsArePinned lists every field across our protos that
+// carries debug_redact. It fails when a label is added or removed so the
+// change is reviewed as a deliberate decision about what the logs may show.
+func TestDebugRedactFieldsArePinned(t *testing.T) {
+	want := map[string]bool{
+		"ateapi.EnvVar.value":                            true,
+		"ateapi.MintActorJwtResponse.actor_jwt":          true,
+		"ateapi.MintWorkerActorJwtResponse.actor_jwt":    true,
+		"atelet.AssetFile.url":                           true,
+		"atelet.EnvVar.value":                            true,
+		"ateworker.ContainerSpec.env":                    true,
+		"credprovider.FetchSecretResponse.opaque_bytes":  true,
+		"objectstore.v1.FetchAssetRequest.asset_uri":     true,
+		"objectstore.v1.FetchSnapshotRequest.actor_jwt":  true,
+		"objectstore.v1.UploadSnapshotRequest.actor_jwt": true,
+	}
+	got := map[string]bool{}
+	forEachField(func(fd protoreflect.FieldDescriptor) {
+		if isDebugRedact(fd) {
+			got[string(fd.FullName())] = true
+		}
+	})
+	for name := range want {
+		if !got[name] {
+			t.Errorf("%s lost its debug_redact label; the log handler would write it in clear", name)
+		}
+	}
+	for name := range got {
+		if !want[name] {
+			t.Errorf("%s is newly marked debug_redact; add it to this list if that is intended", name)
+		}
+	}
+}
+
+// secretLikeName matches field names that usually hold a credential.
+var secretLikeName = regexp.MustCompile(`(?i)jwt|token|secret|passw|credential|private_?key|api_?key|bearer|authorization|cookie`)
+
+// TestSecretLikeFieldsAreLabeled catches a new field that looks like it holds
+// a credential but was added without debug_redact, which the log handler
+// would then write in clear. A field that only names or configures a
+// credential goes in notSecret with the reason.
+func TestSecretLikeFieldsAreLabeled(t *testing.T) {
+	notSecret := map[string]string{
+		"page_token":                             "opaque list cursor",
+		"next_page_token":                        "opaque list cursor",
+		"ateapi.CredentialHeader.credential_uri": "ate-secret:// reference to a credential, not the value",
+		"ateapi.CredentialHeader.actor_jwt":      "ActorJwtSource: audiences and lifetime for minting, not a token",
+	}
+	forEachField(func(fd protoreflect.FieldDescriptor) {
+		if !secretLikeName.MatchString(string(fd.Name())) || isDebugRedact(fd) {
+			return
+		}
+		if _, ok := notSecret[string(fd.FullName())]; ok {
+			return
+		}
+		if _, ok := notSecret[string(fd.Name())]; ok {
+			return
+		}
+		t.Errorf("%s looks like a credential but has no debug_redact; label it, or add it to notSecret with the reason", fd.FullName())
+	})
+}
+
+// TestOurProtoFilesAreAllListed fails when a .proto file is added to the
+// module's Go source without being added to ourProtoFiles, so the two tests
+// above cover it. Only cmd, internal and pkg are walked, where every proto
+// with generated Go code lives; vendored and third-party protos are out of
+// scope, as are tool installs elsewhere in the tree (the locust codegen
+// virtualenv ships google/protobuf/*.proto).
+func TestOurProtoFilesAreAllListed(t *testing.T) {
+	listed := map[string]bool{}
+	for _, file := range ourProtoFiles {
+		listed[path.Base(file.Path())] = true
+	}
+	root := filepath.Join("..", "..")
+	for _, dir := range []string{"cmd", "internal", "pkg"} {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				switch d.Name() {
+				case "testdata", "third_party", "vendor":
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(p, ".proto") && !listed[filepath.Base(p)] {
+				rel, _ := filepath.Rel(root, p)
+				t.Errorf("%s is not in ourProtoFiles", rel)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }

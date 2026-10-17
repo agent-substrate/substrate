@@ -1,4 +1,4 @@
-module github.com/agent-substrate/substrate/hack/tools/protoc-gen-go-grpc
+module go.ate.dev/substrate/hack/tools/protoc-gen-go-grpc
 
 go 1.27.0
 

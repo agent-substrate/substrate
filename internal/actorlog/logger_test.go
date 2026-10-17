@@ -24,8 +24,8 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const (
@@ -150,7 +150,7 @@ func TestWrapContainerLogs_JSONInput(t *testing.T) {
 }
 
 // TestWrapContainerLogs_ActorTraceContextPassthrough covers the only way an actor
-// log line can join a trace: the actor emitting the spec fields itself. ateom
+// log line can join a trace: the actor emitting the spec fields itself. worker
 // cannot supply them, because one forwarder covers a whole stream.
 func TestWrapContainerLogs_ActorTraceContextPassthrough(t *testing.T) {
 	const (
@@ -451,13 +451,13 @@ func mustSpanID(t *testing.T, s string) trace.SpanID {
 	return id
 }
 
-// TestLabelsKey pins the one place the label group's spelling is chosen: the
+// TestLabelsKeyFor pins the one place the label group's spelling is chosen: the
 // GCE spelling is the key Cloud Logging promotes into LogEntry.labels.
-func TestLabelsKey(t *testing.T) {
-	if got := LabelsKey(false); got != "labels" {
-		t.Errorf("LabelsKey(false) = %q, want labels", got)
+func TestLabelsKeyFor(t *testing.T) {
+	if got := labelsKeyFor(false); got != "labels" {
+		t.Errorf("labelsKeyFor(false) = %q, want labels", got)
 	}
-	if got := LabelsKey(true); got != "logging.googleapis.com/labels" {
-		t.Errorf("LabelsKey(true) = %q, want logging.googleapis.com/labels", got)
+	if got := labelsKeyFor(true); got != "logging.googleapis.com/labels" {
+		t.Errorf("labelsKeyFor(true) = %q, want logging.googleapis.com/labels", got)
 	}
 }

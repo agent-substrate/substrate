@@ -41,11 +41,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/internal/egresspolicy"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/egress/actorjwt"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/egresspolicy"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 )
 
 const (
@@ -59,7 +60,7 @@ const (
 	// value.
 	//
 	// This is the only channel that can carry a whole certificate to ext_proc
-	// so the gateway can verify the chain, key usages, and ateom SPIFFE URI.
+	// so the gateway can verify the chain, key usages, and worker SPIFFE URI.
 	//
 	// TODO(identity): Audit that this cannot be stomped by a header sent by the
 	// actor.
@@ -83,9 +84,10 @@ type Handler struct {
 	actorIdentityRoots *x509.CertPool
 	// policies is the per-actor EgressPolicy cache every leg reads through.
 	policies *policyCache
-	// provider resolves an egress policy's credential injections. Nil means
-	// credential injection is not configured, and a request that needs one is
-	// denied.
+	// actorJWTs mints the actor JWTs that credential injections ask for.
+	actorJWTs *actorjwt.Minter
+	// provider resolves an egress policy's credential_uri injections. Nil
+	// means none are configured, and a request that needs one is denied.
 	provider credproviderpb.CredentialProviderClient
 	// providerName, when set, is the provider this gateway serves (the host of
 	// its ate-secret:// credential URIs); a credential URI naming another
@@ -97,16 +99,17 @@ type Handler struct {
 // trusted_ca; see verifyActorCertificate for why it is checked again here.
 // policyCacheTTL of 0 fetches the policy on every callout.
 //
-// provider resolves an allowed rule's credential injections on the
-// TLS-terminated MITM leg; nil leaves credential injection off, so a request
-// matching a rule that requires an injection is denied. providerName, when
-// set, is the provider this gateway serves; a credential URI naming another
-// provider is refused.
+// provider resolves an allowed rule's credential_uri injections on the
+// TLS-terminated MITM leg; nil leaves them off, so a request that needs one is
+// denied. Actor JWT injections need no provider. providerName, when set, is
+// the provider this gateway serves; a credential URI naming another provider
+// is refused.
 func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
 	return &Handler{
 		apiClient:          apiClient,
 		actorIdentityRoots: actorIdentityRoots,
 		policies:           newPolicyCache(apiClient, policyCacheTTL),
+		actorJWTs:          actorjwt.New(apiClient),
 		provider:           provider,
 		providerName:       providerName,
 	}
@@ -182,17 +185,21 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 		return extproc.Result{}, err
 	}
 	rules := policy.SNIRules(dest.Port)
+	dynamicMetadata, err := connectMetadata(dest, rules)
+	if err != nil {
+		return extproc.Result{}, err
+	}
 	slog.InfoContext(ctx, "egress tunnel opened: requests inside it are decided one by one",
 		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host), slog.Int("sniRules", len(rules)))
 	res := allow()
-	res.DynamicMetadata = connectMetadata(dest, rules)
+	res.DynamicMetadata = dynamicMetadata
 	return res, nil
 }
 
 // connectMetadata encodes the SNI rules for EgressPolicyMetadataNamespace and
 // the dialed port for EgressMetadataNamespace. The port is always set: without
 // it the passthrough chain falls back to its configured port instead of closing.
-func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule) *structpb.Struct {
+func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule) (*structpb.Struct, error) {
 	values := make([]*structpb.Value, len(rules))
 	for i, rule := range rules {
 		values[i] = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
@@ -200,22 +207,31 @@ func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule
 			extproc.EgressSNIRuleModeKey:    structpb.NewStringValue(string(rule.Mode)),
 		}})
 	}
+	policyStruct := &structpb.Struct{Fields: map[string]*structpb.Value{
+		extproc.EgressSNIRulesKey: structpb.NewListValue(&structpb.ListValue{Values: values}),
+	}}
+	policyJSON, err := policyStruct.MarshalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("marshaling egress policy metadata: %w", err)
+	}
 	return &structpb.Struct{Fields: map[string]*structpb.Value{
 		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
 			extproc.EgressDialedPortKey: structpb.NewStringValue(strconv.Itoa(int(dest.Port))),
 		}}),
 		extproc.EgressPolicyMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			extproc.EgressSNIRulesKey: structpb.NewListValue(&structpb.ListValue{Values: values}),
+			extproc.EgressPolicyJSONKey: structpb.NewStringValue(string(policyJSON)),
 		}}),
-	}}
+	}}, nil
 }
 
-// metadataAnswer is a one-entry answer in the egress metadata namespace.
-func metadataAnswer(key, value string) *structpb.Struct {
+// metadataAnswer is an answer in the egress metadata namespace.
+func metadataAnswer(fields map[string]string) *structpb.Struct {
+	values := make(map[string]*structpb.Value, len(fields))
+	for key, value := range fields {
+		values[key] = structpb.NewStringValue(value)
+	}
 	return &structpb.Struct{Fields: map[string]*structpb.Value{
-		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			key: structpb.NewStringValue(value),
-		}}),
+		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: values}),
 	}}
 }
 
@@ -296,7 +312,7 @@ func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (res
 }
 
 // verifyActorCertificate checks that chain[0] is a live, non-CA, client-auth
-// ateom actor certificate issued by the actor-identity CA, and returns the
+// worker actor certificate issued by the actor-identity CA, and returns the
 // ActorRef from its SPIFFE URI.
 //
 // The chain is verified here even though Envoy already did it at the handshake
@@ -305,7 +321,7 @@ func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (res
 // trusting a parsed-but-unverified certificate is a well-worn source of CVEs.
 // It also keeps the handler safe if the Envoy config is ever loosened, and costs
 // one signature check per CONNECT rather than per request. The IsCA, ClientAuth-EKU,
-// and ateom SPIFFE URI checks below have no Envoy-side equivalent at all.
+// and worker SPIFFE URI checks below have no Envoy-side equivalent at all.
 func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (resources.ActorRef, error) {
 	leaf := chain[0]
 	intermediates := x509.NewCertPool()
@@ -334,12 +350,12 @@ func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (resources.A
 		return resources.ActorRef{}, fmt.Errorf("actor certificate is not signed by the actor-identity CA: %w", err)
 	}
 
-	// Check that this is an ateom certificate --- the SPIFFE URI should be of
-	// the form `spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}`.
+	// Check that this is a worker certificate --- the SPIFFE URI should be of
+	// the form `spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}`.
 	if len(leaf.URIs) != 1 {
 		return resources.ActorRef{}, fmt.Errorf("actor certificate has %d URI SANs, want 1", len(leaf.URIs))
 	}
-	ref, err := resources.ActorRefFromAteomForActorSPIFFEURL(leaf.URIs[0])
+	ref, err := resources.ActorRefFromWorkerForActorSPIFFEURL(leaf.URIs[0])
 	if err != nil {
 		return resources.ActorRef{}, fmt.Errorf("while parsing actor from SPIFFE ID: %w", err)
 	}

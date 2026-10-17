@@ -25,15 +25,16 @@ import (
 	"slices"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/actoridjwt"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/substratex509"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
+	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/actoridjwt"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/substratex509"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
@@ -92,6 +93,8 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	if tagRef == nil {
 		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
 	} else {
+		// NOTE: whether the ExternalVolumes gate is enabled or not, we do not
+		// support cloning from a tag that has external volumes.
 		for _, volume := range template.GetVolumes() {
 			if volume.GetExternalVolumeTemplate() != nil {
 				// TODO: Permit cloning after CSI volume snapshots are supported.
@@ -106,7 +109,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 			return nil, err
 		}
 		if inActor.GetSourceTag() == nil {
-			if err := validateGoldenSnapshotScope(sourceTag.GetStatus().GetSnapshot()); err != nil {
+			if err := validateGoldenSnapshotFidelity(sourceTag.GetStatus().GetSnapshot()); err != nil {
 				return nil, err
 			}
 		}
@@ -116,32 +119,39 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	name := inActor.GetMetadata().GetName()
 
 	// Volume creation is completed asynchronously after the actor is recorded.
-	initVols, err := initialActorVolumes(ctx, s.storageClassLister, template)
-	if err != nil {
+	var initVols []*ateapipb.ExternalVolume
+	if iv, err := initialExternalVolumes(ctx, s.storageClassLister, template); err != nil {
 		return nil, err
+	} else if preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
+		initVols = iv
+	} else if len(iv) > 0 {
+		errs := field.ErrorList{
+			field.Forbidden(field.NewPath("actor", "actor_template"),
+				"ActorTemplates with external volumes require the ExternalVolumes preview gate to be enabled on the server and the client to opt in to preview features (kubectl ate --preview, or the "+preview.Header+" header)"),
+		}
+		return nil, resources.ToAPIError(errs)
 	}
 
 	// Verify that the result is properly valid before storing it.
 	outActor := proto.CloneOf(inActor)
 	outActor.Status = &ateapipb.ActorStatus{
-		State:        ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-		ActorVolumes: initVols,
+		State:           ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+		ExternalVolumes: initVols,
 	}
 	if sourceTag != nil {
-		// The Actor starts out borrowing the tag's external snapshot rather than
+		// The Actor starts out borrowing the tag's snapshot rather than
 		// copying it. The snapshot URI is under the tag's prefix, not the Actor's, which
 		// is what keeps the Actor from collecting those objects. Its first
 		// suspend writes a snapshot under its own prefix and takes over from
 		// there.
-		outActor.Status.ExternalSnapshot = proto.CloneOf(sourceTag.GetStatus().GetSnapshot())
+		snap := proto.CloneOf(sourceTag.GetStatus().GetSnapshot())
+		snap.Generation = 1
+		snap.Owner = ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG
 		// The Actor is born with guest state, so stamp the template that state
-		// was built on now rather than at the first resume. The Tag records it
-		// beside its snapshot rather than on it, so the clone above does not
-		// carry it. Left empty, a repoint before that first resume reads as "no
-		// guest state" instead of "replaced template", and the resume restores
-		// the old template's memory and rootfs in full instead of the volume
-		// data alone.
-		outActor.Status.ExternalSnapshot.ActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
+		// was built on now rather than at the first resume.
+		snap.ActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
+		outActor.Status.Snapshots = []*ateapipb.Snapshot{snap}
+		outActor.Status.LastAssignedGeneration = 1
 	}
 	if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
 		return nil, toGRPCInternalError(errs)
@@ -172,7 +182,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *ateapipb.ActorTemplate) (*ateapipb.Tag, error) {
 	tag, err := s.store.GetTag(ctx, resources.TagRefFromObjectRef(tagRef))
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("Tag not found")
+		return nil, apierror.FailedPrecondition("Tag not found")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting tag: %w", err)
@@ -187,10 +197,10 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 		return nil, apierror.FailedPrecondition("source Tag has an invalid scope")
 	}
 	// A tag might have an empty Snapshot URI if the tag creation failed or is ongoing.
-	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
+	if tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == "" {
 		return nil, apierror.FailedPrecondition("source Tag is still being created or failed creation")
 	}
-	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
+	// TODO: Permit compatible VOLUMES snapshots when runtimes can extract portable data.
 	if tag.GetStatus().GetActorTemplateUid() != template.GetMetadata().GetUid() {
 		return nil, apierror.FailedPrecondition("source Tag must be taken from an actor with ActorTemplate uid %q", tag.GetStatus().GetActorTemplateUid())
 	}
@@ -220,7 +230,7 @@ func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsReq
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListActors(ctx, req.GetAtespace(), toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actors in db: %w", err))
 	}
@@ -292,13 +302,20 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		// Update actor template is only allowed while the actor is suspended.
 		// The repointed ref must also resolve, mirroring CreateActor's
 		// check (same non-atomicity caveat; resume re-resolves and fails
-		// cleanly), and the replacement's sandbox config, volumes, and
-		// volume mounts must match the old template's. It must also store
-		// snapshots under the location the actor's own already live in.
+		// cleanly), and the replacement's volumes and volume mounts must match
+		// the old template's. It must also store snapshots under the location
+		// the actor's own already live in.
 		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
 			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				return apierror.FailedPrecondition(
 					"actor must be %s to change its actor template (got: %s)", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, state)
+			}
+			// A paused actor resumes from its node-local snapshot, uploaded or
+			// not, which was captured from the old template's sandbox; suspend
+			// or revert it first.
+			if latestSnapshotIsLocal(oldVal.GetStatus()) {
+				return apierror.FailedPrecondition(
+					"actor must hold no node-local snapshot to change its actor template: suspend or revert it first")
 			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
 			if err != nil {
@@ -310,21 +327,12 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
 			switch {
 			case err == nil:
-				// Snapshots are not portable across sandbox runtime
-				// families, so the replacement template must name the same
-				// SandboxConfig.
-				if !proto.Equal(oldTemplate.GetSandboxConfig(), newTemplate.GetSandboxConfig()) {
-					oldSC, newSC := oldTemplate.GetSandboxConfig(), newTemplate.GetSandboxConfig()
-					return apierror.FailedPrecondition(
-						"the current actor template names SandboxConfig %q (class %s) but the new one names %q (class %s); the sandbox config must be identical to repoint an actor",
-						oldSC.GetConfigName(), oldSC.GetSandboxClass(), newSC.GetConfigName(), newSC.GetSandboxClass())
-				}
 				if err := validateTemplateVolumesUnchanged(oldTemplate, newTemplate); err != nil {
 					return err
 				}
 			case errors.Is(err, errActorTemplateNotFound):
 				// The old template is gone, so there is nothing left to
-				// compare the sandbox config or volume layout against.
+				// compare the volume layout against.
 			default:
 				return err
 			}
@@ -395,7 +403,8 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 // Deleting an actor collects everything under its external snapshot prefix. If
 // the location prefix ever changes, we risk leaking the snapshots under the old prefix.
 func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateapipb.ActorTemplate) error {
-	currentSnapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	currentSnapshotURI := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if currentSnapshotURI == "" {
 		return nil
 	}
@@ -429,8 +438,8 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	}
 	start := time.Now()
 	// Template dims only once the record resolved: the request names only the
-	// actor, so failures before the load carry none. No pool pair: delete only
-	// runs from SUSPENDED or CRASHED, which already released the worker.
+	// actor, so failures before the load carry none. No pool pair, even when
+	// any_state deletes an actor that still holds a worker.
 	defer func() {
 		var attrs []attribute.KeyValue
 		if deleted != nil {
@@ -463,7 +472,7 @@ func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorReq
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.PauseActor(ctx, actorRef)
+	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendAsync)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
@@ -507,7 +516,7 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActo
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef)
+	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendModeFromOptions(req.GetOptions()))
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
@@ -542,15 +551,13 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorR
 	return &ateapipb.RevertActorResponse{Actor: actor}, nil
 }
 
-func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJWTRequest) (*ateapipb.MintActorJWTResponse, error) {
+func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJwtRequest) (*ateapipb.MintActorJwtResponse, error) {
 	if errs := apivalidation.ValidateMintActorJWTRequest(ctx, req); len(errs) > 0 {
-		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
+		return nil, resources.ToAPIError(errs)
 	}
 
-	// TODO(authz): Authorization layer needs to check whether the caller has
-	// the mintActorJWT permission/relation with this actor.  This could be an
-	// atelet (via the relationship of the atelet running the actor), or the
-	// egress gateway (via a cluster-level grant?)
+	// With authz enforced, the interceptor requires can_mint_actor_jwt on the
+	// actor, which only the egress gateway holds.
 
 	// Verify that this actor exists in the store.  It doesn't need to be
 	// running, since we may need to issue JWTs during actor boot / resume.
@@ -560,23 +567,21 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 	} else if err != nil {
 		return nil, fmt.Errorf("while retrieving actor: %w", err)
 	}
-	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
-		return nil, apierror.Aborted("conflict; actor has been deleted and recreated")
-	}
 
 	// We only issue tokens with audience bindings.
-	if len(req.GetAudience()) == 0 {
+	if len(req.GetAudiences()) == 0 {
 		return nil, fmt.Errorf("at least one audience must be requested")
 	}
 
-	// JWT timestamps have one-second resolution; truncating keeps expires_at
+	// JWT timestamps have one-second resolution; truncating keeps expire_time
 	// equal to the exp claim.
 	now := time.Now().Truncate(time.Second)
 	expiresAt := now.Add(time.Duration(req.GetExpirationSeconds()) * time.Second)
 	actorClaims := &actoridjwt.Claims{
+		Kind:       actoridjwt.KindActor,
 		Issuer:     s.actorJWTIssuer,
-		Subject:    fmt.Sprintf("actor/%s/%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
-		Audiences:  req.GetAudience(),
+		Subject:    fmt.Sprintf("%s/%s/%s", actoridjwt.KindActor.SubjectPrefix(), dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
+		Audiences:  req.GetAudiences(),
 		Expiration: expiresAt,
 		NotBefore:  now.Add(-5 * time.Minute),
 		IssuedAt:   now,
@@ -594,21 +599,19 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 		return nil, fmt.Errorf("while signing actor JWT: %w", err)
 	}
 
-	return &ateapipb.MintActorJWTResponse{
-		ActorJwt:  actorJWT,
-		ExpiresAt: timestamppb.New(expiresAt),
+	return &ateapipb.MintActorJwtResponse{
+		ActorJwt:   actorJWT,
+		ExpireTime: timestamppb.New(expiresAt),
 	}, nil
 }
 
 func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.MintActorCertificateRequest) (*ateapipb.MintActorCertificateResponse, error) {
 	if errs := apivalidation.ValidateMintActorCertificateRequest(ctx, req); len(errs) > 0 {
-		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
+		return nil, resources.ToAPIError(errs)
 	}
 
-	// TODO(authz): Authorization layer needs to check whether the caller has
-	// the mintActorCertificate permission/relation with this actor.    This
-	// could be an atelet (via the relationship of the atelet running the
-	// actor), or the egress gateway (via a cluster-level grant?)
+	// With authz enforced, the interceptor requires can_mint_actor_certificate
+	// on the actor, which only the egress gateway holds.
 
 	// Check that the caller authenticated with a client certificate --- we
 	// should not allow bootstrapping a proof-of-possession credential from a

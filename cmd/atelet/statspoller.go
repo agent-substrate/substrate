@@ -36,9 +36,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/workerstats"
 )
 
 // workerPoolLabel is the label the pool controller stamps on every worker pod
@@ -48,18 +49,19 @@ import (
 const workerPoolLabel = "ate.dev/worker-pool"
 
 // minActorStatsPollInterval is the floor a configured poll interval is clamped
-// to: one actor's worst-case micro-VM read, maxActorContainers (25) containers
-// at statsCallTimeout (2s) each. Sweeps never overlap, so it bounds
-// guest-agent load, not correctness.
+// to. The workers serve GetActiveWorkloadStats from their own sampling timer, so
+// a poll faster than their sample interval only reads the same sample again.
+// The floor also bounds the worker pod list each sweep sends the apiserver
+// (resolveWorkerPools), so do not lower it to cut lag.
 const minActorStatsPollInterval = 50 * time.Second
 
-// statsRPCTimeout bounds one ateom's GetActiveWorkloadStats call. The micro-VM
-// ateom sets its statsSweepBudget (45s) below this timeout and reports guests
-// it did not reach as pending, so the call does not grow with actor count.
-const statsRPCTimeout = 55 * time.Second
+// statsRPCTimeout bounds one worker's GetActiveWorkloadStats call. The worker
+// answers from memory in under a millisecond, whatever its actor count or
+// guest speed, so the timeout is only for a stuck socket.
+const statsRPCTimeout = 5 * time.Second
 
-// statsSweepConcurrency bounds how many ateoms one sweep probes at once, one
-// call per ateom whatever it hosts. It caps how many stuck sockets can hold a
+// statsSweepConcurrency bounds how many workers one sweep probes at once, one
+// call per worker whatever it hosts. It caps how many stuck sockets can hold a
 // hung call open on atelet at the same time.
 const statsSweepConcurrency = 8
 
@@ -80,33 +82,34 @@ func clampActorStatsPollInterval(ctx context.Context, configured time.Duration) 
 }
 
 // activeStatsClient is the one RPC the poller makes, as a narrow interface so
-// tests can fake an ateom without a socket. ateompb.AteomClient satisfies it.
+// tests can fake a worker without a socket. ateworkerpb.WorkerClient satisfies it.
 type activeStatsClient interface {
-	GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*ateompb.GetActiveWorkloadStatsResponse, error)
+	GetActiveWorkloadStats(ctx context.Context, req *ateworkerpb.GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*ateworkerpb.GetActiveWorkloadStatsResponse, error)
 }
 
-// statsPoller discovers the node's ateoms from the filesystem and turns their
+// statsPoller discovers the node's workers from the filesystem and turns their
 // workload samples into template-level metrics.
 //
 // It holds no worker-to-actor mapping and never asks the control plane: every
-// ateom registers itself on disk by creating its socket directory at boot (the
+// worker registers itself on disk by creating its socket directory at boot (the
 // same sockets the lifecycle RPCs dial), so one readdir plus one probe per
-// socket is complete discovery, and an atelet restart loses nothing because
-// nothing was held. Attribution comes solely from the identity echoed inside
-// each sample, per the RPC's contract.
+// socket is complete discovery, and discovery survives an atelet restart.
+// The CPU used between the old atelet's last sweep and the new one's first is
+// not charged. Attribution comes solely from the identity echoed inside each
+// sample, per the RPC's contract.
 type statsPoller struct {
 	// interval between the end of one sweep and the start of the next. Sweeps
 	// never overlap: a slow sweep delays the next tick rather than stacking a
 	// second poll onto the same guests.
 	interval time.Duration
 
-	// ateomsDir is the directory whose entries are worker pod UIDs
-	// (nodepath.AteomsDir on a real node; a fixture in tests).
-	ateomsDir string
+	// workersDir is the directory whose entries are worker pod UIDs
+	// (nodepath.WorkersDir on a real node; a fixture in tests).
+	workersDir string
 
-	// dial returns a stats client for one ateom plus the closer that releases
+	// dial returns a stats client for one worker plus the closer that releases
 	// its connection; a connection lives exactly one probe. Deliberately NOT
-	// the lifecycle RPCs' cached AteomDialer: at one probe per ateom per
+	// the lifecycle RPCs' cached WorkerDialer: at one probe per worker per
 	// minute over a local unix socket a cache saves nothing, and sweeping the
 	// node's stale sockets through a shared cache would let telemetry evict
 	// connections the lifecycle RPCs are using.
@@ -116,43 +119,58 @@ type statsPoller struct {
 	// node's worker pod UIDs to the pool that owns them, called once per
 	// sweep by resolveWorkerPools, which layers cachedPools over it. A nil
 	// return means the fetch failed. The real fetcher lists the node's pods
-	// by workerPoolLabel; the ateom directory name IS the worker pod UID,
+	// by workerPoolLabel; the worker directory name IS the worker pod UID,
 	// which is the join key.
 	fetchWorkerPools func(ctx context.Context) map[string]workerPoolRef
 
 	inst *statsInstruments
-
-	// eventEmitter receives one usage event per sample per sweep -- the
-	// per-actor channel the aggregates deliberately erase identity from.
-	// Nil disables emission; emit is nil-safe.
-	eventEmitter *statsEventEmitter
 
 	// cachedPools carries pool resolutions across sweeps, so one failed pod
 	// list cannot re-home a tick's samples -- and the CPU counter's
 	// increments, which can never be re-attributed -- onto a pool-less label
 	// set. Safe because a pod's pool is immutable for the pod's lifetime: an
 	// entry can be stale, never wrong. Only the sweep loop touches it;
-	// resolveWorkerPools prunes it to the pods whose ateom directories still
-	// exist, the same bound lastCPU keeps.
+	// resolveWorkerPools prunes it to the pods whose worker directories still
+	// exist.
 	cachedPools map[string]workerPoolRef
 
-	// lastCPU is the last measured cpu_usage_usec per actor uid, the baseline
+	// lastCPU is the last measured cpu_usage_usec per activation, the baseline
 	// for the next delta; read-only during a sweep and replaced whole at the
-	// end. Pending actors keep their entry, unseen actors are dropped.
-	lastCPU map[string]uint64
+	// end. An activation keeps its entry while its worker reports it, pending
+	// included, and while its worker does not answer; it is dropped once that
+	// worker answers without it or the worker's directory is gone. A worker
+	// that dies without removing its directory keeps its entries until atelet
+	// restarts.
+	lastCPU map[cpuKey]cpuBaseline
+
+	// startedAt is when this atelet started, in unix nanoseconds. An activation
+	// that began later was never charged, so its first sample counts in full.
+	startedAt int64
+}
+
+// cpuKey is one activation of one actor, the span a CPU counter counts within.
+type cpuKey struct {
+	actorUID string
+	epoch    int64
+}
+
+// cpuBaseline is an activation's last CPU reading and the worker that sent it.
+type cpuBaseline struct {
+	usec   uint64
+	podUID string
 }
 
 // templateAggregate is one tick's sums for one templateKey group: the
 // bounded label set #174 permits on a TSDB series. Actor and atespace
-// identity deliberately never reach a metric label; per-actor detail is the
-// events channel's job, not this one's.
+// identity deliberately never reach a metric label; per-actor detail is on
+// the workers' usage records.
 //
 // The memory fields are point-in-time sums the gauges observe. cpuDeltaUsec is
-// different: cpu_usage_usec is a cumulative per-epoch counter per actor, so
-// summing the raw values across a churning actor set would be meaningless to
-// rate() -- instead the poller tracks each actor's last seen value and this
-// carries the sweep's INCREASE, which tick adds onto a monotonic counter.
-// Counter semantics survive actors joining, leaving, and resetting epochs by
+// different: cpu_usage_usec is a cumulative counter per activation, so summing
+// the raw values across a churning actor set would be meaningless to rate() --
+// instead the poller tracks each activation's last seen value and this carries
+// the sweep's INCREASE, which tick adds onto a monotonic counter. Counter
+// semantics survive actors joining, leaving, and starting new activations by
 // construction.
 type templateAggregate struct {
 	sampledActors         int64
@@ -214,7 +232,7 @@ func (p *statsPoller) run(ctx context.Context) {
 	}
 }
 
-// tick sweeps every ateom on the node once, adds the sweep's CPU increases
+// tick sweeps every worker on the node once, adds the sweep's CPU increases
 // onto the counters, and publishes the aggregates for the next metric
 // collection to observe.
 func (p *statsPoller) tick(ctx context.Context) {
@@ -223,31 +241,33 @@ func (p *statsPoller) tick(ctx context.Context) {
 	p.inst.publish(aggs)
 }
 
-// collect probes every ateom directory, statsSweepConcurrency at a time, and
+// collect probes every worker directory, statsSweepConcurrency at a time, and
 // aggregates the samples it gets.
 //
 // One tolerance rule covers all the noise a scan meets: any failure to dial or
 // call an entry means "not a target this tick", never an error worth more than
 // a debug line. That uniformly handles stale directories left by deleted
-// worker pods (nothing garbage-collects them eagerly), ateoms that have made
+// worker pods (nothing garbage-collects them eagerly), workers that have made
 // their directory but not yet listened, and workers torn down mid-sweep. The
 // no-sample answers are equally routine: an empty samples list is an idle
-// worker, and a pending entry (source UNSPECIFIED) is a workload the ateom
-// could not measure (boot, restore, teardown, or an unreached guest), which
-// adds nothing but keeps its CPU baseline.
+// worker, and a pending entry (source UNSPECIFIED) is a workload the worker
+// has not measured (boot, restore, or an unreached guest), which adds nothing
+// but keeps its CPU baseline.
 func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggregate {
-	entries, err := os.ReadDir(p.ateomsDir)
+	entries, err := os.ReadDir(p.workersDir)
 	if err != nil {
-		// A node with no ateoms directory yet has no workers to measure; the
+		// A node with no workers directory yet has no workers to measure; the
 		// first RunWorkload dispatch creates it.
-		slog.DebugContext(ctx, "Actor stats sweep: no ateoms directory", slog.Any("err", err))
+		slog.DebugContext(ctx, "Actor stats sweep: no workers directory", slog.Any("err", err))
 		return nil
 	}
 
 	podUIDs := make([]string, 0, len(entries))
+	present := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
 			podUIDs = append(podUIDs, e.Name())
+			present[e.Name()] = true
 		}
 	}
 	pools := p.resolveWorkerPools(ctx, podUIDs)
@@ -255,8 +275,10 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 	var (
 		mu      sync.Mutex
 		aggs    = make(map[templateKey]*templateAggregate)
-		seenCPU = make(map[string]uint64)
-		g       errgroup.Group
+		seenCPU = make(map[cpuKey]cpuBaseline)
+		// answered is the workers whose probe succeeded this sweep.
+		answered = make(map[string]bool)
+		g        errgroup.Group
 	)
 	g.SetLimit(statsSweepConcurrency)
 	for _, podUID := range podUIDs {
@@ -271,40 +293,40 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 
 			client, closer, err := p.dial(callCtx, podUID)
 			if err != nil {
-				slog.DebugContext(ctx, "Actor stats sweep: skipping ateom", slog.String("pod_uid", podUID), slog.Any("err", err))
+				slog.DebugContext(ctx, "Actor stats sweep: skipping worker", slog.String("pod_uid", podUID), slog.Any("err", err))
 				return nil
 			}
 			defer closer.Close()
 
-			resp, err := client.GetActiveWorkloadStats(callCtx, &ateompb.GetActiveWorkloadStatsRequest{})
+			resp, err := client.GetActiveWorkloadStats(callCtx, &ateworkerpb.GetActiveWorkloadStatsRequest{})
 			if err != nil {
-				slog.DebugContext(ctx, "Actor stats sweep: skipping ateom", slog.String("pod_uid", podUID), slog.Any("err", err))
+				slog.DebugContext(ctx, "Actor stats sweep: skipping worker", slog.String("pod_uid", podUID), slog.Any("err", err))
 				return nil
 			}
 
-			// One entry per workload the ateom is hosting; empty when it is
+			mu.Lock()
+			answered[podUID] = true
+			mu.Unlock()
+
+			// One entry per workload the worker is hosting; empty when it is
 			// available.
 			for _, sample := range resp.GetSamples() {
-				if sample.GetSource() == ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED {
+				cpuAt := cpuKey{actorUID: sample.GetActorUid(), epoch: sample.GetEpochUnixNano()}
+				if sample.GetSource() == ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED {
 					// Pending: hosted but not measured, so it adds nothing
-					// and its CPU baseline carries forward. A measured value
-					// from another worker this sweep (restore in flight) wins.
-					if last, ok := p.lastCPU[sample.GetActorUid()]; ok {
+					// and its CPU baseline carries forward.
+					if last, ok := p.lastCPU[cpuAt]; ok {
 						mu.Lock()
-						if _, measured := seenCPU[sample.GetActorUid()]; !measured {
-							seenCPU[sample.GetActorUid()] = last
-						}
+						seenCPU[cpuAt] = last
 						mu.Unlock()
 					}
 					continue
 				}
-				p.eventEmitter.emit(ctx, eventKindPeriodic, sample, pools[podUID])
-
 				key := templateKey{
 					templateNamespace: sample.GetActorTemplateAtespace(),
 					templateName:      sample.GetActorTemplateName(),
-					sandboxClass:      sandboxClassLabel(sample.GetSandboxClass()),
-					source:            statsSourceLabel(sample.GetSource()),
+					sandboxClass:      ateattr.NormalizeSandboxClass(sample.GetSandboxClass()),
+					source:            workerstats.StatsSourceLabel(sample.GetSource()),
 					workerPool:        pools[podUID],
 				}
 				mu.Lock()
@@ -317,22 +339,21 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 				agg.memoryCurrentBytes = addSat(agg.memoryCurrentBytes, sample.GetMemoryCurrentBytes())
 				agg.memoryWorkingSetBytes = addSat(agg.memoryWorkingSetBytes, sample.GetMemoryWorkingSetBytes())
 
-				// The counter increase since the baseline. On a decrease, a
-				// cgroup counter restarted at zero, so the new value is the
-				// usage since then. A guest-agent decrease is ambiguous (a
-				// resume at another guest's value, a restart at zero, or a
-				// container exit), so it charges nothing. A sample with no
-				// baseline charges nothing: atelet cannot tell a new actor
-				// from its own restart.
+				// The counter increase since the activation's baseline; the
+				// worker never lets it decrease within an activation. An
+				// activation with no baseline that began after this atelet
+				// started was never charged, so its value counts in full. One
+				// that began earlier may have been charged by the atelet before
+				// this one, so it only sets the baseline. Both times come from
+				// this node's clock: atelet reads only the workers on its node.
 				cpu := sample.GetCpuUsageUsec()
-				seenCPU[sample.GetActorUid()] = cpu
-				if last, ok := p.lastCPU[sample.GetActorUid()]; ok {
-					switch {
-					case last <= cpu:
-						agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu-last)
-					case sample.GetSource() == ateompb.StatsSource_STATS_SOURCE_CGROUP:
-						agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu)
+				seenCPU[cpuAt] = cpuBaseline{usec: cpu, podUID: podUID}
+				if last, ok := p.lastCPU[cpuAt]; ok {
+					if cpu > last.usec {
+						agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu-last.usec)
 					}
+				} else if cpuAt.epoch > p.startedAt {
+					agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu)
 				}
 				mu.Unlock()
 			}
@@ -342,8 +363,15 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 	// The tasks only ever return nil: a probe that fails is "not a target this
 	// tick", never a failed sweep.
 	_ = g.Wait()
-	// Replacing (not merging) the baselines drops actors this sweep did not
-	// see, so lastCPU cannot grow with actor churn.
+	// A worker that did not answer keeps its activations' baselines: dropping
+	// one would charge the activation in full again once the worker answers.
+	// Everything else this sweep did not see is dropped, so lastCPU does not
+	// grow with actor churn on workers that answer.
+	for k, b := range p.lastCPU {
+		if _, seen := seenCPU[k]; !seen && present[b.podUID] && !answered[b.podUID] {
+			seenCPU[k] = b
+		}
+	}
 	p.lastCPU = seenCPU
 	return aggs
 }
@@ -365,34 +393,9 @@ func addSat(agg int64, v uint64) int64 {
 	return agg + int64(v)
 }
 
-// sandboxClassLabel maps the wire enum to the ate.sandbox.class label values
-// the rest of the system uses.
-func sandboxClassLabel(c ateompb.SandboxClass) string {
-	switch c {
-	case ateompb.SandboxClass_SANDBOX_CLASS_GVISOR:
-		return "gvisor"
-	case ateompb.SandboxClass_SANDBOX_CLASS_MICROVM:
-		return "microvm"
-	default:
-		return ateattr.SandboxClassUnknown
-	}
-}
-
-// statsSourceLabel maps the wire enum to the ate.stats.source label values.
-func statsSourceLabel(s ateompb.StatsSource) string {
-	switch s {
-	case ateompb.StatsSource_STATS_SOURCE_CGROUP:
-		return ateattr.StatsSourceCgroup
-	case ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT:
-		return ateattr.StatsSourceGuestAgent
-	default:
-		return ateattr.StatsSourceUnspecified
-	}
-}
-
 // resolveWorkerPools returns this sweep's pod-UID-to-pool map: fresh
 // resolutions win, a failed or partial list falls back to cachedPools, and
-// the result -- rebuilt restricted to the pods whose ateom directories exist
+// the result -- rebuilt restricted to the pods whose worker directories exist
 // -- becomes the new cache, pruning departed pods and bounding its size. The
 // residual unlabeled case is a pod no fetch has resolved yet, whether first
 // seen during an outage or omitted by a list racing the directory scan; it
@@ -573,33 +576,25 @@ func (i *statsInstruments) addCPU(ctx context.Context, aggs map[templateKey]*tem
 	}
 }
 
-// startStatsPoller assembles the sampling subsystem -- the metrics poller and
-// the periodic events channel -- and starts the poller. Split from main's
-// boot sequence so the subsystem has one obvious entry point.
+// startStatsPoller assembles the metrics poller and starts it. Split from
+// main's boot sequence so the subsystem has one obvious entry point.
 //
 // The poller dials its own short-lived connection per probe (see
-// dialAteomStats) and takes no AteomDialer: the isolation from the lifecycle
+// dialWorkerStats) and takes no WorkerDialer: the isolation from the lifecycle
 // RPCs' connection cache is structural, not just behavioral.
-// logSink is the process's synchronized stdout writer, shared with the
-// runtime logger so the event drain and slog can never tear each other's
-// records.
-func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsInstruments, k8sClient kubernetes.Interface, logSink io.Writer) {
-	// Warm the labels-key resolution so the first emit does not pay the
-	// metadata probe either; see defaultLabelsKey.
-	go defaultLabelsKey()
-
+func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsInstruments, k8sClient kubernetes.Interface) {
 	poller := &statsPoller{
-		interval:  interval,
-		ateomsDir: nodepath.AteomsDir(),
+		interval:   interval,
+		workersDir: nodepath.WorkersDir(),
 		dial: func(_ context.Context, podUID string) (activeStatsClient, io.Closer, error) {
-			conn, closer, err := dialAteomStats(podUID)
+			conn, closer, err := dialWorkerStats(podUID)
 			if err != nil {
 				return nil, nil, err
 			}
-			return ateompb.NewAteomClient(conn), closer, nil
+			return ateworkerpb.NewWorkerClient(conn), closer, nil
 		},
-		inst:         inst,
-		eventEmitter: newStatsEventEmitter(newAsyncWriter(ctx, logSink, usageEventQueueDepth), defaultLabelsKey),
+		inst:      inst,
+		startedAt: time.Now().UnixNano(),
 	}
 	// NODE_NAME comes from the Downward API; without it the samples still
 	// flow, just grouped without pool labels.
@@ -611,13 +606,13 @@ func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsIn
 	go poller.run(ctx)
 }
 
-// dialAteomStats opens the poller's short-lived connection: one per probe,
-// closed by the caller, never the lifecycle RPCs' cached AteomDialer.
+// dialWorkerStats opens the poller's short-lived connection: one per probe,
+// closed by the caller, never the lifecycle RPCs' cached WorkerDialer.
 // grpc.NewClient is lazy, so this cannot block; the caller's deadline bounds
 // the actual connect inside the RPC.
-func dialAteomStats(podUID string) (*grpc.ClientConn, io.Closer, error) {
+func dialWorkerStats(podUID string) (*grpc.ClientConn, io.Closer, error) {
 	conn, err := grpc.NewClient(
-		"unix://"+nodepath.AteomSocketPath(podUID),
+		"unix://"+nodepath.WorkerSocketPath(podUID),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)

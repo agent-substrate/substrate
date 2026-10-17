@@ -19,12 +19,12 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
+	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -48,8 +48,7 @@ func (s *RPCService) ListWorkerActorAssignments(ctx context.Context, req *ateapi
 		return nil, fmt.Errorf("while fetching worker %s: %w", name, err)
 	}
 
-	page, err := s.impl.ListWorkerAssignments(ctx, name,
-		store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListWorkerAssignments(ctx, name, toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing the assignments of worker %s: %w", name, err))
 	}
@@ -64,7 +63,7 @@ func (s *RPCService) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersR
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListWorkers(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListWorkers(ctx, toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing workers in db: %w", err))
 	}
@@ -123,19 +122,19 @@ func (s *RPCService) CreateWorker(ctx context.Context, req *ateapipb.CreateWorke
 }
 
 func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worker) (*ateapipb.Worker, error) {
-	// A Worker is registered only once its pod is Ready and has an IP, which
-	// makes ACTIVE the only state it can be born in.
+	// A Worker takes no Actors until MarkWorkerAvailable.
 	outWorker := proto.CloneOf(inWorker)
 	// A new Worker hosts no Actors, so none are left from an earlier epoch.
 	outWorker.Status = &ateapipb.WorkerStatus{
-		State:         ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+		State:         ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE,
 		ObservedEpoch: inWorker.GetEpoch(),
 	}
 
-	// Capacity is left unset: a Worker holds nothing until its own ateom says
-	// what it has, through WorkerService.SetWorkerCapacity. Nothing is placed
-	// on it in the meantime, which is the point -- the alternative is guessing
-	// on the Worker's behalf and placing against the guess.
+	// Capacity and runtimes are left unset: a Worker holds nothing and runs no
+	// sandbox until its own worker says what it has, through
+	// WorkerService.RegisterWorker. Nothing is placed on it in the meantime,
+	// which is the point -- the alternative is guessing on the Worker's behalf
+	// and placing against the guess.
 
 	// Verify that the result is properly valid before storing it.
 	if errs := apivalidation.ValidateWorkerUpdate(ctx, field.NewPath("worker"), outWorker, inWorker, true); len(errs) > 0 {
@@ -251,25 +250,11 @@ func (s *ServiceImpl) DeleteWorker(ctx context.Context, name string, preconditio
 	return s.store.DeleteWorker(ctx, name, precondition)
 }
 
-func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerRequest) (*ateapipb.Worker, error) {
+func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerRequest) (*ateapipb.DrainWorkerResponse, error) {
 	if errs := apivalidation.ValidateDrainWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	name := req.GetWorker().GetName()
-
-	// A DrainWorkerRequest names a worker and carries no guards, so the ones
-	// the store requires come from a read here rather than from the client. A
-	// write that lands in between is reported as a conflict for the caller to
-	// retry, the same as any other guarded update.
-	observed, err := s.impl.GetWorker(ctx, name)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("Worker %s not found", name)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("while getting worker to drain: %w", err)
-	}
-
-	return s.mutateWorker(ctx, name, store.PreconditionFrom(observed), func(toUpdate *ateapipb.Worker) error {
+	drained, err := s.mutateNamedWorker(ctx, req.GetWorker().GetName(), func(toUpdate *ateapipb.Worker) error {
 		if toUpdate.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
 			// already draining, do nothing
 			return &workerUnchanged{worker: proto.Clone(toUpdate).(*ateapipb.Worker)}
@@ -279,6 +264,70 @@ func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerR
 		// until something releases them. Draining only stops new placements.
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &ateapipb.DrainWorkerResponse{Worker: drained}, nil
+}
+
+func (s *RPCService) MarkWorkerAvailable(ctx context.Context, req *ateapipb.MarkWorkerAvailableRequest) (*ateapipb.MarkWorkerAvailableResponse, error) {
+	if errs := apivalidation.ValidateMarkWorkerAvailableRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
+	}
+	marked, err := s.mutateNamedWorker(ctx, req.GetWorker().GetName(), func(toUpdate *ateapipb.Worker) error {
+		switch toUpdate.GetStatus().GetState() {
+		case ateapipb.WorkerState_WORKER_STATE_ACTIVE:
+			return &workerUnchanged{worker: proto.Clone(toUpdate).(*ateapipb.Worker)}
+		case ateapipb.WorkerState_WORKER_STATE_DRAINING:
+			return errWorkerDraining
+		}
+		toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_ACTIVE
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ateapipb.MarkWorkerAvailableResponse{Worker: marked}, nil
+}
+
+func (s *RPCService) MarkWorkerUnavailable(ctx context.Context, req *ateapipb.MarkWorkerUnavailableRequest) (*ateapipb.MarkWorkerUnavailableResponse, error) {
+	if errs := apivalidation.ValidateMarkWorkerUnavailableRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
+	}
+	marked, err := s.mutateNamedWorker(ctx, req.GetWorker().GetName(), func(toUpdate *ateapipb.Worker) error {
+		switch toUpdate.GetStatus().GetState() {
+		case ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE:
+			return &workerUnchanged{worker: proto.Clone(toUpdate).(*ateapipb.Worker)}
+		case ateapipb.WorkerState_WORKER_STATE_DRAINING:
+			return errWorkerDraining
+		}
+		toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE
+		// The assignments are left alone, as for draining.
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ateapipb.MarkWorkerUnavailableResponse{Worker: marked}, nil
+}
+
+// errWorkerDraining refuses to move a draining Worker out of DRAINING, which
+// is final.
+var errWorkerDraining = errors.New("worker is draining")
+
+// mutateNamedWorker runs mutate against the named Worker for a request that
+// carries no guards, so the ones the store requires come from a read here
+// rather than from the client. A write that lands in between is reported as a
+// conflict for the caller to retry, the same as any other guarded update.
+func (s *RPCService) mutateNamedWorker(ctx context.Context, name string, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error) {
+	observed, err := s.impl.GetWorker(ctx, name)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, apierror.NotFound("Worker %s not found", name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while getting worker %s: %w", name, err)
+	}
+	return s.mutateWorker(ctx, name, store.PreconditionFrom(observed), mutate)
 }
 
 // mutateWorker runs mutate against the named Worker and translates what comes
@@ -295,6 +344,8 @@ func (s *RPCService) mutateWorker(ctx context.Context, name string, precondition
 		return unchanged.worker, nil
 	}
 	switch {
+	case errors.Is(err, errWorkerDraining):
+		return nil, apierror.FailedPrecondition("Worker %s is draining", name)
 	case errors.Is(err, store.ErrNotFound):
 		return nil, apierror.NotFound("Worker %s not found", name)
 	case errors.Is(err, store.ErrUIDConflict):

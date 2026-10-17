@@ -23,9 +23,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/portforward"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/portforward"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 const (
@@ -35,6 +37,8 @@ const (
 	// AgentGateway exposes native Prometheus metrics; it does not export these
 	// instruments through the OTLP collector.
 	agentGatewayRouterStatsPort = 15020
+	// Envoy exposes its Prometheus stats on the admin listener.
+	egressEnvoyAdminPort = 15000
 )
 
 // PlatformMetricPrefixes are the Prometheus metric-name prefixes (OTLP dots
@@ -155,21 +159,87 @@ func MissingPlatformMetrics(scrape string, prefixes []string) []string {
 	return missing
 }
 
+// Port-forward each ready atenet-egress pod's Envoy admin port and read its
+// stats/prometheus endpoint, returning the concatenated Prometheus exposition text.
+func ScrapeEgressEnvoyMetrics(ctx context.Context) (string, error) {
+	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
+	if err != nil {
+		return "", fmt.Errorf("loading kubeconfig: %w", err)
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return "", fmt.Errorf("creating k8s client: %w", err)
+	}
+
+	ns := SystemNamespace()
+	pods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=atenet-egress",
+	})
+	if err != nil {
+		return "", fmt.Errorf("listing atenet-egress pods: %w", err)
+	}
+
+	var b strings.Builder
+	ready := 0
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !portforward.IsPodReady(pod) {
+			continue
+		}
+		ready++
+		body, err := scrapeEgressEnvoyPod(ctx, config, clientset, ns, pod.Name)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(body)
+	}
+	if ready == 0 {
+		return "", fmt.Errorf("no ready atenet-egress pods in %s", ns)
+	}
+	return b.String(), nil
+}
+
+func scrapeEgressEnvoyPod(ctx context.Context, config *rest.Config, clientset kubernetes.Interface, namespace, podName string) (string, error) {
+	localPort, stop, err := portforward.PodPortForward(ctx, config, clientset, namespace, podName, egressEnvoyAdminPort)
+	if err != nil {
+		return "", err
+	}
+	defer stop()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/stats/prometheus", localPort), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("scraping egress Envoy metrics on %s: %w", podName, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading egress Envoy metrics on %s: %w", podName, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("egress Envoy metrics on %s returned %d: %s", podName, resp.StatusCode, body)
+	}
+	return string(body), nil
+}
+
 // LifecycleEventMetric is the count connector's view of the actor lifecycle
 // events. Reading it rather than a log store keeps this check on the metrics
 // harness: kind has no place to query log records.
 const LifecycleEventMetric = "substrate_actor_state_changes"
 
-// LifecycleEventCounts returns the count the collector holds for each
-// ate.actor.state. The counter is cumulative and the collector outlives any one
-// test, so compare two reads rather than asserting a state is merely present:
-// a stale count from an earlier run would pass a presence check even with the
-// exporter turned off.
+// LifecycleEventSeries returns each lifecycle series the collector holds, keyed
+// by ate.actor.state and then by the series' full name and labels. The counter
+// is cumulative and the collector outlives any one test, so compare two reads
+// rather than asserting a state is merely present: a stale count from an
+// earlier run would pass a presence check even with the exporter turned off.
 //
-// One state can appear on several lines, one per emitting ateapi instance, so
-// the counts are summed.
-func LifecycleEventCounts(scrape string) map[string]float64 {
-	counts := map[string]float64{}
+// Series are kept apart, one per emitting instance, otherwise a series the
+// exporter expired looks like the count went down.
+func LifecycleEventSeries(scrape string) map[string]map[string]float64 {
+	series := map[string]map[string]float64{}
 	for _, line := range strings.Split(scrape, "\n") {
 		name := metricNameFromLine(line)
 		if name != LifecycleEventMetric && !strings.HasPrefix(name, LifecycleEventMetric+"_") {
@@ -179,22 +249,40 @@ func LifecycleEventCounts(scrape string) map[string]float64 {
 		if state == "" {
 			continue
 		}
-		fields := strings.Fields(line)
-		v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		line = strings.TrimSpace(line)
+		i := strings.LastIndexAny(line, " \t")
+		if i < 0 {
+			continue
+		}
+		v, err := strconv.ParseFloat(line[i+1:], 64)
 		if err != nil {
 			continue
 		}
-		counts[state] += v
+		if series[state] == nil {
+			series[state] = map[string]float64{}
+		}
+		series[state][strings.TrimSpace(line[:i])] = v
 	}
-	return counts
+	return series
 }
 
-// StatesNotAdvanced returns the states whose count did not rise between the two
-// reads. An empty result means every state was emitted during the window.
-func StatesNotAdvanced(before, after map[string]float64, states []string) []string {
+// StatesNotAdvanced returns the states with no series that appeared or changed
+// between the two reads. An empty result means every state was emitted during
+// the window.
+//
+// A drop counts, since deltatocumulative only restarts a stale stream on a new
+// count. A series that vanished does not, the exporter expires idle series.
+func StatesNotAdvanced(before, after map[string]map[string]float64, states []string) []string {
 	var stale []string
 	for _, s := range states {
-		if after[s] <= before[s] {
+		advanced := false
+		for key, v := range after[s] {
+			if old, ok := before[s][key]; !ok || v != old {
+				advanced = true
+				break
+			}
+		}
+		if !advanced {
 			stale = append(stale, s)
 		}
 	}

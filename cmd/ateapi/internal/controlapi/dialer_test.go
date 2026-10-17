@@ -24,14 +24,16 @@ import (
 	"errors"
 	"math/big"
 	"net/url"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"go.ate.dev/substrate/internal/atelet"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/substratex509"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
@@ -43,6 +45,9 @@ import (
 )
 
 const testAteletSPIFFEID = "spiffe://cluster.local/ns/ate-system/sa/atelet"
+
+// ateletPort is the port every atelet dial target should carry.
+var ateletPort = strconv.Itoa(atelet.DefaultPort)
 
 // makeTestCA mints a self-signed CA and returns it along with an X.509 bundle
 // containing it as the sole authority for the cluster.local trust domain.
@@ -156,17 +161,17 @@ func TestDialForAteletOnNodeTarget(t *testing.T) {
 		{
 			name:       "IPv4 atelet",
 			ateletIP:   "10.244.1.7",
-			wantTarget: "10.244.1.7:8085",
+			wantTarget: "10.244.1.7:" + ateletPort,
 		},
 		{
 			name:       "IPv6 atelet is bracketed",
 			ateletIP:   "fd00:10:244::7",
-			wantTarget: "[fd00:10:244::7]:8085",
+			wantTarget: "[fd00:10:244::7]:" + ateletPort,
 		},
 		{
 			name:       "IPv6 loopback is bracketed",
 			ateletIP:   "::1",
-			wantTarget: "[::1]:8085",
+			wantTarget: "[::1]:" + ateletPort,
 		},
 	}
 
@@ -387,7 +392,7 @@ func TestDialForAteletOnNode(t *testing.T) {
 		if fresh == old {
 			t.Fatal("DialForAteletOnNode returned the stale connection after the IP changed")
 		}
-		if got, want := fresh.Target(), "10.0.0.9:8085"; got != want {
+		if got, want := fresh.Target(), "10.0.0.9:"+ateletPort; got != want {
 			t.Errorf("dial target = %q, want %q", got, want)
 		}
 		if got := old.GetState(); got != connectivity.Shutdown {

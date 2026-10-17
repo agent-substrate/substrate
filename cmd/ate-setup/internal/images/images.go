@@ -28,7 +28,7 @@ import (
 
 // ModulePath is this repository's module path. A ko:// reference is it joined
 // with a component's package.
-const ModulePath = "github.com/agent-substrate/substrate"
+const ModulePath = "go.ate.dev/substrate"
 
 // Components is every package the installer can deploy a published image for,
 // as an import path within the module.
@@ -40,13 +40,17 @@ const ModulePath = "github.com/agent-substrate/substrate"
 // under the same repository and tag as the rest before a pre-built install can
 // use it.
 var Components = []string{
+	"cmd/ate-idp-server",
 	"cmd/ateapi",
 	"cmd/atecontroller",
 	"cmd/atelet",
 	"cmd/atenet",
-	"cmd/ateom-gvisor",
-	"cmd/ateom-microvm",
+	"cmd/ateworker-gvisor",
+	"cmd/ateworker-microvm",
+	"cmd/benchmarking/isolate/fake-atelet",
+	"cmd/benchmarking/isolate/fake-workersync",
 	"cmd/credential-provider/kubernetes-secrets",
+	"cmd/objectstore-plugin",
 	"cmd/podcertcontroller",
 	"demos/counter",
 	"demos/egress",
@@ -68,8 +72,7 @@ func KoReference(pkg string) string { return "ko://" + ModulePath + "/" + pkg }
 // well, which changes nothing while every package here already is.
 //
 // This only describes reality because every ko invocation asks for that
-// naming — internal/ko passes the flag, and the Makefile passes it as
-// KO_NAMING. ko's own default appends an md5 of the full import path, which
+// naming: internal/ko passes the flag. ko's own default appends an md5 of the full import path, which
 // nothing here can reproduce, so a build that loses the flag publishes images
 // no --image-repo install can find.
 func ImageName(pkg string) string { return path.Base(pkg) }
@@ -89,21 +92,6 @@ type Source struct {
 
 // IsPrebuilt reports whether images should be pulled rather than built.
 func (s Source) IsPrebuilt() bool { return s.Repo != "" }
-
-// Validate checks a Source is usable before anything reaches the cluster.
-//
-// Both halves are checked. A tag on its own would otherwise be discarded in
-// silence, leaving a build from source that looks like the release the tag
-// names.
-func (s Source) Validate() error {
-	switch {
-	case s.IsPrebuilt() && s.Tag == "":
-		return fmt.Errorf("--image-repo (or ATE_IMAGE_REPO) requires --image-tag (or ATE_IMAGE_TAG)")
-	case !s.IsPrebuilt() && s.Tag != "":
-		return fmt.Errorf("--image-tag (or ATE_IMAGE_TAG) requires --image-repo (or ATE_IMAGE_REPO); without one, images are built from source and the tag names nothing")
-	}
-	return nil
-}
 
 // Describe renders the source for the install log.
 func (s Source) Describe() string {

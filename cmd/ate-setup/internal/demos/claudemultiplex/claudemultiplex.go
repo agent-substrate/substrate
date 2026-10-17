@@ -24,12 +24,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spf13/pflag"
-
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/demos"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const (
@@ -75,9 +74,12 @@ func agentTemplates() []demos.SubstrateTemplate {
 	return templates
 }
 
-func (d *demo) Name() string         { return d.sub.Name() }
-func (d *demo) Description() string  { return d.sub.Description() }
-func (d *demo) Flags(*pflag.FlagSet) {}
+func (d *demo) Name() string        { return d.sub.Name() }
+func (d *demo) Description() string { return d.sub.Description() }
+
+// Settings reports none: the demo reads ANTHROPIC_API_KEY, which the
+// installer already owns as demo.anthropicAPIKey.
+func (d *demo) Settings() []config.Setting { return nil }
 
 func (d *demo) Deploy(ctx context.Context, e *steps.Env) error {
 	if e.Cfg.AnthropicAPIKey == "" {
@@ -101,7 +103,7 @@ func (d *demo) Delete(ctx context.Context, e *steps.Env) error {
 // renderValues builds the workload image and returns the placeholder values
 // the agent templates need.
 func (d *demo) renderValues(ctx context.Context, e *steps.Env) (map[string]string, error) {
-	image, err := images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, imageName, e.Cfg.Path(workload), e.Cfg.KODefaultPlatforms)
+	image, err := images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, imageName, e.Cfg.Path(workload), e.Cfg.KODefaultPlatforms, e.Cfg.DockerBuildFlags)
 	if err != nil {
 		return nil, err
 	}

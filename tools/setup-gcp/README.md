@@ -96,34 +96,6 @@ Filestore CSI driver disabled).
 > podcertificate ClusterTrustBundles to be ready" and `kubectl get
 > clustertrustbundles` reports the resource type is not served.
 
-> [!WARNING]
-> **Turn node auto-upgrade off on any node pool that runs workers, and do not
-> use spot or preemptible nodes for them.** When a worker pod is deleted,
-> `SIGTERM` is forwarded into the actor's containers and the control plane keeps
-> accepting a suspend for 30 minutes. An actor suspended inside that
-> window keeps its state. One still awake when the window closes is moved to
-> `ACTOR_STATE_CRASHED` with its worker assignment cleared, and `CRASHED` is
-> terminal: `resume` and `suspend` are both refused, there is no recover verb,
-> and the snapshot the actor still holds cannot be used to start it. The only
-> way out is to delete the actor and create a new one, which loses its state.
->
-> Auto-upgrade is the trigger to plan for, because GKE enables it by default and
-> it fires on Google's maintenance schedule rather than yours. `create cluster`
-> does not disable it, so do it yourself on every pool that runs workers:
->
-> ```bash
-> gcloud container node-pools update "${NODE_POOL}" \
->   --cluster "${CLUSTER_NAME}" --location "${CLUSTER_LOCATION}" \
->   --no-enable-autoupgrade
-> ```
->
-> This is a management setting, so it takes effect without recreating nodes and
-> is safe to apply to a serving cluster. Node auto-repair, preemption and OOM
-> kills reach the same path and cannot be configured away, so treat the setting
-> as removing the scheduled risk rather than all of it. Change versions through
-> the [rolling upgrade runbook](../../docs/upgrade.md), which has you suspend
-> every actor on a node at your own pace before the node moves.
-
 ```bash
 go run ./tools/setup-gcp create cluster [flags]
 ```
@@ -144,15 +116,76 @@ go run ./tools/setup-gcp create cluster [flags]
 `NODE_MACHINE_TYPE` was named `GVISOR_NODE_MACHINE_TYPE`. The old name still
 works and warns; rename it in your `.ate-dev-env.sh`.
 
-**Node version labels:** pool labels are the birth default for every node GKE
-creates later (autoscaling, auto-repair, node upgrades), and `setup-gcp` does
-not set `ate.dev/substrate-version` on the pool, so those nodes arrive
-unlabeled and run no dataplane pods (see the README's note on node version
-labels). Stamp the pool with
-`gcloud container node-pools update ... --node-labels=...` (list the existing
-labels first and carry them all over; the flag replaces the full set), and
-create additional pools with
-`--node-labels=ate.dev/substrate-version=<build version>`.
+**Node sysctls for high sandbox density (>800 sandboxes/node):** each awake
+actor sandbox creates its own network namespace, veth/tap pair, and inotify
+watches on the host kernel (even in multi-actor worker pods). Default COS
+limits (`net.ipv4.neigh.default.gc_thresh3 = 1024`,
+`fs.inotify.max_user_instances = 128`, `fs.inotify.max_user_watches = 8192`)
+fail around ~800–1,000 live sandboxes per node: in single-node density
+benchmarks on `c3-standard-192-metal` (50–100 multi-actor worker pods),
+inotify watches exhausted at ~800 live sandboxes and the host ARP cache
+overflowed on the 1,000-sandbox wave after passing 850 (`dmesg`: `neighbour:
+arp_cache: neighbor table overflow!`), while raising these sysctls sustained
+1,500 concurrent sandboxes per node.
+`create cluster` sets these sysctls on `substrate-node-pool` **when creating a
+new cluster**; existing clusters keep their original node-pool sysctls
+(`create cluster` logs a warning if they are missing) and must be updated via
+one of the options below.
+
+* **When creating or updating node pools** (e.g., bare-metal pools), pass
+  `--system-config-from-file=systemconfig.yaml` to `gcloud container node-pools
+  create` or `update`. Note that `node-pools update --system-config-from-file`
+  **replaces the pool's entire system config** (so carry over any existing
+  sysctls/kubelet/cgroup settings) and **recreates the pool's nodes**:
+
+  ```yaml
+  # systemconfig.yaml
+  linuxConfig:
+    sysctls:
+      net.ipv4.neigh.default.gc_thresh1: '4096'
+      net.ipv4.neigh.default.gc_thresh2: '16384'
+      net.ipv4.neigh.default.gc_thresh3: '32768'
+      fs.inotify.max_user_instances: '65536'
+      fs.inotify.max_user_watches: '1048576'
+  ```
+
+* **On an already-running node pool (without rolling/recreating nodes)**, apply
+  a privileged `DaemonSet` to tune the host sysctls in place:
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: DaemonSet
+  metadata:
+    name: substrate-sysctl-tuner
+    namespace: kube-system
+  spec:
+    selector:
+      matchLabels:
+        app: substrate-sysctl-tuner
+    template:
+      metadata:
+        labels:
+          app: substrate-sysctl-tuner
+      spec:
+        hostNetwork: true
+        tolerations:
+        - operator: Exists
+        containers:
+        - name: sysctl-tuner
+          image: busybox:1.36
+          securityContext:
+            privileged: true
+          command:
+          - sh
+          - -ce
+          - |
+            sysctl -w net.ipv4.neigh.default.gc_thresh1=4096
+            sysctl -w net.ipv4.neigh.default.gc_thresh2=16384
+            sysctl -w net.ipv4.neigh.default.gc_thresh3=32768
+            sysctl -w fs.inotify.max_user_instances=65536
+            sysctl -w fs.inotify.max_user_watches=1048576
+            sleep infinity
+  ```
 
 ### 3. Create Bucket
 

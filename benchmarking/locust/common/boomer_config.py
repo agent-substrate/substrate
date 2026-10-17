@@ -24,6 +24,7 @@ Flag registration lives in the modules that own each flag:
   * --mem-target / --mem-churn / --mem-read → common.memload_config.add_memload_arguments
   * --cpu-cores / --cpu-duty-cycle  → common.cpuload_config.add_cpuload_arguments
   * --max-pings-per-wake            → common.ping_config.add_ping_arguments
+  * --target-rps                    → common.rate_config.add_rate_arguments
 
 This module ties them together so boomer-Go workers can pick up the values
 the operator set in the web UI form:
@@ -35,7 +36,11 @@ the operator set in the web UI form:
   * serve_config_headless(): the same /boomer-config payload from a plain
     HTTP server, for a headless run whose values change while it runs.
 
-Keep _FLAGS aligned with internal/benchmarking/boomer/dynconfig.payload.
+_FLAGS is the set of keys the payload carries. The Go side takes the payload
+as an arbitrary JSON object, and the user class a worker runs reads and
+validates the keys it documents (the dynconfig.Typed codec it registers with
+its userclass.Entry), so a flag added here needs a matching field in the
+class that consumes it.
 """
 
 import argparse
@@ -73,9 +78,11 @@ _FLAGS = {
     "--agentsession-script": str,
     "--agentsession-script-file": str,
     "--agentsession-think-scale": float,
+    "--agentsession-snapshot-steps": str,
     "--total-actors": int,
     "--spawn-concurrency": int,
     "--actor-deadline": float,
+    "--target-rps": float,
 }
 
 
@@ -157,6 +164,7 @@ def init_boomer_config() -> None:
     from common.lifecycle_mode import add_lifecycle_mode_arguments
     from common.memload_config import add_memload_arguments
     from common.ping_config import add_ping_arguments
+    from common.rate_config import add_rate_arguments
     from common.resume_mode import add_resume_mode_arguments
     from common.spawn_config import add_spawn_arguments
     from common.sweperf_config import add_sweperf_arguments

@@ -24,14 +24,18 @@ workerSelector:
     workload: websocket${FIXTURE_SUFFIX}
 containers:
 - name: websocket
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/testserver
   args: ["websocket"]
   wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
     timeoutSeconds: 30
-${TEMPLATE_RESOURCES}
-${TEMPLATE_SANDBOX_CONFIG}
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-websocket${FIXTURE_SUFFIX}/

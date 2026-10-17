@@ -24,10 +24,10 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestActorTemplateFromManifestDemos parses the protojson ActorTemplate
@@ -43,10 +43,9 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 	// The values benchmarking/workloads/deploy.sh substitutes, beyond the
 	// ${BUCKET_NAME} every installer provides.
 	benchmarkValues := map[string]string{
-		"${ACTOR_MEMORY}":        "256Mi",
-		"${OTLP_ENDPOINT}":       "http://otel-collector.otel-system:4317",
-		"${SANDBOX_CLASS_ENUM}":  "SANDBOX_CLASS_GVISOR",
-		"${SANDBOX_CONFIG_NAME}": "gvisor-default",
+		"${ACTOR_CPU}":     "1",
+		"${ACTOR_MEMORY}":  "256Mi",
+		"${OTLP_ENDPOINT}": "http://otel-collector.otel-system:4317",
 	}
 
 	tests := []struct {
@@ -95,6 +94,10 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 			relPath: "benchmarking/workloads/manifests/kernelmem-template.yaml.tmpl",
 			values:  benchmarkValues,
 			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "kernelmem"},
+		},
+		{
+			relPath: "benchmarking/nighthawk-egress/traffic-driver-template.yaml.tmpl",
+			want:    resources.ActorTemplateRef{Atespace: "nighthawk", Name: "traffic-driver"},
 		},
 	}
 	for _, tc := range tests {
@@ -163,5 +166,30 @@ func TestWaitActorTemplateGoldenTimeoutIncludesLastError(t *testing.T) {
 	}
 	if !errors.Is(err, getErr) {
 		t.Errorf("WaitActorTemplateGolden error = %v, want it to wrap %v", err, getErr)
+	}
+}
+
+// disabledTemplateClient serves one ActorTemplate that opted out of the
+// golden snapshot and has no golden status.
+type disabledTemplateClient struct {
+	ateapipb.ControlClient
+}
+
+func (disabledTemplateClient) GetActorTemplate(_ context.Context, in *ateapipb.GetActorTemplateRequest, _ ...grpc.CallOption) (*ateapipb.ActorTemplate, error) {
+	return &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: in.GetActorTemplate().GetAtespace(), Name: in.GetActorTemplate().GetName()},
+		SnapshotConfig: &ateapipb.SnapshotConfig{GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}},
+	}, nil
+}
+
+// TestWaitActorTemplateGoldenDisabledTemplateReady: a template that opted out
+// never gets a golden tag or an error, so the wait must treat it as ready
+// instead of timing out.
+func TestWaitActorTemplateGoldenDisabledTemplateReady(t *testing.T) {
+	client := &ateclient.Client{ControlClient: disabledTemplateClient{}}
+	ref := resources.ActorTemplateRef{Atespace: "ate-demo", Name: "counter"}
+
+	if err := WaitActorTemplateGolden(context.Background(), client, ref, 0); err != nil {
+		t.Fatalf("WaitActorTemplateGolden on a disabled template = %v, want nil", err)
 	}
 }

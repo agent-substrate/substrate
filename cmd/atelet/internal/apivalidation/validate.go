@@ -16,9 +16,10 @@ package apivalidation
 
 import (
 	"context"
+	"fmt"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -28,14 +29,50 @@ func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateletpb.Reque
 	return Validate_RequestActorSuspendRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateGetActorEgressPolicyRequest runs the generated validation for
+// req.
+func ValidateGetActorEgressPolicyRequest(ctx context.Context, req *ateletpb.GetActorEgressPolicyRequest) field.ErrorList {
+	return Validate_GetActorEgressPolicyRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 // ValidateMintActorCertificateRequest runs the generated validation for req.
 func ValidateMintActorCertificateRequest(ctx context.Context, req *ateletpb.MintActorCertificateRequest) field.ErrorList {
 	return Validate_MintActorCertificateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
-// ValidateSetWorkerCapacityRequest runs the generated validation for req.
-func ValidateSetWorkerCapacityRequest(ctx context.Context, req *ateletpb.SetWorkerCapacityRequest) field.ErrorList {
-	return Validate_SetWorkerCapacityRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+// ValidateRunRequest runs the generated validation for req.
+func ValidateRunRequest(ctx context.Context, req *ateletpb.RunRequest) field.ErrorList {
+	return Validate_RunRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+// ValidateTerminateRequest runs the generated validation for req.
+func ValidateTerminateRequest(ctx context.Context, req *ateletpb.TerminateRequest) field.ErrorList {
+	return Validate_TerminateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+// ValidateCheckpointRequest runs the generated validation for req.
+func ValidateCheckpointRequest(ctx context.Context, req *ateletpb.CheckpointRequest) field.ErrorList {
+	return Validate_CheckpointRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+// ValidateRestoreRequest runs the generated validation for req.
+func ValidateRestoreRequest(ctx context.Context, req *ateletpb.RestoreRequest) field.ErrorList {
+	return Validate_RestoreRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+// ValidatePromoteSnapshotRequest runs the generated validation for req.
+func ValidatePromoteSnapshotRequest(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) field.ErrorList {
+	return Validate_PromoteSnapshotRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+// ValidateDetachActorRequest runs the generated validation for req.
+func ValidateDetachActorRequest(ctx context.Context, req *ateletpb.DetachActorRequest) field.ErrorList {
+	return Validate_DetachActorRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+// ValidateRegisterWorkerRequest runs the generated validation for req.
+func ValidateRegisterWorkerRequest(ctx context.Context, req *ateletpb.RegisterWorkerRequest) field.ErrorList {
+	return Validate_RegisterWorkerRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
 // ValidateCustom_Limits validates one limit with resources.ValidateLimit, the
@@ -43,6 +80,52 @@ func ValidateSetWorkerCapacityRequest(ctx context.Context, req *ateletpb.SetWork
 // of names are enforced by tags.
 func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.Limits) field.ErrorList {
 	return resources.ValidateLimit(fldPath, value.GetName(), value.GetQuantity())
+}
+
+func ValidateCustom_EgressGateway_Address(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateHostPort(fldPath, *value)
+}
+
+func ValidateCustom_SandboxAssets_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateSandboxClass(fldPath, *value)
+}
+
+func ValidateCustom_SandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateSandboxClass(fldPath, *value)
+}
+
+func ValidateCustom_SandboxAssets_PauseImage(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidatePinnedImage(fldPath, *value)
+}
+
+func ValidateCustom_AssetFile_Sha256(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if err := resources.ValidateAssetHash(*value); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
+	}
+	return nil
+}
+
+// ValidateCustom_PromoteSnapshotRequest_Atespace rejects the golden atespace:
+// golden actors are never paused, so a paused checkpoint is never promoted to
+// a golden snapshot.
+func ValidateCustom_PromoteSnapshotRequest_Atespace(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if *value == resources.GoldenActorAtespace {
+		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf("atespace %q holds golden actors, which are never paused", *value))}
+	}
+	return nil
+}
+
+func ValidateCustom_ObjectStorage_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSnapshotURI(fldPath, *value)
+}
+
+// validateSnapshotURI requires a snapshot URI that resources.ParseSnapshotURI
+// accepts.
+func validateSnapshotURI(fldPath *field.Path, uri string) field.ErrorList {
+	if _, err := resources.ParseSnapshotURI(uri); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, uri, err.Error())}
+	}
+	return nil
 }
 
 // ateDeepEqual is the deep-equal function declarative validation's generated

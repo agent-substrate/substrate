@@ -26,9 +26,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/agent-substrate/substrate/internal/egresspolicy"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/egresspolicy"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // DefaultPolicyCacheTTL is how long a fetched policy stays usable, and so how
@@ -137,7 +137,7 @@ func (c *policyCache) cached(ref resources.ActorRef) (*egresspolicy.Policy, bool
 // fetch loads and compiles one actor's policy and stores the result. A nil
 // policy with a nil error is the stored form of "no policy".
 func (c *policyCache) fetch(ctx context.Context, ref resources.ActorRef) (*egresspolicy.Policy, error) {
-	resp, err := c.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref.ToObjectRef()})
+	resp, err := c.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref.ToObjectRef(), Name: resources.SingletonName})
 	var policy *egresspolicy.Policy
 	switch {
 	case err == nil:

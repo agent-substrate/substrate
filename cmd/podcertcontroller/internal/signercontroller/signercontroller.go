@@ -21,9 +21,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podcertificate"
-	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/rendezvous"
-	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
+	"go.ate.dev/substrate/cmd/podcertcontroller/internal/podcertificate"
+	"go.ate.dev/substrate/cmd/podcertcontroller/internal/rendezvous"
+	"go.ate.dev/substrate/internal/clustertrustbundle"
 	certsv1 "k8s.io/api/certificates/v1"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -149,7 +149,10 @@ func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 
 	err = c.handlePCR(ctx, pcr)
 	if errors.Is(err, rendezvous.ErrNotAssigned) {
-		c.pcrQueue.AddRateLimited(key)
+		// Not an error: don't consume the failure rate limiter or inflate
+		// this item's backoff. Assignments only change when a replica joins
+		// or its lease expires, so re-examine after the lease duration.
+		c.pcrQueue.AddAfter(key, rendezvous.LeaseDuration)
 		return true
 	}
 	if err != nil {

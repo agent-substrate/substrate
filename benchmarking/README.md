@@ -13,6 +13,25 @@ scenario ladder, read [observability.md](observability.md).
 > [!IMPORTANT]
 > Source the environment configuration file (e.g., `source .ate-dev-env.sh`)
 > first so `PROJECT_ID`, `BUCKET_NAME`, etc. are set.
+>
+> **For Local Kind Clusters**: Set `KO_DOCKER_REPO` to the local registry so images are pulled without remote cloud credentials:
+> ```bash
+> export KO_DOCKER_REPO="localhost:5001"
+> export BUCKET_NAME="ate-snapshots"
+> ```
+
+> [!IMPORTANT]
+> The ate-api-server checks every call against
+> [authorization](../docs/authorization.md), and Locust calls it as the
+> `benchmarking/default` ServiceAccount. Install Substrate with that identity
+> as a bootstrap owner, alongside the default `ate-client` owner, or every
+> benchmark call is denied:
+> ```bash
+> ATE_API_AUTHZ_BOOTSTRAP_OWNERS=system:serviceaccount:ate-system:ate-client,spiffe://cluster.local/ns/benchmarking/sa/default \
+>   ./hack/install-ate.sh --deploy-ate-system
+> ```
+> The nightly automation sets this itself; see
+> [automation/README.md](automation/README.md).
 
 Note that deploying the benchmarks does not run them. You must visit Locust's
 web UI to start a test.
@@ -47,9 +66,22 @@ convenience:
 ./hack/install-ate.sh --delete-benchmarks
 ```
 
-The installer accepts `--benchmark-worker-count N` (default `1`).
 `--skip-build` and `--worker-memory` are only available when invoking
 `benchmarking/deploy_locust.sh` directly.
+
+### Settings
+
+`ate-setup` reads these settings in addition to those in
+[docs/operator-install.md](../docs/operator-install.md#settings), through the same
+flag, environment variable, and configuration document channels.
+`hack/install-ate.sh` forwards them as `--benchmark-worker-count`,
+`--benchmark-sandbox-class`, and `--benchmark-actor-memory`.
+
+| Key                      | Environment variable          | Flag                       | Default  | Applies to                               |
+|--------------------------|-------------------------------|----------------------------|----------|------------------------------------------|
+| `benchmark.actorMemory`  | `BENCHMARK_ACTOR_MEMORY`      | `--benchmark-actor-memory` | —        | (global)                                 |
+| `benchmark.sandboxClass` | `ATE_BENCHMARK_SANDBOX_CLASS` | `--sandbox-class`          | `gvisor` | `deploy benchmarks`, `delete benchmarks` |
+| `benchmark.workerCount`  | `ATE_BENCHMARK_WORKER_COUNT`  | `--worker-count`           | `1`      | `deploy benchmarks`, `delete benchmarks` |
 
 ## Running Tests
 
@@ -82,17 +114,23 @@ not a local entry point. See [automation/README.md](automation/README.md).
 python3 runner.py -f tests/<user-class>.py -t 1m -u 1 --name <run-name> --dest /tmp/bench
 ```
 
-Three flags control the optional post-run measurements described in
+Four flags control the optional post-run measurements described in
 [Benchmark output files](#benchmark-output-files):
 
 * `--cluster-facts` / `--no-cluster-facts`: read node capacity and worker pod
-  count from the Kubernetes API once the run ends, to derive density frontiers.
+  count from the Kubernetes API once the run ends, to derive density frontiers,
+  and worker pod restarts and evictions around the run, for `oom_events`.
   On by default. Pass `--no-cluster-facts` to skip Kubernetes API discovery.
 * `--prometheus-url`: the Prometheus to harvest server-side telemetry from.
   Defaults to the in-cluster service installed by
   [Optional: Prometheus + Grafana](#optional-prometheus--grafana).
 * `--atelet-lag-s`: how long to wait after the run before reading the
-  atelet's snapshot metrics. Defaults to 70.
+  atelet's metrics. Defaults to 70.
+* `--phase-breakdown` / `--no-phase-breakdown`: read the atelet and worker pod
+  logs once the run ends and add the suspend/resume phase percentiles to
+  `stats.jsonl`. On by default; needs `pods/log` access in `ate-system` and
+  `benchmark-workloads` (granted in `automation/manifests/runner-job.yaml.tmpl`).
+  See [analysis/README.md](analysis/README.md#automated-runs).
 
 Test-specific flags are appended to the same command; see the sections below.
 
@@ -113,6 +151,11 @@ and state restoration latency when a durable directory is attached to the actor.
 * `--durdir-template`: ActorTemplate name:
   * `glutton-durdir-data` (default): Attaches a durable data directory without memory snapshot restore.
   * `glutton-durdir-full`: Attaches a durable data directory and performs a full memory snapshot restore.
+  * `glutton-storage`: Attaches an external CSI volume instead of a durable
+    directory. `deploy_locust.sh` and `workloads/deploy.sh` deploy it only
+    when `--storage-class-name` names an existing StorageClass. To run it on
+    NFS, install with `hack/install-ate.sh --setup-csi=nfs` and pass
+    `--storage-class-name csi-nfs-sc`, the class the e2e tests also use.
 
 #### DurDir Reported Metrics
 
@@ -128,7 +171,36 @@ and state restoration latency when a durable directory is attached to the actor.
 
 The sweperf benchmark replays a recorded SWE-Perf task inside an actor, suspending and
 resuming between cycles to measure the cost of actor state transitions under a realistic
-agent workload. One task is four cycles by default.
+agent workload. One task is four cycles by default. Each task runs on a fresh actor: once
+the last cycle finishes, the actor is deleted and the user creates a new one for the next
+task.
+
+#### Sweperf Tasks
+
+Each task is one entry (name, digest-pinned image, step count) in
+`workloads/manifests/sweperf/sweperf-images.json`. Its ActorTemplate, `sweperf-<name>`,
+is generated into `workloads/manifests/sweperf/generated/` and checked in. To add or change
+a task, edit the catalog and regenerate:
+
+```bash
+SWEPERF=benchmarking/workloads/manifests/sweperf
+python3 -m venv "${SWEPERF}/venv" && "${SWEPERF}/venv/bin/pip" install -r "${SWEPERF}/requirements.txt"
+"${SWEPERF}/venv/bin/python" "${SWEPERF}/generate_sweperf_templates.py" '*'
+"${SWEPERF}/venv/bin/python" "${SWEPERF}/generate_sweperf_templates.py" --check   # fail if generated/ is missing or stale
+hack/verify/benchmarking-python.sh   # unit tests, as CI runs them
+```
+
+Deploy a task and the sweperf user class:
+
+```bash
+WORKLOAD_TEMPLATES=sweperf-django-11099 ./benchmarking/workloads/deploy.sh --deploy
+./benchmarking/locust/deploy.sh --deploy --user-class sweperf
+```
+
+Then start the run with `--sweperf-template sweperf-django-11099` and
+`--sweperf-total-steps 15`, set in the Locust web UI or through `LOCUST_SWEPERF_TEMPLATE`
+and `LOCUST_SWEPERF_TOTAL_STEPS`. The client takes the step count from that option, not
+from the template, so it must match the catalog.
 
 #### Sweperf Reported Metrics
 
@@ -138,7 +210,8 @@ ran inside the sandbox, as reported by `replay.py`.
 * `ResumeToFirstExec`: Resume RPC start until the sandbox accepts the cycle's `/execute`.
 * `CycleCEL`: CEL for one cycle.
 * `TaskCEL`: CEL summed over one task.
-* `TaskWallClock`: Client wall clock for one task, excluding inter-cycle think time.
+* `TaskWallClock`: Client wall clock for one task, excluding inter-cycle think time and actor
+  startup.
 * `CreateAtespace`, `CreateActor`, `ResumeActor`, `SuspendActor`, `DeleteActor`: Server-side
   elapsed time for each control-plane RPC from the response trailer, or client time without one.
 * `<rpc>_rtt`: Client round trip for the RPC of the same name, recorded only when the trailer is
@@ -147,9 +220,55 @@ ran inside the sandbox, as reported by `replay.py`.
   the job finishes. Polled every `--sweperf-poll-interval-ms` (default 100), so this row sits
   up to one interval above the job's actual end.
 
-The liveness check at session start already has the actor running, so the first cycle's
-resume is a no-op. Its successful `ResumeActor`, `ResumeActor_rtt` and `ResumeToFirstExec`
-samples are not recorded; failures still are.
+The liveness check on a new actor already has it running, so the first cycle of every task
+runs on a freshly started actor and its resume is a no-op. Its successful `ResumeActor`,
+`ResumeActor_rtt` and `ResumeToFirstExec` samples are not recorded; failures still are.
+
+The last cycle of a task is not suspended: the actor is deleted straight from running. A
+task of `n` cycles therefore records `n - 1` `SuspendActor` samples, and `TaskWallClock`
+does not include a final suspend. `DeleteActor` therefore times deleting a running actor,
+including its sandbox teardown, so it is not comparable with older runs that suspended the
+actor before deleting it.
+
+`locust_users` counts live actors rather than virtual users: it rises when a user starts an
+actor and falls when that actor is deleted, so it dips between tasks while a user waits to
+start its next actor.
+
+`CreateAtespace` is sent once per worker, not per task, and again only if `CreateActor`
+reports the atespace missing.
+
+When the run ends, shutdown cancels cycles still in flight. Calls cut short this way record
+nothing, and the interrupted task records no `TaskCEL` or `TaskWallClock` row, so the end of
+a run does not show up as a burst of failures.
+
+#### Sweperf Log Lines
+
+The boomer log also carries per-task facts for post-processing such as the goodput script in
+`tools/goodput`, which decides from them whether a task was good. The benchmark judges
+nothing. Durations are in milliseconds.
+
+* `Completed sweperf cycle`: `actor`, `cycle`, `cel_ms` (0 when the execute failed),
+  `wall_ms` (resume start to cycle end), `ok` (the execute succeeded, and so did the suspend
+  if there was one), `resume_ms` (as on the `ResumeActor` row; omitted for a no-op resume)
+  and `ttfe_ms` (resume start to the asynchronous ack; omitted without one, and for a no-op
+  resume even when its execute got one).
+* `ResumeActor failed in step`: also carries `wall_ms`. The cycle is retried on the next
+  iteration, and the failed attempt's time counts toward the task's `wall_ms`.
+* `sweperf task record`, one per finished task: `v` (1), `user` (boomer goroutine ID, unique
+  per boomer process), `actor`, `template`, `cycles` and `steps` (the cycle and trace step
+  counts the task ran, resolved when it started, so a mid-run change to
+  `--sweperf-num-cycles` or `--sweperf-total-steps` applies from the next task; `cycles` is
+  capped at `steps`), `task_start` (when the session started) and `end`, `startup_ms`
+  (`CreateActor` until the sandbox answers `/status`), `cel_ms` and `wall_ms` (as in `TaskCEL`
+  and `TaskWallClock`), `think_ms` (think time between the task's cycles), `resume_max_ms`
+  (slowest non-no-op resume), `ttfe_max_ms` (slowest `ttfe_ms`; omitted when no cycle after
+  the no-op resume got an asynchronous ack, so always for a one-cycle task), `retries`
+  (failed resumes), `failed`, and the first failure's `fail_step` (`resume`, `execute` or
+  `suspend`) and `fail_cycle`.
+* `sweperf on_start failed`: also carries `user`, to tie a failed start to its user.
+* `sweperf shutdown started`: the worker began tearing down. Startups and cycles in flight
+  are canceled: interrupted tasks log no task record, and startup failures logged after it
+  belong to the teardown, not the run.
 
 ### Agent-Session Benchmark
 
@@ -223,8 +342,12 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
   gap gets ±20% jitter so sessions don't move in lockstep.
 * `--resume-mode implicit|explicit` — implicit (default) lets the parked
   first request wake the actor; explicit issues ResumeActor before traffic.
-* `--lifecycle-mode suspend|pause` — durable suspend (default) or node-local
-  pause between steps.
+* `--lifecycle-mode suspend|pause|none` — durable suspend (default),
+  node-local pause between steps, or `none` to keep actors resident in memory
+  between steps without hibernating.
+* `--agentsession-snapshot-steps` — comma-separated 1-based step numbers after
+  which the actor is hibernated (for example, `3,10,20,30,40,50,61`); between
+  all other steps the actor stays resident.
 
 #### Writing an agent-session script
 
@@ -263,12 +386,44 @@ Sizes are Kubernetes quantities. Each op is one glutton RPC:
 | `churn_ram` | `key`, `size` | re-randomizes part of an array in place, dirtying pages |
 | `walk_ram` | `key` | touches one byte per page: demand-paging cost after a resume |
 | `ping` | none | a minimal round trip through the router |
+| `dwell` | `millis` | no request: the actor stays resident and idle, as a gateway does during a model round trip or a typing gap |
 
 Loading is strict: unknown op kinds or fields, an argument a kind does not
 take, a read of a file nothing wrote, a walk of an array nothing filled, a
 duplicate step name, or a `min_actor_memory` below the declared RAM plus
 disk all fail before any actor is created. Built-in variants are checked by
 `TestEmbeddedScriptsAreValid`, so a broken file cannot merge.
+
+#### Built-in script variants
+
+`coding-session` (default) is a coding agent working one task: 20 steps of
+build, test and edit work, each preceded by a few seconds of LLM thinking
+spent suspended; about 40 CPU-seconds of sandbox work per lap.
+
+`personal-assistant` is an always-on assistant of the OpenClaw or Hermes
+Agent kind: one lap is one day in real time, with about 30 user messages
+in 7 clusters, a heartbeat turn every 30 minutes while the user is awake,
+hourly system-event crons, a morning briefing, model-catalog refreshes,
+one context compaction and a nightly memory sweep (61 wakes, about 65
+CPU-seconds and 150 MiB written per lap, a 640Mi resident heap that grows
+to about 960Mi). Each turn reads its session store, ships a 50 to 110 KiB
+context out through the router, dwells for the model round trip, and
+appends to its store, sized from an strace profile of OpenClaw; the
+script's header comment lists the figures. Its think gaps are the real
+idle gaps, so run it with a fractional think scale:
+`--agentsession-script personal-assistant --agentsession-think-scale 0.02`
+plays a day in about 30 minutes. Because every heartbeat and cron is a
+wake, the script also shows what an always-on agent costs a system that
+suspends it between events: an internal timer cannot fire in a suspended
+sandbox, so each of those turns needs an external wake.
+
+`personal-assistant-light` is the same day with the RAM arrays scaled
+down to 28Mi and everything else unchanged (files, reads, CPU, dwell and
+the 61 wakes), for runs that want the always-on wake pattern with a small
+memory image: about 40 to 95 MB per pause under gVisor, and under micro-VM
+about 100 MB of guest before the script writes anything, bounded by the
+actor's memory limit. It fits a 256Mi actor. Run it with the same
+fractional think scale.
 
 To run a script of your own without rebuilding anything, hand it to the
 locust deploy:
@@ -329,6 +484,125 @@ The web UI shows the same fields; `0` keeps the value boomer-worker started with
 The `actors_per_*` ratios in `trial_summary` are wrong for this test: they
 count users × `--actors-per-user`, not `--total-actors`.
 
+### ResumePaused Benchmark
+
+The ResumePaused benchmark drives ate-api-server's cold resume path at a set
+rate. A cold resume here is a ResumeActor of a paused actor: ateapi takes the
+actor lease, binds a worker, and restores the actor from its snapshot. A
+ResumeActor of a running actor does none of that. Each user owns one actor
+from the `glutton` template. On its first iteration the user creates the actor
+and makes it cold with a resume and a pause; every later iteration resumes the
+actor and pauses it again, so every measured resume is cold.
+
+The warm-up runs in the step that added the user, unpaced, and is recorded
+under its own names.
+
+It sends no requests to the actors themselves, so it runs on the fake data
+plane, where it measures what a cold resume costs ate-api-server and Postgres
+without the router or the restore in the way. The pauses run at the resume
+rate, so a capacity it finds is one of resume and pause cycles, not of resumes
+alone.
+
+Actors are named `rp-<uuid>` and deleted when boomer exits. If the atespace
+cannot be ensured, boomer exits at startup. An actor that fails to warm is
+deleted, and its user creates another on its next iteration. When a step lowers
+the user count, the actors of the stopped users stay paused, unused, until
+boomer exits.
+
+#### ResumePaused Configuration Knobs
+
+* `--target-rps`: Cold resumes per second the whole boomer process paces to
+  (default `0`, unpaced). A `--ladder` step ending in `@target_rps`, as in
+  `200:3m@1000`, changes it as the step starts. Keep the users at or above the
+  rate times the p99 of one resume plus one pause in seconds, or the step falls
+  short of its rate.
+
+The web UI shows the same field.
+
+Trim the start of each ladder step. A rate change reaches boomer at its next
+poll of the master, within 10 s, and a step that adds users carries their
+warm-up until they have all joined at the spawn rate.
+
+#### ResumePaused Reported Metrics
+
+* `ResumeActorCold`: Latency of each measured resume. A resume that finds its
+  actor already running fails, as no cold resume happened.
+* `PauseActor`: Latency of the async SuspendActor (the pause) that makes the
+  actor cold again.
+* `PauseActorRecovery`: After a failed cycle, the pause that makes the actor
+  cold for the next one. It is load on the server, so it is recorded, but
+  apart from `PauseActor`. A recovery pause that finds the actor already
+  paused counts as a success.
+* `CreateActor`, `ResumeActorWarmup`, `PauseActorWarmup`: A user's warm-up of
+  its actor, in the step that added the user.
+
+### Isolate Mode
+
+A real cold resume is limited by the node's restore capacity, which hides the
+limits of ate-api-server and Postgres. Isolate mode takes the nodes out by
+installing substrate with a fake data plane:
+
+```bash
+hack/install-ate.sh --deploy-ate-system --fake-data-plane
+./benchmarking/workloads/deploy.sh --deploy --worker-count 200 \
+  --fake-atelet-env FAKE_ATELET_DELAY=500ms
+```
+
+`deploy.sh` deploys the usual WorkerPool, but the install serves it with two
+fakes from `cmd/benchmarking/isolate/` instead of worker pods:
+
+* `fake-workersync` stands in for ate-controller's WorkerPool controller and
+  worker syncer. It honors each pool's `spec.replicas` with fake Workers, none
+  backed by a pod, round robin on the nodes that run fake-atelet, and scales them
+  up and down with the pool, draining a Worker before deleting it. Each Worker
+  reports what a real worker would: cpu and memory from the pool's
+  `template.resources.limits`, or the node's allocatable without one, and 1000
+  actors, ateworker's default, unless the pool's `ate.dev/fake-max-actors`
+  annotation says otherwise. It writes the pool's status, so
+  `kubectl get workerpool` and `kubectl scale workerpool` work. A node keeps
+  its Workers for `--node-grace`, five minutes by default, after its
+  fake-atelet pod goes, so a DaemonSet rollout does not move them; past that
+  they move to a node that still runs fake-atelet.
+* `fake-atelet` takes atelet's place in its DaemonSet, on every node atelet
+  would run on, and answers every
+  lifecycle call with success after its `--delay`, without running or
+  saving any workload. It writes one placeholder object per snapshot, because
+  ate-api-server refuses to tag an empty one. Like ateworker, it mints the actor's
+  certificate from ate-api-server on every run and restore that names an
+  egress gateway, which the default install does; the mint is ate-api-server's
+  time, so it adds to `--delay`, the data plane's share of the call.
+  It also relays fake-workersync's capacity reports, as atelet relays ateworker's:
+  ate-api-server accepts a report only from the atelet on the Worker's node.
+  The relay admits only fake-workersync's pod identity.
+
+The install also scales ate-controller to zero, whose worker syncer would
+delete the fake Workers. Its other controllers stop with it: no NetworkPolicy
+is made for a WorkerPool, and the egress MITM trust bundle is not derived.
+Fake actors need neither. fake-atelet takes the storage settings of atelet's
+objectstore-plugin sidecar, whose writes it takes over, so its snapshot
+placeholders go to the storage the install points atelet at. The install
+refuses a cluster whose WorkerPools still have worker pods, which would
+outlive ate-controller. A normal `hack/install-ate.sh --deploy-ate-system`
+puts the real data plane back, and `--delete-ate-system` removes the fakes
+either way. Never use the mode on a
+cluster that serves real actors: actors placed on fake Workers do not exist.
+
+The installer only chooses the fake data plane; the benchmark tunes it.
+fake-atelet reads each tuning flag from a `FAKE_ATELET_<FLAG>` variable in the
+optional `fake-atelet-tuning` ConfigMap, which no install creates or resets:
+`FAKE_ATELET_DELAY` sets `--delay`, `FAKE_ATELET_DELAY_RESTORE` overrides it
+for Restore alone, and `FAKE_ATELET_MINT_ACTOR_CERTIFICATE=false` skips the
+certificate mint. `deploy.sh --fake-atelet-env NAME=VALUE`, repeatable, writes
+that ConfigMap to exactly the given entries and restarts fake-atelet when it
+changes, before the WorkerPool is applied.
+
+Nothing answers behind the router, so the mode suits only a user class that
+sends the actors no requests, such as `ate_api.py`, which creates, gets,
+resumes and suspends actors. Every boomer user class pings its actors through
+the router. In `tests.yaml`, an `isolate` block selects the mode, and its
+keys become `deploy.sh --fake-atelet-env` entries: `delay` sets
+`FAKE_ATELET_DELAY`, and so on.
+
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.
 
@@ -343,11 +617,16 @@ them are checked into the repository.
   those two keys, because it is what CI orchestration reads to decide whether a
   trial ran at all.
 * `stats.csv`, `stats_history.csv`, `failures.csv`, `exceptions.csv`: Locust's
-  own CSV output.
+  own CSV output. `stats_history.csv` has a row per operation every second as
+  well as the `Aggregated` row, so each operation's latency can be charted
+  over the run; filter to `Aggregated` for run-wide numbers.
 * `logs.txt`, `traces.txt`: the runner log, and the trace IDs seen during the run.
 * `stats.jsonl`: one JSON object per line, one per metric. Every row carries
   the same five keys: `timestamp`, `tag`, `test_name`, `metric`, and a flat
-  `measurements` map holding that metric's numbers.
+  `measurements` map holding that metric's numbers. The `phase_*` rows and
+  the `phase_breakdown_summary` row are the suspend/resume phase percentiles
+  read from the node logs (see
+  [analysis/README.md](analysis/README.md#automated-runs)).
 * `server_summary.json`: server-side telemetry harvested from Prometheus,
   including the per-sample bin-packing timeseries.
 
@@ -363,6 +642,22 @@ map holds the raw facts and the derived numbers side by side.
   whole cluster, so a separate infrastructure pool is not counted. They are
   recorded so the ratios below can be re-derived later, or recomputed against
   a different denominator.
+* `kubernetes_version`: the worker nodes' Kubernetes version (kubelet version).
+* `worker_actor_capacity`, `worker_memory_limit_gb` (GiB): the capacity each
+  worker pod declares, its ateworker `--max-actors` (1000 when unset) and its
+  container memory limit (null when unset, as the node bounds it instead).
+  `sandbox_class`: `gvisor` or `microvm`, from the worker image. A mixed pool
+  gives a sorted comma-joined list for each. An unreadable value is skipped
+  without affecting the others, and logged once.
+* `multi_actor_worker`: `true` when `actors_per_pod_p50` is above 1.
+* `run_start`, `run_end`: Unix seconds bracketing the run, for finding its
+  server-side metrics after the cluster is deleted.
+* `metadata_<key>`: one per key of the free-form `--metadata '<json>'` object,
+  for facts only the caller knows. Non-string values are stored as JSON, and
+  null values are skipped. The orchestrator passes `cluster_name`,
+  `cluster_location` and `project_id` from the target cluster, plus any keys in
+  the `BENCHMARK_METADATA` environment variable (a JSON object) and in the
+  test's own `--metadata` flag, whose keys win on conflict.
 * `actors_per_node`, `actors_per_vcpu`, `actors_per_gb_ram`: the most actors
   Locust reported running, over the matching capacity. The `-u` flag only
   stands in when no sample was read.
@@ -383,10 +678,14 @@ comparing numbers across runs:
 * **Actors are derived, not counted.** Locust only sees virtual users, so the
   numerator is the peak user count times `--actors-per-user`. No server-side
   gauge counts resident actors: `ate.actor.stats.sampled_actors` drops any
-  actor without a live resource measurement, so suspended ones fall out.
+  actor without a live resource measurement, so suspended ones fall out. It
+  is recorded as `active_actors` in `server_summary.json`, a running-actor
+  count rather than a resident one.
 * **The denominators are read once, after the run.** A cluster that autoscaled
   mid-run is measured at its final size, so the ratio pairs a peak from one
-  moment with a capacity from another.
+  moment with a capacity from another. The same holds for every worker and
+  node fact above, including `kubernetes_version` and the worker capacity, and
+  so for `multi_actor_worker`, which is derived from `actors_per_pod`.
 * **The peak assumes every actor is alive at once.** A workload that creates
   and deletes actors as it goes never holds them all at the same time, so its
   real density is lower than reported.
@@ -409,11 +708,72 @@ actually did, independent of what the load generator reported.
 * `snapshots.size_p50_mb` through `size_p99_mb`: actor memory image sizes.
 * `snapshots.size_avg_mb`: mean memory image size.
 * `snapshots.restore_p50_s` through `restore_p99_s`, `restore_mean_s`, and the
-  same for `checkpoint_*`: atelet restore and checkpoint latency.
+  same for `checkpoint_*`: how long the atelet took to resume or suspend an
+  actor (`ate_actor_{restore,checkpoint}_duration`, `total` phase). Every
+  snapshot kind counts, as in the sizes: the actor's own snapshot, a
+  template's first start from its golden snapshot, and a pause. The buckets
+  reach 60s, so a slower operation reads as 60s.
 * `snapshots.checkpoints_in_window`, `checkpoints_cumulative`: checkpoint
   volume over the steady-state window, and since the atelet started.
 * `snapshots.checkpoint_mb_s`: bytes written per second spent checkpointing,
   not per second of wall clock.
+* `active_actors`: running actors (`ate_actor_stats_sampled_actors`), as a
+  percentile `summary` of the cluster-wide count, `atelets` seen, and a
+  `timeseries` every 10s over the whole run (ramp-up included). Each point has
+  the cluster-wide count and `active_atelets` hosting an actor. As the
+  assumptions above note, the gauge drops actors without a live measurement,
+  so suspended ones fall out and the count dips while actors are suspended.
+  The atelet stops exporting when a node has no running actor, so at a step
+  where at least one atelet reported, a missing one counts as 0. A step where
+  none reported is skipped, not 0, since a failed scrape looks the same; this
+  mostly hits 1-user runs. If the metric never appeared during the run, every
+  field is `null`. `atelets` counts atelet processes seen in the run, not
+  nodes: the collector keeps an exited atelet's last value for about 5
+  minutes, so a restart can briefly count twice, and an atelet scraped both
+  directly and through a collector counts twice.
+* `working_set.node`, `worker`, `atelet`: memory working set in GiB from
+  cAdvisor on the nodes hosting a worker pod, per worker pod (every actor on it
+  included), and per atelet on those nodes. Each has a percentile `summary`
+  (plus `max`) over the steady-state window, `count` of series seen in it, and
+  a `timeseries` every 10s over the whole run with the sum (`total_gb`) and
+  largest (`max_gb`). A spike shorter than 10s can be missed.
+* `working_set.actor`, `per_actor`: the same shape for the actors' own working
+  set as the atelet reports it (`ate_actor_stats_memory_working_set_bytes`),
+  per atelet with every template summed, and the average per measured actor
+  (`ate_actor_stats_sampled_actors`) on each atelet; `count` is atelet
+  processes, keyed like `active_actors`. As `per_actor` is an average per
+  atelet, its `max` is the highest atelet average, not the largest actor, and
+  its `total_gb` has no meaning. A gVisor actor is read from its sandbox cgroup
+  on the host, a microVM actor from inside the guest. As with `active_actors`,
+  suspended actors fall out, but through the telemetry-meter a series that
+  stops being exported keeps its last value for up to 5m. Missing samples are
+  skipped, not counted as 0. The atelet samples every
+  `--actor-stats-poll-interval` (default 1m), so these move in steps of a
+  minute or more. `actor` matches one worker pod's actors only when the node
+  runs one worker pod.
+* `oom_events.node`, `pod`: OOM kills over the run, from cAdvisor's
+  `container_oom_events_total`. `node` counts only global OOMs. `pod` counts
+  kills inside a worker pod (actor sandboxes and the worker container) and is
+  best effort: a non-zero value is real, but a kill whose cgroup is gone before
+  the scrape is missed. A node-allocatable OOM (`oom_memcg=/kubepods.slice`)
+  isn't global, so it isn't in `node`, and `pod` usually misses it; the kubelet
+  evictions that often come with it show in `evicted`. OOMs inside a microVM
+  guest are invisible and show up as task failures. Memory PSI (`node_psi` /
+  `pod_psi`) is the early warning.
+* `oom_events.worker_restarts`, `worker_oomkilled_pods`, `evicted`,
+  `worker_pods_lost`: from the Kubernetes API, read before and after the run.
+  Restarts on a pod deleted during the run are lost. `worker_oomkilled_pods`
+  counts pods whose last restart was `OOMKilled`, not kills; a group kill of
+  the whole worker (`memory.oom.group=1`) shows here. `evicted` is kubelet
+  eviction under node pressure (usually memory), not a kernel OOM kill. It also
+  counts replacement pods the kubelet refused to start while the node was under
+  pressure, as they get the same `Evicted` reason. It comes from `Evicted`
+  events, which last about 1h, so a run longer than that can undercount.
+  `worker_pods_lost` is pods gone by the end for any reason (eviction,
+  scale-down, recycling), not an OOM count; a pod created and deleted within
+  the run isn't counted. A node OOM can also show as a worker `OOMKilled`
+  restart, so never add the fields. A field is `null` when its Kubernetes read
+  fails, and all are with `--no-cluster-facts`.
 
 Every distribution reports p50, p90, p95 and p99 over the steady-state window.
 The steady-state window runs from the first to the last Locust sample at 90% or
@@ -426,18 +786,29 @@ every 10s.
 
 The atelet exports before Prometheus scrapes it, so the harvest waits
 `--atelet-lag-s` seconds (default 70, enough for the OTel SDK's 60s default
-export and a 10s scrape)
-and reads the snapshot window half that late. The window ends at the last
+export and a 10s scrape) and reads the snapshot, `active_actors` and actor
+working set windows half that late, stamping `active_actors` and actor
+working set points back by the same amount. The window ends at the last
 full-load sample, so teardown suspends are left out.
 
-`metadata.start_ts` and `end_ts` bound the whole run, which the packing
-`timeseries` covers. `steady_start_ts` and `steady_end_ts` bound the
-steady-state window. A flat subset of the numbers also goes into a
-`server_summary` row in `stats.jsonl`.
+`metadata.start_ts` and `end_ts` bound the whole run, which the packing,
+`active_actors` and `working_set` timeseries cover. `steady_start_ts` and
+`steady_end_ts` bound the steady-state window. A flat subset of the numbers
+also goes into a `server_summary` row in `stats.jsonl`.
 
 Neither the Kubernetes API nor Prometheus is required. If either is unreachable,
 or discovery was skipped, the affected fields are written as `null` and the run
 still succeeds. A `null` means the value was not measured. It never means zero.
+
+## Suspend/resume phase breakdown
+
+`SuspendActor` and `ResumeActor` latency can be attributed to the phases
+inside them (object-storage transfer, hypervisor snapshot/restore, rootfs
+assembly, ...) from the structured log records atelet and ateworker-microvm
+emit. `analysis/collect_logs.sh` dumps the node logs of a run and
+`analysis/phase_report.py` aggregates them into per-phase percentiles and
+waterfalls of the slowest operations. See
+[analysis/README.md](analysis/README.md).
 
 ## Optional: Prometheus + Grafana
 
@@ -472,4 +843,11 @@ repository root:
 
 ```bash
 python3 -m unittest discover -s benchmarking/locust/unit_tests
+```
+
+`analysis/test_phase_report.py` covers the phase-log report's parser and
+aggregation:
+
+```bash
+python3 -m unittest discover -s benchmarking/analysis
 ```

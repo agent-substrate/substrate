@@ -33,8 +33,9 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"google.golang.org/grpc/codes"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/principal"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/principal"
 )
 
 func configureDockerEnv(ctx context.Context) error {
@@ -63,8 +64,14 @@ func configureDockerEnv(ctx context.Context) error {
 func startPostgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
+	// Without Docker the tests skip locally, but must fail in CI, where a
+	// skip would pass the package without running it.
+	unavailable := t.Skipf
+	if dockerenv.Required() {
+		unavailable = t.Fatalf
+	}
 	if err := configureDockerEnv(ctx); err != nil {
-		t.Skipf("skipping test; docker is unavailable: %v", err)
+		unavailable("docker is unavailable: %v", err)
 	}
 
 	pgContainer, err := postgres.Run(ctx,
@@ -75,7 +82,7 @@ func startPostgres(t *testing.T) *pgxpool.Pool {
 		postgres.BasicWaitStrategies(),
 	)
 	if err != nil {
-		t.Skipf("skipping test; failed to start postgres container: %v", err)
+		unavailable("failed to start postgres container: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = testcontainers.TerminateContainer(pgContainer)
@@ -439,7 +446,7 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 	}
 	t.Cleanup(fgaSrv.Close)
 
-	authorizer, policyManager, err := New(ctx, pool, fgaSrv, nil)
+	authorizer, policyManager, err := New(ctx, pool, fgaSrv, nil, testSystemPrincipals())
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
@@ -544,5 +551,18 @@ func TestFormatUser_NoCollision(t *testing.T) {
 	u2 := formatUser("user:alice")
 	if u1 == u2 {
 		t.Fatalf("formatUser(\"alice\") and formatUser(\"user:alice\") collided on %q", u1)
+	}
+}
+
+func TestAtespacedObjects_NoCollision(t *testing.T) {
+	// '/' separates the atespace from the name, so a '/' inside either must
+	// not produce another resource's ID.
+	for _, format := range []func(atespace, name string) string{ActorObject, ActorTemplateObject} {
+		if o1, o2 := format("a/b", "c"), format("a", "b/c"); o1 == o2 {
+			t.Errorf("(%q, %q) and (%q, %q) collided on %q", "a/b", "c", "a", "b/c", o1)
+		}
+	}
+	if o1, o2 := ActorObject("a", "b"), ActorTemplateObject("a", "b"); o1 == o2 {
+		t.Errorf("ActorObject and ActorTemplateObject collided on %q", o1)
 	}
 }

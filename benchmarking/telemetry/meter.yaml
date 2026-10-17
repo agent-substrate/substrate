@@ -32,6 +32,10 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: benchmarking
+  labels:
+    # Admits the benchmark clients to the Substrate API through
+    # manifests/ate-install/ate-system-networkpolicies.yaml.
+    ate.dev/api-access: "true"
 ---
 apiVersion: v1
 kind: ConfigMap

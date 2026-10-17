@@ -16,6 +16,7 @@ package objectstorage
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"os"
 	"path/filepath"
@@ -91,7 +92,7 @@ func TestSparseZstdRoundTrip(t *testing.T) {
 			defer src.Close()
 
 			var buf bytes.Buffer
-			logical, _, err := writeSparseZstd(&buf, src)
+			logical, _, err := writeSparseZstd(context.Background(), &buf, src, 2)
 			if err != nil {
 				t.Fatalf("writeSparseZstd: %v", err)
 			}

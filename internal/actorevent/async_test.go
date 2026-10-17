@@ -108,7 +108,7 @@ func TestAsyncHandlerAfterClose(t *testing.T) {
 	}
 }
 
-// TestNewEmitterToBypassesDefault pins that the stdout copy goes to the given
+// TestNewEmitterToBypassesDefault pins that the stdout record goes to the given
 // handler, so --log-level on slog.Default() does not reach it.
 func TestNewEmitterToBypassesDefault(t *testing.T) {
 	quiet := &captureHandler{}

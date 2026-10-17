@@ -17,7 +17,7 @@ package steps
 import (
 	"context"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 // Manifests for the bundled Kubernetes Secrets credential provider. They sit

@@ -18,7 +18,7 @@ import (
 	"context"
 	"testing"
 
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 )
 
 func TestParseBytes(t *testing.T) {

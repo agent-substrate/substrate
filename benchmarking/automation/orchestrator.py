@@ -53,7 +53,14 @@ from typing import Any
 import yaml
 
 from testtypes import TYPES
-from util import parse_duration_seconds, run, run_no_check
+from util import (
+    isolate_block,
+    isolate_install_args,
+    isolate_workload_args,
+    parse_duration_seconds,
+    run,
+    run_no_check,
+)
 
 
 SUBSTRATE_DIR = "/workspace/substrate"
@@ -178,6 +185,63 @@ def test_type(test: dict[str, Any]) -> str:
     return test["type"]
 
 
+def _json_object(raw: str, what: str) -> dict[str, Any]:
+    """Parses raw as a JSON object, naming `what` in the error otherwise."""
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"{what} is not valid JSON: {e}") from e
+    if not isinstance(value, dict):
+        raise ValueError(f"{what} must be a JSON object")
+    return value
+
+
+def run_metadata() -> dict[str, Any]:
+    """Free-form run facts handed to the runner as --metadata.
+
+    Read per test, after apply_target_cluster has reset os.environ;
+    BENCHMARK_METADATA survives that reset because it is part of the startup
+    env (_ORIG_ENV).
+    """
+    md: dict[str, Any] = {
+        k.lower(): os.environ[k]
+        for k in ("CLUSTER_NAME", "CLUSTER_LOCATION", "PROJECT_ID")
+        if os.environ.get(k)
+    }
+    raw = os.environ.get("BENCHMARK_METADATA")
+    if raw:
+        md.update(_json_object(raw, "BENCHMARK_METADATA"))
+    return md
+
+
+def split_metadata_flag(test: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
+    """Separates a test's own --metadata from the rest of its flags.
+
+    Accepts `--metadata <json>` and `--metadata=<json>`. With more than one,
+    later keys win. Raises ValueError when the value is missing or is not a
+    JSON object, rather than dropping it.
+    """
+    name = test.get("name")
+    rest: list[Any] = []
+    md: dict[str, Any] = {}
+    flags = list(test.get("flags", []))
+    i = 0
+    while i < len(flags):
+        flag = str(flags[i])
+        if flag == "--metadata":
+            if i + 1 >= len(flags):
+                raise ValueError(f"test {name!r}: --metadata needs a JSON value")
+            raw, i = str(flags[i + 1]), i + 2
+        elif flag.startswith("--metadata="):
+            raw, i = flag.split("=", 1)[1], i + 1
+        else:
+            rest.append(flags[i])
+            i += 1
+            continue
+        md.update(_json_object(raw, f"test {name!r}: --metadata"))
+    return rest, md
+
+
 def wait_for_docker(timeout: int = 120) -> None:
     print("Waiting for DIND sidecar...", flush=True)
     start = time.time()
@@ -196,6 +260,22 @@ def registry_host(ko_docker_repo: str) -> str:
 
 def sanitize(name: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")
+
+
+# Kubernetes copies a Job's name into the job-name label on the Job and its
+# pods, and a label value holds at most 63 bytes.
+MAX_JOB_NAME_LEN = 63
+
+
+def job_name(name: str, commit: str) -> str:
+    """Return a unique Job name for a test run that fits a Kubernetes label.
+
+    The commit and random suffix always survive; a long test name is cut to
+    make room, so two runs of the same test never collide.
+    """
+    suffix = f"-{commit[:7]}-{uuid.uuid4().hex[:6]}"
+    prefix = f"runner-{sanitize(name)}"
+    return prefix[: MAX_JOB_NAME_LEN - len(suffix)].rstrip("-") + suffix
 
 
 def render_template(path: str, subs: dict[str, Any], extra_args: Iterable[str] = ()) -> str:
@@ -303,10 +383,35 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
                 f"(want one of {list(TEST_TYPES)})"
             )
         TYPES[ttype].validate(t)
+        if ttype == "locust":
+            # A malformed --metadata fails here rather than mid-sweep.
+            split_metadata_flag(t)
+        isolate_block(t)
+
+
+def substrate_args(test: dict[str, Any]) -> list[str]:
+    """Return the hack/install-ate.sh --deploy-ate-system arguments for a
+    tests.yaml entry: its ateArgs, then the fake data plane flag its isolate
+    block asks for. The teardown needs no matching flag: --delete-ate-system
+    removes the fake data plane whether or not it was installed."""
+    return [*test.get("ateArgs", []), *isolate_install_args(test)]
+
+
+# ate-api-server enforces authorization, and the runner Job calls it with its
+# pod certificate as BENCHMARK_RUNNER_PRINCIPAL. Each test reinstalls
+# Substrate, so making the runner a bootstrap owner on every install grants it
+# global owner for exactly the life of that install. kubectl-ate's principal
+# stays an owner for the workload and teardown steps.
+BENCHMARK_RUNNER_PRINCIPAL = "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner"
+CLIENT_PRINCIPAL = "system:serviceaccount:ate-system:ate-client"
 
 
 def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
-    run(["hack/install-ate.sh", "--deploy-ate-system", *(str(a) for a in ate_args)])
+    env = {
+        **os.environ,
+        "ATE_API_AUTHZ_BOOTSTRAP_OWNERS": f"{CLIENT_PRINCIPAL},{BENCHMARK_RUNNER_PRINCIPAL}",
+    }
+    run(["hack/install-ate.sh", "--deploy-ate-system", *(str(a) for a in ate_args)], env=env)
 
 
 def teardown_substrate() -> None:
@@ -315,8 +420,8 @@ def teardown_substrate() -> None:
 
 def install_microvm_deps() -> None:
     """Stage kata/cloud-hypervisor assets and apply the cluster-wide
-    microvm SandboxConfig. Required before a microvm ActorTemplate can
-    boot; must run after deploy_substrate() (which installs the CRDs)."""
+    microvm SandboxConfig. Required before a microvm WorkerPool can run
+    actors; must run after deploy_substrate() (which installs the CRDs)."""
     run(["hack/install-microvm-deps.sh", "--install"])
 
 
@@ -333,6 +438,8 @@ def deploy_workloads(
     actor_memory: str = "",
     wait_timeout_secs: int | str = "",
     worker_memory: str = "",
+    fake_atelet_args: Iterable[str] = (),
+    actor_cpu: str = "",
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -346,6 +453,11 @@ def deploy_workloads(
     # minimum); RAM-consuming suites set actorMemory in tests.yaml.
     if actor_memory:
         cmd += ["--actor-memory", actor_memory]
+    # Empty keeps the default in workloads/deploy.sh (1 CPU). The scheduler
+    # books the limit against worker CPU capacity, so dense suites set
+    # actorCPU in tests.yaml to fit more actors per worker.
+    if actor_cpu:
+        cmd += ["--actor-cpu", actor_cpu]
     # Empty leaves the worker pods unsized; set workerMemory in tests.yaml to
     # control how many workers the scheduler packs onto a node.
     if worker_memory:
@@ -354,6 +466,8 @@ def deploy_workloads(
     # (whole seconds).
     if wait_timeout_secs != "":
         cmd += ["--wait-timeout", str(wait_timeout_secs)]
+    # An isolate block's tuning of fake-atelet, on the fake data plane.
+    cmd += list(fake_atelet_args)
     # deploy.sh itself blocks until every template's golden snapshot exists.
     run(cmd)
 
@@ -370,9 +484,9 @@ def run_test(
     manifests_dir: str = MANIFESTS_DIR,
 ) -> str:
     name = test["name"]
-    job_name = f"runner-{sanitize(name)}-{commit[:7]}-{uuid.uuid4().hex[:6]}"
+    job = job_name(name, commit)
     subs = {
-        "JOB_NAME": job_name,
+        "JOB_NAME": job,
         "IMAGE": image,
         "TAG": commit,
         "NAME": name,
@@ -381,19 +495,26 @@ def run_test(
     mod = TYPES[test_type(test)]
     tmpl = mod.job_tmpl(manifests_dir)
     subs.update(mod.job_subs(test))
-    manifest = render_template(tmpl, subs, test.get("flags", []))
+    flags = list(test.get("flags", []))
+    # Only the locust runner knows --metadata. It keeps only the last one it
+    # is given, so a test's own --metadata is folded into a single merged
+    # flag; the test's keys win over the run's.
+    if test_type(test) == "locust":
+        flags, own = split_metadata_flag(test)
+        flags += ["--metadata", json.dumps({**run_metadata(), **own})]
+    manifest = render_template(tmpl, subs, flags)
     wait_for_no_active_runners()
-    print(f"Submitting Job {job_name}", flush=True)
+    print(f"Submitting Job {job}", flush=True)
     subprocess.run(
         ["kubectl", "apply", "-f", "-"], input=manifest, text=True, check=True
     )
     timeout = parse_duration_seconds(test["duration"]) + 1800
-    result = wait_for_job(job_name, timeout)
-    print(f"Job {job_name} result: {result}", flush=True)
+    result = wait_for_job(job, timeout)
+    print(f"Job {job} result: {result}", flush=True)
     run_no_check(
-        ["kubectl", "logs", f"job/{job_name}", "-n", NAMESPACE, "--tail=500"]
+        ["kubectl", "logs", f"job/{job}", "-n", NAMESPACE, "--tail=500"]
     )
-    run_no_check(["kubectl", "delete", "job", job_name, "-n", NAMESPACE])
+    run_no_check(["kubectl", "delete", "job", job, "-n", NAMESPACE])
     return result
 
 
@@ -463,6 +584,8 @@ def main() -> None:
     print(f"Running {len(tests)} test(s)", flush=True)
     try:
         validate_and_normalize_tests(tests)
+        # Checks BENCHMARK_METADATA only; cluster vars may not be set yet.
+        run_metadata()
     except ValueError as e:
         sys.exit(str(e))
 
@@ -518,7 +641,7 @@ def main() -> None:
             failure_msg = None
             start_time = time.time()
             try:
-                deploy_substrate(test.get("ateArgs", []))
+                deploy_substrate(substrate_args(test))
                 TYPES[ttype].pre_test(test)
                 # install-microvm-deps needs the CRDs from deploy_substrate;
                 # deploy_workloads needs the microvm SandboxConfig.
@@ -530,6 +653,8 @@ def main() -> None:
                     test.get("actorMemory", ""),
                     test.get("workerWaitTimeout", ""),
                     test.get("workerMemory", ""),
+                    isolate_workload_args(test),
+                    test.get("actorCPU", ""),
                 )
                 try:
                     status = run_test(
