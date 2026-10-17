@@ -31,8 +31,8 @@ import (
 )
 
 // PostgresImage is the PostgreSQL testcontainer image, shared by every test
-// that starts one.
-const PostgresImage = "postgres:18-alpine"
+// that starts one. It is digest-pinned and matches the install manifest.
+const PostgresImage = "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
 
 // Configure sets the environment testcontainers reads to find Docker, unless
 // it is already set. testcontainers-go resolves the daemon from DOCKER_HOST
