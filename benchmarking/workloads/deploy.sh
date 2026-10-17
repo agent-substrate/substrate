@@ -173,6 +173,7 @@ substitute() {
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
       -e "s|\${ACTOR_CPU}|${ACTOR_CPU}|g" \
       -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
+      -e "s|\${ATE_ENV_IMAGE}|${ATE_ENV_IMAGE:-}|g" \
       -e "s|\${STORAGE_CLASS_NAME}|${STORAGE_CLASS_NAME}|g" \
       "${manifest}"
 }
@@ -447,6 +448,11 @@ fi
 
 if [[ "${action}" == "deploy" && -z "${STORAGE_CLASS_NAME}" && " ${TEMPLATES[*]} " == *" glutton-storage "* ]]; then
   echo "Error: the glutton-storage template needs --storage-class-name" >&2
+  exit 1
+fi
+
+if [[ "${action}" == "deploy" && -z "${ATE_ENV_IMAGE:-}" && " ${TEMPLATES[*]} " == *" ate-env "* ]]; then
+  echo "Error: the ate-env template needs ATE_ENV_IMAGE" >&2
   exit 1
 fi
 
