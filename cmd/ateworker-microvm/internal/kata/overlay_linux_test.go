@@ -88,6 +88,11 @@ func TestVirtiofsdArgs(t *testing.T) {
 	if !slices.Contains(args, "--cache=auto") {
 		t.Errorf("args %v do not contain --cache=auto", args)
 	}
+	for _, required := range []string{"--sandbox=namespace", "--seccomp=kill"} {
+		if !slices.Contains(args, required) {
+			t.Errorf("args %v do not contain %s", args, required)
+		}
+	}
 	// The host kernel owns the overlay; the guest needs no xattr passthrough, so
 	// the flag must never be emitted.
 	if slices.Contains(args, "--xattr") {
@@ -97,6 +102,11 @@ func TestVirtiofsdArgs(t *testing.T) {
 	// inode, such as a live-rotated trust bundle, could never be restored.
 	if i := slices.Index(args, "--migration-on-error"); i < 0 || i+1 >= len(args) || args[i+1] != "guest-error" {
 		t.Errorf("args %v do not set --migration-on-error guest-error", args)
+	}
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--modcaps") || strings.HasPrefix(arg, "--inode-file-handles") {
+			t.Errorf("args %v change virtiofsd's capabilities or file-handle mode", args)
+		}
 	}
 }
 

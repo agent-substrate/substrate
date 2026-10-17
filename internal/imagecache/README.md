@@ -37,13 +37,15 @@ What it buys, concretely:
 
 The design is shaped by an existing substrate boundary: **atelet runs as
 plain root with every Linux capability dropped** ("atelet does no mounts" —
-see `manifests/ate-install/atelet.yaml`), while the **worker pods are
-privileged** and own all mounts on the node. The module is split accordingly:
+see `manifests/ate-install/atelet.yaml`), while the **worker pods** keep
+`CAP_SYS_ADMIN` and set up the rootfs mounts (see
+[Worker security](../../docs/api-guide.md#worker-security)). The module is
+split accordingly:
 
 | Half | Runs in | Files | Needs |
 |---|---|---|---|
 | Store: pull, parse, unpack, record | atelet | `imagecache.go`, `unpack.go`, `spec.go` (portable) | nothing but file I/O |
-| Consumer: finalize, mount, unmount | ateworker-gvisor / ateworker-microvm | `bundle_linux.go` (`//go:build linux`) | `CAP_MKNOD`, `CAP_SYS_ADMIN` |
+| Consumer: finalize, mount, unmount | ateworker-gvisor / ateworker-microvm | `bundle_linux.go` (`//go:build linux`) | `CAP_SYS_ADMIN` (0:0 whiteouts need no `CAP_MKNOD` since Linux 5.8) |
 
 The two halves communicate through the filesystem only: the shared cache
 directory (on the `/var/lib/ate` hostPath, so the same absolute
@@ -102,9 +104,9 @@ layer diffIDs in order — layers shared by N images exist once.
    layer tar omits (they may exist only in lower layers). Character and
    block device nodes are skipped (atelet runs without `CAP_MKNOD` and the
    runtime mounts `/dev`). Whiteout entries (`.wh.*`) are **not** written
-   into the tree — overlayfs whiteouts are char devices atelet cannot
-   create — they are recorded in `whiteouts.json` for the consumer to
-   materialize.
+   into the tree: opaque directories need `trusted.*` xattrs
+   (`CAP_SYS_ADMIN`), which atelet lacks, so the whiteout state is recorded
+   in `whiteouts.json` for the consumer to materialize.
 5. **Record**: the image config + diffID list is written under the
    requested digest (and the per-platform child digest for multi-arch refs).
 
