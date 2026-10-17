@@ -391,9 +391,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	// block restoring its children. Chmod and the mtime go before chown: once
 	// a directory belongs to another uid, changing its mode or times needs
 	// CAP_FOWNER, which atelet does not hold. Chown keeps a directory's setgid
-	// and sticky bits. Each directory is restored once, through the latest
-	// name written to it that still resolves to it, else through a walk that
-	// does not follow symlinks.
+	// and sticky bits.
 	type dirRestore struct {
 		name string
 		hdr  *tar.Header
