@@ -32,6 +32,10 @@ import (
 
 const validSHA256 = "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63"
 
+// gvisorAssetMsg is part of the policy's message for a gvisor version without
+// the release-tarball asset.
+const gvisorAssetMsg = "'gvisor' (release tarball) asset"
+
 // vapManifestPath is the SandboxConfig ValidatingAdmissionPolicy shipped with
 // the install — loaded here so the test guards the policy we actually ship.
 const vapManifestPath = "../../../manifests/ate-install/sandboxconfig-validation.yaml"
@@ -83,7 +87,8 @@ func gvisorAssets() map[string]map[string]AssetFile {
 	return map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}}
 }
 
-func runscAsset() AssetFile { return AssetFile{URL: "gs://bucket/runsc", SHA256: validSHA256} }
+// otherAsset is a valid asset that is not the one a gvisor config needs.
+func otherAsset() AssetFile { return AssetFile{URL: "gs://bucket/other", SHA256: validSHA256} }
 
 func gvisorAsset() AssetFile {
 	return AssetFile{URL: "gs://bucket/gvisor.tar.bz2", SHA256: validSHA256}
@@ -125,19 +130,19 @@ func applyVAP(t *testing.T, ctx context.Context) {
 		}
 	}
 
-	// Wait until the policy is enforced: a gvisor config missing runsc (valid
-	// per the CRD schema) must be denied.
+	// Wait until the policy is enforced: a gvisor config missing the gvisor
+	// asset (valid per the CRD schema) must be denied.
 	i := 0
 	err = wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		i++
 		sc := sandboxConfig(fmt.Sprintf("vap-warmup-%d", i), SandboxClassGvisor,
-			map[string]map[string]AssetFile{"amd64": {"notrunsc": runscAsset()}})
+			map[string]map[string]AssetFile{"amd64": {"other": otherAsset()}})
 		createErr := k8sClient.Create(ctx, sc)
 		if createErr == nil {
 			_ = k8sClient.Delete(ctx, sc) // policy not active yet; clean up and retry
 			return false, nil
 		}
-		return strings.Contains(createErr.Error(), "runsc"), nil
+		return strings.Contains(createErr.Error(), gvisorAssetMsg), nil
 	})
 	if err != nil {
 		t.Fatalf("VAP did not become active: %v", err)
@@ -156,14 +161,6 @@ func TestSandboxConfigValidation(t *testing.T) {
 	}{{
 		name:    "valid gvisor with release tarball",
 		sc:      sandboxConfig("ok-gvisor-tarball", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}, "arm64": {"gvisor": gvisorAsset()}}),
-		wantErr: false,
-	}, {
-		name:    "valid gvisor with legacy runsc",
-		sc:      sandboxConfig("ok-gvisor", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": runscAsset()}, "arm64": {"runsc": runscAsset()}}),
-		wantErr: false,
-	}, {
-		name:    "valid gvisor mixing tarball and legacy per arch",
-		sc:      sandboxConfig("ok-gvisor-mixed", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}, "arm64": {"runsc": runscAsset()}}),
 		wantErr: false,
 	}, {
 		name:    "valid microvm with full asset set",
@@ -192,33 +189,38 @@ func TestSandboxConfigValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "microvm SandboxConfig must define",
 	}, {
-		name:    "gvisor arch missing gvisor and runsc",
-		sc:      sandboxConfig("bad-no-runsc", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"notrunsc": runscAsset()}}),
+		name:    "gvisor arch missing the gvisor asset",
+		sc:      sandboxConfig("bad-no-gvisor", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"other": otherAsset()}}),
 		wantErr: true,
-		errMsg:  "runsc",
+		errMsg:  gvisorAssetMsg,
 	}, {
-		name:    "gvisor one arch missing gvisor and runsc",
-		sc:      sandboxConfig("bad-mixed-arch", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}, "arm64": {"notrunsc": runscAsset()}}),
+		name:    "gvisor with only a bare runsc asset",
+		sc:      sandboxConfig("bad-bare-runsc", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": otherAsset()}}),
 		wantErr: true,
-		errMsg:  "runsc",
+		errMsg:  gvisorAssetMsg,
+	}, {
+		name:    "gvisor one arch missing the gvisor asset",
+		sc:      sandboxConfig("bad-mixed-arch", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}, "arm64": {"other": otherAsset()}}),
+		wantErr: true,
+		errMsg:  gvisorAssetMsg,
 	}, {
 		name:    "gvisor with no assets",
 		sc:      sandboxConfig("bad-empty", SandboxClassGvisor, nil),
 		wantErr: true,
-		errMsg:  "runsc",
+		errMsg:  gvisorAssetMsg,
 	}, {
 		name:    "asset missing url",
-		sc:      sandboxConfig("bad-no-url", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": {SHA256: validSHA256}}}),
+		sc:      sandboxConfig("bad-no-url", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": {SHA256: validSHA256}}}),
 		wantErr: true,
 		errMsg:  "url",
 	}, {
 		name:    "asset missing sha256",
-		sc:      sandboxConfig("bad-no-sha", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": {URL: "gs://bucket/runsc"}}}),
+		sc:      sandboxConfig("bad-no-sha", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": {URL: "gs://bucket/gvisor.tar.bz2"}}}),
 		wantErr: true,
 		errMsg:  "sha256",
 	}, {
 		name:    "asset sha256 not 64 hex",
-		sc:      sandboxConfig("bad-sha", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": {URL: "gs://bucket/runsc", SHA256: "deadbeef"}}}),
+		sc:      sandboxConfig("bad-sha", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": {URL: "gs://bucket/gvisor.tar.bz2", SHA256: "deadbeef"}}}),
 		wantErr: true,
 		errMsg:  "sha256",
 	}, {
@@ -312,10 +314,10 @@ func TestSandboxConfigValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "pauseImage is required on every version for gvisor",
 	}, {
-		name:    "gvisor second version missing gvisor and runsc",
-		sc:      withVersions(sandboxConfig("bad-v2-no-runsc", SandboxClassGvisor, gvisorAssets()), sandboxVersion("v2", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"notrunsc": runscAsset()}})),
+		name:    "gvisor second version missing the gvisor asset",
+		sc:      withVersions(sandboxConfig("bad-v2-no-gvisor", SandboxClassGvisor, gvisorAssets()), sandboxVersion("v2", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"other": otherAsset()}})),
 		wantErr: true,
-		errMsg:  "runsc",
+		errMsg:  gvisorAssetMsg,
 	}, {
 		name: "microvm second version missing an asset",
 		sc: withVersions(sandboxConfig("bad-microvm-v2", SandboxClassMicroVM, map[string]map[string]AssetFile{"amd64": microVMAssets()}), sandboxVersion("v2", SandboxClassMicroVM, map[string]map[string]AssetFile{"amd64": func() map[string]AssetFile {

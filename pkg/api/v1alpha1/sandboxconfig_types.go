@@ -141,11 +141,10 @@ type SandboxVersionConfig struct {
 	// architecture (GOARCH, e.g. "amd64", "arm64") and then by asset name. The
 	// asset names are interpreted by the sandbox backend: gVisor expects a
 	// "gvisor" asset (the release's gvisor.tar.zstd, which atelet extracts so
-	// the gvisor-bin/ helpers sit next to runsc; a legacy bare-binary "runsc"
-	// asset is still accepted); a micro-VM backend expects several (e.g.
-	// "cloud-hypervisor", "kata-kernel", "kata-image"). The schema is
-	// intentionally generic; per-class requirements are enforced by a
-	// ValidatingAdmissionPolicy.
+	// the gvisor-bin/ helpers sit next to runsc); a micro-VM backend expects
+	// several (e.g. "cloud-hypervisor", "kata-kernel", "kata-image"). The
+	// schema is intentionally generic; per-class requirements are enforced by
+	// a ValidatingAdmissionPolicy.
 	//
 	// +optional
 	Assets map[string]map[string]AssetFile `json:"assets,omitempty"`

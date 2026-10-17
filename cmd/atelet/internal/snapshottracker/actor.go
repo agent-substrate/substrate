@@ -191,6 +191,10 @@ type actorSnapshots struct {
 	// the actor in progress on this node. While it is nonzero, atelet does not
 	// detach the actor, and the entry stays in memory.
 	holds int
+	// inFlight holds the snapshots of Checkpoints and PromoteSnapshots of the
+	// actor currently in progress on this node. newest includes them, so an
+	// older generation cannot start while a newer one is in flight.
+	inFlight []*SnapshotRef
 	// promotes counts the PromoteSnapshots of the actor in progress on this
 	// node. While it is nonzero, atelet does not start a background upload of
 	// the actor.
@@ -205,6 +209,28 @@ type actorSnapshots struct {
 	// entry because writing the file failed. The entry stays in memory while
 	// unsaved is set.
 	unsaved bool
+}
+
+// localNeeded reports whether CommitLocal should record snap as LatestLocal:
+// LatestLocal does not already hold snap or a newer snapshot, and no other
+// committed snapshot has a higher generation or the same generation under
+// another UUID.
+func (a *actorSnapshots) localNeeded(snap SnapshotRef) bool {
+	if a.LatestLocal != nil && a.LatestLocal.generation() >= snap.generation() {
+		return false
+	}
+	for _, r := range []*SnapshotRef{a.Uploading, a.LatestDurable} {
+		if r == nil {
+			continue
+		}
+		if r.generation() > snap.generation() {
+			return false
+		}
+		if r.generation() == snap.generation() && !sameUUID(r, &snap) {
+			return false
+		}
+	}
+	return true
 }
 
 // uploadNeeded reports whether ref still needs uploading: neither it nor a
@@ -329,6 +355,52 @@ func (a *actorSnapshots) runningDetach() *SnapshotRef {
 		return nil
 	}
 	return &a.op.target
+}
+
+// opTarget returns the snapshot an operation in progress acts on, or nil.
+func (a *actorSnapshots) opTarget() *SnapshotRef {
+	if a.op == nil {
+		return nil
+	}
+	return &a.op.target
+}
+
+// newest returns the actor's snapshot with the highest generation, or nil
+// when atelet holds no snapshot for the actor. It includes snapshots whose
+// Checkpoint or PromoteSnapshot is in flight.
+func (a *actorSnapshots) newest() *SnapshotRef {
+	var newest *SnapshotRef
+	consider := func(r *SnapshotRef) {
+		if r != nil && (newest == nil || r.generation() > newest.generation()) {
+			newest = r
+		}
+	}
+	consider(a.LatestLocal)
+	consider(a.Uploading)
+	consider(a.LatestDurable)
+	consider(a.opTarget())
+	for _, r := range a.inFlight {
+		consider(r)
+	}
+	return newest
+}
+
+// checkGeneration returns a FailedPrecondition error if snap has a stale
+// generation for the actor: below the actor's newest snapshot, or equal to
+// it under another snapshot_uuid.
+func (a *actorSnapshots) checkGeneration(snap *ateletpb.Snapshot) error {
+	newest := a.newest()
+	if newest == nil {
+		return nil
+	}
+	switch {
+	case snap.GetGeneration() < newest.generation():
+		return apierror.FailedPrecondition("snapshot %q has generation %d, below the actor's newest snapshot %q at generation %d", snap.GetSnapshotUuid(), snap.GetGeneration(), newest.uuid(), newest.generation())
+	case snap.GetGeneration() == newest.generation() && snap.GetSnapshotUuid() != newest.uuid():
+		return apierror.FailedPrecondition("snapshot %q has generation %d, which the actor's newest snapshot %q already holds", snap.GetSnapshotUuid(), snap.GetGeneration(), newest.uuid())
+	default:
+		return nil
+	}
 }
 
 // uploadDue returns when atelet next runs a background upload of the actor:

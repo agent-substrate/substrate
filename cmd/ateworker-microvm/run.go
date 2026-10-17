@@ -658,7 +658,7 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 		}
 		bundleRootfs := filepath.Join(bundle, "rootfs")
 		// Set guest DNS and hosts before serving the rootfs over virtio-fs, on boot and restore.
-		if err := writeActorEtcFiles(bundleRootfs); err != nil {
+		if err := actornet.WriteRootfsEtcFiles(bundleRootfs, ocispec.Hostname); err != nil {
 			return nil, fmt.Errorf("while writing guest /etc files for %q: %w", cn, err)
 		}
 		ctrs[i] = actorContainer{

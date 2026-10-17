@@ -79,7 +79,8 @@ rejects that option with agentgateway rather than silently omitting it.
 
 - **Egress app (`main.go`)** — the Actor: `POST /` fetches an HTTP(S) URL and returns the status,
   body, and observed protocol. `POST /websocket` probes a `ws` or `wss` origin; `POST /grpc` makes
-  unary and streaming gRPC calls, described below.
+  unary and streaming gRPC calls, described below; `POST /connect` sends a forward proxy an HTTP
+  CONNECT, in the clear or over TLS, and returns its answer.
 - **Egress gateway** — the `atenet-egress` Deployment. Envoy uses a co-located atenet `ext_proc`
   container started with `--mode=egress`; agentgateway uses its built-in `substrateEgress` policy
   and does not need that sidecar. The installer renders the matching configuration and container.

@@ -479,7 +479,7 @@ type RunWorkloadRequest struct {
 	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
 	// atelet fetched it to (content-addressed, like runsc_path). The names are
-	// the runtime's own: "gvisor" and "runsc" for gVisor, "cloud-hypervisor",
+	// the runtime's own: "gvisor" for gVisor, "cloud-hypervisor",
 	// "virtiofsd", "kata-kernel", and "kata-image" for the micro-VM. Empty for
 	// the gVisor runtime, which uses runsc_path.
 	//
