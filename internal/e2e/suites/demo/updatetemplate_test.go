@@ -53,9 +53,6 @@ func TestUpdateTemplateLifecycle(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if test.fidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS && !e2e.IsMicroVM() {
-				t.Skipf("Skipping %s: only the micro-VM runtime serves this fidelity", test.name)
-			}
 			t.Parallel()
 			runUpdateTemplateTestCase(t, test.fidelity)
 		})

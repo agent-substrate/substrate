@@ -109,6 +109,49 @@ func TestValidateSnapshotDelayFlags(t *testing.T) {
 	}
 }
 
+// Each snapshot worker flag must be at least 1, and defaults to the tracker's
+// default count.
+func TestValidateSnapshotWorkerFlags(t *testing.T) {
+	setFlags := func(upload, detach int) {
+		*snapshotUploadWorkers, *snapshotDetachWorkers = upload, detach
+	}
+	t.Cleanup(func() { setFlags(snapshottracker.DefaultUploadWorkers, snapshottracker.DefaultDetachWorkers) })
+
+	for _, tc := range []struct {
+		name           string
+		upload, detach int
+		wantErr        bool
+	}{
+		{"defaults", snapshottracker.DefaultUploadWorkers, snapshottracker.DefaultDetachWorkers, false},
+		{"single worker each", 1, 1, false},
+		{"zero upload workers", 0, 2, true},
+		{"negative upload workers", -1, 2, true},
+		{"zero detach workers", 2, 0, true},
+		{"negative detach workers", 2, -1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setFlags(tc.upload, tc.detach)
+			if err := validateSnapshotWorkerFlags(); (err != nil) != tc.wantErr {
+				t.Errorf("upload=%d detach=%d: err = %v, wantErr %v", tc.upload, tc.detach, err, tc.wantErr)
+			}
+		})
+	}
+
+	for name, want := range map[string]int{
+		"snapshot-upload-workers": snapshottracker.DefaultUploadWorkers,
+		"snapshot-detach-workers": snapshottracker.DefaultDetachWorkers,
+	} {
+		f := pflag.Lookup(name)
+		if f == nil {
+			t.Errorf("no --%s flag registered", name)
+			continue
+		}
+		if f.DefValue != strconv.Itoa(want) {
+			t.Errorf("--%s default = %q, want %d", name, f.DefValue, want)
+		}
+	}
+}
+
 // TestCopyLocalCheckpointLinks covers staging a local checkpoint into the restore
 // dir: the files must land as extra links to the cached snapshot rather than
 // copies, so a resume does not rewrite the image's working set. Sharing the inode

@@ -573,11 +573,10 @@ func validateRunscPath(actorUID string, actorDirs *ateworkerpb.ActorDirs, p stri
 	return resources.ToAPIError(errs)
 }
 
-// supportedFidelities are the snapshot fidelities this runtime serves. gVisor
-// keeps rootfs changes inside its memory checkpoint, so it cannot capture
-// ROOTFS without MEMORY.
+// supportedFidelities are the snapshot fidelities this runtime serves.
 var supportedFidelities = []ateworkerpb.SnapshotFidelity{
 	ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+	ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 	ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 }
 
@@ -808,6 +807,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		return err
 	}
 
+	fsPaths := slices.Concat(rootfsFSCheckpointPaths(containers), durablePaths)
 	var checkpointFn func(context.Context) error
 	switch fidelity {
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
@@ -816,15 +816,25 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		}
 		checkpointFn = func(ctx context.Context) error {
 			err := rcmd.cmdFsCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
-			timing.durableDir = lap(&tLast)
+			timing.fsCheckpoint = lap(&tLast)
 			if err != nil {
 				return fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
 			}
 			return nil
 		}
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		checkpointFn = func(ctx context.Context) error {
+			err := rcmd.cmdFsCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, fsPaths)
+			timing.fsCheckpoint = lap(&tLast)
+			if err != nil {
+				return fmt.Errorf("while checkpointing container filesystems: %w", err)
+			}
+			return nil
+		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-		// Checkpoint pause container (root of the sandbox), splitting durable-dir
-		// volumes into <checkpointPath>/fs when present.
+		// Checkpoint pause container (root of the sandbox), splitting container
+		// rootfs overlays into the rootfs bundle and durable-dir volumes into
+		// <checkpointPath>/fs when present.
 		checkpointFn = func(ctx context.Context) error {
 			sandbox, sbErr := openSandboxProcess(req.GetActorDirs())
 			if sbErr != nil {
@@ -832,7 +842,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 			} else {
 				defer sandbox.Close()
 			}
-			err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
+			err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, fsPaths)
 			if err != nil {
 				timing.checkpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing pause: %w", err)
@@ -854,8 +864,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 
 	// Report exactly the files runsc wrote so atelet ships precisely this set
-	// (checkpoint.img plus any pages images and fs/ durable-dir files), rather
-	// than a hardcoded list.
+	// (checkpoint.img and its page files, plus the fs/ and rootfs/ bundle files),
+	// rather than a hardcoded list.
 	snapshotFiles, err := listSnapshotFiles(checkpointPath)
 	if err != nil {
 		return nil, fmt.Errorf("while listing checkpoint files: %w", err)
@@ -868,7 +878,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 }
 
 // listSnapshotFiles returns the (relative) names of regular files directly under
-// dir and under dir/fs, which atelet ships to object storage as the snapshot.
+// dir, dir/fs, and dir/rootfs, which atelet ships to object storage as the
+// snapshot.
 func listSnapshotFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -880,13 +891,15 @@ func listSnapshotFiles(dir string) ([]string, error) {
 			files = append(files, e.Name())
 		}
 	}
-	fsEntries, err := os.ReadDir(filepath.Join(dir, resources.FSCheckpointSubdir))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	for _, e := range fsEntries {
-		if e.Type().IsRegular() {
-			files = append(files, filepath.Join(resources.FSCheckpointSubdir, e.Name()))
+	for _, sub := range []string{resources.FSCheckpointSubdir, resources.RootfsCheckpointSubdir} {
+		subEntries, err := os.ReadDir(filepath.Join(dir, sub))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		for _, e := range subEntries {
+			if e.Type().IsRegular() {
+				files = append(files, filepath.Join(sub, e.Name()))
+			}
 		}
 	}
 	sort.Strings(files)
@@ -1047,7 +1060,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		}
 	}()
 	checkpointDir := req.GetActorDirs().GetRestoreDir()
-	restoreArgs, err := fsRestoreArgs(checkpointDir)
+	restoreArgs, err := fsRestoreArgs(checkpointDir, fidelity)
 	if err != nil {
 		return nil, err
 	}
@@ -1068,8 +1081,8 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 	defer pw.Close()
 	switch fidelity {
-	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-		// Create and start pause container (cold boot with durable-dir volumes restored from fs/)
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		// Create and start pause container (cold boot with filesystem checkpoint bundles restored)
 		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
 		err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, restoreArgs)
 		timing.pauseCreate = lap(&tLast)
@@ -1082,7 +1095,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			return nil, fmt.Errorf("while starting pause container: %w", err)
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-		// Create and restore pause container (restores both process/rootfs and fs/ durable-dir volumes)
+		// Create and restore pause container (restores process state and filesystem checkpoint bundles)
 		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
 		err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, restoreArgs)
 		timing.pauseCreate = lap(&tLast)
@@ -1118,7 +1131,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
 		switch fidelity {
-		case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 			err = rcmd.cmdStart(ctx, pw, ac.GetName())
 			timing.appRestore += lap(&tLast)
 			if err != nil {
@@ -1151,7 +1164,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			}
 		}
 		if len(restoreArgs) > 0 {
-			for _, ctr := range fsRestoreContainers(containers) {
+			for _, ctr := range fsRestoreContainers(fidelity, containers) {
 				if err := rcmd.cmdWaitFSRestore(waitCtx, ctr); err != nil {
 					return err
 				}

@@ -303,16 +303,12 @@ func TestDurableDirLifecycle(t *testing.T) {
 				wantMemoryAfterSuspend: 1,
 				wantFileAfterSuspend:   3,
 				wantRootfsAfterSuspend: 3,
-				microVMOnly:            true,
 			},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if test.tc.microVMOnly && !e2e.IsMicroVM() {
-				t.Skipf("Skipping %s: only the micro-VM runtime serves this fidelity", test.name)
-			}
 			t.Parallel()
 			runActorLifecycleTestCase(t, "durabledir-lifecycle", createActorTemplate, test.tc)
 		})
@@ -320,9 +316,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 }
 
 // TestMultipleDurableDirLifecycle covers an Actor with TWO durable-dir volumes:
-// both must survive pause/resume and suspend/resume independently. Only the
-// micro-VM runtime supports more than one — gVisor templates are still capped at
-// one by the ActorTemplate CEL rules, so the template would be rejected there.
+// both must survive pause/resume and suspend/resume independently.
 func TestMultipleDurableDirLifecycle(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -362,16 +356,12 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 				wantFileAfterSuspend:   3,
 				wantRootfsAfterSuspend: 3,
 				checkSecondFileCounter: true,
-				microVMOnly:            true,
 			},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if test.tc.microVMOnly && !e2e.IsMicroVM() {
-				t.Skipf("Skipping %s: micro-VM-only case", test.name)
-			}
 			t.Parallel()
 			runActorLifecycleTestCase(t, "multi-durabledir-lifecycle", createActorTemplateWithTwoDurableDirs, test.tc)
 		})
@@ -590,9 +580,6 @@ type actorLifecycleTestCase struct {
 	// wantSnapshotFidelity, when set, asserts the content scope recorded
 	// on the ActorSnapshot the suspend produced.
 	wantSnapshotFidelity ateapipb.SnapshotFidelity
-
-	// microVMOnly skips the case outside the micro-VM environment.
-	microVMOnly bool
 }
 
 func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, ateapipb.SnapshotFidelity) (*ateapipb.ActorTemplate, error), tc actorLifecycleTestCase) {
@@ -1421,8 +1408,7 @@ const (
 // createActorTemplateWithTwoDurableDirs builds a template with a SECOND
 // durable-dir volume alongside the one the demo already declares, and points the
 // counter's second file counter at it, so both volumes are written on every
-// request. Only the micro-VM runtime accepts this: gVisor templates are still
-// capped at one durable-dir volume by the ActorTemplate CEL rules.
+// request.
 func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, fidelity ateapipb.SnapshotFidelity) (*ateapipb.ActorTemplate, error) {
 	modify := func(at *ateapipb.ActorTemplate) {
 		for _, c := range at.GetContainers() {

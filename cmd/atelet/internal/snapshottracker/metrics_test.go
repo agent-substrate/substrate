@@ -170,6 +170,7 @@ func TestUploadDurationSkipsNonUploadingPaths(t *testing.T) {
 		useActorDir(t)
 		tr := newStoreTracker(t, store)
 		tr.instruments = inst
+		setWorkers(tr, 0, DefaultDetachWorkers)
 		tr.Start()
 
 		tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))

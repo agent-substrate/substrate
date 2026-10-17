@@ -111,7 +111,7 @@ func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 func TestRestoreWorkloadRejectsUnsupportedFidelity(t *testing.T) {
 	// A zero service cannot acquire locks, configure networking, or open log pipes.
 	s := &AteWorkerService{}
-	for _, fidelity := range []ateworkerpb.SnapshotFidelity{0, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, 99} {
+	for _, fidelity := range []ateworkerpb.SnapshotFidelity{0, 99} {
 		t.Run(fidelity.String(), func(t *testing.T) {
 			// Valid but for the fidelity, so the rejection is the fidelity's;
 			// the fidelity check runs before the runsc path is looked at.

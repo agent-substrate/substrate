@@ -41,27 +41,33 @@ type Store interface {
 // locally, and the latest one confirmed in object storage. State reports them.
 // It uploads and detaches them in the background.
 //
-// Background work runs off a delaying workqueue of actor UIDs drained by a
-// fixed pool of workers. Each change to an actor's state queues the actor for
-// when its next upload or detach is due:
+// Background work runs off two delaying workqueues of actor UIDs, one for
+// uploads and one for detaches, each drained by a fixed pool of workers of its
+// own, so slow uploads cannot hold up a due detach, nor detaches an upload.
+// Each change to an actor's state queues the actor on each queue for when its
+// next upload or detach is due:
 //  1. A checkpoint records the new snapshot as LatestLocal with CommitLocal,
 //     and schedules the actor's detach detachDelay after the checkpoint. An
 //     immediate checkpoint records its upload with CommitDurable first. A
 //     promote of LatestLocal (CommitPromoted) leaves the schedule as it is.
 //     If LatestLocal needs an upload (see uploadDue), its upload is due
 //     uploadDelay after UndurableSince.
-//  2. A worker that takes the actor from the queue runs whatever is due for
-//     it then, preferring a detach, which also makes LatestLocal durable.
-//     When nothing is due yet, it queues the actor again for when something
-//     is: the queue holds an actor until the earliest time it was queued
-//     for, so a due time that moves later only costs a worker that check.
+//  2. A worker that takes the actor from its queue runs the actor's upload,
+//     or detach, if it is due then. When it is not due yet, the worker queues
+//     the actor again for when it is: a queue holds an actor until the
+//     earliest time it was queued for, so a due time that moves later only
+//     costs a worker that check. When both are due, whichever worker begins
+//     first runs; an upload leaves the detach only its prune.
 //  3. The worker uploads the LatestLocal of when it runs, so snapshots
 //     superseded while the actor waits for its upload are never uploaded.
 //     An upload that has begun (Uploading) goes on across newer checkpoints
 //     and atelet restarts, though, until it succeeds, a newer snapshot is
 //     durable, or it fails while a newer local snapshot can replace it.
-//  4. The queue hands an actor to one worker at a time, and the number of
-//     workers bounds how many background uploads and detaches run at once.
+//  4. Each queue hands an actor to one of its workers at a time, and its
+//     number of workers bounds how many background uploads, or detaches, run
+//     at once. An actor can be on both queues at once, but has at most one
+//     operation in progress (see actorOp): a worker that finds one leaves the
+//     actor to that operation's end, which queues it again.
 //  5. An upload leaves LatestLocal on disk so a same-node Restore still
 //     reads it. A detach, in the background or via the Detach RPC, makes
 //     LatestLocal durable and then deletes all the actor's local snapshots.
@@ -87,12 +93,12 @@ type Store interface {
 // generation before doing any work, as Snapshot.generation describes, so that
 // no commit replaces a snapshot with an older one.
 type Tracker struct {
-	// ctx bounds background work, and shuts the queue down when it ends.
+	// ctx bounds background work, and shuts the queues down when it ends.
 	ctx context.Context
 	// store uploads actors' snapshots. A tracker without one schedules no
 	// background work.
 	store Store
-	// clock is what due times are measured on, and the queue waits on.
+	// clock is what due times are measured on, and the queues wait on.
 	clock clock.WithTicker
 	// uploadDelay is how long after UndurableSince the actor's latest local
 	// snapshot becomes due for background upload: DefaultUploadDelay unless
@@ -108,10 +114,13 @@ type Tracker struct {
 	// retries says how long an actor's background work is held back after a
 	// failure: longer with each consecutive failure for the actor.
 	retries workqueue.TypedRateLimiter[string]
-	// workers is how many background workers run at once.
-	workers int
-	// queue holds the UIDs of actors with background work scheduled.
-	queue workqueue.TypedDelayingInterface[string]
+	// workers is how many workers drain each kind's queue: DefaultUploadWorkers
+	// and DefaultDetachWorkers unless WithUploadWorkers and WithDetachWorkers
+	// set them.
+	workers [numOpKinds]int
+	// queues hold the UIDs of actors with a background operation of each kind
+	// scheduled.
+	queues [numOpKinds]workqueue.TypedDelayingInterface[string]
 	// workersDone counts the workers still running.
 	workersDone sync.WaitGroup
 
@@ -148,6 +157,21 @@ func WithDetachDelay(d time.Duration) Option {
 	}
 }
 
+// WithUploadWorkers sets how many background uploads run at once on this node.
+func WithUploadWorkers(n int) Option {
+	return func(t *Tracker) {
+		t.workers[opUpload] = n
+	}
+}
+
+// WithDetachWorkers sets how many background detaches run at once on this
+// node.
+func WithDetachWorkers(n int) Option {
+	return func(t *Tracker) {
+		t.workers[opDetach] = n
+	}
+}
+
 // WithInstruments attaches the instruments the tracker records background
 // uploads on. A nil *Instruments is a no-op.
 func WithInstruments(inst *Instruments) Option {
@@ -167,15 +191,21 @@ func New(ctx context.Context, store Store, clk clock.WithTicker, opts ...Option)
 		uploadDelay: DefaultUploadDelay,
 		detachDelay: DefaultDetachDelay,
 		retries:     workqueue.NewTypedItemExponentialFailureRateLimiter[string](snapshotRetryDelay, maxSnapshotRetryDelay),
-		workers:     snapshotWorkers,
-		queue:       workqueue.NewTypedDelayingQueueWithConfig(workqueue.TypedDelayingQueueConfig[string]{Clock: clk}),
+		workers:     [numOpKinds]int{opUpload: DefaultUploadWorkers, opDetach: DefaultDetachWorkers},
 		locks:       actorlock.New(),
 		actors:      map[string]*actorSnapshots{},
+	}
+	for k := range t.queues {
+		t.queues[k] = workqueue.NewTypedDelayingQueueWithConfig(workqueue.TypedDelayingQueueConfig[string]{Clock: clk})
 	}
 	for _, opt := range opts {
 		opt(t)
 	}
-	context.AfterFunc(ctx, t.queue.ShutDown)
+	context.AfterFunc(ctx, func() {
+		for _, q := range t.queues {
+			q.ShutDown()
+		}
+	})
 	return t
 }
 
