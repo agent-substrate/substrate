@@ -18,6 +18,7 @@ package ateletpath
 
 import (
 	"path/filepath"
+	"strings"
 
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
@@ -42,10 +43,20 @@ var (
 	// here into its SandboxAssetsDir.
 	SandboxAssetCacheDir = filepath.Join(nodepath.BasePath, "sandbox-asset-cache")
 
+	// SandboxAssetPinsDir holds one directory per sandbox runtime some local
+	// worker advertises as its default, with the runtime's assets linked in
+	// from SandboxAssetCacheDir by the prewarmer. A link is how the cache
+	// knows an entry is in use, so a pin keeps a default runtime's assets
+	// cached while no actor runs it. Under BasePath so the links are on the
+	// cache's mount. The prewarmer removes the pin of a runtime no worker
+	// advertises as its default any more.
+	SandboxAssetPinsDir = filepath.Join(nodepath.BasePath, "sandbox-asset-pins")
+
 	// SandboxAssetScratchDir holds short-lived destination directories for
-	// asset fetches that have no actor, such as prewarming a SandboxConfig's
-	// default version. Wiped at startup. Under BasePath so the links the
-	// cache serves into it are on the cache's mount.
+	// asset fetches that have neither an actor nor a pin to link into, such
+	// as the runsc binary the worker sandbox syncer probes for CPU features.
+	// Wiped at startup. Under BasePath so the links the cache serves into it
+	// are on the cache's mount.
 	SandboxAssetScratchDir = filepath.Join(nodepath.BasePath, "sandbox-asset-scratch")
 
 	// SandboxRuntimeIndexFile holds every sandbox runtime a worker on this
@@ -56,6 +67,12 @@ var (
 	// again.
 	SandboxRuntimeIndexFile = filepath.Join(nodepath.BasePath, "sandbox-runtime-index.json")
 )
+
+// SandboxAssetPinDir is the pin directory of the runtime with the given
+// hash (see SandboxAssetPinsDir).
+func SandboxAssetPinDir(runtimeHash string) string {
+	return filepath.Join(SandboxAssetPinsDir, strings.ReplaceAll(runtimeHash, ":", "-"))
+}
 
 func ActorPath(actorUID string) string {
 	return filepath.Join(

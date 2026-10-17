@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"sync"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
@@ -42,7 +43,9 @@ import (
 // earlier, config churn is rare, and an entry is a few URLs. workers, by
 // worker pod UID, holds what each worker currently advertises and lives
 // with the pod; it is where the default runtime to prewarm and to protect
-// from eviction comes from.
+// from eviction comes from. planned, by the same UID, holds the default a
+// worker's sync is about to write, so its pin is kept from the hand-over
+// to the file; a re-plan replaces it, the file or the pod's end drops it.
 //
 // runtimes is also kept on disk, as one file that is the map serialized,
 // rewritten durably before a new entry is added and loaded again by
@@ -58,6 +61,7 @@ type runtimeIndex struct {
 	mu       sync.RWMutex
 	runtimes map[string]*indexedRuntime
 	workers  map[string]*workerRuntime
+	planned  map[string][]string
 	// path persists runtimes; empty keeps the index in memory only.
 	path string
 }
@@ -118,6 +122,7 @@ func newRuntimeIndex() *runtimeIndex {
 	return &runtimeIndex{
 		runtimes: map[string]*indexedRuntime{},
 		workers:  map[string]*workerRuntime{},
+		planned:  map[string][]string{},
 	}
 }
 
@@ -196,6 +201,7 @@ func (x *runtimeIndex) register(podUID string, advertised ...advertisedClass) er
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	wr := &workerRuntime{classes: make(map[v1alpha1.SandboxClass]*classRuntime, len(advertised))}
+	written := false
 	for _, a := range advertised {
 		cr := &classRuntime{config: a.config}
 		seen := make(map[string]bool, len(a.hashed))
@@ -205,6 +211,7 @@ func (x *runtimeIndex) register(podUID string, advertised ...advertisedClass) er
 			}
 			if v.isDefault {
 				cr.defaultHash = v.hash
+				written = true
 			}
 			if !seen[v.hash] {
 				seen[v.hash] = true
@@ -214,7 +221,26 @@ func (x *runtimeIndex) register(podUID string, advertised ...advertisedClass) er
 		wr.classes[a.class] = cr
 	}
 	x.workers[podUID] = wr
+	// The file now says what the worker's default is. One that lacks it
+	// was written partially; the plan stands until the retry writes it.
+	if written {
+		delete(x.planned, podUID)
+	}
 	return nil
+}
+
+// plan records hashes as the defaults the worker pod's sync is about to
+// write, replacing what an earlier sync planned. Until register or forget
+// clears them, defaultHashes counts them as held, so the pins the prewarm
+// fills meanwhile survive a prune.
+func (x *runtimeIndex) plan(podUID string, hashes []string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if len(hashes) == 0 {
+		delete(x.planned, podUID)
+		return
+	}
+	x.planned[podUID] = slices.Clone(hashes)
 }
 
 // registerRuntimes makes each hashed version of config resolvable without
@@ -254,12 +280,13 @@ func (x *runtimeIndex) addRuntime(config string, v hashedVersion) error {
 	return nil
 }
 
-// forget drops what the worker pod advertised. The runtimes themselves stay
-// resolvable.
+// forget drops what the worker pod advertised and planned. The runtimes
+// themselves stay resolvable.
 func (x *runtimeIndex) forget(podUID string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	delete(x.workers, podUID)
+	delete(x.planned, podUID)
 }
 
 // lookup returns the runtime advertised under hash.
@@ -268,6 +295,28 @@ func (x *runtimeIndex) lookup(hash string) (*indexedRuntime, bool) {
 	defer x.mu.RUnlock()
 	rt, ok := x.runtimes[hash]
 	return rt, ok
+}
+
+// defaultHashes returns the runtimes some worker on this node currently
+// advertises as the default of one of its classes, or is about to: the
+// ones to keep prewarmed and pinned in the cache.
+func (x *runtimeIndex) defaultHashes() map[string]bool {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	defaults := map[string]bool{}
+	for _, wr := range x.workers {
+		for _, cr := range wr.classes {
+			if cr.defaultHash != "" {
+				defaults[cr.defaultHash] = true
+			}
+		}
+	}
+	for _, hashes := range x.planned {
+		for _, h := range hashes {
+			defaults[h] = true
+		}
+	}
+	return defaults
 }
 
 // worker returns what the worker pod currently advertises.

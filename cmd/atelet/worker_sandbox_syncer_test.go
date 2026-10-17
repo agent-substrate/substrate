@@ -911,3 +911,80 @@ func TestWorkerSandboxSyncerRunIndexesExistingPods(t *testing.T) {
 		t.Error("a pod whose pool does not exist was indexed")
 	}
 }
+
+// TestWorkerSandboxSyncerPrunesAfterInitialPass pins when the prewarmer is
+// first asked to prune its pins after a restart: once every pod present at
+// the first cache sync has been processed once, so the index holds the
+// defaults of the workers already on the node and their pins are kept;
+// with no such pod, as soon as the caches synced.
+func TestWorkerSandboxSyncerPrunesAfterInitialPass(t *testing.T) {
+	runSyncer := func(t *testing.T, s *workerSandboxSyncer) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			s.run(ctx, func() bool { return true })
+		}()
+		t.Cleanup(func() {
+			cancel()
+			<-stopped
+		})
+	}
+
+	t.Run("no pods: prunes once the caches synced", func(t *testing.T) {
+		s := newTestSyncer(t)
+		rec := &recordingPrewarm{}
+		s.prewarm = rec
+		runSyncer(t, s)
+		waitFor(t, "the first prune", func() bool { return rec.pruneCount() == 1 })
+	})
+
+	t.Run("prunes once every initial pod was processed", func(t *testing.T) {
+		// pod-live is planned, whose own prune the pass holds back;
+		// pod-orphan fails and is retried in the background. The pass is
+		// complete once both were processed once: one prune, no more after.
+		s := newTestSyncer(t, workerPod("pod-live", "pool"), workerPod("pod-orphan", "missing-pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+		rec := &recordingPrewarm{}
+		s.prewarm = rec
+		s.queue.Add("pod-live")
+		s.queue.Add("pod-orphan")
+		runSyncer(t, s)
+		waitFor(t, "the pass's prune", func() bool { return rec.pruneCount() == 1 })
+		waitFor(t, "pod-orphan to be retried", func() bool { return s.queue.NumRequeues("pod-orphan") > 0 })
+		if got := rec.pruneCount(); got != 1 {
+			t.Errorf("prune asked %d times, want 1: a retried pod must not prune again", got)
+		}
+	})
+
+	t.Run("holds back the prunes of the pass itself", func(t *testing.T) {
+		// Two initial pods: one writes its file, which would prune, and one
+		// is gone, whose removal would prune. Neither may, or the pins of
+		// pods not yet processed go; the pass prunes once, at its end.
+		s := newTestSyncer(t, workerPod("pod-live", "pool"), workerPod("pod-later", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+		rec := &recordingPrewarm{}
+		s.prewarm = rec
+		s.markInitial()
+		if err := s.syncPod(context.Background(), workerPod("pod-live", "pool")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.removeDir(context.Background(), "pod-gone"); err != nil {
+			t.Fatal(err)
+		}
+		if got := rec.pruneCount(); got != 0 {
+			t.Fatalf("prune asked %d times during the initial pass, want 0", got)
+		}
+		s.markProcessed("pod-live")
+		s.markProcessed("pod-later")
+		if got := rec.pruneCount(); got != 1 {
+			t.Errorf("prune asked %d times once the pass completed, want 1", got)
+		}
+		// Past the pass, a sync prunes on its own.
+		if err := s.syncPod(context.Background(), workerPod("pod-later", "pool")); err != nil {
+			t.Fatal(err)
+		}
+		if got := rec.pruneCount(); got != 2 {
+			t.Errorf("prune asked %d times after a sync past the pass, want 2", got)
+		}
+	})
+}
