@@ -46,7 +46,6 @@ const (
 	phaseActivate      = "activate"
 
 	phaseCheckpoint   = "checkpoint"
-	phaseDurableDir   = "durable_dir"
 	phaseFSCheckpoint = "fs_checkpoint"
 	phaseTeardown     = "teardown"
 
@@ -85,19 +84,17 @@ func (t restoreTiming) phases() []phaselog.Phase {
 }
 
 // checkpointTiming is the elapsed time of each CheckpointWorkload phase.
-// MEMORY fidelity runs runsc checkpoint (recorded under checkpoint); VOLUMES
-// runs runsc fscheckpoint on durable-dir volumes (recorded under durable_dir);
-// ROOTFS runs runsc fscheckpoint on container rootfs overlays and durable-dir
-// volumes (recorded under fs_checkpoint).
+// MEMORY fidelity runs runsc checkpoint (recorded under checkpoint). VOLUMES
+// and ROOTFS both run runsc fscheckpoint (recorded under fs_checkpoint);
+// ate.snapshot.fidelity tells them apart.
 type checkpointTiming struct {
-	prep, checkpoint, durableDir, fsCheckpoint, teardown, total time.Duration
+	prep, checkpoint, fsCheckpoint, teardown, total time.Duration
 }
 
 func (t checkpointTiming) phases() []phaselog.Phase {
 	return []phaselog.Phase{
 		{Name: phasePrep, D: t.prep},
 		{Name: phaseCheckpoint, D: t.checkpoint},
-		{Name: phaseDurableDir, D: t.durableDir},
 		{Name: phaseFSCheckpoint, D: t.fsCheckpoint},
 		{Name: phaseTeardown, D: t.teardown},
 		{Name: phaseTotal, D: t.total},

@@ -71,9 +71,7 @@ func durableSnapshotFiles(snapshotFiles []string) []string {
 // fsRestoreArgs returns repeatable `--fs-restore-image-path` arguments for the
 // filesystem checkpoint bundles in checkpointDir that apply at the requested
 // fidelity:
-//   - ROOTFS requires `<checkpointDir>/rootfs/fscheckpoint.pb`. MEMORY uses it
-//     when present; MEMORY snapshots taken before the split keep the rootfs
-//     inside checkpoint.img.
+//   - ROOTFS and MEMORY require `<checkpointDir>/rootfs/fscheckpoint.pb`.
 //   - Every fidelity uses `<checkpointDir>/fs` when
 //     `<checkpointDir>/fs/fscheckpoint.pb` exists.
 func fsRestoreArgs(checkpointDir string, fidelity ateworkerpb.SnapshotFidelity) ([]string, error) {
@@ -92,8 +90,8 @@ func fsRestoreArgs(checkpointDir string, fidelity ateworkerpb.SnapshotFidelity) 
 			if !errors.Is(err, fs.ErrNotExist) {
 				return nil, fmt.Errorf("while checking filesystem checkpoint manifest %q: %w", manifestPath, err)
 			}
-			if sub == resources.RootfsCheckpointSubdir && fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
-				return nil, fmt.Errorf("ROOTFS snapshot has no rootfs filesystem checkpoint %q: %w", manifestPath, err)
+			if sub == resources.RootfsCheckpointSubdir {
+				return nil, fmt.Errorf("%v snapshot has no rootfs filesystem checkpoint %q: %w", fidelity, manifestPath, err)
 			}
 			continue
 		}
@@ -102,11 +100,22 @@ func fsRestoreArgs(checkpointDir string, fidelity ateworkerpb.SnapshotFidelity) 
 	return args, nil
 }
 
-// fsRestoreContainers returns the container names that own the master mount of
-// at least one durable-dir volume (the first container to mount each volume),
-// in order. Only those containers register an entry in runsc's fsRestore
-// waitMap for `runsc wait -fsrestore <container>`.
-func fsRestoreContainers(containers []*ateworkerpb.Container) []string {
+// fsRestoreContainers returns, in order, the containers that register an entry
+// in runsc's fsRestore waitMap for `runsc wait -fsrestore <container>`: those
+// whose filesystems fsRestoreArgs restores at the requested fidelity. ROOTFS
+// and MEMORY restore every container's rootfs overlay, so every container has
+// an entry. VOLUMES restores only durable-dir volumes, so only a container
+// that owns the master mount of at least one volume (the first container to
+// mount it) has one.
+func fsRestoreContainers(fidelity ateworkerpb.SnapshotFidelity, containers []*ateworkerpb.Container) []string {
+	if fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS ||
+		fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		out := make([]string, 0, len(containers))
+		for _, c := range containers {
+			out = append(out, c.GetName())
+		}
+		return out
+	}
 	seen := make(map[string]bool)
 	var out []string
 	for _, c := range containers {

@@ -816,7 +816,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		}
 		checkpointFn = func(ctx context.Context) error {
 			err := rcmd.cmdFsCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
-			timing.durableDir = lap(&tLast)
+			timing.fsCheckpoint = lap(&tLast)
 			if err != nil {
 				return fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
 			}
@@ -1164,7 +1164,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			}
 		}
 		if len(restoreArgs) > 0 {
-			for _, ctr := range fsRestoreContainers(containers) {
+			for _, ctr := range fsRestoreContainers(fidelity, containers) {
 				if err := rcmd.cmdWaitFSRestore(waitCtx, ctr); err != nil {
 					return err
 				}

@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
@@ -144,14 +145,22 @@ func TestListSnapshotFilesWithFSSubdir(t *testing.T) {
 }
 
 func TestFSRestoreArgs(t *testing.T) {
-	t.Run("no fs checkpoint present", func(t *testing.T) {
+	t.Run("no filesystem checkpoint present", func(t *testing.T) {
 		checkpointDir := t.TempDir()
-		got, err := fsRestoreArgs(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+		got, err := fsRestoreArgs(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES)
 		if err != nil {
-			t.Fatalf("fsRestoreArgs() = %v", err)
+			t.Fatalf("fsRestoreArgs(VOLUMES) = %v", err)
 		}
 		if len(got) != 0 {
-			t.Errorf("fsRestoreArgs() = %v, want empty", got)
+			t.Errorf("fsRestoreArgs(VOLUMES) = %v, want empty", got)
+		}
+		for _, fidelity := range []ateworkerpb.SnapshotFidelity{
+			ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		} {
+			if got, err := fsRestoreArgs(checkpointDir, fidelity); err == nil {
+				t.Errorf("fsRestoreArgs(%v) = (%v, nil), want error when rootfs/ is missing", fidelity, got)
+			}
 		}
 	})
 
@@ -190,7 +199,7 @@ func TestFSRestoreArgs(t *testing.T) {
 		}
 	})
 
-	t.Run("ROOTFS with only fs checkpoint present fails", func(t *testing.T) {
+	t.Run("ROOTFS and MEMORY with only fs checkpoint present fail", func(t *testing.T) {
 		checkpointDir := t.TempDir()
 		fsDir := filepath.Join(checkpointDir, "fs")
 		if err := os.MkdirAll(fsDir, 0o700); err != nil {
@@ -200,8 +209,24 @@ func TestFSRestoreArgs(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if got, err := fsRestoreArgs(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS); err == nil {
-			t.Errorf("fsRestoreArgs(ROOTFS) = (%v, nil), want error when rootfs/ is missing", got)
+		for _, fidelity := range []ateworkerpb.SnapshotFidelity{
+			ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		} {
+			got, err := fsRestoreArgs(checkpointDir, fidelity)
+			if err == nil {
+				t.Errorf("fsRestoreArgs(%v) = (%v, nil), want error when rootfs/ is missing", fidelity, got)
+			} else if !strings.Contains(err.Error(), "rootfs") {
+				t.Errorf("fsRestoreArgs(%v) error = %q, want it to name the rootfs checkpoint", fidelity, err)
+			}
+		}
+
+		gotVolumes, err := fsRestoreArgs(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES)
+		if err != nil {
+			t.Fatalf("fsRestoreArgs(VOLUMES) = %v", err)
+		}
+		if want := []string{"--fs-restore-image-path", fsDir}; !slices.Equal(gotVolumes, want) {
+			t.Errorf("fsRestoreArgs(VOLUMES) = %v, want %v", gotVolumes, want)
 		}
 	})
 
@@ -278,9 +303,18 @@ func TestFSRestoreContainers(t *testing.T) {
 		},
 	}
 
-	got := fsRestoreContainers(containers)
-	want := []string{"app", "sidecar-with-own-vol"}
-	if !slices.Equal(got, want) {
-		t.Errorf("fsRestoreContainers() = %v, want %v", got, want)
+	for _, tc := range []struct {
+		fidelity ateworkerpb.SnapshotFidelity
+		want     []string
+	}{
+		// Only fs/ is restored, so only durable-dir mount owners wait.
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, []string{"app", "sidecar-with-own-vol"}},
+		// rootfs/ is restored for every container, so every container waits.
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, []string{"init", "app", "sidecar-shared-only", "sidecar-with-own-vol"}},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, []string{"init", "app", "sidecar-shared-only", "sidecar-with-own-vol"}},
+	} {
+		if got := fsRestoreContainers(tc.fidelity, containers); !slices.Equal(got, tc.want) {
+			t.Errorf("fsRestoreContainers(%v) = %v, want %v", tc.fidelity, got, tc.want)
+		}
 	}
 }

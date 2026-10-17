@@ -2,7 +2,7 @@
 
 This directory contains a demo of a stateful counter application running on Agent Substrate.
 
-It deploys a simple Go HTTP server (`counter.go`) that increments two counters on every request — one in process memory, one in a file on a durable volume — and preserves both across suspends and resumes: the template's `MEMORY` `preferredFidelity` snapshot captures process memory alongside the durable volumes, so the in-memory count continues from where it left off. (With a `VOLUMES` fidelity, only the durable-volume counter would survive and the in-memory counter would restart from a cold boot.)
+It deploys a simple Go HTTP server (`counter.go`) that increments two counters on every request — one in process memory, one in a file on a durable volume — and preserves both across suspends and resumes: the template's `MEMORY` `preferredFidelity` snapshot captures process memory alongside the durable volumes, so the in-memory count continues from where it left off. (With a `VOLUMES` fidelity, only the durable-volume counter would survive and the in-memory counter would restart from a cold boot. `ROOTFS` also keeps each container's rootfs writes, but not process memory, so the in-memory counter would restart under it too.)
 
 The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, while the actor template is a Substrate `ActorTemplate` resource — an `ateapipb.ActorTemplate` living in an **atespace** rather than a Kubernetes namespace, managed through the ate API with `kubectl ate`.
 
@@ -27,9 +27,6 @@ The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, whil
 
 The in-RAM-counter suspend/resume-continuity demo be run on the micro-VM
 sandbox class (`ateworker-microvm`: a Kata guest on Cloud Hypervisor).
-The micro-VM class also serves `SNAPSHOT_FIDELITY_ROOTFS`, a snapshot of the
-volumes and each container's rootfs writes without guest memory; this template
-keeps `MEMORY` because the in-RAM counter is the point of the demo.
 
 - [`demos/counter/counter-microvm.yaml.tmpl`](counter-microvm.yaml.tmpl) —
   the `WorkerPool` for the micro-VM sandbox class.
