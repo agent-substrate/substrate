@@ -379,15 +379,19 @@ func TestDownloadExternalCheckpointSharesOneDownload(t *testing.T) {
 // in the restore directory, as a directory or as the file itself, fails the
 // restore instead of being followed outside it.
 func TestDownloadExternalCheckpointCachedSubdirAndSymlinks(t *testing.T) {
-	s, _, base := newSnapshotCacheHerder(t, map[string]string{"memory-ranges": "golden memory", "fs/data.tar": "fs delta"})
+	s, _, base := newSnapshotCacheHerder(t, map[string]string{"memory-ranges": "golden memory", "fs/data.tar": "fs delta", "fs/rootfs-upper-app.tar": "rootfs delta"})
 	ctx := context.Background()
 
+	// Two files share the subdirectory and are fetched in parallel: the
+	// directory is made once, before either, not raced into by both.
 	dir := restoreDir(t, base, "subdir")
-	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, dir, []string{"memory-ranges", "fs/data.tar"}, cacheModeLink); err != nil {
-		t.Fatalf("downloadExternalCheckpoint with a subdirectory file: %v", err)
+	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, dir, []string{"memory-ranges", "fs/data.tar", "fs/rootfs-upper-app.tar"}, cacheModeLink); err != nil {
+		t.Fatalf("downloadExternalCheckpoint with subdirectory files: %v", err)
 	}
-	if got, err := os.ReadFile(filepath.Join(dir, "fs", "data.tar")); err != nil || string(got) != "fs delta" {
-		t.Fatalf("subdirectory file = %q, %v", got, err)
+	for name, want := range map[string]string{"fs/data.tar": "fs delta", "fs/rootfs-upper-app.tar": "rootfs delta"} {
+		if got, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(got) != want {
+			t.Fatalf("subdirectory file %s = %q, %v", name, got, err)
+		}
 	}
 
 	outside := filepath.Join(base, "outside")

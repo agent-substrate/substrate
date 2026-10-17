@@ -183,14 +183,22 @@ func (s *Atelet) downloadSnapshotFilesCached(ctx context.Context, snapshotURI, d
 	if err := resources.ValidateSnapshotFileNames(files); err != nil {
 		return err
 	}
+	// Subdirectories first, once each: the files are fetched in parallel,
+	// and several of them share the checkpoint subdirectory.
+	made := map[string]bool{}
+	for _, fileName := range files {
+		dir := filepath.Dir(fileName)
+		if dir == "." || made[dir] {
+			continue
+		}
+		if err := mkdirNoFollow(filepath.Join(dstDir, dir)); err != nil {
+			return fmt.Errorf("while creating %s in restore directory: %w", dir, err)
+		}
+		made[dir] = true
+	}
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range files {
 		g.Go(func() error {
-			if dir := filepath.Dir(fileName); dir != "." {
-				if err := mkdirNoFollow(filepath.Join(dstDir, dir)); err != nil {
-					return fmt.Errorf("while creating %s in restore directory: %w", dir, err)
-				}
-			}
 			if err := s.fetchSnapshotFile(gCtx, snapshotURI, fileName, filepath.Join(dstDir, fileName), mode); err != nil {
 				return fmt.Errorf("while downloading %s: %w", fileName, err)
 			}
