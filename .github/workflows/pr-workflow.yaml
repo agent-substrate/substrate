@@ -80,6 +80,15 @@ jobs:
           --jsonfile "${ARTIFACTS}/apitool.json" \
           --format pkgname-and-test-fails --format-hide-empty-pkg \
           -- -race ./...
+    # tools/junittool has its own module too
+    - name: junittool tests
+      working-directory: tools/junittool
+      run: |
+        go run . register "${ARTIFACTS}/junittool.xml"
+        ../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/junittool.xml" \
+          --jsonfile "${ARTIFACTS}/junittool.json" \
+          --format pkgname-and-test-fails --format-hide-empty-pkg \
+          -- -race ./...
     # Kept apart from the root module so it can move to its own repository.
     - name: gcp-secret-manager credential provider tests
       working-directory: internal/plugins/gcp-secret-manager
