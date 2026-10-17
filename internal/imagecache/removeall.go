@@ -21,26 +21,19 @@ import (
 )
 
 // RemoveAllWritable removes path and everything under it, first making every
-// directory owner-writable so its children can be unlinked, and, run as root,
-// giving it to uid 0 before that. Unpacked image trees keep the image's
-// (possibly read-only) directory modes, which plain root without
-// CAP_DAC_OVERRIDE cannot remove: os.RemoveAll alone fails there with EACCES.
-// They also keep the image's owners, and unlinking another user's entry from
-// a sticky directory another user owns takes owning the directory or
-// CAP_FOWNER; CAP_DAC_OVERRIDE does not cover it, and atelet does not hold
-// CAP_FOWNER. The chown takes CAP_CHOWN, which atelet holds, and makes root
-// the owner, so the chmod and the unlinks need nothing more. An unprivileged
-// caller cannot chown and skips it.
+// directory owner-writable so its children can be unlinked. Unpacked image
+// trees keep the image's (possibly read-only) directory modes, which plain
+// root without CAP_DAC_OVERRIDE cannot remove: os.RemoveAll alone fails there
+// with EACCES. They also keep the image's owners: changing the mode of
+// another user's directory, and unlinking from another user's sticky
+// directory, take CAP_FOWNER, which atelet holds. An unprivileged caller owns
+// every entry it unpacked.
 func RemoveAllWritable(path string) error {
-	asRoot := os.Geteuid() == 0
-	// Fix up dirs top-down (WalkDir visits a directory before reading it, so
-	// fixing it here lets the walk descend into otherwise-unreadable dirs).
-	// Best-effort: ignore errors and let os.RemoveAll surface real ones.
+	// Make dirs traversable/writable top-down (WalkDir visits a directory before
+	// reading it, so chmod here lets the walk descend into otherwise-unreadable
+	// dirs). Best-effort: ignore errors and let os.RemoveAll surface real ones.
 	_ = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		if err == nil && d.IsDir() {
-			if asRoot {
-				_ = os.Lchown(p, 0, -1)
-			}
 			_ = os.Chmod(p, 0o700)
 		}
 		return nil

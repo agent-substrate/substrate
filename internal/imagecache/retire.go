@@ -20,8 +20,8 @@ package imagecache
 // happens afterwards, outside all locks. A crash in between leaves a
 // ".rm-*" dir for the startup sweep. Retirement is rename/chmod/unlink,
 // which plain root can do on read-only trees it owns; trees an image gave to
-// other users also need CAP_CHOWN, to take back their directories, and
-// CAP_DAC_OVERRIDE (see RemoveAllWritable).
+// other users also need CAP_FOWNER and CAP_DAC_OVERRIDE (see
+// RemoveAllWritable).
 
 import (
 	"errors"
