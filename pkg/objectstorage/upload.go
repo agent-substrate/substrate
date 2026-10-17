@@ -107,7 +107,7 @@ func (u *Uploader) plan(content io.Reader) (uploadPlan, error) {
 		if err != nil {
 			return uploadPlan{}, err
 		}
-		_, populated, err := sparseExtents(f, info.Size())
+		exts, populated, err := sparseExtents(f, info.Size())
 		_, seekErr := f.Seek(position, io.SeekStart)
 		if err != nil {
 			return uploadPlan{}, err
@@ -118,6 +118,13 @@ func (u *Uploader) plan(content io.Reader) (uploadPlan, error) {
 		// Holes never enter the compressor or range uploads.
 		workers = min(workers, populated/parZstdChunk+1)
 		parts = min(sparsePartCount(populated), int(u.budget.capacity/sparseUploadMemory))
+		if _, ok := u.client.(sparseFilePutter); ok && parts >= 2 {
+			// PutSparseFile splits a file into parts whenever it has two or
+			// more (see errSparseTooSmall), so the streaming fallback never
+			// runs: reserve only what the parts hold.
+			return uploadPlan{workers: int(workers), parts: parts, memory: int64(parts) * sparseUploadMemory}, nil
+		}
+		buffers = streamBufferMemory(u.client, sparseEncodedBound(populated, len(exts)))
 	}
 	memory := buffers + workers*parallelWorkerMemory
 	if _, ok := u.client.(sparseFilePutter); ok {
@@ -126,6 +133,25 @@ func (u *Uploader) plan(content io.Reader) (uploadPlan, error) {
 		memory = max(memory, int64(parts)*sparseUploadMemory)
 	}
 	return uploadPlan{workers: int(workers), parts: parts, memory: memory}, nil
+}
+
+// sparseEncodedBound bounds the size of the sparse-extent stream for a file
+// whose populated bytes lie in the given number of extents: zstd's worst-case
+// expansion plus the format's header, per-extent frames, and per-chunk zstd
+// frame headers.
+func sparseEncodedBound(populated int64, extents int) int64 {
+	return populated + populated/128 + int64(extents)*16 + (populated/parZstdChunk+1)*64 + 64
+}
+
+// streamBufferMemory is the backend buffering for a streamed object of at
+// most size bytes. GCS sends an object smaller than uploadCompositeMin in one
+// request: it holds PutObject's lookahead and the client's chunk buffer for
+// that request (see putSingle), never the composite parts.
+func streamBufferMemory(client ObjectStorage, size int64) int64 {
+	if _, ok := client.(*gcsClient); ok && size < uploadCompositeMin {
+		return uploadCompositeMin + uploadChunkSize
+	}
+	return uploadBufferMemory(client)
 }
 
 // SendFile compresses and uploads an already-open snapshot file. The caller keeps
@@ -147,6 +173,13 @@ func (u *Uploader) Send(ctx context.Context, url string, content io.Reader) erro
 		return err
 	}
 	memory := uploadBufferMemory(u.client)
+	if f, ok := content.(*os.File); ok {
+		// A manifest is a few KiB: size its reservation by the file rather
+		// than by the largest object the backend could buffer.
+		if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
+			memory = streamBufferMemory(u.client, info.Size())
+		}
+	}
 	if err := u.budget.reserved.Acquire(ctx, memory); err != nil {
 		return err
 	}

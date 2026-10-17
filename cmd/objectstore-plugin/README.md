@@ -13,9 +13,12 @@ compression or range parallelism to fit the budget; file size does not need to f
 in memory. The sparse format and download readers are unchanged.
 
 With the current buffer sizes, the minimum budget is `384Mi` for GCS and `224Mi`
-for S3. Startup rejects smaller values. The accounting is conservative: GCS
-reserves for a composite upload even when an object ultimately fits in one
-request. Raise the budget to trade memory for more simultaneous uploads.
+for S3. Startup rejects smaller values. Each upload reserves for the path it
+takes: on GCS, a file split into range parts reserves only those parts, and an
+object whose sparse stream is bounded below one request (`64Mi`) reserves that
+request's buffers instead of the composite-upload buffers. Other streamed
+objects still reserve for a composite upload, even when they ultimately fit in
+one request. Raise the budget to trade memory for more simultaneous uploads.
 
 The budget is **not a process memory limit**. The Go runtime, garbage awaiting
 collection, connections, downloads, and asset transfers need additional memory.
@@ -24,7 +27,9 @@ the existing `128Mi` request is not a bound on its usage. If setting `GOMEMLIMIT
 leave headroom below the container limit for memory outside the Go heap.
 
 A manifest included with data files is uploaded only after all those files
-succeed. The existing two-RPC flow (data, then manifest) also uses the same budget.
+succeed. The existing two-RPC flow (data, then manifest) also uses the same
+budget; a manifest small enough for one request reserves only that request's
+buffers.
 
 ## Validation
 
