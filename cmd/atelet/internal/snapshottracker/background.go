@@ -261,19 +261,19 @@ func (t *Tracker) waitIdleLocked(ctx context.Context, actorUID string, check fun
 		if a == nil || a.op == nil {
 			return a, nil
 		}
-		if err := t.waitOpLocked(ctx, actorUID, a.op); err != nil {
+		if err := t.waitOpLocked(ctx, actorUID, a.op.done); err != nil {
 			return nil, err
 		}
 	}
 }
 
-// waitOpLocked waits, releasing the actor's lock meanwhile, until op has
-// ended or ctx does.
-func (t *Tracker) waitOpLocked(ctx context.Context, actorUID string, op *actorOp) error {
+// waitOpLocked waits, releasing the actor's lock meanwhile, until done is
+// closed or ctx ends.
+func (t *Tracker) waitOpLocked(ctx context.Context, actorUID string, done <-chan struct{}) error {
 	t.unlock(actorUID)
 	defer t.lock(actorUID)
 	select {
-	case <-op.done:
+	case <-done:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
