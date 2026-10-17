@@ -614,7 +614,7 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 }
 
 func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
-	f.record(ctx, "SuspendActor")
+	f.record(ctx, suspendCallName(in))
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := nextErr(&f.suspendErrs); err != nil {
@@ -623,9 +623,13 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 	return &ateapipb.SuspendActorResponse{}, nil
 }
 
-func (f *fakeControlClient) PauseActor(ctx context.Context, in *ateapipb.PauseActorRequest, opts ...grpc.CallOption) (*ateapipb.PauseActorResponse, error) {
-	f.record(ctx, "PauseActor")
-	return &ateapipb.PauseActorResponse{}, nil
+// suspendCallName is the name a SuspendActor call is recorded under: an
+// async suspend is told apart from a sync one.
+func suspendCallName(in *ateapipb.SuspendActorRequest) string {
+	if in.GetOptions().GetMode() == ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+		return "SuspendActor(async)"
+	}
+	return "SuspendActor"
 }
 
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
@@ -965,8 +969,8 @@ func TestSnapshotSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := countCalls(ctl.recordedCalls(), "PauseActor"); got != 0 {
-		t.Fatalf("PauseActor after startUser = %d, want 0", got)
+	if got := countCalls(ctl.recordedCalls(), "SuspendActor(async)"); got != 0 {
+		t.Fatalf("SuspendActor(async) after startUser = %d, want 0", got)
 	}
 
 	// Run 4 steps (1-based 1..4). Only steps 2 and 4 should park; only step 3
@@ -979,8 +983,8 @@ func TestSnapshotSteps(t *testing.T) {
 			t.Fatalf("step %d failed", i+1)
 		}
 	}
-	if got := countCalls(ctl.recordedCalls(), "PauseActor"); got != 2 {
-		t.Errorf("PauseActor calls across 4 steps = %d, want 2 (steps 2 and 4); calls = %v", got, ctl.recordedCalls())
+	if got := countCalls(ctl.recordedCalls(), "SuspendActor(async)"); got != 2 {
+		t.Errorf("SuspendActor(async) calls across 4 steps = %d, want 2 (steps 2 and 4); calls = %v", got, ctl.recordedCalls())
 	}
 	if got := countCalls(ctl.recordedCalls(), "ResumeActor"); got != 1 {
 		t.Errorf("ResumeActor calls across 4 steps = %d, want 1 (at step 3 after step 2 parked); calls = %v", got, ctl.recordedCalls())

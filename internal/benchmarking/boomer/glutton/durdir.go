@@ -210,8 +210,9 @@ func (u *durDirUser) resume(ctx context.Context, mode string) bool {
 
 func (u *durDirUser) pause(ctx context.Context) {
 	_ = u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.PauseActor(callCtx, &ateapipb.PauseActorRequest{
-			Actor: u.ref(),
+		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
+			Actor:   u.ref(),
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -239,8 +240,9 @@ func (u *durDirUser) hibernate(ctx context.Context, dynCfg durDirKnobs) {
 // while the delete is metered so true leaks still surface in failures.csv.
 func (u *durDirUser) hibernateAndDelete(ctx context.Context, dynCfg durDirKnobs) {
 	if dynCfg.LifecycleMode == dynconfig.LifecycleModePause {
-		_, _ = u.cfg.APIStub.PauseActor(ctx, &ateapipb.PauseActorRequest{
-			Actor: u.ref(),
+		_, _ = u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+			Actor:   u.ref(),
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		})
 	} else {
 		_, _ = u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{

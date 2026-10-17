@@ -55,7 +55,7 @@ func TestDurDirLoopSequence(t *testing.T) {
 			name:          "pause lifecycle mode",
 			lifecycleMode: dynconfig.LifecycleModePause,
 			resumeMode:    dynconfig.ResumeModeExplicit,
-			wantGRPCCall:  []string{"PauseActor", "ResumeActor"},
+			wantGRPCCall:  []string{"SuspendActor(async)", "ResumeActor"},
 			wantHTTPCall:  []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
 		},
 	}
@@ -274,8 +274,8 @@ func TestDurDirShutdownPausesBeforeDelete(t *testing.T) {
 	rt.shutdown(context.Background())
 
 	calls := fakeCtrl.recordedCalls()
-	if len(calls) < 2 || calls[len(calls)-2] != "PauseActor" || calls[len(calls)-1] != "DeleteActor" {
-		t.Errorf("recordedCalls must end with [PauseActor, DeleteActor], got %v", calls)
+	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor(async)" || calls[len(calls)-1] != "DeleteActor" {
+		t.Errorf("recordedCalls must end with [SuspendActor(async), DeleteActor], got %v", calls)
 	}
 	reqs := fakeCtrl.recordedDeleteRequests()
 	if len(reqs) == 0 || !reqs[0].GetAnyState() {

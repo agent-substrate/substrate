@@ -263,8 +263,9 @@ func (r *runtime) cycle(name string) {
 // is all recovery wants, so that counts as a success.
 func (r *runtime) recover(ctx context.Context, name string) {
 	_ = r.call(ctx, "PauseActorRecovery", func(ctx context.Context) error {
-		_, err := r.cfg.APIStub.PauseActor(ctx, &ateapipb.PauseActorRequest{
-			Actor: r.ref(name),
+		_, err := r.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+			Actor:   r.ref(name),
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		})
 		if status.Code(err) == codes.FailedPrecondition {
 			return nil
@@ -316,12 +317,13 @@ func (r *runtime) resume(ctx context.Context, metricName, name string) error {
 	})
 }
 
-// pause calls PauseActor. suffix keeps warm-up calls apart from the measured
-// ones.
+// pause suspends an actor asynchronously, keeping its snapshot on the node.
+// suffix keeps warm-up calls apart from the measured ones.
 func (r *runtime) pause(ctx context.Context, suffix, name string) error {
 	return r.call(ctx, "PauseActor"+suffix, func(ctx context.Context) error {
-		_, err := r.cfg.APIStub.PauseActor(ctx, &ateapipb.PauseActorRequest{
-			Actor: r.ref(name),
+		_, err := r.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+			Actor:   r.ref(name),
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		})
 		return err
 	})

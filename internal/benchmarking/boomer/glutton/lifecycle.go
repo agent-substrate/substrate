@@ -142,7 +142,7 @@ func (r *taskRuntime) iterate() {
 
 	// Going straight back to resume on a stranded actor would turn every
 	// retryable hibernate failure into a FailedPrecondition and cost the
-	// actor anyway. SuspendActor and PauseActor are re-entrant, so finish
+	// actor anyway. SuspendActor is re-entrant in either mode, so finish
 	// the hibernate and pick the cycle up next iteration.
 	if actor.hibernatePending {
 		if err := actor.hibernate(ctx); err != nil && actor.noteFailure(err) {
@@ -454,9 +454,9 @@ func (u *gluttonActor) resume(ctx context.Context) error {
 }
 
 // hibernate takes the actor off its worker by whichever operation the
-// lifecycle mode selects: PauseActor keeps the snapshot on the node,
-// SuspendActor writes it to durable storage, and LifecycleModeNone leaves
-// the actor running on its worker.
+// lifecycle mode selects: an async SuspendActor keeps the snapshot on the
+// node, a sync one writes it to durable storage, and LifecycleModeNone
+// leaves the actor running on its worker.
 func (u *gluttonActor) hibernate(ctx context.Context) error {
 	switch dynconfig.Get[gluttonKnobs](u.cfg.Dyn).LifecycleMode {
 	case dynconfig.LifecycleModeNone:
@@ -470,8 +470,9 @@ func (u *gluttonActor) hibernate(ctx context.Context) error {
 
 func (u *gluttonActor) pause(ctx context.Context) error {
 	err := u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.PauseActor(callCtx, &ateapipb.PauseActorRequest{
-			Actor: u.ref(),
+		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
+			Actor:   u.ref(),
+			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		}, grpc.Trailer(tr))
 		return err
 	})

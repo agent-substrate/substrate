@@ -91,18 +91,20 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, "SuspendActor")
+	f.calls = append(f.calls, suspendCallName(in))
 	if err := nextErr(&f.suspendErrs); err != nil {
 		return nil, err
 	}
 	return &ateapipb.SuspendActorResponse{}, nil
 }
 
-func (f *fakeControlClient) PauseActor(ctx context.Context, in *ateapipb.PauseActorRequest, opts ...grpc.CallOption) (*ateapipb.PauseActorResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "PauseActor")
-	return &ateapipb.PauseActorResponse{}, nil
+// suspendCallName is the name a SuspendActor call is recorded under: an
+// async suspend is told apart from a sync one.
+func suspendCallName(in *ateapipb.SuspendActorRequest) string {
+	if in.GetOptions().GetMode() == ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+		return "SuspendActor(async)"
+	}
+	return "SuspendActor"
 }
 
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {

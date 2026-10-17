@@ -45,8 +45,8 @@ func TestGluttonIterate_SuspendMode(t *testing.T) {
 	if !slices.Contains(calls, "SuspendActor") {
 		t.Errorf("expected SuspendActor in calls, got: %v", calls)
 	}
-	if slices.Contains(calls, "PauseActor") {
-		t.Errorf("did not expect PauseActor in suspend mode calls, got: %v", calls)
+	if slices.Contains(calls, "SuspendActor(async)") {
+		t.Errorf("did not expect SuspendActor(async) in suspend mode calls, got: %v", calls)
 	}
 }
 
@@ -65,8 +65,8 @@ func TestGluttonIterate_PauseMode(t *testing.T) {
 	rt.iterate()
 
 	calls := fakeCtrl.recordedCalls()
-	if !slices.Contains(calls, "PauseActor") {
-		t.Errorf("expected PauseActor in calls, got: %v", calls)
+	if !slices.Contains(calls, "SuspendActor(async)") {
+		t.Errorf("expected SuspendActor(async) in calls, got: %v", calls)
 	}
 	if slices.Contains(calls, "SuspendActor") {
 		t.Errorf("did not expect SuspendActor in pause mode calls, got: %v", calls)
@@ -125,8 +125,8 @@ func TestGluttonShutdown_PauseModeRunningActor(t *testing.T) {
 	rt.shutdown(context.Background())
 
 	calls := fakeCtrl.recordedCalls()
-	if len(calls) < 2 || calls[len(calls)-2] != "PauseActor" || calls[len(calls)-1] != "DeleteActor" {
-		t.Errorf("recordedCalls must end with [PauseActor, DeleteActor], got %v", calls)
+	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor(async)" || calls[len(calls)-1] != "DeleteActor" {
+		t.Errorf("recordedCalls must end with [SuspendActor(async), DeleteActor], got %v", calls)
 	}
 	reqs := fakeCtrl.recordedDeleteRequests()
 	if len(reqs) == 0 || !reqs[0].GetAnyState() {

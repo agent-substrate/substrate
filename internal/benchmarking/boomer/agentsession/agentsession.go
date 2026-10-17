@@ -615,7 +615,7 @@ func (u *sessionUser) runStep(ctx context.Context, step Step) bool {
 	// A failed hibernate left the actor awake. In implicit mode the wake
 	// ping would return in a few ms and be booked as a WakeFirstTouch
 	// success; in explicit mode ResumeActor would fail FailedPrecondition.
-	// SuspendActor and PauseActor are re-entrant, so finish the hibernate
+	// SuspendActor is re-entrant in either mode, so finish the hibernate
 	// and pick the step up next iteration.
 	if u.hibernatePending {
 		u.hibernate(ctx)
@@ -865,10 +865,10 @@ func (u *sessionUser) resume(ctx context.Context) error {
 	return err
 }
 
-// hibernate suspends (or pauses, per LifecycleMode) the actor at the end of
-// a step. In LifecycleModeNone the actor stays resident and hibernate is a
-// no-op. A failure leaves hibernatePending set so the next step re-drives
-// it instead of waking a stranded actor.
+// hibernate suspends the actor at the end of a step, asynchronously in pause
+// LifecycleMode. In LifecycleModeNone the actor stays resident and hibernate
+// is a no-op. A failure leaves hibernatePending set so the next step
+// re-drives it instead of waking a stranded actor.
 func (u *sessionUser) hibernate(ctx context.Context) {
 	mode := dynconfig.Get[knobs](u.cfg.Dyn).LifecycleMode
 	if mode == dynconfig.LifecycleModeNone {
@@ -878,7 +878,7 @@ func (u *sessionUser) hibernate(ctx context.Context) {
 	var err error
 	if mode == dynconfig.LifecycleModePause {
 		err = u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
-			_, err := u.cfg.APIStub.PauseActor(callCtx, &ateapipb.PauseActorRequest{Actor: u.ref()}, grpc.Trailer(tr))
+			_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{Actor: u.ref(), Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}, grpc.Trailer(tr))
 			return err
 		})
 	} else {

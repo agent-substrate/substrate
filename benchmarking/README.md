@@ -527,7 +527,8 @@ warm-up until they have all joined at the spawn rate.
 
 * `ResumeActorCold`: Latency of each measured resume. A resume that finds its
   actor already running fails, as no cold resume happened.
-* `PauseActor`: Latency of the pause that makes the actor cold again.
+* `PauseActor`: Latency of the async SuspendActor (the pause) that makes the
+  actor cold again.
 * `PauseActorRecovery`: After a failed cycle, the pause that makes the actor
   cold for the next one. It is load on the server, so it is recorded, but
   apart from `PauseActor`. A recovery pause that finds the actor already
