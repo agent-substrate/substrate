@@ -45,6 +45,8 @@ type runsc struct {
 	durableVolumes []string
 	// containers are the workload's containers, from the request.
 	containers []*ateworkerpb.Container
+	// pauseUser is the pause container's identity, from the request. nil is root.
+	pauseUser *ateworkerpb.ProcessUser
 	// flags holds the configured flags; must not be nil.
 	flags *flagStore
 }
@@ -85,18 +87,18 @@ func durableVolumeNames(spec *ateworkerpb.WorkloadSpec) []string {
 }
 
 // pauseContainer is the sandbox root container. It only reaps, so it gets no
-// capabilities and mounts nothing.
-func pauseContainer() *ateworkerpb.Container {
+// capabilities and mounts nothing. It runs as the pause image's USER.
+func (r *runsc) pauseContainer() *ateworkerpb.Container {
 	return &ateworkerpb.Container{
 		Name:          ocispec.PauseContainer,
-		ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/pause"}},
+		ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/pause"}, User: r.pauseUser},
 	}
 }
 
 // writeSpec builds the container's OCI spec, shapes it for gVisor, and saves it
 // into the container's bundle.
 func (r *runsc) writeSpec(containerName string) error {
-	container := pauseContainer()
+	container := r.pauseContainer()
 	if containerName != ocispec.PauseContainer {
 		i := slices.IndexFunc(r.containers, func(c *ateworkerpb.Container) bool { return c.GetName() == containerName })
 		if i < 0 {

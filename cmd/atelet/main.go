@@ -719,7 +719,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 		return nil, err
 	}
-	containerSpecs, err := s.prepareOCIBundles(ctx, actorUID, actorRef,
+	bundles, err := s.prepareOCIBundles(ctx, actorUID, actorRef,
 		req.GetSpec(), sandboxRec.PauseImage,
 	)
 	if err != nil {
@@ -731,7 +731,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 		return nil, err
 	}
 
-	spec, err := buildWorkerWorkloadSpec(req.GetSpec(), containerSpecs)
+	spec, err := buildWorkerWorkloadSpec(req.GetSpec(), bundles)
 	if err != nil {
 		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
@@ -1453,7 +1453,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// fetch + image unpack hides whichever leg is shorter, and on a cold node
 	// (uncached assets + image, ~2.5s unpack) that overlap is large.
 	var assetPaths map[string]string
-	var containerSpecs []*ateworkerpb.ContainerSpec
+	var bundles *bundleSpecs
 	// One per leg: a single field written from both goroutines would race.
 	var downloadErr, prepErr error
 	var prepFailedPhase string
@@ -1487,7 +1487,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 			return err
 		}
 		t := time.Now()
-		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage)
+		bundles, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage)
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -1512,7 +1512,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 
 	// Tell worker to do runsc create + runsc restore for pause container and
 	// all application containers.
-	spec, err := buildWorkerWorkloadSpec(req.GetSpec(), containerSpecs)
+	spec, err := buildWorkerWorkloadSpec(req.GetSpec(), bundles)
 	if err != nil {
 		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
@@ -1772,14 +1772,14 @@ func prepareDurableDirVolume(path string) error {
 // configuration, and on a restore it must be the image the snapshot was taken
 // with. It is empty for sandboxes without a pause container, which get no
 // pause bundle. It returns each application container's spec, indexed like
-// spec.GetContainers().
+// spec.GetContainers(), and the pause container's identity.
 func (s *Atelet) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
 	actorRef resources.ActorRef,
 	spec *ateletpb.WorkloadSpec,
 	pauseImage string,
-) ([]*ateworkerpb.ContainerSpec, error) {
+) (*bundleSpecs, error) {
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
 		if vol.GetDurableDir() != nil {
@@ -1791,37 +1791,47 @@ func (s *Atelet) prepareOCIBundles(
 
 	g, gCtx := errgroup.WithContext(ctx)
 
+	out := &bundleSpecs{containers: make([]*ateworkerpb.ContainerSpec, len(spec.GetContainers()))}
 	if pauseImage != "" {
 		g.Go(func() error {
 			// pause is sandbox infra; it mounts no volumes.
-			if _, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ocispec.PauseContainer, pauseImage, nil, nil); err != nil {
+			img, _, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ocispec.PauseContainer, pauseImage, nil, nil)
+			if err != nil {
 				return wrapFileSystemErr("while creating pause OCI bundle", err)
+			}
+			if out.pauseUser, err = resolveImageUser(img); err != nil {
+				return fmt.Errorf("while resolving the pause container's user: %w", err)
 			}
 			return nil
 		})
 	}
 
 	// Application containers.
-	containerSpecs := make([]*ateworkerpb.ContainerSpec, len(spec.GetContainers()))
 	for i, ctr := range spec.GetContainers() {
 		var envs []string
 		for _, env := range ctr.GetEnv() {
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
 		g.Go(func() error {
-			imageConfig, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
+			img, cwd, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
 			if err != nil {
 				return wrapFileSystemErr(fmt.Sprintf("while creating %q OCI bundle", ctr.GetName()), err)
 			}
-			args, err := resolveProcessArgs(imageConfig, ctr.GetCommand(), ctr.GetArgs())
+			args, err := resolveProcessArgs(&img.Config, ctr.GetCommand(), ctr.GetArgs())
 			if err != nil {
 				return fmt.Errorf("while resolving process args for container %q: %w", ctr.GetName(), err)
 			}
-			containerSpecs[i] = &ateworkerpb.ContainerSpec{
+			user, err := resolveImageUser(img)
+			if err != nil {
+				return fmt.Errorf("while resolving user for container %q: %w", ctr.GetName(), err)
+			}
+			out.containers[i] = &ateworkerpb.ContainerSpec{
 				Args:         args,
-				Env:          resolveActorEnv(imageConfig, envs),
+				Env:          resolveActorEnv(&img.Config, envs),
 				Capabilities: resolveCapabilities(ctr.GetSecurityContext().GetCapabilities()),
 				Resources:    toWorkerResourceLimits(ctr.GetResources()),
+				User:         user,
+				Cwd:          cwd,
 			}
 			return nil
 		})
@@ -1829,7 +1839,17 @@ func (s *Atelet) prepareOCIBundles(
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	return containerSpecs, nil
+	return out, nil
+}
+
+// bundleSpecs is what prepareOCIBundles resolved from the images.
+type bundleSpecs struct {
+	// containers are the application containers' specs, indexed like
+	// WorkloadSpec.containers.
+	containers []*ateworkerpb.ContainerSpec
+	// pauseUser is the pause image's USER. nil is root, and a sandbox without
+	// a pause container.
+	pauseUser *ateworkerpb.ProcessUser
 }
 
 // dialWorker opens (or reuses) the gRPC connection to the target worker
@@ -1843,10 +1863,9 @@ func (s *Atelet) dialWorker(ctx context.Context, workerPodUID string) (ateworker
 }
 
 // buildWorkerWorkloadSpec projects the atelet-facing workload spec onto
-// the worker-facing one. containerSpecs holds each container's spec from
-// prepareOCIBundles, indexed like spec.GetContainers(); it is nil for RPCs that
-// start no process.
-func buildWorkerWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*ateworkerpb.ContainerSpec) (*ateworkerpb.WorkloadSpec, error) {
+// the worker-facing one. bundles holds what prepareOCIBundles resolved from
+// the images; it is nil for RPCs that start no process.
+func buildWorkerWorkloadSpec(spec *ateletpb.WorkloadSpec, bundles *bundleSpecs) (*ateworkerpb.WorkloadSpec, error) {
 	volumes := make(map[string]*ateletpb.Volume)
 	for _, vol := range spec.GetVolumes() {
 		name := vol.GetName()
@@ -1857,6 +1876,9 @@ func buildWorkerWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*atew
 	}
 
 	out := &ateworkerpb.WorkloadSpec{}
+	if bundles != nil {
+		out.PauseUser = bundles.pauseUser
+	}
 	for i, ctr := range spec.GetContainers() {
 		var ddMounts []*ateworkerpb.VolumeMount
 		var extMounts []*ateworkerpb.VolumeMount
@@ -1902,8 +1924,8 @@ func buildWorkerWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*atew
 			ImageVolumeMounts:      imgMounts,
 			WakeupProbe:            toWorkerWakeupProbe(ctr.GetWakeupProbe()),
 		}
-		if containerSpecs != nil {
-			container.ContainerSpec = containerSpecs[i]
+		if bundles != nil {
+			container.ContainerSpec = bundles.containers[i]
 		}
 		out.Containers = append(out.Containers, container)
 	}

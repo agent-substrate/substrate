@@ -185,6 +185,10 @@ message EgressGateway {
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 message WorkloadSpec {
   repeated Container containers = 1;
+
+  // pause_user is the identity of the pause container, the sandbox root,
+  // resolved from the pause image's USER. Unset is root.
+  ProcessUser pause_user = 2;
 }
 
 message Container {
@@ -228,6 +232,19 @@ message ContainerSpec {
 
   // resources are the container's own declared limits, if any.
   ResourceLimits resources = 4;
+
+  // user is the process identity, the image's USER resolved against its
+  // /etc/passwd and /etc/group. Unset is root.
+  ProcessUser user = 5;
+
+  // cwd is the process working directory, the image's WORKDIR. Empty is "/".
+  string cwd = 6;
+}
+// ProcessUser is a resolved process identity.
+message ProcessUser {
+  uint32 uid = 1;
+  uint32 gid = 2;
+  repeated uint32 additional_gids = 3;
 }
 
 // ResourceLimits are a container's declared limits.
