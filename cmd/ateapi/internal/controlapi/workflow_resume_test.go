@@ -1247,6 +1247,16 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	localSnap := func(name string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
 		return newLocalSnapshot(1, fidelity, "", name, "node-1")
 	}
+	// pauseUploadURI is where atelet uploads the pause snapshot.
+	pauseUploadURI := someActorSnapshotURI(t, testStorageLocation, "team-a", localSnapshotName)
+	uploadedLocalSnap := func(name string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
+		snap := localSnap(name, fidelity)
+		snap.DurableSnapshot = &ateapipb.SnapshotStorage{
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: pauseUploadURI},
+		}
+		return snap
+	}
 
 	// actorSeed is the actor status a row persists before resuming.
 	type actorSeed struct {
@@ -1283,7 +1293,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		run  bool
 		// snapshotName is Snapshot.SnapshotUuid and snapshotURI is
 		// Snapshot.Object.SnapshotUri. Both are asserted on every Restore, so
-		// a local row also pins that no durable copy is sent.
+		// a local row also pins which durable copy, if any, is sent.
 		snapshotName string
 		snapshotURI  string
 		scope        ateletpb.SnapshotFidelity
@@ -1590,6 +1600,20 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				snapshotName: durableSnapshotName,
 				snapshotURI:  actorURI,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			},
+		},
+		{
+			// atelet uploads a pause's snapshot in the background. Once that
+			// upload is recorded, a local restore sends it too, so atelet can
+			// download the snapshot if its local copy is gone.
+			name: "25 uploaded pause snapshot restores locally and sends its upload",
+			actor: actorSeed{
+				localSnapshot: uploadedLocalSnap(localSnapshotName, fullScope),
+			},
+			want: restoreWant{
+				snapshotName: localSnapshotName,
+				snapshotURI:  pauseUploadURI,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 	}

@@ -853,6 +853,11 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			CpuMilli:       cpuMilli,
 			MemoryBytes:    memBytes,
 		}
+		// atelet uploads a pause's snapshot in the background. Once that upload
+		// is recorded, atelet can download it if its local copy is gone.
+		if durable := localSnap.GetDurableSnapshot(); durable.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+			req.Snapshot.Object = &ateletpb.ObjectStorage{SnapshotUri: durable.GetObject().GetSnapshotUri()}
+		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 
 		if _, err = client.Restore(ctx, req); err != nil {

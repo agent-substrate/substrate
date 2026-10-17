@@ -340,6 +340,13 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 			seedOpts:  []func(*ateapipb.Actor){withPausedShape("node-1")},
 			wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 		},
+		{
+			// atelet's upload of the snapshot leaves the actor paused.
+			name:      "already paused with its snapshot uploaded succeeds",
+			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			seedOpts:  []func(*ateapipb.Actor){withUploadedPausedShape("node-1", someActorSnapshotURI(t, "gs://snapshots", "team-a", "pause-snap"))},
+			wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

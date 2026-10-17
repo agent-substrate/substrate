@@ -33,8 +33,9 @@ import (
 
 // revertableStates are the states a revert is accepted from. A SUSPENDED
 // actor is also accepted when it is paused, that is, when its latest snapshot
-// is node-local: the revert discards that snapshot and returns the actor to
-// its durable one. See isRevertable.
+// is node-local: the revert discards the node-local copy and returns the actor
+// to its latest durable snapshot, which is that same snapshot once atelet's
+// upload of it is recorded. See isRevertable.
 var revertableStates = []ateapipb.ActorState{
 	ateapipb.ActorState_ACTOR_STATE_RUNNING,
 	ateapipb.ActorState_ACTOR_STATE_CRASHED,
@@ -45,7 +46,7 @@ var revertableStates = []ateapipb.ActorState{
 func isRevertable(actor *ateapipb.Actor) bool {
 	state := actor.GetStatus().GetState()
 	return slices.Contains(revertableStates, state) ||
-		(state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocalOnly(actor.GetStatus()))
+		(state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocal(actor.GetStatus()))
 }
 
 // RevertActor executes the workflow to discard an actor's current execution and
@@ -239,7 +240,8 @@ func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, a
 }
 
 // ensureRevertedFinalized commits SUSPENDED and drops every pointer to the
-// execution that was discarded, in a single update.
+// execution that was discarded, in a single update, then releases the
+// external snapshots the update dropped.
 // It re-reads the actor first so an out-of-band transition is not overwritten,
 // and so the version precondition guards what was actually observed.
 func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
@@ -275,5 +277,6 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		return nil, err
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationRevert)
+	w.releaseDroppedSnapshots(ctx, latestActor, storedActor)
 	return storedActor, nil
 }

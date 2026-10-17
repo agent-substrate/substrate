@@ -170,6 +170,18 @@ func withPausedShape(node string) func(*ateapipb.Actor) {
 	}
 }
 
+// withUploadedPausedShape seeds a paused actor whose snapshot atelet has since
+// uploaded to uri: the paused shape, with a COMPLETED durable copy.
+func withUploadedPausedShape(node, uri string) func(*ateapipb.Actor) {
+	return func(a *ateapipb.Actor) {
+		withPausedShape(node)(a)
+		a.Status.Snapshots[0].DurableSnapshot = &ateapipb.SnapshotStorage{
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri},
+		}
+	}
+}
+
 // withPauseInProgress seeds the shape a pause has between marking the actor
 // SUSPENDING and finalizing it: a node-local snapshot at the latest generation
 // that has no locality yet. Pair it with ACTOR_STATE_SUSPENDING.

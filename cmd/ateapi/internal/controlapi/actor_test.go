@@ -360,6 +360,37 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		t.Fatalf("UpdateActor repointing a running actor = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
+	// Repointing a paused actor is rejected, even once atelet has uploaded its
+	// snapshot: it resumes from the node-local copy, captured under the old
+	// template.
+	for _, name := range []string{"paused-actor", "uploaded-paused-actor"} {
+		paused := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"},
+			Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		})
+		uploaded := mustActorSnapshotURI(t, &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"}}, paused, "pause-snap")
+		paused = mustUpdateActorStatus(t, ctx, persistence, paused, func(s *ateapipb.ActorStatus) {
+			snap := newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", "node-1")
+			if name == "uploaded-paused-actor" {
+				snap.DurableSnapshot = &ateapipb.SnapshotStorage{
+					Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					Object: &ateapipb.ObjectSnapshot{SnapshotUri: uploaded.String()},
+				}
+			}
+			s.AssignedNode = "node-1"
+			s.LastAssignedGeneration = 1
+			s.Snapshots = []*ateapipb.Snapshot{snap}
+		})
+		_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+			Metadata:      paused.GetMetadata(),
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
+		}})
+		if got := apierror.Code(err); got != codes.FailedPrecondition {
+			t.Fatalf("UpdateActor repointing %s = %v, want FailedPrecondition (err: %v)", name, got, err)
+		}
+	}
+
 	// An update that keeps the template ref is still allowed while running:
 	// the suspended-state gate applies only to repoints.
 	kept, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{

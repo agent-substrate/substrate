@@ -82,6 +82,12 @@ func reportedAt(t *testing.T, gen int32, uri string) *ateapipb.SnapshotReport {
 	}
 }
 
+// reportPauseURI builds the upload URI a pause gives atelet for
+// reportActorUID's snapshot named uuid, where ownedURI puts it.
+func reportPauseURI(uuid string) (resources.SnapshotURI, error) {
+	return resources.NewActorSnapshotURI("gs://snapshots", reportAtespace, reportActorUID, uuid)
+}
+
 func TestApplyActorSnapshotState(t *testing.T) {
 	const (
 		pending   = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
@@ -184,12 +190,34 @@ func TestApplyActorSnapshotState(t *testing.T) {
 		}()},
 		wantCode: codes.FailedPrecondition,
 	}, {
-		name: "a snapshot with no recorded upload URI is refused",
-		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
+		name: "a paused actor's latest snapshot is recorded and stays on its node",
+		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
 			localOnly(2, reportNode),
 		}},
-		state:    &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reported(t, 2)},
-		wantCode: codes.FailedPrecondition,
+		state: &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reported(t, 2)},
+		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, reportNode, completed),
+		}},
+	}, {
+		name: "a detach can record a paused actor's latest snapshot, and releases the node",
+		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			localOnly(2, reportNode),
+		}},
+		state: &ateapipb.ActorSnapshotState{LatestDurable: reported(t, 2)},
+		want: &ateapipb.ActorStatus{State: suspended, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 2, "", completed),
+		}},
+	}, {
+		name: "an older snapshot with no recorded upload URI is recorded at the one its pause gave atelet",
+		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			localOnly(1, reportNode),
+			localOnly(2, reportNode),
+		}},
+		state: &ateapipb.ActorSnapshotState{LatestLocal: reported(t, 2), LatestDurable: reported(t, 1)},
+		want: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 1, reportNode, completed),
+			localOnly(2, reportNode),
+		}},
 	}, {
 		name: "an upload URI other than the recorded one is refused",
 		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, Snapshots: []*ateapipb.Snapshot{
@@ -296,7 +324,7 @@ func TestApplyActorSnapshotState(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := applyActorSnapshotState(context.Background(), tt.status, reportNode, tt.state)
+			err := applyActorSnapshotState(context.Background(), tt.status, reportNode, tt.state, reportPauseURI)
 			if tt.wantCode != codes.OK {
 				if got := apierror.Code(err); got != tt.wantCode {
 					t.Fatalf("applyActorSnapshotState() error = %v, want code %v", err, tt.wantCode)
@@ -379,7 +407,7 @@ func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
 			})))
 			t.Cleanup(func() { slog.SetDefault(prev) })
 
-			if err := applyLatestDurable(context.Background(), tt.status, reported(t, tt.gen)); err != nil {
+			if err := applyLatestDurable(context.Background(), tt.status, reported(t, tt.gen), reportPauseURI); err != nil {
 				t.Fatalf("applyLatestDurable() error = %v", err)
 			}
 			var want []logged
@@ -399,12 +427,19 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	w := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, nil, "", nil, nil)
-	tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation}}
+	tmpl, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: reportAtespace, Name: "tmpl"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+	})
+	if err != nil {
+		t.Fatalf("CreateActorTemplate() failed: %v", err)
+	}
 
 	actorRef := resources.ActorRef{Atespace: reportAtespace, Name: "actor-1"}
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: reportAtespace, Name: "tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	})
 	uid := actor.GetMetadata().GetUid()
 	pending := mustActorSnapshotURI(t, tmpl, actor, "snap-2")
@@ -504,6 +539,35 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 		t.Fatalf("repeated ApplyReportedSnapshotState() failed: %v", err)
 	}
 	assertUnwritten(t)
+
+	// A pause records no upload URI, so the report is checked against the one
+	// built from the actor's template. The paused actor stays on its node.
+	t.Run("records the upload of a paused actor's snapshot", func(t *testing.T) {
+		actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 3
+			s.Snapshots = []*ateapipb.Snapshot{localOnly(3, reportNode)}
+		})
+		paused := mustActorSnapshotURI(t, tmpl, actor, snapName(3))
+		uploaded := reportedAt(t, 3, paused.String())
+		if err := w.ApplyReportedSnapshotState(ctx, actorRef, uid, reportNode, &ateapipb.ActorSnapshotState{LatestLocal: uploaded, LatestDurable: uploaded}); err != nil {
+			t.Fatalf("ApplyReportedSnapshotState() failed: %v", err)
+		}
+		got, err := persistence.GetActor(ctx, actorRef)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := localOnly(3, reportNode)
+		want.DurableSnapshot = &ateapipb.SnapshotStorage{
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: paused.String()},
+		}
+		if diff := cmp.Diff([]*ateapipb.Snapshot{want}, got.GetStatus().GetSnapshots(), protocmp.Transform()); diff != "" {
+			t.Errorf("snapshots mismatch (-want +got):\n%s", diff)
+		}
+		if node := got.GetStatus().GetAssignedNode(); node != reportNode {
+			t.Errorf("assigned node = %q, want %q", node, reportNode)
+		}
+	})
 }
 
 func TestActorOnNode(t *testing.T) {
@@ -548,7 +612,21 @@ func TestApplyCheckpointState(t *testing.T) {
 		completed  = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 		suspended  = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		suspending = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
+
+		otherActorUID = "1a7e4c83-6d20-4f95-b3c8-9e0a2f6d4b17"
 	)
+	// previousPause is a pausing actor's status, holding the snapshot of the
+	// pause before, which records no upload URI.
+	previousPause := func() *ateapipb.ActorStatus {
+		return &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			localOnly(1, reportNode),
+			localOnly(2, ""),
+		}}
+	}
+	elsewhere, err := resources.NewActorSnapshotURI("gs://elsewhere", reportAtespace, reportActorUID, snapName(1))
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name     string
 		status   *ateapipb.ActorStatus
@@ -602,6 +680,32 @@ func TestApplyCheckpointState(t *testing.T) {
 			localOnly(2, ""),
 		}},
 	}, {
+		name:   "a deferred checkpoint records the upload of the previous pause's snapshot",
+		status: previousPause(),
+		state:  &ateletpb.ActorSnapshotState{LatestLocal: ateletReported(t, 2), LatestDurable: ateletReported(t, 1)},
+		want: &ateapipb.ActorStatus{State: suspending, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
+			withDurable(t, 1, reportNode, completed),
+			localOnly(2, ""),
+		}},
+	}, {
+		name:   "the previous pause's snapshot uploaded under another location is refused",
+		status: previousPause(),
+		state: &ateletpb.ActorSnapshotState{LatestLocal: ateletReported(t, 2), LatestDurable: func() *ateletpb.SnapshotReport {
+			r := ateletReported(t, 1)
+			r.Snapshot.Object.SnapshotUri = elsewhere.String()
+			return r
+		}()},
+		wantCode: codes.InvalidArgument,
+	}, {
+		name:   "the previous pause's snapshot uploaded under another actor's prefix is refused",
+		status: previousPause(),
+		state: &ateletpb.ActorSnapshotState{LatestLocal: ateletReported(t, 2), LatestDurable: func() *ateletpb.SnapshotReport {
+			r := ateletReported(t, 1)
+			r.Snapshot.Object.SnapshotUri = ownedURI(t, otherActorUID, 1)
+			return r
+		}()},
+		wantCode: codes.InvalidArgument,
+	}, {
 		name: "no local snapshot is not a detach",
 		status: &ateapipb.ActorStatus{State: suspended, AssignedNode: reportNode, LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{
 			withDurable(t, 2, reportNode, completed),
@@ -632,7 +736,7 @@ func TestApplyCheckpointState(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := applyCheckpointState(context.Background(), tt.status, tt.state)
+			err := applyCheckpointState(context.Background(), tt.status, tt.state, reportPauseURI)
 			if tt.wantCode != codes.OK {
 				if got := apierror.Code(err); got != tt.wantCode {
 					t.Fatalf("applyCheckpointState() error = %v, want code %v", err, tt.wantCode)
