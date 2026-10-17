@@ -64,7 +64,7 @@ const (
 	extVolume   = "external"
 	extPathA    = "/mnt/ate-external-a"
 	extPathB    = "/mnt/ate-external-b"
-	extCapacity = "1Gi"
+	extCapacity = 1 << 30
 
 	// probeWrittenContent is the fixed string the probe's /writefile writes.
 	probeWrittenContent = "written by probe"
@@ -235,7 +235,7 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 			tmpl.Volumes = append(tmpl.Volumes, &ateapipb.Volume{
 				Name: extVolume,
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
-					Capacity:         extCapacity,
+					CapacityBytes:    extCapacity,
 					StorageClassName: storageClass,
 				},
 			})

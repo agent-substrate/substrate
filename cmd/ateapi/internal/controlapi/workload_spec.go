@@ -19,31 +19,17 @@ import (
 
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// toAteletResources resolves a container's declared limits into the scalars
-// atelet and the workers consume; everything downstream compares numbers.
-// Returns nil when the container declares no limits, so the OCI spec stays
-// untouched for templates that do not use them.
-func toAteletResources(r *ateapipb.Resources) (*ateletpb.ResourceLimits, error) {
-	out := &ateletpb.ResourceLimits{}
-	for _, limit := range r.GetLimits() {
-		q, err := resource.ParseQuantity(limit.GetQuantity())
-		if err != nil {
-			return nil, fmt.Errorf("invalid container resource limit %s=%q: %w", limit.GetName(), limit.GetQuantity(), err)
-		}
-		switch limit.GetName() {
-		case "cpu":
-			out.CpuMillis = q.MilliValue()
-		case "memory":
-			out.MemoryBytes = q.Value()
-		}
+// toAteletResources copies declared limits into atelet's form. Returns nil
+// when no limits are declared, so the OCI spec stays untouched for templates
+// that do not use them.
+func toAteletResources(r *ateapipb.ResourceRequirements) *ateletpb.ResourceRequirements {
+	l := r.GetLimits()
+	if l.GetMemoryBytes() == 0 && l.GetCpuMillicores() == 0 {
+		return nil
 	}
-	if out.MemoryBytes == 0 && out.CpuMillis == 0 {
-		return nil, nil
-	}
-	return out, nil
+	return &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}}
 }
 
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;
@@ -116,10 +102,7 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 	}
 
 	for _, ctr := range actorTemplate.GetContainers() {
-		ctrResources, err := toAteletResources(ctr.GetResources())
-		if err != nil {
-			return nil, err
-		}
+		ctrResources := toAteletResources(ctr.GetResources())
 		ateletCtr := &ateletpb.Container{
 			Name:            ctr.GetName(),
 			Image:           ctr.GetImage(),

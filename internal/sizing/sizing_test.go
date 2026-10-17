@@ -15,20 +15,21 @@
 package sizing
 
 import (
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"testing"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
 func TestFromLimits(t *testing.T) {
-	got := FromLimits(1500, 2147483648)
+	got := FromLimits(&ateworkerpb.Resources{CpuMillicores: 1500, MemoryBytes: 2147483648})
 	if got.MilliCPU != 1500 || got.MemoryBytes != 2147483648 {
 		t.Fatalf("FromLimits() = %+v", got)
 	}
 }
 
 func TestFromLimitsClampsNegative(t *testing.T) {
-	got := FromLimits(-5, -1)
+	got := FromLimits(&ateworkerpb.Resources{CpuMillicores: -5, MemoryBytes: -1})
 	if got.MilliCPU != 0 || got.MemoryBytes != 0 {
 		t.Fatalf("FromLimits() = %+v, want zero", got)
 	}

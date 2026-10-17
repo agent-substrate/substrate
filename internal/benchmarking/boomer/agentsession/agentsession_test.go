@@ -418,22 +418,22 @@ func TestLoadScriptPrefersFile(t *testing.T) {
 }
 
 // TestStartUserChecksTemplateMemory: a template smaller than the script's
-// floor, or with a limit that does not parse, is refused before any actor
-// is created; a big enough one, or one with no limit, proceeds.
+// floor is refused before any actor is created; a big enough one, or one with
+// no limit, proceeds.
 func TestStartUserChecksTemplateMemory(t *testing.T) {
 	script, err := Load(DefaultScript)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name, memory string
-		wantStart    bool
-		wantErr      string
+		name      string
+		memory    int64
+		wantStart bool
+		wantErr   string
 	}{
-		{"too small", "512Mi", false, "min_actor_memory"},
-		{"unparseable", "1Gi-ish", false, "memory limit"},
-		{"exact", "1Gi", true, ""},
-		{"no limit", "", true, ""},
+		{"too small", 512 << 20, false, "min_actor_memory"},
+		{"exact", 1 << 30, true, ""},
+		{"no limit", 0, true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctl := &fakeControlClient{templateMemory: tc.memory}
@@ -469,14 +469,14 @@ func TestTemplateMemoryRefusalExpires(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctl := &fakeControlClient{templateMemory: "512Mi"}
+	ctl := &fakeControlClient{templateMemory: 512 << 20}
 	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
 	rt := &runtime{cfg: u.cfg}
 
 	if err := rt.checkTemplateMemory(context.Background(), script); err == nil {
 		t.Fatal("512Mi template passed the check")
 	}
-	ctl.templateMemory = "1Gi" // the operator redeployed
+	ctl.templateMemory = 1 << 30 // the operator redeployed
 	if err := rt.checkTemplateMemory(context.Background(), script); err == nil {
 		t.Fatal("refusal must stand for templateRecheckInterval")
 	}
@@ -495,7 +495,7 @@ func TestTemplateMemoryRefusalExpires(t *testing.T) {
 // TestRunningSessionKeepsItsScript: changing the knob affects sessions that
 // start afterwards, not one already walking its steps.
 func TestRunningSessionKeepsItsScript(t *testing.T) {
-	ctl := &fakeControlClient{templateMemory: "1Gi"}
+	ctl := &fakeControlClient{templateMemory: 1 << 30}
 	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
 	rt := &runtime{cfg: u.cfg}
 	first, err := rt.loadScript()
@@ -556,9 +556,9 @@ type fakeControlClient struct {
 	suspendErrs []error
 	// sawDeadline is set when a call arrived with a context deadline.
 	sawDeadline bool
-	// templateMemory is the memory limit GetActorTemplate reports; "" means
+	// templateMemory is the memory limit GetActorTemplate reports in bytes; 0 means
 	// the template sets none.
-	templateMemory string
+	templateMemory int64
 	// deleteDelay stalls each DeleteActor; inFlight and maxInFlight count
 	// concurrent DeleteActor calls, to prove shutdown fans out.
 	deleteDelay time.Duration
@@ -587,8 +587,8 @@ func (f *fakeControlClient) record(ctx context.Context, name string) {
 func (f *fakeControlClient) GetActorTemplate(ctx context.Context, in *ateapipb.GetActorTemplateRequest, opts ...grpc.CallOption) (*ateapipb.ActorTemplate, error) {
 	f.record(ctx, "GetActorTemplate")
 	tmpl := &ateapipb.ActorTemplate{}
-	if f.templateMemory != "" {
-		tmpl.Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: f.templateMemory}}}
+	if f.templateMemory != 0 {
+		tmpl.Resources = &ateapipb.ResourceRequirements{Limits: &ateapipb.Resources{MemoryBytes: f.templateMemory}}
 	}
 	return tmpl, nil
 }
@@ -899,7 +899,7 @@ func wakeFirstTouchCount(t *testing.T) float64 {
 // or explicitly resume the actor, never record WakeFirstTouch, and
 // suspendAndDelete still suspends before deleting on teardown.
 func TestLifecycleModeNone(t *testing.T) {
-	ctl := &fakeControlClient{templateMemory: "1Gi"}
+	ctl := &fakeControlClient{templateMemory: 1 << 30}
 	u := newTestUser(t, &fake.Server{}, ctl, knobs{
 		Lifecycle: dynconfig.Lifecycle{
 			LifecycleMode: dynconfig.LifecycleModeNone,
@@ -948,7 +948,7 @@ func TestLifecycleModeNone(t *testing.T) {
 // steps that actually wake from a parked state. A step number past the
 // script length is rejected in startUser before CreateActor.
 func TestSnapshotSteps(t *testing.T) {
-	ctl := &fakeControlClient{templateMemory: "1Gi"}
+	ctl := &fakeControlClient{templateMemory: 1 << 30}
 	u := newTestUser(t, &fake.Server{}, ctl, knobs{
 		Lifecycle: dynconfig.Lifecycle{
 			LifecycleMode: dynconfig.LifecycleModePause,
@@ -990,7 +990,7 @@ func TestSnapshotSteps(t *testing.T) {
 	}
 
 	// A step number beyond len(loaded.Steps) is rejected before CreateActor.
-	badCtl := &fakeControlClient{templateMemory: "1Gi"}
+	badCtl := &fakeControlClient{templateMemory: 1 << 30}
 	badUser := newTestUser(t, &fake.Server{}, badCtl, knobs{
 		Lifecycle:     dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause},
 		SnapshotSteps: "2,99",

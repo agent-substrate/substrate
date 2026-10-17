@@ -33,7 +33,6 @@ import (
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
@@ -404,10 +403,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef)
 	}
-	constraints, err := schedulingConstraints(actor, actorTemplate)
-	if err != nil {
-		return nil, err
-	}
+	constraints := schedulingConstraints(actor, actorTemplate)
 	if !w.appliesWithFallback(worker, constraints, canRelaxRuntime(actor, constraints)) {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
 		// If that worker's pool is no longer eligible (e.g. the actor's
@@ -427,7 +423,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 
 // admittedResources is what an assignment books against its worker, or nil
 // when the actor declared no limits and so reserves nothing.
-func admittedResources(constraints scheduling.Constraints) *ateapipb.Resources {
+func admittedResources(constraints scheduling.Constraints) *ateapipb.ResourceRequirements {
 	return constraints.Limits
 }
 
@@ -487,10 +483,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		}
 	}()
 
-	constraints, err := schedulingConstraints(actor, actorTemplate)
-	if err != nil {
-		return nil, nil, err
-	}
+	constraints := schedulingConstraints(actor, actorTemplate)
 	snapRuntime := constraints.RequiredRuntime
 	class = constraints.SandboxClass
 	relaxable := canRelaxRuntime(actor, constraints)
@@ -639,33 +632,7 @@ func toAteletSandboxRuntime(in *ateapipb.SandboxRuntime) *ateletpb.SandboxRuntim
 	return out
 }
 
-// actorResourceLimits returns the actor's declared CPU (millicores) and memory
-// (bytes) limits from its ActorTemplate, or 0 for a dimension the template did
-// not set. These size the sandbox, which takes the two scalars the runtimes
-// understand rather than the named set placement accounts in.
-func actorResourceLimits(tmpl *ateapipb.ActorTemplate) (cpuMilli, memBytes int64, err error) {
-	for _, limit := range tmpl.GetResources().GetLimits() {
-		q, perr := resource.ParseQuantity(limit.GetQuantity())
-		if perr != nil {
-			return 0, 0, fmt.Errorf("invalid template resource limit %s=%q: %w", limit.GetName(), limit.GetQuantity(), perr)
-		}
-		switch limit.GetName() {
-		case "cpu":
-			cpuMilli = q.MilliValue()
-		case "memory":
-			memBytes = q.Value()
-		}
-	}
-	return cpuMilli, memBytes, nil
-}
-
-func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) (scheduling.Constraints, error) {
-	// Canonicalized here, the one place an assignment's booked resources are
-	// decided, so what is recorded is sorted however the template was authored.
-	limits, err := resources.ParseQuantities(tmpl.GetResources())
-	if err != nil {
-		return scheduling.Constraints{}, fmt.Errorf("invalid template resource limits: %w", err)
-	}
+func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) scheduling.Constraints {
 	var requiredNodes []string
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
 		requiredNodes = []string{node}
@@ -675,12 +642,12 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 		RequiredRuntime: hardware.NewRequirement(requiredSnapshotRuntime(actor, tmpl)),
 		ActorSelector:   labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
 		RequiredNodes:   requiredNodes,
-		Limits:          limits.Proto(),
+		Limits:          tmpl.GetResources(),
 	}
 	if sel := tmpl.GetWorkerSelector(); sel != nil {
 		c.TemplateSelector = labels.SelectorFromSet(labels.Set(sel.GetMatchLabels()))
 	}
-	return c, nil
+	return c
 }
 
 // snapshotSandboxClass returns the sandbox class of the snapshot ResumeActor
@@ -813,10 +780,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 
 	// The actor's declared limits ride the RPC down to the sandbox so it is sized
 	// to the actor (replacing the worker-pod downward-API approach).
-	cpuMilli, memBytes, err := actorResourceLimits(actorTemplate)
-	if err != nil {
-		return tele, err
-	}
+	actorResources := toAteletResources(actorTemplate.GetResources())
 
 	// The sandbox binaries and pause image come from the assigned worker's
 	// pool SandboxConfig on every path, restores included.
@@ -850,8 +814,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			SandboxRuntime: sandboxRuntime,
 			ActorUid:       actor.GetMetadata().Uid,
 			EgressGateway:  egressGateway,
-			CpuMilli:       cpuMilli,
-			MemoryBytes:    memBytes,
+			Resources:      actorResources,
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 
@@ -893,8 +856,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			SandboxRuntime: sandboxRuntime,
 			ActorUid:       actor.GetMetadata().Uid,
 			EgressGateway:  egressGateway,
-			CpuMilli:       cpuMilli,
-			MemoryBytes:    memBytes,
+			Resources:      actorResources,
 		}
 		if _, err = client.Restore(ctx, req); err != nil {
 			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
@@ -915,8 +877,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			Spec:                  workloadSpec,
 			ActorUid:              actor.GetMetadata().Uid,
 			EgressGateway:         egressGateway,
-			CpuMilli:              cpuMilli,
-			MemoryBytes:           memBytes,
+			Resources:             actorResources,
 		}
 		if _, err = client.Run(ctx, req); err != nil {
 			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Run", false, err)

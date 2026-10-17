@@ -36,15 +36,13 @@ containers:
 # worker limits, so these only need to fit the node.
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 512Mi
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_VOLUMES
   storageLocation: gs://ate-snapshots/ate-demo-counter-microvm-csi/
 volumes:
 - name: data
   externalVolumeTemplate:
-    capacity: 1Gi
+    capacityBytes: 1073741824 # 1Gi
     storageClassName: csi-hostpath-sc

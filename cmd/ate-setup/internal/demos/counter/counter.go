@@ -41,7 +41,7 @@ func (d *demo) externalVolumeValues(e *steps.Env) map[string]string {
 			"    mountPath: /external-data",
 		"EXTERNAL_VOLUMES": "- name: external-data\n" +
 			"  externalVolumeTemplate:\n" +
-			"    capacity: 1Gi\n" +
+			"    capacityBytes: 1073741824 # 1Gi\n" +
 			"    storageClassName: " + sc,
 	}
 }

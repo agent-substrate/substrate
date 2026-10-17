@@ -25,7 +25,7 @@ workerSelector:
 volumes:
 - name: external-storage
   externalVolumeTemplate:
-    capacity: 1Gi
+    capacityBytes: 1073741824 # 1Gi
     storageClassName: ${STORAGE_CLASS_NAME}
 containers:
 - name: glutton-storage
@@ -52,10 +52,8 @@ containers:
       port: 80
 resources:
   limits:
-  - name: cpu
-    quantity: "${ACTOR_CPU}"
-  - name: memory
-    quantity: "${ACTOR_MEMORY}"
+    cpuMillicores: "${ACTOR_CPU_MILLICORES}"
+    memoryBytes: "${ACTOR_MEMORY_BYTES}"
 snapshotConfig:
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton-storage/

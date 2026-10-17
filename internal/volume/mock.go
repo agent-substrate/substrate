@@ -64,7 +64,7 @@ func (p *MockVolumePlugin) DriverName(ctx context.Context) (string, error) {
 // CreateVolume simulates volume provisioning.
 func (p *MockVolumePlugin) CreateVolume(ctx context.Context, req CreateVolumeRequest) (CreateVolumeResponse, error) {
 	volumeID := "mock-vol-" + req.Name
-	slog.InfoContext(ctx, "MockVolumePlugin.CreateVolume", slog.String("name", req.Name), slog.String("capacity", req.Capacity), slog.String("volumeID", volumeID))
+	slog.InfoContext(ctx, "MockVolumePlugin.CreateVolume", slog.String("name", req.Name), slog.Int64("capacity_bytes", req.CapacityBytes), slog.String("volumeID", volumeID))
 	return CreateVolumeResponse{VolumeID: volumeID, VolumeContext: req.Parameters}, nil
 }
 

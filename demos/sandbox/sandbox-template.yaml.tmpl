@@ -30,13 +30,10 @@ containers:
     value: "80"
 # Sandbox size: an actor occupies its whole worker, so size it at (or below)
 # the pool's per-worker capacity (see sandbox.yaml.tmpl and internal/sizing).
-# Quantities are strings in the proto.
 resources:
   limits:
-  - name: cpu
-    quantity: "2"
-  - name: memory
-    quantity: 1Gi
+    cpuMillicores: 2000
+    memoryBytes: 1073741824 # 1Gi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/ate-demo-sandbox/

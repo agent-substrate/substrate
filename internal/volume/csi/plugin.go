@@ -31,7 +31,6 @@ import (
 	v1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -168,16 +167,10 @@ func (p *Plugin) DriverName(ctx context.Context) (string, error) {
 
 // CreateVolume maps to CSI Controller CreateVolume.
 func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
-	qty, err := resource.ParseQuantity(req.Capacity)
-	if err != nil {
-		return volume.CreateVolumeResponse{}, fmt.Errorf("failed to parse capacity %q: %w", req.Capacity, err)
-	}
-	capBytes := qty.Value()
-
 	csiReq := &csi.CreateVolumeRequest{
 		Name: req.Name,
 		CapacityRange: &csi.CapacityRange{
-			RequiredBytes: capBytes,
+			RequiredBytes: req.CapacityBytes,
 		},
 		VolumeCapabilities: getStandardCapabilities(),
 		Parameters:         req.Parameters,

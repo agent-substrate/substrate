@@ -43,9 +43,10 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 	// The values benchmarking/workloads/deploy.sh substitutes, beyond the
 	// ${BUCKET_NAME} every installer provides.
 	benchmarkValues := map[string]string{
-		"${ACTOR_CPU}":     "1",
-		"${ACTOR_MEMORY}":  "256Mi",
-		"${OTLP_ENDPOINT}": "http://otel-collector.otel-system:4317",
+		"${ACTOR_CPU_MILLICORES}": "1000",
+		"${ACTOR_MEMORY_BYTES}":   "268435456",
+		"${ACTOR_MEMORY}":         "256Mi",
+		"${OTLP_ENDPOINT}":        "http://otel-collector.otel-system:4317",
 	}
 
 	tests := []struct {

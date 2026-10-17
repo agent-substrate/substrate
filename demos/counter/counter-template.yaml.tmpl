@@ -46,13 +46,10 @@ ${VALIDATE_EXISTING_FILE_PATH_ARG}
 ${EXTERNAL_VOLUME_MOUNTS}
 # Sandbox size: an actor occupies its whole worker, so size it at (or below)
 # the pool's per-worker capacity (see counter.yaml.tmpl and internal/sizing).
-# Quantities are strings in the proto.
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 512Mi
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi
 snapshotConfig:
   # MEMORY, so a suspend captures process memory as well as the durable
   # volumes and the tutorial's in-memory counter really does continue

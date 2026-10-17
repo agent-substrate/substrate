@@ -13,11 +13,11 @@
 // limitations under the License.
 
 // Package workercapacity names the files the atecontroller projects into the
-// worker container from the downward API, in milli-cores and bytes.
+// worker container from the downward API, in millicores and bytes.
 package workercapacity
 
 const (
 	MountPath       = "/run/worker-capacity"
-	CPULimitFile    = "cpu_milli"
+	CPULimitFile    = "cpu_millicores"
 	MemoryLimitFile = "memory_bytes"
 )
