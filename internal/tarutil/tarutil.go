@@ -18,7 +18,9 @@
 // preserving the metadata a workload's data directory depends on: modes,
 // ownership, modification times, symlinks, hardlinks, FIFOs, overlay
 // whiteouts, and user.* / overlay extended attributes (as PAX SCHILY.xattr
-// records).
+// records). Extraction leaves all-zero blocks unallocated, so a sparse file
+// such as a disk image is restored sparse; the archive itself still stores
+// holes as zeros.
 //
 // It exists for snapshotting durable-dir volumes and rootfs overlay uppers
 // (see cmd/ateworker-microvm): the contents are written by the sandboxed workload
@@ -38,6 +40,7 @@ package tarutil
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -63,6 +66,9 @@ const copyBufSize = 128 << 10
 
 // File contents must bypass the stream buffer.
 const _ = uint(copyBufSize - streamBufSize - 1)
+
+// writeSparse skips whole blocks only if each buffer holds whole blocks.
+const _ = uint(-(copyBufSize % sparseBlockSize))
 
 // Stream buffers must be Reset(nil) before pooling to avoid retaining files.
 var (
@@ -312,6 +318,8 @@ func openRegular(root *os.Root, name string) (*os.File, error) {
 
 // Extract unpacks tarPath into dstDir, which must already exist. Modes,
 // ownership, modification times, symlinks, and hardlinks are restored.
+// Regular files are written sparsely: each all-zero sparseBlockSize block is
+// left as a hole rather than written.
 //
 // All writes go through an os.Root rooted at dstDir, so entries naming a path
 // outside it — via "..", an absolute path, or a symlink planted earlier in the
@@ -391,7 +399,7 @@ func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, d
 		if err != nil {
 			return fmt.Errorf("creating file %q: %w", name, err)
 		}
-		_, copyErr := copyPooled(out, tr)
+		copyErr := writeSparse(out, tr, hdr.Size)
 		closeErr := out.Close()
 		if copyErr != nil {
 			return fmt.Errorf("writing contents of %q: %w", name, copyErr)
@@ -452,6 +460,57 @@ func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, d
 
 	default:
 		return fmt.Errorf("unsupported tar entry type %q at %q", string([]byte{hdr.Typeflag}), name)
+	}
+}
+
+// sparseBlockSize is the granularity at which writeSparse skips zeros: the
+// usual filesystem block size, so a skipped block is one that need not be
+// allocated. copyBufSize is a multiple of it, keeping every block aligned.
+const sparseBlockSize = 4 << 10
+
+var zeroBlock [sparseBlockSize]byte
+
+// writeSparse copies the size bytes of src into the empty file f, writing only
+// blocks that hold a non-zero byte and leaving the rest as holes, then sets f's
+// length so a trailing hole is kept. On a filesystem without hole support the
+// skipped blocks read back as zeros all the same. It fails if src ends before
+// size bytes, as it does when the archive is truncated mid-entry.
+func writeSparse(f *os.File, src io.Reader, size int64) error {
+	bp := copyBufPool.Get().(*[]byte)
+	defer copyBufPool.Put(bp)
+	buf := *bp
+	var off int64
+	for {
+		n, readErr := io.ReadFull(src, buf)
+		// Write each run of consecutive non-zero blocks with one call.
+		for start := 0; start < n; {
+			end := min(start+sparseBlockSize, n)
+			if bytes.Equal(buf[start:end], zeroBlock[:end-start]) {
+				start = end
+				continue
+			}
+			for end < n {
+				next := min(end+sparseBlockSize, n)
+				if bytes.Equal(buf[end:next], zeroBlock[:next-end]) {
+					break
+				}
+				end = next
+			}
+			if _, err := f.WriteAt(buf[start:end], off+int64(start)); err != nil {
+				return err
+			}
+			start = end
+		}
+		off += int64(n)
+		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+			if off != size {
+				return fmt.Errorf("got %d of %d bytes: %w", off, size, io.ErrUnexpectedEOF)
+			}
+			return f.Truncate(off)
+		}
+		if readErr != nil {
+			return readErr
+		}
 	}
 }
 
