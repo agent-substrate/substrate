@@ -322,14 +322,15 @@ func TestTrackerForgetCancelsUpload(t *testing.T) {
 	}
 }
 
-// The workers bound how many background uploads run at once, and an actor
-// that checkpoints again while it waits for a worker uploads only its newest
+// The upload workers bound how many background uploads run at once, and an
+// actor that checkpoints again while it waits for one uploads only its newest
 // snapshot.
 func TestTrackerWorkersBoundBackgroundWork(t *testing.T) {
 	store := newFakeSnapshotStore()
 	store.setBlocking(true)
 	tr := newIdleTestTracker(t, store)
-	tr.workers = 2
+	// The idle detach worker leaves actor-3's upload to the upload workers.
+	setWorkers(tr, 2, 1)
 	tr.Start()
 
 	// Snapshots taken an upload delay ago are due for upload straight away.
@@ -347,19 +348,19 @@ func TestTrackerWorkersBoundBackgroundWork(t *testing.T) {
 	}
 	select {
 	case got := <-store.started:
-		t.Fatalf("a third upload (%q) started while both workers are busy", got)
+		t.Fatalf("a third upload (%q) started while both upload workers are busy", got)
 	default:
 	}
 	if st := tr.State("actor-3"); st.GetUploading() != nil || st.GetUploadDueTime() == nil {
 		t.Errorf("actor-3 state while it waits = %v, want an upload due and none in progress", st)
 	}
 
-	// actor-3 checkpoints again while it waits for a worker.
+	// actor-3 checkpoints again while it waits for an upload worker.
 	tr.CommitLocal("actor-3", testRef("actor-3-s2", 2, taken.Add(time.Minute)))
 
 	done1 := opDone(t, tr, "actor-1")
 	done2 := opDone(t, tr, "actor-2")
-	// Ending one upload frees a worker, which takes actor-3.
+	// Ending one upload frees an upload worker, which takes actor-3.
 	store.release <- nil
 	if got := waitStarted(t, store); got != "actor-3-s2" {
 		t.Fatalf("started = %q, want actor-3-s2", got)
@@ -395,13 +396,13 @@ func TestTrackerRequeuesUntilWorkIsDue(t *testing.T) {
 	tr.CommitLocal(trackedActorUID, testRef("s3", 3, t0.Add(20*time.Minute)))
 
 	stepTo(tr, t0.Add(testUploadDelay))
-	processNext(t, tr)
+	processNext(t, tr, opUpload)
 	if got := store.uploads(); len(got) != 0 {
 		t.Errorf("uploads = %v before the upload of s3 is due, want none", got)
 	}
 
 	stepTo(tr, t0.Add(20*time.Minute+testUploadDelay))
-	processNext(t, tr)
+	processNext(t, tr, opUpload)
 	if got, want := store.uploads(), []string{"s3"}; !slices.Equal(got, want) {
 		t.Errorf("uploads = %v, want %v", got, want)
 	}
@@ -437,10 +438,10 @@ func TestTrackerWithoutStoreSchedulesNoUploads(t *testing.T) {
 	if st := tr.CommitLocal(trackedActorUID, testRef("s1", 1, taken)); st.GetUploadDueTime() != nil {
 		t.Errorf("upload_due_time = %v without a store, want unset", st.GetUploadDueTime())
 	}
-	if n := tr.queue.Len(); n != 0 {
+	if n := queuedNow(tr); n != 0 {
 		t.Errorf("queued actors = %d without a store, want none", n)
 	}
-	// The queue's length leaves out actors queued for later, as a detach is.
+	// The queues' lengths leave out actors queued for later, as a detach is.
 	tr.lock(trackedActorUID)
 	due, ok := tr.nextDueLocked(tr.findLocked(trackedActorUID))
 	tr.unlock(trackedActorUID)
@@ -481,7 +482,7 @@ func TestTrackerSkipsUnuploadableSnapshots(t *testing.T) {
 			if due := tr.State(trackedActorUID).GetUploadDueTime(); due != nil {
 				t.Errorf("upload_due_time = %v, want unset", due)
 			}
-			if n := tr.queue.Len(); n != 0 {
+			if n := queuedNow(tr); n != 0 {
 				t.Errorf("queued actors = %d, want none", n)
 			}
 
@@ -799,11 +800,14 @@ func TestTrackerClearsIdleUploadingWhenSuperseded(t *testing.T) {
 			t0 := tr.clock.Now()
 			tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
 			stepTo(tr, t0.Add(testUploadDelay))
-			processNext(t, tr) // s1's upload fails, and s1 waits in Uploading to retry.
+			processNext(t, tr, opUpload) // s1's upload fails, and s1 waits in Uploading to retry.
 
 			store.setErr(nil)
 			tc.commit(tr)
-			processNext(t, tr)
+			if got := tr.queues[opDetach].Len(); got != 0 {
+				t.Errorf("detach queue len after %s = %d, want 0", tc.name, got)
+			}
+			processNext(t, tr, opUpload)
 			// State hides an Uploading it no longer keeps, so read the file.
 			if rec := readSnapshotState(trackedActorUID); rec == nil || rec.Uploading != nil {
 				t.Errorf("state file after %s = %+v, want Uploading cleared", tc.name, rec)
@@ -832,7 +836,7 @@ func TestTrackerCommitLocalDropsFailedUploading(t *testing.T) {
 	// after the restart.
 	taken := tr.clock.Now().Add(-testUploadDelay)
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, taken))
-	processNext(t, tr) // s1's upload fails, and s1 waits in Uploading to retry.
+	processNext(t, tr, opUpload) // s1's upload fails, and s1 waits in Uploading to retry.
 
 	tr.CommitLocal(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
 	if rec := readSnapshotState(trackedActorUID); rec == nil || rec.Uploading != nil {
@@ -891,14 +895,14 @@ func TestTrackerKeepsSupersededCopyWhileHeld(t *testing.T) {
 		}
 		taken := tr.clock.Now().Add(-testUploadDelay)
 		tr.CommitLocal(trackedActorUID, testRef("s1", 1, taken))
-		processNext(t, tr) // s1's upload fails, and s1 waits in Uploading to retry.
+		processNext(t, tr, opUpload) // s1's upload fails, and s1 waits in Uploading to retry.
 		tr.CommitDurable(trackedActorUID, testRef("s2", 2, tr.clock.Now()))
 
 		end, err := tr.BeginStart(t.Context(), trackedActorUID)
 		if err != nil {
 			t.Fatalf("BeginStart: %v", err)
 		}
-		processNext(t, tr)
+		processNext(t, tr, opUpload)
 		end()
 		if rec := readSnapshotState(trackedActorUID); rec == nil || rec.Uploading != nil {
 			t.Errorf("state file = %+v, want Uploading cleared", rec)
@@ -1034,8 +1038,12 @@ func TestTrackerResumesUploadingAfterRestart(t *testing.T) {
 		if got := after.State(trackedActorUID).GetUploading(); got != nil {
 			t.Errorf("uploading after restart = %v, want nil because s2 is durable", got)
 		}
-		after.queue.Add(trackedActorUID)
-		processNext(t, after)
+		setWorkers(after, 0, 0)
+		after.Start()
+		if got := after.queues[opDetach].Len(); got != 0 {
+			t.Errorf("detach queue len after restart = %d, want 0", got)
+		}
+		processNext(t, after, opUpload)
 		if got := store2.uploads(); len(got) != 0 {
 			t.Errorf("uploads after restart = %v, want none", got)
 		}
@@ -1115,7 +1123,7 @@ func TestTrackerUploadWaitsForPromote(t *testing.T) {
 			t.Fatalf("BeginPromote = (%v, %v), want (false, nil)", durable, err)
 		}
 		stepTo(tr, tr.clock.Now().Add(testUploadDelay))
-		processNext(t, tr)
+		processNext(t, tr, opUpload)
 		if got := store.uploads(); len(got) != 0 {
 			t.Fatalf("uploads during promote = %v, want none", got)
 		}
@@ -1123,8 +1131,8 @@ func TestTrackerUploadWaitsForPromote(t *testing.T) {
 		s1.UploadTime = tr.clock.Now()
 		tr.CommitPromoted(trackedActorUID, s1)
 		endPromote()
-		if n := tr.queue.Len(); n != 0 {
-			processNext(t, tr)
+		if n := tr.queues[opUpload].Len(); n != 0 {
+			processNext(t, tr, opUpload)
 		}
 		if got := store.uploads(); len(got) != 0 {
 			t.Errorf("uploads after promote succeeded = %v, want none", got)
@@ -1142,16 +1150,16 @@ func TestTrackerUploadWaitsForPromote(t *testing.T) {
 			t.Fatalf("BeginPromote: %v", err)
 		}
 		stepTo(tr, tr.clock.Now().Add(testUploadDelay))
-		processNext(t, tr)
+		processNext(t, tr, opUpload)
 		if got := store.uploads(); len(got) != 0 {
 			t.Fatalf("uploads during promote = %v, want none", got)
 		}
-		if n := tr.queue.Len(); n != 0 {
-			t.Fatalf("queued actors during promote = %d, want none: the promote's end queues it", n)
+		if n := tr.queues[opUpload].Len(); n != 0 {
+			t.Fatalf("queued uploads during promote = %d, want none: the promote's end queues it", n)
 		}
 
 		endPromote()
-		processNext(t, tr)
+		processNext(t, tr, opUpload)
 		if got, want := store.uploads(), []string{"s1"}; !slices.Equal(got, want) {
 			t.Errorf("uploads after the failed promote ended = %v, want %v", got, want)
 		}

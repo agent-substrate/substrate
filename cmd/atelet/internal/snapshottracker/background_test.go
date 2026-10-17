@@ -104,7 +104,9 @@ func TestWorkersStopWhenContextEnds(t *testing.T) {
 	tr.Start()
 	tr.lock(trackedActorUID)
 	defer tr.unlock(trackedActorUID)
-	tr.queue.Add(trackedActorUID)
+	for _, q := range tr.queues {
+		q.Add(trackedActorUID)
+	}
 	cancel()
 	returnsPromptly(t, "Wait", func() {
 		if err := tr.Wait(t.Context()); err != nil {
@@ -153,31 +155,36 @@ func TestEntryStaysInMemoryDuringOp(t *testing.T) {
 	}
 }
 
-// Start queues each actor whose snapshot state file survived an atelet
-// restart, and skips actor directories without one. A node with no actor
-// directories yet queues nothing.
+// Start reads each actor's snapshot state file once, queues the actor only on
+// the queues whose work is due, and drops its entry from memory. It skips actor
+// directories without a state file, and queues nothing on an empty node.
 func TestStartQueuesActorsWithSnapshotState(t *testing.T) {
 	useTempNodeDirs(t)
 	// queued starts a tracker, as a restarted atelet does, and returns the
-	// actors it queued.
-	queued := func() []string {
-		tr := newTracker(t)
-		tr.workers = 0 // Leave the queue for the test to read.
+	// actors it queued ready to run on each queue.
+	queued := func() [numOpKinds][]string {
+		tr := newStoreTracker(t, newFakeSnapshotStore())
+		setWorkers(tr, 0, 0) // Leave the queues for the test to read.
 		tr.Start()
-		var actorUIDs []string
-		for tr.queue.Len() > 0 {
-			actorUID, _ := tr.queue.Get()
-			actorUIDs = append(actorUIDs, actorUID)
-			tr.queue.Done(actorUID)
+		if len(tr.actors) != 0 {
+			t.Errorf("in-memory actors after Start = %d, want 0", len(tr.actors))
 		}
-		slices.Sort(actorUIDs)
+		var actorUIDs [numOpKinds][]string
+		for k, q := range tr.queues {
+			for q.Len() > 0 {
+				actorUID, _ := q.Get()
+				actorUIDs[k] = append(actorUIDs[k], actorUID)
+				q.Done(actorUID)
+			}
+			slices.Sort(actorUIDs[k])
+		}
 		return actorUIDs
 	}
-	if got := queued(); len(got) != 0 {
+	if got := queued(); len(got[opUpload]) != 0 || len(got[opDetach]) != 0 {
 		t.Errorf("queued on a node with no actor directories = %v, want none", got)
 	}
 
-	for _, actorUID := range []string{"actor-a", "actor-b", "actor-without-state"} {
+	for _, actorUID := range []string{"actor-both", "actor-upload", "actor-detach", "actor-durable", "actor-without-state"} {
 		if err := os.MkdirAll(ateletpath.ActorPath(actorUID), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -185,11 +192,28 @@ func TestStartQueuesActorsWithSnapshotState(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(nodepath.ActorsDir, "not-an-actor"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	before := newTracker(t)
-	before.CommitLocal("actor-a", testRef("s1", 1, time.Now()))
-	before.CommitDurable("actor-b", testRef("s2", 2, time.Now()))
-	if got, want := queued(), []string{"actor-a", "actor-b"}; !slices.Equal(got, want) {
-		t.Errorf("queued after a restart = %v, want %v", got, want)
+	// Commit a detach delay before the restarted tracker's clock, so any
+	// scheduled upload or detach is due at Start.
+	t0 := time.Unix(1_700_000_000, 0).Add(-testDetachDelay)
+	before := New(t.Context(), newFakeSnapshotStore(), clocktesting.NewFakeClock(t0), WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay))
+	before.CommitLocal("actor-both", testRef("s1", 1, t0))
+	before.CommitLocal("actor-upload", testRef("s2", 1, t0))
+	endStart, err := before.BeginStart(t.Context(), "actor-upload")
+	if err != nil {
+		t.Fatalf("BeginStart: %v", err)
+	}
+	endStart()
+	s3 := testRef("s3", 1, t0)
+	before.CommitDurable("actor-detach", s3)
+	before.CommitLocal("actor-detach", s3)
+	before.CommitDurable("actor-durable", testRef("s4", 1, t0))
+
+	got := queued()
+	if want := []string{"actor-both", "actor-upload"}; !slices.Equal(got[opUpload], want) {
+		t.Errorf("upload queue after restart = %v, want %v", got[opUpload], want)
+	}
+	if want := []string{"actor-both", "actor-detach"}; !slices.Equal(got[opDetach], want) {
+		t.Errorf("detach queue after restart = %v, want %v", got[opDetach], want)
 	}
 }
 
@@ -404,7 +428,7 @@ func TestBackgroundDetachFailureLogsWarning(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(defaultLogger) })
 
 	stepTo(tr, t0.Add(testDetachDelay))
-	processNext(t, tr)
+	processNext(t, tr, opDetach)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	var got []string

@@ -124,6 +124,8 @@ var (
 	objectStorePluginSocket = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and every sandbox asset is fetched through. A gs:// asset the plugin cannot serve is then read anonymously.")
 	snapshotUploadDelay     = pflag.Duration("snapshot-upload-delay", snapshottracker.DefaultUploadDelay, "How long after an actor's oldest snapshot not yet in object storage was taken atelet uploads the actor's latest local snapshot in the background; later while an upload is in progress or failing.")
 	snapshotDetachDelay     = pflag.Duration("snapshot-detach-delay", snapshottracker.DefaultDetachDelay, "How long an actor stays suspended on this node, its latest snapshot kept locally, before atelet detaches it in the background.")
+	snapshotUploadWorkers   = pflag.Int("snapshot-upload-workers", snapshottracker.DefaultUploadWorkers, "How many background snapshot uploads atelet runs at once.")
+	snapshotDetachWorkers   = pflag.Int("snapshot-detach-workers", snapshottracker.DefaultDetachWorkers, "How many background detaches atelet runs at once.")
 )
 
 var _ imagecache.CandidateKeychain = (*credentialprovider.Keychain)(nil)
@@ -148,6 +150,9 @@ func main() {
 	}
 	if err := validateSnapshotDelayFlags(); err != nil {
 		serverboot.Fatal(ctx, "Invalid snapshot delay flags", err)
+	}
+	if err := validateSnapshotWorkerFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid snapshot worker flags", err)
 	}
 
 	// Kept separate from ctx so in-flight work (e.g. a Checkpoint/Restore
@@ -335,6 +340,8 @@ func main() {
 	snapshots := snapshottracker.New(trackerCtx, store, clock.RealClock{},
 		snapshottracker.WithUploadDelay(*snapshotUploadDelay),
 		snapshottracker.WithDetachDelay(*snapshotDetachDelay),
+		snapshottracker.WithUploadWorkers(*snapshotUploadWorkers),
+		snapshottracker.WithDetachWorkers(*snapshotDetachWorkers),
 		snapshottracker.WithInstruments(trackerInstruments))
 	// The runtimes this node's workers advertise, read by Run and Restore.
 	// Loaded from disk before anything serves, so a runtime a worker
@@ -545,6 +552,18 @@ func validateSnapshotDelayFlags() error {
 	}
 	if *snapshotUploadDelay > *snapshotDetachDelay {
 		return fmt.Errorf("--snapshot-upload-delay %v must not exceed --snapshot-detach-delay %v", *snapshotUploadDelay, *snapshotDetachDelay)
+	}
+	return nil
+}
+
+// validateSnapshotWorkerFlags checks --snapshot-upload-workers and
+// --snapshot-detach-workers: each must be at least 1.
+func validateSnapshotWorkerFlags() error {
+	if *snapshotUploadWorkers < 1 {
+		return fmt.Errorf("--snapshot-upload-workers %d must be >= 1", *snapshotUploadWorkers)
+	}
+	if *snapshotDetachWorkers < 1 {
+		return fmt.Errorf("--snapshot-detach-workers %d must be >= 1", *snapshotDetachWorkers)
 	}
 	return nil
 }

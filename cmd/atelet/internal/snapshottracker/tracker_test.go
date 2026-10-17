@@ -263,23 +263,43 @@ func waitClosed(t *testing.T, done <-chan struct{}, what string) {
 	}
 }
 
-// processNext takes the next actor from the queue of a tracker whose workers
-// have not started, and runs its background work as a worker would.
-func processNext(t *testing.T, tr *Tracker) {
+// processNext takes the next actor from kind's queue of a tracker whose
+// workers have not started, and runs its background work as a worker of that
+// queue would.
+func processNext(t *testing.T, tr *Tracker, kind opKind) {
 	t.Helper()
+	q := tr.queues[kind]
 	next := make(chan string, 1)
 	go func() {
-		if actorUID, shutdown := tr.queue.Get(); !shutdown {
+		if actorUID, shutdown := q.Get(); !shutdown {
 			next <- actorUID
 		}
 	}()
 	select {
 	case actorUID := <-next:
-		tr.syncActor(actorUID)
-		tr.queue.Done(actorUID)
+		tr.syncActor(actorUID, kind)
+		q.Done(actorUID)
 	case <-time.After(10 * time.Second):
-		t.Fatal("timed out waiting for an actor to be queued")
+		t.Fatalf("timed out waiting for an actor to be queued for %s", kind)
 	}
+}
+
+// queuedNow returns how many actors tr's queues hold ready for a worker,
+// leaving out those queued for later.
+func queuedNow(tr *Tracker) int {
+	n := 0
+	for _, q := range tr.queues {
+		n += q.Len()
+	}
+	return n
+}
+
+// setWorkers gives tr uploads upload workers and detaches detach workers in
+// place of the defaults, as WithUploadWorkers and WithDetachWorkers do. Call
+// it before Start.
+func setWorkers(tr *Tracker, uploads, detaches int) {
+	WithUploadWorkers(uploads)(tr)
+	WithDetachWorkers(detaches)(tr)
 }
 
 // State reports the latest local snapshot CommitLocal records and the latest
