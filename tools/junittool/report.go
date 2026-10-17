@@ -34,6 +34,7 @@ import (
 const (
 	maxMessageLines = 20
 	maxContextLines = 60
+	maxStackLines   = 200
 	maxLineLen      = 1000
 	// GitHub rejects a step summary over 1MiB
 	summaryBudget = 900 << 10
@@ -64,6 +65,7 @@ type pkgResult struct {
 	action      string
 	failedBuild string
 	output      []string // not attributed to a test
+	all         []string // all output in order, test or not
 	tests       map[string]*testResult
 }
 
@@ -129,6 +131,7 @@ func parseRun(path string) run {
 				case "output":
 					if e.OutputType != "frame" {
 						p.output = append(p.output, line)
+						p.all = append(p.all, line)
 					}
 				case "pass", "fail", "skip":
 					p.action = e.Action
@@ -147,6 +150,7 @@ func parseRun(path string) run {
 						break
 					}
 					t.output = append(t.output, line)
+					p.all = append(p.all, line)
 					if e.OutputType == "error" || e.OutputType == "error-continue" {
 						t.errors = append(t.errors, line)
 					}
@@ -196,6 +200,13 @@ func (r *run) addPackage(name string, p *pkgResult, build map[string][]string) {
 			unfinished = append(unfinished, tn)
 		}
 	}
+	// a panic kills the whole test binary, and test2json files it under
+	// whichever test printed a framing line last: the parent of a panicking
+	// subtest, or a test that already passed before a timeout
+	var crashed []string
+	if i := crashIndex(p.all); i >= 0 {
+		crashed = p.all[i:]
+	}
 	for _, tn := range failed {
 		t := p.tests[tn]
 		// the failed subtests already say why
@@ -210,6 +221,9 @@ func (r *run) addPackage(name string, p *pkgResult, build map[string][]string) {
 		if len(f.message) == 0 {
 			f.message = tail(t.output, maxMessageLines)
 		}
+		if len(f.message) == 0 {
+			f.message = head(crashed, maxMessageLines)
+		}
 		if ctx := tail(t.output, maxContextLines); !slices.Equal(ctx, f.message) {
 			f.context = ctx
 		}
@@ -222,19 +236,18 @@ func (r *run) addPackage(name string, p *pkgResult, build map[string][]string) {
 	f := failure{pkg: name}
 	switch {
 	case p.failedBuild != "":
+		r.failed++
 		f.label = "build failed"
 		f.message = head(build[p.failedBuild], maxMessageLines)
 		if len(f.message) == 0 {
 			f.message = excerpt(p.output, maxMessageLines)
 		}
 	case len(unfinished) > 0:
-		// on a timeout or crash the running tests never report, and the panic
-		// lands in the output of whichever test wrote last
+		// on a timeout the running tests never report
 		r.failed += len(unfinished)
-		all := append([]string(nil), p.output...)
-		var leaves []string
+		var leaves, rest []string
 		for _, tn := range unfinished {
-			all = append(all, p.tests[tn].output...)
+			rest = append(rest, p.tests[tn].output...)
 			if !hasSubtest(unfinished, tn) {
 				leaves = append(leaves, tn)
 			}
@@ -243,8 +256,14 @@ func (r *run) addPackage(name string, p *pkgResult, build map[string][]string) {
 		if len(leaves) > 5 {
 			f.label += fmt.Sprintf(" and %d more", len(leaves)-5)
 		}
-		f.message = excerpt(all, maxMessageLines)
+		if crashed != nil {
+			f.message = head(crashed, maxMessageLines)
+			f.context = head(stacksOf(crashed, leaves), maxStackLines)
+		} else {
+			f.message = tail(slices.Concat(p.output, rest), maxMessageLines)
+		}
 	case len(failed) == 0:
+		r.failed++
 		f.label = "failed outside of a test"
 		f.message = excerpt(p.output, maxMessageLines)
 	default:
@@ -271,16 +290,55 @@ func excerpt(lines []string, n int) []string {
 }
 
 // crash returns up to n lines from the first panic or race report, nil if
-// there is none. The runtime prints these unindented, unlike test logs, which
-// may quote a panic from somewhere else.
+// there is none
 func crash(lines []string, n int) []string {
+	if i := crashIndex(lines); i >= 0 {
+		return head(lines[i:], n)
+	}
+	return nil
+}
+
+// crashIndex finds the first panic or race report. The runtime prints these
+// unindented, unlike test logs, which may quote a panic from somewhere else.
+func crashIndex(lines []string) int {
 	for i, l := range lines {
 		if strings.HasPrefix(l, "panic: ") || strings.HasPrefix(l, "fatal error: ") ||
 			strings.HasPrefix(l, "WARNING: DATA RACE") {
-			return head(lines[i:], n)
+			return i
 		}
 	}
-	return nil
+	return -1
+}
+
+// stacksOf picks the goroutines running one of tests out of a stack dump
+func stacksOf(lines, tests []string) []string {
+	var out, block []string
+	keep := false
+	flush := func() {
+		if keep {
+			out = append(out, block...)
+		}
+		block, keep = nil, false
+	}
+	for _, l := range lines {
+		if strings.HasPrefix(l, "goroutine ") {
+			flush()
+			block = []string{}
+		}
+		if block == nil {
+			continue
+		}
+		block = append(block, l)
+		for _, tn := range tests {
+			// subtests and their closures run as TestX.funcN
+			top, _, _ := strings.Cut(tn, "/")
+			if strings.Contains(l, "."+top+"(") || strings.Contains(l, "."+top+".func") {
+				keep = true
+			}
+		}
+	}
+	flush()
+	return out
 }
 
 func head(lines []string, n int) []string {
@@ -428,7 +486,11 @@ func writeAnnotations(w io.Writer, runs []run, root string) {
 				return
 			}
 			n++
-			props := "title=" + escapeProperty(fmt.Sprintf("%s: %s.%s", r.name, path.Base(f.pkg), f.title()))
+			title := fmt.Sprintf("%s: %s.%s", r.name, path.Base(f.pkg), f.test)
+			if f.test == "" {
+				title = fmt.Sprintf("%s: %s %s", r.name, path.Base(f.pkg), f.label)
+			}
+			props := "title=" + escapeProperty(title)
 			if file, line := location(root, module, f); file != "" {
 				props = fmt.Sprintf("file=%s,line=%s,%s", escapeProperty(file), line, props)
 			}
@@ -438,7 +500,8 @@ func writeAnnotations(w io.Writer, runs []run, root string) {
 }
 
 // location finds where f failed under root: the file of the first error line
-// if it is in the test's own package, else the first stack frame under root
+// if it is in the test's own package, else the first stack frame under root,
+// which for a timeout is in the context
 func location(root, module string, f failure) (file, line string) {
 	if root == "" || len(f.message) == 0 {
 		return "", ""
@@ -449,7 +512,7 @@ func location(root, module string, f failure) (file, line string) {
 		}
 		return "", ""
 	}
-	for _, l := range f.message {
+	for _, l := range slices.Concat(f.message, f.context) {
 		m := stackLine.FindStringSubmatch(l)
 		if m == nil {
 			continue

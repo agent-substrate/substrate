@@ -50,7 +50,7 @@ func end(action, pkg, test string) event {
 }
 
 func TestParseRun(t *testing.T) {
-	a, b, c, d := mod+"/a", mod+"/b", mod+"/c", mod+"/d"
+	a, b, c, d, e := mod+"/a", mod+"/b", mod+"/c", mod+"/d", mod+"/e"
 	content := stream(t,
 		// passing test, its logs are not reported
 		out(a, "TestPass", "frame", "=== RUN   TestPass"),
@@ -89,12 +89,22 @@ func TestParseRun(t *testing.T) {
 		out(a, "TestRace", "error", "    testing.go:1865: race detected during execution of test"),
 		end("fail", a, "TestRace"),
 		end("fail", a, ""),
-		// a timeout leaves tests unfinished
+		// a timeout leaves tests unfinished, the panic lands in whichever test
+		// printed a framing line last
 		event{Action: "run", Package: b, Test: "TestHang"},
 		event{Action: "run", Package: b, Test: "TestHang2"},
 		event{Action: "run", Package: b, Test: "TestHang2/sub"},
-		out(b, "TestHang2", "", "panic: test timed out after 2s"),
-		out(b, "TestHang2", "", "\trunning tests:"),
+		out(b, "TestQuick", "frame", "--- PASS: TestQuick (0.00s)"),
+		out(b, "TestQuick", "", "panic: test timed out after 2s"),
+		out(b, "TestQuick", "", "\trunning tests:"),
+		out(b, "TestQuick", "", ""),
+		out(b, "TestQuick", "", "goroutine 1 [chan receive]:"),
+		out(b, "TestQuick", "", "testing.(*M).Run(0x1)"),
+		out(b, "TestQuick", "", ""),
+		out(b, "TestQuick", "", "goroutine 7 [sleep]:"),
+		out(b, "TestQuick", "", "b.TestHang2.func1(0x2)"),
+		out(b, "TestQuick", "", "\t/src/b/b_test.go:9 +0x1"),
+		end("pass", b, "TestQuick"),
 		end("fail", b, ""),
 		// build failure
 		event{Action: "build-output", ImportPath: c + " [" + c + ".test]", Output: "c/c_test.go:5:28: undefined: x\n"},
@@ -102,6 +112,14 @@ func TestParseRun(t *testing.T) {
 		// TestMain exits non-zero
 		out(d, "", "", "TestMain setup failed"),
 		end("fail", d, ""),
+		// a panicking subtest's panic is filed under its parent
+		out(e, "TestParent", "", "    e_test.go:13: parent setup"),
+		out(e, "TestParent/sub", "frame", "--- FAIL: TestParent/sub (0.00s)"),
+		end("fail", e, "TestParent/sub"),
+		out(e, "TestParent", "frame", "--- FAIL: TestParent (0.00s)"),
+		out(e, "TestParent", "", "panic: boom [recovered, repanicked]"),
+		end("fail", e, "TestParent"),
+		end("fail", e, ""),
 	) + "not json\n"
 	path := write(t, t.TempDir(), "unit.json", content)
 
@@ -109,8 +127,8 @@ func TestParseRun(t *testing.T) {
 	if got.err != nil {
 		t.Fatalf("parseRun() error = %v", got.err)
 	}
-	if got.name != "unit" || got.passed != 1 || got.failed != 10 || got.skipped != 1 {
-		t.Errorf("parseRun() = %s %d passed, %d failed, %d skipped; want unit 1, 10, 1",
+	if got.name != "unit" || got.passed != 2 || got.failed != 14 || got.skipped != 1 {
+		t.Errorf("parseRun() = %s %d passed, %d failed, %d skipped; want unit 2, 14, 1",
 			got.name, got.passed, got.failed, got.skipped)
 	}
 
@@ -129,9 +147,13 @@ func TestParseRun(t *testing.T) {
 		{pkg: a, test: "TestRace", message: []string{"WARNING: DATA RACE", "Write at 0x1 by goroutine 7:",
 			"    testing.go:1865: race detected during execution of test"}},
 		{pkg: b, label: "did not finish: TestHang, TestHang2/sub",
-			message: []string{"panic: test timed out after 2s", "\trunning tests:"}},
+			message: []string{"panic: test timed out after 2s", "\trunning tests:", "",
+				"goroutine 1 [chan receive]:", "testing.(*M).Run(0x1)", "",
+				"goroutine 7 [sleep]:", "b.TestHang2.func1(0x2)", "\t/src/b/b_test.go:9 +0x1"},
+			context: []string{"goroutine 7 [sleep]:", "b.TestHang2.func1(0x2)", "\t/src/b/b_test.go:9 +0x1"}},
 		{pkg: c, label: "build failed", message: []string{"c/c_test.go:5:28: undefined: x"}},
 		{pkg: d, label: "failed outside of a test", message: []string{"TestMain setup failed"}},
+		{pkg: e, test: "TestParent/sub", message: []string{"panic: boom [recovered, repanicked]"}},
 	}
 	if !reflect.DeepEqual(got.failures, want) {
 		t.Errorf("failures:\n%s\nwant:\n%s", dump(got.failures), dump(want))
@@ -179,13 +201,17 @@ func TestWriteAnnotations(t *testing.T) {
 		{pkg: mod + "/a", test: "TestZ", message: []string{"panic: boom",
 			"\t/usr/lib/go/src/testing/testing.go:2123 +0x2b8",
 			"\t" + filepath.Join(root, "a", "a_test.go") + ":31 +0x3c"}},
+		// a timeout's hung test is in the context
+		{pkg: mod + "/a", label: "did not finish: TestW", message: []string{"panic: test timed out after 2s"},
+			context: []string{"a.TestW(0x1)", "\t" + filepath.Join(root, "a", "a_test.go") + ":40 +0x3c"}},
 	}}}
 	var b strings.Builder
 	writeAnnotations(&b, runs, root)
 	want := "::error file=a/a_test.go,line=13,title=unit%3A a.TestX::a_test.go:13: 50%25 off, a: b%0A    next\n" +
 		"::error title=unit%3A a.TestY::helper.go:7: bad\n" +
 		"::error file=a/a_test.go,line=31,title=unit%3A a.TestZ::panic: boom%0A\t/usr/lib/go/src/testing/testing.go:2123 +0x2b8%0A\t" +
-		filepath.Join(root, "a", "a_test.go") + ":31 +0x3c\n"
+		filepath.Join(root, "a", "a_test.go") + ":31 +0x3c\n" +
+		"::error file=a/a_test.go,line=40,title=unit%3A a did not finish%3A TestW::panic: test timed out after 2s\n"
 	if b.String() != want {
 		t.Errorf("writeAnnotations() =\n%s\nwant:\n%s", b.String(), want)
 	}
