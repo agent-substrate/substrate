@@ -390,3 +390,103 @@ func TestRemoveProtectionFinalizer(t *testing.T) {
 		},
 	})
 }
+
+// namespaceRecorder records the namespace a live list was scoped to.
+type namespaceRecorder struct {
+	client.Reader
+	namespace string
+}
+
+func (r *namespaceRecorder) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	for _, opt := range opts {
+		if ns, ok := opt.(client.InNamespace); ok {
+			r.namespace = string(ns)
+		}
+	}
+	return r.Reader.List(ctx, list, opts...)
+}
+
+// A scoped watch reaches only its own namespace, so the live list that guards
+// finalizer removal must carry the watch namespace, and only a user inside it
+// holds the finalizer on. An empty watch namespace keeps listing every
+// namespace.
+func TestSandboxConfigLiveListScopesToWatchNamespace(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	now := metav1.Now()
+
+	sc := makeSandboxConfig("sc", atev1alpha1.SandboxClassGvisor, true)
+	controllerutil.AddFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+	controllerutil.AddFinalizer(sc, testHoldFinalizer)
+	sc.DeletionTimestamp = &now
+
+	user := func(ns string) *atev1alpha1.WorkerPool {
+		wp := makeWorkerPool("pool", ns, 1, "worker:v1")
+		wp.Status.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClassStatus{{
+			Name:      atev1alpha1.SandboxClassGvisor,
+			ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "sc"},
+		}}
+		return wp
+	}
+
+	tests := []struct {
+		name           string
+		watchNamespace string
+		live           []client.Object
+		want           bool
+		wantNamespace  string
+	}{
+		{
+			name:           "user outside the watched namespace does not hold the finalizer",
+			watchNamespace: "watched",
+			live:           []client.Object{user("elsewhere")},
+			want:           false,
+			wantNamespace:  "watched",
+		},
+		{
+			name:           "user inside the watched namespace holds the finalizer",
+			watchNamespace: "watched",
+			live:           []client.Object{user("watched")},
+			want:           true,
+			wantNamespace:  "watched",
+		},
+		{
+			name:           "empty watch namespace lists every namespace",
+			watchNamespace: "",
+			live:           []client.Object{user("elsewhere")},
+			want:           true,
+			wantNamespace:  "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cached := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sc).
+				WithIndex(&atev1alpha1.WorkerPool{}, workerPoolSandboxConfigIndex, func(obj client.Object) []string {
+					return sandboxConfigsInUse(obj.(*atev1alpha1.WorkerPool))
+				}).Build()
+			reader := &namespaceRecorder{Reader: fake.NewClientBuilder().WithScheme(scheme).WithObjects(tc.live...).Build()}
+			r := &SandboxConfigProtectionReconciler{Client: cached, APIReader: reader, WatchNamespace: tc.watchNamespace}
+
+			if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Name: sc.Name}}); err != nil {
+				t.Fatalf("Reconcile error = %v", err)
+			}
+			if reader.namespace != tc.wantNamespace {
+				t.Errorf("live list namespace = %q, want %q", reader.namespace, tc.wantNamespace)
+			}
+			got := &atev1alpha1.SandboxConfig{}
+			if err := cached.Get(t.Context(), types.NamespacedName{Name: sc.Name}, got); err != nil {
+				t.Fatalf("get SandboxConfig: %v", err)
+			}
+			if has := controllerutil.ContainsFinalizer(got, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer); has != tc.want {
+				t.Errorf("has protection finalizer = %v, want %v", has, tc.want)
+			}
+			if !controllerutil.ContainsFinalizer(got, testHoldFinalizer) {
+				t.Errorf("lost %s", testHoldFinalizer)
+			}
+		})
+	}
+}
