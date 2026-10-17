@@ -16,10 +16,19 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/objectstorage"
 )
 
 func TestValidateSnapshotCacheFlags(t *testing.T) {
@@ -109,5 +118,285 @@ func TestOpenSnapshotCacheSweepsDebris(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(entryDir, "data")); err != nil {
 		t.Errorf("published entry did not survive the sweep: %v", err)
+	}
+}
+
+// TestSnapshotCacheMode pins the caching gate: only a snapshot the control
+// plane declared shared is served from the cache. Private, unstated, and
+// absent sources all download fresh; atelet never infers cacheability from
+// the URI.
+func TestSnapshotCacheMode(t *testing.T) {
+	withSharing := func(sh ateletpb.SnapshotSharing) *ateletpb.ObjectStorage {
+		return &ateletpb.ObjectStorage{SnapshotUri: testSnapshotURI, Sharing: sh}
+	}
+	cases := []struct {
+		name   string
+		object *ateletpb.ObjectStorage
+		want   cacheMode
+	}{
+		{"shared uses the class mode", withSharing(ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED), cacheModeLink},
+		{"private is never cached", withSharing(ateletpb.SnapshotSharing_SNAPSHOT_SHARING_PRIVATE), cacheModeOff},
+		{"unstated is never cached", withSharing(ateletpb.SnapshotSharing_SNAPSHOT_SHARING_UNSPECIFIED), cacheModeOff},
+		{"no object", nil, cacheModeOff},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := snapshotCacheMode(tc.object, cacheModeLink); got != tc.want {
+				t.Errorf("snapshotCacheMode() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCacheModeFor(t *testing.T) {
+	if got := cacheModeFor(string(atev1alpha1.SandboxClassGvisor)); got != cacheModeLink {
+		t.Errorf("gVisor consumes restore state read-only; want cacheModeLink, got %v", got)
+	}
+	// ateworker-microvm rewrites config.json and memory-ranges in place;
+	// linking its restore files from the cache would corrupt shared copies,
+	// so it gets private ones.
+	if got := cacheModeFor(string(atev1alpha1.SandboxClassMicroVM)); got != cacheModeCopy {
+		t.Errorf("micro-VM mutates restore state files in place; want cacheModeCopy, got %v", got)
+	}
+	if got := cacheModeFor(""); got != cacheModeOff {
+		t.Errorf("unknown sandbox class: want cacheModeOff, got %v", got)
+	}
+}
+
+// countingObjectStorage counts reads, so a test can pin how many downloads
+// a sequence of restores performed.
+type countingObjectStorage struct {
+	objectstorage.ObjectStorage
+	gets atomic.Int32
+}
+
+func (c *countingObjectStorage) GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
+	c.gets.Add(1)
+	return c.ObjectStorage.GetObject(ctx, bucket, object)
+}
+
+// newSnapshotCacheHerder returns an atelet whose plugin serves a snapshot
+// holding the named files with the given contents, with a snapshot cache
+// open under base, plus base itself, which is on the cache's filesystem,
+// for restore directories.
+func newSnapshotCacheHerder(t *testing.T, files map[string]string) (*Atelet, *countingObjectStorage, string) {
+	t.Helper()
+	base := t.TempDir()
+	store := &countingObjectStorage{ObjectStorage: &recordingObjectStorage{}}
+	for name, content := range files {
+		payload := filepath.Join(base, "payload-"+filepath.Base(name))
+		if err := os.WriteFile(payload, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := objectstorage.SendLocalFileToGCSWithZstd(context.Background(), store.ObjectStorage, testSnapshotURI+"/"+name+".zstd", payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := newPluginHerder(t, store)
+	cache, err := filecache.New(filepath.Join(base, "cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.snapshotCache = cache
+	return s, store, base
+}
+
+// restoreDir makes a restore directory under base, as Restore does before
+// it downloads.
+func restoreDir(t *testing.T, base, name string) string {
+	t.Helper()
+	dir := filepath.Join(base, name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestDownloadExternalCheckpointServesFromCache(t *testing.T) {
+	s, store, base := newSnapshotCacheHerder(t, map[string]string{"memory-ranges": "golden memory"})
+	ctx := context.Background()
+	files := []string{"memory-ranges"}
+
+	// Two cached restores: one download, both destinations share the inode.
+	first, second := restoreDir(t, base, "first"), restoreDir(t, base, "second")
+	for _, dir := range []string{first, second} {
+		if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, dir, files, cacheModeLink); err != nil {
+			t.Fatalf("downloadExternalCheckpoint into %s: %v", dir, err)
+		}
+		if got, err := os.ReadFile(filepath.Join(dir, "memory-ranges")); err != nil || string(got) != "golden memory" {
+			t.Fatalf("staged in %s = %q, %v", dir, got, err)
+		}
+	}
+	if n := store.gets.Load(); n != 1 {
+		t.Errorf("two cached restores performed %d downloads, want 1", n)
+	}
+	fi1, err1 := os.Stat(filepath.Join(first, "memory-ranges"))
+	fi2, err2 := os.Stat(filepath.Join(second, "memory-ranges"))
+	if err1 != nil || err2 != nil || !os.SameFile(fi1, fi2) {
+		t.Errorf("cached destinations do not share an inode (%v, %v)", err1, err2)
+	}
+	if fi1.Mode().Perm()&0o222 != 0 {
+		t.Errorf("a linked restore file is writable (%v); the shared bytes must be read-only", fi1.Mode())
+	}
+
+	// A non-cacheable restore downloads fresh and shares nothing.
+	direct := restoreDir(t, base, "direct")
+	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, direct, files, cacheModeOff); err != nil {
+		t.Fatalf("direct downloadExternalCheckpoint: %v", err)
+	}
+	if n := store.gets.Load(); n != 2 {
+		t.Errorf("direct restore did not download (gets=%d, want 2)", n)
+	}
+	if fi3, err := os.Stat(filepath.Join(direct, "memory-ranges")); err != nil || os.SameFile(fi1, fi3) {
+		t.Errorf("direct destination shares the cache inode (%v)", err)
+	}
+}
+
+// TestDownloadExternalCheckpointCopyMode pins the micro-VM serving mode: one
+// download per snapshot file, every destination a private writable inode,
+// and a consumer's in-place mutation never reaches the next consumer.
+func TestDownloadExternalCheckpointCopyMode(t *testing.T) {
+	s, store, base := newSnapshotCacheHerder(t, map[string]string{"memory-ranges": "golden memory"})
+	ctx := context.Background()
+	files := []string{"memory-ranges"}
+
+	first, second := restoreDir(t, base, "first"), restoreDir(t, base, "second")
+	for _, dir := range []string{first, second} {
+		if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, dir, files, cacheModeCopy); err != nil {
+			t.Fatalf("downloadExternalCheckpoint into %s: %v", dir, err)
+		}
+	}
+	if n := store.gets.Load(); n != 1 {
+		t.Errorf("two copy-mode restores performed %d downloads, want 1", n)
+	}
+	fi1, err1 := os.Stat(filepath.Join(first, "memory-ranges"))
+	fi2, err2 := os.Stat(filepath.Join(second, "memory-ranges"))
+	if err1 != nil || err2 != nil {
+		t.Fatal(err1, err2)
+	}
+	if os.SameFile(fi1, fi2) {
+		t.Error("copy-mode destinations share an inode; each consumer must own its own")
+	}
+
+	// The consumer may rewrite its staged file (ateworker-microvm does, to
+	// config.json) without poisoning what the next restore receives.
+	if err := os.WriteFile(filepath.Join(first, "memory-ranges"), []byte("rewritten by the worker"), 0o600); err != nil {
+		t.Fatalf("consumer write to its copy: %v", err)
+	}
+	third := restoreDir(t, base, "third")
+	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, third, files, cacheModeCopy); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(third, "memory-ranges")); err != nil || string(got) != "golden memory" {
+		t.Errorf("copy after consumer mutation = %q, %v; the cached bytes were poisoned", got, err)
+	}
+	if n := store.gets.Load(); n != 1 {
+		t.Errorf("gets=%d, want 1 (mutation must not invalidate the cache)", n)
+	}
+}
+
+func TestDownloadExternalCheckpointWithoutCacheDownloads(t *testing.T) {
+	s, store, base := newSnapshotCacheHerder(t, map[string]string{"memory-ranges": "golden memory"})
+	s.snapshotCache = nil // caching disabled (--snapshot-cache-dir="")
+
+	dir := restoreDir(t, base, "out")
+	if err := s.downloadExternalCheckpoint(context.Background(), testSnapshotURI, dir, []string{"memory-ranges"}, cacheModeLink); err != nil {
+		t.Fatalf("downloadExternalCheckpoint with nil cache: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "memory-ranges")); err != nil || string(got) != "golden memory" {
+		t.Fatalf("staged content = %q, %v", got, err)
+	}
+	if n := store.gets.Load(); n != 1 {
+		t.Errorf("gets=%d, want 1", n)
+	}
+}
+
+func TestDownloadExternalCheckpointCachedFetchErrorReachesCaller(t *testing.T) {
+	s, _, base := newSnapshotCacheHerder(t, map[string]string{"memory-ranges": "golden memory"})
+	dir := restoreDir(t, base, "out")
+	err := s.downloadExternalCheckpoint(context.Background(), testSnapshotURI, dir, []string{"missing"}, cacheModeLink)
+	if err == nil {
+		t.Fatal("downloadExternalCheckpoint succeeded for a missing file")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "missing")); !os.IsNotExist(statErr) {
+		t.Errorf("failed fetch left a destination file: %v", statErr)
+	}
+}
+
+// TestDownloadExternalCheckpointSharesOneDownload pins the exit criterion at
+// the unit level: concurrent restores staging the same shared snapshot
+// perform its downloads once.
+func TestDownloadExternalCheckpointSharesOneDownload(t *testing.T) {
+	s, store, base := newSnapshotCacheHerder(t, map[string]string{"memory-ranges": "golden memory"})
+	files := []string{"memory-ranges"}
+
+	const restores = 4
+	errs := make([]error, restores)
+	var wg sync.WaitGroup
+	for i := range restores {
+		dir := restoreDir(t, base, fmt.Sprintf("actor-%d", i))
+		wg.Go(func() {
+			errs[i] = s.downloadExternalCheckpoint(context.Background(), testSnapshotURI, dir, files, cacheModeLink)
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("restore %d: %v", i, err)
+		}
+		got, err := os.ReadFile(filepath.Join(base, fmt.Sprintf("actor-%d", i), "memory-ranges"))
+		if err != nil || string(got) != "golden memory" {
+			t.Fatalf("restore %d staged %q, %v", i, got, err)
+		}
+	}
+	if n := store.gets.Load(); n != 1 {
+		t.Errorf("%d concurrent restores performed %d downloads, want 1", restores, n)
+	}
+}
+
+// TestDownloadExternalCheckpointCachedSubdirAndSymlinks covers the two ways
+// the cached path differs from the plugin writing through an os.Root: a
+// file in the checkpoint subdirectory is placed there, and a symlink waiting
+// in the restore directory, as a directory or as the file itself, fails the
+// restore instead of being followed outside it.
+func TestDownloadExternalCheckpointCachedSubdirAndSymlinks(t *testing.T) {
+	s, _, base := newSnapshotCacheHerder(t, map[string]string{"memory-ranges": "golden memory", "fs/data.tar": "fs delta"})
+	ctx := context.Background()
+
+	dir := restoreDir(t, base, "subdir")
+	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, dir, []string{"memory-ranges", "fs/data.tar"}, cacheModeLink); err != nil {
+		t.Fatalf("downloadExternalCheckpoint with a subdirectory file: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "fs", "data.tar")); err != nil || string(got) != "fs delta" {
+		t.Fatalf("subdirectory file = %q, %v", got, err)
+	}
+
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(outside, "memory-ranges")
+	if err := os.WriteFile(keep, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fileLink := restoreDir(t, base, "file-link")
+	if err := os.Symlink(keep, filepath.Join(fileLink, "memory-ranges")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, fileLink, []string{"memory-ranges"}, cacheModeLink); err == nil {
+		t.Error("a symlink in place of the restore file was followed")
+	}
+	dirLink := restoreDir(t, base, "dir-link")
+	if err := os.Symlink(outside, filepath.Join(dirLink, "fs")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.downloadExternalCheckpoint(ctx, testSnapshotURI, dirLink, []string{"fs/data.tar"}, cacheModeCopy); err == nil {
+		t.Error("a symlink in place of the checkpoint subdirectory was followed")
+	}
+	if got, err := os.ReadFile(keep); err != nil || string(got) != "keep me" {
+		t.Errorf("file outside the restore directory = %q, %v; want untouched", got, err)
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 1 {
+		t.Errorf("the directory outside the restore directory holds %d entries, want only the original file", len(entries))
 	}
 }

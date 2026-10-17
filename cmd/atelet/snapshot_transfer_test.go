@@ -144,7 +144,7 @@ func TestUploadSnapshotManifestLast(t *testing.T) {
 func TestSnapshotTransferSkipsEmptyFileLists(t *testing.T) {
 	store := &orderedObjectStorage{}
 	s := newPluginHerder(t, store)
-	if err := s.downloadExternalCheckpoint(context.Background(), pausedSnapshotURI, t.TempDir(), nil); err != nil {
+	if err := s.downloadExternalCheckpoint(context.Background(), pausedSnapshotURI, t.TempDir(), nil, cacheModeOff); err != nil {
 		t.Errorf("downloadExternalCheckpoint(no files) = %v, want nil", err)
 	}
 	if err := s.uploadSnapshotFiles(context.Background(), pausedSnapshotURI, t.TempDir(), nil); err != nil {
@@ -190,7 +190,7 @@ func TestObjectStorePluginErrorCodeThroughAtelet(t *testing.T) {
 		run       func(ctx context.Context, s *Atelet) error
 	}{
 		{"download", true, func(ctx context.Context, s *Atelet) error {
-			return s.downloadExternalCheckpoint(ctx, pausedSnapshotURI, t.TempDir(), []string{"a"})
+			return s.downloadExternalCheckpoint(ctx, pausedSnapshotURI, t.TempDir(), []string{"a"}, cacheModeOff)
 		}},
 		{"paused upload", true, func(ctx context.Context, s *Atelet) error {
 			dir := t.TempDir()
@@ -249,7 +249,7 @@ func TestObjectStorePluginErrorKeepsCredentialsOut(t *testing.T) {
 		run  func(ctx context.Context, s *Atelet) error
 	}{
 		{"download", signedURI, func(ctx context.Context, s *Atelet) error {
-			return s.downloadExternalCheckpoint(ctx, signedURI, t.TempDir(), []string{"a"})
+			return s.downloadExternalCheckpoint(ctx, signedURI, t.TempDir(), []string{"a"}, cacheModeOff)
 		}},
 		{"upload", signedURI, func(ctx context.Context, s *Atelet) error {
 			return s.uploadSnapshotFiles(ctx, signedURI, t.TempDir(), []string{"a"})
