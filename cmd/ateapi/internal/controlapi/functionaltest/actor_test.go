@@ -2934,7 +2934,8 @@ func TestPauseActor_VolumeLifecycle_DetachResumeAndMigrate(t *testing.T) {
 
 	// 6. Suspend and delete the actor on node2.
 	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-vol-actor"},
+		Actor:   &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-vol-actor"},
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	})
 	if err != nil {
 		t.Fatalf("SuspendActor after migration failed: %v", err)
@@ -5037,7 +5038,7 @@ func TestSuspendActor_Mode(t *testing.T) {
 			if gotLocal := localSnapshot(status) != nil; gotLocal != tt.wantLocal {
 				t.Errorf("has local snapshot = %t, want %t", gotLocal, tt.wantLocal)
 			}
-			if gotDurable := durableSnapshot(status) != nil; gotDurable == tt.wantLocal {
+			if gotDurable := durableSnapshot(status).GetOwner() == ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR; gotDurable == tt.wantLocal {
 				t.Errorf("has completed durable snapshot = %t, want %t", gotDurable, !tt.wantLocal)
 			}
 			if got := status.GetAssignedNode(); got != tt.wantNode {
