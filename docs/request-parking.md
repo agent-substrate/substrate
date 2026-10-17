@@ -149,6 +149,24 @@ so a parked request always gets its full budget and a normal verdict (routed
 The retry backoff deliberately has no cap and no attempt limit: the budget alone
 bounds the wait.
 
+### Sizing for agent workloads
+
+The defaults suit short interactive turns. For agents that run long commands,
+or pools that are often full, set the budget to the longest wait for a slot
+you accept before a `503`, and the route timeout above the longest request an
+actor serves. Both are install settings, `--atenet-parked-request-budget` and
+`--atenet-route-timeout` (`ATE_ATENET_PARKED_REQUEST_BUDGET`,
+`ATE_ATENET_ROUTE_TIMEOUT`); the installer grows the router's
+`terminationGracePeriodSeconds` with the budget so parked requests still
+finish during a rollout.
+
+A burst of requests larger than the ext_proc circuit breaker is rejected by
+Envoy itself, with `503` and `reset reason: overflow`, before the router sees
+it. The router derives the breaker as twice `--parked-request-max` (at least
+`1024`); the install setting `--atenet-extproc-max-requests`
+(`ATE_ATENET_EXTPROC_MAX_REQUESTS`) raises it for hosts dense enough to
+synchronize more requests than that.
+
 ## Observability
 
 **Metrics** (OpenTelemetry, meter `atenet-router`):

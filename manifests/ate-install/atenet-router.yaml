@@ -254,6 +254,9 @@ spec:
         # default of 5m, which suits an agent relaying a model completion: the
         # request stays open for the whole generation. Set --route-timeout
         # lower to cap how long one turn may hold a request open.
+        # ate-setup appends --route-timeout, --parked-request-budget and
+        # --extproc-max-requests here from its atenet.router.* settings and grows
+        # the grace period above with the budget.
         #
         # A turn still running after the drain route budget (10s) does not
         # survive a shutdown, and raising --route-timeout does not change that:
