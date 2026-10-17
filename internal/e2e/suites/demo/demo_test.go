@@ -306,52 +306,6 @@ func TestDurableDirLifecycle(t *testing.T) {
 				microVMOnly:            true,
 			},
 		},
-		{
-			// Suspend from paused uploads the MEMORY local snapshot.
-			name: "preferredFidelity:MEMORY, suspend from paused",
-			tc: actorLifecycleTestCase{
-				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-				wantMemoryAfterPause:   2,
-				wantFileAfterPause:     2,
-				wantRootfsAfterPause:   2,
-				wantMemoryAfterSuspend: 3,
-				wantFileAfterSuspend:   3,
-				wantRootfsAfterSuspend: 3,
-				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-				suspendWhilePaused:     true,
-			},
-		},
-		{
-			// Suspend from paused uploads the VOLUMES local snapshot.
-			name: "preferredFidelity:VOLUMES, suspend from paused",
-			tc: actorLifecycleTestCase{
-				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
-				wantMemoryAfterPause:   1,
-				wantFileAfterPause:     2,
-				wantRootfsAfterPause:   1,
-				wantMemoryAfterSuspend: 1,
-				wantFileAfterSuspend:   3,
-				wantRootfsAfterSuspend: 1,
-				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
-				suspendWhilePaused:     true,
-			},
-		},
-		{
-			// Suspend from paused uploads the ROOTFS local snapshot.
-			name: "preferredFidelity:ROOTFS, suspend from paused",
-			tc: actorLifecycleTestCase{
-				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
-				wantMemoryAfterPause:   1,
-				wantFileAfterPause:     2,
-				wantRootfsAfterPause:   2,
-				wantMemoryAfterSuspend: 1,
-				wantFileAfterSuspend:   3,
-				wantRootfsAfterSuspend: 3,
-				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
-				suspendWhilePaused:     true,
-				microVMOnly:            true,
-			},
-		},
 	}
 
 	for _, test := range tests {
@@ -639,13 +593,6 @@ type actorLifecycleTestCase struct {
 
 	// microVMOnly skips the case outside the micro-VM environment.
 	microVMOnly bool
-
-	// suspendWhilePaused pauses the actor again before the suspend step, so
-	// the suspend runs from paused: it must upload the node-local pause
-	// snapshot instead of checkpointing a running workload. The counter
-	// expectations are unchanged — both origins capture the state after the
-	// second call.
-	suspendWhilePaused bool
 }
 
 func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, ateapipb.SnapshotFidelity) (*ateapipb.ActorTemplate, error), tc actorLifecycleTestCase) {
@@ -753,16 +700,6 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	//
 	// Suspending the actor
 	//
-	if tc.suspendWhilePaused {
-		t.Logf("Pausing Actor %q before suspending...", actorID)
-		if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			Actor:   &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
-		}); err != nil {
-			t.Fatalf("failed to pause Actor before suspend: %v", err)
-		}
-		waitForActorPaused(ctx, t, clients, actorID)
-	}
 	t.Logf("Suspending Actor %q...", actorID)
 	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
@@ -773,20 +710,6 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 	if diff := cmp.Diff(assignedRuntime2, durableSnapshot(suspended.GetActor().GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
 		t.Errorf("durable snapshot stamp after suspend mismatch (-assignment +snapshot):\n%s", diff)
-	}
-
-	if tc.suspendWhilePaused {
-		// The suspend must end the node pinning: a suspended actor's snapshot
-		// lives in object storage, not on a node.
-		suspendedActor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-		})
-		if err != nil {
-			t.Fatalf("failed to get suspended Actor: %v", err)
-		}
-		if hasLocalSnapshot(suspendedActor.GetStatus()) {
-			t.Errorf("suspended Actor still carries LocalSnapshot: %v", suspendedActor.GetStatus().GetSnapshots())
-		}
 	}
 
 	if tc.wantSnapshotFidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {

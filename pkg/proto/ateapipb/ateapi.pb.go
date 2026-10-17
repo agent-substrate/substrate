@@ -428,7 +428,10 @@ type DurabilityMode int32
 
 const (
 	DurabilityMode_DURABILITY_MODE_UNSPECIFIED DurabilityMode = 0
-	// Return only after the snapshot is complete in durable storage.
+	// Return only after the snapshot is complete in durable storage. Applies
+	// only when the call checkpoints a running actor: an actor that is already
+	// SUSPENDED is returned with the snapshot it holds, which may still be on
+	// its node.
 	DurabilityMode_DURABILITY_MODE_SYNCHRONOUS DurabilityMode = 1
 	// Return once the snapshot is captured on the node. The upload to durable
 	// storage continues in the background.

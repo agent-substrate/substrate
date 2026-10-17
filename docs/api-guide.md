@@ -374,16 +374,17 @@ a `Snapshot` with the following fields:
   sandbox image cannot be resumed under another.
 - `locality`: The node that holds the snapshot's local files. It is set when a
   pause completes and cleared once those files are deleted from the node (when
-  the actor is next paused or suspended, or is reverted). A resume restores from
-  the files without deleting them, so an actor resumed from pause still reports
-  where they are. A paused actor is an `ACTOR_STATE_SUSPENDED` actor whose
-  latest snapshot has `locality` and no `durableSnapshot`; it is pinned to that
-  node (`status.assignedNode`) until it is suspended or reverted.
+  atelet detaches the actor in the background, the actor is next paused or
+  suspended, or it is reverted). A resume restores from the files without
+  deleting them, so an actor resumed from pause still reports where they are. A
+  paused actor is an `ACTOR_STATE_SUSPENDED` actor whose latest snapshot has
+  `locality`; it is pinned to that node (`status.assignedNode`) until atelet
+  detaches it or it is reverted.
 - `durableSnapshot`: The copy in object storage, with its URI in
   `object.snapshotUri` and a `status` that is `PENDING` while the copy is being
-  written and `COMPLETED` once it can be restored from. A snapshot that exists
-  only on a node has no `durableSnapshot`. A tag's snapshot always has one, and
-  the tag can seed actors only once it is `COMPLETED`.
+  written and `COMPLETED` once it can be restored from. A pause records the copy
+  as `PENDING`, and atelet uploads it in the background. A tag's snapshot always
+  has one, and the tag can seed actors only once it is `COMPLETED`.
 - `sandboxRuntime`: The sandbox runtime and hardware compatibility attributes the
   guest state was captured under, copied from `status.workerAssignment.sandboxRuntime`
   when the checkpoint is taken. A resume that restores memory or rootfs state
@@ -400,11 +401,11 @@ a `Snapshot` with the following fields:
     worker and downgrades the restore to `SNAPSHOT_FIDELITY_VOLUMES`, preserving
     the snapshot's volume data while booting the guest fresh under the new
     worker's `defaultRuntime`.
-  - A local pause checkpoint (with `locality` and no `durableSnapshot`) is not
-    relaxed; the resume returns `RESOURCE_EXHAUSTED` and the actor remains
-    `PAUSED` on its node until a compatible worker there has room. Suspending
-    the actor uploads the checkpoint and lifts the node pin, after which its
-    next resume may fall back like a durable snapshot.
+  - A local pause checkpoint (with `locality`) is not relaxed; the resume
+    returns `RESOURCE_EXHAUSTED` and the actor stays paused on its node until a
+    compatible worker there has room, or until atelet detaches it. A detach
+    uploads the checkpoint, deletes the local files, and lifts the node pin,
+    after which the next resume may fall back like a durable snapshot.
 
   A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_VOLUMES` imposes
   no runtime placement constraint.
@@ -597,7 +598,9 @@ Activates a suspended or paused actor by restoring it onto a physical worker.
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
 *   **Request:** `SuspendActorRequest`
     *   `actor`: `ObjectRef` of the actor to suspend.
+    *   `options.mode`: (Optional) `DURABILITY_MODE_SYNCHRONOUS` returns once the snapshot is `COMPLETED` in object storage. `DURABILITY_MODE_ASYNCHRONOUS` (a pause) returns once the snapshot is captured on the worker's node, and atelet uploads it in the background. Unset runs a synchronous suspend.
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`, with its snapshot in `status.snapshots`.
+*   Called on an actor that is already `ACTOR_STATE_SUSPENDED`, it returns the actor as it is, in either mode. A paused actor's node-local snapshot is uploaded in the background, not by this call, so `status.snapshots` may still show it with `locality` and a `PENDING` `durableSnapshot`.
 *   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateTag` while the actor is still suspended.
 
 #### Snapshot lifetime

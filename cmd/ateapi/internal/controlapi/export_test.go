@@ -79,9 +79,9 @@ func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
 		{
 			Name:  "pause",
 			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-			Snapshot: func(*testing.T) *ateapipb.Snapshot {
-				// A pause in progress: node-local and not yet captured.
-				return newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-snap-1", "")
+			Snapshot: func(t *testing.T) *ateapipb.Snapshot {
+				// A pause in progress: a PENDING durable copy, not yet captured.
+				return newInProgressSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "local-snap-1")
 			},
 			// The actor is seeded SUSPENDING, so the pause skips its mark step
 			// and its first actor update is the finalize commit.

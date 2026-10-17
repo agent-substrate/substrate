@@ -182,15 +182,23 @@ func withUploadedPausedShape(node, uri string) func(*ateapipb.Actor) {
 	}
 }
 
-// withPauseInProgress seeds the shape a pause has between marking the actor
-// SUSPENDING and finalizing it: a node-local snapshot at the latest generation
-// that has no locality yet. Pair it with ACTOR_STATE_SUSPENDING.
-func withPauseInProgress() func(*ateapipb.Actor) {
+// newInProgressSnapshot builds the snapshot a suspend of either mode marks at
+// generation gen: a PENDING durable copy at a URI named uuid, and no locality
+// yet.
+func newInProgressSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFidelity, uuid string) *ateapipb.Snapshot {
+	t.Helper()
+	return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", uuid, someActorSnapshotURI(t, testStorageLocation, "team-a", uuid), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+}
+
+// withPauseInProgress seeds the shape a suspend of either mode has between
+// marking the actor SUSPENDING and finalizing it: a snapshot at the latest
+// generation with a PENDING durable copy and no locality yet. Pair it with
+// ACTOR_STATE_SUSPENDING.
+func withPauseInProgress(t *testing.T) func(*ateapipb.Actor) {
+	snap := newInProgressSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "pause-snap")
 	return func(a *ateapipb.Actor) {
 		a.Status.LastAssignedGeneration = 1
-		a.Status.Snapshots = []*ateapipb.Snapshot{
-			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", ""),
-		}
+		a.Status.Snapshots = []*ateapipb.Snapshot{proto.CloneOf(snap)}
 	}
 }
 

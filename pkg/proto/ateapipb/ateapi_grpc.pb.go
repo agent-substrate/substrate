@@ -92,8 +92,7 @@ type ControlClient interface {
 	// Update mutable fields on an existing Actor.
 	UpdateActor(ctx context.Context, in *UpdateActorRequest, opts ...grpc.CallOption) (*Actor, error)
 	// Suspend a given actor to a new snapshot. A running actor is checkpointed
-	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
-	// to the template's commit scope where required (Full capture, Data commit).
+	// on its worker. A SUSPENDED actor is returned as it is.
 	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
 	// Deprecated: Do not use.
 	// Pause a given actor: checkpoint it to its worker's node and leave it
@@ -673,8 +672,7 @@ type ControlServer interface {
 	// Update mutable fields on an existing Actor.
 	UpdateActor(context.Context, *UpdateActorRequest) (*Actor, error)
 	// Suspend a given actor to a new snapshot. A running actor is checkpointed
-	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
-	// to the template's commit scope where required (Full capture, Data commit).
+	// on its worker. A SUSPENDED actor is returned as it is.
 	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
 	// Deprecated: Do not use.
 	// Pause a given actor: checkpoint it to its worker's node and leave it

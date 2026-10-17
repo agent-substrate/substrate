@@ -422,17 +422,26 @@ stateDiagram-v2
     RUNNING --> SUSPENDING : SuspendActor
     SUSPENDING --> SUSPENDED : checkpoint complete
     RUNNING --> SUSPENDING : SuspendActor (async: keeps the snapshot on the node)
-    SUSPENDED --> SUSPENDING : SuspendActor (paused: uploads the node-local snapshot)
     SUSPENDED --> [*] : DeleteActor
 ```
 
 A pause and a suspend both pass through `SUSPENDING`, and a paused actor and
 a suspended actor are both `SUSPENDED`. They differ only in the shape of
-`status.snapshots`: after a pause the latest snapshot has a
-`locality` (the node holding its files) and no `durableSnapshot`, and
-`status.assignedNode` pins the actor to that node, so `ResumeActor` restores
-it there from the local files. After a suspend the latest snapshot has a
-`COMPLETED` `durableSnapshot` and the actor is pinned to no node.
+`status.snapshots`:
+
+  * After a pause (an asynchronous suspend), the latest snapshot has a
+    `locality` (the node holding its files) and a `PENDING`
+    `durableSnapshot`. `status.assignedNode` pins the actor to that node, so
+    `ResumeActor` restores it there from the local files.
+  * atelet uploads a paused actor's snapshot in the background
+    (`--snapshot-upload-delay`) and reports it, which marks the
+    `durableSnapshot` `COMPLETED`. `--snapshot-detach-delay` after the pause,
+    atelet deletes the local files and reports that too, which clears the
+    `locality` and `status.assignedNode`.
+  * After a synchronous suspend, the latest snapshot has a `COMPLETED`
+    `durableSnapshot` and the actor is pinned to no node.
+
+`SuspendActor` on a `SUSPENDED` actor returns it as it is, in either mode.
 
 ### Phase 1: Creation (`CreateActor`)
 
