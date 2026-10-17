@@ -84,19 +84,19 @@ func durableVolumeNames(spec *ateworkerpb.WorkloadSpec) []string {
 	return slices.Compact(names)
 }
 
-// pauseContainer is the sandbox root container. It only reaps, so it gets no
-// capabilities and mounts nothing.
-func pauseContainer() *ateworkerpb.Container {
-	return &ateworkerpb.Container{
-		Name:          ocispec.PauseContainer,
-		ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/pause"}},
+// noRootContainerArgs returns the flag that tells runsc the sandbox has no
+// root container. runsc refuses the flag for any other container.
+func noRootContainerArgs(containerName string) []string {
+	if containerName == ocispec.PauseContainer {
+		return []string{"-no-root-container"}
 	}
+	return nil
 }
 
 // writeSpec builds the container's OCI spec, shapes it for gVisor, and saves it
 // into the container's bundle.
 func (r *runsc) writeSpec(containerName string) error {
-	container := pauseContainer()
+	container := &ateworkerpb.Container{Name: ocispec.PauseContainer}
 	if containerName != ocispec.PauseContainer {
 		i := slices.IndexFunc(r.containers, func(c *ateworkerpb.Container) bool { return c.GetName() == containerName })
 		if i < 0 {
@@ -116,6 +116,17 @@ func (r *runsc) writeSpec(containerName string) error {
 	return ocispec.Save(ociBundlePath(r.actorDirs, containerName), spec)
 }
 
+// createArgs builds the argv for `runsc create <container>`. Factored out so
+// the argument construction can be unit-tested without executing runsc.
+func (r *runsc) createArgs(containerName string, additionalArgs []string) []string {
+	args := append(noRootContainerArgs(containerName),
+		"-bundle", ociBundlePath(r.actorDirs, containerName),
+		"-pid-file", pidFilePath(r.actorDirs, containerName),
+	)
+	args = append(args, additionalArgs...)
+	return r.buildArgs("create", containerName, args...)
+}
+
 func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error {
 	slog.InfoContext(ctx, "About to run runsc create", slog.String("container", containerName))
 
@@ -123,18 +134,7 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 		return fmt.Errorf("while writing the OCI spec for %q: %w", containerName, err)
 	}
 
-	args := make([]string, 0, 4+len(additionalArgs))
-	args = append(args,
-		"-bundle", ociBundlePath(r.actorDirs, containerName),
-		"-pid-file", pidFilePath(r.actorDirs, containerName),
-	)
-	args = append(args, additionalArgs...)
-
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
-		r.buildArgs("create", containerName, args...)...,
-	)
+	cmd := exec.CommandContext(ctx, r.path, r.createArgs(containerName, additionalArgs)...)
 	cmd.Stdout = out
 	cmd.Stderr = out
 
@@ -212,15 +212,16 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 // restoreArgs builds the argv for `runsc restore <container>`. Factored out so
 // the argument construction can be unit-tested without executing runsc.
 func (r *runsc) restoreArgs(containerName, checkpointPath string) []string {
-	return r.buildArgs("restore", containerName,
+	args := append(noRootContainerArgs(containerName),
 		"-bundle", ociBundlePath(r.actorDirs, containerName),
 		"-image-path", checkpointPath,
 		"-pid-file", pidFilePath(r.actorDirs, containerName),
 	)
+	return r.buildArgs("restore", containerName, args...)
 }
 
-// We take a checkpoint only of the root container of the sandbox, but we need
-// to call restore on each container, using the same checkpoint.
+// We take a checkpoint only of the sandbox, but we need to call restore on each
+// container, using the same checkpoint.
 func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, checkpointPath string) error {
 	slog.InfoContext(ctx, "About to run runsc restore", slog.String("container", containerName))
 

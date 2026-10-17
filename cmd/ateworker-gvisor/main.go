@@ -667,30 +667,26 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			}
 		}
 	}()
-	// Create and start pause container. The bundle rootfs is composed here —
-	// an overlay of the node's cached image layers plus the bundle's private
-	// upper — because mounting is ateworker's job (atelet runs with no
-	// capabilities); runsc's gofer resolves the mount in this pod's mount
-	// namespace.
-	if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer)); err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
-	}
 	containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-	// Attribute runsc CLI output and the pause container's stdio to the actor.
+	// Attribute the sandbox's runsc CLI output to the actor.
 	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
 	if err != nil {
-		return nil, fmt.Errorf("while starting pause log pipe: %w", err)
+		return nil, fmt.Errorf("while starting sandbox log pipe: %w", err)
 	}
 	defer pw.Close()
 	if err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, nil); err != nil {
-		return nil, fmt.Errorf("while creating pause container: %w", err)
+		return nil, fmt.Errorf("while creating the sandbox: %w", err)
 	}
 	if err := rcmd.cmdStart(ctx, pw, ocispec.PauseContainer); err != nil {
-		return nil, fmt.Errorf("while starting pause container: %w", err)
+		return nil, fmt.Errorf("while starting the sandbox: %w", err)
 	}
 
 	// Create and start each application container, each with its own log pipe so
 	// every line is tagged with the originating container (ate.actor.container.name).
+	// The bundle rootfs is composed here — an overlay of the node's cached
+	// image layers plus the bundle's private upper — because mounting is
+	// ateworker's job (atelet runs with no capabilities); runsc's gofer
+	// resolves the mount in this pod's mount namespace.
 	for _, ac := range req.GetSpec().GetContainers() {
 		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
 		if err != nil {
@@ -828,8 +824,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 			return nil
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-		// Checkpoint pause container (root of the sandbox), splitting durable-dir
-		// volumes into <checkpointPath>/fs when present.
+		// Checkpoint the sandbox, splitting durable-dir volumes into
+		// <checkpointPath>/fs when present.
 		checkpointFn = func(ctx context.Context) error {
 			sandbox, sbErr := openSandboxProcess(req.GetActorDirs())
 			if sbErr != nil {
@@ -840,7 +836,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 			err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
 			if err != nil {
 				timing.checkpoint = lap(&tLast)
-				return fmt.Errorf("while checkpointing pause: %w", err)
+				return fmt.Errorf("while checkpointing the sandbox: %w", err)
 			}
 			// the checkpoint stops the sandbox, runsc delete fails until it is reaped
 			if sandbox != nil {
@@ -898,10 +894,9 @@ func listSnapshotFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
-// stopContainers stops the actor's application containers. The pause container
-// is left running: it is the sandbox, and cleanupContainers deletes the others
-// through it before deleting it last. Killing it first leaves the sentry a
-// zombie until reaped, which runsc delete mistakes for a live sandbox.
+// stopContainers stops the actor's application containers. The sandbox is left
+// running: cleanupContainers deletes the others through it before deleting it
+// last. runsc kill does not apply to a sandbox with no root container.
 func stopContainers(ctx context.Context, rcmd containerRuntime, containers []*ateworkerpb.Container) {
 	for _, ctr := range containers {
 		_ = rcmd.cmdKill(ctx, ctr.GetName(), "SIGKILL")
@@ -910,7 +905,7 @@ func stopContainers(ctx context.Context, rcmd containerRuntime, containers []*at
 }
 
 func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []*ateworkerpb.Container) error {
-	// Application containers first, the pause (root) container last.
+	// Application containers first, the sandbox last.
 	names := make([]string, 0, len(containers)+1)
 	for _, ctr := range containers {
 		names = append(names, ctr.GetName())
@@ -1057,47 +1052,38 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		return nil, err
 	}
 
-	// Compose the pause rootfs before create (see RunWorkload). runsc restore
-	// only needs the rootfs to hold the correct content; whether it came from
-	// an untar or an overlay of cached layers is transparent to it.
-	err = imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer))
-	timing.pauseRootfs = lap(&tLast)
-	if err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
-	}
-
-	// Attribute runsc CLI output and the pause container's stdio to the actor.
+	// Attribute the sandbox's runsc CLI output to the actor.
 	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
 	if err != nil {
-		return nil, fmt.Errorf("while starting pause log pipe: %w", err)
+		return nil, fmt.Errorf("while starting sandbox log pipe: %w", err)
 	}
 	defer pw.Close()
 	switch fidelity {
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-		// Create and start pause container (cold boot with durable-dir volumes restored from fs/)
+		// Create and start the sandbox (cold boot with durable-dir volumes restored from fs/)
 		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
 		err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, restoreArgs)
 		timing.pauseCreate = lap(&tLast)
 		if err != nil {
-			return nil, fmt.Errorf("while creating pause container: %w", err)
+			return nil, fmt.Errorf("while creating the sandbox: %w", err)
 		}
 		err = rcmd.cmdStart(ctx, pw, ocispec.PauseContainer)
 		timing.pauseRestore = lap(&tLast)
 		if err != nil {
-			return nil, fmt.Errorf("while starting pause container: %w", err)
+			return nil, fmt.Errorf("while starting the sandbox: %w", err)
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-		// Create and restore pause container (restores both process/rootfs and fs/ durable-dir volumes)
+		// Create and restore the sandbox (restores both memory and fs/ durable-dir volumes)
 		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
 		err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, restoreArgs)
 		timing.pauseCreate = lap(&tLast)
 		if err != nil {
-			return nil, fmt.Errorf("while creating pause container: %w", err)
+			return nil, fmt.Errorf("while creating the sandbox: %w", err)
 		}
 		err = rcmd.cmdRestore(ctx, pw, ocispec.PauseContainer, checkpointDir)
 		timing.pauseRestore = lap(&tLast)
 		if err != nil {
-			return nil, fmt.Errorf("while restoring pause container: %w", err)
+			return nil, fmt.Errorf("while restoring the sandbox: %w", err)
 		}
 	}
 

@@ -23,7 +23,8 @@ import (
 	"go.ate.dev/substrate/internal/sizing"
 )
 
-// PauseContainer is the name of the sandbox root container. The underscore
+// PauseContainer is the runsc ID of the sandbox. runsc creates it with
+// -no-root-container, so it has no process and no rootfs. The underscore
 // keeps it outside the k8s-short-name an ActorTemplate container
 // name is drawn from, so no actor container can collide with it.
 const PauseContainer = "_pause"
@@ -51,13 +52,17 @@ func GVisorCgroupLeaf(actorUID, containerName string) string {
 }
 
 // ShapeGVisor adds runsc CRI annotations, durable-dir mount hints, host
-// resolv.conf, and per-container cgroups to the spec. It is idempotent.
+// resolv.conf, and per-container cgroups to the spec. It removes the process,
+// rootfs, and mounts from the sandbox spec. It is idempotent.
 func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 	if spec.Annotations == nil {
 		spec.Annotations = make(map[string]string)
 	}
 	spec.Annotations["io.kubernetes.cri.container-name"] = o.ContainerName
 	if o.ContainerName == PauseContainer {
+		spec.Process = nil
+		spec.Root = nil
+		spec.Mounts = nil
 		spec.Annotations["io.kubernetes.cri.container-type"] = "sandbox"
 		for _, v := range o.DurableVolumes {
 			spec.Annotations["dev.gvisor.spec.mount."+v+".type"] = "tmpfs"
@@ -67,24 +72,7 @@ func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 	} else {
 		spec.Annotations["io.kubernetes.cri.container-type"] = "container"
 		spec.Annotations["io.kubernetes.cri.sandbox-id"] = PauseContainer
-	}
-
-	// Insert resolv.conf before any volume bind mounts.
-	if !slices.ContainsFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == resolvConf }) {
-		i := slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Type == "bind" })
-		if i < 0 {
-			i = len(spec.Mounts)
-		}
-		source := o.ResolvConf
-		if source == "" {
-			source = resolvConf
-		}
-		spec.Mounts = slices.Insert(spec.Mounts, i, specs.Mount{
-			Destination: resolvConf,
-			Type:        "bind",
-			Source:      source,
-			Options:     []string{"ro"},
-		})
+		insertResolvConf(spec, o.ResolvConf)
 	}
 
 	if spec.Linux == nil {
@@ -95,4 +83,25 @@ func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 		spec.Linux.CgroupsPath = "/" + GVisorCgroupLeaf(o.ActorUID, o.ContainerName)
 	}
 	o.Size.ApplyToOCISpec(spec)
+}
+
+// insertResolvConf binds source at /etc/resolv.conf before any volume bind
+// mounts. An empty source uses the pod's file.
+func insertResolvConf(spec *specs.Spec, source string) {
+	if slices.ContainsFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == resolvConf }) {
+		return
+	}
+	i := slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Type == "bind" })
+	if i < 0 {
+		i = len(spec.Mounts)
+	}
+	if source == "" {
+		source = resolvConf
+	}
+	spec.Mounts = slices.Insert(spec.Mounts, i, specs.Mount{
+		Destination: resolvConf,
+		Type:        "bind",
+		Source:      source,
+		Options:     []string{"ro"},
+	})
 }

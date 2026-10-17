@@ -43,10 +43,10 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // sandbox as a whole.
 //
 // gVisor runs every container of a sandbox as threads inside one host process,
-// the sentry. runsc starts that process from the root container's create and
-// from inside that container's cgroup — container.createRoot wraps the sandbox
-// and gofer spawn in cgroup.RunInCgroup — so the sentry lands in the leaf of
-// the pause container, the first one RunWorkload and RestoreWorkload create.
+// the sentry. runsc starts that process from the sandbox's create and from
+// inside the sandbox's cgroup — container.createRoot wraps the sandbox spawn in
+// cgroup.RunInCgroup — so the sentry lands in the sandbox's leaf. RunWorkload
+// and RestoreWorkload create the sandbox first.
 //
 // The leaf is a direct child of the delegated scope rather than of ateworker's own
 // cgroup, because runsc resolves cgroupsPath against the parent of the cgroup

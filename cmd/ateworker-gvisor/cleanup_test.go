@@ -119,8 +119,8 @@ func TestCleanupContainers_SucceedsWhenEverythingIsAlreadyGone(t *testing.T) {
 	assertCalls(t, f, "state app", "list", "state _pause", "list")
 }
 
-// The pause container is the sandbox: it must outlive the deletes of the
-// containers inside it, so stopping the actor leaves it to cleanup.
+// The sandbox must outlive the deletes of the containers inside it, so
+// stopping the actor leaves it to cleanup.
 func TestStopContainersLeavesTheSandboxToCleanup(t *testing.T) {
 	f := newFakeRunsc()
 	stopContainers(context.Background(), f, appContainers)
