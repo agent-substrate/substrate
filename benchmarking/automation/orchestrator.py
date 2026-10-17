@@ -456,8 +456,9 @@ def deploy_workloads(
     # Empty keeps the default in workloads/deploy.sh (1 CPU). The scheduler
     # books the limit against worker CPU capacity, so dense suites set
     # actorCPU in tests.yaml to fit more actors per worker.
+    # str() because a whole number of cores (actorCPU: 1) parses as an int.
     if actor_cpu:
-        cmd += ["--actor-cpu", actor_cpu]
+        cmd += ["--actor-cpu", str(actor_cpu)]
     # Empty leaves the worker pods unsized; set workerMemory in tests.yaml to
     # control how many workers the scheduler packs onto a node.
     if worker_memory:

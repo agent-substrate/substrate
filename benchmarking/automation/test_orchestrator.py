@@ -107,6 +107,13 @@ class DeployWorkloadsTest(unittest.TestCase):
         self.assertEqual(cmd[i + 1], "12Gi")
 
     @mock.patch("orchestrator.run")
+    def test_whole_core_actor_cpu_is_a_string(self, run):
+        orchestrator.deploy_workloads(actor_cpu=1)
+        cmd = run.call_args.args[0]
+        i = cmd.index("--actor-cpu")
+        self.assertEqual(cmd[i + 1], "1")
+
+    @mock.patch("orchestrator.run")
     def test_all_options(self, run):
         orchestrator.deploy_workloads(
             worker_count=3,
