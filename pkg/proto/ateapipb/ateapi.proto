@@ -50,7 +50,8 @@ service Control {
   }
 
   // Revert an actor to SUSPENDED state at its durable snapshot.
-  // Only crashed, running or paused actors can be reverted.
+  // Only crashed or running actors, or suspended actors whose snapshot has
+  // not reached storage yet, can be reverted.
   rpc RevertActor(RevertActorRequest) returns (RevertActorResponse) {
     option (method).resource = "Actor";
   }

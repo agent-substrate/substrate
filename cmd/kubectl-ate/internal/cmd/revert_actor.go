@@ -31,7 +31,8 @@ var revertActorCmd = &cobra.Command{
 	Long: `Revert an actor to SUSPENDED, discarding its current execution.
 
 The actor's external snapshot is left untouched, so a later resume restores
-from it. Only crashed, running, or paused actors can be reverted.`,
+from it. Only crashed or running actors, or suspended actors whose snapshot
+has not reached storage yet, can be reverted.`,
 	Args: exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()

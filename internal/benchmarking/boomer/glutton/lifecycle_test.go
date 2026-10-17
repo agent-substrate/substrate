@@ -95,8 +95,8 @@ func TestGluttonIterate_NoneMode(t *testing.T) {
 	rt.iterate()
 
 	calls := fakeCtrl.recordedCalls()
-	if slices.Contains(calls, "SuspendActor") || slices.Contains(calls, "SuspendActorAsync") {
-		t.Errorf("did not expect SuspendActor or SuspendActorAsync during iterate in none mode, got: %v", calls)
+	if slices.Contains(calls, "SuspendActor") || slices.Contains(calls, "SuspendActor(async)") {
+		t.Errorf("did not expect a sync or async SuspendActor during iterate in none mode, got: %v", calls)
 	}
 	if got := countCalls(calls, "ResumeActor"); got != 1 {
 		t.Errorf("ResumeActor count across 2 iterations = %d, want 1 (first activation only); calls = %v", got, calls)

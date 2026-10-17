@@ -259,9 +259,8 @@ func (r *runtime) cycle(name string) {
 // recover suspends an actor asynchronously after a failed cycle, so it is cold
 // for the next one. It is load on the server like any other call, so it is
 // recorded, as SuspendActorAsyncRecovery to keep it apart from the measured
-// suspends. An actor
-// already paused fails it with FailedPrecondition; the actor is cold, which
-// is all recovery wants, so that counts as a success.
+// suspends. An actor already suspended fails it with FailedPrecondition; the
+// actor is cold, which is all recovery wants, so that counts as a success.
 func (r *runtime) recover(ctx context.Context, name string) {
 	_ = r.call(ctx, "SuspendActorAsyncRecovery", func(ctx context.Context) error {
 		_, err := r.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
