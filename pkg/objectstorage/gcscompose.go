@@ -182,10 +182,11 @@ func composeAll(ctx context.Context, bkt *storage.BucketHandle, object string, p
 				continue
 			}
 			mid := bkt.Object(fmt.Sprintf("%s.compose-%s-%d-%04d", object, runID, round, i))
+			// Before Run: it can fail after GCS committed mid.
+			mids = append(mids, mid)
 			if _, err := mid.ComposerFrom(group...).Run(ctx); err != nil {
 				return fmt.Errorf("while composing parts of %q: %w", object, err)
 			}
-			mids = append(mids, mid)
 			next = append(next, mid)
 		}
 		parts = next
