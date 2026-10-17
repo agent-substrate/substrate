@@ -21,7 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -58,19 +58,16 @@ func describeGCSError(err error) (ServiceError, bool) {
 
 type gcsClient struct {
 	client *storage.Client
-	// opts are how client was built, so the pool below is built the same way.
-	// A pooled client that authenticates differently from the one that opened
-	// an object fails partway through reading it.
-	opts []option.ClientOption
-	// pool holds extra clients so concurrent parts get their own connections;
-	// built on first use by uploadClient.
-	poolOnce sync.Once
-	pool     []*storage.Client
+	// pool holds extra clients so concurrent transfers get their own
+	// connections, see uploadClient. next is the round-robin position for
+	// single-request transfers, see nextClient.
+	pool []*storage.Client
+	next atomic.Uint64
 }
 
 // NewGCSClient returns a GCS-backed ObjectStorage. It builds its own
-// storage.Client from opts (and more from the same opts for the part-upload
-// pool, see uploadClient) rather than accepting one, because it installs a
+// storage.Client from opts (and more from the same opts for the connection
+// pool, see newPool) rather than accepting one, because it installs a
 // RetryAlways policy (see setRetry) that is only safe for this package's own
 // operations and must not leak onto a client shared with other code.
 func NewGCSClient(ctx context.Context, opts ...option.ClientOption) (ObjectStorage, error) {
@@ -79,7 +76,7 @@ func NewGCSClient(ctx context.Context, opts ...option.ClientOption) (ObjectStora
 		return nil, err
 	}
 	setRetry(client)
-	return &gcsClient{client: client, opts: opts}, nil
+	return &gcsClient{client: client, pool: newPool(ctx, opts)}, nil
 }
 
 // setRetry makes every operation on c retry transient errors (408, 429, 5xx)
@@ -131,9 +128,10 @@ func (g *gcsClient) PutObject(ctx context.Context, bucket, object string, reader
 	return g.putComposite(ctx, bucket, object, bytes.NewReader(head[:n]), reader)
 }
 
-// putSingle writes the whole body in one resumable request.
+// putSingle writes the whole body in one resumable request, on a pooled client so
+// the small objects a node uploads concurrently do not queue on one connection.
 func (g *gcsClient) putSingle(ctx context.Context, bucket, object string, reader io.Reader) error {
-	wc := g.client.Bucket(bucket).Object(object).NewWriter(ctx)
+	wc := g.nextClient().Bucket(bucket).Object(object).NewWriter(ctx)
 	wc.ChunkSize = uploadChunkSize
 	// io.Copy reports local read errors; wc.Close() reports the actual
 	// GCS upload (auth, permissions, transient). Join both so the caller

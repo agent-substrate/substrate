@@ -85,7 +85,7 @@ func (g *gcsClient) PutSparseFile(ctx context.Context, bucket, object string, f 
 	for i, ranges := range groups {
 		grp.Go(func() error {
 			// Each part uploads over its own connection; see uploadClient.
-			obj := g.uploadClient(gctx, i).Bucket(bucket).Object(parts[i].ObjectName())
+			obj := g.uploadClient(i).Bucket(bucket).Object(parts[i].ObjectName())
 			w := obj.NewWriter(gctx)
 			w.ChunkSize = partWriterChunk
 			if err := writeSparsePart(contextWriter{ctx: gctx, dst: w}, f, size, ranges, i == 0, i == len(groups)-1); err != nil {
