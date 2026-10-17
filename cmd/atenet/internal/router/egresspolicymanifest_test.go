@@ -162,6 +162,85 @@ func outerChain(t *testing.T, tree node) node {
 	return outer
 }
 
+// The CONNECT leg's ext_proc reads the actor's peer certificate from filter
+// state Envoy sets from the verified handshake. It stays on the outer chain:
+// the inner legs authenticate by the shared identity instead.
+func TestEgressManifestPassesPeerCertificateThroughFilterState(t *testing.T) {
+	tree := bootstrapTree(t, egressManifest)
+	outer := outerChain(t, tree)
+	tls := child(child(outer, "transport_socket"), "typed_config")
+	if required, _ := tls["require_client_certificate"].(bool); !required {
+		t.Error("outer TLS no longer requires an actor client certificate")
+	}
+	if _, ok := child(child(tls, "common_tls_context"), "validation_context")["trusted_ca"]; !ok {
+		t.Error("outer TLS has no actor identity trusted_ca")
+	}
+
+	h := hcm(outer)
+	if got := str(h, "forward_client_cert_details"); got != "SANITIZE" {
+		t.Errorf("forward_client_cert_details = %q, want SANITIZE", got)
+	}
+	if _, ok := h["set_current_client_cert_details"]; ok {
+		t.Error("outer HCM still generates certificate headers")
+	}
+
+	filters := list(h, "http_filters")
+	extAt := filterIndex(filters, extProcFilter)
+	if extAt < 0 {
+		t.Fatal("outer HCM has no ext_proc filter")
+	}
+	var entry node
+	entryAt := -1
+	for i, f := range filters {
+		if str(f, "name") != setFilterStateFilter {
+			continue
+		}
+		for _, v := range list(child(f, "typed_config"), "on_request_headers") {
+			if str(v, "object_key") == extproc.PeerCertificateFilterStateKey {
+				entry, entryAt = v, i
+			}
+		}
+	}
+	if entry == nil {
+		t.Fatalf("the egress chain never sets %s", extproc.PeerCertificateFilterStateKey)
+	}
+	if entryAt > extAt {
+		t.Errorf("%s is set after ext_proc, which would read it as absent", extproc.PeerCertificateFilterStateKey)
+	}
+	format := child(entry, "format_string")
+	if got := str(child(format, "text_format_source"), "inline_string"); got != "%DOWNSTREAM_PEER_CERT%" {
+		t.Errorf("%s format = %q, want %%DOWNSTREAM_PEER_CERT%%", extproc.PeerCertificateFilterStateKey, got)
+	}
+	if omit, _ := format["omit_empty_values"].(bool); !omit {
+		t.Errorf("%s does not omit empty values; an absent certificate would render as \"-\"", extproc.PeerCertificateFilterStateKey)
+	}
+	if got := str(entry, "shared_with_upstream"); got != "" {
+		t.Errorf("%s is shared with upstream (%s); only the CONNECT leg reads it", extproc.PeerCertificateFilterStateKey, got)
+	}
+	if got := strs(child(filters[extAt], "typed_config"), "request_attributes"); !slices.Contains(got, extproc.PeerCertificateFilterStateAttribute) {
+		t.Errorf("CONNECT ext_proc request_attributes = %v, want %q", got, extproc.PeerCertificateFilterStateAttribute)
+	}
+
+	for _, lc := range allChains(tree) {
+		name := str(lc.chain, "name")
+		for _, filter := range list(hcm(lc.chain), "http_filters") {
+			if str(filter, "name") == "envoy.filters.http.lua" {
+				t.Errorf("chain %q runs a Lua filter", name)
+			}
+			if str(filter, "name") != extProcFilter {
+				continue
+			}
+			cfg := child(filter, "typed_config")
+			if _, ok := child(cfg, "metadata_options")["forwarding_namespaces"]; ok {
+				t.Errorf("chain %q ext_proc forwards dynamic metadata", name)
+			}
+			if name != extproc.EgressFilterChainName && slices.Contains(strs(cfg, "request_attributes"), extproc.PeerCertificateFilterStateAttribute) {
+				t.Errorf("inner chain %q ext_proc requests %q", name, extproc.PeerCertificateFilterStateAttribute)
+			}
+		}
+	}
+}
+
 // Every chain that calls ext_proc must be one the handler knows as an egress
 // leg, and each manifest must have exactly the legs its topology implies.
 func TestEgressManifestsNameEveryExtProcChain(t *testing.T) {
@@ -269,7 +348,7 @@ func extProcOf(chain node) (node, int, []node) {
 // routes. A missing attribute reads as "absent" and denies every request.
 func TestEgressManifestsExtProcFilters(t *testing.T) {
 	required := map[string][]string{
-		extproc.EgressFilterChainName:          {extproc.FilterChainNameAttribute},
+		extproc.EgressFilterChainName:          {extproc.FilterChainNameAttribute, extproc.PeerCertificateFilterStateAttribute},
 		extproc.EgressCleartextFilterChainName: {extproc.FilterChainNameAttribute, extproc.ActorIdentityFilterStateAttribute, extproc.ConnectAuthorityFilterStateAttribute, extproc.OriginalDstIPAttribute, extproc.OriginalDstPortAttribute},
 		extproc.EgressTLSMITMFilterChainName:   {extproc.FilterChainNameAttribute, extproc.ActorIdentityFilterStateAttribute, extproc.ConnectAuthorityFilterStateAttribute, extproc.OriginalDstIPAttribute, extproc.OriginalDstPortAttribute},
 	}
@@ -722,6 +801,11 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesHashToTheInnerListener(t *test
 		}
 		for _, v := range list(child(f, "typed_config"), "on_request_headers") {
 			key := str(v, "object_key")
+			// Read by the CONNECT leg alone and deliberately not shared; see
+			// TestEgressManifestPassesPeerCertificateThroughFilterState.
+			if key == extproc.PeerCertificateFilterStateKey {
+				continue
+			}
 			gotKeys = append(gotKeys, key)
 			actionsByKey[key] = v
 			if key == extproc.EgressPolicyHashFilterStateKey {

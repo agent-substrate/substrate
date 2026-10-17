@@ -98,11 +98,9 @@ data:
                     path_config_source:
                       path: /etc/envoy/sds-servicedns-cert.yaml
                 validation_context:
-                  # Actors authenticate with an actor-identity client cert.
-                  # Envoy enforces chain, signature, and validity period here, so
-                  # an unsigned or expired actor cert never reaches ext_proc; the
-                  # ActorIdentity extension is checked there because Envoy cannot
-                  # read custom X.509 extensions.
+                  # Actors authenticate with a client-auth certificate carrying
+                  # the worker-for-actor URI SAN. Envoy checks its chain, signature,
+                  # and validity; ext_proc resolves the URI to a running actor.
                   trusted_ca: { filename: /run/actor-id-ca-certs/ca.crt }
           filters:
           - name: envoy.filters.network.http_connection_manager
@@ -120,10 +118,7 @@ data:
                 initial_connection_window_size: 1048576
               upgrade_configs:
               - upgrade_type: CONNECT
-              # TODO(liorlieberman): Can we make this cleaner?
-              forward_client_cert_details: SANITIZE_SET
-              set_current_client_cert_details:
-                chain: true
+              forward_client_cert_details: SANITIZE
               # Emit the access log as soon as the CONNECT tunnel is established
               # (atunnel keeps the tunnel open, so the default log-on-close would
               # not fire during the demo).
@@ -189,6 +184,17 @@ data:
                       text_format_source:
                         inline_string: "%REQ(:AUTHORITY)%"
                       omit_empty_values: true
+                  # The URL-encoded PEM of the verified peer certificate, for
+                  # the CONNECT leg's ext_proc to re-verify. Leaf only, which
+                  # suffices because the actor-identity CA signs with its root.
+                  # Not shared: the inner legs carry the identity above.
+                  - object_key: dev.ate.actor.peer_certificate
+                    factory_key: envoy.string
+                    skip_if_empty: true
+                    format_string:
+                      text_format_source:
+                        inline_string: "%DOWNSTREAM_PEER_CERT%"
+                      omit_empty_values: true
               # The CONNECT leg. The sidecar authenticates the actor from its
               # certificate (see cmd/atenet/internal/router/egress) and returns
               # the SNI rules in dev.ate.policy.egress and the dialed port in
@@ -215,6 +221,7 @@ data:
                   # instance does not serve, and is refused with a 404).
                   request_attributes:
                   - xds.filter_chain_name
+                  - filter_state['dev.ate.actor.peer_certificate']
                   processing_mode:
                     request_header_mode: SEND
                     response_header_mode: SKIP
@@ -1454,10 +1461,9 @@ spec:
         - --ateapi-address=dns:///api.ate-system.svc:443
         - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
         - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
-        # Same bundle Envoy validates the handshake against. The handler
-        # re-verifies the chain in Go and reads the ActorIdentity extension out
-        # of it; without this flag the router has no actor-identity roots and
-        # denies every egress CONNECT with a 503.
+        # Same roots Envoy uses for the handshake. The handler re-verifies the
+        # chain in Go and reads the worker-for-actor URI SAN; without this flag
+        # it has no actor-identity roots and denies every egress CONNECT with 503.
         - --actor-identity-ca-file=/run/actor-id-ca-certs/ca.crt
         # Disables Envoy-side tracing only (a span per CONNECT tunnel is
         # dataplane-volume noise). The ext-proc's own OTel SDK exports to

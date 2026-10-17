@@ -50,6 +50,16 @@ const (
 	// evaluates to read ActorIdentityFilterStateKey back out.
 	ActorIdentityFilterStateAttribute = "filter_state['" + ActorIdentityFilterStateKey + "']"
 
+	// PeerCertificateFilterStateKey holds the URL-encoded PEM of the actor's
+	// leaf certificate. The outer CONNECT chain sets it from
+	// %DOWNSTREAM_PEER_CERT% for the CONNECT leg's ext_proc only; it is not
+	// shared with the inner legs. A leaf suffices because the actor-identity
+	// CA signs actor certificates with its root.
+	PeerCertificateFilterStateKey = "dev.ate.actor.peer_certificate"
+	// PeerCertificateFilterStateAttribute is the CEL expression ext_proc
+	// evaluates to read PeerCertificateFilterStateKey back out.
+	PeerCertificateFilterStateAttribute = "filter_state['" + PeerCertificateFilterStateKey + "']"
+
 	// EgressMetadataNamespace is the dynamic-metadata namespace the CONNECT
 	// leg answers in. Envoy only keeps it when the outer ext_proc filter lists
 	// it under metadata_options.receiving_namespaces; the manifest tests check.
