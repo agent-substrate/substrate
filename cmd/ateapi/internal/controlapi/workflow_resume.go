@@ -855,6 +855,14 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			scope = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(scope)
+		// A snapshot the actor does not own is a tag's, borrowed at creation:
+		// immutable once published and read by every actor created from it,
+		// so atelet may serve its files from the node-local cache. The
+		// actor's own snapshot is replaced by its next suspend, so never.
+		sharing := ateletpb.SnapshotSharing_SNAPSHOT_SHARING_PRIVATE
+		if !src.SnapshotURI.OwnedBy(actorSnapshotOwner(actor)) {
+			sharing = ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED
+		}
 		req := &ateletpb.RestoreRequest{
 			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
@@ -868,6 +876,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 				Fidelity:     scope,
 				Object: &ateletpb.ObjectStorage{
 					SnapshotUri: src.SnapshotURI.String(),
+					Sharing:     sharing,
 				},
 			},
 			SandboxRuntime: sandboxRuntime,

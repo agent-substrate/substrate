@@ -71,6 +71,30 @@ func detachedState(snap *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
 	}}}
 }
 
+// ownSnapshot moves the seeded actor's only snapshot under the actor's own
+// UID, which the store assigns on create, and returns the stored snapshot.
+// Fixtures name someActorUID, which no seeded actor has.
+func ownSnapshot(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) *ateapipb.Snapshot {
+	t.Helper()
+	cur, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	updated, err := st.UpdateActor(ctx, actorRef, store.PreconditionFrom(cur), func(a *ateapipb.Actor) error {
+		snap := a.GetStatus().GetSnapshots()[0]
+		uri, err := resources.NewActorSnapshotURI(testStorageLocation, a.GetMetadata().GetAtespace(), a.GetMetadata().GetUid(), snap.GetUuid())
+		if err != nil {
+			return err
+		}
+		snap.DurableSnapshot.Object.SnapshotUri = uri.String()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateActor: %v", err)
+	}
+	return updated.GetStatus().GetSnapshots()[0]
+}
+
 func TestShouldDetachFromNode(t *testing.T) {
 	noRoom := apierror.ResourceExhausted("%w", errNoWorkerRoom)
 	pinned := func(state ateapipb.ActorState, node string) *ateapipb.Actor {
@@ -334,8 +358,12 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 		name     string
 		node1    bool
 		wantNode string
+		// wantSharing is what the restore declares about the snapshot's
+		// object: private for the actor's own durable copy, which atelet
+		// downloads; nothing for a local copy, which it does not.
+		wantSharing ateletpb.SnapshotSharing
 	}{
-		{name: "node-1 full: detaches and resumes on node-2", wantNode: "node-2"},
+		{name: "node-1 full: detaches and resumes on node-2", wantNode: "node-2", wantSharing: ateletpb.SnapshotSharing_SNAPSHOT_SHARING_PRIVATE},
 		{name: "node-1 has room: resumes there from the local copy", node1: true, wantNode: "node-1"},
 	}
 	for _, tt := range tests {
@@ -364,6 +392,10 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 				a.Status.LastAssignedGeneration = 1
 				a.Status.Snapshots = []*ateapipb.Snapshot{proto.CloneOf(snap)}
 			})
+			// The actor resumes from its own snapshot, which the restore
+			// declares private; the fixture's URI names someActorUID, so
+			// move it under the UID the store gave the actor.
+			snap = ownSnapshot(t, ctx, st, actorRef)
 
 			w, atelet := newDetachTestWorkflow(t, ctx, st)
 			addAteletOnNode(t, w, "node-2")
@@ -394,7 +426,10 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 				SnapshotUuid: snap.GetUuid(),
 				Generation:   snap.GetGeneration(),
 				Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-				Object:       &ateletpb.ObjectStorage{SnapshotUri: snap.GetDurableSnapshot().GetObject().GetSnapshotUri()},
+				Object: &ateletpb.ObjectStorage{
+					SnapshotUri: snap.GetDurableSnapshot().GetObject().GetSnapshotUri(),
+					Sharing:     tt.wantSharing,
+				},
 			}
 			if !proto.Equal(restore.GetSnapshot(), want) {
 				t.Errorf("Restore snapshot = %v, want %v", restore.GetSnapshot(), want)
