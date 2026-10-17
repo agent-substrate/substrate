@@ -27,11 +27,26 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 )
+
+// recheckInterval bounds how often get() stats the file: a cached value
+// younger than this is served with no syscall. Tests lower it via
+// SetRecheckIntervalForTesting to avoid waiting it out.
+var recheckInterval = time.Minute
+
+// SetRecheckIntervalForTesting overrides how often Loader and PoolLoader
+// re-stat their file. Returns a restore function for t.Cleanup; for tests
+// in other packages that need a file change visible immediately.
+func SetRecheckIntervalForTesting(d time.Duration) (restore func()) {
+	prev := recheckInterval
+	recheckInterval = d
+	return func() { recheckInterval = prev }
+}
 
 // Loader returns a tls.Config GetCertificate function serving the credential
 // bundle at path. The parse is cached and redone only when the file changes, so
-// a rotation is picked up on the next handshake.
+// a rotation is picked up within recheckInterval.
 func Loader(path string) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	c := &certCache{path: path}
 	return func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
@@ -55,27 +70,34 @@ type certCache struct {
 	mu sync.Mutex
 	// fi is the stat taken just before cert was parsed; cert is served while a
 	// fresh stat matches it.
-	fi   os.FileInfo
-	cert *tls.Certificate
+	fi      os.FileInfo
+	cert    *tls.Certificate
+	checked time.Time
 }
 
-// get returns the cached bundle, re-parsing when the file's identity
+// get returns the cached bundle, stat'ing the file at most once per
+// recheckInterval and re-parsing when that stat shows the file's identity
 // (os.SameFile), mtime or size has changed. The kubelet rotates projected
 // volumes by swapping a symlink, which changes identity; mtime and size catch
 // in-place rewrites.
 //
 // A change between the stat and the read stores newer content under the older
-// stat, so the next call re-reads: the cache lags a rotation by at most one
-// handshake. Errors are returned, never masked by the cache, and later calls
-// retry.
+// stat, so the next stat re-reads: a rotation is visible within one
+// recheckInterval of occurring, not necessarily on the very next call. Errors
+// are returned, never masked by the cache, and a later stat retries.
 func (c *certCache) get() (*tls.Certificate, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.cert != nil && time.Since(c.checked) < recheckInterval {
+		return c.cert, nil
+	}
 
 	fi, err := os.Stat(c.path)
 	if err != nil {
 		return nil, fmt.Errorf("while getting file info for credential bundle %q: %w", c.path, err)
 	}
+	c.checked = time.Now()
 	if c.cert != nil && os.SameFile(c.fi, fi) && fi.ModTime().Equal(c.fi.ModTime()) && fi.Size() == c.fi.Size() {
 		return c.cert, nil
 	}
@@ -92,9 +114,10 @@ func (c *certCache) get() (*tls.Certificate, error) {
 type poolCache struct {
 	path string
 
-	mu   sync.Mutex
-	fi   os.FileInfo
-	pool *x509.CertPool
+	mu      sync.Mutex
+	fi      os.FileInfo
+	pool    *x509.CertPool
+	checked time.Time
 }
 
 // get returns the cached trust pool, re-parsing as certCache.get does.
@@ -102,10 +125,15 @@ func (c *poolCache) get() (*x509.CertPool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.pool != nil && time.Since(c.checked) < recheckInterval {
+		return c.pool, nil
+	}
+
 	fi, err := os.Stat(c.path)
 	if err != nil {
 		return nil, fmt.Errorf("while getting file info for trust bundle %q: %w", c.path, err)
 	}
+	c.checked = time.Now()
 	if c.pool != nil && os.SameFile(c.fi, fi) && fi.ModTime().Equal(c.fi.ModTime()) && fi.Size() == c.fi.Size() {
 		return c.pool, nil
 	}

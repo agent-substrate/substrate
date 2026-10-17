@@ -52,32 +52,17 @@ func ServerCredentials(cfg Config) (credentials.TransportCredentials, error) {
 		return nil, errors.New("a caller identity is required")
 	}
 
-	loadPool := credbundle.PoolLoader(cfg.ClientCAFile)
-	if _, err := loadPool(); err != nil {
-		return nil, err
-	}
-	serverCert := credbundle.Loader(cfg.ServerBundle)
-	if _, err := serverCert(nil); err != nil {
-		return nil, err
-	}
-	verifySAN := verifyCallerSAN(cfg.CallerIdentity)
-
 	// A per-connection config picks up a rotated client CA without a restart.
-	return credentials.NewTLS(&tls.Config{
-		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
-			pool, err := loadPool()
-			if err != nil {
-				return nil, err
-			}
-			return &tls.Config{
-				MinVersion:       tls.VersionTLS13,
-				GetCertificate:   serverCert,
-				ClientAuth:       tls.RequireAndVerifyClientCert,
-				ClientCAs:        pool,
-				VerifyConnection: verifySAN,
-			}, nil
-		},
-	}), nil
+	tlsCfg, err := credbundle.PrepareServerTLSConfig(credbundle.ServerConfig{
+		CertPath:     cfg.ServerBundle,
+		ClientCAPath: cfg.ClientCAFile,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		VerifyPeer:   verifyCallerSAN(cfg.CallerIdentity),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return credentials.NewTLS(tlsCfg), nil
 }
 
 // verifyCallerSAN returns a VerifyConnection callback requiring expectedSAN
