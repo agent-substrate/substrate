@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/distribution/reference"
 	"go.ate.dev/substrate/internal/apierror"
@@ -234,9 +235,9 @@ func ValidateAssetHash(sha256Hash string) error {
 // location could sit inside the per-atespace or per-owner prefix another
 // location builds, and one owner's objects would fall under another's prefix,
 // covered by its grants and its cleanup. The segment is matched case-
-// insensitively and with surrounding dots and spaces trimmed, like the checks
-// below, so a backend that folds or trims names cannot turn a near-match into
-// the real one.
+// insensitively and with surrounding dots and Unicode white space trimmed, so
+// a backend that folds or trims names cannot turn a near-match into the real
+// one.
 //
 // This validates the base that many snapshots share, not any one snapshot's
 // URI; SnapshotURI is the type for the latter, and it applies this check when
@@ -247,16 +248,19 @@ func ValidateSnapshotLocation(location string) error {
 		return err
 	}
 	for segment := range strings.SplitSeq(u.Path, "/") {
-		if strings.EqualFold(strings.Trim(segment, ". "), atespacesPathSegment) {
+		if strings.EqualFold(strings.TrimFunc(segment, isDotOrSpace), atespacesPathSegment) {
 			return fmt.Errorf("invalid snapshot location %q: must not contain an %q path segment; snapshots are stored under <location>/%s/", location, atespacesPathSegment, atespacesPathSegment)
 		}
 	}
 	return nil
 }
 
+func isDotOrSpace(r rune) bool { return r == '.' || unicode.IsSpace(r) }
+
 // parseStorageURI checks the shape every snapshot location, owner prefix and
-// snapshot URI shares: a scheme, a bucket and a path that appending names to
-// cannot redirect.
+// snapshot URI shares: a host (the bucket) and a path that appending names to
+// cannot redirect. It does not check the scheme, which may be empty
+// ("//bucket/path").
 func parseStorageURI(location string) (*url.URL, error) {
 	u, err := url.Parse(location)
 	if err != nil {

@@ -180,6 +180,7 @@ func TestValidateSnapshotLocation(t *testing.T) {
 		{"valid without path", "gs://bucket", false},
 		// Scheme is storage-backend policy, not validated here.
 		{"valid alternate scheme", "s3://bucket/path", false},
+		{"valid without scheme", "//bucket/path", false},
 		{"empty", "", true},
 		{"missing bucket", "gs://", true},
 		{"no scheme or bucket", "bucket/path", true},
@@ -221,6 +222,14 @@ func TestValidateSnapshotLocation(t *testing.T) {
 		{"mixed-case atespaces", "gs://snaps/root/AteSpaces/team-a", true},
 		{"atespaces with a trailing dot", "gs://snaps/root/atespaces./team-a", true},
 		{"space-padded atespaces", "gs://snaps/root/%20atespaces%20/team-a", true},
+		{"no-break-space-padded atespaces", "gs://snaps/root/atespaces%C2%A0/team-a", true},
+		{"en-quad-padded atespaces", "gs://snaps/root/%E2%80%80atespaces/team-a", true},
+		{"ideographic-space-padded atespaces", "gs://snaps/root/atespaces%E3%80%80/team-a", true},
+		{"unescaped no-break-space-padded atespaces", "gs://snaps/root/atespaces\u00a0/team-a", true},
+		{"dot-and-space-padded atespaces", "gs://snaps/root/.%C2%A0atespaces.%E3%80%80/team-a", true},
+		// Only the ends are trimmed: a space inside the segment makes it a
+		// different name.
+		{"space inside atespaces", "gs://snaps/root/ate%C2%A0spaces/team-a", false},
 		{"atespaces as part of a segment", "gs://snaps/root/my-atespaces/atespaces-old", false},
 		{"actors without atespaces", "gs://snaps/root/team-a/actors/actor-a", false},
 		{"s3 path", "s3://snaps/root/team-a", false},
