@@ -541,9 +541,16 @@ Once a template is `Ready`, creating an actor logically (via `kubectl ate create
 ### Eviction
 A worker pod can go away while it hosts running actors: when its `WorkerPool` rolls to a new worker image or pod template, as in an [upgrade](upgrade.md), or scales down, when its node is drained, or when its Spot VM is reclaimed.
 
-When the pod gets `SIGTERM`, its worker stops accepting actors and sends `SIGTERM` to the main process of each container of every actor it hosts. Each actor then has 30 minutes, counted from the pod's `SIGTERM`, to be suspended. An actor suspended in that window keeps its state and resumes on another worker like any suspended actor.
+When the pod gets `SIGTERM`, its worker stops accepting actors and sends `SIGTERM` to the main process of each container of every actor it hosts. Each actor then has 30 minutes, counted from the pod's `SIGTERM`, to be suspended. The 30 minutes is the worker's shutdown budget, fixed in ateworker and kept shorter than the pod's one-hour termination grace period so that the worker, not the kubelet, kills what is left. An actor suspended in that window keeps its state and resumes on another worker like any suspended actor.
 
-Substrate does not suspend the actor for you. Whatever drives the actor, usually its harness, has to call `SuspendActor` with `DURABILITY_MODE_SYNCHRONOUS` (`kubectl ate suspend actor --mode=sync`) within the 30 minutes: an asynchronous suspend leaves the snapshot on a node that may be about to go away. Only the actor gets the `SIGTERM`, so it has to pass that on, for example on an endpoint the harness polls.
+Substrate does not suspend the actor for you. Whatever drives the actor, usually its harness, has to call `SuspendActor` with `DURABILITY_MODE_SYNCHRONOUS` (`kubectl ate suspend actor --mode=sync`) before those 30 minutes are up. An asynchronous suspend can lose the snapshot if the node goes away:
+
+- It returns once the snapshot is on the node.
+- atelet schedules the upload to object storage about `--snapshot-upload-delay` (5 minutes by default) after the snapshot is taken. Neither when the upload starts nor when it finishes is promised.
+- Until atelet detaches the actor, `--snapshot-detach-delay` (30 minutes by default, unrelated to the worker's 30 minutes), the actor stays pinned to the node and resumes there.
+- If the node goes away before the upload completes, the snapshot goes with it.
+
+Only the actor gets the `SIGTERM`, so it has to pass that on, for example on an endpoint the harness polls.
 
 Every actor that must keep its state through an eviction needs a `SIGTERM` handler that:
 
