@@ -3353,6 +3353,11 @@ func TestResumeActor_DataSnapshotIgnoresGolden(t *testing.T) {
 	if got := restoreReq.GetSnapshot().GetObject().GetSnapshotUri(); got != actorSnapshotURI {
 		t.Errorf("restore config snapshot uri = %q, want the actor's data snapshot %q", got, actorSnapshotURI)
 	}
+	// The actor's own snapshot is replaced by its next suspend: atelet must
+	// not cache it.
+	if got := restoreReq.GetSnapshot().GetObject().GetSharing(); got != ateletpb.SnapshotSharing_SNAPSHOT_SHARING_PRIVATE {
+		t.Errorf("restore of the actor's own snapshot declared sharing %v, want PRIVATE", got)
+	}
 }
 
 // TestSuspendActor_ReplacedSnapshotReleaseFailure verifies that object storage
@@ -6170,6 +6175,11 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	}
 	if got, want := goldenRestore.GetSnapshot().GetObject().GetSnapshotUri(), goldenSnapshotURI(t); got != want {
 		t.Fatalf("golden-actor RestoreRequest.SnapshotUri = %q, want golden %q", got, want)
+	}
+	// A borrowed golden snapshot is shared by every actor created from it,
+	// and the request must say so: atelet caches only declared-SHARED sources.
+	if got := goldenRestore.GetSnapshot().GetObject().GetSharing(); got != ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED {
+		t.Fatalf("golden-actor RestoreRequest.Sharing = %v, want SHARED", got)
 	}
 
 	// Free worker-b and have it advertise rtA in restorable_runtimes while
