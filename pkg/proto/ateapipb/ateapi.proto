@@ -1200,8 +1200,9 @@ message GoldenSnapshotStatus {
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef golden_tag = 1;
 
-  // snapshot_time is when the golden-actor warmup ends and the
-  // golden snapshot may be taken.
+  // snapshot_time is when uninterrupted warmup ends for the Actor identified
+  // by warmup_actor_uid and warmup_actor_version. It is set once RUNNING is
+  // observed and stays unset otherwise; capture waits for it.
   //
   // +k8s:optional
   google.protobuf.Timestamp snapshot_time = 2;
@@ -1212,6 +1213,17 @@ message GoldenSnapshotStatus {
   // +k8s:optional
   // +k8s:maxLength=4096
   string error_message = 3;
+
+  // warmup_actor_uid identifies the Actor whose RUNNING state starts the timer.
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string warmup_actor_uid = 4;
+
+  // warmup_actor_version is the RUNNING revision whose warmup is being timed.
+  // A different revision starts a fresh timer, even if the Actor is RUNNING again.
+  // +k8s:optional
+  // +k8s:minimum=1
+  int64 warmup_actor_version = 5;
 }
 
 message ActorTemplateStatus {
@@ -1661,7 +1673,7 @@ message CreateActorTemplateRequest {
   // version, timestamps) is ignored, as are the status fields.
   //
   // +k8s:required
-  // +k8s:customValidation # volume_mounts must reference declared volumes
+  // +k8s:customValidation # volume_mounts must reference declared volumes; VOLUMES fidelity requires a snapshot-capable mounted volume
   ActorTemplate actor_template = 1;
 }
 

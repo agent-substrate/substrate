@@ -61,7 +61,7 @@ func TestPauseActor_Finalized_WorkerGone(t *testing.T) {
 	})
 	// Intentionally NOT creating the worker in store, simulates worker already gone.
 
-	if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
+	if _, err := w.SuspendActor(ctx, actorRef, suspendAsync, nil); apierror.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("Async SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
 	}
 	if checkpoints, _ := atelet.calls(); checkpoints != 1 {
@@ -129,7 +129,7 @@ func TestPauseActor_Finalized_AlreadyCrashed(t *testing.T) {
 		s.WorkerAssignment = nil
 	})
 
-	if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
+	if _, err := w.SuspendActor(ctx, actorRef, suspendAsync, nil); apierror.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("Async SuspendActor error = %v, want FailedPrecondition for a CRASHED actor", err)
 	}
 	got := mustReadActor(t, ctx, st, actorRef)
@@ -172,7 +172,7 @@ func TestPauseActor_Finalized_KeepsCrashFromWorkerDelete(t *testing.T) {
 	seedWireWorker(t, ctx, st, assignmentOf(created))
 
 	w, _ := newWireCaptureWorkflow(t, workerDeletedDuringReleaseStore{Interface: st})
-	_, err := w.SuspendActor(ctx, actorRef, suspendAsync)
+	_, err := w.SuspendActor(ctx, actorRef, suspendAsync, nil)
 	assertConcurrentCrashKept(t, ctx, st, actorRef, err, "suspend failed: "+crashMessageWorkerPodGone)
 }
 
@@ -222,7 +222,7 @@ func TestPauseActor_Finalized_RecordsFidelity(t *testing.T) {
 			})
 			seedWireWorker(t, ctx, st, assignmentOf(created))
 
-			got, err := w.SuspendActor(ctx, actorRef, suspendAsync)
+			got, err := w.SuspendActor(ctx, actorRef, suspendAsync, nil)
 			if err != nil {
 				t.Fatalf("SuspendActor: %v", err)
 			}
@@ -289,7 +289,7 @@ func TestPauseActor_Finalized_MissingLocalSnapshotClearsAssignment(t *testing.T)
 		s.Snapshots = nil
 	})
 
-	if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
+	if _, err := w.SuspendActor(ctx, actorRef, suspendAsync, nil); apierror.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("Async SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
 	}
 	got := mustReadActor(t, ctx, st, actorRef)
@@ -357,7 +357,7 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 
 			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedState, tc.seedOpts...)
 
-			actor, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, suspendAsync)
+			actor, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, suspendAsync, nil)
 			if tc.wantErr {
 				if got := apierror.Code(err); got != codes.FailedPrecondition {
 					t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
@@ -401,7 +401,7 @@ func TestPauseActor_MarkedPausing_StateMatrix(t *testing.T) {
 			a.Status.WorkerAssignment = wireTestAssignment()
 		})
 
-		_, err := w.SuspendActor(ctx, actorRef, suspendAsync)
+		_, err := w.SuspendActor(ctx, actorRef, suspendAsync, nil)
 		stored := mustReadActor(t, ctx, st, actorRef)
 		if seedState == ateapipb.ActorState_ACTOR_STATE_RUNNING {
 			assertStoppedAtDial(t, err)
@@ -442,7 +442,7 @@ func TestPauseActor_MarkedPausing_ReentrySkipsPauseInProgress(t *testing.T) {
 		a.Status.AssignedNode = "node-1"
 		a.Status.WorkerAssignment = wireTestAssignment()
 	})
-	paused, err := w.SuspendActor(ctx, actorRef, suspendAsync)
+	paused, err := w.SuspendActor(ctx, actorRef, suspendAsync, nil)
 	if err != nil {
 		t.Fatalf("Async SuspendActor on a pause in progress: %v", err)
 	}
@@ -468,7 +468,7 @@ func TestPauseActor_MarkedPausing_ReentrySkipsPauseInProgress(t *testing.T) {
 			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap", "gs://snapshots/s", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 		}
 	})
-	_, err = w.SuspendActor(ctx, suspendingRef, suspendAsync)
+	_, err = w.SuspendActor(ctx, suspendingRef, suspendAsync, nil)
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Errorf("Async SuspendActor on a suspend in progress: code = %v, want FailedPrecondition (err: %v)", got, err)
 	}
@@ -522,7 +522,7 @@ func TestPauseActor_AteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 			storetest.MustCreateActor(t, ctx, persistence, actor)
 
 			w := newMarkOnlyWorkflow(persistence)
-			_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, suspendAsync)
+			_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, suspendAsync, nil)
 			assertStoppedAtDial(t, err)
 
 			stored := mustReadActor(t, ctx, persistence, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
@@ -552,7 +552,7 @@ func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 
 	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDING, withPauseInProgress())
 
-	_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, suspendAsync)
+	_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, suspendAsync, nil)
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 	}
@@ -582,7 +582,7 @@ func TestPauseActor_MarkedPausing_GoldenAtespaceRejected(t *testing.T) {
 		a.Status.AssignedNode = "node-1"
 		a.Status.WorkerAssignment = wireTestAssignment()
 	})
-	_, err := w.SuspendActor(ctx, actorRef, suspendAsync)
+	_, err := w.SuspendActor(ctx, actorRef, suspendAsync, nil)
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("apierror.Code = %v (err %v), want FailedPrecondition", got, err)
 	}
@@ -628,7 +628,7 @@ func TestPauseActor_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 				},
 			})
 
-			if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); err != nil {
+			if _, err := w.SuspendActor(ctx, actorRef, suspendAsync, nil); err != nil {
 				t.Fatalf("SuspendActor: %v", err)
 			}
 			req := atelet.checkpointRequest()
