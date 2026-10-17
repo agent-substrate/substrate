@@ -159,6 +159,46 @@ func TestRuntimePrewarmProcess(t *testing.T) {
 	}
 }
 
+// TestRuntimePrewarmOnce pins that a runtime is prewarmed once: a hash
+// whose prewarm succeeded is skipped by every later enqueue, while one whose
+// prewarm failed is queued again.
+func TestRuntimePrewarmOnce(t *testing.T) {
+	useTempAssetScratch(t)
+	ctx := context.Background()
+	index := newRuntimeIndex()
+	good := indexedTestRuntime(t, index, []byte("runsc"), "")
+	// The store serves the same bytes for every asset, so this one's digest
+	// never matches and its prewarm fails.
+	bad := indexedTestRuntime(t, index, []byte("another runsc"), "")
+	herder := &Atelet{sandboxAssetCache: newTestAssetCache(t), anonGCSClient: fakeObjectStorage{data: []byte("runsc")}}
+	p := newRuntimePrewarmer(index, herder, newTestImageStore(t))
+
+	drain := func() {
+		for p.queue.Len() > 0 {
+			hash, _ := p.queue.Get()
+			p.process(ctx, hash)
+		}
+	}
+	p.enqueue(good)
+	p.enqueue(good) // a second pod of the pool: collapsed while it waits
+	if got := p.queue.Len(); got != 1 {
+		t.Fatalf("queue holds %d items after two enqueues of one hash, want 1", got)
+	}
+	drain()
+	p.enqueue(good) // a later pod, re-plan or retry: already prewarmed
+	if got := p.queue.Len(); got != 0 {
+		t.Errorf("queue holds %d items after enqueueing a prewarmed hash, want 0", got)
+	}
+
+	p.enqueue(bad)
+	drain()
+	p.queue.Forget(bad) // drop the retry backoff for the test
+	p.enqueue(bad)
+	if got := p.queue.Len(); got != 1 {
+		t.Errorf("queue holds %d items after enqueueing a hash whose prewarm failed, want 1 (not skipped)", got)
+	}
+}
+
 // TestRuntimePrewarmFillsBothCaches covers a successful prewarm: the asset
 // lands in the asset cache with nothing left in the scratch dir, and the
 // pause image lands in the image cache.
@@ -234,14 +274,23 @@ func TestRuntimePrewarmAttemptTimeout(t *testing.T) {
 	}
 }
 
-// TestSyncPodPrewarmsDefaultRuntime pins the hand-off: after a worker's
-// file is written, its default runtime, and only that, is handed to the
-// prewarmer.
+// TestSyncPodPrewarmsDefaultRuntime pins the hand-off: a worker's default
+// runtime, and only that, is handed to the prewarmer, and before the build
+// fetches anything for its probes, so the probes are the prewarm's head
+// start. A build that then fails has still handed it over.
 func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	pod := workerPod("pod-a", "pool")
 	s := newTestSyncer(t, pod, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
 	var prewarmed []string
 	s.prewarm = func(hash string) { prewarmed = append(prewarmed, hash) }
+	s.assets = &fakeAssetFetcher{
+		fn: func(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+			if len(prewarmed) == 0 {
+				t.Error("the build fetched for a probe before the default runtime was handed to the prewarmer")
+			}
+			return newTestAssetFetcher().ensureSandboxAssets(ctx, rec, "")
+		},
+	}
 	if err := s.syncPod(context.Background(), pod); err != nil {
 		t.Fatalf("syncPod: %v", err)
 	}
@@ -255,6 +304,22 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	}
 	if len(cr.hashes) < 2 {
 		t.Fatalf("config advertises %d runtimes, want several so the test proves only the default is prewarmed", len(cr.hashes))
+	}
+
+	// A build that fails on the default's probe writes nothing, but the
+	// prewarm was queued before it started.
+	s = newTestSyncer(t, pod, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+	prewarmed = nil
+	s.prewarm = func(hash string) { prewarmed = append(prewarmed, hash) }
+	s.runCPUFeatures = func(context.Context, string) ([]string, error) { return nil, errors.New("runsc failed") }
+	if err := s.syncPod(context.Background(), pod); err == nil {
+		t.Fatal("syncPod with the default's probe failing = nil, want an error")
+	}
+	if len(prewarmed) != 1 || prewarmed[0] != cr.defaultHash {
+		t.Errorf("prewarmed %v after a failed build, want the default runtime %s once", prewarmed, cr.defaultHash)
+	}
+	if _, ok := s.index.worker("pod-a"); ok {
+		t.Error("a failed build registered the worker")
 	}
 }
 
@@ -328,10 +393,11 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 	if n := cachedAssets(t, root); n != 1 {
 		t.Fatalf("asset cache holds %d assets after prewarm, want 1", n)
 	}
-	if !exists(s.runtimesFile("pod-a")) {
-		t.Error("the worker's runtimes file was not written")
-	}
-	if left, err := os.ReadDir(ateletpath.SandboxAssetScratchDir); err != nil || len(left) != 0 {
-		t.Errorf("prewarm left %d scratch dirs behind (%v)", len(left), err)
-	}
+	// The prewarm is queued before the build probes, so it can finish
+	// before the file is written; the syncer catches up on its own.
+	waitFor(t, "the worker's runtimes file to be written", func() bool { return exists(s.runtimesFile("pod-a")) })
+	waitFor(t, "the prewarm's and the probe's scratch dirs to be removed", func() bool {
+		left, err := os.ReadDir(ateletpath.SandboxAssetScratchDir)
+		return err == nil && len(left) == 0
+	})
 }

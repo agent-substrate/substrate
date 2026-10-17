@@ -72,12 +72,19 @@ type runtimePrewarmer struct {
 	index  *runtimeIndex
 	assets sandboxAssetFetcher
 	images *imagecache.Store
-	// queue carries runtime hashes. It dedupes while an item waits, so the
-	// workers of one pool, and pools sharing one runtime, cost one fetch,
-	// and it rate-limits retries after failures. A single worker drains it,
-	// which also serializes downloads so concurrent prewarms never compete
-	// for node bandwidth.
+	// queue carries runtime hashes. It dedupes while an item waits, and it
+	// rate-limits retries after failures. A single worker drains it, which
+	// also serializes downloads so concurrent prewarms never compete for
+	// node bandwidth.
 	queue workqueue.TypedRateLimitingInterface[string]
+	// prewarmed holds the hashes whose prewarm succeeded since atelet
+	// started. The queue forgets an item once it is done, and every pod of
+	// a pool, every re-plan and every retry of a sync hands the same default
+	// over again; enqueue skips what is here, so a runtime is prewarmed
+	// once rather than re-staged and logged once per pod. Content-addressed
+	// hashes make that safe: the bytes a hash names never change.
+	mu        sync.Mutex
+	prewarmed map[string]bool
 	// done is closed when the worker goroutine exits; wait blocks on it.
 	done chan struct{}
 }
@@ -92,15 +99,30 @@ func newRuntimePrewarmer(index *runtimeIndex, assets sandboxAssetFetcher, images
 		// millisecond-based controller default.
 		queue: workqueue.NewTypedRateLimitingQueue(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)),
-		done: make(chan struct{}),
+		prewarmed: map[string]bool{},
+		done:      make(chan struct{}),
 	}
 }
 
-// enqueue asks for the runtime advertised under hash to be prewarmed. The
-// syncer calls it after writing a worker's versions file; the hash is in
-// the index by then.
+// enqueue asks for the runtime advertised under hash to be prewarmed,
+// unless it already was. The syncer calls it as it plans a worker, after
+// registering the hash in the index.
 func (p *runtimePrewarmer) enqueue(hash string) {
+	p.mu.Lock()
+	already := p.prewarmed[hash]
+	p.mu.Unlock()
+	if already {
+		return
+	}
 	p.queue.Add(hash)
+}
+
+// markPrewarmed records that hash's prewarm succeeded, so enqueue skips it
+// from now on.
+func (p *runtimePrewarmer) markPrewarmed(hash string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.prewarmed[hash] = true
 }
 
 // run drains the queue until ctx ends.
@@ -141,6 +163,7 @@ func (p *runtimePrewarmer) process(ctx context.Context, hash string) {
 	err := p.prewarm(ctx, hash, rt)
 	prewarmFinished(hash, err)
 	if err == nil {
+		p.markPrewarmed(hash)
 		p.queue.Forget(hash)
 		return
 	}

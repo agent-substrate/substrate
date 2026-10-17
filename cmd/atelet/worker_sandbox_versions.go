@@ -478,11 +478,12 @@ func bundleHash(rec *sandboxAssetsRecord, pauseDigest string) string {
 //   - plan: resolve the pool's config and its versions for this node
 //   - hash: hash each version's runtime, and make each resolvable by its
 //     hash before the file can let the worker register it
+//   - prewarm: have the default runtime's assets fetched, off this
+//     goroutine, so the probe below is its head start and the file never
+//     waits on a download
 //   - build: probe what a snapshot taken on each runtime must find again
 //   - write: replace the file if its content changed, then record what
 //     the worker now advertises in the index
-//   - prewarm: have the default runtime's assets fetched, off this
-//     goroutine, so the file never waits on a download
 //
 // A file missing restorable runtimes for a transient reason is written all
 // the same, and the errIncomplete from build is returned so finish retries.
@@ -500,6 +501,17 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 	if err := s.index.registerRuntimes(plan.config, hashed); err != nil {
 		return err
 	}
+	// Queued now rather than after the write: the build fetches and probes
+	// every restorable version serially, longest on a fresh node, and the
+	// file it ends with is what lets the worker take its first actor. The
+	// prewarm gets that whole duration to finish first.
+	if s.prewarm != nil {
+		for _, v := range hashed {
+			if v.isDefault {
+				s.prewarm(v.hash)
+			}
+		}
+	}
 	want, buildErr := s.buildFile(ctx, plan, hashed)
 	if buildErr != nil && !errors.Is(buildErr, errIncomplete) {
 		return buildErr
@@ -513,13 +525,6 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 	// today; a pool that runs several will yield one plan per class here.
 	if err := s.index.register(string(pod.UID), advertisedClass{class: plan.sandboxClass, config: plan.config, hashed: writtenVersions(hashed, want)}); err != nil {
 		return err
-	}
-	if s.prewarm != nil {
-		for _, v := range hashed {
-			if v.isDefault {
-				s.prewarm(v.hash)
-			}
-		}
 	}
 	return buildErr
 }
