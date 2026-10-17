@@ -478,7 +478,7 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // FailedPrecondition.
 // ateletState is the state atelet returned from Checkpoint or
 // PromoteSnapshot, applied in the same update. A state that conflicts with the
-// record fails the step before it frees the worker.
+// record crashes the actor.
 func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, ateletState *ateletpb.ActorSnapshotState) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
@@ -523,12 +523,14 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		}
 	}
 
-	// Apply atelet's state before freeing the worker, so a state that
-	// conflicts with the record fails the step while a retry can still call
-	// atelet again.
+	// A state that conflicts with the record crashes the actor. Atelet has
+	// already destroyed the workload, so a retried Checkpoint can't succeed.
 	applied := proto.CloneOf(latestActor.GetStatus())
 	if err := applyCheckpointState(ctx, applied, ateletState); err != nil {
-		return nil, err
+		slog.WarnContext(ctx, "Snapshot state atelet returned conflicts with the record",
+			slog.Any("actor", actorRef),
+			slog.Any("err", err))
+		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
 	}
 
 	// 1. Free the worker (if it hasn't been freed yet)
