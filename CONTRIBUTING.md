@@ -47,11 +47,12 @@ to review and update than large PRs that touch many different parts of the
 codebase.
 
 2) While we welcome new contributors, we are really focused on the minimal
-capabilities needed to make this project useful. Before you start a new
-contribution, please discuss it with us first (if there is an issue open,
-comment there and if not, open one). We want to make sure that your work is
-aligned with our near-term goals for the project and that we are not
-duplicating work that is already in flight.
+capabilities needed to make this project useful. Small fixes and cleanups can
+go straight to a PR. Before you start anything larger, please discuss it with
+us first (if there is an issue open, comment there and if not, open one), and
+search open PRs so we are not duplicating work that is already in flight. We
+want to make sure that your work is aligned with our near-term goals for the
+project.
 
 3) PRs which are not aligned with our near-term goals may be closed without
 extensive review. We are not trying to be discouraging, but we need to make
@@ -85,8 +86,11 @@ All submissions, including submissions by project members, require review. We
 use [GitHub pull requests](https://docs.github.com/articles/about-pull-requests)
 for this purpose.
 
-All code changes should be accompanied by tests. We will not merge code that
-does not have tests, and we will not merge code that causes tests to fail.
+Changes that add or alter behavior should come with tests, and existing tests
+should be updated when behavior they cover changes. We will not merge code that
+causes tests to fail. Every test runs in CI on every PR, so please don't add
+tests whose only purpose is to raise coverage numbers. Tests should be
+inherently valuable for future changes.
 
 Follow the [PostgreSQL schema evolution rules](docs/dev/postgresql-schema-evolution.md) for each application schema change.
 
