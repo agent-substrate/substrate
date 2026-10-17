@@ -24,10 +24,12 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/snapshotstate"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
@@ -566,6 +568,54 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 		}
 		if node := got.GetStatus().GetAssignedNode(); node != reportNode {
 			t.Errorf("assigned node = %q, want %q", node, reportNode)
+		}
+	})
+
+	// The report atelet sends once a background detach has made a paused
+	// actor's latest snapshot durable and deleted its local copies, converted
+	// as atelet converts it, passes validation and releases the actor from the
+	// node: the snapshot is no longer local, and the actor no longer pinned.
+	// The upload is recorded from the detach report alone, as when the
+	// upload's own report was dropped.
+	t.Run("a detach report clears the local snapshot and the assigned node", func(t *testing.T) {
+		actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+			s.AssignedNode = reportNode
+			s.LastAssignedGeneration = 4
+			s.Snapshots = []*ateapipb.Snapshot{localOnly(4, reportNode)}
+		})
+		paused := mustActorSnapshotURI(t, tmpl, actor, snapName(4))
+		detached := snapshotstate.ToAPI(&ateletpb.ActorSnapshotState{
+			LatestDurable: &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
+				SnapshotUuid: snapName(4),
+				Generation:   4,
+				Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				Object:       &ateletpb.ObjectStorage{SnapshotUri: paused.String()},
+			}},
+		})
+		req := &ateapipb.ReportActorSnapshotStateRequest{Actor: actorRef.ToObjectRef(), ActorUid: uid, State: detached}
+		if errs := apivalidation.ValidateReportActorSnapshotStateRequest(ctx, req); len(errs) > 0 {
+			t.Fatalf("atelet's detach report fails validation: %v", errs)
+		}
+		if err := w.ApplyReportedSnapshotState(ctx, actorRef, uid, reportNode, detached); err != nil {
+			t.Fatalf("ApplyReportedSnapshotState() failed: %v", err)
+		}
+		got, err := persistence.GetActor(ctx, actorRef)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := localOnly(4, "")
+		want.DurableSnapshot = &ateapipb.SnapshotStorage{
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: paused.String()},
+		}
+		if diff := cmp.Diff([]*ateapipb.Snapshot{want}, got.GetStatus().GetSnapshots(), protocmp.Transform()); diff != "" {
+			t.Errorf("snapshots mismatch (-want +got):\n%s", diff)
+		}
+		if node := got.GetStatus().GetAssignedNode(); node != "" {
+			t.Errorf("assigned node = %q, want none", node)
+		}
+		if local := findLatestLocalSnapshot(got.GetStatus()); local != nil {
+			t.Errorf("latest local snapshot = %v, want none", local)
 		}
 	})
 }
