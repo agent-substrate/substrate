@@ -543,7 +543,7 @@ A worker pod can go away while it hosts running actors: when its `WorkerPool` ro
 
 When the pod gets `SIGTERM`, its worker stops accepting actors and sends `SIGTERM` to the main process of each container of every actor it hosts. Each actor then has 30 minutes, counted from the pod's `SIGTERM`, to be suspended. An actor suspended in that window keeps its state and resumes on another worker like any suspended actor.
 
-Substrate does not suspend the actor for you. Whatever drives the actor, usually its harness, has to call `SuspendActor` with `DURABILITY_MODE_SYNCHRONOUS` (`kubectl ate suspend`) within the 30 minutes: an asynchronous suspend leaves the snapshot on a node that may be about to go away. Only the actor gets the `SIGTERM`, so it has to pass that on, for example on an endpoint the harness polls.
+Substrate does not suspend the actor for you. Whatever drives the actor, usually its harness, has to call `SuspendActor` with `DURABILITY_MODE_SYNCHRONOUS` (`kubectl ate suspend actor --mode=sync`) within the 30 minutes: an asynchronous suspend leaves the snapshot on a node that may be about to go away. Only the actor gets the `SIGTERM`, so it has to pass that on, for example on an endpoint the harness polls.
 
 Every actor that must keep its state through an eviction needs a `SIGTERM` handler that:
 

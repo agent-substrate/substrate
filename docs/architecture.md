@@ -409,7 +409,7 @@ sequenceDiagram
     A-->>Tunnel: response
     Tunnel-->>Gateway: response
     Gateway-->>Client: response
-    Note over API,Store: later: an explicit SuspendActor checkpoints back to storage and frees the worker
+    Note over API,Store: later: an explicit SuspendActor checkpoints the actor and frees the worker
 ```
 
 An Actor's `state` moves through these states (UML state machine diagram):
@@ -419,9 +419,9 @@ stateDiagram-v2
     [*] --> SUSPENDED : CreateActor
     SUSPENDED --> RESUMING : ResumeActor
     RESUMING --> RUNNING : restore / boot complete
-    RUNNING --> SUSPENDING : SuspendActor
+    RUNNING --> SUSPENDING : SuspendActor (sync)
     SUSPENDING --> SUSPENDED : checkpoint complete
-    RUNNING --> SUSPENDING : SuspendActor (async: keeps the snapshot on the node)
+    RUNNING --> SUSPENDING : SuspendActor (async, the default: keeps the snapshot on the node)
     SUSPENDED --> [*] : DeleteActor
 ```
 

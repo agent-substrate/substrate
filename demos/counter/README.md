@@ -167,7 +167,7 @@ kubectl ate get actor my-counter-1 -a ate-demo-counter
 ```
 </details>
 
-3. When finished, you can manually suspend the actor back to snapshot storage:
+3. When finished, you can manually suspend the actor:
 <details>
 <summary>Suspend on MicroVM</summary>
 ```bash
@@ -181,6 +181,9 @@ kubectl ate suspend actor my-counter-microvm-1 -a ate-demo-counter-microvm
 kubectl ate suspend actor my-counter-1 -a ate-demo-counter
 ```
 </details>
+
+The snapshot stays on the worker's node and is uploaded to snapshot storage in
+the background. Add `--mode=sync` to wait for the upload instead.
 
 Repeat the `curl` from step 1 and the actor resumes from its snapshot —
 possibly on a different worker — with **both** counters continuing from where

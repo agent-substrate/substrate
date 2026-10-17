@@ -87,7 +87,7 @@ The form fields are the flags documented in
 `benchmarking/locust/common/memload_config.py`; the boomer workers fetch the
 values from the master on each spawn. Let it run for about 90 seconds (≈10
 cycles per user), then stop the test. For a single operation without locust,
-`kubectl ate suspend actor <name> -a benchmark-workloads` and
+`kubectl ate suspend actor <name> -a benchmark-workloads --mode=sync` and
 `kubectl ate resume actor <name> -a benchmark-workloads` on any actor in the
 atespace produce one record pair each.
 

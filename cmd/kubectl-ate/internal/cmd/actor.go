@@ -52,6 +52,7 @@ var (
 	pauseActorAtespaceFlag   string
 	resumeActorAtespaceFlag  string
 	suspendActorAtespaceFlag string
+	suspendActorModeFlag     string
 	logsActorAtespaceFlag    string
 	logsActorFollowFlag      bool
 	logsActorContainerFlag   string
@@ -178,7 +179,7 @@ var pauseActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		actorRef := resources.ActorRef{Atespace: pauseActorAtespaceFlag, Name: args[0]}
-		resp, err := apiClient.SuspendActor(ctx, buildSuspendActorRequest(actorRef, true))
+		resp, err := apiClient.SuspendActor(ctx, buildSuspendActorRequest(actorRef, ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS))
 		if err != nil {
 			return fmt.Errorf("failed to pause actor: %w", err)
 		}
@@ -216,6 +217,10 @@ var suspendActorCmd = &cobra.Command{
 	Short: "Suspend an actor",
 	Args:  exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		mode, err := parseSuspendMode(suspendActorModeFlag)
+		if err != nil {
+			return wrapUsageError(err)
+		}
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
 		if err != nil {
@@ -224,7 +229,7 @@ var suspendActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		actorRef := resources.ActorRef{Atespace: suspendActorAtespaceFlag, Name: args[0]}
-		resp, err := apiClient.SuspendActor(ctx, buildSuspendActorRequest(actorRef, false))
+		resp, err := apiClient.SuspendActor(ctx, buildSuspendActorRequest(actorRef, mode))
 		if err != nil {
 			return fmt.Errorf("failed to suspend actor: %w", err)
 		}
@@ -240,14 +245,26 @@ var logsActorsCmd = &cobra.Command{
 	RunE:  runLogsActor,
 }
 
-// buildSuspendActorRequest builds the request behind both pause and suspend.
-// A pause leaves the snapshot on the node, a suspend waits for it to reach
-// object storage.
-func buildSuspendActorRequest(actorRef resources.ActorRef, pause bool) *ateapipb.SuspendActorRequest {
-	mode := ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS
-	if pause {
-		mode = ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS
+// Values of kubectl ate suspend actor --mode.
+const (
+	suspendModeAsync = "async"
+	suspendModeSync  = "sync"
+)
+
+// parseSuspendMode maps the --mode flag value to a durability mode.
+func parseSuspendMode(mode string) (ateapipb.DurabilityMode, error) {
+	switch mode {
+	case suspendModeAsync:
+		return ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, nil
+	case suspendModeSync:
+		return ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, nil
+	default:
+		return ateapipb.DurabilityMode_DURABILITY_MODE_UNSPECIFIED, fmt.Errorf("invalid --mode %q: must be one of %s, %s", mode, suspendModeAsync, suspendModeSync)
 	}
+}
+
+// buildSuspendActorRequest builds the request behind both pause and suspend.
+func buildSuspendActorRequest(actorRef resources.ActorRef, mode ateapipb.DurabilityMode) *ateapipb.SuspendActorRequest {
 	return &ateapipb.SuspendActorRequest{
 		Actor:   actorRef.ToObjectRef(),
 		Options: &ateapipb.SuspendOptions{Mode: mode},
@@ -763,6 +780,7 @@ func init() {
 	resumeCmd.AddCommand(resumeActorCmd)
 
 	suspendActorCmd.Flags().StringVarP(&suspendActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
+	suspendActorCmd.Flags().StringVar(&suspendActorModeFlag, "mode", suspendModeAsync, "how the snapshot is made durable: async (return once the snapshot is on the worker's node, and upload it in the background) or sync (return once the snapshot is in object storage)")
 	suspendCmd.AddCommand(suspendActorCmd)
 
 	logsActorsCmd.Flags().BoolVarP(&logsActorFollowFlag, "follow", "f", false, "stream logs continuously")
