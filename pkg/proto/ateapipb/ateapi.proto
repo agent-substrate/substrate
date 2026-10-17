@@ -48,7 +48,10 @@ service Control {
   // Pause a given actor: checkpoint it to its worker's node and leave it
   // SUSPENDED with that node-local snapshot, pinned to the node. A paused
   // actor is told from a suspended one by its snapshots, not its state.
+  //
+  // Deprecated: use SuspendActor with DURABILITY_MODE_ASYNCHRONOUS.
   rpc PauseActor(PauseActorRequest) returns (PauseActorResponse) {
+    option deprecated = true;
     option (method).resource = "Actor";
   }
 

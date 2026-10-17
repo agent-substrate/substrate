@@ -1660,6 +1660,7 @@ func TestValidation_Actor(t *testing.T) {
 	})
 
 	t.Run("PauseActor", func(t *testing.T) {
+		//nolint:staticcheck // PauseActor is still served until it is removed.
 		_, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
@@ -4224,6 +4225,7 @@ func TestSuspendActorAsynchronous(t *testing.T) {
 		{
 			name: "PauseActor",
 			suspend: func(ctx context.Context, client ateapipb.ControlClient, ref *ateapipb.ObjectRef) error {
+				//nolint:staticcheck // PauseActor is still served until it is removed.
 				_, err := client.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: ref})
 				return err
 			},
