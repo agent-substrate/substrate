@@ -76,6 +76,7 @@ func init() {
 		Name:       "glutton",
 		LocustFile: "glutton.py",
 		UserClass:  userClass,
+		Config:     gluttonCodec,
 		Init:       initPing,
 	})
 }
@@ -181,7 +182,7 @@ func (r *taskRuntime) iterate() {
 	// actor stays live for the full window. With the default zero window
 	// the actor is hibernated right after the first ping.
 	deadline := time.Now().Add(r.liveWait())
-	maxPings := max(r.cfg.Dyn.Load().MaxPingsPerWake, 1)
+	maxPings := max(dynconfig.Get[gluttonKnobs](r.cfg.Dyn).MaxPingsPerWake, 1)
 	actor.ping(ctx)
 	for sent := 1; sent < maxPings; sent++ {
 		gap := minPingGap + time.Duration(rand.Float64()*float64(maxPingGap-minPingGap))
@@ -261,24 +262,15 @@ func (r *taskRuntime) shutdown(ctx context.Context) {
 // dynamicWait is the gap between suspending one actor and resuming the
 // VU's next one, drawn uniformly from [MinWait, MaxWait].
 func (r *taskRuntime) dynamicWait() time.Duration {
-	cfg := r.cfg.Dyn.Load()
-	return uniformWait(cfg.MinWait, cfg.MaxWait)
+	return dynconfig.Get[gluttonKnobs](r.cfg.Dyn).WaitTime.Draw()
 }
 
 // liveWait is how long an actor stays resumed between its first ping and
 // its suspend, drawn uniformly from [MinLive, MaxLive]. The default zero
 // window suspends right after the ping.
 func (r *taskRuntime) liveWait() time.Duration {
-	cfg := r.cfg.Dyn.Load()
-	return uniformWait(cfg.MinLive, cfg.MaxLive)
-}
-
-// uniformWait draws from [lo, hi]; an inverted or empty range yields lo.
-func uniformWait(lo, hi time.Duration) time.Duration {
-	if hi <= lo {
-		return lo
-	}
-	return lo + time.Duration(rand.Float64()*float64(hi-lo))
+	knobs := dynconfig.Get[gluttonKnobs](r.cfg.Dyn)
+	return dynconfig.Uniform(knobs.MinLive.Duration(), knobs.MaxLive.Duration())
 }
 
 // gluttonUser is one VU (boomer goroutine). It owns --actors-per-user actors
@@ -459,7 +451,7 @@ func (u *gluttonActor) resume(ctx context.Context) error {
 // lifecycle mode selects: PauseActor keeps the snapshot on the node, while
 // SuspendActor writes it to durable storage.
 func (u *gluttonActor) hibernate(ctx context.Context) error {
-	if u.cfg.Dyn.Load().LifecycleMode == dynconfig.LifecycleModePause {
+	if dynconfig.Get[gluttonKnobs](u.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModePause {
 		return u.pause(ctx)
 	}
 	return u.suspend(ctx)
@@ -600,7 +592,7 @@ func (u *gluttonActor) ensureRAMFilled(ctx context.Context) {
 	if u.ramFilled {
 		return
 	}
-	target := u.cfg.Dyn.Load().MemTarget
+	target := dynconfig.Get[gluttonKnobs](u.cfg.Dyn).MemTarget
 	if target == "" {
 		u.ramFilled = true
 		return
@@ -631,8 +623,8 @@ func (u *gluttonActor) ensureCPULoad(ctx context.Context) {
 	if u.cpuLoaded {
 		return
 	}
-	dyn := u.cfg.Dyn.Load()
-	if dyn.CPUCores == 0 {
+	knobs := dynconfig.Get[gluttonKnobs](u.cfg.Dyn)
+	if knobs.CPUCores == 0 {
 		u.cpuLoaded = true
 		return
 	}
@@ -642,8 +634,8 @@ func (u *gluttonActor) ensureCPULoad(ctx context.Context) {
 	start := time.Now()
 
 	err := u.postProto(ctx, useCPUPath, &gluttonpb.UseCPURequest{
-		NumCores:  int32(dyn.CPUCores),
-		DutyCycle: dyn.CPUDutyCycle,
+		NumCores:  int32(knobs.CPUCores),
+		DutyCycle: knobs.CPUDutyCycle,
 	}, &gluttonpb.UseCPUResponse{})
 	clientLatency := time.Since(start)
 	boomerutil.LogSampledTrace(span, "GluttonUseCPU", clientLatency, boomerutil.SourceClient, err)
@@ -665,7 +657,7 @@ func (u *gluttonActor) ensureCPULoad(ctx context.Context) {
 // iteration, only after the fill has succeeded, and reports as its own
 // GluttonChurnRAM stats row.
 func (u *gluttonActor) churnRAM(ctx context.Context) {
-	churn := u.cfg.Dyn.Load().MemChurn
+	churn := dynconfig.Get[gluttonKnobs](u.cfg.Dyn).MemChurn
 	if churn == "" || !u.ramFilled {
 		return
 	}
@@ -691,7 +683,7 @@ func (u *gluttonActor) churnRAM(ctx context.Context) {
 // memory; on an eagerly-restored actor it degenerates to a fast in-memory
 // scan, so the two restore modes are directly comparable.
 func (u *gluttonActor) readRAM(ctx context.Context) {
-	read := u.cfg.Dyn.Load().MemRead
+	read := dynconfig.Get[gluttonKnobs](u.cfg.Dyn).MemRead
 	if read == "" || !u.ramFilled {
 		return
 	}

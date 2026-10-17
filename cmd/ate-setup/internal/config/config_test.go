@@ -714,8 +714,9 @@ func TestLoadActorJWTIssuer(t *testing.T) {
 	}{
 		{name: "unset", want: "https://idp.ate-system.svc"},
 		{name: "unset in a relocated install", namespace: "team-a", want: "https://idp.team-a.svc"},
-		{name: "set is used as given", env: "https://idp.example.com/prod/", want: "https://idp.example.com/prod/"},
+		{name: "set is used as given", env: "https://idp.example.com", want: "https://idp.example.com"},
 		{name: "not https", env: "http://idp.example.com", wantErr: true},
+		{name: "path", env: "https://idp.example.com/prod", wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			loadEnv(t)

@@ -744,3 +744,44 @@ func TestTrackerDetachDoesNotPruneOnceCancelled(t *testing.T) {
 		t.Errorf("state = %v, want s1 still local, and durable", st)
 	}
 }
+
+// TestTrackerDetachActsForTheActor checks that a detach's upload names the
+// actor the snapshot was committed for, across an atelet restart that reloads
+// the snapshot state file, and that a promote keeps it on the local copy.
+func TestTrackerDetachActsForTheActor(t *testing.T) {
+	t.Run("after a restart", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		first := newIdleTestTracker(t, store)
+		ref := testRef("s1", 1, first.clock.Now())
+		ref.Actor = testActor
+		first.CommitLocal(trackedActorUID, ref)
+
+		// A new tracker over the same node directories reloads the state file.
+		tr := newStoreTracker(t, store)
+		tr.Start()
+		if _, err := tr.Detach(t.Context(), trackedActorUID); err != nil {
+			t.Fatalf("detach: %v", err)
+		}
+		if got := store.actorOf("s1"); got != testActor {
+			t.Errorf("upload acted for %+v, want %+v", got, testActor)
+		}
+	})
+
+	t.Run("kept by a promote", func(t *testing.T) {
+		store := newFakeSnapshotStore()
+		tr := newTestTracker(t, store)
+		ref := testRef("s1", 1, tr.clock.Now())
+		ref.Actor = testActor
+		tr.CommitLocal(trackedActorUID, ref)
+		promoted := testRef("s1", 1, time.Time{})
+		promoted.Actor = testActor
+		tr.CommitPromoted(trackedActorUID, promoted)
+
+		tr.lock(trackedActorUID)
+		got := tr.findLocked(trackedActorUID).LatestLocal.Actor
+		tr.unlock(trackedActorUID)
+		if got != testActor {
+			t.Errorf("local copy's actor after promote = %+v, want %+v", got, testActor)
+		}
+	})
+}

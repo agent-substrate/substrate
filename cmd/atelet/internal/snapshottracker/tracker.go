@@ -30,8 +30,9 @@ import (
 // Store moves an actor's snapshots between this node and object storage.
 type Store interface {
 	// UploadLocalSnapshot makes ref durable at its snapshot's URI from its
-	// local copy. With the local copy gone, it succeeds without uploading if a
-	// manifest is already committed there. It reports whether it uploaded.
+	// local copy, acting for ref.Actor. With the local copy gone, it succeeds
+	// without uploading if a manifest is already committed there. It reports
+	// whether it uploaded.
 	UploadLocalSnapshot(ctx context.Context, actorUID string, ref SnapshotRef) (bool, error)
 }
 

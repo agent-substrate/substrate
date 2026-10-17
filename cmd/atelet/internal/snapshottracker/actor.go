@@ -20,6 +20,7 @@ import (
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -36,6 +37,10 @@ type SnapshotRef struct {
 	// object storage. Zero unless it did. It is only valid for durable
 	// snapshots, so LatestLocal never carries it.
 	UploadTime time.Time
+	// Actor is the actor the snapshot belongs to, so a background upload of
+	// the snapshot can act for the actor the way an RPC for it would. The
+	// Checkpoint or PromoteSnapshot that commits the snapshot sets it.
+	Actor resources.ActorRef
 }
 
 // snapshotRefJSON is a SnapshotRef as the snapshot state file stores it.
@@ -44,6 +49,8 @@ type snapshotRefJSON struct {
 	Snapshot   json.RawMessage `json:"snapshot"`
 	CommitTime time.Time       `json:"commitTime,omitzero"`
 	UploadTime time.Time       `json:"uploadTime,omitzero"`
+	Atespace   string          `json:"atespace,omitempty"`
+	ActorName  string          `json:"actorName,omitempty"`
 }
 
 // MarshalJSON encodes r as a snapshotRefJSON.
@@ -52,7 +59,7 @@ func (r SnapshotRef) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(snapshotRefJSON{Snapshot: snap, CommitTime: r.CommitTime, UploadTime: r.UploadTime})
+	return json.Marshal(snapshotRefJSON{Snapshot: snap, CommitTime: r.CommitTime, UploadTime: r.UploadTime, Atespace: r.Actor.Atespace, ActorName: r.Actor.Name})
 }
 
 // UnmarshalJSON decodes a snapshotRefJSON into r.
@@ -65,7 +72,7 @@ func (r *SnapshotRef) UnmarshalJSON(data []byte) error {
 	if err := protojson.Unmarshal(rec.Snapshot, snap); err != nil {
 		return err
 	}
-	*r = SnapshotRef{Snapshot: snap, CommitTime: rec.CommitTime, UploadTime: rec.UploadTime}
+	*r = SnapshotRef{Snapshot: snap, CommitTime: rec.CommitTime, UploadTime: rec.UploadTime, Actor: resources.ActorRef{Atespace: rec.Atespace, Name: rec.ActorName}}
 	return nil
 }
 
@@ -196,7 +203,7 @@ func (a *actorSnapshots) recordDurable(d *SnapshotRef) {
 // keeps snap's Snapshot and CommitTime only: UploadTime is only valid for
 // durable snapshots.
 func (a *actorSnapshots) setLatestLocal(snap SnapshotRef, detachAt time.Time) {
-	a.LatestLocal = &SnapshotRef{Snapshot: proto.CloneOf(snap.Snapshot), CommitTime: snap.CommitTime}
+	a.LatestLocal = &SnapshotRef{Snapshot: proto.CloneOf(snap.Snapshot), CommitTime: snap.CommitTime, Actor: snap.Actor}
 	a.DetachAt = detachAt
 }
 

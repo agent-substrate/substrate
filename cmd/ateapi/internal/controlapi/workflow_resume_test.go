@@ -1066,6 +1066,10 @@ type capturingAtelet struct {
 	// whatever else happens while the workload checkpoints. Its error fails
 	// the RPC.
 	onCheckpoint func(ctx context.Context) error
+	// checkpointState is the snapshot state Checkpoint returns.
+	checkpointState *ateletpb.ActorSnapshotState
+	// promoteState is the snapshot state PromoteSnapshot returns.
+	promoteState *ateletpb.ActorSnapshotState
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1093,7 +1097,9 @@ func (f *capturingAtelet) Checkpoint(ctx context.Context, req *ateletpb.Checkpoi
 			return nil, err
 		}
 	}
-	return &ateletpb.CheckpointResponse{}, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &ateletpb.CheckpointResponse{State: proto.CloneOf(f.checkpointState)}, nil
 }
 
 func (f *capturingAtelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (*ateletpb.PromoteSnapshotResponse, error) {
@@ -1101,7 +1107,7 @@ func (f *capturingAtelet) PromoteSnapshot(ctx context.Context, req *ateletpb.Pro
 	defer f.mu.Unlock()
 	f.promote = proto.Clone(req).(*ateletpb.PromoteSnapshotRequest)
 	f.promotes++
-	return &ateletpb.PromoteSnapshotResponse{}, nil
+	return &ateletpb.PromoteSnapshotResponse{State: proto.CloneOf(f.promoteState)}, nil
 }
 
 // calls returns how many Checkpoint and PromoteSnapshot RPCs were received.
@@ -1729,14 +1735,17 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	}
 }
 
-// publishContextVolumePlugin hands back a fixed publish context, standing in
-// for a driver whose node plugin needs attachment metadata.
+// publishContextVolumePlugin records AttachVolume requests and hands back a
+// fixed publish context, standing in for a driver whose node plugin needs
+// attachment metadata.
 type publishContextVolumePlugin struct {
 	volume.VolumePluginControlPlane
 	publishContext map[string]string
+	attachCalls    []volume.AttachVolumeRequest
 }
 
 func (p *publishContextVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	p.attachCalls = append(p.attachCalls, req)
 	return volume.AttachVolumeResponse{PublishContext: p.publishContext}, nil
 }
 
@@ -1762,10 +1771,11 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 		t.Fatalf("GetActor: %v", err)
 	}
 
+	plugin := &publishContextVolumePlugin{publishContext: map[string]string{"devicePath": "/dev/xvdba"}}
 	w := &ActorWorkflow{
 		store: persistence,
 		pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{
-			"mock": &publishContextVolumePlugin{publishContext: map[string]string{"devicePath": "/dev/xvdba"}},
+			"mock": plugin,
 		}},
 	}
 	worker := &ateapipb.Worker{NodeName: "node-1"}
@@ -1786,6 +1796,10 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 	want := map[string]map[string]string{"mounted": {"devicePath": "/dev/xvdba"}}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("publish contexts mismatch (-want +got):\n%s", diff)
+	}
+	wantCalls := []volume.AttachVolumeRequest{{VolumeID: "storage-mounted", Node: "node-1"}}
+	if diff := cmp.Diff(wantCalls, plugin.attachCalls); diff != "" {
+		t.Errorf("attachCalls mismatch (-want +got):\n%s", diff)
 	}
 
 	stored, err := persistence.GetActor(ctx, actorRef)

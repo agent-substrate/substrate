@@ -37,6 +37,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
@@ -53,8 +54,27 @@ func init() {
 		Name:       "resumepaused",
 		LocustFile: "resumepaused.py",
 		UserClass:  userClass,
+		Config:     knobsCodec,
 		Init:       initResumePaused,
 	})
+}
+
+// knobs is the ResumePausedUser slice of the runtime config. The master
+// populates target_rps from the --target-rps locust flag
+// (common/rate_config.py) or the ladder step's @rps suffix.
+type knobs struct {
+	// TargetRPS is the cold resumes per second this worker paces to; zero
+	// means unpaced.
+	TargetRPS float64 `json:"target_rps"`
+}
+
+var knobsCodec = dynconfig.Typed[knobs]{
+	Validate: func(k knobs) error {
+		if k.TargetRPS < 0 {
+			return fmt.Errorf("target_rps cannot be negative: %v", k.TargetRPS)
+		}
+		return nil
+	},
 }
 
 // initResumePaused ensures the atespace and returns the task. Each user
@@ -269,7 +289,7 @@ func (r *runtime) startCycle() bool {
 // current TargetRPS first. Zero means unpaced.
 func (r *runtime) pace(ctx context.Context) {
 	want := rate.Inf
-	if target := r.cfg.Dyn.Load().TargetRPS; target > 0 {
+	if target := dynconfig.Get[knobs](r.cfg.Dyn).TargetRPS; target > 0 {
 		want = rate.Limit(target)
 	}
 	if r.limiter.Limit() != want {

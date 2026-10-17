@@ -858,7 +858,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	}
 	// The snapshot commits on this node once worker has written it, in either
 	// upload mode.
-	snap := snapshottracker.SnapshotRef{Snapshot: req.GetSnapshot(), CommitTime: time.Now()}
+	snap := snapshottracker.SnapshotRef{Snapshot: req.GetSnapshot(), CommitTime: time.Now(), Actor: actorRef}
 
 	s.systemInfoVolumes.Deregister(actorUID)
 
@@ -1127,7 +1127,7 @@ func (s *Atelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 	}
 	defer endCheckpoint()
 
-	snap := snapshottracker.SnapshotRef{Snapshot: req.GetSnapshot()}
+	snap := snapshottracker.SnapshotRef{Snapshot: req.GetSnapshot(), Actor: resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}}
 	alreadyDurable, err := s.snapshots.IsDurable(req.GetActorUid(), snap)
 	if err != nil {
 		return nil, err
@@ -1214,7 +1214,7 @@ func (st *trackerStore) UploadLocalSnapshot(ctx context.Context, actorUID string
 		return false, apierror.InvalidArgument("%v", err)
 	}
 	localDir := ateletpath.LocalSnapshotDir(actorUID, ref.Snapshot.GetSnapshotUuid())
-	req := &ateletpb.PromoteSnapshotRequest{ActorUid: actorUID, Snapshot: ref.Snapshot}
+	req := &ateletpb.PromoteSnapshotRequest{Atespace: ref.Actor.Atespace, ActorName: ref.Actor.Name, ActorUid: actorUID, Snapshot: ref.Snapshot}
 	_, uploaded, err := st.s.uploadLocalCheckpointDir(ctx, req, localDir, uri)
 	return uploaded, err
 }

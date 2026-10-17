@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
@@ -75,6 +76,7 @@ func init() {
 		Name:       "spawn",
 		LocustFile: "spawn.py",
 		UserClass:  spawnUserClass,
+		Config:     spawnCodec,
 		Init:       initSpawn,
 	})
 }
@@ -161,17 +163,15 @@ func (r *spawnRuntime) runBatch(ctx context.Context) {
 	spawnConcurrency := r.cfg.SpawnConcurrency
 	deadline := r.cfg.ActorDeadline
 	// Values set in the web UI form (dynconfig) override the flags.
-	if r.cfg.Dyn != nil {
-		dyn := r.cfg.Dyn.Load()
-		if dyn.TotalActors > 0 {
-			totalActors = dyn.TotalActors
-		}
-		if dyn.SpawnConcurrency > 0 {
-			spawnConcurrency = dyn.SpawnConcurrency
-		}
-		if dyn.ActorDeadline > 0 {
-			deadline = dyn.ActorDeadline
-		}
+	knobs := dynconfig.Get[spawnKnobs](r.cfg.Dyn)
+	if knobs.TotalActors > 0 {
+		totalActors = knobs.TotalActors
+	}
+	if knobs.SpawnConcurrency > 0 {
+		spawnConcurrency = knobs.SpawnConcurrency
+	}
+	if knobs.ActorDeadline > 0 {
+		deadline = knobs.ActorDeadline.Duration()
 	}
 	spawnConcurrency = min(spawnConcurrency, totalActors)
 	if spawnConcurrency < 1 {

@@ -89,6 +89,17 @@ func latestSnapshotIsPendingLocal(status *ateapipb.ActorStatus) bool {
 	return snap != nil && snap.GetLocality() == "" && snap.GetDurableSnapshot() == nil
 }
 
+// latestSnapshotIsLocalNotYetDurable reports whether the snapshot at the
+// actor's latest generation is a local checkpoint with no COMPLETED durable
+// copy. A pause leaves it with no durable copy at all, and a suspend of the
+// paused actor marks the copy PENDING before it asks the node to upload, so
+// both shapes mean the node holding the checkpoint still acts for the actor.
+func latestSnapshotIsLocalNotYetDurable(status *ateapipb.ActorStatus) bool {
+	snap := snapshotAtLatestGeneration(status)
+	return snap.GetLocality() != "" &&
+		snap.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+}
+
 // clearLocalSnapshots clears Locality across all Snapshots in status.Snapshots
 // without dropping PENDING durable snapshots (so DeleteActor can still collect
 // an in-flight durable snapshot after releasing the worker).

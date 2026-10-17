@@ -222,3 +222,39 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		t.Errorf("HostingNode naming the released stale worker = %q, %v; want \"\", nil", got, err)
 	}
 }
+
+// TestHostingNodeWithoutWorker pins which no-worker shapes count assigned_node
+// as hosting the actor. None of them reads the store.
+func TestHostingNodeWithoutWorker(t *testing.T) {
+	durable := func(st ateapipb.SnapshotStorageStatus) *ateapipb.SnapshotStorage {
+		return &ateapipb.SnapshotStorage{Status: st, Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://snaps/root/atespaces/a/actors/uid/snap-1"}}
+	}
+	status := func(state ateapipb.ActorState, locality string, d *ateapipb.SnapshotStorage) *ateapipb.ActorStatus {
+		return &ateapipb.ActorStatus{
+			State:                  state,
+			AssignedNode:           "node-1",
+			LastAssignedGeneration: 1,
+			Snapshots:              []*ateapipb.Snapshot{{Uuid: "snap-1", Generation: 1, Owner: ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, Locality: locality, DurableSnapshot: d}},
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		status *ateapipb.ActorStatus
+		want   string
+	}{
+		{"paused", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1", nil), "node-1"},
+		{"paused, suspend uploading its snapshot", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "node-1", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)), "node-1"},
+		{"suspended, snapshot durable, local copy kept", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "node-1", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)), ""},
+		{"suspended, no local copy", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "", durable(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)), ""},
+		{"pause in progress, not yet captured", status(ateapipb.ActorState_ACTOR_STATE_SUSPENDING, "", nil), ""},
+		{"crashed with a local copy", status(ateapipb.ActorState_ACTOR_STATE_CRASHED, "node-1", nil), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			actor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "n", Uid: "uid"}, Status: tc.status}
+			got, err := HostingNode(context.Background(), nil, actor)
+			if err != nil || got != tc.want {
+				t.Fatalf("HostingNode = %q, %v, want %q", got, err, tc.want)
+			}
+		})
+	}
+}

@@ -202,7 +202,7 @@ func newTestRuntime(fake *fakeControlClient) *runtime {
 	r := newRuntime(&userclass.Config{
 		APIStub:  fake,
 		Atespace: "bench",
-		Dyn:      dynconfig.NewHolder(dynconfig.Config{}),
+		Dyn:      dynconfig.Static(knobs{}),
 		Tracer:   otel.Tracer("test"),
 	})
 	r.retryBackoff = time.Millisecond
@@ -359,7 +359,7 @@ func TestEachUserCyclesItsOwnActor(t *testing.T) {
 func TestSetupIsNotPaced(t *testing.T) {
 	fake := newFake()
 	r := newTestRuntime(fake)
-	r.cfg.Dyn.Store(dynconfig.Config{TargetRPS: 1})
+	r.cfg.Dyn = dynconfig.Static(knobs{TargetRPS: 1})
 	start := time.Now()
 	setUpUsers(t, r, 5)
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
@@ -475,7 +475,7 @@ func TestIteratePacesResumes(t *testing.T) {
 	r := newTestRuntime(fake)
 	r.iterate()
 
-	r.cfg.Dyn.Store(dynconfig.Config{TargetRPS: 200})
+	r.cfg.Dyn = dynconfig.Static(knobs{TargetRPS: 200})
 	start := time.Now()
 	for range 21 {
 		r.iterate()
