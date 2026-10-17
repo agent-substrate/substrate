@@ -203,7 +203,6 @@ func TestSuspendActorWorkflow_SuspendedReturnsAsIs(t *testing.T) {
 	}
 }
 
-
 // TestSuspendActor_MarkedSuspending_StateMatrix verifies the suspend edge's
 // state gating against every actor state, in either mode: RUNNING takes the
 // edge and marks a snapshot with a PENDING durable copy, SUSPENDING skips the
@@ -816,7 +815,6 @@ func TestSuspendActor_Finalized_ReleasesOnlyOwnWorker(t *testing.T) {
 		})
 	}
 }
-
 
 // TestSuspendActor_Finalized_MissingDurableSnapshotClearsAssignment verifies that if the
 // latest generation snapshot entry is missing when the suspend finalizes, the

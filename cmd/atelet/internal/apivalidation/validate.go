@@ -104,7 +104,6 @@ func ValidateCustom_AssetFile_Sha256(_ context.Context, _ operation.Operation, f
 	return nil
 }
 
-
 func ValidateCustom_ObjectStorage_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return validateSnapshotURI(fldPath, *value)
 }
