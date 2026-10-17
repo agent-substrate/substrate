@@ -97,9 +97,13 @@ func recordedLayerSize(layerDir string) (n int64, ok bool, err error) {
 	return n, true, nil
 }
 
-// walkLayerSize sums regular-file sizes under the layer's fs tree.
+// walkLayerSize sums regular-file sizes under the layer's fs tree, plus the
+// layer's EROFS image when present.
 func walkLayerSize(layerDir string) int64 {
 	var total int64
+	if fi, err := os.Stat(LayerEROFSPath(layerDir)); err == nil {
+		total += fi.Size()
+	}
 	fsRoot := filepath.Join(layerDir, layerFSDirName)
 	// The callback swallows every error (skip-and-under-count contract),
 	// so WalkDir cannot return one.
