@@ -573,6 +573,73 @@ You must have enabled otel tracing for your cluster to view traces.
 
 You can find trace IDs by viewing the `logs` tab in the Locust UI
 
+## Running at scale
+
+A dense run meets limits the demo path never reaches. The ones met so far, and
+what to set before the run:
+
+* **Reaching the API and the router from outside the cluster.** The Locust
+  and boomer workers in this document run in the cluster and reach the
+  Services directly. A load generator outside it must not go through
+  `kubectl port-forward`: the forward resets under load and takes every
+  in-flight resume and pause down with it. Expose `svc/api` and
+  `svc/atenet-router` through a NodePort or LoadBalancer Service instead.
+  The port-forwards in this document are for the UIs only.
+* **PostgreSQL connection slots.** Each ateapi replica opens up to
+  `pool_max_conns` connections in its read/write pool plus 5 for its owner
+  and watch pools. Unset, pgx sizes the pool at the node's CPU count (at
+  least 4), not the container's limit, so on a large node one replica can
+  take most of PostgreSQL's default `max_connections` of 100. Set it with
+  `--ateapi-postgres-pool-max-conns` on ate-setup and keep
+  `replicas x (pool max + 5)` under `max_connections` with slack for `psql`
+  and migrations (see
+  [connection sizing](../docs/dev/cloud-sql-scaling-guide.md#connection-sizing-for-a-target-throughput)).
+  To raise `max_connections`, add a `-c` argument to the StatefulSet in
+  `manifests/ate-install/postgres/postgres.yaml`, or install with
+  `--cluster-size size10`, which sets 300 and pins the pool at 64 but sizes
+  PostgreSQL for a dedicated node. When the slots run out, requests fail with
+  `INTERNAL` and `remaining connection slots are reserved`.
+* **PostgreSQL probes.** Under load the probes miss their default 1 s
+  timeout. Three misses of the liveness probe (`pg_isready`) restart
+  postgres mid-run; three misses of the readiness probe (`nc`) drop the pod
+  from the Service, and ateapi loses its connections without a restart. Give
+  both `timeoutSeconds: 5` and `failureThreshold: 6`, and give the postgres
+  container CPU and memory requests sized for the run: on a saturated node
+  the request is its share of the CPU, and a starved postgres is what misses
+  the probes.
+* **Parking budget.** `--parked-request-budget` (default `5s`) has to cover a
+  pause-and-resume cycle under load, tens of seconds, times the
+  oversubscription (live actors per worker slot); at 2x that is minutes. Watch
+  `atenet.router.parking.wait.duration{outcome="budget_exhausted"}`. See
+  [docs/request-parking.md](../docs/request-parking.md).
+* **Synchronized bursts.** Clients that step in lockstep send one request per
+  actor at the same instant. Above the ext_proc circuit breaker Envoy answers
+  `503 ... reset reason: overflow` and the router never sees it. Jitter the
+  clients, or size `--extproc-max-requests`.
+* **Kernel neighbor table.** Every sandbox has a link-local address, and
+  `net.ipv4.neigh.default.gc_thresh3` is global across network namespaces.
+  Above about a thousand sandboxes per host, raise the thresholds
+  (`gc_thresh1/2/3` = 4096/16384/32768). The symptom is an idle host with
+  `connection timed out` to its sandboxes and `arp_cache: neighbor table
+  overflow!` in `dmesg`.
+* **Restores under full load.** A node's restore throughput falls as its
+  sandboxes burn CPU, and a restore wave onto a saturated node makes the
+  wakeup probe time out: the actor is crashed. Substrate does not steer
+  restores away from busy nodes, so keep CPU headroom instead: fewer resident
+  sandboxes per node, and admission (creates per second) paced to the restore
+  rate.
+* **The kubelet.** Hundreds of sandboxes per node starve its heartbeat; after
+  the 300 s toleration the taint manager evicts every pod on the node.
+  Reserve CPU for it (`systemReserved`, `kubeReserved`) before going above a
+  few hundred sandboxes per node, and watch node `Ready`.
+
+Besides the Locust statistics, watch `ate.actor.crashes` (a crash is a finding,
+not noise), `atenet.router.parking.*`, atelet restore and checkpoint p99,
+`pg_stat_activity` against `max_connections`, node conditions, and `dmesg` for
+OOM and neighbor-table lines. ateapi logs every RPC at INFO and its container
+log rotates at 10 MiB, so read lifecycle events from the collector rather than
+from `kubectl logs`.
+
 ## Benchmark output files
 
 A run writes the following to `--dest`. Each run produces them fresh; none of
