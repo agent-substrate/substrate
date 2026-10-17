@@ -15,13 +15,15 @@
 """Harvests server-side Prometheus ground-truth timeseries during benchmark trials.
 
 Queries Prometheus over [T_start, T_end] and the steady-state window inside it
-to capture cluster packing, node and pod PSI stalls, snapshot sizes, latencies
-and throughput, running actors, memory working set and OOM kills.
+to capture cluster packing, node and pod PSI stalls, node disk throughput,
+snapshot sizes, latencies and throughput, running actors, memory working set
+and OOM kills.
 """
 
 import csv
 import json
 import math
+import re
 import sys
 import time
 import urllib.parse
@@ -259,6 +261,19 @@ def _node_psi_query(resource: str) -> str:
     )
 
 
+def _node_disk_query(counter: str) -> str:
+    """Disk MiB/s per node and device, kept to nodes hosting a live worker pod.
+
+    cAdvisor counts the whole node's I/O on its root cgroup. Workers are found
+    by CPU rate, as for the node working set, so this works without PSI.
+    """
+    return (
+        f"sum by (instance, device) (rate(container_fs_{counter}_bytes_total"
+        f'{{container="node"}}[1m])) / {2**20}'
+        f" and on (instance) count by (instance) ({WORKER_PODS})"
+    )
+
+
 def _steady_values(
     results: list[dict[str, Any]], steady_start_ts: int, steady_end_ts: int
 ) -> list[float]:
@@ -402,6 +417,31 @@ def _harvest_pod_psi(
             _steady_values(res, steady_start_ts, steady_end_ts)
         )
     out["pods"] = len(pods - {""})
+    return out
+
+
+def _harvest_node_disk(
+    prom_url: str, start_ts: int, end_ts: int, steady_start_ts: int,
+    steady_end_ts: int,
+) -> dict[str, Any]:
+    """Worker node disk MiB/s, every node's steady samples pooled per device."""
+    out: dict[str, Any] = {}
+    nodes: set[str] = set()
+    for key, counter in (("read", "reads"), ("write", "writes")):
+        res = query_prometheus_range(
+            prom_url, _node_disk_query(counter), start_ts, end_ts, step="10s"
+        )
+        nodes.update(s.get("metric", {}).get("instance", "") for s in res)
+        devices: dict[str, list[dict[str, Any]]] = {}
+        for s in res:
+            devices.setdefault(s.get("metric", {}).get("device", ""), []).append(s)
+        out[f"{key}_mb_s"] = {
+            device: compute_percentiles(
+                _steady_values(series, steady_start_ts, steady_end_ts)
+            )
+            for device, series in sorted(devices.items())
+        }
+    out["nodes"] = len(nodes - {""})
     return out
 
 
@@ -762,8 +802,9 @@ def harvest_server_telemetry(
     """Harvests the ground truth metric streams from Prometheus.
 
     Only the atelet-exported snapshot, active actor and actor working set
-    blocks are read late, by `lag_s // 2`; packing, PSI, the cAdvisor working
-    set and OOM counts aren't shifted and are read over the run window as is.
+    blocks are read late, by `lag_s // 2`; packing, PSI, node disk, the
+    cAdvisor working set and OOM counts aren't shifted and are read over the
+    run window as is.
     """
     steady_end = end_ts if steady_end_ts is None else steady_end_ts
     return {
@@ -774,6 +815,9 @@ def harvest_server_telemetry(
             prom_url, start_ts, end_ts, steady_start_ts, steady_end
         ),
         "pod_psi": _harvest_pod_psi(
+            prom_url, start_ts, end_ts, steady_start_ts, steady_end
+        ),
+        "node_disk": _harvest_node_disk(
             prom_url, start_ts, end_ts, steady_start_ts, steady_end
         ),
         "snapshots": _harvest_snapshots(
@@ -861,6 +905,7 @@ def extract_and_record_server_telemetry(
     packing_s = telemetry.get("cluster_packing", {}).get("summary", {})
     psi = telemetry.get("node_psi", {})
     pod_psi = telemetry.get("pod_psi", {})
+    disk = telemetry.get("node_disk", {})
     snaps = telemetry.get("snapshots", {})
     ps = ("p50", "p90", "p95", "p99")
 
@@ -875,6 +920,14 @@ def extract_and_record_server_telemetry(
             measurements[f"pod_psi_{res}_stall_{p}"] = (
                 pod_psi.get(f"{res}_stall_pct", {}).get(p)
             )
+    # Keyed by device name, so /dev/nvme0n1 gives node_disk_nvme0n1_*.
+    for key in ("read", "write"):
+        for device, mb_s in disk.get(f"{key}_mb_s", {}).items():
+            name = re.sub(
+                r"[^a-z0-9]+", "_", device.removeprefix("/dev/").lower()
+            ).strip("_")
+            for p in ps:
+                measurements[f"node_disk_{name}_{key}_{p}_mb_s"] = mb_s.get(p)
     for p in ps:
         measurements[f"snapshot_size_{p}_mb"] = snaps.get(f"size_{p}_mb")
     measurements["snapshot_size_avg_mb"] = snaps.get("size_avg_mb")
