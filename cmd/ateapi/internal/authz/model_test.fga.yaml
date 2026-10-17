@@ -269,7 +269,6 @@ tests:
           can_get: true
           can_update: true
           can_delete: true
-          can_pause: true
           can_resume: true
           can_suspend: true
           can_revert: true
@@ -283,7 +282,6 @@ tests:
           can_get: true
           can_update: true
           can_delete: true
-          can_pause: true
           can_resume: true
           can_suspend: true
           can_revert: true
@@ -297,7 +295,6 @@ tests:
           can_get: true
           can_update: false
           can_delete: false
-          can_pause: false
           can_resume: false
           can_suspend: false
           can_revert: false
@@ -311,7 +308,6 @@ tests:
           can_get: true
           can_update: false
           can_delete: false
-          can_pause: false
           can_resume: false
           can_suspend: false
           can_revert: false
@@ -323,14 +319,12 @@ tests:
         object: actor:runner-1
         assertions:
           can_get: false
-          can_pause: false
           can_get_egress_policy: false
           can_update_egress_policy: false
       - user: user:sa-router # Ingress router proxy can only resume
         object: actor:runner-1
         assertions:
           can_resume: true
-          can_pause: false
           can_get_egress_policy: false
       - user: user:sa-runner-1 # Workload identity can suspend and revert
         object: actor:runner-1
@@ -414,7 +408,6 @@ tests:
           can_update_egress_policy: false
           can_delete_egress_policy: false
           can_resume: false
-          can_pause: false
       - user: user:sys-egress # lists actors as its ateapi health check
         object: global:root
         assertions:
@@ -482,7 +475,6 @@ tests:
         assertions:
           can_resume: true
           can_get: false
-          can_pause: false
           can_suspend: false
           can_revert: false
           can_delete: false

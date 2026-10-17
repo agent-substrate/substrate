@@ -175,6 +175,5 @@ type actor
     define can_resume: [user] or editor from parent_atespace or ingress_router from parent_atespace
 
     # Lifecycle Operations
-    define can_pause: [user] or editor from parent_atespace
     define can_suspend: [user] or editor from parent_atespace
     define can_revert: [user] or editor from parent_atespace

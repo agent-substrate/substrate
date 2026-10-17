@@ -25,6 +25,8 @@ import (
 
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
@@ -276,29 +278,49 @@ func (x *runtimeIndex) worker(podUID string) (*workerRuntime, bool) {
 	return wr, ok
 }
 
-// advertisedSandboxAssets returns the sandbox assets to stage for a request
-// that asked for requested: the record of the runtime a worker on this node
-// advertises under the same hash. Until the request carries the runtime
-// hash itself, the hash is computed from the request's assets with the same
-// function the syncer hashes a SandboxConfig version with, so a request for
-// a version a local worker advertises always resolves.
+// advertisedRuntime returns the sandbox assets to stage for an actor placed
+// on runtime rt: the record of the runtime a worker on this node advertises
+// under rt's bundle hash. ate-api-server fills rt from the worker
+// assignment, which is a runtime the worker registered from the file this
+// node wrote, so the hash resolves as long as the request reached the node
+// the actor was placed on. The request's sandbox_assets are not consulted.
 //
-// A miss is not served from the request: it means the control plane placed
-// the actor on a worker whose pool does not run that config or version,
-// which must surface. A runtime registered before an atelet restart is no
-// miss: the index is loaded from disk before atelet serves.
-func (s *Atelet) advertisedSandboxAssets(ctx context.Context, requested *sandboxAssetsRecord) (*sandboxAssetsRecord, error) {
-	hash, err := versionBundleHash(requested)
+// A miss is not served from the request: it means the request reached a
+// node whose workers never advertised the runtime, which must surface. A
+// runtime registered before an atelet restart is no miss: the index is
+// loaded from disk before atelet serves.
+func (s *Atelet) advertisedRuntime(ctx context.Context, rt *ateletpb.SandboxRuntime) (*sandboxAssetsRecord, error) {
+	hash, err := bundleHashOf(rt)
 	if err != nil {
-		return nil, apierror.InvalidArgument("sandbox_assets: %v", err)
+		return nil, apierror.InvalidArgument("sandbox_runtime: %v", err)
 	}
-	rt, ok := s.runtimes.lookup(hash)
+	indexed, ok := s.runtimes.lookup(hash)
 	if !ok {
 		slog.WarnContext(ctx, "Sandbox runtime is not advertised by any worker on this node",
 			slog.String("bundle_hash", hash),
-			slog.String("sandbox_class", requested.SandboxClass),
-			slog.String("pause_image", requested.PauseImage))
-		return nil, apierror.FailedPrecondition("sandbox runtime %s (class %s) is not advertised by any worker on this node", hash, requested.SandboxClass)
+			slog.String("sandbox_class", rt.GetSandboxClass()))
+		return nil, apierror.FailedPrecondition("sandbox runtime %s (class %s) is not advertised by any worker on this node", hash, rt.GetSandboxClass())
 	}
-	return rt.rec, nil
+	if class := rt.GetSandboxClass(); class != indexed.rec.SandboxClass {
+		return nil, apierror.FailedPrecondition("sandbox runtime %s is advertised for class %s, not %s", hash, indexed.rec.SandboxClass, class)
+	}
+	return indexed.rec, nil
+}
+
+// bundleHashOf returns the sandbox_bundle_hash attribute of rt, which names
+// the SandboxConfig version a worker runs an actor under.
+func bundleHashOf(rt *ateletpb.SandboxRuntime) (string, error) {
+	if rt == nil {
+		return "", errors.New("missing")
+	}
+	for _, a := range rt.GetVersion().GetAttributes() {
+		if a.GetKey() != hardware.AttrSandboxBundleHash {
+			continue
+		}
+		if a.GetValue() == "" {
+			return "", fmt.Errorf("empty %s attribute", hardware.AttrSandboxBundleHash)
+		}
+		return a.GetValue(), nil
+	}
+	return "", fmt.Errorf("no %s attribute", hardware.AttrSandboxBundleHash)
 }

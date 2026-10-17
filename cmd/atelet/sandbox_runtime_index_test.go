@@ -23,6 +23,8 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/hardware"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"google.golang.org/grpc/codes"
 )
@@ -146,28 +148,40 @@ func TestResolveRuntime(t *testing.T) {
 	const sha = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	s := &Atelet{runtimes: newRuntimeIndex()}
 	advertised := hashedTestVersion(t, "v1", true, sha)
-
-	// The request names the same binaries from another bucket: same runtime.
-	requested := &sandboxAssetsRecord{
-		SandboxClass: "gvisor",
-		PauseImage:   testPauseImage,
-		Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://mirror/v1", SHA256: sha}},
+	runtimeWith := func(class string, attrs ...*ateletpb.AttributeEntry) *ateletpb.SandboxRuntime {
+		return &ateletpb.SandboxRuntime{SandboxClass: class, Version: &ateletpb.VersionedSandboxCompat{SchemaVersion: hardware.SchemaVersionV1, Attributes: attrs}}
 	}
-	if _, err := s.advertisedSandboxAssets(t.Context(), requested); apierror.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("advertisedSandboxAssets before any worker advertises it = %v, want %s", err, codes.FailedPrecondition)
+	placed := runtimeWith("gvisor",
+		&ateletpb.AttributeEntry{Key: hardware.AttrArchitecture, Value: "amd64"},
+		&ateletpb.AttributeEntry{Key: hardware.AttrSandboxBundleHash, Value: advertised.hash})
+
+	if _, err := s.advertisedRuntime(t.Context(), placed); apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("advertisedRuntime before any worker advertises it = %v, want %s", err, codes.FailedPrecondition)
 	}
 	s.runtimes.register("pod-1", advertisedClass{class: v1alpha1.SandboxClassGvisor, config: "config-x", hashed: []hashedVersion{advertised}})
-	rec, err := s.advertisedSandboxAssets(t.Context(), requested)
+	rec, err := s.advertisedRuntime(t.Context(), placed)
 	if err != nil {
-		t.Fatalf("advertisedSandboxAssets: %v", err)
+		t.Fatalf("advertisedRuntime: %v", err)
 	}
 	if rec != advertised.rec {
-		t.Errorf("advertisedSandboxAssets returned %+v, want the advertised record (the index's URL, not the request's)", rec)
+		t.Errorf("advertisedRuntime returned %+v, want the advertised record", rec)
 	}
 
-	unpinned := &sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: "registry.k8s.io/pause:3.10", Assets: requested.Assets}
-	if _, err := s.advertisedSandboxAssets(t.Context(), unpinned); apierror.Code(err) != codes.InvalidArgument {
-		t.Errorf("advertisedSandboxAssets with an unpinned pause image = %v, want %s", err, codes.InvalidArgument)
+	for name, rt := range map[string]*ateletpb.SandboxRuntime{
+		"no runtime":    nil,
+		"no attributes": runtimeWith("gvisor"),
+		"no bundle hash": runtimeWith("gvisor",
+			&ateletpb.AttributeEntry{Key: hardware.AttrArchitecture, Value: "amd64"}),
+		"empty bundle hash": runtimeWith("gvisor",
+			&ateletpb.AttributeEntry{Key: hardware.AttrSandboxBundleHash, Value: ""}),
+	} {
+		if _, err := s.advertisedRuntime(t.Context(), rt); apierror.Code(err) != codes.InvalidArgument {
+			t.Errorf("advertisedRuntime with %s = %v, want %s", name, err, codes.InvalidArgument)
+		}
+	}
+	otherClass := runtimeWith("microvm", &ateletpb.AttributeEntry{Key: hardware.AttrSandboxBundleHash, Value: advertised.hash})
+	if _, err := s.advertisedRuntime(t.Context(), otherClass); apierror.Code(err) != codes.FailedPrecondition {
+		t.Errorf("advertisedRuntime with the hash under another class = %v, want %s", err, codes.FailedPrecondition)
 	}
 }
 
