@@ -156,3 +156,18 @@ func TestFromActor_RefusesMalformedURI(t *testing.T) {
 		t.Fatal("a URI outside the snapshot layout was accepted")
 	}
 }
+
+// A URI recorded under a location inside another owner's prefix gets no
+// grant: a read-write grant on the actor's own prefix there would sit inside
+// the other owner's.
+func TestFromActor_RefusesLocationUnderAnotherOwner(t *testing.T) {
+	nested := loc + "/atespaces/team-b/actors/0b4e7c4e-2f3a-4d43-9a5e-0f6d1c2b3a4d"
+	for _, s := range []*ateapipb.Snapshot{
+		gen(2, ownerActor, completed, actorURI(nested, "c0de")),
+		gen(1, ownerTag, completed, nested+"/atespaces/ate-golden/tags/"+tagUID),
+	} {
+		if got, err := FromActor(actorWith(s)); err == nil {
+			t.Errorf("FromActor(%q) = %v, want an error", s.GetDurableSnapshot().GetObject().GetSnapshotUri(), got)
+		}
+	}
+}

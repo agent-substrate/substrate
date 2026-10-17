@@ -549,6 +549,29 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 	}
 }
 
+// TestValidateSnapshotLocationUnchanged_LocationUnderAnotherOwner covers an
+// actor whose recorded snapshot sits under a location ValidateSnapshotLocation
+// rejects: repointing it to a template with that same location is refused,
+// because the actor could not write its next snapshot there.
+func TestValidateSnapshotLocationUnchanged_LocationUnderAnotherOwner(t *testing.T) {
+	const location = "gs://snaps/root/atespaces/team-a/actors/actor-a"
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-b", Name: "bot", Uid: "actor-b"},
+		Status: &ateapipb.ActorStatus{Snapshots: []*ateapipb.Snapshot{{
+			Generation: 1,
+			Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+			DurableSnapshot: &ateapipb.SnapshotStorage{
+				Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+				Object: &ateapipb.ObjectSnapshot{SnapshotUri: location + "/atespaces/team-b/actors/actor-b/snapshots/snap-1"},
+			},
+		}}},
+	}
+	tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: location}}
+	if err := validateSnapshotLocationUnchanged(actor, tmpl); err == nil {
+		t.Errorf("validateSnapshotLocationUnchanged(%q) = nil, want an error", location)
+	}
+}
+
 // TestValidateTemplateVolumesUnchanged exercises the volumes and
 // per-container mount comparison applied when an actor is repointed at a
 // replacement template.

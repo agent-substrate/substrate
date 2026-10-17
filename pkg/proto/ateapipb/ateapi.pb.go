@@ -2980,7 +2980,10 @@ func (x *ActorTemplateStatus) GetGoldenSnapshotStatus() *GoldenSnapshotStatus {
 type SnapshotConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// storage_location is the base object-storage URI snapshots of actors on
-	// this version are stored under. Required.
+	// this version are stored under. Required. Each owner's snapshots are
+	// stored under <storage_location>/atespaces/..., so storage_location must
+	// not itself contain an "atespaces" path segment, in any letter case,
+	// percent-encoded, or padded with dots or spaces.
 	//
 	// +k8s:required
 	// +k8s:maxLength=1024

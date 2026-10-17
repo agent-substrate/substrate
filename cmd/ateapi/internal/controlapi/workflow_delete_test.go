@@ -511,3 +511,28 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 		})
 	}
 }
+
+// TestActorSnapshotStoragePrefix_LocationUnderAnotherOwner covers an actor
+// whose recorded snapshot sits under a location ValidateSnapshotLocation
+// rejects: deleting it still collects its own prefix.
+func TestActorSnapshotStoragePrefix_LocationUnderAnotherOwner(t *testing.T) {
+	const location = "gs://snaps/root/atespaces/team-a/actors/actor-a"
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-b", Name: "bot", Uid: "actor-b"},
+		Status: &ateapipb.ActorStatus{Snapshots: []*ateapipb.Snapshot{{
+			Generation: 1,
+			Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+			DurableSnapshot: &ateapipb.SnapshotStorage{
+				Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+				Object: &ateapipb.ObjectSnapshot{SnapshotUri: location + "/atespaces/team-b/actors/actor-b/snapshots/snap-1"},
+			},
+		}}},
+	}
+	got, err := actorSnapshotStoragePrefix(actor)
+	if err != nil {
+		t.Fatalf("actorSnapshotStoragePrefix() error = %v", err)
+	}
+	if want := location + "/atespaces/team-b/actors/actor-b"; got.String() != want {
+		t.Errorf("actorSnapshotStoragePrefix() = %q, want %q", got, want)
+	}
+}

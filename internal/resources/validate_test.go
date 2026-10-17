@@ -180,6 +180,7 @@ func TestValidateSnapshotLocation(t *testing.T) {
 		{"valid without path", "gs://bucket", false},
 		// Scheme is storage-backend policy, not validated here.
 		{"valid alternate scheme", "s3://bucket/path", false},
+		{"valid without scheme", "//bucket/path", false},
 		{"empty", "", true},
 		{"missing bucket", "gs://", true},
 		{"no scheme or bucket", "bucket/path", true},
@@ -201,6 +202,41 @@ func TestValidateSnapshotLocation(t *testing.T) {
 		{"backslash", `gs://bucket/team-a\..\team-b`, true},
 		{"escaped backslash", "gs://bucket/a%5Cb", true},
 		{"dots in a name", "gs://bucket/a..b/.c/d.", false},
+
+		// Every owner's objects are stored under <location>/atespaces/, so
+		// a location must not contain that segment anywhere, or it could
+		// sit inside an atespace's or an owner's prefix.
+		{"under another actor's prefix", "gs://snaps/root/atespaces/team-a/actors/0b4e7c4e-2f3a-4d43-9a5e-0f6d1c2b3a4d", true},
+		{"under another actor's snapshot", "gs://snaps/root/atespaces/team-a/actors/actor-a/snapshots/snap-1", true},
+		{"under a tag's prefix", "gs://snaps/root/atespaces/team-a/tags/tag-a", true},
+		{"under an atespace's prefix", "gs://snaps/root/atespaces/team-a", true},
+		{"under every atespace's prefix", "gs://snaps/root/atespaces", true},
+		{"atespaces as the first segment", "gs://snaps/atespaces/secret-agent", true},
+		{"atespaces with a trailing slash", "gs://snaps/root/atespaces/", true},
+		{"atespaces between empty segments", "gs://snaps/root//atespaces//team-a", true},
+		{"s3 under another actor's prefix", "s3://snaps/root/atespaces/team-a/actors/actor-a", true},
+		{"azure under another actor's prefix", "https://acct.blob.core.windows.net/snaps/root/atespaces/team-a/actors/actor-a", true},
+		{"escaped atespaces", "gs://snaps/root/%61tespaces/team-a", true},
+		{"escaped separators", "gs://snaps/root%2Fatespaces%2Fteam-a%2Factors%2Factor-a", true},
+		{"uppercase atespaces", "gs://snaps/root/ATESPACES/team-a", true},
+		{"mixed-case atespaces", "gs://snaps/root/AteSpaces/team-a", true},
+		{"atespaces with a trailing dot", "gs://snaps/root/atespaces./team-a", true},
+		{"space-padded atespaces", "gs://snaps/root/%20atespaces%20/team-a", true},
+		{"no-break-space-padded atespaces", "gs://snaps/root/atespaces%C2%A0/team-a", true},
+		{"en-quad-padded atespaces", "gs://snaps/root/%E2%80%80atespaces/team-a", true},
+		{"ideographic-space-padded atespaces", "gs://snaps/root/atespaces%E3%80%80/team-a", true},
+		{"unescaped no-break-space-padded atespaces", "gs://snaps/root/atespaces\u00a0/team-a", true},
+		{"dot-and-space-padded atespaces", "gs://snaps/root/.%C2%A0atespaces.%E3%80%80/team-a", true},
+		// Only the ends are trimmed: a space inside the segment makes it a
+		// different name.
+		{"space inside atespaces", "gs://snaps/root/ate%C2%A0spaces/team-a", false},
+		{"atespaces as part of a segment", "gs://snaps/root/my-atespaces/atespaces-old", false},
+		{"actors without atespaces", "gs://snaps/root/team-a/actors/actor-a", false},
+		{"s3 path", "s3://snaps/root/team-a", false},
+		{"azure path", "https://acct.blob.core.windows.net/snaps/root", false},
+		// The storage layer decodes a path once, so this names an object
+		// segment "%61tespaces", not "atespaces".
+		{"double-escaped atespaces", "gs://snaps/root/%2561tespaces/team-a", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

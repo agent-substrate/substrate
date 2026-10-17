@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/distribution/reference"
 	"go.ate.dev/substrate/internal/apierror"
@@ -230,16 +231,44 @@ func ValidateAssetHash(sha256Hash string) error {
 // scheme: the storage layer only uses the host (bucket) and path, and which
 // schemes are acceptable is a storage-backend policy, not a per-RPC one.
 //
+// Every owner's objects are stored under <location>/atespaces/..., so the
+// location must not contain an "atespaces" path segment itself. Otherwise one
+// location could sit inside the per-atespace or per-owner prefix another
+// location builds, and one owner's objects would fall under another's prefix,
+// covered by its grants and its cleanup. The segment is matched case-
+// insensitively and with surrounding dots and Unicode white space trimmed, so
+// a backend that folds or trims names cannot turn a near-match into the real
+// one.
+//
 // This validates the base that many snapshots share, not any one snapshot's
 // URI; SnapshotURI is the type for the latter, and it applies this check when
-// it is built.
+// a new one is built.
 func ValidateSnapshotLocation(location string) error {
+	u, err := parseStorageURI(location)
+	if err != nil {
+		return err
+	}
+	for segment := range strings.SplitSeq(u.Path, "/") {
+		if strings.EqualFold(strings.TrimFunc(segment, isDotOrSpace), atespacesPathSegment) {
+			return fmt.Errorf("invalid snapshot location %q: must not contain an %q path segment; snapshots are stored under <location>/%s/", location, atespacesPathSegment, atespacesPathSegment)
+		}
+	}
+	return nil
+}
+
+func isDotOrSpace(r rune) bool { return r == '.' || unicode.IsSpace(r) }
+
+// parseStorageURI checks the shape every snapshot location, owner prefix and
+// snapshot URI shares: a host (the bucket) and a path that appending names to
+// cannot redirect. It does not check the scheme, which may be empty
+// ("//bucket/path").
+func parseStorageURI(location string) (*url.URL, error) {
 	u, err := url.Parse(location)
 	if err != nil {
-		return fmt.Errorf("invalid snapshot location %q: %v", location, err)
+		return nil, fmt.Errorf("invalid snapshot location %q: %v", location, err)
 	}
 	if u.Host == "" {
-		return fmt.Errorf("invalid snapshot location %q: missing bucket", location)
+		return nil, fmt.Errorf("invalid snapshot location %q: missing bucket", location)
 	}
 	// Snapshot and object names are appended to the location by string
 	// concatenation. A query, fragment, or userinfo component would swallow
@@ -247,21 +276,21 @@ func ValidateSnapshotLocation(location string) error {
 	// only host and path), silently redirecting the upload/download to a
 	// different object.
 	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("invalid snapshot location %q: must contain only a scheme, bucket, and path", location)
+		return nil, fmt.Errorf("invalid snapshot location %q: must contain only a scheme, bucket, and path", location)
 	}
 	// url.JoinPath cleans dot segments, and some backends trim spaces from
 	// segments (or windows, trailing dots) and treat '\' as a separator, so
 	// these could move snapshots outside of the location, e.g. into another
 	// atespace's prefix
 	if strings.Contains(u.Path, `\`) {
-		return fmt.Errorf(`invalid snapshot location %q: must not contain '\'`, location)
+		return nil, fmt.Errorf(`invalid snapshot location %q: must not contain '\'`, location)
 	}
 	for segment := range strings.SplitSeq(u.Path, "/") {
 		if segment != "" && strings.Trim(segment, ". ") == "" {
-			return fmt.Errorf("invalid snapshot location %q: must not contain path segments of only '.' and ' '", location)
+			return nil, fmt.Errorf("invalid snapshot location %q: must not contain path segments of only '.' and ' '", location)
 		}
 	}
-	return nil
+	return u, nil
 }
 
 // ValidateIP checks that the given string is a valid IP address, is not an

@@ -56,12 +56,9 @@ func (p StoragePrefix) String() string { return p.uri }
 // snapshot URI or an owner's prefix. It rejects a bare bucket, so a prefix
 // can never name every object in a bucket.
 func ParseStoragePrefix(uri string) (StoragePrefix, error) {
-	if err := ValidateSnapshotLocation(uri); err != nil {
-		return StoragePrefix{}, err
-	}
-	u, err := url.Parse(uri)
+	u, err := parseStorageURI(uri)
 	if err != nil {
-		return StoragePrefix{}, fmt.Errorf("invalid storage prefix %q: %v", uri, err)
+		return StoragePrefix{}, err
 	}
 	if strings.Trim(u.Path, "/") == "" {
 		return StoragePrefix{}, fmt.Errorf("invalid storage prefix %q: missing path", uri)
@@ -120,12 +117,23 @@ func (o SnapshotOwner) validate() error {
 }
 
 // Prefix returns the prefix holding every object this owner's snapshots are
-// made of, under an ActorTemplate's snapshotConfig.location.
+// made of, under an ActorTemplate's snapshotConfig.location. The location must
+// pass ValidateSnapshotLocation.
 func (o SnapshotOwner) Prefix(location string) (StoragePrefix, error) {
+	if err := ValidateSnapshotLocation(location); err != nil {
+		return StoragePrefix{}, err
+	}
+	return o.prefix(location)
+}
+
+// prefix is Prefix without ValidateSnapshotLocation's rule against an
+// "atespaces" segment in the location; ParseSnapshotURI reads recorded URIs
+// with it.
+func (o SnapshotOwner) prefix(location string) (StoragePrefix, error) {
 	if err := o.validate(); err != nil {
 		return StoragePrefix{}, err
 	}
-	if err := ValidateSnapshotLocation(location); err != nil {
+	if _, err := parseStorageURI(location); err != nil {
 		return StoragePrefix{}, err
 	}
 	uri, err := url.JoinPath(location, atespacesPathSegment, o.atespace, o.kind, o.id)
@@ -153,10 +161,18 @@ type SnapshotURI struct {
 }
 
 // NewActorSnapshotURI returns the URI of a snapshot an Actor took, stored
-// under an ActorTemplate's snapshotConfig.location.
+// under an ActorTemplate's snapshotConfig.location. The location must pass
+// ValidateSnapshotLocation.
 func NewActorSnapshotURI(location, atespace, actorUID, name string) (SnapshotURI, error) {
+	if err := ValidateSnapshotLocation(location); err != nil {
+		return SnapshotURI{}, err
+	}
+	return actorSnapshotURI(location, atespace, actorUID, name)
+}
+
+func actorSnapshotURI(location, atespace, actorUID, name string) (SnapshotURI, error) {
 	owner := ActorSnapshotOwner(atespace, actorUID)
-	prefix, err := owner.Prefix(location)
+	prefix, err := owner.prefix(location)
 	if err != nil {
 		return SnapshotURI{}, err
 	}
@@ -172,17 +188,29 @@ func NewActorSnapshotURI(location, atespace, actorUID, name string) (SnapshotURI
 
 // NewTagSnapshotURI returns the URI of the snapshot a Tag owns, stored under
 // an ActorTemplate's snapshotConfig.location. The tag's prefix and its
-// snapshot's are the same: a tag holds exactly one snapshot.
+// snapshot's are the same: a tag holds exactly one snapshot. The location must
+// pass ValidateSnapshotLocation.
 func NewTagSnapshotURI(location, atespace, tagUID string) (SnapshotURI, error) {
+	if err := ValidateSnapshotLocation(location); err != nil {
+		return SnapshotURI{}, err
+	}
+	return tagSnapshotURI(location, atespace, tagUID)
+}
+
+func tagSnapshotURI(location, atespace, tagUID string) (SnapshotURI, error) {
 	owner := TagSnapshotOwner(atespace, tagUID)
-	prefix, err := owner.Prefix(location)
+	prefix, err := owner.prefix(location)
 	if err != nil {
 		return SnapshotURI{}, err
 	}
 	return SnapshotURI{uri: prefix.String(), location: location, owner: owner, ownerPrefix: prefix.String(), name: tagUID}, nil
 }
 
-// ParseSnapshotURI parses a given snapshot URI.
+// ParseSnapshotURI parses a given snapshot URI. It reads URIs already
+// recorded on actors and tags, so it checks their shape but not
+// ValidateSnapshotLocation's rule against an "atespaces" segment in the
+// location: an owner whose recorded snapshot sits under such a location can
+// still be collected. Building a new URI or prefix under that location fails.
 func ParseSnapshotURI(uri string) (SnapshotURI, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
@@ -196,12 +224,12 @@ func ParseSnapshotURI(uri string) (SnapshotURI, error) {
 	//       n-6       n-5    n-4    n-3   n-2       n-1
 	case n >= 6 && segments[n-6] == atespacesPathSegment && segments[n-4] == actorsOwnerKind && segments[n-2] == snapshotsPathSegment:
 		u.Path = strings.Join(segments[:n-6], "/")
-		return NewActorSnapshotURI(u.String(), segments[n-5], segments[n-3], segments[n-1])
+		return actorSnapshotURI(u.String(), segments[n-5], segments[n-3], segments[n-1])
 	// /root/atespaces/team-a/tags/<uid>
 	//       n-4       n-3    n-2  n-1
 	case n >= 4 && segments[n-4] == atespacesPathSegment && segments[n-2] == tagsOwnerKind:
 		u.Path = strings.Join(segments[:n-4], "/")
-		return NewTagSnapshotURI(u.String(), segments[n-3], segments[n-1])
+		return tagSnapshotURI(u.String(), segments[n-3], segments[n-1])
 	}
 	return SnapshotURI{}, fmt.Errorf("invalid snapshot URI %q", uri)
 }

@@ -143,6 +143,12 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "storage_location"), "gs://my-bucket/snapshots?versions=true", "")},
 	}, {
+		"storage_location under another actor's prefix",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots/atespaces/team-a/actors/0b4e7c4e-2f3a-4d43-9a5e-0f6d1c2b3a4d"
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "storage_location"), "gs://my-bucket/snapshots/atespaces/team-a/actors/0b4e7c4e-2f3a-4d43-9a5e-0f6d1c2b3a4d", "")},
+	}, {
 		// preferred_fidelity has no default of its own at this layer, so leaving it
 		// unset is a required violation.
 		"preferred_fidelity unset",
@@ -888,6 +894,45 @@ func TestValidateActorTemplate(t *testing.T) {
 				op := MakeCreateOp(context.Background())
 				return Validate_ActorTemplate(context.Background(), op, nil, tmpl, nil)
 			}, tt.want, tt.wantWithPreview)
+		})
+	}
+}
+
+// TestValidateActorTemplateUpdate_StorageLocation covers the ratchet on
+// storage_location: a stored template whose location the current rules reject
+// can still have the rest of it updated, but no update can move a location
+// to one the rules reject.
+func TestValidateActorTemplateUpdate_StorageLocation(t *testing.T) {
+	const nested = "gs://my-bucket/snapshots/atespaces/team-a/actors/0b4e7c4e-2f3a-4d43-9a5e-0f6d1c2b3a4d"
+	locPath := field.NewPath("snapshot_config", "storage_location")
+	withLocation := func(location string) *ateapipb.ActorTemplate {
+		return validActorTemplate(func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = location })
+	}
+	tests := []struct {
+		name   string
+		oldObj *ateapipb.ActorTemplate
+		newObj *ateapipb.ActorTemplate
+		want   field.ErrorList
+	}{{
+		name:   "unchanged location under another owner's prefix",
+		oldObj: withLocation(nested),
+		newObj: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.StorageLocation = nested
+			tmpl.Status = &ateapipb.ActorTemplateStatus{}
+		}),
+	}, {
+		name:   "location changed to one under another owner's prefix",
+		oldObj: withLocation("gs://my-bucket/snapshots"),
+		newObj: withLocation(nested),
+		want:   field.ErrorList{field.Invalid(locPath, nested, "")},
+	}, {
+		name:   "location repaired",
+		oldObj: withLocation(nested),
+		newObj: withLocation("gs://my-bucket/snapshots"),
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateActorTemplateUpdate(context.Background(), nil, tt.newObj, tt.oldObj), tt.want)
 		})
 	}
 }

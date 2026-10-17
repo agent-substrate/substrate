@@ -352,6 +352,8 @@ records its snapshot's URI in `status.snapshot` right after it is reserved,
 before anything is copied, so a tag whose creation failed still names any
 partial copy to collect.
 
+Because every owner's prefix starts with `<location>/atespaces/`, a `storageLocation` must not contain an `atespaces` path segment, in any letter case, percent-encoded, or padded with dots or spaces. A location such as `gs://my-bucket/atespaces/team-a/actors/<actor uid>` would otherwise put one owner's objects under another owner's or atespace's prefix, inside its grants and its cleanup.
+
 An owner is collected by deleting everything under its prefix, and it can delete nothing else. That is what makes a borrowed snapshot safe: an actor created from a tag points at a URI under `tags/`, which its own prefix does not cover. See [Snapshot lifetime](#snapshot-lifetime).
 
 An `Actor` reports its snapshots in the server-managed `status.snapshots` (and
