@@ -260,8 +260,9 @@ func main() {
 	}
 
 	if err = (&controllers.SandboxConfigProtectionReconciler{
-		Client:    mgr.GetClient(),
-		APIReader: mgr.GetAPIReader(),
+		Client:         mgr.GetClient(),
+		APIReader:      mgr.GetAPIReader(),
+		WatchNamespace: *watchNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SandboxConfigProtection")
 		os.Exit(1)
