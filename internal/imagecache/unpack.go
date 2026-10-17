@@ -255,8 +255,8 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			if closeErr != nil {
 				return nil, fmt.Errorf("while closing file %q: %w", name, closeErr)
 			}
-			// The mtime goes before the owner: once the file belongs to another
-			// uid, setting its times needs CAP_FOWNER, which atelet does not hold.
+			// Set before the owner, the mode and mtime take no CAP_FOWNER; only
+			// the setuid and setgid bits, which chown clears, go after it.
 			if err := restoreModTime(root, name, hdr.ModTime); err != nil {
 				return nil, err
 			}
@@ -345,19 +345,10 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			if err := replaceExisting(name, "hardlink"); err != nil {
 				return nil, err
 			}
-			// With fs.protected_hardlinks=1, linking to another user's entry
-			// takes CAP_FOWNER unless it is a regular file the caller can
-			// read and write (one another user owns never keeps setuid or
-			// setgid here, see restoreSetIDBits). A symlink, the only other
-			// entry a hardlink can target here, is given to root first.
+			// With fs.protected_hardlinks=1, linking to a symlink or a setuid
+			// or setgid file another user owns takes CAP_FOWNER, which atelet
+			// holds.
 			// The chown below gives the shared inode this header's owner.
-			if os.Geteuid() == 0 {
-				if fi, err := root.Lstat(linkname); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-					if err := root.Lchown(linkname, 0, 0); err != nil {
-						return nil, fmt.Errorf("while giving hardlink target %q to root: %w", linkname, err)
-					}
-				}
-			}
 			if err := root.Link(linkname, name); err != nil {
 				return nil, fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
 			}
@@ -388,10 +379,9 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 
 	// Restore directory modes, mtimes and owners now that every child exists.
 	// Deepest (longest name) first, so a parent's restored mode or owner can't
-	// block restoring its children. Chmod and the mtime go before chown: once
-	// a directory belongs to another uid, changing its mode or times needs
-	// CAP_FOWNER, which atelet does not hold. Chown keeps a directory's setgid
-	// and sticky bits.
+	// block restoring its children. Chmod and the mtime go before chown, so
+	// they take no CAP_FOWNER; chown keeps a directory's setgid and sticky
+	// bits.
 	type dirRestore struct {
 		name string
 		hdr  *tar.Header
@@ -530,10 +520,13 @@ func dirPaths(root *os.Root, dir string) (map[dirInode]string, error) {
 }
 
 // restoreSetIDBits puts back the setuid and setgid bits of want on name, a
-// regular file whose owner was just applied: chown clears them, so they go
-// after it. atelet lacks CAP_FOWNER and CAP_FSETID, so a file another user
-// owns, or one setgid to a group other than root's, loses the bit; that is
-// logged rather than failing the unpack, which would reject common base images.
+// regular file whose owner was just applied: chown clears them, even for
+// root, so they go after it. On a file another user owns this takes
+// CAP_FOWNER, and keeping setgid for a group the caller is not in takes
+// CAP_FSETID; atelet's manifest grants both. A process without them loses
+// the bit, which is logged rather than failing the unpack, so that an atelet
+// run without them still unpacks Debian-based images, which ship such files
+// (unix_chkpwd is setgid shadow).
 func restoreSetIDBits(ctx context.Context, root *os.Root, name string, want os.FileMode) error {
 	const setID = os.ModeSetuid | os.ModeSetgid
 	if want&setID == 0 {
@@ -553,7 +546,7 @@ func restoreSetIDBits(ctx context.Context, root *os.Root, name string, want os.F
 		return fmt.Errorf("while checking mode of %q: %w", name, err)
 	}
 	if got := fi.Mode() & tarutil.ModeBits; got != want {
-		slog.WarnContext(ctx, "Image file lost its setuid or setgid bit on unpack: atelet lacks CAP_FOWNER and CAP_FSETID",
+		slog.WarnContext(ctx, "Image file lost its setuid or setgid bit on unpack: restoring it takes CAP_FOWNER and CAP_FSETID",
 			slog.String("name", name), slog.String("want", want.String()), slog.String("got", got.String()))
 	}
 	return nil

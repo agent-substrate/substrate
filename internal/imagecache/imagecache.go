@@ -19,13 +19,13 @@
 //
 // The work is split along the existing atelet/worker privilege boundary:
 //
-//   - atelet (root with only CAP_CHOWN and CAP_DAC_OVERRIDE) pulls layers
-//     and unpacks them into the pool with the owners their tars record
-//     (Store.EnsureImage), and writes a rootfs-overlay.json into each
-//     bundle (WriteSpec). Whiteout entries are recorded in per-layer
-//     metadata rather than materialized, because overlayfs whiteouts are
-//     char devices (CAP_MKNOD) with trusted.* xattrs for opaque dirs
-//     (CAP_SYS_ADMIN).
+//   - atelet (root with only CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_FOWNER and
+//     CAP_FSETID) pulls layers and unpacks them into the pool with the
+//     owners their tars record (Store.EnsureImage), and writes a
+//     rootfs-overlay.json into each bundle (WriteSpec). Whiteout entries
+//     are recorded in per-layer metadata rather than materialized, because
+//     overlayfs whiteouts are char devices (CAP_MKNOD) with trusted.* xattrs
+//     for opaque dirs (CAP_SYS_ADMIN).
 //   - worker (privileged; it already owns every mount on the node) finalizes
 //     layers — materializing the recorded whiteout state, once per layer —
 //     and mounts the overlay rootfs (SetupBundleRootfs) just before

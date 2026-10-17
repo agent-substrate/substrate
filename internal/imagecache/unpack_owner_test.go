@@ -16,10 +16,13 @@ package imagecache
 
 import (
 	"archive/tar"
+	"bytes"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -166,21 +169,25 @@ func TestUnpackLayer_UnprivilegedKeepsUnpackingUser(t *testing.T) {
 
 // TestUnpackLayer_AppliesModesWithOwners checks that files keep their tar
 // mode once given to their owners: group write survives the umask, and
-// setuid and setgid, which the kernel clears on chown, are put back where the
-// process's capabilities allow. atelet holds only CAP_CHOWN and
-// CAP_DAC_OVERRIDE; with them a setuid-root binary keeps its bit, while one
-// another user owns, or one setgid to a group root is not in, loses it
-// without failing the unpack.
+// setuid and setgid, which the kernel clears on chown even for root, are put
+// back. With atelet's CAP_FOWNER and CAP_FSETID that includes a file another
+// user owns and one setgid to a group root is not in, such as Debian's
+// unix_chkpwd, and nothing is logged. Without them those two lose the bit,
+// with a warning each, and the unpack still succeeds.
 func TestUnpackLayer_AppliesModesWithOwners(t *testing.T) {
 	roottest.Require(t, "giving files to other uids requires CAP_CHOWN")
-	runAsRootAndAtelet(t, testUnpackLayerAppliesModesWithOwners)
+	runAsRootAndAtelet(t, func(t *testing.T) { testUnpackLayerAppliesModesWithOwners(t, true) })
+	runUnderCaps(t, "without-fowner-fsetid", noSetIDCaps, func(t *testing.T) { testUnpackLayerAppliesModesWithOwners(t, false) })
 }
 
-func testUnpackLayerAppliesModesWithOwners(t *testing.T) {
-	fowner, fsetid := hasEffectiveCap(t, capFowner), hasEffectiveCap(t, capFsetid)
-
+func testUnpackLayerAppliesModesWithOwners(t *testing.T, keepSetID bool) {
 	old := syscall.Umask(0o022)
 	t.Cleanup(func() { syscall.Umask(old) })
+
+	var logs bytes.Buffer
+	defaultLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(defaultLogger) })
 
 	entries := []tarEntry{
 		{name: "srv/", typeflag: tar.TypeDir},
@@ -191,17 +198,24 @@ func testUnpackLayerAppliesModesWithOwners(t *testing.T) {
 		{name: "usr/bin/sudo", typeflag: tar.TypeReg, mode: 0o4755, body: "sudo"},
 		{name: "usr/bin/sudoedit", typeflag: tar.TypeLink, linkname: "usr/bin/sudo"},
 		{name: "usr/bin/newgrp", typeflag: tar.TypeReg, mode: 0o6755, body: "newgrp"},
+		// Setgid to groups root is not in, as Debian ships them.
 		{name: "usr/bin/crontab", typeflag: tar.TypeReg, mode: 0o2755, body: "crontab", gid: 54321},
+		{name: "usr/sbin/", typeflag: tar.TypeDir},
+		{name: "usr/sbin/unix_chkpwd", typeflag: tar.TypeReg, mode: 0o2755, body: "chkpwd", gid: 42},
+		// Setuid to another user, and a hardlink to it, which
+		// fs.protected_hardlinks allows only with CAP_FOWNER once the
+		// target keeps its setuid bit.
 		{name: "opt/", typeflag: tar.TypeDir},
 		{name: "opt/tool", typeflag: tar.TypeReg, mode: 0o4755, body: "tool", uid: 1000, gid: 1000},
+		{name: "opt/tool2", typeflag: tar.TypeLink, linkname: "opt/tool", uid: 1000, gid: 1000},
 	}
 	dir, _, err := runUnpack(t, entries)
 	if err != nil {
 		t.Fatalf("unpackLayer: %v", err)
 	}
 
-	ifCap := func(held bool, bit os.FileMode) os.FileMode {
-		if held {
+	ifKept := func(bit os.FileMode) os.FileMode {
+		if keepSetID {
 			return bit
 		}
 		return 0
@@ -211,8 +225,26 @@ func testUnpackLayerAppliesModesWithOwners(t *testing.T) {
 	assertOwner(t, filepath.Join(dir, "usr/bin/sudo"), 0, 0, os.ModeSetuid|0o755)
 	assertOwner(t, filepath.Join(dir, "usr/bin/sudoedit"), 0, 0, os.ModeSetuid|0o755)
 	assertOwner(t, filepath.Join(dir, "usr/bin/newgrp"), 0, 0, os.ModeSetuid|os.ModeSetgid|0o755)
-	assertOwner(t, filepath.Join(dir, "usr/bin/crontab"), 0, 54321, ifCap(fsetid, os.ModeSetgid)|0o755)
-	assertOwner(t, filepath.Join(dir, "opt/tool"), 1000, 1000, ifCap(fowner, os.ModeSetuid)|0o755)
+	assertOwner(t, filepath.Join(dir, "usr/bin/crontab"), 0, 54321, ifKept(os.ModeSetgid)|0o755)
+	assertOwner(t, filepath.Join(dir, "usr/sbin/unix_chkpwd"), 0, 42, ifKept(os.ModeSetgid)|0o755)
+	assertOwner(t, filepath.Join(dir, "opt/tool"), 1000, 1000, ifKept(os.ModeSetuid)|0o755)
+	assertOwner(t, filepath.Join(dir, "opt/tool2"), 1000, 1000, ifKept(os.ModeSetuid)|0o755)
+
+	// One warning per file that lost its bit. The hardlink wants the mode
+	// opt/tool was left with, so it adds none.
+	const lostMsg = "lost its setuid or setgid bit"
+	wantLost := []string{"usr/bin/crontab", "usr/sbin/unix_chkpwd", "opt/tool"}
+	if keepSetID {
+		wantLost = nil
+	}
+	if got := strings.Count(logs.String(), lostMsg); got != len(wantLost) {
+		t.Errorf("logged %d lost-bit warnings, want %d:\n%s", got, len(wantLost), logs.String())
+	}
+	for _, name := range wantLost {
+		if !strings.Contains(logs.String(), "name="+name+" ") {
+			t.Errorf("no lost-bit warning for %s:\n%s", name, logs.String())
+		}
+	}
 }
 
 // TestUnpackLayer_DirectoryAliasesTakeLatestHeader checks that a directory a
@@ -562,7 +594,7 @@ func testUnpackLayerNonUTF8DirectoryNames(t *testing.T) {
 
 // stickyDirEntries is a layer with sticky directories other users own, holding
 // entries that belong to users other than root. Unlinking such an entry takes
-// owning it or the directory, or CAP_FOWNER, which atelet does not hold;
+// owning it or the directory, or CAP_FOWNER, which atelet holds;
 // CAP_DAC_OVERRIDE does not cover it.
 var stickyDirEntries = []tarEntry{
 	// A shared drop directory, as `install -d -m 1777 -o app` creates.
