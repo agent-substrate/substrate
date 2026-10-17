@@ -148,19 +148,6 @@ func newDurableSnapshot(gen int32, owner ateapipb.SnapshotOwner, fidelity ateapi
 	}
 }
 
-// newLocalSnapshot constructs an actor Snapshot for a local pause checkpoint
-// with Uuid, Fidelity, and Locality.
-func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality string) *ateapipb.Snapshot {
-	return &ateapipb.Snapshot{
-		Uuid:             uuid,
-		Generation:       gen,
-		Owner:            ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
-		Fidelity:         fidelity,
-		ActorTemplateUid: templateUID,
-		Locality:         locality,
-	}
-}
-
 // tagDurableSnapshotURI returns the durable snapshot URI on tag matching
 // storageStatus (or any status if storageStatus is UNSPECIFIED), or "" if none
 // exists.

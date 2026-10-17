@@ -71,16 +71,7 @@ func (w *ActorWorkflow) ApplyReportedSnapshotState(ctx context.Context, actorRef
 	}
 
 	applied := proto.Clone(before).(*ateapipb.Actor)
-	// A pause records no upload URI, so a report of a pause's snapshot is
-	// checked against the URI built from the Actor's template, read only then.
-	pauseURI := func(uuid string) (resources.SnapshotURI, error) {
-		actorTemplate, err := resolveActorTemplate(leaseCtx, w.store, before)
-		if err != nil {
-			return resources.SnapshotURI{}, err
-		}
-		return newInProgressSnapshotURI(actorTemplate, before, uuid)
-	}
-	if err := applyActorSnapshotState(leaseCtx, applied.GetStatus(), node, state, pauseURI); err != nil {
+	if err := applyActorSnapshotState(leaseCtx, applied.GetStatus(), node, state); err != nil {
 		return err
 	}
 	if proto.Equal(applied.GetStatus(), before.GetStatus()) {
@@ -128,8 +119,9 @@ func (w *ActorWorkflow) loadReportedActor(ctx context.Context, actorRef resource
 }
 
 // actorOnNode reports whether the Actor is placed on node or has a local
-// snapshot there. Unlike HostingNode, it includes a node that only holds the
-// Actor's snapshots, since that node's atelet reports them.
+// snapshot there. Unlike HostingNode, it includes a node that holds only
+// older snapshots of an Actor placed elsewhere, since that node's atelet
+// reports them.
 func actorOnNode(actor *ateapipb.Actor, node string) bool {
 	if actor.GetStatus().GetAssignedNode() == node {
 		return true
@@ -151,8 +143,8 @@ const (
 // applyActorSnapshotState applies the two facts a report carries: an upload
 // finished, and the atelet on node detached the Actor. A report with neither
 // latest_local nor uploading is a detach.
-func applyActorSnapshotState(ctx context.Context, status *ateapipb.ActorStatus, node string, state *ateapipb.ActorSnapshotState, pauseURI pauseURIFunc) error {
-	if err := applyLatestDurable(ctx, status, state.GetLatestDurable(), pauseURI); err != nil {
+func applyActorSnapshotState(ctx context.Context, status *ateapipb.ActorStatus, node string, state *ateapipb.ActorSnapshotState) error {
+	if err := applyLatestDurable(ctx, status, state.GetLatestDurable()); err != nil {
 		return err
 	}
 	if state.GetLatestLocal() == nil && state.GetUploading() == nil {
@@ -163,28 +155,23 @@ func applyActorSnapshotState(ctx context.Context, status *ateapipb.ActorStatus, 
 
 // applyCheckpointState records an upload that atelet's state, as returned by
 // Checkpoint, says finished, with the same rules as a report. It records the
-// fidelity atelet reports, which for Checkpoint is the one requested. Unlike a report, a state with no local
-// snapshot is not a detach. The workflow that made the call records where its
-// snapshot lives.
-func applyCheckpointState(ctx context.Context, status *ateapipb.ActorStatus, state *ateletpb.ActorSnapshotState, pauseURI pauseURIFunc) error {
-	return applyLatestDurable(ctx, status, snapshotReportFromAtelet(state.GetLatestDurable()), pauseURI)
+// fidelity atelet reports, which for Checkpoint is the one requested. Unlike a
+// report, a state with no local snapshot is not a detach. The workflow that
+// made the call records where its snapshot lives.
+func applyCheckpointState(ctx context.Context, status *ateapipb.ActorStatus, state *ateletpb.ActorSnapshotState) error {
+	return applyLatestDurable(ctx, status, snapshotReportFromAtelet(state.GetLatestDurable()))
 }
-
-// pauseURIFunc builds the upload URI a pause gave atelet for the Actor's
-// snapshot named uuid, which the pause doesn't record.
-type pauseURIFunc func(uuid string) (resources.SnapshotURI, error)
 
 // applyLatestDurable marks the reported durable snapshot COMPLETED, and records
 // its fidelity. Its uuid and upload URI must match the recorded ones, and its
-// fidelity must be set. A pause records no upload URI, so for a pause's
-// snapshot the URI must be the one pauseURI builds, and is recorded. The
-// snapshot keeps its locality, so a paused Actor stays on its node.
+// fidelity must be set. The snapshot keeps its locality, so a paused Actor
+// stays on its node.
 //
 // A late report changes nothing and is logged at Info. A report is late when
 // its generation is older than the latest COMPLETED one, or is no longer in
 // status.snapshots, for example because a revert removed it. A repeat of the
 // latest COMPLETED generation also changes nothing, and isn't logged.
-func applyLatestDurable(ctx context.Context, status *ateapipb.ActorStatus, reported *ateapipb.SnapshotReport, pauseURI pauseURIFunc) error {
+func applyLatestDurable(ctx context.Context, status *ateapipb.ActorStatus, reported *ateapipb.SnapshotReport) error {
 	if reported == nil {
 		return nil
 	}
@@ -210,15 +197,10 @@ func applyLatestDurable(ctx context.Context, status *ateapipb.ActorStatus, repor
 	if snap.GetUuid() != reported.GetUuid() {
 		return apierror.FailedPrecondition("snapshot generation %d is recorded as %s, not %s", reported.GetGeneration(), snap.GetUuid(), reported.GetUuid())
 	}
-	want := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
-	unrecorded := want == ""
-	if unrecorded {
-		uri, err := pauseURI(snap.GetUuid())
-		if err != nil {
-			return err
-		}
-		want = uri.String()
+	if snap.GetDurableSnapshot() == nil {
+		return apierror.FailedPrecondition("snapshot generation %d records no upload", reported.GetGeneration())
 	}
+	want := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if got := reported.GetObject().GetSnapshotUri(); got != want {
 		return apierror.InvalidArgument("snapshot generation %d was uploaded to %q, want %q", reported.GetGeneration(), got, want)
 	}
@@ -226,9 +208,6 @@ func applyLatestDurable(ctx context.Context, status *ateapipb.ActorStatus, repor
 		return apierror.InvalidArgument("snapshot generation %d reports no fidelity", reported.GetGeneration())
 	}
 	snap.Fidelity = reported.GetFidelity()
-	if unrecorded {
-		snap.DurableSnapshot = &ateapipb.SnapshotStorage{Object: &ateapipb.ObjectSnapshot{SnapshotUri: want}}
-	}
 	snap.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 	return nil
 }

@@ -105,10 +105,9 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 		return nil, err
 	}
 	// A SUSPENDED actor has nothing left to do, whatever the mode and wherever
-	// its snapshot is. A node-local snapshot is not uploaded here: atelet
-	// uploads it in the background. These successes report no pool, and
-	// cannot: the previous attempt released the worker, so the record names
-	// none (#957).
+	// its snapshot is: atelet uploads a node-local snapshot in the background.
+	// These successes report no pool, and cannot: the previous attempt
+	// released the worker, so the record names none (#957).
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		return actor, nil
 	}
@@ -130,7 +129,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	// the one requested.
 	finalAttrs = lifecycleOpAttrs(actor, "", wireFidelity)
 	var finalized *ateapipb.Actor
-	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, actorTemplate, mode, ateletState); err != nil {
+	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, mode, ateletState); err != nil {
 		return nil, err
 	}
 	actor = finalized
@@ -163,17 +162,19 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	ctx, done := stepSpan(ctx, "MarkSuspending")
 	defer func() { err = done(err) }()
 
-	// Golden actors are only suspended, never paused.
+	state := actor.GetStatus().GetState()
+	if state != ateapipb.ActorState_ACTOR_STATE_RUNNING && state != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+		return nil, apierror.FailedPrecondition("MarkSuspending prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, state, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	}
+	// Golden actors are only suspended, never paused. Checked before the skip,
+	// so an async retry can't finish a golden actor's suspend as a pause.
 	// TODO: Remove this check: the suspend workflow should not special-case golden actors.
 	if mode == suspendAsync && actorRef.Atespace == resources.GoldenActorAtespace {
 		return nil, apierror.FailedPrecondition("actors in atespace %q are golden actors, which cannot be paused", actorRef.Atespace)
 	}
-	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+	if state == ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
 		markSkipped(ctx, "actor already SUSPENDING")
 		return actor, nil
-	}
-	if state := actor.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		return nil, apierror.FailedPrecondition("MarkSuspending prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, state, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	}
 	snapshotName := resources.NewSnapshotName()
 
@@ -330,10 +331,9 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // is no longer SUSPENDING is left as it is and the step fails with
 // FailedPrecondition.
 // ateletState is the state atelet returned from Checkpoint, applied in the
-// same update. A state that conflicts with the
-// record fails the step before it frees the worker. actorTemplate builds the
-// upload URI of an earlier pause's snapshot, which the pause doesn't record.
-func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate, mode suspendMode, ateletState *ateletpb.ActorSnapshotState) (_ *ateapipb.Actor, err error) {
+// same update. A state that conflicts with the record fails the step before it
+// frees the worker.
+func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, ateletState *ateletpb.ActorSnapshotState) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
 
@@ -381,10 +381,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	// conflicts with the record fails the step while a retry can still call
 	// atelet again.
 	applied := proto.CloneOf(latestActor.GetStatus())
-	pauseURI := func(uuid string) (resources.SnapshotURI, error) {
-		return newInProgressSnapshotURI(actorTemplate, latestActor, uuid)
-	}
-	if err := applyCheckpointState(ctx, applied, ateletState, pauseURI); err != nil {
+	if err := applyCheckpointState(ctx, applied, ateletState); err != nil {
 		return nil, err
 	}
 

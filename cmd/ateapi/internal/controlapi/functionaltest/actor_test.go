@@ -4285,7 +4285,7 @@ func TestSuspendActorAsynchronous(t *testing.T) {
 					LastAssignedGeneration: 2,
 					Snapshots: []*ateapipb.Snapshot{
 						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
-						newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "ignored", "node1"),
+						newPausedSnapshot(t, 2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), getResp.GetMetadata().GetUid(), ls.GetUuid(), "node1"),
 					},
 				},
 			}
@@ -4295,7 +4295,6 @@ func TestSuspendActorAsynchronous(t *testing.T) {
 				ignoreUID,
 				ignoreVersion,
 				ignoreTimestamps,
-				protocmp.IgnoreFields(&ateapipb.Snapshot{}, "uuid"),
 			); diff != "" {
 				t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
 			}
@@ -4921,8 +4920,8 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 }
 
 // TestSuspendActor_FromPaused verifies SuspendActor, in either mode, returns a
-// paused actor as it is: atelet is not called, and the node-local snapshot is
-// not promoted, so the actor stays pinned to its node.
+// paused actor as it is: atelet is not called, and the actor keeps its
+// node-local snapshot and stays pinned to its node.
 func TestSuspendActor_FromPaused(t *testing.T) {
 	tests := []struct {
 		name string
@@ -5061,12 +5060,12 @@ func TestCheckpointFailureCrashes(t *testing.T) {
 	}
 }
 
-// TestResumeActor_RelocatesAfterSuspendFromPaused covers the capacity-recovery
-// flow: a paused actor is pinned to the node holding its local snapshot, so it
-// cannot resume while that node is full. Suspending it uploads the snapshot and
-// drops the node pinning, after which it is scheduled onto a worker on a different
-// node.
-func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
+// TestResumeActor_RelocatesAfterDetach covers the capacity-recovery flow: a
+// paused actor is pinned to the node holding its local snapshot, so it cannot
+// resume while that node is full. Once atelet reports the snapshot uploaded and
+// detached from the node, the pin is dropped and the actor is scheduled onto a
+// worker on a different node.
+func TestResumeActor_RelocatesAfterDetach(t *testing.T) {
 	ns := namespaceForTest("ns-resume-relocate")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
@@ -5124,17 +5123,30 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	})
 	assertGrpcError(t, err, codes.ResourceExhausted, "no worker has room for the actor")
 
-	suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+	// node1's atelet reports the paused snapshot uploaded and detached: a report
+	// with only latest_durable.
+	ls := localSnapshot(paused.GetStatus())
+	if err := tc.service.ApplyActorSnapshotState(context.Background(), resources.ActorRefFromActor(paused), paused.GetMetadata().GetUid(), "node1", &ateapipb.ActorSnapshotState{
+		LatestDurable: &ateapipb.SnapshotReport{
+			Uuid:       ls.GetUuid(),
+			Generation: ls.GetGeneration(),
+			Fidelity:   ls.GetFidelity(),
+			Object:     ls.GetDurableSnapshot().GetObject(),
+		},
+	}); err != nil {
+		t.Fatalf("ApplyActorSnapshotState(%s) failed: %v", pinned, err)
+	}
+	detached, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
 	})
 	if err != nil {
-		t.Fatalf("SuspendActor(%s) failed: %v", pinned, err)
+		t.Fatalf("GetActor(%s) failed: %v", pinned, err)
 	}
-	if got := suspended.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Fatalf("state after suspend = %v, want SUSPENDED", got)
-	}
-	if ls := localSnapshot(suspended.GetActor().GetStatus()); ls != nil {
+	if ls := localSnapshot(detached.GetStatus()); ls != nil {
 		t.Fatalf("local snapshot = %v, want cleared so the actor can be scheduled anywhere", ls)
+	}
+	if got := detached.GetStatus().GetAssignedNode(); got != "" {
+		t.Fatalf("detached actor pinned to %q, want no node", got)
 	}
 
 	// Resume should succeed now and the actor scheduled on node2.
@@ -5142,7 +5154,7 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
 	})
 	if err != nil {
-		t.Fatalf("ResumeActor(%s) after suspend failed: %v", pinned, err)
+		t.Fatalf("ResumeActor(%s) after detach failed: %v", pinned, err)
 	}
 	if got := resumed.GetActor().GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "worker-2" {
 		t.Errorf("resumed onto worker %q, want worker-2 (the worker on node2)", got)
@@ -6203,7 +6215,7 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	}
 
 	// A sync suspend of the paused actor returns it as it is: the node-local
-	// snapshot keeps its runtime stamp and is not promoted.
+	// snapshot keeps its runtime stamp.
 	suspendedFromPaused, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: restorableRef})
 	if err != nil {
 		t.Fatalf("SuspendActor from PAUSED(restorable-actor) failed: %v", err)

@@ -79,7 +79,7 @@ func TestEnsureMarkedReverting_AcceptsPaused(t *testing.T) {
 	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, withPausedShape("node-1"))
+	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, withPausedShape(t, "node-1"))
 	actor, err := st.GetActor(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("get seeded actor: %v", err)
@@ -139,8 +139,8 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 				s.LastAssignedGeneration = 3
 				s.Snapshots = []*ateapipb.Snapshot{
 					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "kept", keptURI, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-					newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1"),
-					newLocalSnapshot(3, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-in-progress", ""),
+					newPausedSnapshot(t, 2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1"),
+					newPausedSnapshot(t, 3, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-in-progress", ""),
 				}
 				if tc.paused {
 					s.Snapshots[2].Locality = "node-1"
@@ -243,7 +243,7 @@ func TestRevertActor_PausedSnapshotAlreadyUploaded(t *testing.T) {
 	objects.PutSnapshot(t, old, "manifest.json")
 	objects.PutSnapshot(t, uploaded, "manifest.json")
 	mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
-		paused := newLocalSnapshot(2, memory, "", "pause-snap", "node-1")
+		paused := newPausedSnapshot(t, 2, memory, "", "pause-snap", "node-1")
 		paused.DurableSnapshot = &ateapipb.SnapshotStorage{Status: completed, Object: &ateapipb.ObjectSnapshot{SnapshotUri: uploaded.String()}}
 		s.LastAssignedGeneration = 2
 		s.Snapshots = []*ateapipb.Snapshot{

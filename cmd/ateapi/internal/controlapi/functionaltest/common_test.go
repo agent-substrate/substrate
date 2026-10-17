@@ -546,7 +546,14 @@ func newDurableSnapshot(gen int32, owner ateapipb.SnapshotOwner, fidelity ateapi
 	}
 }
 
-func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality string) *ateapipb.Snapshot {
+// newPausedSnapshot is the snapshot a pause leaves on node locality: its
+// durable copy, under the actor's own prefix, is PENDING until atelet uploads it.
+func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, actorUID, uuid, locality string) *ateapipb.Snapshot {
+	t.Helper()
+	uri, err := resources.NewActorSnapshotURI(testStorageLocation, testAtespace, actorUID, uuid)
+	if err != nil {
+		t.Fatalf("NewActorSnapshotURI: %v", err)
+	}
 	return &ateapipb.Snapshot{
 		Uuid:             uuid,
 		Generation:       gen,
@@ -554,6 +561,10 @@ func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID
 		Fidelity:         fidelity,
 		ActorTemplateUid: templateUID,
 		Locality:         locality,
+		DurableSnapshot: &ateapipb.SnapshotStorage{
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri.String()},
+		},
 	}
 }
 

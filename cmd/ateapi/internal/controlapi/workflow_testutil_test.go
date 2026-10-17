@@ -158,27 +158,26 @@ func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, ac
 }
 
 // withPausedShape seeds the shape a pause leaves behind: a node-local
-// snapshot at the latest generation, pinned to node. Pair it with
-// ACTOR_STATE_SUSPENDED to seed a paused actor.
-func withPausedShape(node string) func(*ateapipb.Actor) {
+// snapshot at the latest generation with a PENDING durable copy, pinned to
+// node. Pair it with ACTOR_STATE_SUSPENDED to seed a paused actor.
+func withPausedShape(t *testing.T, node string) func(*ateapipb.Actor) {
+	t.Helper()
+	snap := newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", node)
 	return func(a *ateapipb.Actor) {
 		a.Status.AssignedNode = node
 		a.Status.LastAssignedGeneration = 1
-		a.Status.Snapshots = []*ateapipb.Snapshot{
-			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap", node),
-		}
+		a.Status.Snapshots = []*ateapipb.Snapshot{proto.CloneOf(snap)}
 	}
 }
 
 // withUploadedPausedShape seeds a paused actor whose snapshot atelet has since
-// uploaded to uri: the paused shape, with a COMPLETED durable copy.
-func withUploadedPausedShape(node, uri string) func(*ateapipb.Actor) {
+// uploaded: the paused shape, with its durable copy COMPLETED.
+func withUploadedPausedShape(t *testing.T, node string) func(*ateapipb.Actor) {
+	t.Helper()
+	paused := withPausedShape(t, node)
 	return func(a *ateapipb.Actor) {
-		withPausedShape(node)(a)
-		a.Status.Snapshots[0].DurableSnapshot = &ateapipb.SnapshotStorage{
-			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-			Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri},
-		}
+		paused(a)
+		a.Status.Snapshots[0].DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 	}
 }
 
@@ -188,6 +187,17 @@ func withUploadedPausedShape(node, uri string) func(*ateapipb.Actor) {
 func newInProgressSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFidelity, uuid string) *ateapipb.Snapshot {
 	t.Helper()
 	return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", uuid, someActorSnapshotURI(t, testStorageLocation, "team-a", uuid), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+}
+
+// newPausedSnapshot builds the snapshot a pause leaves on node locality at
+// generation gen: a node-local checkpoint whose PENDING durable copy atelet
+// uploads in the background. With no locality it is the in-progress mark.
+func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality string) *ateapipb.Snapshot {
+	t.Helper()
+	snap := newInProgressSnapshot(t, gen, fidelity, uuid)
+	snap.ActorTemplateUid = templateUID
+	snap.Locality = locality
+	return snap
 }
 
 // withPauseInProgress seeds the shape a suspend of either mode has between

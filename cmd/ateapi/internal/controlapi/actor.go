@@ -311,11 +311,11 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 					"actor must be %s to change its actor template (got: %s)", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, state)
 			}
 			// A paused actor resumes from its node-local snapshot, uploaded or
-			// not, which was captured from the old template's sandbox; suspend
-			// or revert it first.
+			// not, which was captured from the old template's sandbox. The
+			// snapshot stays local until atelet detaches it from the node.
 			if latestSnapshotIsLocal(oldVal.GetStatus()) {
 				return apierror.FailedPrecondition(
-					"actor must hold no node-local snapshot to change its actor template: suspend or revert it first")
+					"actor must hold no node-local snapshot to change its actor template: wait for its snapshot to be uploaded and detached from the node, or revert it")
 			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
 			if err != nil {
