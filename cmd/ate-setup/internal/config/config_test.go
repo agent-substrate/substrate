@@ -1347,3 +1347,41 @@ func TestLoadImageSource(t *testing.T) {
 		})
 	}
 }
+
+// The apiserver's pool limit comes from the installer: 20, 64 on size10, and
+// a supplied value wins over the size profile. Zero is refused here rather
+// than by a crash-looping apiserver.
+func TestLoadPostgresPoolMaxConns(t *testing.T) {
+	for _, tc := range []struct {
+		name, size, env, want string
+		wantSet, wantErr      bool
+	}{
+		{name: "default", want: DefaultPostgresPoolMaxConns},
+		{name: "size10", size: ClusterSizeSize10, want: Size10PostgresPoolMaxConns},
+		{name: "supplied on size10", size: ClusterSizeSize10, env: "40", want: "40", wantSet: true},
+		{name: "zero", env: "0", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			if tc.size != "" {
+				t.Setenv("ATE_INSTALL_CLUSTER_SIZE", tc.size)
+			}
+			if tc.env != "" {
+				t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", tc.env)
+			}
+			cfg, err := Load(Options{})
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "a positive integer") {
+					t.Fatalf("Load() error = %v, want a positive integer", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.PostgresPoolMaxConns != tc.want || cfg.PostgresPoolMaxConnsSet != tc.wantSet {
+				t.Errorf("PostgresPoolMaxConns = %q set=%v, want %q set=%v", cfg.PostgresPoolMaxConns, cfg.PostgresPoolMaxConnsSet, tc.want, tc.wantSet)
+			}
+		})
+	}
+}

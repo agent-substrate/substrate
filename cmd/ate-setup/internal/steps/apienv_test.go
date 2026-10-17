@@ -327,12 +327,13 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 			cfg: config.Config{
 				PostgresReadWriteRole: config.DefaultPostgresReadWriteRole,
 				PostgresOwnerRole:     config.DefaultPostgresOwnerRole,
+				PostgresPoolMaxConns:  config.DefaultPostgresPoolMaxConns,
 			},
 			wantReadWrite: "tenant_readwrite",
 			wantOwner:     "tenant_owner",
 			wantOwnerDSN:  recordedDSN,
 			wantSchema:    "tenant_schema",
-			wantPoolSize:  "20",
+			wantPoolSize:  "25",
 		},
 		{
 			name: "explicit overrides win",
@@ -344,6 +345,7 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 				PostgresOwnerConnectionString: explicitOwnerDSN,
 				PostgresSchema:                "other_schema",
 				PostgresPoolMaxConns:          "30",
+				PostgresPoolMaxConnsSet:       true,
 			},
 			wantReadWrite: config.DefaultPostgresReadWriteRole,
 			wantOwner:     config.DefaultPostgresOwnerRole,
@@ -361,7 +363,7 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 						"ATE_API_POSTGRES_CLOUDSQL_INSTANCE": "p:r:i",
 						"ATE_API_POSTGRES_READ_WRITE_ROLE":   "tenant_readwrite",
 						"ATE_API_POSTGRES_OWNER_ROLE":        "tenant_owner",
-						"ATE_API_POSTGRES_POOL_MAX_CONNS":    "20",
+						"ATE_API_POSTGRES_POOL_MAX_CONNS":    "25",
 					},
 				},
 				&corev1.Secret{
