@@ -79,6 +79,7 @@ func TestCreateActor_Success(t *testing.T) {
 	want := &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 1},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()},
 		Status: &ateapipb.ActorStatus{
 			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			LastAssignedGeneration: 1,
@@ -769,6 +770,7 @@ func TestUpdateActor_Success(t *testing.T) {
 	wantActor := &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 2},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()},
 		Status: &ateapipb.ActorStatus{
 			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			LastAssignedGeneration: 1,
@@ -912,6 +914,7 @@ func TestUpdateActor(t *testing.T) {
 	wantActor := &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 2},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()},
 		Status: &ateapipb.ActorStatus{
 			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			LastAssignedGeneration: 1,
@@ -3124,6 +3127,7 @@ func TestResumeActor(t *testing.T) {
 	want := &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()},
 		Status: &ateapipb.ActorStatus{
 			State:                  ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			AssignedNode:           "node1",
@@ -3961,6 +3965,7 @@ func TestSuspendActor(t *testing.T) {
 	want := &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()},
 		Status: &ateapipb.ActorStatus{
 			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			LastAssignedGeneration: 2,
@@ -4279,6 +4284,7 @@ func TestSuspendActorAsynchronous(t *testing.T) {
 			want := &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			SourceTag:     &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()},
 				Status: &ateapipb.ActorStatus{
 					State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 					AssignedNode:           "node1",
