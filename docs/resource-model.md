@@ -104,6 +104,7 @@ classDiagram
     Tag "*" --> "1" Actor : source_actor
     ActorAssignment "0..1" --> "1" Actor : actor
     ActorTemplate ..> WorkerPool : worker_selector
+    Actor ..> WorkerPool : worker_selector
     WorkerPool ..> SandboxConfig : sandboxClasses
     WorkerPool "1" *-- "*" WorkerPod
     Worker "1" --> "1" WorkerPod

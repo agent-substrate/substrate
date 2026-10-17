@@ -37,25 +37,31 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
+const maxWorkerSelectorLabels = 10
+
 var (
-	getActorAtespaceFlag     string
-	getActorAllAtespacesFlag bool
-	createActorAtespaceFlag  string
-	createActorTemplateFlag  string
-	createActorTagFlag       string
-	deleteActorAtespaceFlag  string
-	deleteActorAnyStateFlag  bool
-	resumeActorAtespaceFlag  string
-	suspendActorAtespaceFlag string
-	suspendActorModeFlag     string
-	logsActorAtespaceFlag    string
-	logsActorFollowFlag      bool
-	logsActorContainerFlag   string
-	logsActorSourceFlag      string
+	getActorAtespaceFlag          string
+	getActorAllAtespacesFlag      bool
+	createActorAtespaceFlag       string
+	createActorTemplateFlag       string
+	createActorTagFlag            string
+	updateActorAtespaceFlag       string
+	updateActorTemplateFlag       string
+	updateActorWorkerSelectorFlag string
+	deleteActorAtespaceFlag       string
+	deleteActorAnyStateFlag       bool
+	resumeActorAtespaceFlag       string
+	suspendActorAtespaceFlag      string
+	suspendActorModeFlag          string
+	logsActorAtespaceFlag         string
+	logsActorFollowFlag           bool
+	logsActorContainerFlag        string
+	logsActorSourceFlag           string
 )
 
 var getActorsCmd = &cobra.Command{
@@ -133,6 +139,39 @@ var createActorCmd = &cobra.Command{
 		resp, err := apiClient.CreateActor(ctx, request)
 		if err != nil {
 			return fmt.Errorf("failed to create actor: %w", err)
+		}
+
+		return printer.PrintActorTo(cmd.OutOrStdout(), resp, outputFmt)
+	},
+}
+
+var updateActorCmd = &cobra.Command{
+	Use:   "actor <actor-name>",
+	Short: "Update an actor",
+	Args:  exactlyOneArg("<actor-name>", "atespace"),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mutate, err := buildActorUpdateMutation(
+			updateActorAtespaceFlag,
+			cmd.Flags().Changed("template"),
+			updateActorTemplateFlag,
+			cmd.Flags().Changed("worker-selector"),
+			updateActorWorkerSelectorFlag,
+		)
+		if err != nil {
+			return wrapUsageError(err)
+		}
+
+		ctx := cmd.Context()
+		apiClient, err := newAPIClient(cmd)
+		if err != nil {
+			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+		}
+		defer apiClient.Close()
+
+		actorRef := resources.ActorRef{Atespace: updateActorAtespaceFlag, Name: args[0]}
+		resp, err := updateActor(ctx, apiClient, actorRef.ToObjectRef(), mutate)
+		if err != nil {
+			return err
 		}
 
 		return printer.PrintActorTo(cmd.OutOrStdout(), resp, outputFmt)
@@ -269,6 +308,88 @@ func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapi
 		actor.SourceTag = ref
 	}
 	return &ateapipb.CreateActorRequest{Actor: actor}, nil
+}
+
+type actorUpdater interface {
+	GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error)
+	UpdateActor(ctx context.Context, in *ateapipb.UpdateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error)
+}
+
+func updateActor(ctx context.Context, client actorUpdater, ref *ateapipb.ObjectRef, mutate func(*ateapipb.Actor)) (*ateapipb.Actor, error) {
+	actor, err := client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get actor %q: %w", ref.GetName(), err)
+	}
+	mutate(actor)
+
+	resp, err := client.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: actor})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update actor: %w", err)
+	}
+	return resp, nil
+}
+
+func buildActorUpdateMutation(atespace string, templateSet bool, template string, workerSelectorSet bool, workerSelector string) (func(*ateapipb.Actor), error) {
+	if !templateSet && !workerSelectorSet {
+		return nil, errors.New("at least one of --template or --worker-selector is required")
+	}
+
+	var templateRef *ateapipb.ObjectRef
+	if templateSet {
+		var err error
+		templateRef, err = parseAtespacedName(template, atespace)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var selector *ateapipb.Selector
+	if workerSelectorSet {
+		var err error
+		selector, err = parseWorkerSelector(workerSelector)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return func(actor *ateapipb.Actor) {
+		if templateSet {
+			actor.ActorTemplate = templateRef
+		}
+		if workerSelectorSet {
+			actor.WorkerSelector = selector
+		}
+	}, nil
+}
+
+// parseWorkerSelector parses a comma-separated key=value label selector into a
+// Selector proto. An empty string returns nil, which clears the actor's
+// worker_selector on update.
+func parseWorkerSelector(raw string) (*ateapipb.Selector, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	matchLabels := make(map[string]string)
+	for entry := range strings.SplitSeq(raw, ",") {
+		key, val, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid worker selector %q: entry %q must be in key=value format", raw, entry)
+		}
+		if errs := content.IsLabelKey(key); len(errs) > 0 {
+			return nil, fmt.Errorf("invalid worker selector %q: invalid label key %q: %s", raw, key, strings.Join(errs, "; "))
+		}
+		if errs := content.IsLabelValue(val); len(errs) > 0 {
+			return nil, fmt.Errorf("invalid worker selector %q: invalid label value %q for key %q: %s", raw, val, key, strings.Join(errs, "; "))
+		}
+		if _, exists := matchLabels[key]; exists {
+			return nil, fmt.Errorf("invalid worker selector %q: duplicate label key %q", raw, key)
+		}
+		matchLabels[key] = val
+	}
+	if len(matchLabels) > maxWorkerSelectorLabels {
+		return nil, fmt.Errorf("invalid worker selector %q: at most %d labels are allowed, got %d", raw, maxWorkerSelectorLabels, len(matchLabels))
+	}
+	return &ateapipb.Selector{MatchLabels: matchLabels}, nil
 }
 
 // AteAPIClient abstracts the gRPC client calls.
@@ -745,6 +866,11 @@ func init() {
 	createActorCmd.Flags().StringVarP(&createActorAtespaceFlag, "atespace", "a", "", "atespace to create the actor in")
 	createActorCmd.Flags().StringVar(&createActorTagFlag, "tag", "", "tag to initialize the actor from, as <atespace>/<tag-name>, or just <tag-name> to use the actor's own atespace (see --atespace)")
 	createCmd.AddCommand(createActorCmd)
+
+	updateActorCmd.Flags().StringVarP(&updateActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
+	updateActorCmd.Flags().StringVar(&updateActorTemplateFlag, "template", "", "actor-template to repoint the actor to, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (see --atespace)")
+	updateActorCmd.Flags().StringVar(&updateActorWorkerSelectorFlag, "worker-selector", "", "comma-separated key=value label selector for worker pools, or empty string to clear")
+	updateCmd.AddCommand(updateActorCmd)
 
 	deleteActorCmd.Flags().StringVarP(&deleteActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
 	deleteActorCmd.Flags().BoolVar(&deleteActorAnyStateFlag, "any-state", false, "delete the actor regardless of current state")
