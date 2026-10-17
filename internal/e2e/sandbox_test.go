@@ -47,7 +47,7 @@ var substrateFixtures = []struct {
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
 		Template: "internal/e2e/fixtures/capabilities/capabilities-templates.yaml.tmpl",
-	}, 2},
+	}, 3},
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/testserver/websocket.yaml.tmpl",
 		Template: "internal/e2e/fixtures/testserver/websocket-template.yaml.tmpl",
