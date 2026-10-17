@@ -39,13 +39,24 @@ type suspendMode int
 
 const (
 	// suspendSync makes the snapshot durable before the workflow returns:
-	// the actor ends SUSPENDED holding a durable snapshot (SuspendActor).
+	// the actor ends SUSPENDED holding a durable snapshot.
 	suspendSync suspendMode = iota
 	// suspendAsync leaves the snapshot on the worker's node, to be uploaded
 	// later: the actor ends SUSPENDED holding a node-local snapshot and
-	// pinned to that node (PauseActor). Nothing uploads it yet.
+	// pinned to that node. Nothing uploads it yet.
 	suspendAsync
 )
+
+// suspendModeFromOptions maps a SuspendActor request's options to the
+// workflow mode.
+// TODO: default to suspendAsync once callers that need a durable snapshot ask
+// for DURABILITY_MODE_SYNCHRONOUS.
+func suspendModeFromOptions(opts *ateapipb.SuspendOptions) suspendMode {
+	if opts.GetMode() == ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+		return suspendAsync
+	}
+	return suspendSync
+}
 
 // uploadMode is when atelet makes the checkpoint durable.
 func (m suspendMode) uploadMode() ateletpb.UploadMode {
@@ -55,27 +66,15 @@ func (m suspendMode) uploadMode() ateletpb.UploadMode {
 	return ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE
 }
 
-// SuspendActor executes the workflow to suspend a running or paused actor:
-// a running actor is checkpointed on its worker, a paused actor's node-local
-// snapshot is uploaded. Idempotent: a re-entered workflow fast-forwards past
-// the steps a previous attempt completed, deriving progress from the
-// persisted actor alone.
-func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+// SuspendActor executes the workflow to suspend an actor. A sync suspend
+// takes a running or paused actor: a running actor is checkpointed on its
+// worker, a paused actor's node-local snapshot is uploaded. An async suspend
+// takes a running actor: it is checkpointed on its worker and the snapshot is
+// kept on that node. Idempotent: a re-entered workflow fast-forwards past the
+// steps a previous attempt completed, deriving progress from the persisted
+// actor alone.
+func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode) (_ *ateapipb.Actor, err error) {
 	ctx = preview.ContextWithOptIn(ctx)
-	return w.suspendActor(ctx, actorRef, suspendSync)
-}
-
-// PauseActor executes the workflow to pause a running actor: it is
-// checkpointed on its worker and the snapshot is kept on that node.
-// Idempotent: a re-entered workflow fast-forwards past the steps a previous
-// attempt completed, deriving progress from the persisted actor alone.
-func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
-	ctx = preview.ContextWithOptIn(ctx)
-	return w.suspendActor(ctx, actorRef, suspendAsync)
-}
-
-// suspendActor runs the suspend workflow behind SuspendActor and PauseActor.
-func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode) (_ *ateapipb.Actor, err error) {
 	start := time.Now()
 	var actor *ateapipb.Actor
 	var actorTemplate *ateapipb.ActorTemplate

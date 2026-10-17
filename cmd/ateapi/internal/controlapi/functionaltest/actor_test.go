@@ -4190,86 +4190,110 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 	}
 }
 
-// TestPauseActor tests the full workflow of pausing a running actor.
+// TestSuspendActorAsynchronous tests the full workflow of suspending a running
+// actor asynchronously, through SuspendActor and through PauseActor.
 // Workflow:
-// 1. Creates a mock ActorTemplate.
-// 2. Creates a mock Atelet Pod on 'node1'.
-// 3. Creates a mock worker Pod on 'node1'.
-// 4. Waits for the WorkerPoolSyncer to mirror the worker to the store.
-// 5. Creates an actor.
-// 6. Calls ResumeActor to transition it to RUNNING.
-// 7. Calls PauseActor RPC.
-// 8. Verifies that the fake Atelet received the Pause call.
-func TestPauseActor(t *testing.T) {
-	ns := namespaceForTest("ns-pause")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	tmpl := createTemplate(t, tc, ns)
-
-	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
-
-	name := "id1"
-	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
-	}})
-	if err != nil {
-		t.Fatalf("CreateActor failed: %v", err)
-	}
-
-	// Resume first to make it running
-	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
-	})
-	if err != nil {
-		t.Fatalf("ResumeActor failed: %v", err)
-	}
-
-	// Pause
-	_, err = tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
-	})
-	if err != nil {
-		t.Fatalf("PauseActor failed: %v", err)
-	}
-
-	if !tc.fakeAtelet.CheckpointCalled {
-		t.Errorf("expected atelet Checkpoint to be called")
-	}
-
-	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
-	})
-	if err != nil {
-		t.Fatalf("GetActor failed: %v", err)
-	}
-	ls := localSnapshot(getResp.GetStatus())
-	if ls.GetUuid() == "" {
-		t.Error("Snapshot.Uuid is empty, want the name the pause checkpointed under")
-	}
-	want := &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
-		Status: &ateapipb.ActorStatus{
-			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			AssignedNode:           "node1",
-			LastAssignedGeneration: 2,
-			Snapshots: []*ateapipb.Snapshot{
-				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
-				newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "ignored", "node1"),
+//  1. Creates a mock ActorTemplate.
+//  2. Creates a mock Atelet Pod on 'node1'.
+//  3. Creates a mock worker Pod on 'node1'.
+//  4. Waits for the WorkerPoolSyncer to mirror the worker to the store.
+//  5. Creates an actor.
+//  6. Calls ResumeActor to transition it to RUNNING.
+//  7. Suspends it asynchronously.
+//  8. Verifies that the fake Atelet received the Checkpoint call and the
+//     actor holds a node-local snapshot.
+func TestSuspendActorAsynchronous(t *testing.T) {
+	tests := []struct {
+		name    string
+		suspend func(ctx context.Context, client ateapipb.ControlClient, ref *ateapipb.ObjectRef) error
+	}{
+		{
+			name: "SuspendActor asynchronous",
+			suspend: func(ctx context.Context, client ateapipb.ControlClient, ref *ateapipb.ObjectRef) error {
+				_, err := client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+					Actor:   ref,
+					Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+				})
+				return err
+			},
+		},
+		{
+			name: "PauseActor",
+			suspend: func(ctx context.Context, client ateapipb.ControlClient, ref *ateapipb.ObjectRef) error {
+				_, err := client.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: ref})
+				return err
 			},
 		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest("ns-pause")
+			tc := setupTest(t, ns)
+			defer tc.cleanup()
 
-	if diff := cmp.Diff(want, getResp,
-		protocmp.Transform(),
-		ignoreUID,
-		ignoreVersion,
-		ignoreTimestamps,
-		protocmp.IgnoreFields(&ateapipb.Snapshot{}, "uuid"),
-	); diff != "" {
-		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
+			tmpl := createTemplate(t, tc, ns)
+
+			createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+			name := "id1"
+			_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			}})
+			if err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
+
+			// Resume first to make it running
+			_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+				Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+			})
+			if err != nil {
+				t.Fatalf("ResumeActor failed: %v", err)
+			}
+
+			if err := tt.suspend(context.Background(), tc.client, &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}); err != nil {
+				t.Fatalf("suspend failed: %v", err)
+			}
+
+			if !tc.fakeAtelet.CheckpointCalled {
+				t.Errorf("expected atelet Checkpoint to be called")
+			}
+
+			getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+				Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+			})
+			if err != nil {
+				t.Fatalf("GetActor failed: %v", err)
+			}
+			ls := localSnapshot(getResp.GetStatus())
+			if ls.GetUuid() == "" {
+				t.Error("Snapshot.Uuid is empty, want the name the pause checkpointed under")
+			}
+			want := &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+				Status: &ateapipb.ActorStatus{
+					State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+					AssignedNode:           "node1",
+					LastAssignedGeneration: 2,
+					Snapshots: []*ateapipb.Snapshot{
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
+						newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "ignored", "node1"),
+					},
+				},
+			}
+
+			if diff := cmp.Diff(want, getResp,
+				protocmp.Transform(),
+				ignoreUID,
+				ignoreVersion,
+				ignoreTimestamps,
+				protocmp.IgnoreFields(&ateapipb.Snapshot{}, "uuid"),
+			); diff != "" {
+				t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

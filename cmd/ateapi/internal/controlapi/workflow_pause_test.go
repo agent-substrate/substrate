@@ -61,8 +61,8 @@ func TestPauseActor_Finalized_WorkerGone(t *testing.T) {
 	})
 	// Intentionally NOT creating the worker in store, simulates worker already gone.
 
-	if _, err := w.PauseActor(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("PauseActor error = %v, want FailedPrecondition for the actor it crashed", err)
+	if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("Async SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
 	}
 	if checkpoints, _ := atelet.calls(); checkpoints != 1 {
 		t.Errorf("Checkpoint calls = %d, want 1 before finalize", checkpoints)
@@ -129,8 +129,8 @@ func TestPauseActor_Finalized_AlreadyCrashed(t *testing.T) {
 		s.WorkerAssignment = nil
 	})
 
-	if _, err := w.PauseActor(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("PauseActor error = %v, want FailedPrecondition for a CRASHED actor", err)
+	if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("Async SuspendActor error = %v, want FailedPrecondition for a CRASHED actor", err)
 	}
 	got := mustReadActor(t, ctx, st, actorRef)
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
@@ -172,7 +172,7 @@ func TestPauseActor_Finalized_KeepsCrashFromWorkerDelete(t *testing.T) {
 	seedWireWorker(t, ctx, st, assignmentOf(created))
 
 	w, _ := newWireCaptureWorkflow(t, workerDeletedDuringReleaseStore{Interface: st})
-	_, err := w.PauseActor(ctx, actorRef)
+	_, err := w.SuspendActor(ctx, actorRef, suspendAsync)
 	assertConcurrentCrashKept(t, ctx, st, actorRef, err, "suspend failed: "+crashMessageWorkerPodGone)
 }
 
@@ -222,9 +222,9 @@ func TestPauseActor_Finalized_RecordsFidelity(t *testing.T) {
 			})
 			seedWireWorker(t, ctx, st, assignmentOf(created))
 
-			got, err := w.PauseActor(ctx, actorRef)
+			got, err := w.SuspendActor(ctx, actorRef, suspendAsync)
 			if err != nil {
-				t.Fatalf("PauseActor: %v", err)
+				t.Fatalf("SuspendActor: %v", err)
 			}
 
 			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
@@ -289,8 +289,8 @@ func TestPauseActor_Finalized_MissingLocalSnapshotClearsAssignment(t *testing.T)
 		s.Snapshots = nil
 	})
 
-	if _, err := w.PauseActor(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("PauseActor error = %v, want FailedPrecondition for the actor it crashed", err)
+	if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("Async SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
 	}
 	got := mustReadActor(t, ctx, st, actorRef)
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
@@ -319,7 +319,7 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 		name      string
 		seedState ateapipb.ActorState
 		seedOpts  []func(*ateapipb.Actor)
-		// wantErr true means PauseActor must fail with FailedPrecondition.
+		// wantErr true means an async SuspendActor must fail with FailedPrecondition.
 		wantErr bool
 		// wantState is the stored state after the call.
 		wantState ateapipb.ActorState
@@ -357,14 +357,14 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 
 			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedState, tc.seedOpts...)
 
-			actor, err := w.PauseActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+			actor, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, suspendAsync)
 			if tc.wantErr {
 				if got := apierror.Code(err); got != codes.FailedPrecondition {
 					t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 				}
 			} else {
 				if err != nil {
-					t.Fatalf("PauseActor failed: %v", err)
+					t.Fatalf("Async SuspendActor failed: %v", err)
 				}
 				if actor.GetStatus().GetState() != tc.wantState {
 					t.Errorf("returned state = %v, want %v", actor.GetStatus().GetState(), tc.wantState)
@@ -401,7 +401,7 @@ func TestPauseActor_MarkedPausing_StateMatrix(t *testing.T) {
 			a.Status.WorkerAssignment = wireTestAssignment()
 		})
 
-		_, err := w.PauseActor(ctx, actorRef)
+		_, err := w.SuspendActor(ctx, actorRef, suspendAsync)
 		stored := mustReadActor(t, ctx, st, actorRef)
 		if seedState == ateapipb.ActorState_ACTOR_STATE_RUNNING {
 			assertStoppedAtDial(t, err)
@@ -442,9 +442,9 @@ func TestPauseActor_MarkedPausing_ReentrySkipsPauseInProgress(t *testing.T) {
 		a.Status.AssignedNode = "node-1"
 		a.Status.WorkerAssignment = wireTestAssignment()
 	})
-	paused, err := w.PauseActor(ctx, actorRef)
+	paused, err := w.SuspendActor(ctx, actorRef, suspendAsync)
 	if err != nil {
-		t.Fatalf("PauseActor on a pause in progress: %v", err)
+		t.Fatalf("Async SuspendActor on a pause in progress: %v", err)
 	}
 	if got := atelet.checkpointRequest().GetSnapshot().GetSnapshotUuid(); got != "pause-snap" {
 		t.Errorf("CheckpointRequest.Snapshot.SnapshotUuid = %q, want the persisted %q", got, "pause-snap")
@@ -468,9 +468,9 @@ func TestPauseActor_MarkedPausing_ReentrySkipsPauseInProgress(t *testing.T) {
 			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snap", "gs://snapshots/s", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 		}
 	})
-	_, err = w.PauseActor(ctx, suspendingRef)
+	_, err = w.SuspendActor(ctx, suspendingRef, suspendAsync)
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
-		t.Errorf("PauseActor on a suspend in progress: code = %v, want FailedPrecondition (err: %v)", got, err)
+		t.Errorf("Async SuspendActor on a suspend in progress: code = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 	if checkpoints, _ := atelet.calls(); checkpoints != 1 {
 		t.Errorf("Checkpoint calls = %d, want 1 (none for the suspend in progress)", checkpoints)
@@ -522,7 +522,7 @@ func TestPauseActor_AteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 			storetest.MustCreateActor(t, ctx, persistence, actor)
 
 			w := newMarkOnlyWorkflow(persistence)
-			_, err := w.PauseActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
+			_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, suspendAsync)
 			assertStoppedAtDial(t, err)
 
 			stored := mustReadActor(t, ctx, persistence, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
@@ -552,7 +552,7 @@ func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 
 	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDING, withPauseInProgress())
 
-	_, err := w.PauseActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+	_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, suspendAsync)
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 	}
@@ -582,7 +582,7 @@ func TestPauseActor_MarkedPausing_GoldenAtespaceRejected(t *testing.T) {
 		a.Status.AssignedNode = "node-1"
 		a.Status.WorkerAssignment = wireTestAssignment()
 	})
-	_, err := w.PauseActor(ctx, actorRef)
+	_, err := w.SuspendActor(ctx, actorRef, suspendAsync)
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("apierror.Code = %v (err %v), want FailedPrecondition", got, err)
 	}
@@ -628,8 +628,8 @@ func TestPauseActor_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 				},
 			})
 
-			if _, err := w.PauseActor(ctx, actorRef); err != nil {
-				t.Fatalf("PauseActor: %v", err)
+			if _, err := w.SuspendActor(ctx, actorRef, suspendAsync); err != nil {
+				t.Fatalf("SuspendActor: %v", err)
 			}
 			req := atelet.checkpointRequest()
 			if req == nil {

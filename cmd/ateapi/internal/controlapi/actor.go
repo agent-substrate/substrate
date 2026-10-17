@@ -472,7 +472,7 @@ func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorReq
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.PauseActor(ctx, actorRef)
+	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendAsync)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
@@ -516,7 +516,7 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActo
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef)
+	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendModeFromOptions(req.GetOptions()))
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
