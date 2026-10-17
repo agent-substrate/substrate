@@ -732,7 +732,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 
 	var registration *registeredActor
 	defer func() {
-		if err != nil && registration != nil {
+		if err != nil {
 			s.systemInfoVolumes.DeregisterOwned(registration)
 		}
 	}()
@@ -1448,7 +1448,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// Undo the Register if the restore fails. The errgroup join below happens
 	// before this defer can read registration, so the handoff is synchronized.
 	defer func() {
-		if err != nil && registration != nil {
+		if err != nil {
 			s.systemInfoVolumes.DeregisterOwned(registration)
 		}
 	}()
