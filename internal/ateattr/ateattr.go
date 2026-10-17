@@ -244,6 +244,9 @@ const (
 	// FileCacheSandboxAsset is the sandbox asset cache: the runsc binaries,
 	// kernels and guest images the workers run actors with.
 	FileCacheSandboxAsset = "sandbox_asset"
+	// FileCacheSnapshot is the snapshot cache: the files of shared snapshots,
+	// the ones many actors restore from.
+	FileCacheSnapshot = "snapshot"
 )
 
 // Values for FileCacheGCOutcomeKey. A pass is quiet when the cache is within

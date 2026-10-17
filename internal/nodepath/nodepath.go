@@ -18,7 +18,11 @@
 // stages runtime binaries.
 package nodepath
 
-import "path/filepath"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+)
 
 // BasePath is the root shared folder on the host filesystem, mounted at the
 // same path into the atelet and worker containers.
@@ -26,6 +30,21 @@ const BasePath = "/var/lib/ate"
 
 // ActorsDir is the parent of the per-actor directories atelet prepares.
 var ActorsDir = filepath.Join(BasePath, "actors")
+
+// UnderBasePath reports whether dir resolves to a directory strictly under
+// BasePath; BasePath itself does not count. A relative dir resolves against
+// the process working directory. Callers use it to tell a cache directory
+// configured off the shared mount, and judge the consequence themselves: the
+// image cache's GC watermarks then measure a different volume than actor
+// state, and the snapshot cache cannot be filled at all, since the
+// object-store plugin writes only under the base path.
+func UnderBasePath(dir string) bool {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = filepath.Clean(dir)
+	}
+	return strings.HasPrefix(abs, BasePath+string(os.PathSeparator))
+}
 
 // ActorSandboxAssetsDir is where atelet stages an actor's sandbox runtime
 // assets, hard-linked from its asset cache, and the only location a worker

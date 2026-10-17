@@ -282,6 +282,18 @@ func main() {
 	if err := filecachegc.Start(ctx, ateattr.FileCacheSandboxAsset, sandboxAssetCache, sandboxAssetCacheGCFlags, fileCacheInstruments); err != nil {
 		serverboot.Fatal(ctx, "Failed to start the sandbox asset cache GC", err)
 	}
+	if err := validateSnapshotCacheFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid snapshot cache flags", err)
+	}
+	snapshotCache, err := openSnapshotCache(ctx, *snapshotCacheDir, *snapshotCacheMinAge, *snapshotCacheFetchTimeout)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to open snapshot cache", err)
+	}
+	if snapshotCache != nil {
+		if err := filecachegc.Start(ctx, ateattr.FileCacheSnapshot, snapshotCache, snapshotCacheGCFlags, fileCacheInstruments); err != nil {
+			serverboot.Fatal(ctx, "Failed to start the snapshot cache GC", err)
+		}
+	}
 
 	// Sandbox assets go through the object-store plugin; a gs:// asset it
 	// cannot serve, such as one in the public gs://gvisor bucket, is read
@@ -402,6 +414,7 @@ func main() {
 		*objectStorePluginSocket,
 		imageCache,
 		sandboxAssetCache,
+		snapshotCache,
 		runtimes,
 		instruments,
 		volPlugins,
@@ -671,6 +684,10 @@ type Atelet struct {
 	// sandboxAssetCache holds every sandbox asset on the node once; actors get hard
 	// links into their own directories (see ensureSandboxAssets).
 	sandboxAssetCache *filecache.Store
+	// snapshotCache dedupes and retains shared snapshot files across
+	// restores. nil means caching is disabled (--snapshot-cache-dir=""):
+	// every restore downloads its snapshot files directly.
+	snapshotCache *filecache.Store
 	// runtimes resolves the runtime a Run or Restore names to the assets to
 	// stage, among those this node's workers advertise.
 	runtimes *runtimeIndex
@@ -719,6 +736,7 @@ func NewService(
 	pluginSocket string,
 	imageCache *imagecache.Store,
 	sandboxAssetCache *filecache.Store,
+	snapshotCache *filecache.Store,
 	runtimes *runtimeIndex,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
@@ -730,6 +748,7 @@ func NewService(
 		workerDialer:          workerDialer,
 		imageCache:            imageCache,
 		sandboxAssetCache:     sandboxAssetCache,
+		snapshotCache:         snapshotCache,
 		runtimes:              runtimes,
 		anonGCSClient:         anonGCSClient,
 		objectStorePlugin:     objectStorePlugin,
