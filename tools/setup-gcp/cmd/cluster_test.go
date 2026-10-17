@@ -59,9 +59,10 @@ func TestBuildCreateClusterRequest_NodeConfig(t *testing.T) {
 		cfg          *Config
 		wantDiskSize int32
 		wantDiskType string
+		wantBootDisk *containerpb.BootDisk
 	}{
 		{
-			name: "custom disk size and type",
+			name: "custom disk size and type without IOPS/throughput",
 			cfg: &Config{
 				ProjectID:       "test-project",
 				ClusterName:     "test-cluster",
@@ -72,6 +73,66 @@ func TestBuildCreateClusterRequest_NodeConfig(t *testing.T) {
 			},
 			wantDiskSize: 500,
 			wantDiskType: "hyperdisk-balanced",
+			wantBootDisk: nil,
+		},
+		{
+			name: "custom hyperdisk with provisioned IOPS and throughput",
+			cfg: &Config{
+				ProjectID:                         "test-project",
+				ClusterName:                       "test-cluster",
+				ClusterLocation:                   "us-central1-a",
+				MachineType:                       "c3-highmem-192-metal",
+				BootDiskSizeGB:                    500,
+				BootDiskType:                      "hyperdisk-balanced",
+				BootDiskProvisionedIOPS:           12000,
+				BootDiskProvisionedThroughputMBps: 1200,
+			},
+			wantDiskSize: 500,
+			wantDiskType: "hyperdisk-balanced",
+			wantBootDisk: &containerpb.BootDisk{
+				DiskType:              "hyperdisk-balanced",
+				SizeGb:                500,
+				ProvisionedIops:       12000,
+				ProvisionedThroughput: 1200,
+			},
+		},
+		{
+			name: "provisioned IOPS and throughput default empty disk type to hyperdisk-balanced",
+			cfg: &Config{
+				ProjectID:                         "test-project",
+				ClusterName:                       "test-cluster",
+				ClusterLocation:                   "us-central1-a",
+				MachineType:                       "c3-highmem-192-metal",
+				BootDiskSizeGB:                    500,
+				BootDiskProvisionedIOPS:           12000,
+				BootDiskProvisionedThroughputMBps: 1200,
+			},
+			wantDiskSize: 500,
+			wantDiskType: "hyperdisk-balanced",
+			wantBootDisk: &containerpb.BootDisk{
+				DiskType:              "hyperdisk-balanced",
+				SizeGb:                500,
+				ProvisionedIops:       12000,
+				ProvisionedThroughput: 1200,
+			},
+		},
+		{
+			name: "provisioned IOPS and throughput without disk size",
+			cfg: &Config{
+				ProjectID:                         "test-project",
+				ClusterName:                       "test-cluster",
+				ClusterLocation:                   "us-west1-c",
+				MachineType:                       "c3-standard-4",
+				BootDiskProvisionedIOPS:           4000,
+				BootDiskProvisionedThroughputMBps: 300,
+			},
+			wantDiskSize: 0,
+			wantDiskType: "hyperdisk-balanced",
+			wantBootDisk: &containerpb.BootDisk{
+				DiskType:              "hyperdisk-balanced",
+				ProvisionedIops:       4000,
+				ProvisionedThroughput: 300,
+			},
 		},
 		{
 			name: "unset disk size and type",
@@ -83,6 +144,7 @@ func TestBuildCreateClusterRequest_NodeConfig(t *testing.T) {
 			},
 			wantDiskSize: 0,
 			wantDiskType: "",
+			wantBootDisk: nil,
 		},
 	}
 
@@ -107,6 +169,9 @@ func TestBuildCreateClusterRequest_NodeConfig(t *testing.T) {
 			}
 			if nodeConfig.DiskType != tt.wantDiskType {
 				t.Errorf("DiskType = %q, want %q", nodeConfig.DiskType, tt.wantDiskType)
+			}
+			if !proto.Equal(nodeConfig.BootDisk, tt.wantBootDisk) {
+				t.Errorf("BootDisk = %+v, want %+v", nodeConfig.BootDisk, tt.wantBootDisk)
 			}
 
 			sysctls := nodeConfig.GetLinuxNodeConfig().GetSysctls()
@@ -402,6 +467,22 @@ func TestValidateBootDisk(t *testing.T) {
 			cfg:  Config{BootDiskSizeGB: 500},
 		},
 		{
+			name: "valid hyperdisk with IOPS and throughput",
+			cfg: Config{
+				BootDiskSizeGB:                    500,
+				BootDiskType:                      "hyperdisk-balanced",
+				BootDiskProvisionedIOPS:           12000,
+				BootDiskProvisionedThroughputMBps: 1200,
+			},
+		},
+		{
+			name: "IOPS and throughput with empty type (defaults to hyperdisk-balanced)",
+			cfg: Config{
+				BootDiskProvisionedIOPS:           12000,
+				BootDiskProvisionedThroughputMBps: 1200,
+			},
+		},
+		{
 			name: "zero boot disk size (unset/default)",
 			cfg:  Config{BootDiskSizeGB: 0},
 		},
@@ -409,6 +490,57 @@ func TestValidateBootDisk(t *testing.T) {
 			name:    "negative boot disk size",
 			cfg:     Config{BootDiskSizeGB: -1},
 			wantErr: "boot disk size -1 is invalid: must be greater than or equal to 0",
+		},
+		{
+			name:    "negative boot disk provisioned IOPS",
+			cfg:     Config{BootDiskProvisionedIOPS: -100},
+			wantErr: "boot disk provisioned IOPS -100 is invalid: must be greater than or equal to 0",
+		},
+		{
+			name:    "negative boot disk provisioned throughput",
+			cfg:     Config{BootDiskProvisionedThroughputMBps: -50},
+			wantErr: "boot disk provisioned throughput -50 is invalid: must be greater than or equal to 0",
+		},
+		{
+			name: "provisioned IOPS on non-hyperdisk type",
+			cfg: Config{
+				BootDiskType:            "pd-balanced",
+				BootDiskProvisionedIOPS: 12000,
+			},
+			wantErr: `boot disk provisioned IOPS/throughput requires --boot-disk-type=hyperdisk-balanced, got "pd-balanced"`,
+		},
+		{
+			name: "provisioned throughput on non-hyperdisk type",
+			cfg: Config{
+				BootDiskType:                      "pd-balanced",
+				BootDiskProvisionedThroughputMBps: 1200,
+			},
+			wantErr: `boot disk provisioned IOPS/throughput requires --boot-disk-type=hyperdisk-balanced, got "pd-balanced"`,
+		},
+		{
+			name: "provisioned IOPS on mixed-case hyperdisk type",
+			cfg: Config{
+				BootDiskType:                      "Hyperdisk-Balanced",
+				BootDiskProvisionedIOPS:           12000,
+				BootDiskProvisionedThroughputMBps: 1200,
+			},
+			wantErr: `boot disk provisioned IOPS/throughput requires --boot-disk-type=hyperdisk-balanced, got "Hyperdisk-Balanced"`,
+		},
+		{
+			name: "provisioned IOPS without throughput",
+			cfg: Config{
+				BootDiskType:            "hyperdisk-balanced",
+				BootDiskProvisionedIOPS: 12000,
+			},
+			wantErr: "--boot-disk-provisioned-iops and --boot-disk-provisioned-throughput must be set together",
+		},
+		{
+			name: "provisioned throughput without IOPS",
+			cfg: Config{
+				BootDiskType:                      "hyperdisk-balanced",
+				BootDiskProvisionedThroughputMBps: 1200,
+			},
+			wantErr: "--boot-disk-provisioned-iops and --boot-disk-provisioned-throughput must be set together",
 		},
 	}
 
@@ -427,6 +559,125 @@ func TestValidateBootDisk(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestBootDiskMatches(t *testing.T) {
+	pool := func(diskType string, sizeGb int32, bootDisk *containerpb.BootDisk) *containerpb.NodePool {
+		return &containerpb.NodePool{Config: &containerpb.NodeConfig{
+			DiskType:   diskType,
+			DiskSizeGb: sizeGb,
+			BootDisk:   bootDisk,
+		}}
+	}
+	defaultPool := pool("hyperdisk-balanced", 100, &containerpb.BootDisk{DiskType: "hyperdisk-balanced", SizeGb: 100})
+	provisionedPool := pool("hyperdisk-balanced", 500, &containerpb.BootDisk{
+		DiskType:              "hyperdisk-balanced",
+		SizeGb:                500,
+		ProvisionedIops:       12000,
+		ProvisionedThroughput: 1200,
+	})
+	// Type left empty: provisioned IOPS/throughput imply hyperdisk-balanced.
+	provisioned := &Config{BootDiskSizeGB: 500, BootDiskProvisionedIOPS: 12000, BootDiskProvisionedThroughputMBps: 1200}
+
+	tests := []struct {
+		name    string
+		cluster *containerpb.Cluster
+		cfg     *Config
+		want    bool
+	}{
+		{
+			name:    "no node pools",
+			cluster: &containerpb.Cluster{},
+			cfg:     provisioned,
+			want:    false,
+		},
+		{
+			name:    "pool at GKE default size and performance",
+			cluster: &containerpb.Cluster{NodePools: []*containerpb.NodePool{defaultPool}},
+			cfg:     provisioned,
+			want:    false,
+		},
+		// Each of the next four differs from the request in one setting only.
+		{
+			name: "right size at GKE default performance",
+			cluster: &containerpb.Cluster{NodePools: []*containerpb.NodePool{
+				pool("hyperdisk-balanced", 500, &containerpb.BootDisk{DiskType: "hyperdisk-balanced", SizeGb: 500}),
+			}},
+			cfg:  provisioned,
+			want: false,
+		},
+		{
+			name: "IOPS differs",
+			cluster: &containerpb.Cluster{NodePools: []*containerpb.NodePool{
+				pool("hyperdisk-balanced", 500, &containerpb.BootDisk{
+					DiskType:              "hyperdisk-balanced",
+					SizeGb:                500,
+					ProvisionedIops:       6000,
+					ProvisionedThroughput: 1200,
+				}),
+			}},
+			cfg:  provisioned,
+			want: false,
+		},
+		{
+			name: "throughput differs",
+			cluster: &containerpb.Cluster{NodePools: []*containerpb.NodePool{
+				pool("hyperdisk-balanced", 500, &containerpb.BootDisk{
+					DiskType:              "hyperdisk-balanced",
+					SizeGb:                500,
+					ProvisionedIops:       12000,
+					ProvisionedThroughput: 600,
+				}),
+			}},
+			cfg:  provisioned,
+			want: false,
+		},
+		{
+			name: "size differs",
+			cluster: &containerpb.Cluster{NodePools: []*containerpb.NodePool{
+				pool("hyperdisk-balanced", 100, &containerpb.BootDisk{
+					DiskType:              "hyperdisk-balanced",
+					SizeGb:                100,
+					ProvisionedIops:       12000,
+					ProvisionedThroughput: 1200,
+				}),
+			}},
+			cfg:  provisioned,
+			want: false,
+		},
+		{
+			name:    "pool already provisioned",
+			cluster: &containerpb.Cluster{NodePools: []*containerpb.NodePool{provisionedPool}},
+			cfg:     provisioned,
+			want:    true,
+		},
+		{
+			name:    "second pool provisioned",
+			cluster: &containerpb.Cluster{NodePools: []*containerpb.NodePool{defaultPool, provisionedPool}},
+			cfg:     provisioned,
+			want:    true,
+		},
+		{
+			name:    "only size requested and matching",
+			cluster: &containerpb.Cluster{NodePools: []*containerpb.NodePool{pool("pd-balanced", 200, nil)}},
+			cfg:     &Config{BootDiskSizeGB: 200},
+			want:    true,
+		},
+		{
+			name:    "type differs",
+			cluster: &containerpb.Cluster{NodePools: []*containerpb.NodePool{pool("pd-balanced", 100, nil)}},
+			cfg:     &Config{BootDiskType: "pd-ssd"},
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := bootDiskMatches(tt.cluster, tt.cfg); got != tt.want {
+				t.Errorf("bootDiskMatches() = %v, want %v", got, tt.want)
 			}
 		})
 	}

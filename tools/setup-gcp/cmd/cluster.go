@@ -82,8 +82,17 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 	if cfg.BootDiskSizeGB > 0 {
 		nodeConfig.DiskSizeGb = cfg.BootDiskSizeGB
 	}
-	if cfg.BootDiskType != "" {
-		nodeConfig.DiskType = cfg.BootDiskType
+	nodeConfig.DiskType = effectiveBootDiskType(cfg)
+	if cfg.BootDiskProvisionedIOPS > 0 || cfg.BootDiskProvisionedThroughputMBps > 0 {
+		// Provisioned IOPS and throughput exist only in BootDisk. GKE rejects a
+		// BootDisk whose type or size disagrees with the legacy DiskType and
+		// DiskSizeGb fields, so both copies carry the same values.
+		nodeConfig.BootDisk = &containerpb.BootDisk{
+			DiskType:              nodeConfig.DiskType,
+			SizeGb:                int64(nodeConfig.DiskSizeGb),
+			ProvisionedIops:       cfg.BootDiskProvisionedIOPS,
+			ProvisionedThroughput: cfg.BootDiskProvisionedThroughputMBps,
+		}
 	}
 	return &containerpb.CreateClusterRequest{
 		Parent: parent,
@@ -345,6 +354,18 @@ func createClusterIdempotent(ctx context.Context, cfg *Config) error {
 			slog.String("remedy", "run gcloud container node-pools update --system-config-from-file (see tools/setup-gcp/README.md; this warning is expected to remain if using the in-place DaemonSet)"))
 	}
 
+	// The boot disk is likewise set when GKE creates the nodes, and this tool
+	// never changes an existing pool's boot disk.
+	if bootDiskRequested(cfg) && !bootDiskMatches(cluster, cfg) {
+		slog.Warn("Cluster has no node pool with the requested boot disk; --boot-disk-* flags only apply to a cluster this tool creates",
+			slog.String("cluster", cfg.ClusterName),
+			slog.Int("want_size_gb", int(cfg.BootDiskSizeGB)),
+			slog.String("want_type", effectiveBootDiskType(cfg)),
+			slog.Int64("want_provisioned_iops", cfg.BootDiskProvisionedIOPS),
+			slog.Int64("want_provisioned_throughput_mibps", cfg.BootDiskProvisionedThroughputMBps),
+			slog.String("remedy", "recreate the cluster, or change the pool's boot disk with gcloud container node-pools update, which moves the pool's nodes onto the new boot disk"))
+	}
+
 	return nil
 }
 
@@ -392,10 +413,74 @@ func containsAll(clusterAPIs []string, requiredAPIs []string) bool {
 	return true
 }
 
-// validateBootDisk ensures BootDiskSizeGB is non-negative.
+// hyperdiskBalanced is the only boot disk type that accepts provisioned IOPS
+// and throughput.
+const hyperdiskBalanced = "hyperdisk-balanced"
+
+// effectiveBootDiskType is the boot disk type to request: --boot-disk-type
+// when set; hyperdisk-balanced when only provisioned IOPS/throughput are set,
+// since GKE would otherwise pick the machine's default type (pd-balanced on
+// most shapes), which rejects them; and empty to let GKE choose.
+func effectiveBootDiskType(cfg *Config) string {
+	if cfg.BootDiskType != "" {
+		return cfg.BootDiskType
+	}
+	if cfg.BootDiskProvisionedIOPS > 0 || cfg.BootDiskProvisionedThroughputMBps > 0 {
+		return hyperdiskBalanced
+	}
+	return ""
+}
+
+// bootDiskRequested reports whether any --boot-disk-* setting is set.
+func bootDiskRequested(cfg *Config) bool {
+	return cfg.BootDiskSizeGB > 0 || cfg.BootDiskType != "" ||
+		cfg.BootDiskProvisionedIOPS > 0 || cfg.BootDiskProvisionedThroughputMBps > 0
+}
+
+// bootDiskMatches reports whether any node pool's boot disk already has every
+// boot disk setting cfg asks for. Settings cfg leaves unset are not compared,
+// except that provisioned IOPS/throughput imply hyperdisk-balanced.
+func bootDiskMatches(cluster *containerpb.Cluster, cfg *Config) bool {
+	diskType := effectiveBootDiskType(cfg)
+	for _, np := range cluster.GetNodePools() {
+		nc := np.GetConfig()
+		if cfg.BootDiskSizeGB > 0 && nc.GetDiskSizeGb() != cfg.BootDiskSizeGB {
+			continue
+		}
+		if diskType != "" && nc.GetDiskType() != diskType {
+			continue
+		}
+		if cfg.BootDiskProvisionedIOPS > 0 && nc.GetBootDisk().GetProvisionedIops() != cfg.BootDiskProvisionedIOPS {
+			continue
+		}
+		if cfg.BootDiskProvisionedThroughputMBps > 0 && nc.GetBootDisk().GetProvisionedThroughput() != cfg.BootDiskProvisionedThroughputMBps {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// validateBootDisk ensures boot disk size, IOPS, and throughput parameters are valid.
 func validateBootDisk(cfg *Config) error {
 	if cfg.BootDiskSizeGB < 0 {
 		return fmt.Errorf("boot disk size %d is invalid: must be greater than or equal to 0", cfg.BootDiskSizeGB)
+	}
+	if cfg.BootDiskProvisionedIOPS < 0 {
+		return fmt.Errorf("boot disk provisioned IOPS %d is invalid: must be greater than or equal to 0", cfg.BootDiskProvisionedIOPS)
+	}
+	if cfg.BootDiskProvisionedThroughputMBps < 0 {
+		return fmt.Errorf("boot disk provisioned throughput %d is invalid: must be greater than or equal to 0", cfg.BootDiskProvisionedThroughputMBps)
+	}
+	if cfg.BootDiskProvisionedIOPS > 0 || cfg.BootDiskProvisionedThroughputMBps > 0 {
+		if cfg.BootDiskType != "" && cfg.BootDiskType != hyperdiskBalanced {
+			return fmt.Errorf("boot disk provisioned IOPS/throughput requires --boot-disk-type=%s, got %q", hyperdiskBalanced, cfg.BootDiskType)
+		}
+		// GKE rejects a hyperdisk-balanced boot disk that sets only one of
+		// them; fail before creating anything.
+		if cfg.BootDiskProvisionedIOPS == 0 || cfg.BootDiskProvisionedThroughputMBps == 0 {
+			return errors.New("--boot-disk-provisioned-iops and --boot-disk-provisioned-throughput must be set together")
+		}
 	}
 	return nil
 }
@@ -443,5 +528,7 @@ func init() {
 	clusterCmd.Flags().BoolVar(&cfg.EnableDataplaneV2, "enable-dataplane-v2", getEnv("ENABLE_DATAPLANE_V2", true), "Enable Dataplane V2 [env: ENABLE_DATAPLANE_V2]")
 	clusterCmd.Flags().BoolVar(&cfg.EnableNestedVirtualization, "enable-nested-virtualization", getEnv("ENABLE_NESTED_VIRTUALIZATION", true), "Create the node pool with nested virtualization, exposing /dev/kvm for micro-VM workers; needs a machine type that supports it. Turn off with --enable-nested-virtualization=false [env: ENABLE_NESTED_VIRTUALIZATION]")
 	clusterCmd.Flags().Int32Var(&cfg.BootDiskSizeGB, "boot-disk-size", getEnv("BOOT_DISK_SIZE_GB", int32(0)), "Boot disk size in GB for the node pool; 0 = GKE default (100 GB) [env: BOOT_DISK_SIZE_GB]")
-	clusterCmd.Flags().StringVar(&cfg.BootDiskType, "boot-disk-type", getEnv("BOOT_DISK_TYPE", ""), "Boot disk type for the node pool; empty = GKE default [env: BOOT_DISK_TYPE]")
+	clusterCmd.Flags().StringVar(&cfg.BootDiskType, "boot-disk-type", getEnv("BOOT_DISK_TYPE", ""), "Boot disk type for the node pool; empty = GKE default, or hyperdisk-balanced when provisioned IOPS/throughput are set [env: BOOT_DISK_TYPE]")
+	clusterCmd.Flags().Int64Var(&cfg.BootDiskProvisionedIOPS, "boot-disk-provisioned-iops", getEnv("BOOT_DISK_PROVISIONED_IOPS", int64(0)), "Provisioned IOPS for the node pool boot disk (hyperdisk-balanced only; set together with --boot-disk-provisioned-throughput; 0 = GKE default) [env: BOOT_DISK_PROVISIONED_IOPS]")
+	clusterCmd.Flags().Int64Var(&cfg.BootDiskProvisionedThroughputMBps, "boot-disk-provisioned-throughput", getEnv("BOOT_DISK_PROVISIONED_THROUGHPUT_MBPS", int64(0)), "Provisioned throughput in MiB/s for the node pool boot disk (hyperdisk-balanced only; set together with --boot-disk-provisioned-iops; 0 = GKE default) [env: BOOT_DISK_PROVISIONED_THROUGHPUT_MBPS]")
 }
