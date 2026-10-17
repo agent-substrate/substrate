@@ -43,10 +43,11 @@ const trackedActorUID = "actor-uid-1"
 func useTempNodeDirs(t *testing.T) {
 	t.Helper()
 	root := t.TempDir()
-	origActors := nodepath.ActorsDir
+	origActors, origSnapshots := nodepath.ActorsDir, nodepath.SnapshotsDir
 	nodepath.ActorsDir = filepath.Join(root, "actors")
+	nodepath.SnapshotsDir = filepath.Join(root, "snapshots")
 	t.Cleanup(func() {
-		nodepath.ActorsDir = origActors
+		nodepath.ActorsDir, nodepath.SnapshotsDir = origActors, origSnapshots
 	})
 }
 

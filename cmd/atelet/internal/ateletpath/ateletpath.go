@@ -64,6 +64,16 @@ func ActorPath(actorUID string) string {
 	)
 }
 
+// ActorSnapshotPath is the actor's snapshot staging directory, which may be on
+// a different filesystem from ActorPath. Checkpoints rename files between its
+// subdirectories, so they must stay on one filesystem.
+func ActorSnapshotPath(actorUID string) string {
+	return filepath.Join(
+		nodepath.SnapshotsDir,
+		actorUID,
+	)
+}
+
 // ActorSandboxAssetsFile is the per-actor file where atelet records the sandbox
 // binaries (class + content-addressed asset set, for this node's architecture)
 // the actor is currently running. It is written at Run/Restore and read at
@@ -123,14 +133,14 @@ func OCIBundlePath(actorUID, containerName string) string {
 
 func CheckpointStateDir(actorUID string) string {
 	return filepath.Join(
-		ActorPath(actorUID),
+		ActorSnapshotPath(actorUID),
 		"checkpoint-state",
 	)
 }
 
 func LocalCheckpointsDir(actorUID string) string {
 	return filepath.Join(
-		ActorPath(actorUID),
+		ActorSnapshotPath(actorUID),
 		"local-checkpoint",
 	)
 }
@@ -202,7 +212,7 @@ func SystemInfoVolumeRoot(actorUID, volumeName string) string {
 // yet been loaded.
 func RestoreStateDir(actorUID string) string {
 	return filepath.Join(
-		ActorPath(actorUID),
+		ActorSnapshotPath(actorUID),
 		"restore-state",
 	)
 }

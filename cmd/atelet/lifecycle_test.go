@@ -54,10 +54,11 @@ import (
 func useTempNodeDirs(t *testing.T) {
 	t.Helper()
 	root := t.TempDir()
-	origActors := nodepath.ActorsDir
+	origActors, origSnapshots := nodepath.ActorsDir, nodepath.SnapshotsDir
 	nodepath.ActorsDir = filepath.Join(root, "actors")
+	nodepath.SnapshotsDir = filepath.Join(root, "snapshots")
 	t.Cleanup(func() {
-		nodepath.ActorsDir = origActors
+		nodepath.ActorsDir, nodepath.SnapshotsDir = origActors, origSnapshots
 	})
 }
 
@@ -191,12 +192,14 @@ func TestLocalSnapshotGC(t *testing.T) {
 		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 	} {
-		t.Run(fidelity.String(), func(t *testing.T) { runLocalSnapshotGC(t, fidelity) })
+		t.Run(fidelity.String(), func(t *testing.T) { runLocalSnapshotGC(t, fidelity, useTempNodeDirs) })
 	}
 }
 
-func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
-	useTempNodeDirs(t)
+// runLocalSnapshotGC runs the TestLocalSnapshotGC flow on the node dirs useDirs
+// sets up.
+func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDirs func(*testing.T)) {
+	useDirs(t)
 	ctx := t.Context()
 
 	const (
@@ -383,16 +386,8 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 
 	// Terminate is the only chance to reclaim the actor's directory: nothing
 	// else on the node deletes it.
-	actorDir := ateletpath.ActorPath(actorUID)
-	if entries, err := os.ReadDir(actorDir); err == nil {
-		left := make([]string, 0, len(entries))
-		for _, e := range entries {
-			left = append(left, e.Name())
-		}
-		t.Errorf("actor dir %s survived terminate with %d entries: %v", actorDir, len(left), left)
-	} else if !os.IsNotExist(err) {
-		t.Errorf("reading actor dir %s: %v", actorDir, err)
-	}
+	assertDirGone(t, "actor dir", ateletpath.ActorPath(actorUID))
+	assertDirGone(t, "actor snapshot dir", ateletpath.ActorSnapshotPath(actorUID))
 }
 
 // TestRestoreUsesRequestSandboxAssets checks that Restore runs the actor with
@@ -1081,6 +1076,9 @@ func TestTerminateWithoutWorkerPodUID(t *testing.T) {
 	}
 	if _, err := os.Stat(ateletpath.LocalCheckpointsDir(actorUID)); !os.IsNotExist(err) {
 		t.Errorf("local checkpoint dir survived terminate: %v", err)
+	}
+	if _, err := os.Stat(ateletpath.ActorSnapshotPath(actorUID)); !os.IsNotExist(err) {
+		t.Errorf("actor snapshot dir survived terminate: %v", err)
 	}
 	if _, err := os.Stat(ateletpath.ActorPath(actorUID)); !os.IsNotExist(err) {
 		t.Errorf("actor dir survived terminate: %v", err)

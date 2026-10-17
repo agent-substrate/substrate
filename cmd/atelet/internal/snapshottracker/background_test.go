@@ -34,12 +34,14 @@ import (
 )
 
 // useActorDir roots atelet's on-node state in temp directories and creates the
-// tracked actor's directory, so the tracker writes its snapshot state file.
+// tracked actor's directories, so the tracker writes its snapshot state file.
 func useActorDir(t *testing.T) {
 	t.Helper()
 	useTempNodeDirs(t)
-	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
-		t.Fatal(err)
+	for _, dir := range []string{ateletpath.ActorPath(trackedActorUID), ateletpath.ActorSnapshotPath(trackedActorUID)} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
