@@ -47,17 +47,27 @@ func TestValidateSandboxAssetCacheFlags(t *testing.T) {
 	}
 }
 
-// TestOpenSandboxAssetCacheResetsScratch pins the startup contract: the
-// cache opens under the given dir, and whatever a crashed prewarm left in
-// the scratch dir is gone.
-func TestOpenSandboxAssetCacheResetsScratch(t *testing.T) {
+// TestOpenSandboxAssetCacheKeepsPins pins the startup contract: the cache
+// opens under the given dir, whatever a crashed fetch left in the scratch
+// dir is gone, the pins dir exists afterwards, and a pin a previous atelet
+// left is untouched; only the prewarmer prunes, once it knows what the
+// node's workers advertise.
+func TestOpenSandboxAssetCacheKeepsPins(t *testing.T) {
 	useTempNodeDirs(t)
+	useTempAssetPins(t)
 	useTempAssetScratch(t)
-	leftover := filepath.Join(ateletpath.SandboxAssetScratchDir, "prewarm-123", "runsc")
-	if err := os.MkdirAll(filepath.Dir(leftover), 0o755); err != nil {
+	leftover := filepath.Join(ateletpath.SandboxAssetScratchDir, "cpu-features-123", "runsc")
+	if err := os.MkdirAll(filepath.Dir(leftover), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(leftover, []byte("stale link"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	pinned := filepath.Join(ateletpath.SandboxAssetPinDir("sha256:abc"), "runsc")
+	if err := os.MkdirAll(filepath.Dir(pinned), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pinned, []byte("pinned"), 0o555); err != nil {
 		t.Fatal(err)
 	}
 
@@ -72,12 +82,11 @@ func TestOpenSandboxAssetCacheResetsScratch(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "entries")); err != nil {
 		t.Errorf("cache layout not created under %s: %v", dir, err)
 	}
-	entries, err := os.ReadDir(ateletpath.SandboxAssetScratchDir)
-	if err != nil {
-		t.Fatalf("scratch dir after open: %v", err)
+	if got, err := os.ReadFile(pinned); err != nil || string(got) != "pinned" {
+		t.Errorf("a previous atelet's pin after open = %q, %v; want it untouched", got, err)
 	}
-	if len(entries) != 0 {
-		t.Errorf("scratch dir holds %d entries after open, want it emptied", len(entries))
+	if entries, err := os.ReadDir(ateletpath.SandboxAssetScratchDir); err != nil || len(entries) != 0 {
+		t.Errorf("scratch dir after open holds %d entries (%v), want it emptied", len(entries), err)
 	}
 }
 

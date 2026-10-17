@@ -253,9 +253,9 @@ func TestRecordFromRequest(t *testing.T) {
 // newTestAssetCacheAt opens an asset cache under root/cache. Destinations a
 // test links into should live under the same root, on the cache's
 // filesystem.
-func newTestAssetCacheAt(t *testing.T, root string) *filecache.Store {
+func newTestAssetCacheAt(t *testing.T, root string, opts ...filecache.Option) *filecache.Store {
 	t.Helper()
-	store, err := filecache.New(filepath.Join(root, "cache"))
+	store, err := filecache.New(filepath.Join(root, "cache"), opts...)
 	if err != nil {
 		t.Fatalf("filecache.New: %v", err)
 	}
@@ -279,8 +279,18 @@ func cachedAssets(t *testing.T, root string) int {
 	return len(entries)
 }
 
-// useTempAssetScratch points prewarm's scratch dir at a temp dir. Not
-// parallel-safe: the path is process-global.
+// useTempAssetPins points the prewarmer's pins dir at a temp dir, on the
+// same filesystem as the test caches. Not parallel-safe: the path is
+// process-global.
+func useTempAssetPins(t *testing.T) {
+	t.Helper()
+	orig := ateletpath.SandboxAssetPinsDir
+	ateletpath.SandboxAssetPinsDir = t.TempDir()
+	t.Cleanup(func() { ateletpath.SandboxAssetPinsDir = orig })
+}
+
+// useTempAssetScratch points the scratch dir of fetches without an actor or
+// a pin at a temp dir. Not parallel-safe: the path is process-global.
 func useTempAssetScratch(t *testing.T) {
 	t.Helper()
 	orig := ateletpath.SandboxAssetScratchDir
