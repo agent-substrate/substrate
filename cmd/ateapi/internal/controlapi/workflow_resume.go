@@ -85,7 +85,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		if err == nil && wasRunning {
 			return
 		}
-		w.instruments.recordLifecycleOp(ctx, ateattr.OperationResume, start, err,
+		w.instruments.recordLifecycleOp(ctx, ateattr.OperationResume, start, actorOpError(err, actorRef),
 			lifecycleOpAttrs(actor, tele.SnapshotKind, tele.WireFidelity)...)
 	}()
 
