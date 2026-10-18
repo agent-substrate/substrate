@@ -48,6 +48,7 @@ RECORD_FAIL_STEP = {"resume": REASON_RESUME, "execute": REASON_EXECUTE, "suspend
 
 LSSD_SUFFIX = "-lssd"  # machine types with local SSD, which get G2's tighter resume bound
 MAX_STARTUP_FAILURES_PER_TASK = 10  # above this many per finished task, a run is invalid
+NOTE_NO_TASK_FINISHED = "no task finished within the run"
 
 
 @dataclass
@@ -312,12 +313,27 @@ def classify(task: Task, mode: dict[str, Any], baseline: Optional[dict[str, Any]
 
 
 def run_validity(tasks_finished: int, startup_failure_attempts: int,
-                 max_startup_failures_per_task: float = MAX_STARTUP_FAILURES_PER_TASK) -> tuple[bool, str]:
+                 max_startup_failures_per_task: float = MAX_STARTUP_FAILURES_PER_TASK,
+                 sessions_started: int = 0) -> tuple[bool, str]:
     """Whether a run measured the platform at all, and why not: it is invalid with
     no finished task, or with more than max_startup_failures_per_task startup
-    failures per finished task (the actors mostly never started)."""
+    failures per finished task (the actors mostly never started).
+
+    A run in which sessions_started sessions started, without that many startup
+    failures per session, but no task finished before the cut-off stays valid with
+    no task done: its tasks took longer than the run. Pass sessions_started only for
+    runs that log task records, where a missing record means an unfinished task.
+    """
     if tasks_finished == 0:
+        if sessions_started and startup_failure_attempts <= max_startup_failures_per_task * sessions_started:
+            return True, ""
         return False, "no finished tasks"
     if startup_failure_attempts > max_startup_failures_per_task * tasks_finished:
         return False, f"{startup_failure_attempts} startup failures for {tasks_finished} finished tasks"
     return True, ""
+
+
+def sessions_started(events: list[parse.Event], cut: Optional[float]) -> int:
+    """Actors that started a cycle by the cut-off."""
+    limit = cut if cut is not None else float("inf")
+    return len({ev.actor for ev in events if ev.msg == parse.MSG_START and ev.actor and ev.t <= limit})

@@ -116,6 +116,11 @@ part of a user's task. The first available of:
 no finished task, or more than `max_startup_failures_per_task` (10) startup
 failures per finished task. Such a run measured a broken setup, not the platform,
 and `summary` leaves it out. A log with no sweperf line at all is an error.
+- One exception, for runs that log task records (recognized even without a record
+  by the `ok` on their cycle lines): if sessions started, without more than
+  `max_startup_failures_per_task` startup failures per session, but no task
+  finished before the cut-off, the run stays valid with no task done and the note
+  "no task finished within the run". Its tasks took longer than the run.
 
 **Windows.**
 - A finished task counts in the window it **ended** in. An unfinished bad task
@@ -127,9 +132,12 @@ and `summary` leaves it out. A log with no sweperf line at all is an error.
 ## Outputs
 
 `goodput.json`:
-- `run`, `valid`, `invalid_reason`, `cutoff`, `steady_window`, `baseline`;
+- `run`, `valid`, `invalid_reason`, `note`, `sessions_started`, `cutoff`,
+  `steady_window`, `baseline`;
 - `abs_speed_ratio`: the run baseline's `task_cel_ref_ms` ÷ that of the
-  `reference_baseline` named in `config.json` (above 1 is slower than the reference);
+  `reference_baseline` named in `config.json` (above 1 is slower than the
+  reference). The reference may be for another template, such as another build
+  of the same task;
 - per mode (`strict`, `relaxed`) and window (`steady`, `whole`):
   - `tasks_done`, `tasks_good`, `tasks_bad`, `tasks_unfinished_bad`, `bad_reasons`,
     `startup_failure_attempts`;
@@ -153,9 +161,10 @@ carry a `whole_` prefix.
   `<mode>_<metric>_<median|min|max>` of the steady-window metrics over the
   test's valid runs (counts, ratio, rates, bad reasons, latency and slowdown
   percentiles, `eta_infra`), `abs_speed_ratio_*`, and valid/invalid run counts;
-- `goodput_summary.md`: the same as tables, plus the invalid runs and why;
-- `goodput_runs.csv`: one row per run, valid or not, with the same metrics
-  unaggregated (`<mode>_<metric>`).
+- `goodput_summary.md`: the same as tables, plus the invalid runs and why, and
+  runs with a note;
+- `goodput_runs.csv`: one row per run, valid or not (with `invalid_reason` and
+  `note`), with the same metrics unaggregated (`<mode>_<metric>`).
 
 ## Config (`config.json`)
 

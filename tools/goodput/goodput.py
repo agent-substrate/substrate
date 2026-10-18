@@ -143,9 +143,11 @@ def compute(run_dir: Path, config: dict[str, Any], identity: Optional[dict[str, 
             modes[mode_name].update(g2_resume_max_s=rules["resume_max_s"], g2_ttfe_max_s=rules["ttfe_max_s"])
 
     finished = sum(1 for t in tasks if t.finished)
+    sessions = classify.sessions_started(events, cut)
     valid, invalid_reason = classify.run_validity(
         finished, len(startup),
-        config.get("max_startup_failures_per_task", classify.MAX_STARTUP_FAILURES_PER_TASK))
+        config.get("max_startup_failures_per_task", classify.MAX_STARTUP_FAILURES_PER_TASK),
+        sessions if has_records else 0)
     reference, speed = abs_speed(baseline, config)
     result = {
         "version": 1,
@@ -156,6 +158,8 @@ def compute(run_dir: Path, config: dict[str, Any], identity: Optional[dict[str, 
                 **capacity},
         "valid": valid,
         "invalid_reason": invalid_reason,
+        "note": classify.NOTE_NO_TASK_FINISHED if valid and not finished else "",
+        "sessions_started": sessions,
         "cutoff": {"ts": cut, "source": cut_source},
         "steady_window": {"start_ts": steady[0], "end_ts": steady[1], "source": steady_source},
         "baseline": baseline,
@@ -190,13 +194,11 @@ def task_row(t: classify.Task) -> dict[str, Any]:
 
 def abs_speed(baseline: Optional[dict[str, Any]], config: dict[str, Any]) -> tuple[Optional[str], Optional[float]]:
     """config's reference_baseline (a baselines[] name), and the run baseline's task_cel_ref_ms
-    divided by the reference's (above 1: slower than the reference). The ratio is None without
-    both values, or when the two baselines name different templates."""
+    divided by the reference's (above 1: slower than the reference); None without both values.
+    The reference may be for another template, such as another build of the same task."""
     name = config.get("reference_baseline") or None
     ref = next((b for b in config.get("baselines") or [] if name and b.get("name") == name), None)
     if not (baseline and baseline.get("task_cel_ref_ms") and ref and ref.get("task_cel_ref_ms")):
-        return name, None
-    if baseline.get("template") and ref.get("template") and baseline["template"] != ref["template"]:
         return name, None
     return name, round(float(baseline["task_cel_ref_ms"]) / float(ref["task_cel_ref_ms"]), 4)
 
@@ -210,7 +212,7 @@ def jsonl_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
                 "startup_basis": m["startup_basis"],
                 "log_format": run["log_format"], "runtime": run["runtime"], "machine_type": run["machine_type"],
                 "template": run["template"], "valid": str(result.get("valid", True)).lower()}
-        for key in ("invalid_reason", "abs_speed_ratio"):
+        for key in ("invalid_reason", "note", "abs_speed_ratio"):
             if result.get(key):
                 meas[key] = str(result[key])
         for key in ("g2_resume_max_s", "g2_ttfe_max_s"):
@@ -241,6 +243,8 @@ def summary_line(result: dict[str, Any]) -> str:
     parts = [f"{run['test_name'] or '?'} {run['run_date']} {run['runtime']} {run['machine_type']}"]
     if not result.get("valid", True):
         parts.append(f"INVALID: {result.get('invalid_reason')}")
+    if result.get("note"):
+        parts.append(f"NOTE: {result['note']}")
     for mode_name, m in sorted(result["modes"].items()):
         s = m["steady"]
         parts.append(f"{mode_name}: good {s['tasks_good']}/{s['tasks_done']} done (+{s['tasks_unfinished_bad']} "

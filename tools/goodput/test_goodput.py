@@ -531,6 +531,16 @@ class RecordParseTest(unittest.TestCase):
         ev = parse.parse_line(ONSTART_USER_LINE)
         self.assertEqual((ev.actor, ev.user), ("sb-0c3de0a1-7f6e-4b8a-9d2c-1e5f00a1b2c4", 12))
 
+    def test_lines_that_came_with_task_records_mark_the_format(self):
+        """A run whose tasks all outlast it has no record; its cycle lines' ok still marks it."""
+        done = parse.parse_line(line(3, parse.MSG_DONE, cycle=1, cel_ms=1300.0, wall_ms=2000.0, ok=False))
+        self.assertIs(done.ok, False)
+        self.assertEqual(parse.log_format([done]), parse.FORMAT_TASK_RECORD)
+        self.assertEqual(parse.log_format([parse.parse_line(ONSTART_USER_LINE)]), parse.FORMAT_TASK_RECORD)
+        self.assertIsNone(parse.parse_line(REAL["done"]).ok)
+        self.assertEqual(parse.log_format([parse.parse_line(REAL["done"]), parse.parse_line(REAL["onstart_fail"])]),
+                         parse.FORMAT_UNKNOWN)
+
 
 class RecordTaskTest(unittest.TestCase):
     def test_tasks_from_records_and_failure_lines(self):
@@ -778,6 +788,52 @@ class ValidityTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no sweperf task log lines"):
                 goodput.compute(run, CONFIG)
 
+    def test_rule_for_tasks_that_outlast_the_run(self):
+        self.assertEqual(classify.run_validity(0, 0, sessions_started=5), (True, ""))
+        self.assertEqual(classify.run_validity(0, 50, sessions_started=5), (True, ""))
+        self.assertEqual(classify.run_validity(0, 51, sessions_started=5), (False, "no finished tasks"))
+
+    def test_record_run_whose_tasks_all_outlast_it(self):
+        """Sessions started and cycled, but no task finished before the cut-off: valid, with no task done."""
+        logs = []
+        for i in range(3):
+            logs += [line(1 + i, parse.MSG_START, sb(i), cycle=1),
+                     line(3 + i, parse.MSG_DONE, sb(i), cycle=1, cel_ms=1300.0, wall_ms=2000.0, ok=True),
+                     line(4 + i, parse.MSG_START, sb(i), cycle=2)]
+        end = [line(20, parse.MSG_SHUTDOWN, actor=""), line(20.1, parse.MSG_SUSPEND_FAIL, sb(0), err="canceled")]
+        with tempfile.TemporaryDirectory() as tmp:
+            r = goodput.compute(write_run(Path(tmp) / "a", logs + end, RecordComputeTest.META), CONFIG)
+            failed = goodput.compute(write_run(Path(tmp) / "b", logs + [line(10, parse.MSG_RESUME_FAIL, sb(1), cycle=2)]
+                                               + end, RecordComputeTest.META), CONFIG)
+        self.assertEqual((r["run"]["log_format"], r["valid"], r["invalid_reason"], r["note"], r["sessions_started"]),
+                         (parse.FORMAT_TASK_RECORD, True, "", classify.NOTE_NO_TASK_FINISHED, 3))
+        st = r["modes"]["strict"]["steady"]
+        self.assertEqual((st["tasks_done"], st["tasks_good"], st["good_tasks_per_hr"], st["goodput_ratio_pct"]),
+                         (0, 0, 0.0, None))
+        self.assertIn("NOTE: no task finished within the run", goodput.summary_line(r))
+        self.assertEqual(goodput.jsonl_rows(r)[0]["measurements"]["note"], classify.NOTE_NO_TASK_FINISHED)
+        # a task that failed before the cut-off is unfinished and bad, so the ratio is 0%
+        st = failed["modes"]["strict"]["steady"]
+        self.assertEqual((failed["valid"], st["tasks_unfinished_bad"], st["goodput_ratio_pct"]), (True, 1, 0.0))
+
+    def test_older_run_whose_tasks_outlast_it_stays_invalid(self):
+        logs = cycle(1, 1, 2.0) + [line(4, parse.MSG_START, cycle=2), line(20, parse.MSG_BOOMER_QUIT, actor="")]
+        with tempfile.TemporaryDirectory() as tmp:
+            r = goodput.compute(write_run(Path(tmp), logs, {"start_ts": T0, "end_ts": T0 + 30}), CONFIG)
+        self.assertEqual((r["run"]["log_format"], r["valid"], r["invalid_reason"], r["note"], r["sessions_started"]),
+                         (parse.FORMAT_UNKNOWN, False, "no finished tasks", "", 1))
+
+
+class AbsSpeedTest(unittest.TestCase):
+    def test_ratio_to_the_reference(self):
+        base = {"template": "swebench-astropy", "task_cel_ref_ms": 9000}
+        ref = {"name": "ref", "template": "sweperf-astropy", "task_cel_ref_ms": 6000}
+        config = {"baselines": [ref], "reference_baseline": "ref"}
+        self.assertEqual(goodput.abs_speed(base, config), ("ref", 1.5))  # another build of the same task
+        self.assertEqual(goodput.abs_speed(base, dict(config, reference_baseline="other")), ("other", None))
+        self.assertEqual(goodput.abs_speed(None, config), ("ref", None))
+        self.assertEqual(goodput.abs_speed(base, {"baselines": [ref]}), (None, None))
+
 
 class RecordBaselineTest(unittest.TestCase):
     def test_entry_from_clean_records(self):
@@ -864,6 +920,15 @@ class SummaryTest(unittest.TestCase):
                "totals": {"tasks_finished": 0, "startup_failure_attempts": 9}}
         rows, invalid = summarize.summarize([old])
         self.assertEqual((rows[0]["runs_invalid"], invalid[0]["reason"]), (1, "no finished tasks"))
+
+    def test_notes_are_listed(self):
+        r = {"run": {"test_name": "t", "run_date": "2026-10-18", "run_ts": "1"}, "modes": {}, "valid": True,
+             "invalid_reason": "", "note": classify.NOTE_NO_TASK_FINISHED}
+        self.assertEqual(summarize.run_rows([r])[0]["note"], classify.NOTE_NO_TASK_FINISHED)
+        rows, invalid = summarize.summarize([r])
+        md = summarize.markdown(rows, invalid, summarize.mode_names([r]), summarize.notes_of([r]))
+        self.assertIn("## Notes", md)
+        self.assertIn("| t | 2026-10-18 | 1 | no task finished within the run |", md)
 
 
 if __name__ == "__main__":

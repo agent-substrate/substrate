@@ -131,7 +131,7 @@ def run_rows(results: list[dict[str, Any]], max_startup_failures_per_task: float
         ok, why = validity(r, max_startup_failures_per_task)
         row: dict[str, Any] = {"test_name": run.get("test_name") or "?", "run_date": run.get("run_date") or "",
                                "run_ts": run.get("run_ts") or "", "tag": run.get("tag") or "", "valid": int(ok),
-                               "invalid_reason": why}
+                               "invalid_reason": why, "note": r.get("note") or ""}
         row.update({key: run.get(key) or "" for key in IDENTITY})
         for mode in modes:
             steady = (r["modes"].get(mode) or {}).get("steady")
@@ -171,7 +171,8 @@ def _pair(row: dict[str, Any], key50: str, key90: str, ratio: bool = False) -> s
     return f"{_num(row[key50 + '_median'], ratio)} / {_num(row[key90 + '_median'], ratio)}"
 
 
-def markdown(rows: list[dict[str, Any]], invalid: list[dict[str, Any]], modes: list[str]) -> str:
+def markdown(rows: list[dict[str, Any]], invalid: list[dict[str, Any]], modes: list[str],
+             notes: list[dict[str, Any]] = ()) -> str:
     runs = sum(r["runs"] for r in rows)
     out = ["# Task goodput summary", "",
            f"{runs} runs of {len(rows)} tests, {len(invalid)} of them invalid and left out. Steady window. "
@@ -211,7 +212,18 @@ def markdown(rows: list[dict[str, Any]], invalid: list[dict[str, Any]], modes: l
         out += ["## Invalid runs", ""]
         table(["test", "run date", "run ts", "reason"],
               [[x["test_name"], x["run_date"], str(x["run_ts"]), x["reason"]] for x in invalid])
+    if notes:
+        out += ["## Notes", ""]
+        table(["test", "run date", "run ts", "note"],
+              [[x["test_name"], x["run_date"], str(x["run_ts"]), x["note"]] for x in notes])
     return "\n".join(out)
+
+
+def notes_of(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per run with a note (such as a valid run in which no task finished)."""
+    rows = [{"test_name": r["run"].get("test_name") or "?", "run_date": r["run"].get("run_date") or "",
+             "run_ts": r["run"].get("run_ts") or "", "note": r["note"]} for r in results if r.get("note")]
+    return sorted(rows, key=lambda x: (x["test_name"], x["run_date"], str(x["run_ts"])))
 
 
 def write(results: list[dict[str, Any]], out: Path,
@@ -221,6 +233,6 @@ def write(results: list[dict[str, Any]], out: Path,
     out.mkdir(parents=True, exist_ok=True)
     csv_path, md_path, runs_path = out / CSV_NAME, out / MD_NAME, out / RUNS_CSV_NAME
     write_csv(rows, csv_path)
-    md_path.write_text(markdown(rows, invalid, mode_names(results)), encoding="utf-8")
+    md_path.write_text(markdown(rows, invalid, mode_names(results), notes_of(results)), encoding="utf-8")
     write_csv(run_rows(results, max_startup_failures_per_task), runs_path)
     return csv_path, md_path, runs_path

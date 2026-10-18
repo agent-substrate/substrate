@@ -87,6 +87,7 @@ class Event:
     actor: str = ""
     cycle: Optional[int] = None
     user: Optional[int] = None  # boomer goroutine ID, on task records and newer startup failure lines
+    ok: Optional[bool] = None  # on newer "Completed sweperf cycle" lines
     record: Optional[TaskRecord] = None  # set on task record lines
 
 
@@ -125,7 +126,8 @@ def parse_line(line: str) -> Optional[Event]:
     if not actor and msg.startswith(MSG_ONSTART_FAIL_PREFIX):
         m = ACTOR_IN_TEXT.search(str(j.get("err") or ""))
         actor = m.group(1) if m else ""
-    ev = Event(t=t, msg=msg, actor=actor, cycle=_int(j.get("cycle")), user=_int(j.get("user")))
+    ev = Event(t=t, msg=msg, actor=actor, cycle=_int(j.get("cycle")), user=_int(j.get("user")),
+               ok=j["ok"] if isinstance(j.get("ok"), bool) else None)
     if msg == MSG_TASK_RECORD:
         ev.record = parse_record(j, t)
     return ev
@@ -157,8 +159,12 @@ def read_events(path: Path) -> list[Event]:
 
 
 def log_format(events: list[Event]) -> str:
-    """task_record if the run logged task records, else the task-end wording of its first task-end line."""
-    if any(ev.record is not None for ev in events):
+    """task_record if the benchmark logged task records, else the task-end wording of the first task-end line.
+
+    A run whose tasks all ran past the cut-off has no record, so a cycle line's ok or a
+    startup failure's user, which came with task records, also marks it.
+    """
+    if any(ev.record is not None or ev.ok is not None or ev.user is not None for ev in events):
         return FORMAT_TASK_RECORD
     for ev in events:
         if ev.msg.startswith(MSG_FINISHED_PREFIX):
