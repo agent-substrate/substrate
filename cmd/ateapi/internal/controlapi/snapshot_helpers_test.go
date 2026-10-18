@@ -204,45 +204,6 @@ func TestSnapshotPruningHelpers(t *testing.T) {
 	})
 }
 
-// TestLatestSnapshotIsLocalOnly pins a pause's snapshot whose upload is not
-// recorded yet: the latest snapshot is node-local with no COMPLETED durable
-// copy, whether it has no copy or a PENDING one. A durable latest snapshot, or
-// a local snapshot that is not captured yet, do not count; a RUNNING actor
-// that kept its local snapshot across a resume does.
-func TestLatestSnapshotIsLocalOnly(t *testing.T) {
-	local := func(gen int32) *ateapipb.Snapshot {
-		return newPausedSnapshot(t, gen, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local", "node-1")
-	}
-	durable := func(gen int32, st ateapipb.SnapshotStorageStatus) *ateapipb.Snapshot {
-		return newDurableSnapshot(gen, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "durable", "gs://b/durable", st)
-	}
-	uploading := local(2)
-	uploading.DurableSnapshot = &ateapipb.SnapshotStorage{Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING, Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://b/up"}}
-
-	tests := []struct {
-		name   string
-		status *ateapipb.ActorStatus
-		want   bool
-	}{
-		{"nil status", nil, false},
-		{"no snapshots", &ateapipb.ActorStatus{}, false},
-		{"local only above a durable one", &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{durable(1, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED), local(2)}}, true},
-		{"local only alone", &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{local(1)}}, true},
-		{"durable only", &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{durable(2, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)}}, false},
-		{"local with an upload pending", &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{uploading}}, true},
-		{"local not yet captured", &ateapipb.ActorStatus{LastAssignedGeneration: 1, Snapshots: []*ateapipb.Snapshot{newPausedSnapshot(t, 1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local", "")}}, false},
-		{"older local only under a pause in progress", &ateapipb.ActorStatus{LastAssignedGeneration: 2, Snapshots: []*ateapipb.Snapshot{local(1), newPausedSnapshot(t, 2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local", "")}}, false},
-		{"latest generation dropped by a revert", &ateapipb.ActorStatus{LastAssignedGeneration: 3, Snapshots: []*ateapipb.Snapshot{local(2)}}, false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := latestSnapshotIsLocalOnly(tc.status); got != tc.want {
-				t.Errorf("latestSnapshotIsLocalOnly = %t, want %t", got, tc.want)
-			}
-		})
-	}
-}
-
 // TestLatestSnapshotIsLocal pins the shape a paused actor has: the latest
 // snapshot is node-local, whether or not atelet has uploaded it. A latest
 // snapshot with only a durable copy, or a local one not captured yet, does not

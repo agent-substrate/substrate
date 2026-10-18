@@ -1070,6 +1070,8 @@ type capturingAtelet struct {
 	checkpointState *ateletpb.ActorSnapshotState
 	// promoteState is the snapshot state PromoteSnapshot returns.
 	promoteState *ateletpb.ActorSnapshotState
+	// promoteErr, when set, fails PromoteSnapshot after it is recorded.
+	promoteErr error
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1107,6 +1109,9 @@ func (f *capturingAtelet) PromoteSnapshot(ctx context.Context, req *ateletpb.Pro
 	defer f.mu.Unlock()
 	f.promote = proto.Clone(req).(*ateletpb.PromoteSnapshotRequest)
 	f.promotes++
+	if f.promoteErr != nil {
+		return nil, f.promoteErr
+	}
 	return &ateletpb.PromoteSnapshotResponse{State: proto.CloneOf(f.promoteState)}, nil
 }
 
