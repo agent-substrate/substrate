@@ -102,7 +102,8 @@ service Control {
 
   // Tag the external snapshot a suspended Actor holds. The tag gets its own
   // copy of that snapshot, so suspending or deleting the Actor afterwards
-  // cannot collect it.
+  // cannot collect it. When the Actor's latest snapshot is not uploaded yet,
+  // atelet uploads it first, so the call can take as long as that upload.
   rpc CreateTag(CreateTagRequest) returns (Tag) {
     option (method).resource = "Tag";
   }

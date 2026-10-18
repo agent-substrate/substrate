@@ -380,7 +380,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	// conflicts with the record fails the step while a retry can still call
 	// atelet again.
 	applied := proto.CloneOf(latestActor.GetStatus())
-	if err := applyCheckpointState(ctx, applied, ateletState); err != nil {
+	if err := applyAteletResponseState(ctx, applied, ateletState); err != nil {
 		return nil, err
 	}
 

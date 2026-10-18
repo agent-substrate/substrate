@@ -228,8 +228,8 @@ func TestSuspendActorAsync_Finalized_RecordsFidelity(t *testing.T) {
 			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				t.Fatalf("state = %v, want SUSPENDED", got.GetStatus().GetState())
 			}
-			if !latestSnapshotIsLocalOnly(got.GetStatus()) {
-				t.Errorf("snapshots = %v, want the latest one local only", got.GetStatus().GetSnapshots())
+			if !latestSnapshotIsLocal(got.GetStatus()) {
+				t.Errorf("snapshots = %v, want the latest one local", got.GetStatus().GetSnapshots())
 			}
 			localSnap := findLatestLocalSnapshot(got.GetStatus())
 			if localSnap.GetFidelity() != tc.want {
