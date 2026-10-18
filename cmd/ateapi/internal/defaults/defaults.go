@@ -64,6 +64,9 @@ func applySnapshotConfigDefaults(sc *ateapipb.SnapshotConfig) {
 	if sc.PreferredFidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 		sc.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	}
+	if sc.MinimumFidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+		sc.MinimumFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	}
 	if sc.GoldenSnapshotConfig == nil {
 		sc.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{}
 	}

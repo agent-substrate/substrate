@@ -668,6 +668,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	if err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
 	}
+	if got := resumed2.GetFidelity(); got != tc.fidelity {
+		t.Errorf("resume from pause Fidelity = %v, want %v", got, tc.fidelity)
+	}
 	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	assignedRuntime2 := resumed2.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime()
 	if diff := cmp.Diff(assignedRuntime, assignedRuntime2, protocmp.Transform()); diff != "" {
@@ -708,10 +711,14 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q again...", actorID)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
+	resumed3, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
+	}
+	if got := resumed3.GetFidelity(); got != tc.fidelity {
+		t.Errorf("resume from suspend Fidelity = %v, want %v", got, tc.fidelity)
 	}
 	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 

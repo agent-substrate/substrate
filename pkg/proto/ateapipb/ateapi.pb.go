@@ -2977,6 +2977,8 @@ func (x *ActorTemplateStatus) GetGoldenSnapshotStatus() *GoldenSnapshotStatus {
 
 // SnapshotConfig selects what actor snapshots capture and where they are
 // stored.
+//
+// +k8s:customValidation # minimum_fidelity <= preferred_fidelity
 type SnapshotConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// storage_location is the base object-storage URI snapshots of actors on
@@ -2998,6 +3000,17 @@ type SnapshotConfig struct {
 	// +k8s:minimum=1
 	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
 	PreferredFidelity SnapshotFidelity `protobuf:"varint,2,opt,name=preferred_fidelity,json=preferredFidelity,proto3,enum=ateapi.SnapshotFidelity" json:"preferred_fidelity,omitempty"`
+	// minimum_fidelity is the lowest fidelity the actor can safely resume at.
+	// When the highest fidelity a snapshot can be restored at is below
+	// minimum_fidelity (for example after an ActorTemplate update drops restore
+	// fidelity to VOLUMES), ResumeActor transitions the actor to CRASHED rather
+	// than booting it with lost state. Must not exceed preferred_fidelity.
+	// Defaults to VOLUMES when unset.
+	//
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+	MinimumFidelity SnapshotFidelity `protobuf:"varint,3,opt,name=minimum_fidelity,json=minimumFidelity,proto3,enum=ateapi.SnapshotFidelity" json:"minimum_fidelity,omitempty"`
 	// golden_snapshot_config configures automated golden snapshot creation.
 	// Golden snapshots are enabled when this config is omitted.
 	//
@@ -3047,6 +3060,13 @@ func (x *SnapshotConfig) GetStorageLocation() string {
 func (x *SnapshotConfig) GetPreferredFidelity() SnapshotFidelity {
 	if x != nil {
 		return x.PreferredFidelity
+	}
+	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+}
+
+func (x *SnapshotConfig) GetMinimumFidelity() SnapshotFidelity {
+	if x != nil {
+		return x.MinimumFidelity
 	}
 	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 }
@@ -5167,7 +5187,11 @@ type ResumeActorResponse struct {
 	Actor *Actor                 `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// True if a resume workflow was executed to activate the actor.
 	// False if the actor was already RUNNING.
-	Resumed       bool `protobuf:"varint,2,opt,name=resumed,proto3" json:"resumed,omitempty"`
+	Resumed bool `protobuf:"varint,2,opt,name=resumed,proto3" json:"resumed,omitempty"`
+	// fidelity is the snapshot fidelity the actor actually resumed at.
+	// SNAPSHOT_FIDELITY_UNSPECIFIED when resumed is false; SNAPSHOT_FIDELITY_VOLUMES
+	// on a cold boot without a snapshot or a volumes-only restore.
+	Fidelity      SnapshotFidelity `protobuf:"varint,3,opt,name=fidelity,proto3,enum=ateapi.SnapshotFidelity" json:"fidelity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5214,6 +5238,13 @@ func (x *ResumeActorResponse) GetResumed() bool {
 		return x.Resumed
 	}
 	return false
+}
+
+func (x *ResumeActorResponse) GetFidelity() SnapshotFidelity {
+	if x != nil {
+		return x.Fidelity
+	}
+	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 }
 
 // RevertActorRequest identifies the Actor to revert.
@@ -9594,10 +9625,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\rsnapshot_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\fsnapshotTime\x12#\n" +
 	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"i\n" +
 	"\x13ActorTemplateStatus\x12R\n" +
-	"\x16golden_snapshot_status\x18\x01 \x01(\v2\x1c.ateapi.GoldenSnapshotStatusR\x14goldenSnapshotStatus\"\xd8\x01\n" +
+	"\x16golden_snapshot_status\x18\x01 \x01(\v2\x1c.ateapi.GoldenSnapshotStatusR\x14goldenSnapshotStatus\"\x9d\x02\n" +
 	"\x0eSnapshotConfig\x12)\n" +
 	"\x10storage_location\x18\x01 \x01(\tR\x0fstorageLocation\x12G\n" +
-	"\x12preferred_fidelity\x18\x02 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\x11preferredFidelity\x12R\n" +
+	"\x12preferred_fidelity\x18\x02 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\x11preferredFidelity\x12C\n" +
+	"\x10minimum_fidelity\x18\x03 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\x0fminimumFidelity\x12R\n" +
 	"\x16golden_snapshot_config\x18\x05 \x01(\v2\x1c.ateapi.GoldenSnapshotConfigR\x14goldenSnapshotConfig\"F\n" +
 	"\x14GoldenSnapshotConfig\x12.\n" +
 	"\x04mode\x18\x01 \x01(\x0e2\x1a.ateapi.GoldenSnapshotModeR\x04mode\"\xec\x02\n" +
@@ -9699,10 +9731,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x12PauseActorResponse\x12#\n" +
 	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"=\n" +
 	"\x12ResumeActorRequest\x12'\n" +
-	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"T\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"\x8a\x01\n" +
 	"\x13ResumeActorResponse\x12#\n" +
 	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\x12\x18\n" +
-	"\aresumed\x18\x02 \x01(\bR\aresumed\"=\n" +
+	"\aresumed\x18\x02 \x01(\bR\aresumed\x124\n" +
+	"\bfidelity\x18\x03 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\bfidelity\"=\n" +
 	"\x12RevertActorRequest\x12'\n" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\":\n" +
 	"\x13RevertActorResponse\x12#\n" +
@@ -10297,241 +10330,243 @@ var file_ateapi_proto_depIdxs = []int32{
 	145, // 51: ateapi.GoldenSnapshotStatus.snapshot_time:type_name -> google.protobuf.Timestamp
 	37,  // 52: ateapi.ActorTemplateStatus.golden_snapshot_status:type_name -> ateapi.GoldenSnapshotStatus
 	2,   // 53: ateapi.SnapshotConfig.preferred_fidelity:type_name -> ateapi.SnapshotFidelity
-	40,  // 54: ateapi.SnapshotConfig.golden_snapshot_config:type_name -> ateapi.GoldenSnapshotConfig
-	5,   // 55: ateapi.GoldenSnapshotConfig.mode:type_name -> ateapi.GoldenSnapshotMode
-	44,  // 56: ateapi.Container.env:type_name -> ateapi.EnvVar
-	45,  // 57: ateapi.Container.wakeup_probe:type_name -> ateapi.WakeupProbe
-	56,  // 58: ateapi.Container.volume_mounts:type_name -> ateapi.VolumeMount
-	42,  // 59: ateapi.Container.security_context:type_name -> ateapi.SecurityContext
-	35,  // 60: ateapi.Container.resources:type_name -> ateapi.Resources
-	43,  // 61: ateapi.SecurityContext.capabilities:type_name -> ateapi.Capabilities
-	46,  // 62: ateapi.WakeupProbe.http_get:type_name -> ateapi.HttpGetAction
-	49,  // 63: ateapi.Volume.durable_dir:type_name -> ateapi.DurableDirVolumeSource
-	50,  // 64: ateapi.Volume.external_volume_template:type_name -> ateapi.ExternalVolumeTemplate
-	51,  // 65: ateapi.Volume.system_info:type_name -> ateapi.SystemInfoVolumeSource
-	48,  // 66: ateapi.Volume.image:type_name -> ateapi.ImageVolumeSource
-	52,  // 67: ateapi.SystemInfoVolumeSource.data_sources:type_name -> ateapi.SystemInfoDataSource
-	53,  // 68: ateapi.SystemInfoDataSource.actor_metadata:type_name -> ateapi.ActorMetadataDataSource
-	55,  // 69: ateapi.SystemInfoDataSource.trust_bundle:type_name -> ateapi.TrustBundleDataSource
-	54,  // 70: ateapi.ActorMetadataDataSource.items:type_name -> ateapi.ActorMetadataItem
-	6,   // 71: ateapi.ActorMetadataItem.field:type_name -> ateapi.ActorMetadataField
-	32,  // 72: ateapi.CreateAtespaceRequest.atespace:type_name -> ateapi.Atespace
-	33,  // 73: ateapi.GetAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
-	95,  // 74: ateapi.ListAtespacesRequest.options:type_name -> ateapi.ListOptions
-	32,  // 75: ateapi.ListAtespacesResponse.atespaces:type_name -> ateapi.Atespace
-	33,  // 76: ateapi.DeleteAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
-	94,  // 77: ateapi.DeleteAtespaceRequest.options:type_name -> ateapi.DeleteOptions
-	34,  // 78: ateapi.CreateActorTemplateRequest.actor_template:type_name -> ateapi.ActorTemplate
-	33,  // 79: ateapi.GetActorTemplateRequest.actor_template:type_name -> ateapi.ObjectRef
-	95,  // 80: ateapi.ListActorTemplatesRequest.options:type_name -> ateapi.ListOptions
-	34,  // 81: ateapi.ListActorTemplatesResponse.actor_templates:type_name -> ateapi.ActorTemplate
-	33,  // 82: ateapi.DeleteActorTemplateRequest.actor_template:type_name -> ateapi.ObjectRef
-	94,  // 83: ateapi.DeleteActorTemplateRequest.options:type_name -> ateapi.DeleteOptions
-	33,  // 84: ateapi.GetActorRequest.actor:type_name -> ateapi.ObjectRef
-	16,  // 85: ateapi.CreateActorRequest.actor:type_name -> ateapi.Actor
-	16,  // 86: ateapi.UpdateActorRequest.actor:type_name -> ateapi.Actor
-	33,  // 87: ateapi.SuspendActorRequest.actor:type_name -> ateapi.ObjectRef
-	72,  // 88: ateapi.SuspendActorRequest.options:type_name -> ateapi.SuspendOptions
-	16,  // 89: ateapi.SuspendActorResponse.actor:type_name -> ateapi.Actor
-	7,   // 90: ateapi.SuspendOptions.mode:type_name -> ateapi.DurabilityMode
-	33,  // 91: ateapi.PauseActorRequest.actor:type_name -> ateapi.ObjectRef
-	16,  // 92: ateapi.PauseActorResponse.actor:type_name -> ateapi.Actor
-	33,  // 93: ateapi.ResumeActorRequest.actor:type_name -> ateapi.ObjectRef
-	16,  // 94: ateapi.ResumeActorResponse.actor:type_name -> ateapi.Actor
-	33,  // 95: ateapi.RevertActorRequest.actor:type_name -> ateapi.ObjectRef
-	16,  // 96: ateapi.RevertActorResponse.actor:type_name -> ateapi.Actor
-	33,  // 97: ateapi.DeleteActorRequest.actor:type_name -> ateapi.ObjectRef
-	94,  // 98: ateapi.DeleteActorRequest.options:type_name -> ateapi.DeleteOptions
-	33,  // 99: ateapi.GetActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
-	33,  // 100: ateapi.CreateActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
-	17,  // 101: ateapi.CreateActorEgressPolicyRequest.egress_policy:type_name -> ateapi.EgressPolicy
-	33,  // 102: ateapi.UpdateActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
-	17,  // 103: ateapi.UpdateActorEgressPolicyRequest.egress_policy:type_name -> ateapi.EgressPolicy
-	33,  // 104: ateapi.DeleteActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
-	94,  // 105: ateapi.DeleteActorEgressPolicyRequest.options:type_name -> ateapi.DeleteOptions
-	33,  // 106: ateapi.GetTagRequest.tag:type_name -> ateapi.ObjectRef
-	33,  // 107: ateapi.MintActorJwtRequest.actor:type_name -> ateapi.ObjectRef
-	145, // 108: ateapi.MintActorJwtResponse.expire_time:type_name -> google.protobuf.Timestamp
-	33,  // 109: ateapi.MintActorCertificateRequest.actor:type_name -> ateapi.ObjectRef
-	95,  // 110: ateapi.ListTagsRequest.options:type_name -> ateapi.ListOptions
-	31,  // 111: ateapi.ListTagsResponse.tags:type_name -> ateapi.Tag
-	31,  // 112: ateapi.CreateTagRequest.tag:type_name -> ateapi.Tag
-	31,  // 113: ateapi.UpdateTagRequest.tag:type_name -> ateapi.Tag
-	33,  // 114: ateapi.DeleteTagRequest.tag:type_name -> ateapi.ObjectRef
-	94,  // 115: ateapi.DeleteTagRequest.options:type_name -> ateapi.DeleteOptions
-	33,  // 116: ateapi.ListWorkerActorAssignmentsRequest.worker:type_name -> ateapi.ObjectRef
-	95,  // 117: ateapi.ListWorkerActorAssignmentsRequest.options:type_name -> ateapi.ListOptions
-	118, // 118: ateapi.ListWorkerActorAssignmentsResponse.actor_assignments:type_name -> ateapi.ActorAssignment
-	95,  // 119: ateapi.ListWorkersRequest.options:type_name -> ateapi.ListOptions
-	112, // 120: ateapi.ListWorkersResponse.workers:type_name -> ateapi.Worker
-	33,  // 121: ateapi.GetWorkerRequest.worker:type_name -> ateapi.ObjectRef
-	112, // 122: ateapi.CreateWorkerRequest.worker:type_name -> ateapi.Worker
-	112, // 123: ateapi.UpdateWorkerRequest.worker:type_name -> ateapi.Worker
-	33,  // 124: ateapi.DeleteWorkerRequest.worker:type_name -> ateapi.ObjectRef
-	94,  // 125: ateapi.DeleteWorkerRequest.options:type_name -> ateapi.DeleteOptions
-	33,  // 126: ateapi.DrainWorkerRequest.worker:type_name -> ateapi.ObjectRef
-	112, // 127: ateapi.DrainWorkerResponse.worker:type_name -> ateapi.Worker
-	33,  // 128: ateapi.MarkWorkerAvailableRequest.worker:type_name -> ateapi.ObjectRef
-	112, // 129: ateapi.MarkWorkerAvailableResponse.worker:type_name -> ateapi.Worker
-	33,  // 130: ateapi.MarkWorkerUnavailableRequest.worker:type_name -> ateapi.ObjectRef
-	112, // 131: ateapi.MarkWorkerUnavailableResponse.worker:type_name -> ateapi.Worker
-	95,  // 132: ateapi.ListActorsRequest.options:type_name -> ateapi.ListOptions
-	16,  // 133: ateapi.ListActorsResponse.actors:type_name -> ateapi.Actor
-	14,  // 134: ateapi.Worker.metadata:type_name -> ateapi.ResourceMetadata
-	144, // 135: ateapi.Worker.labels:type_name -> ateapi.Worker.LabelsEntry
-	113, // 136: ateapi.Worker.status:type_name -> ateapi.WorkerStatus
-	8,   // 137: ateapi.WorkerStatus.state:type_name -> ateapi.WorkerState
-	117, // 138: ateapi.WorkerStatus.capacity:type_name -> ateapi.WorkerResources
-	117, // 139: ateapi.WorkerStatus.allocated:type_name -> ateapi.WorkerResources
-	114, // 140: ateapi.WorkerStatus.default_runtime:type_name -> ateapi.SandboxRuntime
-	114, // 141: ateapi.WorkerStatus.restorable_runtimes:type_name -> ateapi.SandboxRuntime
-	115, // 142: ateapi.SandboxRuntime.version:type_name -> ateapi.VersionedSandboxCompat
-	116, // 143: ateapi.VersionedSandboxCompat.attributes:type_name -> ateapi.AttributeEntry
-	35,  // 144: ateapi.WorkerResources.resources:type_name -> ateapi.Resources
-	14,  // 145: ateapi.ActorAssignment.metadata:type_name -> ateapi.ResourceMetadata
-	33,  // 146: ateapi.ActorAssignment.actor:type_name -> ateapi.ObjectRef
-	35,  // 147: ateapi.ActorAssignment.resources:type_name -> ateapi.Resources
-	33,  // 148: ateapi.RegisterWorkerRequest.worker:type_name -> ateapi.ObjectRef
-	117, // 149: ateapi.RegisterWorkerRequest.capacity:type_name -> ateapi.WorkerResources
-	114, // 150: ateapi.RegisterWorkerRequest.default_runtime:type_name -> ateapi.SandboxRuntime
-	114, // 151: ateapi.RegisterWorkerRequest.restorable_runtimes:type_name -> ateapi.SandboxRuntime
-	112, // 152: ateapi.RegisterWorkerResponse.worker:type_name -> ateapi.Worker
-	33,  // 153: ateapi.MintWorkerActorCertificateRequest.actor:type_name -> ateapi.ObjectRef
-	33,  // 154: ateapi.MintWorkerActorCertificateRequest.worker:type_name -> ateapi.ObjectRef
-	33,  // 155: ateapi.MintWorkerActorJwtRequest.actor:type_name -> ateapi.ObjectRef
-	145, // 156: ateapi.MintWorkerActorJwtResponse.expire_time:type_name -> google.protobuf.Timestamp
-	33,  // 157: ateapi.RequestActorSuspendRequest.worker:type_name -> ateapi.ObjectRef
-	33,  // 158: ateapi.RequestActorSuspendRequest.actor:type_name -> ateapi.ObjectRef
-	16,  // 159: ateapi.RequestActorSuspendResponse.actor:type_name -> ateapi.Actor
-	33,  // 160: ateapi.ReportActorSnapshotStateRequest.actor:type_name -> ateapi.ObjectRef
-	129, // 161: ateapi.ReportActorSnapshotStateRequest.state:type_name -> ateapi.ActorSnapshotState
-	130, // 162: ateapi.ActorSnapshotState.latest_local:type_name -> ateapi.SnapshotReport
-	130, // 163: ateapi.ActorSnapshotState.uploading:type_name -> ateapi.SnapshotReport
-	130, // 164: ateapi.ActorSnapshotState.latest_durable:type_name -> ateapi.SnapshotReport
-	145, // 165: ateapi.ActorSnapshotState.upload_due_time:type_name -> google.protobuf.Timestamp
-	2,   // 166: ateapi.SnapshotReport.fidelity:type_name -> ateapi.SnapshotFidelity
-	10,  // 167: ateapi.SnapshotReport.object:type_name -> ateapi.ObjectSnapshot
-	145, // 168: ateapi.SnapshotReport.local_commit_time:type_name -> google.protobuf.Timestamp
-	145, // 169: ateapi.SnapshotReport.durable_complete_time:type_name -> google.protobuf.Timestamp
-	14,  // 170: ateapi.AccessPolicy.metadata:type_name -> ateapi.ResourceMetadata
-	132, // 171: ateapi.AccessPolicy.bindings:type_name -> ateapi.Binding
-	131, // 172: ateapi.CreateGlobalAccessPolicyRequest.access_policy:type_name -> ateapi.AccessPolicy
-	131, // 173: ateapi.UpdateGlobalAccessPolicyRequest.access_policy:type_name -> ateapi.AccessPolicy
-	33,  // 174: ateapi.GetAtespaceAccessPolicyRequest.atespace:type_name -> ateapi.ObjectRef
-	33,  // 175: ateapi.CreateAtespaceAccessPolicyRequest.atespace:type_name -> ateapi.ObjectRef
-	131, // 176: ateapi.CreateAtespaceAccessPolicyRequest.access_policy:type_name -> ateapi.AccessPolicy
-	33,  // 177: ateapi.UpdateAtespaceAccessPolicyRequest.atespace:type_name -> ateapi.ObjectRef
-	131, // 178: ateapi.UpdateAtespaceAccessPolicyRequest.access_policy:type_name -> ateapi.AccessPolicy
-	33,  // 179: ateapi.DeleteAtespaceAccessPolicyRequest.atespace:type_name -> ateapi.ObjectRef
-	94,  // 180: ateapi.DeleteAtespaceAccessPolicyRequest.options:type_name -> ateapi.DeleteOptions
-	9,   // 181: ateapi.ResourceAnnotation.scope:type_name -> ateapi.Scope
-	146, // 182: ateapi.resource:extendee -> google.protobuf.MessageOptions
-	147, // 183: ateapi.method:extendee -> google.protobuf.MethodOptions
-	140, // 184: ateapi.resource:type_name -> ateapi.ResourceAnnotation
-	141, // 185: ateapi.method:type_name -> ateapi.MethodAnnotation
-	67,  // 186: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
-	68,  // 187: ateapi.Control.CreateActor:input_type -> ateapi.CreateActorRequest
-	69,  // 188: ateapi.Control.UpdateActor:input_type -> ateapi.UpdateActorRequest
-	70,  // 189: ateapi.Control.SuspendActor:input_type -> ateapi.SuspendActorRequest
-	73,  // 190: ateapi.Control.PauseActor:input_type -> ateapi.PauseActorRequest
-	75,  // 191: ateapi.Control.ResumeActor:input_type -> ateapi.ResumeActorRequest
-	77,  // 192: ateapi.Control.RevertActor:input_type -> ateapi.RevertActorRequest
-	79,  // 193: ateapi.Control.DeleteActor:input_type -> ateapi.DeleteActorRequest
-	80,  // 194: ateapi.Control.GetActorEgressPolicy:input_type -> ateapi.GetActorEgressPolicyRequest
-	81,  // 195: ateapi.Control.CreateActorEgressPolicy:input_type -> ateapi.CreateActorEgressPolicyRequest
-	82,  // 196: ateapi.Control.UpdateActorEgressPolicy:input_type -> ateapi.UpdateActorEgressPolicyRequest
-	83,  // 197: ateapi.Control.DeleteActorEgressPolicy:input_type -> ateapi.DeleteActorEgressPolicyRequest
-	85,  // 198: ateapi.Control.MintActorJwt:input_type -> ateapi.MintActorJwtRequest
-	87,  // 199: ateapi.Control.MintActorCertificate:input_type -> ateapi.MintActorCertificateRequest
-	91,  // 200: ateapi.Control.CreateTag:input_type -> ateapi.CreateTagRequest
-	84,  // 201: ateapi.Control.GetTag:input_type -> ateapi.GetTagRequest
-	89,  // 202: ateapi.Control.ListTags:input_type -> ateapi.ListTagsRequest
-	92,  // 203: ateapi.Control.UpdateTag:input_type -> ateapi.UpdateTagRequest
-	93,  // 204: ateapi.Control.DeleteTag:input_type -> ateapi.DeleteTagRequest
-	98,  // 205: ateapi.Control.ListWorkers:input_type -> ateapi.ListWorkersRequest
-	100, // 206: ateapi.Control.GetWorker:input_type -> ateapi.GetWorkerRequest
-	101, // 207: ateapi.Control.CreateWorker:input_type -> ateapi.CreateWorkerRequest
-	102, // 208: ateapi.Control.UpdateWorker:input_type -> ateapi.UpdateWorkerRequest
-	103, // 209: ateapi.Control.DeleteWorker:input_type -> ateapi.DeleteWorkerRequest
-	104, // 210: ateapi.Control.DrainWorker:input_type -> ateapi.DrainWorkerRequest
-	106, // 211: ateapi.Control.MarkWorkerAvailable:input_type -> ateapi.MarkWorkerAvailableRequest
-	108, // 212: ateapi.Control.MarkWorkerUnavailable:input_type -> ateapi.MarkWorkerUnavailableRequest
-	96,  // 213: ateapi.Control.ListWorkerActorAssignments:input_type -> ateapi.ListWorkerActorAssignmentsRequest
-	110, // 214: ateapi.Control.ListActors:input_type -> ateapi.ListActorsRequest
-	57,  // 215: ateapi.Control.CreateAtespace:input_type -> ateapi.CreateAtespaceRequest
-	58,  // 216: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
-	59,  // 217: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
-	61,  // 218: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
-	62,  // 219: ateapi.Control.CreateActorTemplate:input_type -> ateapi.CreateActorTemplateRequest
-	63,  // 220: ateapi.Control.GetActorTemplate:input_type -> ateapi.GetActorTemplateRequest
-	64,  // 221: ateapi.Control.ListActorTemplates:input_type -> ateapi.ListActorTemplatesRequest
-	66,  // 222: ateapi.Control.DeleteActorTemplate:input_type -> ateapi.DeleteActorTemplateRequest
-	133, // 223: ateapi.Control.GetGlobalAccessPolicy:input_type -> ateapi.GetGlobalAccessPolicyRequest
-	134, // 224: ateapi.Control.CreateGlobalAccessPolicy:input_type -> ateapi.CreateGlobalAccessPolicyRequest
-	135, // 225: ateapi.Control.UpdateGlobalAccessPolicy:input_type -> ateapi.UpdateGlobalAccessPolicyRequest
-	136, // 226: ateapi.Control.GetAtespaceAccessPolicy:input_type -> ateapi.GetAtespaceAccessPolicyRequest
-	137, // 227: ateapi.Control.CreateAtespaceAccessPolicy:input_type -> ateapi.CreateAtespaceAccessPolicyRequest
-	138, // 228: ateapi.Control.UpdateAtespaceAccessPolicy:input_type -> ateapi.UpdateAtespaceAccessPolicyRequest
-	139, // 229: ateapi.Control.DeleteAtespaceAccessPolicy:input_type -> ateapi.DeleteAtespaceAccessPolicyRequest
-	119, // 230: ateapi.WorkerService.RegisterWorker:input_type -> ateapi.RegisterWorkerRequest
-	121, // 231: ateapi.WorkerService.MintWorkerActorCertificate:input_type -> ateapi.MintWorkerActorCertificateRequest
-	123, // 232: ateapi.WorkerService.MintWorkerActorJwt:input_type -> ateapi.MintWorkerActorJwtRequest
-	125, // 233: ateapi.WorkerService.RequestActorSuspend:input_type -> ateapi.RequestActorSuspendRequest
-	127, // 234: ateapi.WorkerService.ReportActorSnapshotState:input_type -> ateapi.ReportActorSnapshotStateRequest
-	16,  // 235: ateapi.Control.GetActor:output_type -> ateapi.Actor
-	16,  // 236: ateapi.Control.CreateActor:output_type -> ateapi.Actor
-	16,  // 237: ateapi.Control.UpdateActor:output_type -> ateapi.Actor
-	71,  // 238: ateapi.Control.SuspendActor:output_type -> ateapi.SuspendActorResponse
-	74,  // 239: ateapi.Control.PauseActor:output_type -> ateapi.PauseActorResponse
-	76,  // 240: ateapi.Control.ResumeActor:output_type -> ateapi.ResumeActorResponse
-	78,  // 241: ateapi.Control.RevertActor:output_type -> ateapi.RevertActorResponse
-	16,  // 242: ateapi.Control.DeleteActor:output_type -> ateapi.Actor
-	17,  // 243: ateapi.Control.GetActorEgressPolicy:output_type -> ateapi.EgressPolicy
-	17,  // 244: ateapi.Control.CreateActorEgressPolicy:output_type -> ateapi.EgressPolicy
-	17,  // 245: ateapi.Control.UpdateActorEgressPolicy:output_type -> ateapi.EgressPolicy
-	17,  // 246: ateapi.Control.DeleteActorEgressPolicy:output_type -> ateapi.EgressPolicy
-	86,  // 247: ateapi.Control.MintActorJwt:output_type -> ateapi.MintActorJwtResponse
-	88,  // 248: ateapi.Control.MintActorCertificate:output_type -> ateapi.MintActorCertificateResponse
-	31,  // 249: ateapi.Control.CreateTag:output_type -> ateapi.Tag
-	31,  // 250: ateapi.Control.GetTag:output_type -> ateapi.Tag
-	90,  // 251: ateapi.Control.ListTags:output_type -> ateapi.ListTagsResponse
-	31,  // 252: ateapi.Control.UpdateTag:output_type -> ateapi.Tag
-	31,  // 253: ateapi.Control.DeleteTag:output_type -> ateapi.Tag
-	99,  // 254: ateapi.Control.ListWorkers:output_type -> ateapi.ListWorkersResponse
-	112, // 255: ateapi.Control.GetWorker:output_type -> ateapi.Worker
-	112, // 256: ateapi.Control.CreateWorker:output_type -> ateapi.Worker
-	112, // 257: ateapi.Control.UpdateWorker:output_type -> ateapi.Worker
-	112, // 258: ateapi.Control.DeleteWorker:output_type -> ateapi.Worker
-	105, // 259: ateapi.Control.DrainWorker:output_type -> ateapi.DrainWorkerResponse
-	107, // 260: ateapi.Control.MarkWorkerAvailable:output_type -> ateapi.MarkWorkerAvailableResponse
-	109, // 261: ateapi.Control.MarkWorkerUnavailable:output_type -> ateapi.MarkWorkerUnavailableResponse
-	97,  // 262: ateapi.Control.ListWorkerActorAssignments:output_type -> ateapi.ListWorkerActorAssignmentsResponse
-	111, // 263: ateapi.Control.ListActors:output_type -> ateapi.ListActorsResponse
-	32,  // 264: ateapi.Control.CreateAtespace:output_type -> ateapi.Atespace
-	32,  // 265: ateapi.Control.GetAtespace:output_type -> ateapi.Atespace
-	60,  // 266: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
-	32,  // 267: ateapi.Control.DeleteAtespace:output_type -> ateapi.Atespace
-	34,  // 268: ateapi.Control.CreateActorTemplate:output_type -> ateapi.ActorTemplate
-	34,  // 269: ateapi.Control.GetActorTemplate:output_type -> ateapi.ActorTemplate
-	65,  // 270: ateapi.Control.ListActorTemplates:output_type -> ateapi.ListActorTemplatesResponse
-	34,  // 271: ateapi.Control.DeleteActorTemplate:output_type -> ateapi.ActorTemplate
-	131, // 272: ateapi.Control.GetGlobalAccessPolicy:output_type -> ateapi.AccessPolicy
-	131, // 273: ateapi.Control.CreateGlobalAccessPolicy:output_type -> ateapi.AccessPolicy
-	131, // 274: ateapi.Control.UpdateGlobalAccessPolicy:output_type -> ateapi.AccessPolicy
-	131, // 275: ateapi.Control.GetAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
-	131, // 276: ateapi.Control.CreateAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
-	131, // 277: ateapi.Control.UpdateAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
-	131, // 278: ateapi.Control.DeleteAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
-	120, // 279: ateapi.WorkerService.RegisterWorker:output_type -> ateapi.RegisterWorkerResponse
-	122, // 280: ateapi.WorkerService.MintWorkerActorCertificate:output_type -> ateapi.MintWorkerActorCertificateResponse
-	124, // 281: ateapi.WorkerService.MintWorkerActorJwt:output_type -> ateapi.MintWorkerActorJwtResponse
-	126, // 282: ateapi.WorkerService.RequestActorSuspend:output_type -> ateapi.RequestActorSuspendResponse
-	128, // 283: ateapi.WorkerService.ReportActorSnapshotState:output_type -> ateapi.ReportActorSnapshotStateResponse
-	235, // [235:284] is the sub-list for method output_type
-	186, // [186:235] is the sub-list for method input_type
-	184, // [184:186] is the sub-list for extension type_name
-	182, // [182:184] is the sub-list for extension extendee
-	0,   // [0:182] is the sub-list for field type_name
+	2,   // 54: ateapi.SnapshotConfig.minimum_fidelity:type_name -> ateapi.SnapshotFidelity
+	40,  // 55: ateapi.SnapshotConfig.golden_snapshot_config:type_name -> ateapi.GoldenSnapshotConfig
+	5,   // 56: ateapi.GoldenSnapshotConfig.mode:type_name -> ateapi.GoldenSnapshotMode
+	44,  // 57: ateapi.Container.env:type_name -> ateapi.EnvVar
+	45,  // 58: ateapi.Container.wakeup_probe:type_name -> ateapi.WakeupProbe
+	56,  // 59: ateapi.Container.volume_mounts:type_name -> ateapi.VolumeMount
+	42,  // 60: ateapi.Container.security_context:type_name -> ateapi.SecurityContext
+	35,  // 61: ateapi.Container.resources:type_name -> ateapi.Resources
+	43,  // 62: ateapi.SecurityContext.capabilities:type_name -> ateapi.Capabilities
+	46,  // 63: ateapi.WakeupProbe.http_get:type_name -> ateapi.HttpGetAction
+	49,  // 64: ateapi.Volume.durable_dir:type_name -> ateapi.DurableDirVolumeSource
+	50,  // 65: ateapi.Volume.external_volume_template:type_name -> ateapi.ExternalVolumeTemplate
+	51,  // 66: ateapi.Volume.system_info:type_name -> ateapi.SystemInfoVolumeSource
+	48,  // 67: ateapi.Volume.image:type_name -> ateapi.ImageVolumeSource
+	52,  // 68: ateapi.SystemInfoVolumeSource.data_sources:type_name -> ateapi.SystemInfoDataSource
+	53,  // 69: ateapi.SystemInfoDataSource.actor_metadata:type_name -> ateapi.ActorMetadataDataSource
+	55,  // 70: ateapi.SystemInfoDataSource.trust_bundle:type_name -> ateapi.TrustBundleDataSource
+	54,  // 71: ateapi.ActorMetadataDataSource.items:type_name -> ateapi.ActorMetadataItem
+	6,   // 72: ateapi.ActorMetadataItem.field:type_name -> ateapi.ActorMetadataField
+	32,  // 73: ateapi.CreateAtespaceRequest.atespace:type_name -> ateapi.Atespace
+	33,  // 74: ateapi.GetAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
+	95,  // 75: ateapi.ListAtespacesRequest.options:type_name -> ateapi.ListOptions
+	32,  // 76: ateapi.ListAtespacesResponse.atespaces:type_name -> ateapi.Atespace
+	33,  // 77: ateapi.DeleteAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
+	94,  // 78: ateapi.DeleteAtespaceRequest.options:type_name -> ateapi.DeleteOptions
+	34,  // 79: ateapi.CreateActorTemplateRequest.actor_template:type_name -> ateapi.ActorTemplate
+	33,  // 80: ateapi.GetActorTemplateRequest.actor_template:type_name -> ateapi.ObjectRef
+	95,  // 81: ateapi.ListActorTemplatesRequest.options:type_name -> ateapi.ListOptions
+	34,  // 82: ateapi.ListActorTemplatesResponse.actor_templates:type_name -> ateapi.ActorTemplate
+	33,  // 83: ateapi.DeleteActorTemplateRequest.actor_template:type_name -> ateapi.ObjectRef
+	94,  // 84: ateapi.DeleteActorTemplateRequest.options:type_name -> ateapi.DeleteOptions
+	33,  // 85: ateapi.GetActorRequest.actor:type_name -> ateapi.ObjectRef
+	16,  // 86: ateapi.CreateActorRequest.actor:type_name -> ateapi.Actor
+	16,  // 87: ateapi.UpdateActorRequest.actor:type_name -> ateapi.Actor
+	33,  // 88: ateapi.SuspendActorRequest.actor:type_name -> ateapi.ObjectRef
+	72,  // 89: ateapi.SuspendActorRequest.options:type_name -> ateapi.SuspendOptions
+	16,  // 90: ateapi.SuspendActorResponse.actor:type_name -> ateapi.Actor
+	7,   // 91: ateapi.SuspendOptions.mode:type_name -> ateapi.DurabilityMode
+	33,  // 92: ateapi.PauseActorRequest.actor:type_name -> ateapi.ObjectRef
+	16,  // 93: ateapi.PauseActorResponse.actor:type_name -> ateapi.Actor
+	33,  // 94: ateapi.ResumeActorRequest.actor:type_name -> ateapi.ObjectRef
+	16,  // 95: ateapi.ResumeActorResponse.actor:type_name -> ateapi.Actor
+	2,   // 96: ateapi.ResumeActorResponse.fidelity:type_name -> ateapi.SnapshotFidelity
+	33,  // 97: ateapi.RevertActorRequest.actor:type_name -> ateapi.ObjectRef
+	16,  // 98: ateapi.RevertActorResponse.actor:type_name -> ateapi.Actor
+	33,  // 99: ateapi.DeleteActorRequest.actor:type_name -> ateapi.ObjectRef
+	94,  // 100: ateapi.DeleteActorRequest.options:type_name -> ateapi.DeleteOptions
+	33,  // 101: ateapi.GetActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
+	33,  // 102: ateapi.CreateActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
+	17,  // 103: ateapi.CreateActorEgressPolicyRequest.egress_policy:type_name -> ateapi.EgressPolicy
+	33,  // 104: ateapi.UpdateActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
+	17,  // 105: ateapi.UpdateActorEgressPolicyRequest.egress_policy:type_name -> ateapi.EgressPolicy
+	33,  // 106: ateapi.DeleteActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
+	94,  // 107: ateapi.DeleteActorEgressPolicyRequest.options:type_name -> ateapi.DeleteOptions
+	33,  // 108: ateapi.GetTagRequest.tag:type_name -> ateapi.ObjectRef
+	33,  // 109: ateapi.MintActorJwtRequest.actor:type_name -> ateapi.ObjectRef
+	145, // 110: ateapi.MintActorJwtResponse.expire_time:type_name -> google.protobuf.Timestamp
+	33,  // 111: ateapi.MintActorCertificateRequest.actor:type_name -> ateapi.ObjectRef
+	95,  // 112: ateapi.ListTagsRequest.options:type_name -> ateapi.ListOptions
+	31,  // 113: ateapi.ListTagsResponse.tags:type_name -> ateapi.Tag
+	31,  // 114: ateapi.CreateTagRequest.tag:type_name -> ateapi.Tag
+	31,  // 115: ateapi.UpdateTagRequest.tag:type_name -> ateapi.Tag
+	33,  // 116: ateapi.DeleteTagRequest.tag:type_name -> ateapi.ObjectRef
+	94,  // 117: ateapi.DeleteTagRequest.options:type_name -> ateapi.DeleteOptions
+	33,  // 118: ateapi.ListWorkerActorAssignmentsRequest.worker:type_name -> ateapi.ObjectRef
+	95,  // 119: ateapi.ListWorkerActorAssignmentsRequest.options:type_name -> ateapi.ListOptions
+	118, // 120: ateapi.ListWorkerActorAssignmentsResponse.actor_assignments:type_name -> ateapi.ActorAssignment
+	95,  // 121: ateapi.ListWorkersRequest.options:type_name -> ateapi.ListOptions
+	112, // 122: ateapi.ListWorkersResponse.workers:type_name -> ateapi.Worker
+	33,  // 123: ateapi.GetWorkerRequest.worker:type_name -> ateapi.ObjectRef
+	112, // 124: ateapi.CreateWorkerRequest.worker:type_name -> ateapi.Worker
+	112, // 125: ateapi.UpdateWorkerRequest.worker:type_name -> ateapi.Worker
+	33,  // 126: ateapi.DeleteWorkerRequest.worker:type_name -> ateapi.ObjectRef
+	94,  // 127: ateapi.DeleteWorkerRequest.options:type_name -> ateapi.DeleteOptions
+	33,  // 128: ateapi.DrainWorkerRequest.worker:type_name -> ateapi.ObjectRef
+	112, // 129: ateapi.DrainWorkerResponse.worker:type_name -> ateapi.Worker
+	33,  // 130: ateapi.MarkWorkerAvailableRequest.worker:type_name -> ateapi.ObjectRef
+	112, // 131: ateapi.MarkWorkerAvailableResponse.worker:type_name -> ateapi.Worker
+	33,  // 132: ateapi.MarkWorkerUnavailableRequest.worker:type_name -> ateapi.ObjectRef
+	112, // 133: ateapi.MarkWorkerUnavailableResponse.worker:type_name -> ateapi.Worker
+	95,  // 134: ateapi.ListActorsRequest.options:type_name -> ateapi.ListOptions
+	16,  // 135: ateapi.ListActorsResponse.actors:type_name -> ateapi.Actor
+	14,  // 136: ateapi.Worker.metadata:type_name -> ateapi.ResourceMetadata
+	144, // 137: ateapi.Worker.labels:type_name -> ateapi.Worker.LabelsEntry
+	113, // 138: ateapi.Worker.status:type_name -> ateapi.WorkerStatus
+	8,   // 139: ateapi.WorkerStatus.state:type_name -> ateapi.WorkerState
+	117, // 140: ateapi.WorkerStatus.capacity:type_name -> ateapi.WorkerResources
+	117, // 141: ateapi.WorkerStatus.allocated:type_name -> ateapi.WorkerResources
+	114, // 142: ateapi.WorkerStatus.default_runtime:type_name -> ateapi.SandboxRuntime
+	114, // 143: ateapi.WorkerStatus.restorable_runtimes:type_name -> ateapi.SandboxRuntime
+	115, // 144: ateapi.SandboxRuntime.version:type_name -> ateapi.VersionedSandboxCompat
+	116, // 145: ateapi.VersionedSandboxCompat.attributes:type_name -> ateapi.AttributeEntry
+	35,  // 146: ateapi.WorkerResources.resources:type_name -> ateapi.Resources
+	14,  // 147: ateapi.ActorAssignment.metadata:type_name -> ateapi.ResourceMetadata
+	33,  // 148: ateapi.ActorAssignment.actor:type_name -> ateapi.ObjectRef
+	35,  // 149: ateapi.ActorAssignment.resources:type_name -> ateapi.Resources
+	33,  // 150: ateapi.RegisterWorkerRequest.worker:type_name -> ateapi.ObjectRef
+	117, // 151: ateapi.RegisterWorkerRequest.capacity:type_name -> ateapi.WorkerResources
+	114, // 152: ateapi.RegisterWorkerRequest.default_runtime:type_name -> ateapi.SandboxRuntime
+	114, // 153: ateapi.RegisterWorkerRequest.restorable_runtimes:type_name -> ateapi.SandboxRuntime
+	112, // 154: ateapi.RegisterWorkerResponse.worker:type_name -> ateapi.Worker
+	33,  // 155: ateapi.MintWorkerActorCertificateRequest.actor:type_name -> ateapi.ObjectRef
+	33,  // 156: ateapi.MintWorkerActorCertificateRequest.worker:type_name -> ateapi.ObjectRef
+	33,  // 157: ateapi.MintWorkerActorJwtRequest.actor:type_name -> ateapi.ObjectRef
+	145, // 158: ateapi.MintWorkerActorJwtResponse.expire_time:type_name -> google.protobuf.Timestamp
+	33,  // 159: ateapi.RequestActorSuspendRequest.worker:type_name -> ateapi.ObjectRef
+	33,  // 160: ateapi.RequestActorSuspendRequest.actor:type_name -> ateapi.ObjectRef
+	16,  // 161: ateapi.RequestActorSuspendResponse.actor:type_name -> ateapi.Actor
+	33,  // 162: ateapi.ReportActorSnapshotStateRequest.actor:type_name -> ateapi.ObjectRef
+	129, // 163: ateapi.ReportActorSnapshotStateRequest.state:type_name -> ateapi.ActorSnapshotState
+	130, // 164: ateapi.ActorSnapshotState.latest_local:type_name -> ateapi.SnapshotReport
+	130, // 165: ateapi.ActorSnapshotState.uploading:type_name -> ateapi.SnapshotReport
+	130, // 166: ateapi.ActorSnapshotState.latest_durable:type_name -> ateapi.SnapshotReport
+	145, // 167: ateapi.ActorSnapshotState.upload_due_time:type_name -> google.protobuf.Timestamp
+	2,   // 168: ateapi.SnapshotReport.fidelity:type_name -> ateapi.SnapshotFidelity
+	10,  // 169: ateapi.SnapshotReport.object:type_name -> ateapi.ObjectSnapshot
+	145, // 170: ateapi.SnapshotReport.local_commit_time:type_name -> google.protobuf.Timestamp
+	145, // 171: ateapi.SnapshotReport.durable_complete_time:type_name -> google.protobuf.Timestamp
+	14,  // 172: ateapi.AccessPolicy.metadata:type_name -> ateapi.ResourceMetadata
+	132, // 173: ateapi.AccessPolicy.bindings:type_name -> ateapi.Binding
+	131, // 174: ateapi.CreateGlobalAccessPolicyRequest.access_policy:type_name -> ateapi.AccessPolicy
+	131, // 175: ateapi.UpdateGlobalAccessPolicyRequest.access_policy:type_name -> ateapi.AccessPolicy
+	33,  // 176: ateapi.GetAtespaceAccessPolicyRequest.atespace:type_name -> ateapi.ObjectRef
+	33,  // 177: ateapi.CreateAtespaceAccessPolicyRequest.atespace:type_name -> ateapi.ObjectRef
+	131, // 178: ateapi.CreateAtespaceAccessPolicyRequest.access_policy:type_name -> ateapi.AccessPolicy
+	33,  // 179: ateapi.UpdateAtespaceAccessPolicyRequest.atespace:type_name -> ateapi.ObjectRef
+	131, // 180: ateapi.UpdateAtespaceAccessPolicyRequest.access_policy:type_name -> ateapi.AccessPolicy
+	33,  // 181: ateapi.DeleteAtespaceAccessPolicyRequest.atespace:type_name -> ateapi.ObjectRef
+	94,  // 182: ateapi.DeleteAtespaceAccessPolicyRequest.options:type_name -> ateapi.DeleteOptions
+	9,   // 183: ateapi.ResourceAnnotation.scope:type_name -> ateapi.Scope
+	146, // 184: ateapi.resource:extendee -> google.protobuf.MessageOptions
+	147, // 185: ateapi.method:extendee -> google.protobuf.MethodOptions
+	140, // 186: ateapi.resource:type_name -> ateapi.ResourceAnnotation
+	141, // 187: ateapi.method:type_name -> ateapi.MethodAnnotation
+	67,  // 188: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
+	68,  // 189: ateapi.Control.CreateActor:input_type -> ateapi.CreateActorRequest
+	69,  // 190: ateapi.Control.UpdateActor:input_type -> ateapi.UpdateActorRequest
+	70,  // 191: ateapi.Control.SuspendActor:input_type -> ateapi.SuspendActorRequest
+	73,  // 192: ateapi.Control.PauseActor:input_type -> ateapi.PauseActorRequest
+	75,  // 193: ateapi.Control.ResumeActor:input_type -> ateapi.ResumeActorRequest
+	77,  // 194: ateapi.Control.RevertActor:input_type -> ateapi.RevertActorRequest
+	79,  // 195: ateapi.Control.DeleteActor:input_type -> ateapi.DeleteActorRequest
+	80,  // 196: ateapi.Control.GetActorEgressPolicy:input_type -> ateapi.GetActorEgressPolicyRequest
+	81,  // 197: ateapi.Control.CreateActorEgressPolicy:input_type -> ateapi.CreateActorEgressPolicyRequest
+	82,  // 198: ateapi.Control.UpdateActorEgressPolicy:input_type -> ateapi.UpdateActorEgressPolicyRequest
+	83,  // 199: ateapi.Control.DeleteActorEgressPolicy:input_type -> ateapi.DeleteActorEgressPolicyRequest
+	85,  // 200: ateapi.Control.MintActorJwt:input_type -> ateapi.MintActorJwtRequest
+	87,  // 201: ateapi.Control.MintActorCertificate:input_type -> ateapi.MintActorCertificateRequest
+	91,  // 202: ateapi.Control.CreateTag:input_type -> ateapi.CreateTagRequest
+	84,  // 203: ateapi.Control.GetTag:input_type -> ateapi.GetTagRequest
+	89,  // 204: ateapi.Control.ListTags:input_type -> ateapi.ListTagsRequest
+	92,  // 205: ateapi.Control.UpdateTag:input_type -> ateapi.UpdateTagRequest
+	93,  // 206: ateapi.Control.DeleteTag:input_type -> ateapi.DeleteTagRequest
+	98,  // 207: ateapi.Control.ListWorkers:input_type -> ateapi.ListWorkersRequest
+	100, // 208: ateapi.Control.GetWorker:input_type -> ateapi.GetWorkerRequest
+	101, // 209: ateapi.Control.CreateWorker:input_type -> ateapi.CreateWorkerRequest
+	102, // 210: ateapi.Control.UpdateWorker:input_type -> ateapi.UpdateWorkerRequest
+	103, // 211: ateapi.Control.DeleteWorker:input_type -> ateapi.DeleteWorkerRequest
+	104, // 212: ateapi.Control.DrainWorker:input_type -> ateapi.DrainWorkerRequest
+	106, // 213: ateapi.Control.MarkWorkerAvailable:input_type -> ateapi.MarkWorkerAvailableRequest
+	108, // 214: ateapi.Control.MarkWorkerUnavailable:input_type -> ateapi.MarkWorkerUnavailableRequest
+	96,  // 215: ateapi.Control.ListWorkerActorAssignments:input_type -> ateapi.ListWorkerActorAssignmentsRequest
+	110, // 216: ateapi.Control.ListActors:input_type -> ateapi.ListActorsRequest
+	57,  // 217: ateapi.Control.CreateAtespace:input_type -> ateapi.CreateAtespaceRequest
+	58,  // 218: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
+	59,  // 219: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
+	61,  // 220: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
+	62,  // 221: ateapi.Control.CreateActorTemplate:input_type -> ateapi.CreateActorTemplateRequest
+	63,  // 222: ateapi.Control.GetActorTemplate:input_type -> ateapi.GetActorTemplateRequest
+	64,  // 223: ateapi.Control.ListActorTemplates:input_type -> ateapi.ListActorTemplatesRequest
+	66,  // 224: ateapi.Control.DeleteActorTemplate:input_type -> ateapi.DeleteActorTemplateRequest
+	133, // 225: ateapi.Control.GetGlobalAccessPolicy:input_type -> ateapi.GetGlobalAccessPolicyRequest
+	134, // 226: ateapi.Control.CreateGlobalAccessPolicy:input_type -> ateapi.CreateGlobalAccessPolicyRequest
+	135, // 227: ateapi.Control.UpdateGlobalAccessPolicy:input_type -> ateapi.UpdateGlobalAccessPolicyRequest
+	136, // 228: ateapi.Control.GetAtespaceAccessPolicy:input_type -> ateapi.GetAtespaceAccessPolicyRequest
+	137, // 229: ateapi.Control.CreateAtespaceAccessPolicy:input_type -> ateapi.CreateAtespaceAccessPolicyRequest
+	138, // 230: ateapi.Control.UpdateAtespaceAccessPolicy:input_type -> ateapi.UpdateAtespaceAccessPolicyRequest
+	139, // 231: ateapi.Control.DeleteAtespaceAccessPolicy:input_type -> ateapi.DeleteAtespaceAccessPolicyRequest
+	119, // 232: ateapi.WorkerService.RegisterWorker:input_type -> ateapi.RegisterWorkerRequest
+	121, // 233: ateapi.WorkerService.MintWorkerActorCertificate:input_type -> ateapi.MintWorkerActorCertificateRequest
+	123, // 234: ateapi.WorkerService.MintWorkerActorJwt:input_type -> ateapi.MintWorkerActorJwtRequest
+	125, // 235: ateapi.WorkerService.RequestActorSuspend:input_type -> ateapi.RequestActorSuspendRequest
+	127, // 236: ateapi.WorkerService.ReportActorSnapshotState:input_type -> ateapi.ReportActorSnapshotStateRequest
+	16,  // 237: ateapi.Control.GetActor:output_type -> ateapi.Actor
+	16,  // 238: ateapi.Control.CreateActor:output_type -> ateapi.Actor
+	16,  // 239: ateapi.Control.UpdateActor:output_type -> ateapi.Actor
+	71,  // 240: ateapi.Control.SuspendActor:output_type -> ateapi.SuspendActorResponse
+	74,  // 241: ateapi.Control.PauseActor:output_type -> ateapi.PauseActorResponse
+	76,  // 242: ateapi.Control.ResumeActor:output_type -> ateapi.ResumeActorResponse
+	78,  // 243: ateapi.Control.RevertActor:output_type -> ateapi.RevertActorResponse
+	16,  // 244: ateapi.Control.DeleteActor:output_type -> ateapi.Actor
+	17,  // 245: ateapi.Control.GetActorEgressPolicy:output_type -> ateapi.EgressPolicy
+	17,  // 246: ateapi.Control.CreateActorEgressPolicy:output_type -> ateapi.EgressPolicy
+	17,  // 247: ateapi.Control.UpdateActorEgressPolicy:output_type -> ateapi.EgressPolicy
+	17,  // 248: ateapi.Control.DeleteActorEgressPolicy:output_type -> ateapi.EgressPolicy
+	86,  // 249: ateapi.Control.MintActorJwt:output_type -> ateapi.MintActorJwtResponse
+	88,  // 250: ateapi.Control.MintActorCertificate:output_type -> ateapi.MintActorCertificateResponse
+	31,  // 251: ateapi.Control.CreateTag:output_type -> ateapi.Tag
+	31,  // 252: ateapi.Control.GetTag:output_type -> ateapi.Tag
+	90,  // 253: ateapi.Control.ListTags:output_type -> ateapi.ListTagsResponse
+	31,  // 254: ateapi.Control.UpdateTag:output_type -> ateapi.Tag
+	31,  // 255: ateapi.Control.DeleteTag:output_type -> ateapi.Tag
+	99,  // 256: ateapi.Control.ListWorkers:output_type -> ateapi.ListWorkersResponse
+	112, // 257: ateapi.Control.GetWorker:output_type -> ateapi.Worker
+	112, // 258: ateapi.Control.CreateWorker:output_type -> ateapi.Worker
+	112, // 259: ateapi.Control.UpdateWorker:output_type -> ateapi.Worker
+	112, // 260: ateapi.Control.DeleteWorker:output_type -> ateapi.Worker
+	105, // 261: ateapi.Control.DrainWorker:output_type -> ateapi.DrainWorkerResponse
+	107, // 262: ateapi.Control.MarkWorkerAvailable:output_type -> ateapi.MarkWorkerAvailableResponse
+	109, // 263: ateapi.Control.MarkWorkerUnavailable:output_type -> ateapi.MarkWorkerUnavailableResponse
+	97,  // 264: ateapi.Control.ListWorkerActorAssignments:output_type -> ateapi.ListWorkerActorAssignmentsResponse
+	111, // 265: ateapi.Control.ListActors:output_type -> ateapi.ListActorsResponse
+	32,  // 266: ateapi.Control.CreateAtespace:output_type -> ateapi.Atespace
+	32,  // 267: ateapi.Control.GetAtespace:output_type -> ateapi.Atespace
+	60,  // 268: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
+	32,  // 269: ateapi.Control.DeleteAtespace:output_type -> ateapi.Atespace
+	34,  // 270: ateapi.Control.CreateActorTemplate:output_type -> ateapi.ActorTemplate
+	34,  // 271: ateapi.Control.GetActorTemplate:output_type -> ateapi.ActorTemplate
+	65,  // 272: ateapi.Control.ListActorTemplates:output_type -> ateapi.ListActorTemplatesResponse
+	34,  // 273: ateapi.Control.DeleteActorTemplate:output_type -> ateapi.ActorTemplate
+	131, // 274: ateapi.Control.GetGlobalAccessPolicy:output_type -> ateapi.AccessPolicy
+	131, // 275: ateapi.Control.CreateGlobalAccessPolicy:output_type -> ateapi.AccessPolicy
+	131, // 276: ateapi.Control.UpdateGlobalAccessPolicy:output_type -> ateapi.AccessPolicy
+	131, // 277: ateapi.Control.GetAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
+	131, // 278: ateapi.Control.CreateAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
+	131, // 279: ateapi.Control.UpdateAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
+	131, // 280: ateapi.Control.DeleteAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
+	120, // 281: ateapi.WorkerService.RegisterWorker:output_type -> ateapi.RegisterWorkerResponse
+	122, // 282: ateapi.WorkerService.MintWorkerActorCertificate:output_type -> ateapi.MintWorkerActorCertificateResponse
+	124, // 283: ateapi.WorkerService.MintWorkerActorJwt:output_type -> ateapi.MintWorkerActorJwtResponse
+	126, // 284: ateapi.WorkerService.RequestActorSuspend:output_type -> ateapi.RequestActorSuspendResponse
+	128, // 285: ateapi.WorkerService.ReportActorSnapshotState:output_type -> ateapi.ReportActorSnapshotStateResponse
+	237, // [237:286] is the sub-list for method output_type
+	188, // [188:237] is the sub-list for method input_type
+	186, // [186:188] is the sub-list for extension type_name
+	184, // [184:186] is the sub-list for extension extendee
+	0,   // [0:184] is the sub-list for field type_name
 }
 
 func init() { file_ateapi_proto_init() }

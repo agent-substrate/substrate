@@ -62,6 +62,7 @@ func TestActorTemplateCRUD(t *testing.T) {
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation:      "gs://my-bucket/snapshots",
 			PreferredFidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			MinimumFidelity:      ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		},
 		Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}},
