@@ -122,9 +122,10 @@ type actorOp struct {
 // Start reads each actor's snapshot state file on this node, queues the actor
 // for when its next background upload or detach is due and for any report due,
 // so its background work resumes after an atelet restart, and starts each
-// queue's workers and the report workers.
+// queue's workers and the report workers. With instruments, it also adds each
+// actor's undurable local snapshot to their tally before any worker runs.
 func (t *Tracker) Start() {
-	if t.store != nil || t.reporting.reporter != nil {
+	if t.store != nil || t.reporting.reporter != nil || t.undurableActorsTally != nil {
 		actorUIDs, err := savedActorUIDs()
 		if err != nil {
 			// Best-effort: each actor's next commit queues it again.
@@ -135,6 +136,7 @@ func (t *Tracker) Start() {
 				break
 			}
 			if a := t.findLocked(actorUID); a != nil {
+				t.undurableActorsTally.observe(a)
 				t.enqueueSavedReportLocked(a)
 				t.requeueLocked(a)
 			}
@@ -226,6 +228,7 @@ func (t *Tracker) beginDueWork(actorUID string, kind opKind) func() {
 				return nil
 			}
 			if finish, err := t.beginDetachLocked(t.ctx, a, true); err == nil {
+				t.instruments.recordDetachOverdue(t.ctx, now.Sub(due))
 				return func() { _, _ = finish() }
 			}
 		}
@@ -236,7 +239,9 @@ func (t *Tracker) beginDueWork(actorUID string, kind opKind) func() {
 				// the actor again when it ends (see holdLocked).
 				return nil
 			}
-			return t.beginUploadLocked(t.ctx, a)
+			run := t.beginUploadLocked(t.ctx, a)
+			t.instruments.recordUploadOverdue(t.ctx, now.Sub(due))
+			return run
 		}
 		// beginUploadLocked clears any superseded Uploading snapshot before
 		// starting the next upload. When no upload runs (for example after an

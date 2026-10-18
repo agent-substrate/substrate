@@ -329,6 +329,18 @@ const (
 	SnapshotFidelityUnknown = "unknown"
 )
 
+// SnapshotUploadOverdueBandKey buckets how long past the upload delay an
+// actor's undurable local snapshot has been waiting on atelet.
+const SnapshotUploadOverdueBandKey = attribute.Key("ate.snapshot.upload_overdue_band")
+
+// Values for SnapshotUploadOverdueBandKey.
+const (
+	SnapshotUploadOverdueBandUnder1m = "under_1m"
+	SnapshotUploadOverdueBand1mTo5m  = "1m_to_5m"
+	SnapshotUploadOverdueBand5mTo15m = "5m_to_15m"
+	SnapshotUploadOverdueBandOver15m = "over_15m"
+)
+
 // SnapshotFidelityValue maps the wire enum onto its label value, shared so
 // ateapi (which sets the fidelity) and atelet (which receives it) cannot
 // drift. An unrecognized fidelity reports as unknown rather than stringified,
