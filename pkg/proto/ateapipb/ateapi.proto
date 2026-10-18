@@ -1644,7 +1644,6 @@ message Volume {
   // +k8s:unionMember
   ExternalVolumeSource external = 7;
 
-
   // +k8s:optional
   // +k8s:unionMember
   SystemInfoVolumeSource system_info = 5;
