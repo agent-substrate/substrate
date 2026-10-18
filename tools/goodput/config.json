@@ -1,8 +1,10 @@
 {
   "version": 1,
   "modes": {
-    "strict": {"g2": true, "ttfe_max_s": 1.0, "resume_max_s": 1.5, "s_max": 1.5},
+    "strict": {"g2": true, "ttfe_max_s": 1.0, "resume_max_s": 1.5, "resume_max_lssd_s": 0.5, "s_max": 1.5},
     "relaxed": {"g2": false, "s_max": 2.0}
   },
+  "max_startup_failures_per_task": 10,
+  "reference_baseline": "",
   "baselines": []
 }

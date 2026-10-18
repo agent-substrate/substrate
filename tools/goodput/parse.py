@@ -37,18 +37,46 @@ MSG_FINISHED_REUSED = "Actor finished all cycles and reset session back to cycle
 MSG_RESUME_FAIL = "ResumeActor failed in step"  # one per failed resume, with the cycle
 MSG_EXEC_FAIL = "execute steps failed"
 MSG_SUSPEND_FAIL = "SuspendActor failed"
-MSG_ONSTART_FAIL_PREFIX = "sweperf on_start failed"  # the actor is only in err
+MSG_ONSTART_FAIL_PREFIX = "sweperf on_start failed"  # older runs name the actor only in err
 MSG_SHUTDOWN = "sweperf shutdown started"
 MSG_BOOMER_QUIT = "Recv quit message from master, all the goroutines are stopped"
+MSG_TASK_RECORD = "sweperf task record"  # one per finished task, in newer runs
 ACTOR_IN_TEXT = re.compile(r"\b(sb-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b")
 
 KNOWN = {MSG_START, MSG_DONE, MSG_RESUME_FAIL, MSG_EXEC_FAIL, MSG_SUSPEND_FAIL, MSG_SHUTDOWN,
-         MSG_BOOMER_QUIT}
+         MSG_BOOMER_QUIT, MSG_TASK_RECORD}
 
-# Task log wordings, from the task-end lines.
+# Task log formats: the two task-end wordings of runs without task records, and
+# runs with task records.
 FORMAT_REUSED_ACTOR = "reused_actor"
 FORMAT_FRESH_ACTOR = "fresh_actor"
+FORMAT_TASK_RECORD = "task_record"
 FORMAT_UNKNOWN = "unknown"
+
+
+@dataclass
+class TaskRecord:
+    """The facts of one finished task, from its "sweperf task record" line (v 1).
+
+    Durations are in milliseconds. The benchmark judges nothing; classify decides
+    from these facts whether the task was good.
+    """
+    template: str
+    end: float  # unix seconds
+    cel_ms: float  # in-container compute, as in TaskCEL
+    wall_ms: float  # sum of the cycles' wall clock, as in TaskWallClock (think time excluded)
+    resume_max_ms: float  # slowest non-no-op resume; 0 if every resume was a no-op
+    failed: bool
+    fail_step: str = ""  # first failed step: resume, execute or suspend
+    fail_cycle: Optional[int] = None
+    ttfe_max_ms: Optional[float] = None  # None when no cycle after the no-op resume got an async ack
+    task_start: Optional[float] = None  # when the session started
+    startup_ms: Optional[float] = None
+    think_ms: Optional[float] = None
+    retries: int = 0  # failed resumes
+    cycles: Optional[int] = None
+    steps: Optional[int] = None
+    v: int = 1
 
 
 @dataclass
@@ -58,6 +86,8 @@ class Event:
     msg: str
     actor: str = ""
     cycle: Optional[int] = None
+    user: Optional[int] = None  # boomer goroutine ID, on task records and newer startup failure lines
+    record: Optional[TaskRecord] = None  # set on task record lines
 
 
 def parse_time(s: str) -> float:
@@ -95,8 +125,29 @@ def parse_line(line: str) -> Optional[Event]:
     if not actor and msg.startswith(MSG_ONSTART_FAIL_PREFIX):
         m = ACTOR_IN_TEXT.search(str(j.get("err") or ""))
         actor = m.group(1) if m else ""
-    cycle = j.get("cycle")
-    return Event(t=t, msg=msg, actor=actor, cycle=int(cycle) if isinstance(cycle, (int, float)) else None)
+    ev = Event(t=t, msg=msg, actor=actor, cycle=_int(j.get("cycle")), user=_int(j.get("user")))
+    if msg == MSG_TASK_RECORD:
+        ev.record = parse_record(j, t)
+    return ev
+
+
+def parse_record(j: dict[str, Any], t: float) -> TaskRecord:
+    """A TaskRecord from a task record line's fields; the line's time t stands in for an unreadable end."""
+    fail_cycle = _int(j.get("fail_cycle"))
+    return TaskRecord(
+        template=str(j.get("template") or ""), end=epoch(j.get("end")) or t,
+        cel_ms=num(j.get("cel_ms")) or 0.0, wall_ms=num(j.get("wall_ms")) or 0.0,
+        resume_max_ms=num(j.get("resume_max_ms")) or 0.0, failed=j.get("failed") is True,
+        fail_step=str(j.get("fail_step") or ""), fail_cycle=fail_cycle if fail_cycle else None,
+        ttfe_max_ms=num(j.get("ttfe_max_ms")), task_start=epoch(j.get("task_start")),
+        startup_ms=num(j.get("startup_ms")), think_ms=num(j.get("think_ms")),
+        retries=_int(j.get("retries")) or 0, cycles=_int(j.get("cycles")), steps=_int(j.get("steps")),
+        v=_int(j.get("v")) or 1)
+
+
+def _int(v: Any) -> Optional[int]:
+    """An int from a JSON number (not a bool), else None."""
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
 def read_events(path: Path) -> list[Event]:
@@ -106,7 +157,9 @@ def read_events(path: Path) -> list[Event]:
 
 
 def log_format(events: list[Event]) -> str:
-    """The task log wording the run used, from its first task-end line."""
+    """task_record if the run logged task records, else the task-end wording of its first task-end line."""
+    if any(ev.record is not None for ev in events):
+        return FORMAT_TASK_RECORD
     for ev in events:
         if ev.msg.startswith(MSG_FINISHED_PREFIX):
             return FORMAT_REUSED_ACTOR if ev.msg == MSG_FINISHED_REUSED else FORMAT_FRESH_ACTOR
