@@ -656,7 +656,7 @@ func TestTrackerSkipsUnreadableSnapshotState(t *testing.T) {
 // BeginCheckpoint and BeginPromote accept any generation when atelet holds no
 // snapshot for the actor, and otherwise reject a generation below the actor's
 // newest snapshot or equal to it under another snapshot_uuid with
-// FailedPrecondition.
+// Aborted.
 func TestTrackerCheckGeneration(t *testing.T) {
 	useTempNodeDirs(t)
 	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
@@ -699,9 +699,9 @@ func TestTrackerCheckGeneration(t *testing.T) {
 	}{
 		{name: "same snapshot at newest generation", ref: ref("s1", 2), wantCode: codes.OK},
 		{name: "higher generation", ref: ref("s2", 3), wantCode: codes.OK},
-		{name: "generation below newest", ref: ref("s0", 1), wantCode: codes.FailedPrecondition},
-		{name: "same uuid at lower generation", ref: ref("s1", 1), wantCode: codes.FailedPrecondition},
-		{name: "different uuid at newest generation", ref: ref("other", 2), wantCode: codes.FailedPrecondition},
+		{name: "generation below newest", ref: ref("s0", 1), wantCode: codes.Aborted},
+		{name: "same uuid at lower generation", ref: ref("s1", 1), wantCode: codes.Aborted},
+		{name: "different uuid at newest generation", ref: ref("other", 2), wantCode: codes.Aborted},
 	} {
 		t.Run("localNewest/"+tc.name, func(t *testing.T) {
 			checkBegin(t, tr, tc.ref, tc.wantCode)
@@ -719,8 +719,8 @@ func TestTrackerCheckGeneration(t *testing.T) {
 	}{
 		{name: "same snapshot at newest generation", ref: ref("s2", 4), wantCode: codes.OK},
 		{name: "higher generation", ref: ref("s3", 5), wantCode: codes.OK},
-		{name: "generation below newest", ref: ref("s1", 3), wantCode: codes.FailedPrecondition},
-		{name: "different uuid at newest generation", ref: ref("other", 4), wantCode: codes.FailedPrecondition},
+		{name: "generation below newest", ref: ref("s1", 3), wantCode: codes.Aborted},
+		{name: "different uuid at newest generation", ref: ref("other", 4), wantCode: codes.Aborted},
 	} {
 		t.Run("durableNewest/"+tc.name, func(t *testing.T) {
 			checkBegin(t, tr, tc.ref, tc.wantCode)
@@ -729,7 +729,7 @@ func TestTrackerCheckGeneration(t *testing.T) {
 
 	// Both local (generation 6) and durable (generation 4) are tracked: local is newest.
 	tr.CommitLocal(trackedActorUID, ref("s3", 6))
-	checkBegin(t, tr, ref("s2", 4), codes.FailedPrecondition)
+	checkBegin(t, tr, ref("s2", 4), codes.Aborted)
 	checkBegin(t, tr, ref("s3", 6), codes.OK)
 
 	// While a Checkpoint or PromoteSnapshot holds an uncommitted snapshot at
@@ -738,9 +738,9 @@ func TestTrackerCheckGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginCheckpoint(s4@8): %v", err)
 	}
-	checkBegin(t, tr, ref("s3", 6), codes.FailedPrecondition)
-	checkBegin(t, tr, ref("between", 7), codes.FailedPrecondition)
-	checkBegin(t, tr, ref("other", 8), codes.FailedPrecondition)
+	checkBegin(t, tr, ref("s3", 6), codes.Aborted)
+	checkBegin(t, tr, ref("between", 7), codes.Aborted)
+	checkBegin(t, tr, ref("other", 8), codes.Aborted)
 	checkBegin(t, tr, ref("s4", 8), codes.OK)
 	checkBegin(t, tr, ref("s5", 9), codes.OK)
 	endCp()
@@ -752,8 +752,8 @@ func TestTrackerCheckGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginPromote(s4@8): %v", err)
 	}
-	checkBegin(t, tr, ref("between", 7), codes.FailedPrecondition)
-	checkBegin(t, tr, ref("other", 8), codes.FailedPrecondition)
+	checkBegin(t, tr, ref("between", 7), codes.Aborted)
+	checkBegin(t, tr, ref("other", 8), codes.Aborted)
 	checkBegin(t, tr, ref("s4", 8), codes.OK)
 	endPromote()
 	checkBegin(t, tr, ref("between", 7), codes.OK)
@@ -766,11 +766,11 @@ func TestTrackerCheckGeneration(t *testing.T) {
 			LatestDurable: ref("durable", 5).clone(),
 		},
 	}
-	if got := apierror.Code(a.checkGeneration(snap("local", 3))); got != codes.FailedPrecondition {
-		t.Errorf("checkGeneration(older local@3) code = %v, want FailedPrecondition", got)
+	if got := apierror.Code(a.checkGeneration(snap("local", 3))); got != codes.Aborted {
+		t.Errorf("checkGeneration(older local@3) code = %v, want Aborted", got)
 	}
-	if got := apierror.Code(a.checkGeneration(snap("other", 5))); got != codes.FailedPrecondition {
-		t.Errorf("checkGeneration(other@5) code = %v, want FailedPrecondition", got)
+	if got := apierror.Code(a.checkGeneration(snap("other", 5))); got != codes.Aborted {
+		t.Errorf("checkGeneration(other@5) code = %v, want Aborted", got)
 	}
 	if got := apierror.Code(a.checkGeneration(snap("durable", 5))); got != codes.OK {
 		t.Errorf("checkGeneration(durable@5) code = %v, want OK", got)
@@ -778,11 +778,11 @@ func TestTrackerCheckGeneration(t *testing.T) {
 
 	// If Uploading holds a newer snapshot, it is newest even while no op runs.
 	a.Uploading = ref("saved-uploading", 6).clone()
-	if got := apierror.Code(a.checkGeneration(snap("durable", 5))); got != codes.FailedPrecondition {
-		t.Errorf("checkGeneration(older durable@5) code = %v, want FailedPrecondition", got)
+	if got := apierror.Code(a.checkGeneration(snap("durable", 5))); got != codes.Aborted {
+		t.Errorf("checkGeneration(older durable@5) code = %v, want Aborted", got)
 	}
-	if got := apierror.Code(a.checkGeneration(snap("other", 6))); got != codes.FailedPrecondition {
-		t.Errorf("checkGeneration(other@6) code = %v, want FailedPrecondition", got)
+	if got := apierror.Code(a.checkGeneration(snap("other", 6))); got != codes.Aborted {
+		t.Errorf("checkGeneration(other@6) code = %v, want Aborted", got)
 	}
 	if got := apierror.Code(a.checkGeneration(snap("saved-uploading", 6))); got != codes.OK {
 		t.Errorf("checkGeneration(saved-uploading@6) code = %v, want OK", got)
@@ -790,11 +790,11 @@ func TestTrackerCheckGeneration(t *testing.T) {
 
 	// If an operation in progress acts on a newer snapshot, its target is newest.
 	a.op = &actorOp{target: ref("uploading", 7)}
-	if got := apierror.Code(a.checkGeneration(snap("saved-uploading", 6))); got != codes.FailedPrecondition {
-		t.Errorf("checkGeneration(older saved-uploading@6) code = %v, want FailedPrecondition", got)
+	if got := apierror.Code(a.checkGeneration(snap("saved-uploading", 6))); got != codes.Aborted {
+		t.Errorf("checkGeneration(older saved-uploading@6) code = %v, want Aborted", got)
 	}
-	if got := apierror.Code(a.checkGeneration(snap("other", 7))); got != codes.FailedPrecondition {
-		t.Errorf("checkGeneration(other@7) code = %v, want FailedPrecondition", got)
+	if got := apierror.Code(a.checkGeneration(snap("other", 7))); got != codes.Aborted {
+		t.Errorf("checkGeneration(other@7) code = %v, want Aborted", got)
 	}
 	if got := apierror.Code(a.checkGeneration(snap("uploading", 7))); got != codes.OK {
 		t.Errorf("checkGeneration(uploading@7) code = %v, want OK", got)

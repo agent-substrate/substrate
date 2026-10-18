@@ -195,7 +195,7 @@ func (t *Tracker) BeginStart(ctx context.Context, actorUID string) (end func(), 
 // BeginCheckpoint records that a Checkpoint of snap is in progress on this
 // node, once any detach in progress has finished, and returns the func to call
 // when the checkpoint ends, whether or not it succeeded. It fails with
-// FailedPrecondition when snap has a stale generation for the actor: below the
+// Aborted when snap has a stale generation for the actor: below the
 // actor's newest snapshot on this node, or equal to it under another
 // snapshot_uuid. atelet does not detach the actor in between, so a detach
 // cannot delete the local snapshot the checkpoint writes.
@@ -217,8 +217,8 @@ func (t *Tracker) BeginCheckpoint(ctx context.Context, actorUID string, snap *at
 
 // BeginPromote records that a PromoteSnapshot of snap is in progress on this
 // node, once any detach in progress and any background upload of snap have
-// finished. It fails with FailedPrecondition when snap has a stale generation
-// for the actor or conflicts with LatestDurable. It reports whether snap is
+// finished. A stale generation fails with Aborted. A conflicting description
+// of LatestDurable fails with FailedPrecondition. It reports whether snap is
 // already the actor's latest durable snapshot, and returns the func to call
 // when the promote ends. atelet does not start a detach or a background upload
 // of the actor in between.
