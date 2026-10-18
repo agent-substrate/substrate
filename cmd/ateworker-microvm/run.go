@@ -709,6 +709,12 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 			return nil, fmt.Errorf("while staging system-info volumes: %w", err)
 		}
 	}
+	for _, c := range containers {
+		opts := ocispec.Options{ActorUID: id, ActorDirs: actorDirs, Container: c}
+		if err := ocispec.PrepareSubPaths(opts, filepath.Join(kata.SharedDir(id), c.GetName(), ocispec.SubPathDir)); err != nil {
+			return nil, err
+		}
+	}
 	vfsdLog, _ := os.OpenFile(virtiofsdLogPath(id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	vfsdCmd, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
 		Binary:      rr.virtiofsd,

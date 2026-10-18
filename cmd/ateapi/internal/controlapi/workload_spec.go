@@ -148,6 +148,8 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 			ateletCtr.VolumeMounts = append(ateletCtr.VolumeMounts, &ateletpb.VolumeMount{
 				Name:      mount.GetName(),
 				MountPath: mount.GetMountPath(),
+				ReadOnly:  mount.GetReadOnly(),
+				SubPath:   mount.GetSubPath(),
 			})
 		}
 		workloadSpec.Containers = append(workloadSpec.Containers, ateletCtr)

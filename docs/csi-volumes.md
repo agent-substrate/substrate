@@ -255,3 +255,20 @@ restore whose mount options differ from the checkpoint's. Supporting golden
 restores here is follow-up work; the candidate approaches are a golden actor
 that warms up on a scratch volume from the same driver, or an upstream runsc
 change that excludes host-derived mount options from restore validation.
+
+### Per-mount views of a shared volume
+
+A `SharedVolume` still identifies the whole CSI volume. On each `volumeMounts`
+entry, `subPath` selects a caller-supplied directory and `readOnly` restricts
+only that bind. One container can mount the same shared volume read-write at
+`/workspace` with `subPath: sessions/018f2c` and read-only at `/skills` with
+`subPath: skills`. Both workers use the same confined bind preparation; neither
+option changes CSI publication, the shared volume, or another mount's permissions.
+See [Volume mount views](api-guide.md#volume-mount-views) for validation and
+missing-directory rules.
+
+Golden actors use an empty local placeholder for a shared volume. A selected
+read-only directory (or a missing parent of a writable directory) will not exist
+there. Disable golden snapshot creation for such templates. These mount options
+do not change the shared-volume cold-boot policy or make a placeholder snapshot
+restorable onto NFS.

@@ -258,6 +258,42 @@ Each container runs with a default set of Linux capabilities — `AUDIT_WRITE`, 
 
 The sandbox — gVisor or micro-VM — remains the isolation boundary; capabilities constrain the workload *inside* it.
 
+### Volume mount views
+
+Each `volumeMounts` entry accepts `subPath` (`sub_path` in protobuf) and
+`readOnly` (`read_only`). The caller chooses a concrete sub-path; placeholders
+such as `${SESSION_ID}` are not expanded. Empty `subPath` selects the volume
+root. Otherwise it must be a clean relative Unix path of at most 16 segments,
+with no empty, `.` or `..` segment and no NUL. Symlinks in the selected path are
+rejected by the workers.
+
+The same volume can appear at several distinct, non-nested `mountPath` values:
+
+```yaml
+volumeMounts:
+  - name: data
+    mountPath: /workspace
+    subPath: sessions/018f2c
+  - name: data
+    mountPath: /skills
+    subPath: skills
+    readOnly: true
+```
+
+A missing final directory is created only for a writable, non-empty sub-path;
+its parent must already exist. A read-only mount of a missing directory fails
+without creating it. Both workers use the same confined bind preparation and
+per-mount flags on start and restore. `readOnly` changes only this view, not the
+volume or another mount's permissions. Image and system-info sources remain
+read-only even when `readOnly` is false. Leaving both fields unset preserves
+the existing root mount behavior. CSI publish/unpublish and the whole-volume
+resource are unchanged.
+
+Currently, gVisor rejects non-empty sub-paths on `durableDir` volumes: its
+shared in-sandbox tmpfs cannot expose a selected subdirectory through the
+existing mount hints. Root mounts, including read-only views, retain their
+existing snapshot behavior.
+
 ### Per-container limits
 
 A container may cap its own CPU and memory so it cannot starve or kill its siblings in the same actor (on a template whose `workerSelector` targets a micro-VM pool):

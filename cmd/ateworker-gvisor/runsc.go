@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -102,7 +103,16 @@ func (r *runsc) writeSpec(containerName string) error {
 		}
 		container = r.containers[i]
 	}
-	spec := ocispec.Build(ocispec.Options{ActorUID: r.actorUID, ActorDirs: r.actorDirs, Container: container})
+	for _, m := range container.GetDurableDirVolumeMounts() {
+		if m.GetSubPath() != "" {
+			return fmt.Errorf("durable-dir volume %q: gVisor shared tmpfs does not support sub_path", m.GetName())
+		}
+	}
+	opts := ocispec.Options{ActorUID: r.actorUID, ActorDirs: r.actorDirs, Container: container}
+	if err := ocispec.PrepareSubPaths(opts, filepath.Join(ociBundlePath(r.actorDirs, containerName), ocispec.SubPathDir)); err != nil {
+		return err
+	}
+	spec := ocispec.Build(opts)
 	ocispec.ShapeGVisor(spec, ocispec.GVisorOptions{
 		ActorUID:       r.actorUID,
 		ActorDirs:      r.actorDirs,

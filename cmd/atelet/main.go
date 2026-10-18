@@ -1910,21 +1910,29 @@ func buildWorkerWorkloadSpec(spec *ateletpb.WorkloadSpec, containerSpecs []*atew
 				ddMounts = append(ddMounts, &ateworkerpb.VolumeMount{
 					Name:      volName,
 					MountPath: vm.GetMountPath(),
+					ReadOnly:  vm.GetReadOnly(),
+					SubPath:   vm.GetSubPath(),
 				})
 			case vol.GetExternal() != nil, vol.GetEmptyDir() != nil:
 				extMounts = append(extMounts, &ateworkerpb.VolumeMount{
 					Name:      volName,
 					MountPath: vm.GetMountPath(),
+					ReadOnly:  vm.GetReadOnly(),
+					SubPath:   vm.GetSubPath(),
 				})
 			case vol.GetSystemInfo() != nil:
 				siMounts = append(siMounts, &ateworkerpb.VolumeMount{
 					Name:      volName,
 					MountPath: vm.GetMountPath(),
+					ReadOnly:  vm.GetReadOnly(),
+					SubPath:   vm.GetSubPath(),
 				})
 			case vol.GetImage() != nil:
 				imgMounts = append(imgMounts, &ateworkerpb.VolumeMount{
 					Name:      volName,
 					MountPath: vm.GetMountPath(),
+					ReadOnly:  vm.GetReadOnly(),
+					SubPath:   vm.GetSubPath(),
 				})
 			default:
 				return nil, fmt.Errorf("container %q mounts volume %q with no source set", ctr.GetName(), volName)

@@ -24,7 +24,6 @@ import (
 	"path/filepath"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
@@ -169,19 +168,16 @@ func Build(o Options) *specs.Spec {
 			Options:     []string{"bind", mode},
 		})
 	}
-	actorDirs := o.ActorDirs
-	for _, m := range container.GetDurableDirVolumeMounts() {
-		bind(m.GetMountPath(), filepath.Join(actorDirs.GetDurableDirVolumeMountsDir(), m.GetName()), "rw")
-	}
-	for _, m := range container.GetExternalVolumeMounts() {
-		bind(m.GetMountPath(), filepath.Join(actorDirs.GetExternalVolumeMountsDir(), m.GetName()), "rw")
-	}
-	for _, m := range container.GetSystemInfoVolumeMounts() {
-		bind(m.GetMountPath(), filepath.Join(actorDirs.GetSystemInfoVolumeRootsDir(), m.GetName()), "ro")
-	}
-	bundlePath := filepath.Join(actorDirs.GetOciBundleDir(), container.GetName())
-	for _, m := range container.GetImageVolumeMounts() {
-		bind(m.GetMountPath(), imagecache.ImageVolumeMountPath(bundlePath, m.GetName()), "ro")
+	for i, v := range volumeBinds(o) {
+		src := v.source
+		if v.mount.GetSubPath() != "" {
+			src = filepath.Join(o.ActorDirs.GetOciBundleDir(), container.GetName(), SubPathDir, fmt.Sprint(i))
+		}
+		mode := "rw"
+		if v.readOnly {
+			mode = "ro"
+		}
+		bind(v.mount.GetMountPath(), src, mode)
 	}
 
 	return spec

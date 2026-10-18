@@ -114,6 +114,7 @@ func mergeKataResources(from *specs.LinuxResources) *specs.LinuxResources {
 // guestVolumeSource maps a volume's host directory to its guest path.
 func guestVolumeSource(hostPath string, actorDirs *ateworkerpb.ActorDirs, containerID string) (string, error) {
 	for _, staged := range []struct{ host, guest string }{
+		{filepath.Join(actorDirs.GetOciBundleDir(), containerID, SubPathDir), path.Join(GuestSharedDir, containerID, SubPathDir)},
 		{actorDirs.GetDurableDirVolumeMountsDir(), path.Join(GuestSharedDir, ShareDurable)},
 		{actorDirs.GetExternalVolumeMountsDir(), path.Join(GuestSharedDir, ShareCSI)},
 		{actorDirs.GetSystemInfoVolumeRootsDir(), path.Join(GuestSharedDir, ShareSystemInfo)},

@@ -4774,7 +4774,14 @@ type VolumeMount struct {
 	// +k8s:required
 	// +k8s:maxLength=4096
 	// +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
-	MountPath     string `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
+	MountPath string `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
+	// read_only makes this bind read-only; it never grants source write access.
+	// +k8s:optional
+	ReadOnly bool `protobuf:"varint,3,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
+	// sub_path is a caller-chosen directory inside the volume. Empty selects its root.
+	// +k8s:optional
+	// +k8s:customValidation # projected-path rule shared through internal/volumepath
+	SubPath       string `protobuf:"bytes,4,opt,name=sub_path,json=subPath,proto3" json:"sub_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4819,6 +4826,20 @@ func (x *VolumeMount) GetName() string {
 func (x *VolumeMount) GetMountPath() string {
 	if x != nil {
 		return x.MountPath
+	}
+	return ""
+}
+
+func (x *VolumeMount) GetReadOnly() bool {
+	if x != nil {
+		return x.ReadOnly
+	}
+	return false
+}
+
+func (x *VolumeMount) GetSubPath() string {
+	if x != nil {
+		return x.SubPath
 	}
 	return ""
 }
@@ -10538,11 +10559,13 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x04path\x18\x02 \x01(\tR\x04path\"M\n" +
 	"\x15TrustBundleDataSource\x12\x14\n" +
 	"\x05names\x18\x03 \x03(\tR\x05names\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04pathJ\x04\b\x01\x10\x02R\x04name\"@\n" +
+	"\x04path\x18\x02 \x01(\tR\x04pathJ\x04\b\x01\x10\x02R\x04name\"x\n" +
 	"\vVolumeMount\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
-	"mount_path\x18\x02 \x01(\tR\tmountPath\"E\n" +
+	"mount_path\x18\x02 \x01(\tR\tmountPath\x12\x1b\n" +
+	"\tread_only\x18\x03 \x01(\bR\breadOnly\x12\x19\n" +
+	"\bsub_path\x18\x04 \x01(\tR\asubPath\"E\n" +
 	"\x15CreateAtespaceRequest\x12,\n" +
 	"\batespace\x18\x01 \x01(\v2\x10.ateapi.AtespaceR\batespace\"C\n" +
 	"\x12GetAtespaceRequest\x12-\n" +

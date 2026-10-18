@@ -1842,6 +1842,15 @@ message VolumeMount {
   // +k8s:maxLength=4096
   // +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
   string mount_path = 2;
+
+  // read_only makes this bind read-only; it never grants source write access.
+  // +k8s:optional
+  bool read_only = 3;
+
+  // sub_path is a caller-chosen directory inside the volume. Empty selects its root.
+  // +k8s:optional
+  // +k8s:customValidation # projected-path rule shared through internal/volumepath
+  string sub_path = 4;
 }
 
 message CreateAtespaceRequest {

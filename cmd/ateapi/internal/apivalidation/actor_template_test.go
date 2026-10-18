@@ -420,8 +420,8 @@ func TestValidateActorTemplate(t *testing.T) {
 		name: "the same volume mounted at two paths is allowed",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
-				{Name: "data", MountPath: "/var/data"},
-				{Name: "data", MountPath: "/mnt/data"},
+				{Name: "data", MountPath: "/var/data", SubPath: "sessions/018f2c"},
+				{Name: "data", MountPath: "/mnt/data", SubPath: "skills", ReadOnly: true},
 			}
 		},
 	}, {

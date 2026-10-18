@@ -1795,8 +1795,8 @@ func TestValidateContainer(t *testing.T) {
 			Args:    []string{"--serve"},
 			Env:     []*ateletpb.EnvVar{{Name: "PORT", Value: "8080"}},
 			VolumeMounts: []*ateletpb.VolumeMount{
-				{Name: "data", MountPath: "/data"},
-				{Name: "data", MountPath: "/mnt/data"},
+				{Name: "data", MountPath: "/data", SubPath: "sessions/018f2c"},
+				{Name: "data", MountPath: "/mnt/data", SubPath: "skills", ReadOnly: true},
 			},
 		}
 		for _, m := range mutate {

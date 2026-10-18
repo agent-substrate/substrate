@@ -151,3 +151,8 @@ func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ oper
 	}
 	return errs
 }
+
+// ValidateCustom_VolumeMount_SubPath permits the volume root or a projected path.
+func ValidateCustom_VolumeMount_SubPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateProjectedPath(fldPath, *value)
+}

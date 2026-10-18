@@ -43,8 +43,8 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 						Name:  "main",
 						Image: "main",
 						VolumeMounts: []*ateapipb.VolumeMount{
-							{Name: "home", MountPath: "/home/user"},
-							{Name: "home", MountPath: "/workspace"},
+							{Name: "home", MountPath: "/home/user", SubPath: "sessions/018f2c"},
+							{Name: "home", MountPath: "/workspace", SubPath: "skills", ReadOnly: true},
 						},
 					},
 				},
@@ -61,8 +61,8 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 						Name:  "main",
 						Image: "main",
 						VolumeMounts: []*ateletpb.VolumeMount{
-							{Name: "home", MountPath: "/home/user"},
-							{Name: "home", MountPath: "/workspace"},
+							{Name: "home", MountPath: "/home/user", SubPath: "sessions/018f2c"},
+							{Name: "home", MountPath: "/workspace", SubPath: "skills", ReadOnly: true},
 						},
 					},
 				},
@@ -139,7 +139,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 						Name:  "main",
 						Image: "main",
 						VolumeMounts: []*ateapipb.VolumeMount{
-							{Name: "home", MountPath: "/home/user"},
+							{Name: "home", MountPath: "/home/user", SubPath: "sessions/018f2c"},
 							{Name: "agent", MountPath: "/ate"},
 						},
 					},
@@ -161,7 +161,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 						Name:  "main",
 						Image: "main",
 						VolumeMounts: []*ateletpb.VolumeMount{
-							{Name: "home", MountPath: "/home/user"},
+							{Name: "home", MountPath: "/home/user", SubPath: "sessions/018f2c"},
 							{Name: "agent", MountPath: "/ate"},
 						},
 					},
@@ -230,7 +230,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 						Name:  "main",
 						Image: "main",
 						VolumeMounts: []*ateapipb.VolumeMount{
-							{Name: "home", MountPath: "/workspace"},
+							{Name: "home", MountPath: "/workspace", SubPath: "skills", ReadOnly: true},
 						},
 					},
 				},
@@ -247,7 +247,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 						Name:  "main",
 						Image: "main",
 						VolumeMounts: []*ateletpb.VolumeMount{
-							{Name: "home", MountPath: "/workspace"},
+							{Name: "home", MountPath: "/workspace", SubPath: "skills", ReadOnly: true},
 						},
 					},
 				},
@@ -665,7 +665,8 @@ func TestWorkloadSpecBorrowedVolume(t *testing.T) {
 		Containers: []*ateapipb.Container{{
 			Name: "main",
 			VolumeMounts: []*ateapipb.VolumeMount{
-				{Name: "borrowed", MountPath: "/mnt/shared"},
+				{Name: "borrowed", MountPath: "/workspace", SubPath: "sessions/018f2c"},
+				{Name: "borrowed", MountPath: "/skills", SubPath: "skills", ReadOnly: true},
 				{Name: "owned", MountPath: "/mnt/owned"},
 			},
 		}},
@@ -724,6 +725,14 @@ func TestWorkloadSpecBorrowedVolume(t *testing.T) {
 			got, err := workloadSpecFromActorTemplate(template, tc.actor, nil)
 			if err != nil {
 				t.Fatalf("workloadSpecFromActorTemplate: %v", err)
+			}
+			wantMounts := []*ateletpb.VolumeMount{
+				{Name: "borrowed", MountPath: "/workspace", SubPath: "sessions/018f2c"},
+				{Name: "borrowed", MountPath: "/skills", SubPath: "skills", ReadOnly: true},
+				{Name: "owned", MountPath: "/mnt/owned"},
+			}
+			if diff := cmp.Diff(wantMounts, got.GetContainers()[0].GetVolumeMounts(), protocmp.Transform()); diff != "" {
+				t.Errorf("mount options mismatch (-want +got):\n%s", diff)
 			}
 			if diff := cmp.Diff(tc.want, got.GetVolumes(), protocmp.Transform()); diff != "" {
 				t.Errorf("volumes mismatch (-want +got):\n%s", diff)
