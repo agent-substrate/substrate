@@ -18,12 +18,15 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
+	"syscall"
 	"testing"
 	"time"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
@@ -672,6 +675,107 @@ func TestTrackerDetachRetriesFailedPrune(t *testing.T) {
 	}
 	if got := tr.State(trackedActorUID).GetLatestLocal(); got != nil {
 		t.Errorf("latest_local = %v after the retried detach, want unset", got)
+	}
+}
+
+// stageSandboxAssets hard-links a cached asset into the tracked actor's sandbox
+// assets dir, as Run does, and returns the cached file's path and the dir.
+func stageSandboxAssets(t *testing.T) (cached, assetsDir string) {
+	t.Helper()
+	cached = filepath.Join(filepath.Dir(nodepath.ActorsDir), "sandbox-asset-cache", "runsc")
+	assetsDir = ateletpath.SandboxAssetsDir(trackedActorUID)
+	for _, dir := range []string{filepath.Dir(cached), filepath.Join(assetsDir, "gvisor")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(cached, []byte("runsc"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(cached, filepath.Join(assetsDir, "gvisor", "runsc")); err != nil {
+		t.Fatal(err)
+	}
+	return cached, assetsDir
+}
+
+// linksOf returns the number of links to path.
+func linksOf(t *testing.T, path string) uint64 {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skip("link counts are unavailable on this platform")
+	}
+	return uint64(st.Nlink)
+}
+
+// A detach deletes the actor's sandbox asset links, so the asset cache no
+// longer counts the entries they pin as in use. Detach and the timer share the
+// path that does it.
+func TestTrackerDetachRemovesSandboxAssets(t *testing.T) {
+	for name, detach := range map[string]func(*testing.T, *Tracker){
+		"requested": func(t *testing.T, tr *Tracker) {
+			if _, err := tr.Detach(t.Context(), trackedActorUID); err != nil {
+				t.Fatalf("detach: %v", err)
+			}
+		},
+		"by the timer": detachNow,
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr := newTestTracker(t, newFakeSnapshotStore())
+			tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+			cached, assetsDir := stageSandboxAssets(t)
+			if got := linksOf(t, cached); got != 2 {
+				t.Fatalf("links to the cached asset = %d before the detach, want 2", got)
+			}
+
+			detach(t, tr)
+
+			if _, err := os.Stat(assetsDir); !os.IsNotExist(err) {
+				t.Errorf("sandbox assets dir after the detach: %v, want it removed", err)
+			}
+			if got := linksOf(t, cached); got != 1 {
+				t.Errorf("links to the cached asset = %d after the detach, want 1", got)
+			}
+		})
+	}
+}
+
+// A detach whose asset removal fails keeps LatestLocal, and the retry removes
+// the links.
+func TestTrackerDetachRetriesFailedAssetRemoval(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions, so no asset link can be made undeletable")
+	}
+	tr := newTestTracker(t, newFakeSnapshotStore())
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
+	cached, assetsDir := stageSandboxAssets(t)
+	// A directory with no write bit: its links cannot be unlinked.
+	stuck := filepath.Join(assetsDir, "gvisor")
+	if err := os.Chmod(stuck, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stuck, 0o700) })
+
+	if _, err := tr.Detach(t.Context(), trackedActorUID); err == nil {
+		t.Fatal("detach succeeded, want the removal's error")
+	}
+	if uuidOf(tr.State(trackedActorUID).GetLatestLocal()) != "s1" {
+		t.Errorf("state = %v, want s1 still local", tr.State(trackedActorUID))
+	}
+
+	if err := os.Chmod(stuck, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	detachNow(t, tr)
+	if _, err := os.Stat(assetsDir); !os.IsNotExist(err) {
+		t.Errorf("sandbox assets dir after the retried detach: %v, want it removed", err)
+	}
+	if got := linksOf(t, cached); got != 1 {
+		t.Errorf("links to the cached asset = %d after the retried detach, want 1", got)
 	}
 }
 
