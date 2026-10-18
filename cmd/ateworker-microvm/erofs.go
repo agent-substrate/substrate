@@ -26,12 +26,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb"
 	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/ocispec"
@@ -68,8 +70,33 @@ func loadBundleOverlay(ac *actorContainer) error {
 		return nil
 	}
 	ac.erofs = true
-	ac.erofsLayers, err = imagecache.EROFSLowerLayers(spec)
-	return err
+	if ac.erofsLayers, err = imagecache.EROFSLowerLayers(spec); err != nil {
+		return err
+	}
+	// Every image volume of an EROFS container is EROFS too: atelet pulls
+	// them in the rootfs's form.
+	ac.erofsVolumes = ac.erofsVolumes[:0]
+	for _, vol := range spec.ImageVolumes {
+		layers, err := imagecache.EROFSVolumeLayers(vol)
+		if err != nil {
+			return err
+		}
+		ac.erofsVolumes = append(ac.erofsVolumes, erofsVolume{name: vol.Name, layers: layers})
+	}
+	return nil
+}
+
+// allEROFSLayers calls fn with every layer image c maps, rootfs first then
+// each volume in spec order, top-most first within each.
+func (c *actorContainer) allEROFSLayers(fn func(layer string)) {
+	for _, l := range c.erofsLayers {
+		fn(l)
+	}
+	for _, v := range c.erofsVolumes {
+		for _, l := range v.layers {
+			fn(l)
+		}
+	}
 }
 
 // checkpointContainers loads each container's overlay spec from its bundle
@@ -94,7 +121,7 @@ func checkpointContainers(shareDir string, actorDirs *ateworkerpb.ActorDirs, con
 		case guestMerged && !ctrs[i].erofs:
 			return nil, fmt.Errorf("container %q runs on EROFS layers but its bundle no longer names them", cn)
 		case !guestMerged:
-			ctrs[i].erofs, ctrs[i].erofsLayers = false, nil
+			ctrs[i].erofs, ctrs[i].erofsLayers, ctrs[i].erofsVolumes = false, nil, nil
 		}
 	}
 	return ctrs, nil
@@ -114,14 +141,12 @@ func guestMergedRootfs(shareDir, cid string) (bool, error) {
 }
 
 // checkEROFSLayerBudget refuses an actor whose containers have more than
-// maxEROFSLayers distinct layer images. A layer two containers share counts
-// once.
+// maxEROFSLayers distinct layer images, rootfs and image volumes together.
+// A layer two containers, or a rootfs and a volume, share counts once.
 func checkEROFSLayerBudget(ctrs []actorContainer) error {
 	distinct := map[string]bool{}
 	for _, c := range ctrs {
-		for _, l := range c.erofsLayers {
-			distinct[l] = true
-		}
+		c.allEROFSLayers(func(l string) { distinct[l] = true })
 	}
 	if len(distinct) > maxEROFSLayers {
 		return fmt.Errorf("actor's containers have %d distinct layer images, more than the %d one VM attaches", len(distinct), maxEROFSLayers)
@@ -158,13 +183,16 @@ const erofsPmemIDPrefix = "erofs"
 // layers must bump it.
 const erofsFirstPmemDevice = 1
 
-// newEROFSDevices assigns the devices for ctrs' EROFS containers.
+// newEROFSDevices assigns the devices for ctrs' EROFS containers: one per
+// distinct layer image across their rootfs and image volumes, in the order
+// allEROFSLayers visits them. A restore rebuilds the same list from the same
+// bundles, which is what keeps the guest's /dev/pmemN numbering stable.
 func newEROFSDevices(ctrs []actorContainer) *erofsDevices {
 	d := &erofsDevices{index: map[string]int{}}
 	for _, c := range ctrs {
-		for _, layer := range c.erofsLayers {
+		c.allEROFSLayers(func(layer string) {
 			if _, ok := d.index[layer]; ok {
-				continue
+				return
 			}
 			i := len(d.pmem)
 			d.index[layer] = i
@@ -176,9 +204,27 @@ func newEROFSDevices(ctrs []actorContainer) *erofsDevices {
 				PciSegment:    int32(erofsFirstPCISegment + i/erofsLayerSegmentSlots),
 			})
 			d.mounts = append(d.mounts, kata.EROFSLayerMount(i, erofsFirstPmemDevice+i))
-		}
+		})
 	}
 	return d
+}
+
+// volumeStorages returns the agent storages that mount c's EROFS image
+// volumes in the guest (kata.ImageVolumeStorage), nil for a container on the
+// host-merged rootfs.
+func (d *erofsDevices) volumeStorages(c actorContainer) []*agentpb.Storage {
+	if !c.erofs {
+		return nil
+	}
+	storages := make([]*agentpb.Storage, 0, len(c.erofsVolumes))
+	for _, v := range c.erofsVolumes {
+		mounts := make([]string, 0, len(v.layers))
+		for _, layer := range v.layers {
+			mounts = append(mounts, kata.EROFSLayerMountPoint(d.index[layer]))
+		}
+		storages = append(storages, kata.ImageVolumeStorage(c.id, v.name, mounts))
+	}
+	return storages
 }
 
 // overlay returns the guest overlay for c, or nil for a container on the
@@ -237,9 +283,23 @@ type erofsLayerRecord struct {
 }
 
 // erofsLayers is the contents of erofsLayersSnapshotFile: each EROFS
-// container's layer images, top-most first.
+// container's rootfs layers and, per image volume, the volume's layers, all
+// top-most first.
 type erofsLayers struct {
-	Containers map[string][]erofsLayerRecord `json:"containers"`
+	Containers map[string][]erofsLayerRecord            `json:"containers"`
+	Volumes    map[string]map[string][]erofsLayerRecord `json:"volumes,omitempty"`
+}
+
+func recordLayers(name string, dirs []string) ([]erofsLayerRecord, error) {
+	layers := make([]erofsLayerRecord, 0, len(dirs))
+	for _, dir := range dirs {
+		digest, err := imagecache.LayerEROFSDigest(dir)
+		if err != nil {
+			return nil, fmt.Errorf("while recording layer %q of %q: %w", dir, name, err)
+		}
+		layers = append(layers, erofsLayerRecord{Dir: dir, Digest: digest})
+	}
+	return layers, nil
 }
 
 // writeEROFSLayers records ctrs' EROFS containers into checkpointDir, if any.
@@ -249,15 +309,24 @@ func writeEROFSLayers(checkpointDir string, ctrs []actorContainer) error {
 		if !c.erofs {
 			continue
 		}
-		var layers []erofsLayerRecord
-		for _, dir := range c.erofsLayers {
-			digest, err := imagecache.LayerEROFSDigest(dir)
-			if err != nil {
-				return fmt.Errorf("while recording layer %q of %q: %w", dir, c.name, err)
-			}
-			layers = append(layers, erofsLayerRecord{Dir: dir, Digest: digest})
+		layers, err := recordLayers(c.name, c.erofsLayers)
+		if err != nil {
+			return err
 		}
 		rec.Containers[c.name] = layers
+		for _, v := range c.erofsVolumes {
+			vl, err := recordLayers(c.name, v.layers)
+			if err != nil {
+				return err
+			}
+			if rec.Volumes == nil {
+				rec.Volumes = map[string]map[string][]erofsLayerRecord{}
+			}
+			if rec.Volumes[c.name] == nil {
+				rec.Volumes[c.name] = map[string][]erofsLayerRecord{}
+			}
+			rec.Volumes[c.name][v.name] = vl
+		}
 	}
 	if len(rec.Containers) == 0 {
 		return nil
@@ -297,9 +366,22 @@ func (r *erofsLayers) hasImage(file string) bool {
 	if r == nil || file == "" {
 		return false
 	}
-	for _, layers := range r.Containers {
+	match := func(layers []erofsLayerRecord) bool {
 		for _, l := range layers {
 			if imagecache.LayerEROFSPath(l.Dir) == file {
+				return true
+			}
+		}
+		return false
+	}
+	for _, layers := range r.Containers {
+		if match(layers) {
+			return true
+		}
+	}
+	for _, vols := range r.Volumes {
+		for _, layers := range vols {
+			if match(layers) {
 				return true
 			}
 		}
@@ -331,6 +413,13 @@ func (r *erofsLayers) checkMode(ac *actorContainer) error {
 	case !r.isEROFS(ac.name) && ac.erofs:
 		return fmt.Errorf("container %q has no EROFS layer record in its snapshot but its bundle names EROFS layers", ac.name)
 	}
+	// The frozen guest has each image volume mounted from layer images or
+	// not at all; the bundle must name the same set.
+	want := slices.Sorted(maps.Keys(r.Volumes[ac.name]))
+	got := slices.Sorted(slices.Values(ac.erofsVolumeNames()))
+	if !slices.Equal(want, got) {
+		return fmt.Errorf("container %q had image volumes %v on EROFS layers in its snapshot but its bundle names %v", ac.name, want, got)
+	}
 	return nil
 }
 
@@ -351,29 +440,52 @@ func (r *erofsLayers) verify(ctrs []actorContainer) error {
 		if !c.erofs {
 			return fmt.Errorf("container %q ran on EROFS layers in its snapshot but has none now", c.name)
 		}
-		var got []string
-		for _, l := range want {
-			got = append(got, l.Dir)
+		if err := verifyLayers(c.name, "rootfs", want, c.erofsLayers); err != nil {
+			return err
 		}
-		if !slices.Equal(got, c.erofsLayers) {
-			return fmt.Errorf("container %q layers %v differ from the snapshot's %v", c.name, c.erofsLayers, got)
+		if len(r.Volumes[c.name]) != len(c.erofsVolumes) {
+			return fmt.Errorf("container %q had %d EROFS image volumes in its snapshot but has %d now", c.name, len(r.Volumes[c.name]), len(c.erofsVolumes))
 		}
-		for _, l := range want {
-			if _, err := os.Stat(imagecache.LayerEROFSPath(l.Dir)); err != nil {
-				return fmt.Errorf("layer image of %q: %w", c.name, err)
-			}
-			digest, err := imagecache.LayerEROFSDigest(l.Dir)
-			if err != nil {
-				return fmt.Errorf("layer %q of %q: %w", l.Dir, c.name, err)
-			}
-			if digest != l.Digest {
-				return fmt.Errorf("layer %q of %q is %s here but %s in the snapshot", l.Dir, c.name, digest, l.Digest)
+		for _, v := range c.erofsVolumes {
+			if err := verifyLayers(c.name, "image volume "+v.name, r.Volumes[c.name][v.name], v.layers); err != nil {
+				return err
 			}
 		}
 	}
 	for name := range r.Containers {
 		if !known[name] {
 			return fmt.Errorf("snapshot records EROFS layers for unknown container %q", name)
+		}
+	}
+	for name := range r.Volumes {
+		if !known[name] {
+			return fmt.Errorf("snapshot records EROFS image volumes for unknown container %q", name)
+		}
+	}
+	return nil
+}
+
+// verifyLayers checks that have, the layer dirs a bundle names for what of
+// container name, are the ones the snapshot recorded, and that this node's
+// images of them carry the recorded digests.
+func verifyLayers(name, what string, want []erofsLayerRecord, have []string) error {
+	got := make([]string, 0, len(want))
+	for _, l := range want {
+		got = append(got, l.Dir)
+	}
+	if !slices.Equal(got, have) {
+		return fmt.Errorf("%s of %q has layers %v, which differ from the snapshot's %v", what, name, have, got)
+	}
+	for _, l := range want {
+		if _, err := os.Stat(imagecache.LayerEROFSPath(l.Dir)); err != nil {
+			return fmt.Errorf("layer image for %s of %q: %w", what, name, err)
+		}
+		digest, err := imagecache.LayerEROFSDigest(l.Dir)
+		if err != nil {
+			return fmt.Errorf("layer %q for %s of %q: %w", l.Dir, what, name, err)
+		}
+		if digest != l.Digest {
+			return fmt.Errorf("layer %q for %s of %q is %s here but %s in the snapshot", l.Dir, what, name, digest, l.Digest)
 		}
 	}
 	return nil

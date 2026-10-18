@@ -52,6 +52,15 @@ const (
 	// mountPathAlias is a second mount of the same image volume: one volume
 	// may be mounted at multiple paths.
 	mountPathAlias = "/mnt/ate-image-volume-alias"
+	// singlePath mounts a one-layer image volume: the micro-VM guest binds
+	// the layer's mount instead of composing an overlay.
+	singlePath = "/mnt/ate-image-volume-single"
+	// sharedPath mounts an image volume built on top of the probe's own
+	// image, so every layer but one is shared with the container's rootfs.
+	// On a micro-VM node that is the case the one-form-per-node rule has to
+	// serve (both pulls land as EROFS), and the shared layers ride one
+	// device each.
+	sharedPath = "/mnt/ate-image-volume-shared"
 
 	// The scratch durable-dir volume is mounted at both of these paths; a
 	// write through one must be readable through the other.
@@ -71,6 +80,8 @@ const (
 
 	payloadName    = "payload.txt"
 	payloadContent = "delivered by an image volume"
+	singleContent  = "delivered by a one-layer image volume"
+	sharedContent  = "delivered on top of the probe image"
 	// shadowedName is written by two layers; the upper one must win.
 	shadowedName    = "shadowed.txt"
 	shadowedContent = "from the middle layer"
@@ -83,6 +94,11 @@ const (
 )
 
 const probeName = e2e.ProbeName
+
+// fixtureImages are the digest-pinned image volume sources of one run.
+type fixtureImages struct {
+	fixture, single, shared string
+}
 
 // tarLayer builds a layer from a set of paths to contents. A path whose base
 // name starts with ".wh." is an OCI whiteout for the same-named lower path.
@@ -116,8 +132,7 @@ func tarLayer(t *testing.T, files map[string]string) v1.Layer {
 // reference.
 func buildFixtureImage(t *testing.T, repo string) string {
 	t.Helper()
-
-	img, err := mutate.AppendLayers(empty.Image,
+	return pushFixture(t, repo, "fixture", empty.Image,
 		tarLayer(t, map[string]string{
 			payloadName:  "from-the-bottom-layer",
 			shadowedName: "from-the-bottom-layer",
@@ -129,6 +144,35 @@ func buildFixtureImage(t *testing.T, repo string) string {
 			".wh." + deletedName: "",
 		}),
 	)
+}
+
+// buildSingleLayerImage pushes a one-layer image.
+func buildSingleLayerImage(t *testing.T, repo string) string {
+	t.Helper()
+	return pushFixture(t, repo, "single", empty.Image, tarLayer(t, map[string]string{payloadName: singleContent}))
+}
+
+// buildSharedLayersImage pushes the probe's image with one layer added, so
+// the volume shares every layer of the container's rootfs.
+func buildSharedLayersImage(t *testing.T, repo, probeImage string) string {
+	t.Helper()
+	ref, err := name.ParseReference(probeImage, name.Insecure)
+	if err != nil {
+		t.Fatalf("parsing probe image %q: %v", probeImage, err)
+	}
+	base, err := remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	if err != nil {
+		t.Fatalf("fetching probe image %q: %v", probeImage, err)
+	}
+	return pushFixture(t, repo, "shared", base, tarLayer(t, map[string]string{payloadName: sharedContent}))
+}
+
+// pushFixture appends layers to base, pushes the result under a unique tag
+// and returns its digest-pinned reference.
+func pushFixture(t *testing.T, repo, kind string, base v1.Image, layers ...v1.Layer) string {
+	t.Helper()
+
+	img, err := mutate.AppendLayers(base, layers...)
 	if err != nil {
 		t.Fatalf("appending layers: %v", err)
 	}
@@ -136,7 +180,7 @@ func buildFixtureImage(t *testing.T, repo string) string {
 	// A unique tag per run: some registries refuse to overwrite an existing
 	// tag. The returned reference is digest-pinned, so the tag itself is
 	// throwaway.
-	ref := fmt.Sprintf("%s/e2e-combinedvolumes-fixture:%d", strings.TrimSuffix(repo, "/"), time.Now().UnixNano())
+	ref := fmt.Sprintf("%s/e2e-combinedvolumes-%s:%d", strings.TrimSuffix(repo, "/"), kind, time.Now().UnixNano())
 	tag, err := name.ParseReference(ref, name.Insecure)
 	if err != nil {
 		t.Fatalf("parsing %q: %v", ref, err)
@@ -179,11 +223,10 @@ func storageClassOrEmpty(ctx context.Context, t *testing.T, clients *e2e.Clients
 // The template's name is suffixed per test run: it lives in the suite's
 // shared atespace, which outlives the per-test k8s namespace. A non-empty
 // storageClass adds the external volume.
-func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, fixtureImage, storageClass string) *ateapi.ActorTemplate {
+func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, probeAtespace string, images fixtureImages, storageClass string) *ateapi.ActorTemplate {
 	t.Helper()
 
 	// The probe supplies this suite's container image and resolved runtime.
-	probeAtespace, _ := e2e.DeployProbe(t, "combinedvolumes")
 	src := e2e.SubstrateFixture{
 		Atespace:      probeAtespace,
 		Name:          probeName,
@@ -210,12 +253,22 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 			tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts,
 				&ateapi.VolumeMount{Name: "fixture", MountPath: mountPath},
 				&ateapi.VolumeMount{Name: "fixture", MountPath: mountPathAlias},
+				&ateapi.VolumeMount{Name: "single", MountPath: singlePath},
+				&ateapi.VolumeMount{Name: "shared", MountPath: sharedPath},
 				&ateapi.VolumeMount{Name: "scratch", MountPath: scratchPathA},
 				&ateapi.VolumeMount{Name: "scratch", MountPath: scratchPathB})
 			tmpl.Volumes = append(tmpl.Volumes,
 				&ateapi.Volume{
 					Name:  "fixture",
-					Image: &ateapi.ImageVolumeSource{Reference: fixtureImage},
+					Image: &ateapi.ImageVolumeSource{Reference: images.fixture},
+				},
+				&ateapi.Volume{
+					Name:  "single",
+					Image: &ateapi.ImageVolumeSource{Reference: images.single},
+				},
+				&ateapi.Volume{
+					Name:  "shared",
+					Image: &ateapi.ImageVolumeSource{Reference: images.shared},
 				},
 				&ateapi.Volume{
 					Name:       "scratch",
@@ -356,10 +409,15 @@ func TestCombinedVolumes(t *testing.T) {
 	clients := e2e.GetClients()
 	ns := e2e.CreateNamespace(t)
 
-	fixtureImage := buildFixtureImage(t, repo)
-	t.Logf("fixture image: %s", fixtureImage)
+	probeAtespace, probeTmpl := e2e.DeployProbe(t, "combinedvolumes")
+	images := fixtureImages{
+		fixture: buildFixtureImage(t, repo),
+		single:  buildSingleLayerImage(t, repo),
+		shared:  buildSharedLayersImage(t, repo, probeTmpl.GetContainers()[0].GetImage()),
+	}
+	t.Logf("fixture images: %+v", images)
 	storageClass := storageClassOrEmpty(ctx, t, clients)
-	tmpl := createTemplate(ctx, t, clients, ns, fixtureImage, storageClass)
+	tmpl := createTemplate(ctx, t, clients, ns, probeAtespace, images, storageClass)
 
 	actorRef := resources.ActorRef{Atespace: atespace, Name: "cv-" + ns.Name}
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{
@@ -413,6 +471,16 @@ func TestCombinedVolumes(t *testing.T) {
 		requireWriteRejected(ctx, t, router, actorRef, mountPath+"/should-not-exist")
 	})
 
+	t.Run("OneLayerImageVolume", func(t *testing.T) {
+		requireContent(ctx, t, router, actorRef, singlePath+"/"+payloadName, singleContent)
+		requireWriteRejected(ctx, t, router, actorRef, singlePath+"/should-not-exist")
+	})
+
+	t.Run("ImageVolumeSharingTheContainerLayers", func(t *testing.T) {
+		requireContent(ctx, t, router, actorRef, sharedPath+"/"+payloadName, sharedContent)
+		requireWriteRejected(ctx, t, router, actorRef, sharedPath+"/should-not-exist")
+	})
+
 	t.Run("SameImageVolumeAtTwoPaths", func(t *testing.T) {
 		requireContentAtBoth(ctx, t, router, actorRef, payloadPath, mountPathAlias+"/"+payloadName, payloadContent)
 	})
@@ -445,6 +513,8 @@ func TestCombinedVolumes(t *testing.T) {
 			t.Fatalf("ResumeActor after suspend: %v", err)
 		}
 		requireContentAtBoth(resumeCtx, t, router, actorRef, payloadPath, mountPathAlias+"/"+payloadName, payloadContent)
+		requireContent(resumeCtx, t, router, actorRef, singlePath+"/"+payloadName, singleContent)
+		requireContent(resumeCtx, t, router, actorRef, sharedPath+"/"+payloadName, sharedContent)
 		requireContentAtBoth(resumeCtx, t, router, actorRef, scratchPathA+"/multi.txt", scratchPathB+"/multi.txt", probeWrittenContent)
 
 		// Suspend detached the external volume; the resume must reattach it
