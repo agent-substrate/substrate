@@ -35,20 +35,21 @@ import (
 // The tag is given its own copy of that snapshot, so suspending the actor again
 // or deleting the actor does not garbage collect the tag's snapshot.
 //
-// The tag is built in 5 phases:
-//  1. Make the actor's latest snapshot durable, if it is still node-local: a
-//     paused actor's snapshot may not be uploaded yet.
-//  2. Reserve the tag's name; the store assigns its UID.
-//  3. Record the snapshot's URI, under the tag's UID, before anything is
+// The tag is built in 6 phases:
+//  1. Check that the name is free and the storage location is usable.
+//  2. Make the actor's latest snapshot durable, if it is not uploaded yet: a
+//     paused actor's snapshot may still be uploading.
+//  3. Reserve the tag's name; the store assigns its UID.
+//  4. Record the snapshot's URI, under the tag's UID, before anything is
 //     copied there.
-//  4. Copy the snapshot to that URI.
-//  5. Finalize: mark the tag's snapshot COMPLETED.
+//  5. Copy the snapshot to that URI.
+//  6. Finalize: mark the tag's snapshot COMPLETED.
 //
 // The tag captures whichever snapshot the actor holds when the workflow runs.
 // An actor keeps no snapshot history, so a suspend that lands first moves what
 // gets tagged; that race is inherent to naming an actor rather than a snapshot.
 //
-// Not idempotent: the name is taken as soon as phase 2 lands, so a create that
+// Not idempotent: the name is taken as soon as phase 3 lands, so a create that
 // dies after it leaves a pending tag and every later create under that name is
 // AlreadyExists. To retry, delete the tag, which collects whatever the failed
 // attempt stranded, and create it again.
@@ -77,6 +78,10 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 	if err != nil {
 		return nil, err
 	}
+	// Runs before the upload, so a create that cannot succeed fails fast.
+	if err := w.checkTagCreatable(leaseCtx, tagRef, actorTemplate); err != nil {
+		return nil, err
+	}
 	// Runs before the name is taken, so a failed upload leaves no pending tag.
 	actor, err = w.ensureTagSourceSnapshotDurable(leaseCtx, actorRef, actor)
 	if err != nil {
@@ -87,7 +92,7 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 		return nil, err
 	}
 
-	reserved, err := w.ensureTagReserved(leaseCtx, tagRef, actor, actorTemplate, snapshot, tag)
+	reserved, err := w.ensureTagReserved(leaseCtx, tagRef, actor, snapshot, tag)
 	if err != nil {
 		return nil, err
 	}
@@ -238,8 +243,34 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	return actor, actorTemplate, nil
 }
 
+// checkTagCreatable fails a create that cannot succeed before the snapshot is
+// uploaded: a name already taken, or a storage location the copy cannot use.
+// The tag lease is held, so no other create or delete of the name races the
+// lookup.
+func (w *ActorWorkflow) checkTagCreatable(ctx context.Context, tagRef resources.TagRef, actorTemplate *ateapipb.ActorTemplate) (err error) {
+	ctx, done := stepSpan(ctx, "CheckTagCreatable")
+	defer func() { err = done(err) }()
+
+	_, err = w.store.GetTag(ctx, tagRef)
+	switch {
+	case err == nil:
+		return tagAlreadyExistsError(tagRef)
+	case !errors.Is(err, store.ErrNotFound):
+		return fmt.Errorf("while getting tag %s: %w", tagRef, err)
+	}
+	if err := resources.ValidateSnapshotLocation(actorTemplate.GetSnapshotConfig().GetStorageLocation()); err != nil {
+		return fmt.Errorf("invalid storage location for tag %s: %w", tagRef, err)
+	}
+	return nil
+}
+
+// tagAlreadyExistsError is the error a create under a taken name fails with.
+func tagAlreadyExistsError(tagRef resources.TagRef) error {
+	return apierror.AlreadyExists("Tag %s already exists; delete it and create it again to retry", tagRef)
+}
+
 // ensureTagSourceSnapshotDurable makes the actor's latest snapshot durable when
-// it is still node-local, the shape a pause leaves until atelet's background
+// it is not uploaded yet, the shape a pause leaves until atelet's background
 // upload is recorded. It asks the atelet on the snapshot's node to upload it
 // with PromoteSnapshot, which keeps the local copy so the actor still resumes
 // on that node, and records the upload on the actor. It returns the actor as
@@ -252,8 +283,14 @@ func (w *ActorWorkflow) ensureTagSourceSnapshotDurable(ctx context.Context, acto
 	defer func() { err = done(err) }()
 
 	snap := latestSnapshot(actor.GetStatus(), func(*ateapipb.Snapshot) bool { return true })
-	if snap.GetLocality() == "" || snap.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+	if snap.GetDurableSnapshot().GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
 		markSkipped(ctx, "the actor's latest snapshot is already durable")
+		return actor, nil
+	}
+	// For example a PENDING upload whose node was lost. The tag falls back to
+	// the latest durable snapshot, the one the actor would resume from.
+	if snap.GetLocality() == "" {
+		markSkipped(ctx, "the actor's latest snapshot is on no node to upload from")
 		return actor, nil
 	}
 	snapshotURI := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
@@ -294,8 +331,10 @@ func (w *ActorWorkflow) ensureTagSourceSnapshotDurable(ctx context.Context, acto
 	// The actor lease is held for the whole tag, so the actor cannot be resumed
 	// or suspended meanwhile and snap is still its newest snapshot here.
 	applied := proto.CloneOf(actor.GetStatus())
+	// The request was valid, so a state that conflicts with the record is
+	// atelet breaking its contract.
 	if err := applyAteletResponseState(ctx, applied, resp.GetState()); err != nil {
-		return nil, err
+		return nil, apierror.Internal("atelet on node %q reported a state for Actor %s that conflicts with its record: %w", snap.GetLocality(), actorRef, err)
 	}
 	stored, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		// The precondition makes toUpdate the version applied was built from.
@@ -354,15 +393,10 @@ func tagSourceSnapshot(actorRef resources.ActorRef, actor *ateapipb.Actor) (*ate
 // deciding whether the objects under it still belong to the snapshot being
 // tagged, and the row may not even be this actor's; deleting the tag collects
 // them and frees the name, so a retry is a delete followed by a create.
-func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.TagRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, snapshot *ateapipb.Snapshot, tag *ateapipb.Tag) (_ *ateapipb.Tag, err error) {
+func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.TagRef, actor *ateapipb.Actor, snapshot *ateapipb.Snapshot, tag *ateapipb.Tag) (_ *ateapipb.Tag, err error) {
 	ctx, done := stepSpan(ctx, "ReserveTag")
 	defer func() { err = done(err) }()
 
-	// Checked before the name is taken, so an unusable location fails the
-	// create without leaving a pending tag behind.
-	if err := resources.ValidateSnapshotLocation(actorTemplate.GetSnapshotConfig().GetStorageLocation()); err != nil {
-		return nil, fmt.Errorf("invalid storage location for tag %s: %w", tagRef, err)
-	}
 	tagToCreate := &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
 		Scope:       tag.GetScope(),
@@ -384,7 +418,7 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 	case errors.Is(err, store.ErrFailedPrecondition):
 		return nil, apierror.FailedPrecondition("Atespace %s not found", tagRef.Atespace)
 	case errors.Is(err, store.ErrAlreadyExists):
-		return nil, apierror.AlreadyExists("Tag %s already exists; delete it and create it again to retry", tagRef)
+		return nil, tagAlreadyExistsError(tagRef)
 	}
 	return nil, fmt.Errorf("while reserving tag %s: %w", tagRef, err)
 }

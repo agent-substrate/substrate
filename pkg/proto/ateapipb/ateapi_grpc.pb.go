@@ -124,7 +124,7 @@ type ControlClient interface {
 	MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error)
 	// Tag the external snapshot a suspended Actor holds. The tag gets its own
 	// copy of that snapshot, so suspending or deleting the Actor afterwards
-	// cannot collect it. When the Actor's latest snapshot is still node-local,
+	// cannot collect it. When the Actor's latest snapshot is not uploaded yet,
 	// atelet uploads it first, so the call can take as long as that upload.
 	CreateTag(ctx context.Context, in *CreateTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	// Get a Tag.
@@ -689,7 +689,7 @@ type ControlServer interface {
 	MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error)
 	// Tag the external snapshot a suspended Actor holds. The tag gets its own
 	// copy of that snapshot, so suspending or deleting the Actor afterwards
-	// cannot collect it. When the Actor's latest snapshot is still node-local,
+	// cannot collect it. When the Actor's latest snapshot is not uploaded yet,
 	// atelet uploads it first, so the call can take as long as that upload.
 	CreateTag(context.Context, *CreateTagRequest) (*Tag, error)
 	// Get a Tag.

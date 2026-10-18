@@ -290,7 +290,7 @@ func TestTagActorSnapshot_TagsNewestExternalSnapshot(t *testing.T) {
 // actor whose snapshot is not uploaded yet has the atelet on the snapshot's
 // node upload it first, records the upload on the actor, and tags that
 // snapshot. A failed upload fails the tag without reserving its name and leaves
-// the actor as it was.
+// the actor as it was. A create that cannot succeed fails before the upload.
 func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 	// reported is the state atelet answers with once it made snap durable.
 	reported := func(snap *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
@@ -312,6 +312,13 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 		// reverted puts last_assigned_generation above the paused snapshot,
 		// as when a revert dropped the generation a later suspend began.
 		reverted bool
+		// nodeLost clears the paused snapshot's locality, as when its node
+		// was lost before the upload finished.
+		nodeLost bool
+		// nameTaken seeds a tag under the name the create asks for.
+		nameTaken bool
+		// badLocation points the template at an unusable storage location.
+		badLocation bool
 		// promoteState builds the state PromoteSnapshot answers with from the
 		// paused snapshot.
 		promoteState func(paused *ateapipb.Snapshot) *ateletpb.ActorSnapshotState
@@ -340,6 +347,21 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 		{
 			name:     "the paused snapshot's upload is already recorded",
 			uploaded: true,
+		},
+		{
+			name:         "the paused snapshot's node was lost before its upload finished",
+			olderDurable: true,
+			nodeLost:     true,
+		},
+		{
+			name:      "the name is already taken",
+			nameTaken: true,
+			wantCode:  codes.AlreadyExists,
+		},
+		{
+			name:        "the storage location is unusable",
+			badLocation: true,
+			wantCode:    codes.Internal,
 		},
 		{
 			name:        "atelet is unavailable",
@@ -387,7 +409,17 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 				return state
 			},
 			wantPromote: true,
-			wantCode:    codes.InvalidArgument,
+			wantCode:    codes.Internal,
+		},
+		{
+			name: "atelet reports the snapshot without a fidelity",
+			promoteState: func(paused *ateapipb.Snapshot) *ateletpb.ActorSnapshotState {
+				state := reported(paused)
+				state.LatestDurable.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+				return state
+			},
+			wantPromote: true,
+			wantCode:    codes.Internal,
 		},
 	}
 
@@ -412,7 +444,9 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 				pausedStatus = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 			}
 			paused := newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, pausedURI.Name(), pausedURI.String(), pausedStatus)
-			paused.Locality = "node-1"
+			if !tt.nodeLost {
+				paused.Locality = "node-1"
+			}
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 				s.LastAssignedGeneration = 2
 				if tt.reverted {
@@ -425,6 +459,29 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 				}
 				s.Snapshots = append(s.Snapshots, proto.CloneOf(paused))
 			})
+			tagRef := resources.TagRef{Atespace: "team-a", Name: "v1"}
+			var takenBy *ateapipb.Tag
+			if tt.nameTaken {
+				var err error
+				takenBy, err = persistence.CreateTag(ctx, &ateapipb.Tag{
+					Metadata:    &ateapipb.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
+					Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+					SourceActor: actorRef.ToObjectRef(),
+					Status:      &ateapipb.TagStatus{ActorTemplateUid: tmplUID},
+				})
+				if err != nil {
+					t.Fatalf("CreateTag: %v", err)
+				}
+			}
+			if tt.badLocation {
+				_, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(template), store.PreconditionFrom(template), func(tmpl *ateapipb.ActorTemplate) error {
+					tmpl.SnapshotConfig.StorageLocation = "gs://ate-snapshots/team-a/?query"
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("UpdateActorTemplate: %v", err)
+				}
+			}
 			if tt.promoteState != nil {
 				atelet.promoteState = tt.promoteState(paused)
 			}
@@ -438,7 +495,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 			gotPromote := atelet.promoteRequest()
 			switch {
 			case !tt.wantPromote && gotPromote != nil:
-				t.Errorf("PromoteSnapshot request = %v, want none for a snapshot already durable", gotPromote)
+				t.Errorf("PromoteSnapshot request = %v, want none", gotPromote)
 			case tt.wantPromote:
 				wantPromote := &ateletpb.PromoteSnapshotRequest{
 					Atespace:              "team-a",
@@ -466,8 +523,27 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 				if diff := cmp.Diff(actor.GetStatus(), stored.GetStatus(), protocmp.Transform()); diff != "" {
 					t.Errorf("a failed promote changed the actor's status (-want +got):\n%s", diff)
 				}
-				if _, err := persistence.GetTag(ctx, resources.TagRef{Atespace: "team-a", Name: "v1"}); !errors.Is(err, store.ErrNotFound) {
+				got, err := persistence.GetTag(ctx, tagRef)
+				switch {
+				case takenBy != nil:
+					if diff := cmp.Diff(takenBy, got, protocmp.Transform()); diff != "" {
+						t.Errorf("the failed create changed the tag holding the name (-want +got):\n%s", diff)
+					}
+				case !errors.Is(err, store.ErrNotFound):
 					t.Errorf("GetTag = %v, want ErrNotFound: the failed create reserved the name", err)
+				}
+				return
+			}
+
+			tagSnapshot := tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			if tt.nodeLost {
+				// Nothing to upload from: the actor is left as it was, and the
+				// tag copied the older durable snapshot.
+				if diff := cmp.Diff(actor.GetStatus(), stored.GetStatus(), protocmp.Transform()); diff != "" {
+					t.Errorf("the actor's status changed (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff([]string{"manifest.json"}, objects.Snapshot(t, mustParseSnapshotURI(t, tagSnapshot))); diff != "" {
+					t.Errorf("the tag's external snapshot mismatch (-want +got):\n%s", diff)
 				}
 				return
 			}
@@ -479,7 +555,6 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 				t.Errorf("the actor's latest snapshot mismatch (-want +got):\n%s", diff)
 			}
 			// The tag copied the paused snapshot, not the older one.
-			tagSnapshot := tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 			if diff := cmp.Diff([]string{"manifest.json", "memory.zst"}, objects.Snapshot(t, mustParseSnapshotURI(t, tagSnapshot))); diff != "" {
 				t.Errorf("the tag's external snapshot mismatch (-want +got):\n%s", diff)
 			}
