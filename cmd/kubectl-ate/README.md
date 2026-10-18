@@ -111,7 +111,7 @@ kubectl ate get workers -l <label-selector>
 |---|---|
 | `ATESPACE` | The atespace the actor belongs to. Part of the actor's identity; folded into the storage key as `actor:<atespace>:<name>`. |
 | `NAME` | The actor's name. User-provided for application actors; UUID for the golden actor that each template materialises while building its golden tag. |
-| `TEMPLATE` | The `ActorTemplate` the actor was created from, displayed as `<atespace>/<name>`. |
+| `TEMPLATE` | The `ActorTemplate` the actor references, displayed as `<atespace>/<name>`. |
 | `STATE` | Current lifecycle state (`ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`, `ACTOR_STATE_CRASHED`, `ACTOR_STATE_DELETING`, `ACTOR_STATE_REVERTING`). |
 | `WORKER POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
 | `WORKER IP` | The pod IP of that worker. Empty while suspended. |
@@ -160,7 +160,8 @@ kubectl ate delete atespace <atespace>
 An **actor template** describes what an actor runs: containers, volumes,
 snapshot policy, and worker selection. Templates live in an
 atespace and are immutable — there is no update; delete and recreate to change
-one.
+one (or create a new template and repoint suspended actors to it with
+`kubectl ate update actor --template`).
 
 ```bash
 # Create a template from a manifest (protojson-shaped ateapipb.ActorTemplate,
@@ -197,6 +198,11 @@ Manage the execution state of your workloads.
 ```bash
 # Create a new actor from an ActorTemplate.
 kubectl ate create actor my-actor --template=<template-name> -a <atespace>
+
+# Update an actor's template (requires the actor to be SUSPENDED) or worker selector.
+kubectl ate update actor my-actor --template=<new-template-name> -a <atespace>
+kubectl ate update actor my-actor --worker-selector=tier=paid,env=prod -a <atespace>
+kubectl ate update actor my-actor --worker-selector="" -a <atespace>
 
 # Resume an actor (assigns it to a free worker and restores its state)
 kubectl ate resume actor my-actor -a <atespace>

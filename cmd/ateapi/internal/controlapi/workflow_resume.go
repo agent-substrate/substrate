@@ -190,11 +190,17 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		src.SnapshotUUID = snap.GetUuid()
 		src.Generation = snap.GetGeneration()
 		src.Fidelity = snap.GetFidelity()
-		capturedUnder := snap.GetActorTemplateUid()
-		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
+		src.TemplateReplaced = templateReplaced(snap, actorTemplate)
 	}
 
 	return actor, actorTemplate, src, nil
+}
+
+// templateReplaced reports whether snap was captured under a different
+// ActorTemplate than tmpl. An unstamped snapshot is treated as matching.
+func templateReplaced(snap *ateapipb.Snapshot, tmpl *ateapipb.ActorTemplate) bool {
+	capturedUnder := snap.GetActorTemplateUid()
+	return capturedUnder != "" && capturedUnder != tmpl.GetMetadata().GetUid()
 }
 
 // ensureVolumesCreated provisions any actor volumes that have no storage
@@ -715,14 +721,16 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 		if localSnap.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
 			return nil
 		}
+		if templateReplaced(localSnap, tmpl) {
+			return nil
+		}
 		return localSnap.GetSandboxRuntime()
 	}
 	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
 		if snap.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
 			return nil
 		}
-		capturedUnder := snap.GetActorTemplateUid()
-		if capturedUnder != "" && capturedUnder != tmpl.GetMetadata().GetUid() {
+		if templateReplaced(snap, tmpl) {
 			return nil
 		}
 		return snap.GetSandboxRuntime()
@@ -839,6 +847,9 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 
 		fidelity := fidelityToAtelet(localSnap.GetFidelity())
+		if templateReplaced(localSnap, actorTemplate) {
+			fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		}
 		req := &ateletpb.RestoreRequest{
 			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),

@@ -567,7 +567,7 @@ The node can cut the 30 minutes short. GKE node upgrades and cluster autoscaler 
 ## 5. Best Practices
 *   **Startup Logic:** Place expensive initialization (loading large models, establishing baseline connections) in your application's entry point. When golden snapshots are enabled, this initialization can be captured in the Golden Snapshot. Actors that cold-boot run initialization again.
 *   **Placement:** The `WorkerPool` decides the sandbox class (`sandboxClasses[].name`), so use the template's `workerSelector` to target the pools whose class your workload needs — pool selection is by label match, not by namespace or RBAC. Without a selector an actor may land on any pool.
-*   **Version Management:** When updating code, create a new `ActorTemplate` (e.g. `v2`). Substrate treats each template as an immutable state root.
+*   **Version Management:** When updating code, create a new `ActorTemplate` (e.g. `v2`). Substrate treats each template as an immutable state root. Suspended actors can be repointed to the new template via `UpdateActor` (`kubectl ate update actor --template`).
 *   **Eviction:** Give every actor a `SIGTERM` handler that does not exit, and have the actor suspended within 30 minutes of it. See [Eviction](#eviction).
 
 ---
@@ -583,13 +583,15 @@ Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
     *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); the `actor_template` ref (atespace + name) selects the `ActorTemplate`.
     *   `actor.source_tag`: (Optional) `ObjectRef` of a `Tag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.snapshots` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
+    *   `actor.worker_selector`: (Optional) Per-actor `WorkerSelector` merged with the template's `worker_selector` at resume time (actor keys override template keys).
 *   **Response:** the initialized `Actor`.
 
 #### `UpdateActor`
-Replaces the mutable fields of an existing actor with the ones in the request.
+Replaces the mutable fields of an existing actor with the ones in the request (`kubectl ate update actor`).
 *   **Request:** `UpdateActorRequest`
     *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_tag` is immutable.
     *   `actor_template` may change only while the actor is `SUSPENDED`. The new template must declare the same volumes and volume mounts. Once the actor owns an external snapshot, the new template must also store snapshots under the same `snapshotConfig.storageLocation`.
+    *   `worker_selector` may be updated or cleared (`nil`) in any state; the updated selector takes effect on the next `ResumeActor`.
 *   **Response:** the updated `Actor`.
 *   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field — including by leaving one unset; `FAILED_PRECONDITION` if a change to `actor_template` breaks one of the rules above; `ABORTED` if either guard no longer matches the stored resource.
 

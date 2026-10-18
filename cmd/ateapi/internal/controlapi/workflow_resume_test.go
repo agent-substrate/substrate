@@ -1470,9 +1470,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			// The repoint permutation without a durable snapshot is
-			// deliberately not pinned: its wire scope is in flux while the
-			// resume-source resolution is being reworked.
 			name: "14 local snapshot built on the current template stays Full",
 			actor: actorSeed{
 				localSnapshot: localSnap(localSnapshotName, fullScope),
@@ -1481,6 +1478,28 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				snapshotName: localSnapshotName,
 				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			},
+		},
+		{
+			name: "14a repointed actor's Full local snapshot drops to Data",
+			actor: actorSeed{
+				localSnapshot: localSnap(localSnapshotName, fullScope),
+				tmplUID:       "mismatch",
+			},
+			want: restoreWant{
+				snapshotName: localSnapshotName,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			},
+		},
+		{
+			name: "14b repointed actor's Rootfs local snapshot drops to Data",
+			actor: actorSeed{
+				localSnapshot: localSnap(localSnapshotName, rootfsScope),
+				tmplUID:       "mismatch",
+			},
+			want: restoreWant{
+				snapshotName: localSnapshotName,
+				scope:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
@@ -1521,12 +1540,14 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		},
 		{
 			// An older external snapshot's template mismatch does not affect a
-			// local pause restore: templates can only be updated while
-			// SUSPENDED, so a pause checkpoint is always from the current
-			// template.
+			// local pause restore captured under the current template.
 			name: "18 local snapshot ignores an older external snapshot's template mismatch",
 			actor: actorSeed{
-				localSnapshot:    localSnap(localSnapshotName, fullScope),
+				localSnapshot: func() *ateapipb.Snapshot {
+					s := localSnap(localSnapshotName, fullScope)
+					s.ActorTemplateUid = "current"
+					return s
+				}(),
 				externalSnapshot: extSnap(actorURI, fullScope),
 				tmplUID:          "mismatch",
 			},
@@ -1695,6 +1716,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 					loc.Generation = gen
 					if loc.ActorTemplateUid == "" {
 						loc.ActorTemplateUid = uid
+					} else if loc.ActorTemplateUid == "current" {
+						loc.ActorTemplateUid = createdTmpl.GetMetadata().GetUid()
 					}
 					a.Status.Snapshots = append(a.Status.Snapshots, loc)
 				}
@@ -2719,6 +2742,16 @@ func TestRequiredSnapshotRuntime(t *testing.T) {
 			name:      "local checkpoint requires its runtime",
 			snapshots: []*ateapipb.Snapshot{local(1, memory, localRT)},
 			want:      localRT,
+		},
+		{
+			name: "local checkpoint captured under a replaced template imposes no constraint",
+			snapshots: []*ateapipb.Snapshot{
+				func() *ateapipb.Snapshot {
+					s := newPausedSnapshot(t, 1, memory, "old-tmpl-uid", "local", "node-1")
+					s.SandboxRuntime = localRT
+					return s
+				}(),
+			},
 		},
 		{
 			// ensureAteletRestored restores a local checkpoint before any

@@ -360,9 +360,8 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		t.Fatalf("UpdateActor repointing a running actor = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
-	// Repointing a paused actor is rejected, even once atelet has uploaded its
-	// snapshot: it resumes from the node-local copy, captured under the old
-	// template.
+	// Repointing a paused actor is allowed while suspended, even when it holds
+	// a node-local snapshot.
 	for _, name := range []string{"paused-actor", "uploaded-paused-actor"} {
 		paused := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
@@ -382,12 +381,15 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 			s.LastAssignedGeneration = 1
 			s.Snapshots = []*ateapipb.Snapshot{snap}
 		})
-		_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+		repointedPaused, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
 			Metadata:      paused.GetMetadata(),
 			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
 		}})
-		if got := apierror.Code(err); got != codes.FailedPrecondition {
-			t.Fatalf("UpdateActor repointing %s = %v, want FailedPrecondition (err: %v)", name, got, err)
+		if err != nil {
+			t.Fatalf("UpdateActor repointing %s failed: %v", name, err)
+		}
+		if got, want := repointedPaused.GetActorTemplate().GetName(), "tmpl-b"; got != want {
+			t.Errorf("%s actor_template.name = %q, want %q", name, got, want)
 		}
 	}
 

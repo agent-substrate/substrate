@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -171,6 +172,235 @@ func TestSuspendActorModeFlagDefault(t *testing.T) {
 	if got, want := flag.DefValue, suspendModeAsync; got != want {
 		t.Errorf("--mode default = %q, want %q", got, want)
 	}
+}
+
+func TestParseWorkerSelector(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    *ateapipb.Selector
+		wantErr string
+	}{
+		{
+			name: "empty string clears selector",
+			raw:  "",
+			want: nil,
+		},
+		{
+			name: "single label",
+			raw:  "tier=paid",
+			want: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+		},
+		{
+			name: "multiple labels with prefixed key and empty value",
+			raw:  "ate.dev/pool=fast,tier=paid,empty=",
+			want: &ateapipb.Selector{MatchLabels: map[string]string{
+				"ate.dev/pool": "fast",
+				"tier":         "paid",
+				"empty":        "",
+			}},
+		},
+		{
+			name: "exactly 10 labels is allowed",
+			raw:  "k1=v1,k2=v2,k3=v3,k4=v4,k5=v5,k6=v6,k7=v7,k8=v8,k9=v9,k10=v10",
+			want: &ateapipb.Selector{MatchLabels: map[string]string{
+				"k1": "v1", "k2": "v2", "k3": "v3", "k4": "v4", "k5": "v5",
+				"k6": "v6", "k7": "v7", "k8": "v8", "k9": "v9", "k10": "v10",
+			}},
+		},
+		{
+			name:    "more than 10 labels is rejected",
+			raw:     "k1=v1,k2=v2,k3=v3,k4=v4,k5=v5,k6=v6,k7=v7,k8=v8,k9=v9,k10=v10,k11=v11",
+			wantErr: "at most 10 labels are allowed, got 11",
+		},
+		{
+			name:    "missing equals sign",
+			raw:     "tier",
+			wantErr: `entry "tier" must be in key=value format`,
+		},
+		{
+			name:    "trailing comma produces empty entry",
+			raw:     "tier=paid,",
+			wantErr: `entry "" must be in key=value format`,
+		},
+		{
+			name:    "duplicate key",
+			raw:     "tier=free,tier=paid",
+			wantErr: `duplicate label key "tier"`,
+		},
+		{
+			name:    "invalid label key",
+			raw:     "bad key!=paid",
+			wantErr: `invalid label key "bad key!"`,
+		},
+		{
+			name:    "invalid label value",
+			raw:     "tier=not valid!",
+			wantErr: `invalid label value "not valid!" for key "tier"`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseWorkerSelector(tc.raw)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("parseWorkerSelector(%q) error = %v, want substring %q", tc.raw, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseWorkerSelector(%q) unexpected error: %v", tc.raw, err)
+			}
+			if diff := cmp.Diff(tc.want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("parseWorkerSelector(%q) mismatch (-want +got):\n%s", tc.raw, diff)
+			}
+		})
+	}
+}
+
+type fakeActorUpdater struct {
+	actor     *ateapipb.Actor
+	getErr    error
+	updateErr error
+
+	getCalls  int
+	updateReq *ateapipb.UpdateActorRequest
+}
+
+func (f *fakeActorUpdater) GetActor(_ context.Context, _ *ateapipb.GetActorRequest, _ ...grpc.CallOption) (*ateapipb.Actor, error) {
+	f.getCalls++
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	return proto.Clone(f.actor).(*ateapipb.Actor), nil
+}
+
+func (f *fakeActorUpdater) UpdateActor(_ context.Context, in *ateapipb.UpdateActorRequest, _ ...grpc.CallOption) (*ateapipb.Actor, error) {
+	f.updateReq = in
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	updated := proto.Clone(in.GetActor()).(*ateapipb.Actor)
+	updated.Metadata.Version++
+	return updated, nil
+}
+
+func TestUpdateActor(t *testing.T) {
+	baseActor := func() *ateapipb.Actor {
+		return &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: "demo",
+				Name:     "my-counter",
+				Uid:      "8ba9b6ee-2e1a-4c0f-9f4e-2f0a0f1c3d55",
+				Version:  3,
+			},
+			ActorTemplate:  &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v1"},
+			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
+			SourceTag:      &ateapipb.ObjectRef{Atespace: "demo", Name: "seed-tag"},
+			Status:         &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		}
+	}
+
+	tests := []struct {
+		name              string
+		templateSet       bool
+		template          string
+		workerSelectorSet bool
+		workerSelector    string
+		wantTemplate      *ateapipb.ObjectRef
+		wantSelector      *ateapipb.Selector
+	}{
+		{
+			name:         "repoint template in same atespace keeps worker selector",
+			templateSet:  true,
+			template:     "counter-v2",
+			wantTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v2"},
+			wantSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
+		},
+		{
+			name:         "repoint template in another atespace",
+			templateSet:  true,
+			template:     "shared/counter-v2",
+			wantTemplate: &ateapipb.ObjectRef{Atespace: "shared", Name: "counter-v2"},
+			wantSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
+		},
+		{
+			name:              "update worker selector keeps template",
+			workerSelectorSet: true,
+			workerSelector:    "tier=paid,env=prod",
+			wantTemplate:      &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v1"},
+			wantSelector:      &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid", "env": "prod"}},
+		},
+		{
+			name:              "empty worker selector clears existing selector",
+			workerSelectorSet: true,
+			workerSelector:    "",
+			wantTemplate:      &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v1"},
+			wantSelector:      nil,
+		},
+		{
+			name:              "update both template and worker selector",
+			templateSet:       true,
+			template:          "counter-v2",
+			workerSelectorSet: true,
+			workerSelector:    "tier=paid",
+			wantTemplate:      &ateapipb.ObjectRef{Atespace: "demo", Name: "counter-v2"},
+			wantSelector:      &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mutate, err := buildActorUpdateMutation("demo", tc.templateSet, tc.template, tc.workerSelectorSet, tc.workerSelector)
+			if err != nil {
+				t.Fatalf("buildActorUpdateMutation() unexpected error: %v", err)
+			}
+
+			client := &fakeActorUpdater{actor: baseActor()}
+			ref := &ateapipb.ObjectRef{Atespace: "demo", Name: "my-counter"}
+
+			got, err := updateActor(context.Background(), client, ref, mutate)
+			if err != nil {
+				t.Fatalf("updateActor() unexpected error: %v", err)
+			}
+			if client.getCalls != 1 {
+				t.Errorf("GetActor called %d times, want 1", client.getCalls)
+			}
+
+			want := baseActor()
+			want.ActorTemplate = tc.wantTemplate
+			want.WorkerSelector = tc.wantSelector
+			want.Metadata.Version = 4
+			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("updated actor mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+
+	t.Run("GetActor error is propagated", func(t *testing.T) {
+		client := &fakeActorUpdater{getErr: status.Error(codes.NotFound, "not found")}
+		ref := &ateapipb.ObjectRef{Atespace: "demo", Name: "my-counter"}
+		_, err := updateActor(context.Background(), client, ref, func(*ateapipb.Actor) {})
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("updateActor() error = %v, want NotFound", err)
+		}
+		if client.updateReq != nil {
+			t.Errorf("UpdateActor called after GetActor failed")
+		}
+	})
+
+	t.Run("UpdateActor error is propagated", func(t *testing.T) {
+		client := &fakeActorUpdater{
+			actor:     baseActor(),
+			updateErr: status.Error(codes.FailedPrecondition, "actor must be SUSPENDED"),
+		}
+		ref := &ateapipb.ObjectRef{Atespace: "demo", Name: "my-counter"}
+		_, err := updateActor(context.Background(), client, ref, func(*ateapipb.Actor) {})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("updateActor() error = %v, want FailedPrecondition", err)
+		}
+	})
 }
 
 func TestFilterAndDisplayLogLine(t *testing.T) {

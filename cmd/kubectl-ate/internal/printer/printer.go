@@ -55,7 +55,7 @@ func sortActors(actors []*ateapipb.Actor) {
 	})
 }
 
-// actorTemplateDisplay renders the template an actor was created from, in
+// actorTemplateDisplay renders the template an actor references, in
 // "<atespace>/<name>" form.
 func actorTemplateDisplay(a *ateapipb.Actor) string {
 	ref := a.GetActorTemplate()
