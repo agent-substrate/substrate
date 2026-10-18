@@ -16,6 +16,7 @@ package ocispec
 
 import (
 	"path/filepath"
+	"slices"
 
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
@@ -43,4 +44,19 @@ func volumeBinds(o Options) []volumeBind {
 	add(c.GetSystemInfoVolumeMounts(), d.GetSystemInfoVolumeRootsDir(), true)
 	add(c.GetImageVolumeMounts(), imagecache.ImageVolumeMountPath(filepath.Join(d.GetOciBundleDir(), c.GetName()), ""), true)
 	return out
+}
+
+// WholeVolumeNames returns only volumes whose root is explicitly requested.
+// Sub-path-only volumes must not also be exposed whole in a VM's shared tree.
+func WholeVolumeNames(containers []*ateworkerpb.Container, mounts func(*ateworkerpb.Container) []*ateworkerpb.VolumeMount) []string {
+	var names []string
+	for _, c := range containers {
+		for _, m := range mounts(c) {
+			if m.GetSubPath() == "" {
+				names = append(names, m.GetName())
+			}
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
 }

@@ -296,3 +296,17 @@ func TestBuild_PerMountOptions(t *testing.T) {
 		})
 	}
 }
+
+func TestWholeVolumeNames(t *testing.T) {
+	containers := []*ateworkerpb.Container{
+		{ExternalVolumeMounts: []*ateworkerpb.VolumeMount{
+			{Name: "private", SubPath: "session"}, {Name: "shared", SubPath: "skills", ReadOnly: true},
+			{Name: "whole"}, {Name: "whole", ReadOnly: true},
+		}},
+		{ExternalVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "shared"}}},
+	}
+	got := WholeVolumeNames(containers, (*ateworkerpb.Container).GetExternalVolumeMounts)
+	if !slices.Equal(got, []string{"shared", "whole"}) {
+		t.Fatalf("whole roots = %v; sub-path-only volume must stay private", got)
+	}
+}

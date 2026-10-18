@@ -88,19 +88,20 @@ func stageSubPath(root, sub, target string, readOnly bool) error {
 	if err := unix.Mount(fmt.Sprintf("/proc/self/fd/%d", f.Fd()), target, "", unix.MS_BIND, ""); err != nil {
 		return err
 	}
+	// Preserve source restrictions, including read-only, on the private bind.
+	var st unix.Statfs_t
+	if err := unix.Statfs(target, &st); err != nil {
+		return err
+	}
+	flags := uintptr(unix.MS_BIND|unix.MS_REMOUNT|unix.MS_NOSUID|unix.MS_NODEV) | uintptr(st.Flags)&(unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC|unix.MS_NOATIME|unix.MS_NODIRATIME)
+	if st.Flags&unix.ST_RELATIME != 0 {
+		flags |= unix.MS_RELATIME
+	}
 	if readOnly {
-		// Preserve source restrictions while adding read-only to this bind alone.
-		var st unix.Statfs_t
-		if err := unix.Statfs(target, &st); err != nil {
-			return err
-		}
-		flags := uintptr(unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY) | uintptr(st.Flags)&(unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC|unix.MS_NOATIME|unix.MS_NODIRATIME)
-		if st.Flags&unix.ST_RELATIME != 0 {
-			flags |= unix.MS_RELATIME
-		}
-		if err := unix.Mount("", target, "", flags, ""); err != nil {
-			return err
-		}
+		flags |= unix.MS_RDONLY
+	}
+	if err := unix.Mount("", target, "", flags, ""); err != nil {
+		return err
 	}
 	return nil
 }

@@ -103,6 +103,26 @@ func TestStageSubPath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A writable request cannot grant write access to a read-only source bind.
+	inherited := filepath.Join(mounts, "inherited-ro")
+	if err := stageSubPath(mounts, "ro", inherited, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := unix.Unmount(inherited, unix.MNT_DETACH); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := os.WriteFile(filepath.Join(inherited, "write"), []byte("no"), 0o600); !errors.Is(err, unix.EROFS) {
+		t.Fatalf("source read-only lost: %v", err)
+	}
+	var st unix.Statfs_t
+	if err := unix.Statfs(inherited, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Flags&(unix.ST_NOSUID|unix.ST_NODEV) != unix.ST_NOSUID|unix.ST_NODEV {
+		t.Fatal("private bind lost nosuid/nodev")
+	}
 	// Replacing the host pathname after mounting cannot redirect the pinned bind.
 	if err := os.Rename(filepath.Join(root, "selected"), filepath.Join(root, "moved")); err != nil {
 		t.Fatal(err)

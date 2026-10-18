@@ -18,8 +18,7 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
+	"path/filepath"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/ocispec"
@@ -36,14 +35,12 @@ func hasCsiVolumes(containers []*ateworkerpb.Container) bool {
 	return false
 }
 
-// stageCsiVolumes bind-mounts src, the actor's host CSI volumes directory,
-// into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/csi.
-func (s *AteWorkerService) stageCsiVolumes(ctx context.Context, actorUID, src string) error {
-	if _, err := os.Stat(src); err != nil {
-		return fmt.Errorf("while checking CSI volumes dir %q: %w", src, err)
-	}
-	if err := kata.BindIntoShare(ctx, src, actorUID, ocispec.ShareCSI); err != nil {
-		return fmt.Errorf("while binding CSI volumes into the shared tree: %w", err)
+// stageCsiVolumes exposes only explicitly requested whole-volume roots.
+func (s *AteWorkerService) stageCsiVolumes(ctx context.Context, actorUID, src string, names []string) error {
+	for _, name := range names {
+		if err := kata.BindIntoShare(ctx, filepath.Join(src, name), actorUID, filepath.Join(ocispec.ShareCSI, name)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
