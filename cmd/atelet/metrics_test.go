@@ -28,7 +28,6 @@ import (
 
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/internal/resources"
 )
 
 const (
@@ -357,15 +356,15 @@ func TestRestoreSnapshotKind(t *testing.T) {
 			want:        ateattr.SnapshotKindLocal,
 		},
 		{
-			name:        "a golden actor's snapshot served locally is still local",
+			name:        "a snapshot from another atespace served locally is still local",
 			directLocal: true,
-			rec:         &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
+			rec:         &sandboxAssetsRecord{Atespace: "team-b"},
 			want:        ateattr.SnapshotKindLocal,
 		},
 		{
-			name: "external snapshot written by a golden actor",
-			rec:  &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
-			want: ateattr.SnapshotKindGolden,
+			name: "external snapshot written in another atespace",
+			rec:  &sandboxAssetsRecord{Atespace: "team-b"},
+			want: ateattr.SnapshotKindLatest,
 		},
 		{
 			name: "external snapshot written by a tenant actor",
@@ -411,13 +410,13 @@ func TestCheckpointSnapshotKind(t *testing.T) {
 			want: ateattr.SnapshotKindLatest,
 		},
 		{
-			name: "a golden actor's commit writes the template's golden",
-			req:  &ateletpb.CheckpointRequest{UploadConfig: immediate, Atespace: resources.GoldenActorAtespace},
-			want: ateattr.SnapshotKindGolden,
+			name: "a durable checkpoint in another atespace is latest",
+			req:  &ateletpb.CheckpointRequest{UploadConfig: immediate, Atespace: "team-b"},
+			want: ateattr.SnapshotKindLatest,
 		},
 		{
-			name: "a local checkpoint in the golden atespace is still local",
-			req:  &ateletpb.CheckpointRequest{UploadConfig: deferred, Atespace: resources.GoldenActorAtespace},
+			name: "a local checkpoint in another atespace is still local",
+			req:  &ateletpb.CheckpointRequest{UploadConfig: deferred, Atespace: "team-b"},
 			want: ateattr.SnapshotKindLocal,
 		},
 	}

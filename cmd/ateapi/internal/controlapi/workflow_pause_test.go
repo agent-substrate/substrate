@@ -427,32 +427,10 @@ func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 	}
 }
 
-// TestPauseActor_MarkedPausing_GoldenAtespaceRejected verifies golden actors cannot be
-// paused: by design they can only be suspended (committed).
-func TestPauseActor_MarkedPausing_GoldenAtespaceRejected(t *testing.T) {
-	ctx := context.Background()
-	st := newTestPersistence(t)
-	seedSuspendTemplate(t, ctx, st, nil)
-	w := newMarkOnlyWorkflow(st)
-
-	actorRef := resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: "golden-1"}
-	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
-		a.Status.AssignedNode = "node-1"
-		a.Status.WorkerAssignment = wireTestAssignment()
-	})
-	_, err := w.SuspendActor(ctx, actorRef, suspendAsync)
-	if got := apierror.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("apierror.Code = %v (err %v), want FailedPrecondition", got, err)
-	}
-	if got := mustReadActor(t, ctx, st, actorRef).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		t.Errorf("stored state = %v, want RUNNING untouched", got)
-	}
-}
-
-// TestPauseActor_AteletPaused_ForwardsPreferredFidelity verifies that local pause
-// checkpoints forward the template's PreferredFidelity to atelet, and label the
-// pause's lifecycle-op metric with it.
-func TestPauseActor_AteletPaused_ForwardsPreferredFidelity(t *testing.T) {
+// TestEnsureAteletPaused_ForwardsPreferredFidelity verifies that local pause
+// checkpoints forward the template's PreferredFidelity to atelet, and label
+// the pause's lifecycle-op metric with it.
+func TestEnsureAteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 	tests := []struct {
 		preferred ateapipb.SnapshotFidelity
 		want      ateletpb.SnapshotFidelity

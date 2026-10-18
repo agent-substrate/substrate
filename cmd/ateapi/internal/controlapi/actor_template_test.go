@@ -101,7 +101,7 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 		// Server-owned status a client must not be able to set.
 		tmpl.Status = &ateapipb.ActorTemplateStatus{
 			GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-				GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
+				GoldenTag: &ateapipb.ObjectRef{Atespace: "ns1", Name: "golden-tag"},
 			},
 		}
 	})
@@ -152,7 +152,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 			persistence := newTestPersistence(t)
 			tmpl := seedSubstrateTemplate(t, ctx, persistence, "tmpl")
 			templateRef := resources.ActorTemplateRefFromActorTemplate(tmpl)
-			goldenRef := resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()}
+			goldenRef := resources.ActorRef{Atespace: "team-a", Name: tmpl.GetMetadata().GetUid()}
 			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: goldenRef.Atespace, Name: goldenRef.Name},
 				ActorTemplate: templateRef.ToObjectRef(),
@@ -366,7 +366,7 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 	// A server-owned status write passes validation and bumps the version.
 	updated, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(created), func(tmpl *ateapipb.ActorTemplate) error {
 		tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-			GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
+			GoldenTag: &ateapipb.ObjectRef{Atespace: "ns1", Name: "golden-tag"},
 		}}
 		return nil
 	})

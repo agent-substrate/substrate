@@ -302,11 +302,7 @@ groups:
             - id: latest
               stability: development
               value: latest
-              brief: The durable snapshot of the actor in object storage.
-            - id: golden
-              stability: development
-              value: golden
-              brief: The golden image of the ActorTemplate.
+              brief: A durable snapshot in object storage, including a template's golden snapshot.
             - id: boot
               stability: development
               value: boot

@@ -1712,7 +1712,7 @@ func TestValidateTagRequestPayloads(t *testing.T) {
 
 func validGoldenSnapshotStatus(mutate ...func(*ateapipb.GoldenSnapshotStatus)) *ateapipb.GoldenSnapshotStatus {
 	s := &ateapipb.GoldenSnapshotStatus{
-		GoldenTag:    &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "01234567-89ab-cdef-0123-456789abcdef"},
+		GoldenTag:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "01234567-89ab-cdef-0123-456789abcdef"},
 		SnapshotTime: &timestamppb.Timestamp{Seconds: 867},
 	}
 	for _, m := range mutate {

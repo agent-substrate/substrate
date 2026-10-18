@@ -123,16 +123,17 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			},
 		},
 		{
-			name:       "CreateActor from a golden tag does not check the tag",
+			name:       "CreateActor from a template tag checks the tag",
 			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
 			req: &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 				Metadata:      actorMeta,
 				ActorTemplate: sharedTemplate,
-				SourceTag:     &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "0b5c7d4e-golden"},
+				SourceTag:     &ateapipb.ObjectRef{Atespace: "shared", Name: "0b5c7d4e-golden"},
 			}},
 			want: []check{
 				{RelationCanCreateActor, "atespace:team-a"},
 				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
+				{RelationCanUseTag, "tag:shared/0b5c7d4e-golden"},
 			},
 		},
 		{

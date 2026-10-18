@@ -26,7 +26,6 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
@@ -206,48 +205,6 @@ func TestRequestActorSuspend_Errors(t *testing.T) {
 	}
 	if len(suspender.calls) != 0 {
 		t.Errorf("a malformed or unauthorized request reached the suspend: %v", suspender.calls)
-	}
-}
-
-// A golden actor is committed by the template controller once the warmup it
-// timed has elapsed, and the suspend is that commit. The actor idles from the
-// moment it boots, so it would ask immediately and snapshot a workload that
-// never warmed up. Control.SuspendActor still serves the controller; only the
-// Worker's request for one is refused.
-func TestRequestActorSuspend_GoldenActorCannotSelfSuspend(t *testing.T) {
-	st, cleanup := storetest.SetupTestStore(t)
-	defer cleanup()
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
-	golden := storetest.MustCreateActor(t, context.Background(), st, &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: suspendActor},
-		Status: &ateapipb.ActorStatus{
-			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			WorkerAssignment: &ateapipb.WorkerAssignment{
-				Worker:          &ateapipb.ObjectRef{Name: testWorkerName},
-				WorkerNamespace: "ate-system",
-				WorkerPool:      "pool-1",
-				WorkerPod:       "worker-pod-1",
-				WorkerPodUid:    testWorkerName,
-			},
-		},
-	})
-	suspender := &fakeSuspender{}
-	s := New(st, suspender, testAteletSPIFFEID, nil, "", nil)
-
-	// Everything else about the request is in order: the Worker really does
-	// host this actor, so being golden is the only reason it is refused.
-	_, err := s.RequestActorSuspend(
-		ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)),
-		&ateapipb.RequestActorSuspendRequest{
-			Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
-			Actor:    &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: suspendActor},
-			ActorUid: golden.GetMetadata().GetUid(),
-		})
-	if got := apierror.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v (err %v), want FailedPrecondition", got, err)
-	}
-	if len(suspender.calls) != 0 {
-		t.Errorf("golden actor request still reached the suspend: %v", suspender.calls)
 	}
 }
 

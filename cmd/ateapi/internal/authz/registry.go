@@ -124,10 +124,9 @@ func onTag(relation string, ref resourceRef, fldPath *field.Path) ([]check, fiel
 }
 
 // onSourceTag checks can_use_tag on the tag an actor is created from, if the
-// request names one. Golden tags are exempt: the handler only accepts one
-// built from the actor's own template, which can_use_template already covers.
+// request names one.
 func onSourceTag(ref *ateapipb.ObjectRef, fldPath *field.Path) ([]check, field.ErrorList) {
-	if ref == nil || ref.GetAtespace() == resources.GoldenActorAtespace {
+	if ref == nil {
 		return nil, nil
 	}
 	return onTag(RelationCanUseTag, ref, fldPath)

@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -910,10 +909,6 @@ func TestValidatePromoteSnapshotRequest(t *testing.T) {
 		name: "invalid atespace: path escape",
 		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Atespace = "../escape" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
-	}, {
-		name: "golden atespace",
-		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.Atespace = resources.GoldenActorAtespace }),
-		want: field.ErrorList{field.Forbidden(field.NewPath("atespace"), "")},
 	}, {
 		name: "invalid actor_name: uppercase",
 		obj:  valid(func(r *ateletpb.PromoteSnapshotRequest) { r.ActorName = "UPPER" }),

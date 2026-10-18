@@ -1166,11 +1166,8 @@ message RestoreResponse {
 }
 
 message PromoteSnapshotRequest {
-  // Golden actors are never paused, so the golden atespace is rejected.
-  //
   // +k8s:required
   // +k8s:format=k8s-short-name
-  // +k8s:customValidation # not the golden atespace
   string atespace = 1;
 
   // +k8s:required
