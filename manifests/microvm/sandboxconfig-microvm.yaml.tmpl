@@ -16,9 +16,9 @@
 # class. Unlike sandboxconfig-gvisor.yaml (applied unconditionally by
 # hack/install-ate.sh --deploy-ate-system), this is opt-in: apply via
 # hack/install-microvm-deps.sh --install after staging the asset set
-# (assemble.sh + stage-to-gcs.sh / stage-to-rustfs.sh). Every microvm
-# ActorTemplate names it explicitly (configName: microvm), so a missing/stale
-# config fails loudly at template creation.
+# (assemble.sh + stage-to-gcs.sh / stage-to-rustfs.sh). A microvm WorkerPool
+# resolves it as its class default (or names it via configRef: microvm), so
+# a missing/stale config shows on the pool's status.
 #
 # The sandbox binaries (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs)
 # are FETCHED at runtime from the cluster object store bucket ${BUCKET_NAME}

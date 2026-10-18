@@ -319,11 +319,10 @@ type AteletClient interface {
 	Run(ctx context.Context, in *RunRequest, opts ...grpc.CallOption) (*RunResponse, error)
 	// Checkpoint saves the workload's state as a new snapshot of the actor and
 	// returns the worker to a blank state. upload_config says when the snapshot
-	// becomes durable. Once the worker has captured the workload, and before the new
-	// snapshot is uploaded or stored locally, atelet deletes the actor's older
-	// local snapshots, except one still being uploaded, which it deletes when
-	// that upload ends. A Checkpoint that then fails to upload or store the new
-	// snapshot leaves the actor with no local snapshot.
+	// becomes durable. Once the new snapshot is uploaded or stored locally,
+	// atelet deletes the actor's older local snapshots, except one still being
+	// uploaded, which it deletes after that upload ends. A Checkpoint that fails
+	// before then leaves the actor's previous local snapshot in place.
 	Checkpoint(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error)
 	// Restore restores a workload from a snapshot onto a worker.
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
@@ -336,17 +335,19 @@ type AteletClient interface {
 	// Idempotent: once the snapshot is durable, atelet answers from the
 	// manifest at `snapshot.object`, and fails if there is none.
 	//
-	// TODO: Temporarily, this deletes all of the actor's local snapshots after
-	// the upload and does not check whether the actor is running. Its only
-	// caller, the suspend of a paused actor, relies on the deletion.
+	// TODO: Temporarily, this does not check whether the actor is running.
 	PromoteSnapshot(ctx context.Context, in *PromoteSnapshotRequest, opts ...grpc.CallOption) (*PromoteSnapshotResponse, error)
 	// DetachActor makes the actor's latest local snapshot durable, then deletes
 	// the actor's local snapshots on this node, so it can resume on any node.
-	// atelet also detaches a suspended actor on its own after its detach delay.
+	// atelet also detaches a suspended actor on its own after its detach delay,
+	// and reports that with WorkerService.ReportActorSnapshotState; it does not
+	// report a DetachActor call, whose caller reads the state from the response.
 	// Waits for an operation already in progress on the actor, such as an
 	// upload or a detach. Does nothing when atelet holds no local snapshot for
 	// the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
-	// actor is in progress or the actor runs on this node.
+	// actor is in progress or the actor runs on this node, and
+	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
+	// durable, such as when it has no `snapshot.object`.
 	//
 	// TODO: Temporarily, atelet returns UNIMPLEMENTED.
 	DetachActor(ctx context.Context, in *DetachActorRequest, opts ...grpc.CallOption) (*DetachActorResponse, error)
@@ -437,11 +438,10 @@ type AteletServer interface {
 	Run(context.Context, *RunRequest) (*RunResponse, error)
 	// Checkpoint saves the workload's state as a new snapshot of the actor and
 	// returns the worker to a blank state. upload_config says when the snapshot
-	// becomes durable. Once the worker has captured the workload, and before the new
-	// snapshot is uploaded or stored locally, atelet deletes the actor's older
-	// local snapshots, except one still being uploaded, which it deletes when
-	// that upload ends. A Checkpoint that then fails to upload or store the new
-	// snapshot leaves the actor with no local snapshot.
+	// becomes durable. Once the new snapshot is uploaded or stored locally,
+	// atelet deletes the actor's older local snapshots, except one still being
+	// uploaded, which it deletes after that upload ends. A Checkpoint that fails
+	// before then leaves the actor's previous local snapshot in place.
 	Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error)
 	// Restore restores a workload from a snapshot onto a worker.
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
@@ -454,17 +454,19 @@ type AteletServer interface {
 	// Idempotent: once the snapshot is durable, atelet answers from the
 	// manifest at `snapshot.object`, and fails if there is none.
 	//
-	// TODO: Temporarily, this deletes all of the actor's local snapshots after
-	// the upload and does not check whether the actor is running. Its only
-	// caller, the suspend of a paused actor, relies on the deletion.
+	// TODO: Temporarily, this does not check whether the actor is running.
 	PromoteSnapshot(context.Context, *PromoteSnapshotRequest) (*PromoteSnapshotResponse, error)
 	// DetachActor makes the actor's latest local snapshot durable, then deletes
 	// the actor's local snapshots on this node, so it can resume on any node.
-	// atelet also detaches a suspended actor on its own after its detach delay.
+	// atelet also detaches a suspended actor on its own after its detach delay,
+	// and reports that with WorkerService.ReportActorSnapshotState; it does not
+	// report a DetachActor call, whose caller reads the state from the response.
 	// Waits for an operation already in progress on the actor, such as an
 	// upload or a detach. Does nothing when atelet holds no local snapshot for
 	// the actor. Returns ABORTED while a Run, Restore, or Checkpoint of the
-	// actor is in progress or the actor runs on this node.
+	// actor is in progress or the actor runs on this node, and
+	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
+	// durable, such as when it has no `snapshot.object`.
 	//
 	// TODO: Temporarily, atelet returns UNIMPLEMENTED.
 	DetachActor(context.Context, *DetachActorRequest) (*DetachActorResponse, error)

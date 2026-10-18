@@ -49,7 +49,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 			name:      "suspend marks the actor suspending",
 			seedState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
-				markOnly(t, w, ref, actor, w.SuspendActor)
+				markOnly(t, w, ref, actor, suspendSync)
 			},
 			wantOp:     ateattr.OperationSuspend,
 			wantState:  ateattr.ActorStateSuspending,
@@ -59,7 +59,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 			name:      "pause marks the actor suspending",
 			seedState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
-				markOnly(t, w, ref, actor, w.PauseActor)
+				markOnly(t, w, ref, actor, suspendAsync)
 			},
 			wantOp:     ateattr.OperationSuspend,
 			wantState:  ateattr.ActorStateSuspending,
@@ -69,15 +69,15 @@ func TestActorStateChangeRecords(t *testing.T) {
 			name:      "finalize pause marks the actor suspended",
 			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
 			seedOpts: []func(*ateapipb.Actor){
-				withPauseInProgress(),
+				withPauseInProgress(t),
 				func(a *ateapipb.Actor) {
 					a.Status.AssignedNode = "node-1"
 					a.Status.WorkerAssignment = wireTestAssignment()
 				},
 			},
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, _ *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
-				if _, err := w.PauseActor(context.Background(), ref); err != nil {
-					t.Fatalf("PauseActor: %v", err)
+				if _, err := w.SuspendActor(context.Background(), ref, suspendAsync); err != nil {
+					t.Fatalf("SuspendActor: %v", err)
 				}
 			},
 			wantOp:     ateattr.OperationSuspend,
@@ -171,7 +171,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 // markOnly runs a suspend or pause on a RUNNING actor only as far as its mark
 // step: the actor gets a worker to checkpoint on, but the atelet dial fails,
 // so the SUSPENDING mark is the only transition the workflow commits.
-func markOnly(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, run func(context.Context, resources.ActorRef) (*ateapipb.Actor, error)) {
+func markOnly(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, mode suspendMode) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := w.store.UpdateActor(ctx, ref, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
@@ -181,7 +181,7 @@ func markOnly(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ate
 		t.Fatalf("UpdateActor: %v", err)
 	}
 	w.dialer = newDanglingDialer()
-	_, err := run(ctx, ref)
+	_, err := w.SuspendActor(ctx, ref, mode)
 	assertStoppedAtDial(t, err)
 }
 

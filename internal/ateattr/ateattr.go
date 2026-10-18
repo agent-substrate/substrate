@@ -310,12 +310,11 @@ const (
 
 // Values for SnapshotKindKey, set by ateapi from its own resume branching, so
 // the label is bounded at the producer: Local restores an in-node snapshot,
-// Latest pulls the actor's durable snapshot from object storage, Golden pulls the
-// template's golden image, Boot is a from-scratch start (not a restore).
+// Latest pulls a durable snapshot from object storage (including a template's
+// golden snapshot), Boot is a from-scratch start (not a restore).
 // atelet derives the same values for its own histograms, where the kind is the
 // snapshot a restore reads or a checkpoint writes; Boot never appears there.
 const (
-	SnapshotKindGolden = "golden"
 	SnapshotKindLatest = "latest"
 	SnapshotKindLocal  = "local"
 	SnapshotKindBoot   = "boot"
@@ -327,6 +326,18 @@ const (
 	SnapshotFidelityRootfs  = "rootfs"
 	SnapshotFidelityMemory  = "memory"
 	SnapshotFidelityUnknown = "unknown"
+)
+
+// SnapshotUploadOverdueBandKey buckets how long past the upload delay an
+// actor's undurable local snapshot has been waiting on atelet.
+const SnapshotUploadOverdueBandKey = attribute.Key("ate.snapshot.upload_overdue_band")
+
+// Values for SnapshotUploadOverdueBandKey.
+const (
+	SnapshotUploadOverdueBandUnder1m = "under_1m"
+	SnapshotUploadOverdueBand1mTo5m  = "1m_to_5m"
+	SnapshotUploadOverdueBand5mTo15m = "5m_to_15m"
+	SnapshotUploadOverdueBandOver15m = "over_15m"
 )
 
 // SnapshotFidelityValue maps the wire enum onto its label value, shared so
@@ -360,6 +371,7 @@ const (
 	// Persist is one step with two destinations (upload for external, rename
 	// for local); SnapshotKindKey already says which.
 	SnapshotPhasePersist = "persist"
+	SnapshotPhaseCleanup = "cleanup"
 	SnapshotPhaseTotal   = "total"
 )
 
@@ -382,7 +394,8 @@ func NormalizeSandboxClass(class string) string {
 // helper and not through SandboxClassKey.
 //
 // To omit the attribute while the class is unknown is a different choice, and
-// two emitters make it: recordSchedulerAssignment and snapshotOp.attrs.
+// three emitters make it: lifecycleOpAttrs, recordSchedulerAssignment and
+// snapshotOp.attrs.
 func SandboxClassAttribute(class string) attribute.KeyValue {
 	return SandboxClassKey.String(NormalizeSandboxClass(class))
 }

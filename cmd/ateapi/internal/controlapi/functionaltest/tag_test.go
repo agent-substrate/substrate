@@ -172,7 +172,8 @@ func suspendActorForTest(t *testing.T, tc *testContext, workerName, name string)
 		t.Fatalf("ResumeActor(%s) failed: %v", name, err)
 	}
 	suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+		Actor:   &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	})
 	if err != nil {
 		t.Fatalf("SuspendActor(%s) failed: %v", name, err)

@@ -39,8 +39,9 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 )
 
-// Every RPC rejects a request without ActorDirs before touching any state.
-func TestRPCsRejectMissingActorDirs(t *testing.T) {
+// Every RPC with a request body rejects an empty one before touching any
+// state: the generated validators run first in each handler.
+func TestRPCsRejectInvalidRequests(t *testing.T) {
 	s := &AteWorkerService{}
 	ctx := context.Background()
 	for name, call := range map[string]func() error{
@@ -60,6 +61,10 @@ func TestRPCsRejectMissingActorDirs(t *testing.T) {
 			_, err := s.TerminateWorkload(ctx, &ateworkerpb.TerminateWorkloadRequest{})
 			return err
 		},
+		"GetWorkloadStats": func() error {
+			_, err := s.GetWorkloadStats(ctx, &ateworkerpb.GetWorkloadStatsRequest{})
+			return err
+		},
 	} {
 		if got := apierror.Code(call()); got != codes.InvalidArgument {
 			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
@@ -70,71 +75,91 @@ func TestRPCsRejectMissingActorDirs(t *testing.T) {
 func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 	s := &AteWorkerService{}
 	ctx := context.Background()
-	dirs := &ateworkerpb.ActorDirs{
-		RootDir:                   "/node/actors/actor-a",
-		OciBundleDir:              "/node/actors/actor-a/bundle",
-		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
-		RestoreDir:                "/node/actors/actor-a/restore",
-		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
-		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
-		ExternalVolumeMountsDir:   "/node/actors/actor-a/volumes",
-		SandboxAssetsDir:          "/node/actors/actor-a/sandbox-assets",
-	}
 	for name, call := range map[string]func() error{
 		"RunWorkload": func() error {
-			_, err := s.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
+			req := validRunRequest()
+			req.RunscPath = "/bin/sh"
+			_, err := s.RunWorkload(ctx, req)
 			return err
 		},
 		"RestoreWorkload": func() error {
-			_, err := s.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
+			req := validRestoreRequest()
+			req.RunscPath = "/bin/sh"
+			_, err := s.RestoreWorkload(ctx, req)
 			return err
 		},
 		"CheckpointWorkload": func() error {
-			_, err := s.CheckpointWorkload(ctx, &ateworkerpb.CheckpointWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
+			req := validCheckpointRequest()
+			req.RunscPath = "/bin/sh"
+			_, err := s.CheckpointWorkload(ctx, req)
 			return err
 		},
 		"TerminateWorkload": func() error {
-			_, err := s.TerminateWorkload(ctx, &ateworkerpb.TerminateWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
+			req := validTerminateRequest()
+			req.RunscPath = "/bin/sh"
+			_, err := s.TerminateWorkload(ctx, req)
 			return err
 		},
 	} {
-		if got := apierror.Code(call()); got != codes.InvalidArgument {
-			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
+		err := call()
+		if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "runsc_path") {
+			t.Errorf("%s() = %v, want InvalidArgument naming runsc_path", name, err)
 		}
 	}
 }
 
 func TestRestoreWorkloadRejectsUnsupportedFidelity(t *testing.T) {
-	// runsc must sit in the actor's own sandbox assets dir.
-	sandboxAssetsDir := t.TempDir()
-	runscPath := filepath.Join(sandboxAssetsDir, "runsc")
-	if err := os.WriteFile(runscPath, nil, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	dirs := &ateworkerpb.ActorDirs{
-		RootDir:                   "/node/actors/actor-a",
-		OciBundleDir:              "/node/actors/actor-a/bundle",
-		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
-		RestoreDir:                "/node/actors/actor-a/restore",
-		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
-		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
-		ExternalVolumeMountsDir:   "/node/actors/actor-a/volumes",
-		SandboxAssetsDir:          sandboxAssetsDir,
-	}
 	// A zero service cannot acquire locks, configure networking, or open log pipes.
 	s := &AteWorkerService{}
-	for _, fidelity := range []ateworkerpb.SnapshotFidelity{0, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, 99} {
+	for _, fidelity := range []ateworkerpb.SnapshotFidelity{0, 99} {
 		t.Run(fidelity.String(), func(t *testing.T) {
-			resp, err := s.RestoreWorkload(context.Background(), &ateworkerpb.RestoreWorkloadRequest{
-				ActorDirs: dirs,
-				RunscPath: runscPath,
-				Fidelity:  fidelity,
-			})
-			if resp != nil || err == nil || apierror.Code(err) != codes.InvalidArgument {
-				t.Errorf("RestoreWorkload() = (%v, %v), want InvalidArgument for unsupported fidelity", resp, err)
+			// Valid but for the fidelity, so the rejection is the fidelity's;
+			// the fidelity check runs before the runsc path is looked at.
+			req := validRestoreRequest()
+			req.Fidelity = fidelity
+			resp, err := s.RestoreWorkload(context.Background(), req)
+			if resp != nil || apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "fidelity") {
+				t.Errorf("RestoreWorkload() = (%v, %v), want InvalidArgument naming the fidelity", resp, err)
 			}
 		})
 	}
+}
+
+// The requests below describe testActor and pass the generated validators, so
+// a test aimed at one of the hand checks that run after them (the runsc path,
+// the fidelity) sees that check's error rather than an unrelated rejection.
+
+func testDirs() *ateworkerpb.ActorDirs {
+	return &ateworkerpb.ActorDirs{
+		RootDir:                   "/node/actors/actor-a",
+		OciBundleDir:              "/node/actors/actor-a/bundle",
+		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
+		RestoreDir:                "/node/actors/actor-a/restore-state",
+		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
+		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
+		ExternalVolumeMountsDir:   "/node/actors/actor-a/volumes",
+		SandboxAssetsDir:          nodepath.ActorSandboxAssetsDir(testActor.UID),
+	}
+}
+
+func testSpec() *ateworkerpb.WorkloadSpec {
+	return &ateworkerpb.WorkloadSpec{Containers: []*ateworkerpb.Container{{Name: "app"}}}
+}
+
+func validRunRequest() *ateworkerpb.RunWorkloadRequest {
+	return &ateworkerpb.RunWorkloadRequest{Atespace: testActor.Ref.Atespace, ActorName: testActor.Ref.Name, ActorUid: testActor.UID, Spec: testSpec(), ActorDirs: testDirs()}
+}
+
+func validCheckpointRequest() *ateworkerpb.CheckpointWorkloadRequest {
+	return &ateworkerpb.CheckpointWorkloadRequest{Atespace: testActor.Ref.Atespace, ActorName: testActor.Ref.Name, ActorUid: testActor.UID, Spec: testSpec(), ActorDirs: testDirs(), Fidelity: ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY}
+}
+
+func validRestoreRequest() *ateworkerpb.RestoreWorkloadRequest {
+	return &ateworkerpb.RestoreWorkloadRequest{Atespace: testActor.Ref.Atespace, ActorName: testActor.Ref.Name, ActorUid: testActor.UID, Spec: testSpec(), ActorDirs: testDirs(), Fidelity: ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY}
+}
+
+func validTerminateRequest() *ateworkerpb.TerminateWorkloadRequest {
+	return &ateworkerpb.TerminateWorkloadRequest{Atespace: testActor.Ref.Atespace, ActorName: testActor.Ref.Name, ActorUid: testActor.UID, Spec: testSpec(), ActorDirs: testDirs()}
 }
 
 // TestPauseContainerLogAttribution covers the actor and _pause labels on runsc

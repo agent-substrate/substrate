@@ -167,6 +167,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	var waits []rollout
 	waits = append(waits,
 		rollout{kube.KindDeployment, "ate-api-server"},
+		rollout{kube.KindDeployment, "ate-idp-server"},
 		rollout{kube.KindDeployment, "ate-controller"},
 		rollout{kube.KindDeployment, "atenet-router"},
 		rollout{kube.KindDeployment, "atenet-egress"},
@@ -568,10 +569,8 @@ func (e *Env) DeploySandboxConfig(ctx context.Context) error {
 		return err
 	}
 
-	// Install the cluster-wide sandbox config. Sandbox binaries live on
-	// cluster-scoped SandboxConfigs each ActorTemplate names via
-	// sandboxConfig.configName; gVisor templates name this one unless they
-	// create their own SandboxConfig.
+	// Install the cluster-wide default gVisor SandboxConfig that gVisor
+	// WorkerPools resolve by default unless they pin their own configRef.
 	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml"))
 }
 

@@ -38,22 +38,17 @@ func TestActorTemplateCRUD(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 	ctx := context.Background()
-	ensureDefaultGvisorSandboxConfig(t, tc)
 
 	created, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
 		ActorTemplate: &ateapipb.ActorTemplate{
 			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
 			Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: "gvisor",
-				ConfigName:   "gvisor-default",
-			},
-			Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}},
+			Resources:      &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}},
 			// Server-owned status on the request is ignored.
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
+					GoldenTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "golden-tag"},
 				},
 			},
 		},
@@ -69,10 +64,6 @@ func TestActorTemplateCRUD(t *testing.T) {
 			PreferredFidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		},
-		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: "gvisor",
-			ConfigName:   "gvisor-default",
-		},
 		Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}},
 		Status:    &ateapipb.ActorTemplateStatus{},
 	}
@@ -85,7 +76,6 @@ func TestActorTemplateCRUD(t *testing.T) {
 			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
 			Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
 			Resources:      resources.CPUMemory(1000, 512<<20),
 		},
 	})
@@ -135,18 +125,6 @@ func TestActorTemplateCRUD(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+testAtespace+"/tmpl-a not found")
 	_, err = tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
 	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+testAtespace+"/tmpl-a not found")
-
-	// config_name is required: a template must name its SandboxConfig.
-	_, err = tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
-		ActorTemplate: &ateapipb.ActorTemplate{
-			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-unnamed-config"},
-			Containers:     []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: "gvisor"},
-			Resources:      resources.CPUMemory(1000, 512<<20),
-		},
-	})
-	assertGrpcErrorRegex(t, err, codes.InvalidArgument, `sandbox_config\.config_name`)
 }
 
 func TestGoldenTagLifecycle(t *testing.T) {
@@ -185,7 +163,7 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !parsed.OwnedBy(resources.TagSnapshotOwner(resources.GoldenActorAtespace, golden.GetMetadata().GetUid())) {
+	if !parsed.OwnedBy(resources.TagSnapshotOwner(testAtespace, golden.GetMetadata().GetUid())) {
 		t.Fatalf("golden snapshot %q is not under the golden tag's own prefix", uri)
 	}
 	assertSnapshotPresent(t, tc, uri)
@@ -222,7 +200,10 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	if !tc.fakeAtelet.RestoreCalled {
 		t.Fatal("actor did not restore golden tag")
 	}
-	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: resources.ActorRefFromActor(late).ToObjectRef()}); err != nil {
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   resources.ActorRefFromActor(late).ToObjectRef(),
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	assertSnapshotPresent(t, tc, uri)
@@ -247,7 +228,6 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	defer tc.cleanup()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	ensureDefaultGvisorSandboxConfig(t, tc)
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
 	tmpl, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: &ateapipb.ActorTemplate{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "no-golden"},
@@ -255,7 +235,6 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 			StorageLocation:      testStorageLocation,
 			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
 		},
-		SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
 		Containers:     []*ateapipb.Container{{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}}},
 		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}},
 		Resources:      resources.CPUMemory(1000, 512<<20),
@@ -268,7 +247,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	}
 	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 	controlTemplate := createTemplateWithSelector(t, tc, "golden-control", &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}})
-	goldenRef := &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()}
+	goldenRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: tmpl.GetMetadata().GetUid()}
 	assertNoGolden := func(ctx context.Context) error {
 		if _, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: goldenRef}); status.Code(err) != codes.NotFound {
 			return fmt.Errorf("disabled template's golden actor: got %v, want NotFound", err)
@@ -316,7 +295,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	if !ran || restored {
 		t.Fatal("first resume did not cold boot")
 	}
-	suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
+	suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref, Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +380,6 @@ func TestCreateActorTemplate_ExternalVolumesPreview(t *testing.T) {
 	ns := namespaceForTest("ns-template-ext-vol-preview")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
-	ensureDefaultGvisorSandboxConfig(t, tc)
 
 	for i, tt := range []struct {
 		name     string
@@ -433,10 +411,6 @@ func TestCreateActorTemplate_ExternalVolumesPreview(t *testing.T) {
 					}},
 					Resources:      &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}},
 					SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-					SandboxConfig: &ateapipb.SandboxConfig{
-						SandboxClass: "gvisor",
-						ConfigName:   "gvisor-default",
-					},
 				},
 			})
 			if status.Code(err) != tt.wantCode {

@@ -99,7 +99,7 @@ PHASE_ORDER = [
     "tap", "vmm_launch", "vm_restore", "resume", "wakeup_probe", "activate",
     # atelet + ateworker checkpoint
     "pause", "checkpoint", "snapshot", "durable_dir", "rootfs_upper",
-    "worker_checkpoint", "teardown", "persist",
+    "fs_checkpoint", "worker_checkpoint", "teardown", "persist", "cleanup",
     UNATTRIBUTED, TOTAL,
 ]
 _PHASE_RANK = {name: i for i, name in enumerate(PHASE_ORDER)}
@@ -113,9 +113,8 @@ INNER_PHASE = {"restore": "worker_restore", "checkpoint": "worker_checkpoint"}
 CONCURRENT_CAPTURES = ("snapshot", "durable_dir", "rootfs_upper")
 
 # Slack on the window in which the ateworker record of an operation must land:
-# atelet does a little work after the ateworker call returns before it writes its
-# own record (unmounting, resetting the actor dirs), and the two clocks are
-# the same node's but not the same goroutine's.
+# atelet does a little untimed work between the ateworker call and its own
+# record, and the two clocks are the same node's but not the same goroutine's.
 JOIN_SLACK_S = 1.0
 
 
@@ -177,7 +176,7 @@ def unattributed(source: str, op: str, sandbox_class: str, phases: dict[str, flo
     if total is None:
         return None
     if (source, op) == ("atelet", "checkpoint"):
-        spent = sum(phases.get(p, 0.0) for p in ("sandbox_assets", "worker_checkpoint", "persist"))
+        spent = sum(phases.get(p, 0.0) for p in ("sandbox_assets", "worker_checkpoint", "persist", "cleanup"))
     elif (source, op, sandbox_class) == ("ateworker", "checkpoint", MICROVM):
         spent = (phases.get("prep", 0.0) + phases.get("pause", 0.0)
                  + max(phases.get(p, 0.0) for p in CONCURRENT_CAPTURES)
@@ -295,9 +294,9 @@ def fmt_s(seconds: float) -> str:
 
 def report_phases(breakdowns: list[Breakdown], writer) -> list[dict]:
     """Per (source, op, sandbox class, kind, scope, phase) percentiles. A
-    golden restore (which downloads the golden image) and a latest restore,
-    or a gVisor and a micro-VM checkpoint, are different distributions and
-    must not be pooled. Returns the rows for CSV."""
+    local restore and a latest one, or a gVisor and a micro-VM checkpoint,
+    are different distributions and must not be pooled. Returns the rows
+    for CSV."""
     groups: dict[tuple, list[float]] = defaultdict(list)
     for b in breakdowns:
         if b.failed:
@@ -335,14 +334,15 @@ def ateworker_window(op: Breakdown) -> tuple[float, float] | None:
     """When, relative to the atelet record's time, the ateworker record of the
     same operation was written. ateworker writes it as its RPC returns, i.e. at
     the end of the atelet worker_* phase: for a checkpoint that is before
-    persist runs, for a restore it is the last phase. An operation that never
-    reached the ateworker call has no window and nothing to pair with."""
+    persist and cleanup run, for a restore it is the last phase. An operation
+    that never reached the ateworker call has no window and nothing to pair
+    with."""
     total = op.phases.get(TOTAL)
     if op.ts is None or total is None or INNER_PHASE[op.op] not in op.phases:
         return None
     if op.op == "checkpoint":
-        return (op.ts - total - JOIN_SLACK_S,
-                op.ts - op.phases.get("persist", 0.0) + JOIN_SLACK_S)
+        after = op.phases.get("persist", 0.0) + op.phases.get("cleanup", 0.0)
+        return (op.ts - total - JOIN_SLACK_S, op.ts - after + JOIN_SLACK_S)
     return (op.ts - op.phases[INNER_PHASE[op.op]] - JOIN_SLACK_S, op.ts + JOIN_SLACK_S)
 
 

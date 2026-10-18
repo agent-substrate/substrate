@@ -51,6 +51,26 @@ func TestToAPIError(t *testing.T) {
 	}
 }
 
+func TestToAPIErrorEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		errs field.ErrorList
+	}{
+		{
+			name: "nil",
+			errs: nil,
+		},
+		{
+			name: "empty",
+			errs: field.ErrorList{},
+		},
+	} {
+		if err := ToAPIError(tc.errs); err != nil {
+			t.Errorf("%s: ToAPIError = %v, want nil", tc.name, err)
+		}
+	}
+}
+
 func TestDeepEqual(t *testing.T) {
 	// Proto messages carry internal state that reflect.DeepEqual would
 	// compare; proto.Equal compares only field values.
@@ -368,11 +388,12 @@ func TestValidateActorDirs(t *testing.T) {
 		wantField string
 	}{
 		{"valid", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs { return actorDirs }, ""},
-		{"nil", func(*ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs { return nil }, "actor_dirs"},
+		// Presence is the tags' job: nil and empty are not this check's to report.
+		{"nil", func(*ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs { return nil }, ""},
 		{"missing dir", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs {
 			actorDirs.RestoreDir = ""
 			return actorDirs
-		}, "actor_dirs.restore_dir"},
+		}, ""},
 		{"relative dir", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs {
 			actorDirs.OciBundleDir = "bundles"
 			return actorDirs
@@ -608,6 +629,20 @@ func TestValidateNestedMountPaths(t *testing.T) {
 			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateNestedMountPaths(path, tt.paths))
 		})
 	}
+}
+
+// TestValidateNestedMountPathsAt pins that each finding lands on the field
+// the caller maps its index to, which is how a caller spanning several lists
+// points at the right one.
+func TestValidateNestedMountPathsAt(t *testing.T) {
+	fields := []*field.Path{
+		field.NewPath("external_volume_mounts").Index(0).Child("mount_path"),
+		field.NewPath("image_volume_mounts").Index(0).Child("mount_path"),
+		field.NewPath("image_volume_mounts").Index(1).Child("mount_path"),
+	}
+	got := ValidateNestedMountPathsAt([]string{"/a", "/b", "/a/c"}, func(i int) *field.Path { return fields[i] })
+	want := field.ErrorList{field.Invalid(fields[2], nil, "")}
+	field.ErrorMatcher{}.ByType().ByField().Test(t, want, got)
 }
 
 func TestValidateCSIMap(t *testing.T) {

@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -167,7 +168,9 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	s := newWorkerSandboxSyncer(&workerSandboxResolver{
 		workerPools: listersv1alpha1.NewWorkerPoolLister(pools),
 		configs:     listersv1alpha1.NewSandboxConfigLister(configs),
-	}, pods, newTestAssetFetcher(), t.TempDir())
+	}, pods, newTestAssetFetcher(), t.TempDir(), newRuntimeIndex(), nil)
+	// The queue starts a goroutine; stop it with the test.
+	t.Cleanup(s.queue.ShutDown)
 	s.scratchDir = t.TempDir() // the runsc probe stages the binary there
 	s.probeCPUIdentity = func() (string, string, error) { return testCPUVendor, testCPUModel, nil }
 	s.runCPUFeatures = func(context.Context, string) ([]string, error) { return testCPUFeatures(), nil }
@@ -348,18 +351,68 @@ func TestWorkerSandboxSyncerJitter(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := newTestSyncer(t, append(pods, pool)...)
-			s.maxJitter = 50 * time.Millisecond
-			tt.event(s)
-			if diff := cmp.Diff(tt.want, drain(s)); diff != "" {
-				t.Errorf("UIDs enqueued right away mismatch (-want +got):\n%s", diff)
-			}
-			time.Sleep(2 * s.maxJitter)
-			if diff := cmp.Diff(tt.wantLater, drain(s)); diff != "" {
-				t.Errorf("UIDs enqueued after the jitter mismatch (-want +got):\n%s", diff)
-			}
+			// On the bubble's clock the sleep fires every delay at once.
+			synctest.Test(t, func(t *testing.T) {
+				s := newTestSyncer(t, append(pods, pool)...)
+				s.maxJitter = syncMaxJitter
+				tt.event(s)
+				synctest.Wait()
+				if diff := cmp.Diff(tt.want, drain(s)); diff != "" {
+					t.Errorf("UIDs enqueued right away mismatch (-want +got):\n%s", diff)
+				}
+				time.Sleep(s.maxJitter)
+				synctest.Wait()
+				if diff := cmp.Diff(tt.wantLater, drain(s)); diff != "" {
+					t.Errorf("UIDs enqueued after the jitter mismatch (-want +got):\n%s", diff)
+				}
+			})
 		})
 	}
+}
+
+// TestWorkerSandboxSyncerRegistersAheadOfJitter pins what closes the window
+// between a SandboxConfig change and the jittered sync: the config's
+// runtimes resolve as soon as the event is handled, while the file, and
+// with it what the worker advertises, waits for the sync.
+func TestWorkerSandboxSyncerRegistersAheadOfJitter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// Two pods of one pool: the pool is planned once, both pods are delayed.
+		pod := workerPod("pod-a", "pool")
+		s := newTestSyncer(t, pod, workerPod("pod-b", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+		s.maxJitter = syncMaxJitter
+
+		cfg := multiVersionConfig()
+		cfg.Generation = 2
+		s.sandboxConfigHandler().OnUpdate(multiVersionConfig(), cfg)
+		synctest.Wait()
+
+		plan, err := s.resolver.plan(pod)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hashed, err := hashVersions(context.Background(), plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range hashed {
+			if _, ok := s.index.lookup(v.hash); !ok {
+				t.Errorf("runtime %s (%s) does not resolve before the jittered sync", v.name, v.hash)
+			}
+		}
+		for _, uid := range []string{"pod-a", "pod-b"} {
+			if _, ok := s.index.worker(uid); ok {
+				t.Errorf("%s advertises runtimes before its file is written", uid)
+			}
+		}
+		if got := drain(s); len(got) != 0 {
+			t.Errorf("enqueued %v right away, want the jittered delay", got)
+		}
+		time.Sleep(s.maxJitter)
+		synctest.Wait()
+		if diff := cmp.Diff([]string{"pod-a", "pod-b"}, drain(s)); diff != "" {
+			t.Errorf("UIDs enqueued after the jitter mismatch (-want +got):\n%s", diff)
+		}
+	})
 }
 
 func TestWorkerSandboxSyncerProcess(t *testing.T) {
@@ -384,45 +437,59 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 		// wantUntouched is whether the existing file must not be rewritten.
 		wantUntouched bool
 		wantRetries   int
+		// indexed registers pod-a in the index before processing, as an
+		// earlier sync would have; wantIndexed is whether it is there after.
+		indexed, wantIndexed bool
 	}{{
-		name:    "writes the file",
-		objs:    []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
-		want:    wantVersions(),
-		wantDir: true,
+		name:        "writes the file",
+		wantIndexed: true,
+		objs:        []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		want:        wantVersions(),
+		wantDir:     true,
 	}, {
-		name:     "replaces a stale file",
-		objs:     []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
-		existing: stale,
-		want:     wantVersions(),
-		wantDir:  true,
+		name:        "replaces a stale file",
+		wantIndexed: true,
+		objs:        []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		existing:    stale,
+		want:        wantVersions(),
+		wantDir:     true,
 	}, {
 		name:          "leaves an equal file alone",
+		wantIndexed:   true,
 		objs:          []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
 		existing:      wantVersions(),
 		want:          wantVersions(),
 		wantDir:       true,
 		wantUntouched: true,
 	}, {
-		// The Delete event removes the directory.
-		name:     "pod being deleted",
-		objs:     []any{deleting, resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
-		existing: stale,
-		want:     stale,
-		wantDir:  true,
+		// The Delete event removes the directory, and the index entry with it.
+		name:        "pod being deleted",
+		objs:        []any{deleting, resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		existing:    stale,
+		indexed:     true,
+		want:        stale,
+		wantDir:     true,
+		wantIndexed: true,
 	}, {
 		name:     "pod gone",
 		objs:     []any{resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
 		existing: stale,
+		indexed:  true,
 	}, {
-		name: "pod gone, no directory",
-		objs: []any{resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		name:    "pod gone, no directory",
+		objs:    []any{resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		indexed: true,
 	}, {
+		// A sync that fails before the write leaves the index entry as it
+		// left the file.
 		name:        "unresolved pool keeps the existing file",
 		objs:        []any{workerPod("pod-a", "pool"), multiVersionConfig()},
 		existing:    stale,
+		indexed:     true,
 		want:        stale,
 		wantDir:     true,
 		wantRetries: 1,
+		wantIndexed: true,
 	}, {
 		name:         "unresolved pool retries up to syncMaxRetries",
 		objs:         []any{workerPod("pod-a", "pool"), multiVersionConfig()},
@@ -452,8 +519,9 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 	}, {
 		// A transient failure on a restorable version writes the default
 		// runtime right away and requeues without the syncMaxRetries cap.
-		name: "incomplete restorable version writes partial file and requeues past syncMaxRetries",
-		objs: []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
+		name:        "incomplete restorable version writes partial file and requeues past syncMaxRetries",
+		wantIndexed: true,
+		objs:        []any{workerPod("pod-a", "pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig()},
 		assets: &fakeAssetFetcher{
 			fn: func(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
 				if rec.Assets[gvisorAssetName].SHA256 != "sha-v2" {
@@ -475,6 +543,9 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 			s := newTestSyncer(t, tt.objs...)
 			if tt.assets != nil {
 				s.assets = tt.assets
+			}
+			if tt.indexed {
+				s.index.register("pod-a")
 			}
 			limiter := workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)
 			for range tt.priorRetries {
@@ -522,6 +593,9 @@ func TestWorkerSandboxSyncerProcess(t *testing.T) {
 			}
 			if got := s.queue.NumRequeues("pod-a"); got != tt.wantRetries {
 				t.Errorf("NumRequeues = %d, want %d", got, tt.wantRetries)
+			}
+			if _, ok := s.index.worker("pod-a"); ok != tt.wantIndexed {
+				t.Errorf("pod-a in the index = %v, want %v", ok, tt.wantIndexed)
 			}
 			requeued := make(chan struct{})
 			go func() {
@@ -574,38 +648,45 @@ func TestWorkerSandboxSyncerExistingDirs(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := newTestSyncer(t)
-			// Short enough to observe a delayed enqueue.
-			s.minAge = 50 * time.Millisecond
-			if tt.entries == nil {
-				s.workersDir = filepath.Join(s.workersDir, "missing")
-			}
-			for name, kind := range tt.entries {
-				path := filepath.Join(s.workersDir, name)
-				var err error
-				switch kind {
-				case file:
-					err = os.WriteFile(path, nil, 0o600)
-				case youngDir:
-					err = os.Mkdir(path, 0o700)
-				case oldDir:
-					if err = os.Mkdir(path, 0o700); err == nil {
-						old := time.Now().Add(-2 * orphanMinAge)
-						err = os.Chtimes(path, old, old)
+			// On the bubble's clock the sleep fires the delayed enqueue at
+			// once. Directory ages are stamped from that clock too.
+			synctest.Test(t, func(t *testing.T) {
+				s := newTestSyncer(t)
+				if tt.entries == nil {
+					s.workersDir = filepath.Join(s.workersDir, "missing")
+				}
+				now := time.Now()
+				for name, kind := range tt.entries {
+					path := filepath.Join(s.workersDir, name)
+					var err error
+					switch kind {
+					case file:
+						err = os.WriteFile(path, nil, 0o600)
+					case youngDir:
+						if err = os.Mkdir(path, 0o700); err == nil {
+							err = os.Chtimes(path, now, now)
+						}
+					case oldDir:
+						if err = os.Mkdir(path, 0o700); err == nil {
+							old := now.Add(-2 * s.minAge)
+							err = os.Chtimes(path, old, old)
+						}
+					}
+					if err != nil {
+						t.Fatal(err)
 					}
 				}
-				if err != nil {
-					t.Fatal(err)
+				s.enqueueExistingDirs(context.Background())
+				synctest.Wait()
+				if diff := cmp.Diff(tt.want, drain(s)); diff != "" {
+					t.Errorf("enqueued UIDs mismatch (-want +got):\n%s", diff)
 				}
-			}
-			s.enqueueExistingDirs(context.Background())
-			if diff := cmp.Diff(tt.want, drain(s)); diff != "" {
-				t.Errorf("enqueued UIDs mismatch (-want +got):\n%s", diff)
-			}
-			time.Sleep(2 * s.minAge)
-			if diff := cmp.Diff(tt.wantLater, drain(s)); diff != "" {
-				t.Errorf("UIDs enqueued after minAge mismatch (-want +got):\n%s", diff)
-			}
+				time.Sleep(s.minAge)
+				synctest.Wait()
+				if diff := cmp.Diff(tt.wantLater, drain(s)); diff != "" {
+					t.Errorf("UIDs enqueued after minAge mismatch (-want +got):\n%s", diff)
+				}
+			})
 		})
 	}
 }
@@ -771,7 +852,7 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 				ateFactory.Api().V1alpha1().WorkerPools(),
 				ateFactory.Api().V1alpha1().SandboxConfigs(),
 				newScriptAssetFetcher(t),
-				dir)
+				dir, newRuntimeIndex(), nil)
 			if err != nil {
 				t.Fatalf("startWorkerSandboxSyncer() error = %v", err)
 			}
@@ -793,5 +874,40 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 				waitFor(t, "the directory of "+uid+" to be removed", func() bool { return !exists(s.podDir(uid)) })
 			}
 		})
+	}
+}
+
+// TestWorkerSandboxSyncerRunIndexesExistingPods pins what run does with the
+// pods already on the node: each is processed once the caches synced, so a
+// pod that resolves is indexed, and one whose pool does not exist is not
+// and is retried in the background without holding anything else.
+func TestWorkerSandboxSyncerRunIndexesExistingPods(t *testing.T) {
+	s := newTestSyncer(t, workerPod("pod-live", "pool"), workerPod("pod-orphan", "missing-pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+	// The initial list replays each pod as an Add before the caches sync.
+	s.queue.Add("pod-live")
+	s.queue.Add("pod-orphan")
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		s.run(ctx, func() bool { return true })
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-stopped
+	})
+
+	waitFor(t, "pod-live to be indexed", func() bool { _, ok := s.index.worker("pod-live"); return ok })
+	wr, _ := s.index.worker("pod-live")
+	cr, ok := wr.class(v1alpha1.SandboxClassGvisor)
+	if !ok || cr.config != "gvisor-release" || cr.defaultHash == "" {
+		t.Errorf("index.worker(pod-live).class(gvisor) = %+v, %v; want gvisor-release with a default runtime", cr, ok)
+	}
+	if _, ok := s.index.lookup(cr.defaultHash); !ok {
+		t.Error("pod-live's default runtime is not resolvable")
+	}
+	waitFor(t, "pod-orphan to be retried", func() bool { return s.queue.NumRequeues("pod-orphan") > 0 })
+	if _, ok := s.index.worker("pod-orphan"); ok {
+		t.Error("a pod whose pool does not exist was indexed")
 	}
 }

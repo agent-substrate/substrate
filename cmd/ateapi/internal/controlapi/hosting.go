@@ -29,9 +29,9 @@ import (
 // worker (delete its row in the store's worker assignments) before they clear
 // status.worker_assignment, and a crash keeps status.assigned_node as a record
 // of the last node. The rules:
-//   - SUSPENDED or SUSPENDING with no worker and a local-only latest
-//     snapshot, the shape of a paused actor: assigned_node, the node holding
-//     that snapshot.
+//   - SUSPENDED with no worker: assigned_node. It is set only while a
+//     snapshot whose locality is that node still holds files there, uploaded
+//     or not, and cleared once none does.
 //   - RESUMING, RUNNING and SUSPENDING with status.worker_assignment set: the
 //     worker's node, but only while the store's worker assignment row binds
 //     that worker to this actor's UID; "" once it is released or the worker
@@ -44,13 +44,10 @@ func HostingNode(ctx context.Context, st store.Interface, actor *ateapipb.Actor)
 	status := actor.GetStatus()
 	assignment := status.GetWorkerAssignment()
 	if assignment == nil {
-		switch status.GetState() {
-		case ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
-			if latestSnapshotIsLocalOnly(status) {
-				return status.GetAssignedNode(), nil
-			}
+		if status.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+			return "", nil
 		}
-		return "", nil
+		return status.GetAssignedNode(), nil
 	}
 	switch status.GetState() {
 	case ateapipb.ActorState_ACTOR_STATE_RESUMING, ateapipb.ActorState_ACTOR_STATE_RUNNING,

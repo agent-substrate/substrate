@@ -70,11 +70,6 @@ resources:
     quantity: "1"
   - name: memory
     quantity: 512Mi
-sandboxConfig:
-  sandboxClass: microvm
-  # Installed cluster-wide by hack/install-microvm-deps.sh; naming it
-  # explicitly makes a missing or stale install fail loudly.
-  configName: microvm
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/ate-demo-egress-microvm/

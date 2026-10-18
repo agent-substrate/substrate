@@ -414,14 +414,6 @@ func (s *AteWorkerService) beginRPC(actorUID, name string, cancel context.Cancel
 	return release, nil
 }
 
-// validateActorDirs rejects a request whose actor directories are unusable.
-func validateActorDirs(actorDirs *ateworkerpb.ActorDirs) error {
-	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
-		return apierror.InvalidArgument("%v", errs.ToAggregate())
-	}
-	return nil
-}
-
 // supportedFidelities are the snapshot fidelities this runtime serves: the
 // rootfs upper is host-backed, so it ships with or without guest memory.
 var supportedFidelities = []ateworkerpb.SnapshotFidelity{
@@ -433,17 +425,15 @@ var supportedFidelities = []ateworkerpb.SnapshotFidelity{
 // validateFidelity rejects a checkpoint or restore request whose fidelity
 // this runtime cannot serve.
 func validateFidelity(fidelity ateworkerpb.SnapshotFidelity) error {
-	if errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity")); len(errs) > 0 {
-		return apierror.InvalidArgument("%v", errs.ToAggregate())
-	}
-	return nil
+	errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity"))
+	return resources.ToAPIError(errs)
 }
 
 // validateRuntimeAssetPaths ensures we only run assets from the actor's own
 // sandbox assets dir, where atelet staged them. The dir is derived from the
 // actor UID here and the request's sandbox_assets_dir must match it, so a
 // request cannot name a root of its own choosing. actorDirs must have passed
-// validateActorDirs.
+// the generated validator.
 func validateRuntimeAssetPaths(actorUID string, actorDirs *ateworkerpb.ActorDirs, paths map[string]string) error {
 	root := actorDirs.GetSandboxAssetsDir()
 	if errs := resources.ValidateSandboxAssetsDir(actorUID, root, field.NewPath("actor_dirs", "sandbox_assets_dir")); len(errs) > 0 {
@@ -453,10 +443,7 @@ func validateRuntimeAssetPaths(actorUID string, actorDirs *ateworkerpb.ActorDirs
 	for name, p := range paths {
 		errs = append(errs, resources.ValidateRuntimeAssetPath(root, p, field.NewPath("runtime_asset_paths").Key(name))...)
 	}
-	if len(errs) > 0 {
-		return resources.ToAPIError(errs)
-	}
-	return nil
+	return resources.ToAPIError(errs)
 }
 
 // rejectIfDraining returns a codes.Unavailable error if ateworker has begun graceful

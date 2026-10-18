@@ -50,7 +50,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScrapeCollectorMetrics for the lifecycle baseline: %v", err)
 	}
-	lifecycleBaseline := e2e.LifecycleEventCounts(baselineScrape)
+	lifecycleBaseline := e2e.LifecycleEventSeries(baselineScrape)
 
 	// CreateActor requires the atespace to exist first; ignore AlreadyExists.
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
@@ -123,7 +123,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		if err != nil {
 			t.Fatalf("checking route-duration metric: %v", err)
 		}
-		missingStates = e2e.StatesNotAdvanced(lifecycleBaseline, e2e.LifecycleEventCounts(scrape), wantStates)
+		missingStates = e2e.StatesNotAdvanced(lifecycleBaseline, e2e.LifecycleEventSeries(scrape), wantStates)
 		lifecycleSeen = len(missingStates) == 0
 		workerSeen = e2e.CollectorHasService(scrape, "ateworker-gvisor", "ateworker-microvm")
 		// atecontroller bridges controller-runtime's Prometheus registry onto its OTLP

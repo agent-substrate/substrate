@@ -67,3 +67,27 @@ func TestWrite(t *testing.T) {
 		}
 	})
 }
+
+// TestWriteSync covers the durable variant: same contract as Write, the
+// file holds exactly the data afterwards and no temp file is left.
+func TestWriteSync(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runtime.json")
+	if err := WriteSync(path, []byte("v1"), 0o600); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	if err := WriteSync(path, []byte("v2"), 0o600); err != nil {
+		t.Fatalf("WriteSync over an existing file: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "v2" {
+		t.Fatalf("ReadFile = %q, %v; want v2", got, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("dir holds %d entries after WriteSync, want only the file", len(entries))
+	}
+}

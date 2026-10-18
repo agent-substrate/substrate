@@ -108,3 +108,25 @@ func TestWriteRootfsResolvConfDoesNotFollowAPlantedSymlink(t *testing.T) {
 		t.Errorf("the symlink was followed and the file outside the rootfs was overwritten with %q", victim)
 	}
 }
+
+func TestWriteRootfsHosts(t *testing.T) {
+	rootfs := t.TempDir()
+	// Images built by docker ship an empty /etc/hosts.
+	if err := os.Mkdir(filepath.Join(rootfs, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootfs, "etc", "hosts"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteRootfsHosts(rootfs, SandboxHosts("actor", "169.254.17.2")); err != nil {
+		t.Fatalf("WriteRootfsHosts: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(rootfs, "etc", "hosts"))
+	if err != nil {
+		t.Fatalf("reading what was written: %v", err)
+	}
+	want := "# Agent Substrate-managed hosts file.\n127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n169.254.17.2\tactor\n"
+	if string(got) != want {
+		t.Errorf("wrote %q, want %q", got, want)
+	}
+}

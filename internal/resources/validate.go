@@ -52,8 +52,11 @@ func ToGRPCStatusError(errs field.ErrorList) error {
 }
 
 // ToAPIError turns validation errors into the InvalidArgument error an RPC
-// handler responds with. Callers check len(errs) > 0 first.
+// handler responds with, or nil if errs is empty.
 func ToAPIError(errs field.ErrorList) error {
+	if len(errs) == 0 {
+		return nil
+	}
 	return apierror.InvalidArgument("%v", errs.ToAggregate())
 }
 
@@ -107,11 +110,12 @@ func ValidateWorkerPodUID(workerPodUID string) error {
 	return nil
 }
 
-// ValidateActorDirs checks that every directory atelet passes to worker is
-// set, absolute and clean.
+// ValidateActorDirs checks that every directory atelet passes to the worker
+// is absolute and clean. Presence is enforced by the tags on the message; it
+// backs the ateworkerpb.ActorDirs custom validation hook.
 func ValidateActorDirs(actorDirs *ateworkerpb.ActorDirs, fldPath *field.Path) field.ErrorList {
 	if actorDirs == nil {
-		return field.ErrorList{field.Required(fldPath, "")}
+		return nil
 	}
 	var errs field.ErrorList
 	for _, actorDir := range []struct{ name, path string }{
@@ -158,7 +162,7 @@ func ValidateSandboxClass(fldPath *field.Path, value string) field.ErrorList {
 
 func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
 	if dir == "" {
-		return field.ErrorList{field.Required(fldPath, "")}
+		return nil // required is enforced by tags
 	}
 	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
 		return field.ErrorList{field.Invalid(fldPath, dir, "must be an absolute, clean path")}
@@ -425,6 +429,12 @@ func ValidateMountPath(fldPath *field.Path, p string) field.ErrorList {
 // fldPath[i].mount_path. Identical paths are left to the list-key uniqueness
 // check.
 func ValidateNestedMountPaths(fldPath *field.Path, paths []string) field.ErrorList {
+	return ValidateNestedMountPathsAt(paths, func(i int) *field.Path { return fldPath.Index(i).Child("mount_path") })
+}
+
+// ValidateNestedMountPathsAt is ValidateNestedMountPaths for paths gathered
+// from more than one list: at(i) is where paths[i] is reported.
+func ValidateNestedMountPathsAt(paths []string, at func(i int) *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	for i, path := range paths {
 		if path == "" {
@@ -435,7 +445,7 @@ func ValidateNestedMountPaths(fldPath *field.Path, paths []string) field.ErrorLi
 				continue
 			}
 			if strings.HasPrefix(path, prior+"/") || strings.HasPrefix(prior, path+"/") {
-				errs = append(errs, field.Invalid(fldPath.Index(i).Child("mount_path"), path,
+				errs = append(errs, field.Invalid(at(i), path,
 					fmt.Sprintf("must not nest under or over another mount (%q)", prior)))
 			}
 		}

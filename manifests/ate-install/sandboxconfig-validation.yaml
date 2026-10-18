@@ -31,15 +31,13 @@ spec:
       resources:   ["sandboxconfigs"]
   validations:
   # gVisor needs a "gvisor" release-tarball asset (gvisor.tar.zstd: runsc plus
-  # its gvisor-bin/ helpers) for every architecture it advertises. A legacy
-  # bare-binary "runsc" asset is still accepted for releases that predate the
-  # tarball.
+  # its gvisor-bin/ helpers) for every architecture it advertises.
   - expression: >-
       object.spec.sandboxClass != 'gvisor' ||
       object.spec.versions.all(v,
         has(v.assets) && size(v.assets) > 0 &&
-        v.assets.all(arch, 'gvisor' in v.assets[arch] || 'runsc' in v.assets[arch]))
-    message: "a gvisor SandboxConfig must define a 'gvisor' (release tarball) or legacy 'runsc' asset for every architecture of every version under spec.versions[].assets"
+        v.assets.all(arch, 'gvisor' in v.assets[arch]))
+    message: "a gvisor SandboxConfig must define a 'gvisor' (release tarball) asset for every architecture of every version under spec.versions[].assets"
   # The micro-VM (cloud-hypervisor) runtime needs its asset set for every
   # architecture it advertises.
   - expression: >-

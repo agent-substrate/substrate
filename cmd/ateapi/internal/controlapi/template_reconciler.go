@@ -72,7 +72,6 @@ type goldenActorControl interface {
 	CreateTag(ctx context.Context, req *ateapipb.CreateTagRequest) (*ateapipb.Tag, error)
 	DeleteTag(ctx context.Context, req *ateapipb.DeleteTagRequest) (*ateapipb.Tag, error)
 	DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (*ateapipb.Actor, error)
-	CreateAtespace(ctx context.Context, req *ateapipb.CreateAtespaceRequest) (*ateapipb.Atespace, error)
 	CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.Actor, error)
 	GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error)
 	ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error)
@@ -198,11 +197,9 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 	}
 
 	goldenActorRef := &ateapipb.ObjectRef{
-		// Golden actors live in the reserved ate-golden atespace, because
-		// the suspend workflow relies on the ate-golden system atespace to
-		// always take a full snapshot of the golden actor.
-		// https://github.com/agent-substrate/substrate/blob/cb7c8385ef2bb489c3d5f7bfa71820fd33935d91/cmd/ateapi/internal/controlapi/workflow_suspend.go#L170-L173
-		Atespace: resources.GoldenActorAtespace,
+		// Golden actors live in the template's atespace, under the same
+		// policies and storage grants as ordinary actors.
+		Atespace: tmpl.GetMetadata().GetAtespace(),
 		// Use the template's UID as golden actor's name to prevent collision
 		// when templates are recreated with the same name.
 		Name: tmpl.GetMetadata().GetUid(),
@@ -321,7 +318,10 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 // suspendActor waits for the golden actor to produce an external snapshot.
 // SuspendActor completes an in-flight suspend and is a no-op if already suspended.
 func (r *ActorTemplateReconciler) suspendActor(ctx context.Context, goldenRef *ateapipb.ObjectRef) error {
-	resp, err := r.control.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: goldenRef})
+	resp, err := r.control.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor:   goldenRef,
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	})
 	if err != nil {
 		// A crash during suspend is observed as CRASHED on the retry.
 		return fmt.Errorf("while suspending golden actor: %w", err)
@@ -431,13 +431,6 @@ func (r *ActorTemplateReconciler) ensureActorExists(ctx context.Context, tmpl *a
 	}
 	if apierror.Code(err) != codes.NotFound {
 		return nil, fmt.Errorf("while getting golden actor: %w", err)
-	}
-	// Golden actor has not yet been created. Its reserved atespace is
-	// system-owned, so ensure it exists rather than assuming bootstrap did.
-	if _, err := r.control.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: goldenActorRef.GetAtespace()}},
-	}); err != nil && apierror.Code(err) != codes.AlreadyExists {
-		return nil, fmt.Errorf("while ensuring atespace %q: %w", goldenActorRef.GetAtespace(), err)
 	}
 	actor, err = r.control.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{

@@ -125,8 +125,8 @@ var Registry = []Setting{
 	{
 		// The default depends on the namespace, so buildConfig applies it.
 		Key: "actorJWT.issuer", Env: "ACTOR_JWT_ISSUER", Flag: "actor-jwt-issuer", Kind: KindString,
-		Usage: "iss claim of actor JWTs, verbatim. Relying parties fetch <issuer>/.well-known/openid-configuration " +
-			"(default https://idp.<namespace>.svc)",
+		Usage: "iss claim of actor JWTs, as https://<host> with no path. Relying parties fetch " +
+			"<issuer>/.well-known/openid-configuration (default https://idp.<namespace>.svc)",
 	},
 	{
 		// Whitespace-separated, as the environment variable is. The registry

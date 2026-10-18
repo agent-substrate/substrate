@@ -72,18 +72,22 @@ A failed atelet operation still writes its record, marked with `error.type`
 ## Reading the report
 
 **Phase percentiles.** Per layer, operation, sandbox class, snapshot kind,
-scope and phase: count, p50, p90, p95 and max. A `golden` restore downloads
-the golden image and a `latest` one the actor's own, so they are separate
-rows, as are gVisor and micro-VM operations. The atelet rows split a
-checkpoint between `sandbox_assets`, `worker_checkpoint` and `persist`, and a
+scope and phase: count, p50, p90, p95 and max. A `local` restore reads a
+node-local snapshot and a `latest` one a durable snapshot from object
+storage, so they are separate rows, as are gVisor and micro-VM operations.
+A restore from a template's golden snapshot reports `latest`, like the
+actor's own durable snapshot. The atelet rows split a
+checkpoint between `sandbox_assets`, `worker_checkpoint`, `persist` and
+`cleanup`, and a
 restore between `volume_mount`, `manifest_fetch`, `sandbox_assets`,
 `download`, `oci_unpack` and `worker_restore`. The ateworker rows split the
 `worker_*` phase further with the runtime's own phases: for micro-VM
 `prep` / `pause` / `snapshot` / `durable_dir` / `rootfs_upper` / `teardown`
 on a checkpoint and `prep` / … / `vm_restore` / `wakeup_probe` on a restore;
-for gVisor `pause` / `checkpoint` / `durable_dir` / `resume` / `teardown` and
-`prep` / `net_setup` / … / `pause_restore` / `app_restore` / `wakeup_probe` /
-`activate` (the full lists are in `cmd/ateworker-*/phaselog.go`). The ateworker
+for gVisor `pause` / `checkpoint` / `fs_checkpoint` / `resume` / `teardown` and
+`prep` / `net_setup` / … / `pause_restore` / `app_restore` /
+`wakeup_probe` / `activate` (the full lists are in
+`cmd/ateworker-*/phaselog.go`). The ateworker
 records carry no sandbox class or kind of their own; a paired one takes both
 from its atelet record, so both layers split into the same rows.
 

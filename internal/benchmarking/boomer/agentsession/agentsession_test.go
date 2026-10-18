@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
@@ -37,6 +38,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestEmbeddedScriptsAreValid keeps every built-in variant loadable: a file
@@ -221,7 +223,7 @@ func TestExecOpAgainstFake(t *testing.T) {
 			HTTPClient: http.DefaultClient,
 			RouterURL:  ts.URL,
 			Atespace:   "benchmark",
-			Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
+			Dyn:        dynconfig.Static(knobs{}),
 		},
 		actorName: "agent-test",
 	}
@@ -270,7 +272,7 @@ func TestExecOpAgainstFake(t *testing.T) {
 // error that leaves the previous script in place, and a changed knob loads
 // the new script for sessions that start afterwards.
 func TestLoadScriptFollowsTheKnob(t *testing.T) {
-	rt := &runtime{cfg: &userclass.Config{Dyn: dynconfig.NewHolder(dynconfig.Config{AgentSessionScript: "no-such-script"})}}
+	rt := &runtime{cfg: &userclass.Config{Dyn: dynconfig.Static(knobs{Script: "no-such-script"})}}
 	if _, err := rt.loadScript(); err == nil {
 		t.Fatal("loadScript accepted an unknown script name")
 	}
@@ -278,7 +280,7 @@ func TestLoadScriptFollowsTheKnob(t *testing.T) {
 		t.Fatal("a failed load must not cache a script")
 	}
 
-	rt.cfg.Dyn.Store(dynconfig.Config{})
+	rt.cfg.Dyn = dynconfig.Static(knobs{})
 	s, err := rt.loadScript()
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +297,7 @@ func TestLoadScriptFollowsTheKnob(t *testing.T) {
 
 	// A knob that names something that does not load is an error, and the
 	// previous script stays available to sessions that already run on it.
-	rt.cfg.Dyn.Store(dynconfig.Config{AgentSessionScript: "no-such-script"})
+	rt.cfg.Dyn = dynconfig.Static(knobs{Script: "no-such-script"})
 	if _, err := rt.loadScript(); err == nil {
 		t.Error("loadScript accepted an unknown name after a successful load")
 	}
@@ -308,7 +310,7 @@ func TestLoadScriptFollowsTheKnob(t *testing.T) {
 	if err := os.WriteFile(path, []byte(validScript), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rt.cfg.Dyn.Store(dynconfig.Config{AgentSessionScriptFile: path})
+	rt.cfg.Dyn = dynconfig.Static(knobs{ScriptFile: path})
 	next, err := rt.loadScript()
 	if err != nil {
 		t.Fatal(err)
@@ -343,7 +345,7 @@ func TestLoadScriptFollowsTheKnob(t *testing.T) {
 func TestShutdownFansOut(t *testing.T) {
 	const sessions = 40
 	ctl := &fakeControlClient{deleteDelay: 20 * time.Millisecond}
-	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{})
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
 	rt := &runtime{cfg: u.cfg}
 	for i := range sessions {
 		rt.users.Store(int64(i), &sessionUser{cfg: u.cfg, actorName: "agent-" + strconv.Itoa(i)})
@@ -403,9 +405,9 @@ func TestLoadScriptPrefersFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte(validScript), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rt := &runtime{cfg: &userclass.Config{Dyn: dynconfig.NewHolder(dynconfig.Config{
-		AgentSessionScript:     DefaultScript,
-		AgentSessionScriptFile: path,
+	rt := &runtime{cfg: &userclass.Config{Dyn: dynconfig.Static(knobs{
+		Script:     DefaultScript,
+		ScriptFile: path,
 	})}}
 	s, err := rt.loadScript()
 	if err != nil {
@@ -436,7 +438,7 @@ func TestStartUserChecksTemplateMemory(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctl := &fakeControlClient{templateMemory: tc.memory}
-			u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{})
+			u := newTestUser(t, &fake.Server{}, ctl, knobs{})
 			rt := &runtime{cfg: u.cfg}
 
 			started, err := rt.startUser(context.Background(), &loadedScript{Script: script, ingestBuf: makeIngestBuf(script.Steps)})
@@ -469,7 +471,7 @@ func TestTemplateMemoryRefusalExpires(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctl := &fakeControlClient{templateMemory: "512Mi"}
-	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{})
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
 	rt := &runtime{cfg: u.cfg}
 
 	if err := rt.checkTemplateMemory(context.Background(), script); err == nil {
@@ -495,7 +497,7 @@ func TestTemplateMemoryRefusalExpires(t *testing.T) {
 // start afterwards, not one already walking its steps.
 func TestRunningSessionKeepsItsScript(t *testing.T) {
 	ctl := &fakeControlClient{templateMemory: "1Gi"}
-	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{})
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{})
 	rt := &runtime{cfg: u.cfg}
 	first, err := rt.loadScript()
 	if err != nil {
@@ -510,7 +512,7 @@ func TestRunningSessionKeepsItsScript(t *testing.T) {
 	if err := os.WriteFile(path, []byte(validScript), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rt.cfg.Dyn.Store(dynconfig.Config{AgentSessionScriptFile: path})
+	rt.cfg.Dyn = dynconfig.Static(knobs{ScriptFile: path})
 	second, err := rt.loadScript()
 	if err != nil {
 		t.Fatal(err)
@@ -524,7 +526,7 @@ func TestRunningSessionKeepsItsScript(t *testing.T) {
 func TestThinkScaling(t *testing.T) {
 	r := &runtime{
 		cfg: &userclass.Config{
-			Dyn: dynconfig.NewHolder(dynconfig.Config{AgentSessionThinkScale: 0.5}),
+			Dyn: dynconfig.Static(knobs{ThinkScale: 0.5}),
 		},
 	}
 	s := Step{Think: 10 * time.Second}
@@ -536,7 +538,7 @@ func TestThinkScaling(t *testing.T) {
 	}
 
 	// Zero scale reads as 1.0.
-	r.cfg.Dyn.Store(dynconfig.Config{})
+	r.cfg.Dyn = dynconfig.Static(knobs{})
 	for i := 0; i < 100; i++ {
 		got := r.think(s)
 		if got < 8*time.Second || got > 12*time.Second {
@@ -553,6 +555,8 @@ type fakeControlClient struct {
 	calls       []string
 	resumeErrs  []error
 	suspendErrs []error
+	// suspendReqs holds every SuspendActor request, in arrival order.
+	suspendReqs []*ateapipb.SuspendActorRequest
 	// sawDeadline is set when a call arrived with a context deadline.
 	sawDeadline bool
 	// templateMemory is the memory limit GetActorTemplate reports; "" means
@@ -616,15 +620,11 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 	f.record(ctx, "SuspendActor")
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.suspendReqs = append(f.suspendReqs, in)
 	if err := nextErr(&f.suspendErrs); err != nil {
 		return nil, err
 	}
 	return &ateapipb.SuspendActorResponse{}, nil
-}
-
-func (f *fakeControlClient) PauseActor(ctx context.Context, in *ateapipb.PauseActorRequest, opts ...grpc.CallOption) (*ateapipb.PauseActorResponse, error) {
-	f.record(ctx, "PauseActor")
-	return &ateapipb.PauseActorResponse{}, nil
 }
 
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
@@ -643,6 +643,12 @@ func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.Delete
 	return &ateapipb.Actor{}, nil
 }
 
+func (f *fakeControlClient) recordedSuspendReqs() []*ateapipb.SuspendActorRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*ateapipb.SuspendActorRequest(nil), f.suspendReqs...)
+}
+
 func (f *fakeControlClient) recordedCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -659,7 +665,7 @@ func countCalls(calls []string, name string) int {
 	return n
 }
 
-func newTestUser(t *testing.T, srv *fake.Server, ctl *fakeControlClient, dyn dynconfig.Config) *sessionUser {
+func newTestUser(t *testing.T, srv *fake.Server, ctl *fakeControlClient, dyn knobs) *sessionUser {
 	t.Helper()
 	ts := srv.Start(t)
 	return &sessionUser{
@@ -668,7 +674,7 @@ func newTestUser(t *testing.T, srv *fake.Server, ctl *fakeControlClient, dyn dyn
 			HTTPClient: ts.Client(),
 			RouterURL:  ts.URL,
 			Atespace:   "benchmark",
-			Dyn:        dynconfig.NewHolder(dyn),
+			Dyn:        dynconfig.Static(dyn),
 			Tracer:     otel.Tracer("test"),
 		},
 		actorName: "agent-test",
@@ -683,7 +689,7 @@ var pingStep = Step{Name: "01_test", Agent: "testing", Think: time.Second, Ops: 
 func TestRunStep_RetriesStrandedHibernate(t *testing.T) {
 	srv := &fake.Server{}
 	ctl := &fakeControlClient{suspendErrs: []error{status.Error(codes.Unavailable, "ate-api-server restarting")}}
-	u := newTestUser(t, srv, ctl, dynconfig.Config{})
+	u := newTestUser(t, srv, ctl, knobs{})
 
 	if !u.runStep(context.Background(), pingStep) {
 		t.Fatal("runStep = false; the step's ops succeeded and must count")
@@ -712,11 +718,53 @@ func TestRunStep_RetriesStrandedHibernate(t *testing.T) {
 	}
 }
 
+// A step ends with an async SuspendActor in pause LifecycleMode and a sync
+// one in suspend LifecycleMode.
+func TestRunStep_HibernateMode(t *testing.T) {
+	ref := &ateapipb.ObjectRef{Atespace: "benchmark", Name: "agent-test"}
+	for _, tt := range []struct {
+		name          string
+		lifecycleMode string
+		want          *ateapipb.SuspendActorRequest
+	}{
+		{
+			name:          "pause",
+			lifecycleMode: dynconfig.LifecycleModePause,
+			want: &ateapipb.SuspendActorRequest{
+				Actor:   ref,
+				Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			},
+		},
+		{
+			name:          "suspend",
+			lifecycleMode: dynconfig.LifecycleModeSuspend,
+			want: &ateapipb.SuspendActorRequest{
+				Actor:   ref,
+				Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctl := &fakeControlClient{}
+			u := newTestUser(t, &fake.Server{}, ctl, knobs{Lifecycle: dynconfig.Lifecycle{LifecycleMode: tt.lifecycleMode}})
+
+			if !u.runStep(context.Background(), pingStep) {
+				t.Fatal("runStep = false")
+			}
+
+			got := ctl.recordedSuspendReqs()
+			if len(got) != 1 || !proto.Equal(got[0], tt.want) {
+				t.Errorf("SuspendActor requests = %v, want [%v]", got, tt.want)
+			}
+		})
+	}
+}
+
 // ateapi reports a CRASHED actor on ResumeActor; it never recovers, so the
 // session must replace it on the first failure, not the third.
 func TestRunStep_ReplacesCrashedActorImmediately(t *testing.T) {
 	ctl := &fakeControlClient{resumeErrs: []error{status.Error(codes.Aborted, "actor benchmark/agent-test crashed")}}
-	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit})
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit}})
 
 	if u.runStep(context.Background(), pingStep) {
 		t.Fatal("runStep = true with a crashed actor")
@@ -731,7 +779,7 @@ func TestRunStep_ReplacesCrashedActorImmediately(t *testing.T) {
 // a state nothing the driver can call moves the actor out of.
 func TestRunStep_ReplacesStuckActorAfterFailedWake(t *testing.T) {
 	ctl := &fakeControlClient{suspendErrs: []error{status.Error(codes.FailedPrecondition, "MarkSuspending prerequisite not met (got: ACTOR_STATE_CRASHED)")}}
-	u := newTestUser(t, &fake.Server{Status: 503}, ctl, dynconfig.Config{})
+	u := newTestUser(t, &fake.Server{Status: 503}, ctl, knobs{})
 
 	if u.runStep(context.Background(), pingStep) {
 		t.Fatal("runStep = true with a failing router")
@@ -750,7 +798,7 @@ func TestRunStep_KeepsActorThroughCapacityShortage(t *testing.T) {
 		errs[i] = status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 	}
 	ctl := &fakeControlClient{resumeErrs: errs}
-	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit})
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit}})
 
 	for range rounds {
 		if u.runStep(context.Background(), pingStep) {
@@ -769,7 +817,7 @@ func TestRunStep_KeepsActorThroughRouterCapacityErrors(t *testing.T) {
 	for _, status := range []int{503, 504, 429} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
 			ctl := &fakeControlClient{}
-			u := newTestUser(t, &fake.Server{Status: status}, ctl, dynconfig.Config{})
+			u := newTestUser(t, &fake.Server{Status: status}, ctl, knobs{})
 			for range maxConsecutiveStepFailures + 2 {
 				if u.runStep(context.Background(), pingStep) {
 					t.Fatal("runStep = true with a failing router")
@@ -786,7 +834,7 @@ func TestRunStep_KeepsActorThroughRouterCapacityErrors(t *testing.T) {
 // brings it back, so it is replaced on the first failure.
 func TestRunStep_ReplacesActorOnRouterNotFound(t *testing.T) {
 	ctl := &fakeControlClient{}
-	u := newTestUser(t, &fake.Server{Status: 404}, ctl, dynconfig.Config{})
+	u := newTestUser(t, &fake.Server{Status: 404}, ctl, knobs{})
 	u.runStep(context.Background(), pingStep)
 	if !u.broken {
 		t.Error("broken = false after a 404 wake; want immediate replacement")
@@ -798,7 +846,7 @@ func TestRunStep_ReplacesActorOnRouterNotFound(t *testing.T) {
 // after maxConsecutiveStepFailures steps.
 func TestRunStep_ReplacesActorAfterRepeatedStepFailures(t *testing.T) {
 	ctl := &fakeControlClient{}
-	u := newTestUser(t, &fake.Server{Status: 502}, ctl, dynconfig.Config{})
+	u := newTestUser(t, &fake.Server{Status: 502}, ctl, knobs{})
 
 	for i := 1; i <= maxConsecutiveStepFailures; i++ {
 		u.runStep(context.Background(), pingStep)
@@ -810,7 +858,7 @@ func TestRunStep_ReplacesActorAfterRepeatedStepFailures(t *testing.T) {
 
 func TestControlRPCsCarryADeadline(t *testing.T) {
 	ctl := &fakeControlClient{}
-	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit})
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit}})
 
 	u.runStep(context.Background(), pingStep)
 	u.suspendAndDelete(context.Background())
@@ -845,7 +893,7 @@ func TestDwell(t *testing.T) {
 			HTTPClient: http.DefaultClient,
 			RouterURL:  ts.URL,
 			Atespace:   "benchmark",
-			Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
+			Dyn:        dynconfig.Static(knobs{}),
 		},
 		actorName: "agent-test",
 	}
@@ -863,5 +911,152 @@ func TestDwell(t *testing.T) {
 	cancel()
 	if err := u.execOp(ctx, op{kind: opDwell, millis: 10_000}); !errors.Is(err, context.Canceled) {
 		t.Errorf("canceled dwell returned %v, want context.Canceled", err)
+	}
+}
+
+// wakeFirstTouchCount returns the cumulative WakeFirstTouch count (success +
+// failure) recorded in Prometheus so far.
+func wakeFirstTouchCount(t *testing.T) float64 {
+	t.Helper()
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total float64
+	for _, mf := range mfs {
+		if mf.GetName() != "locust_requests_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			var isWake bool
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "name" && lp.GetValue() == "WakeFirstTouch" {
+					isWake = true
+				}
+			}
+			if isWake {
+				total += m.GetCounter().GetValue()
+			}
+		}
+	}
+	return total
+}
+
+// TestLifecycleModeNone: in resident mode, startUser and runStep never park
+// or explicitly resume the actor, never record WakeFirstTouch, and
+// suspendAndDelete still suspends before deleting on teardown.
+func TestLifecycleModeNone(t *testing.T) {
+	ctl := &fakeControlClient{templateMemory: "1Gi"}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{
+		Lifecycle: dynconfig.Lifecycle{
+			LifecycleMode: dynconfig.LifecycleModeNone,
+			ResumeMode:    dynconfig.ResumeModeExplicit,
+		},
+	})
+	rt := &runtime{cfg: u.cfg}
+	loaded, err := rt.loadScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := rt.startUser(context.Background(), loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !session.awake {
+		t.Error("session.awake = false after startUser in LifecycleModeNone")
+	}
+	wakesBefore := wakeFirstTouchCount(t)
+	for range 3 {
+		if !session.runStep(context.Background(), pingStep) {
+			t.Fatal("runStep = false in LifecycleModeNone")
+		}
+	}
+	if got := wakeFirstTouchCount(t) - wakesBefore; got != 0 {
+		t.Errorf("WakeFirstTouch recorded %v times in LifecycleModeNone, want 0", got)
+	}
+	for _, call := range []string{"SuspendActor", "ResumeActor"} {
+		if got := countCalls(ctl.recordedCalls(), call); got != 0 {
+			t.Errorf("%s called %d times in LifecycleModeNone, want 0; calls = %v", call, got, ctl.recordedCalls())
+		}
+	}
+
+	session.suspendAndDelete(context.Background())
+	if got := countCalls(ctl.recordedCalls(), "SuspendActor"); got != 1 {
+		t.Errorf("SuspendActor on teardown = %d, want 1", got)
+	}
+	if got := countCalls(ctl.recordedCalls(), "DeleteActor"); got != 1 {
+		t.Errorf("DeleteActor on teardown = %d, want 1", got)
+	}
+}
+
+// TestSnapshotSteps: when SnapshotSteps is set, the actor stays
+// resident at start and between non-snapshot steps, parking only after the
+// configured 1-based step numbers and recording WakeFirstTouch only on the
+// steps that actually wake from a parked state. A step number past the
+// script length is rejected in startUser before CreateActor.
+func TestSnapshotSteps(t *testing.T) {
+	ctl := &fakeControlClient{templateMemory: "1Gi"}
+	u := newTestUser(t, &fake.Server{}, ctl, knobs{
+		Lifecycle: dynconfig.Lifecycle{
+			LifecycleMode: dynconfig.LifecycleModePause,
+			ResumeMode:    dynconfig.ResumeModeExplicit,
+		},
+		SnapshotSteps: "2,4",
+	})
+	rt := &runtime{cfg: u.cfg}
+	loaded, err := rt.loadScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := rt.startUser(context.Background(), loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ctl.recordedSuspendReqs(); len(got) != 0 {
+		t.Fatalf("SuspendActor requests after startUser = %v, want none", got)
+	}
+
+	// Run 4 steps (1-based 1..4). Only steps 2 and 4 should park; only step 3
+	// starts from a parked actor, so only step 3 should issue ResumeActor and
+	// record WakeFirstTouch.
+	wakesBefore := wakeFirstTouchCount(t)
+	for i := range 4 {
+		session.stepIndex = i
+		if !session.runStep(context.Background(), pingStep) {
+			t.Fatalf("step %d failed", i+1)
+		}
+	}
+	wantSuspend := &ateapipb.SuspendActorRequest{
+		Actor:   session.ref(),
+		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	}
+	gotSuspends := ctl.recordedSuspendReqs()
+	if len(gotSuspends) != 2 {
+		t.Errorf("SuspendActor requests across 4 steps = %v, want 2 (steps 2 and 4)", gotSuspends)
+	}
+	for _, got := range gotSuspends {
+		if !proto.Equal(got, wantSuspend) {
+			t.Errorf("SuspendActor request = %v, want %v", got, wantSuspend)
+		}
+	}
+	if got := countCalls(ctl.recordedCalls(), "ResumeActor"); got != 1 {
+		t.Errorf("ResumeActor calls across 4 steps = %d, want 1 (at step 3 after step 2 parked); calls = %v", got, ctl.recordedCalls())
+	}
+	if got := wakeFirstTouchCount(t) - wakesBefore; got != 1 {
+		t.Errorf("WakeFirstTouch recorded %v times across 4 steps, want 1 (at step 3 after step 2 parked)", got)
+	}
+
+	// A step number beyond len(loaded.Steps) is rejected before CreateActor.
+	badCtl := &fakeControlClient{templateMemory: "1Gi"}
+	badUser := newTestUser(t, &fake.Server{}, badCtl, knobs{
+		Lifecycle:     dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause},
+		SnapshotSteps: "2,99",
+	})
+	badRT := &runtime{cfg: badUser.cfg}
+	if _, err := badRT.startUser(context.Background(), loaded); err == nil || !strings.Contains(err.Error(), "exceeds script") {
+		t.Errorf("startUser with out-of-range snapshot step = %v, want error mentioning 'exceeds script'", err)
+	}
+	if got := countCalls(badCtl.recordedCalls(), "CreateActor"); got != 0 {
+		t.Errorf("CreateActor called %d times on out-of-range snapshot step, want 0", got)
 	}
 }

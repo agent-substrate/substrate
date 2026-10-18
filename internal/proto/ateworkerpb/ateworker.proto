@@ -109,37 +109,81 @@ service Worker {
 // it shares with the worker. The worker takes them from the RPC instead of deriving
 // them from the actor UID.
 // Every directory is under root_dir.
+//
+// +k8s:customValidation # each directory is an absolute, clean path
 message ActorDirs {
   // The actor's own directory.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string root_dir = 1;
   // Holds one OCI bundle per container, named after the container.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string oci_bundle_dir = 2;
   // Where CheckpointWorkload writes the snapshot files.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string checkpoint_dir = 3;
   // Where the snapshot files RestoreWorkload reads have been downloaded to.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string restore_dir = 4;
   // Holds one subdirectory per durable-dir volume.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string durable_dir_volume_mounts_dir = 5;
   // Holds one subdirectory per system-info volume.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string system_info_volume_roots_dir = 6;
   // Holds one mount point per external volume.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string external_volume_mounts_dir = 7;
   // Holds the sandbox runtime assets staged for this actor (runsc, or the
   // micro-VM kernel, VMM and guest image), hard-linked from atelet's asset
   // cache. The only location a sandbox runtime may run a binary from; the
   // worker derives the same path from actor_uid and rejects a request
   // naming any other.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096 # PATH_MAX
   string sandbox_assets_dir = 8;
 }
 
 message TerminateWorkloadRequest {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 1;
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 2;
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_atespace = 4;
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_name = 5;
+  // Empty for runtimes that do not use runsc.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   string runsc_path = 6;
+  // Names the containers to stop.
+  //
+  // +k8s:required
   WorkloadSpec spec = 7;
+  // +k8s:required
   ActorDirs actor_dirs = 8;
 }
 
@@ -147,31 +191,62 @@ message TerminateWorkloadResponse {
 }
 
 message RunWorkloadRequest {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 1;
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 2;
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_atespace = 4;
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_name = 5;
 
+  // Empty for runtimes that do not use runsc.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   string runsc_path = 6;
 
+  // +k8s:required
+  // +k8s:subfield(containers)=+k8s:required # a container to start; only Terminate's fallback spec may have none
   WorkloadSpec spec = 7;
 
-  // runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
-  // "virtiofsd", "kata-kernel", "kata-image")
-  // to the local on-disk path atelet fetched it to (content-addressed, like
-  // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
+  // runtime_asset_paths maps a runtime asset name to the local on-disk path
+  // atelet fetched it to (content-addressed, like runsc_path). The names are
+  // the runtime's own: "gvisor" for gVisor, "cloud-hypervisor",
+  // "virtiofsd", "kata-kernel", and "kata-image" for the micro-VM. Empty for
+  // the gVisor runtime, which uses runsc_path.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=16 # matches atelet.ArchAssets.files
+  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet.ArchAssets.files
+  // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   map<string, string> runtime_asset_paths = 8;
 
   // When absent the actor has no egress: its TCP is captured and refused.
+  //
+  // +k8s:optional
   optional EgressGateway egress_gateway = 10;
 
   // The actor's declared size, from the ActorTemplate's resource limits. The worker
   // sizes the sandbox to these (cgroup caps via the OCI spec, and for the
   // micro-VM the VM's vCPU count and memory). Zero means "unset": keep the
   // runtime default (unlimited for gVisor, the worker's own default for the micro-VM).
-  int64 cpu_milli = 11;    // CPU limit in millicores (1000 = one core).
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=999999 # matches atelet.RunRequest.cpu_milli, the control plane caps cpu limits strictly below 1000 cores
+  int64 cpu_milli = 11; // CPU limit in millicores (1000 = one core).
+  // +k8s:optional
+  // +k8s:minimum=1
   int64 memory_bytes = 12; // Memory limit in bytes.
+  // +k8s:required
   ActorDirs actor_dirs = 13;
 }
 
@@ -179,37 +254,84 @@ message RunWorkloadRequest {
 message EgressGateway {
   // address is required and identifies the remote gateway as an IP address or
   // DNS name followed by its port.
+  //
+  // +k8s:required
+  // +k8s:maxLength=261 # a bracketed or 253-character host, ':' and a 5-digit port
+  // +k8s:customValidation # host:port shape
   string address = 1;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 message WorkloadSpec {
+  // Empty on the fallback spec atelet's Terminate sends for an actor whose
+  // template is gone, as on atelet's own WorkloadSpec.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=10 # matches ateapi.ActorTemplate.containers
+  // +k8s:listType=map
+  // +k8s:listMapKey=name
   repeated Container containers = 1;
 }
 
+// A container's mounts split into four typed lists. Each list's key keeps
+// only that list's paths unique, so the rules that span the lists are a hook.
+//
+// +k8s:customValidation # mount paths are unique and do not nest across the four lists
 message Container {
+  // The sandbox's own container, ocispec.PauseContainer, is not a short
+  // name, so the format keeps a workload container from taking its bundle.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string name = 1;
+  // +k8s:optional
   WakeupProbe wakeup_probe = 2;
 
   // durable_dir_volume_mounts are the durable-dir volumes this container
   // mounts, if any.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches ateapi.Container.volume_mounts
+  // +k8s:listType=map
+  // +k8s:listMapKey=mount_path
   repeated VolumeMount durable_dir_volume_mounts = 3;
 
   // external_volume_mounts are the external volumes this container mounts, if
   // any.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches ateapi.Container.volume_mounts
+  // +k8s:listType=map
+  // +k8s:listMapKey=mount_path
   repeated VolumeMount external_volume_mounts = 4;
 
   // system_info_volume_mounts are the system-info volumes this container
   // mounts, if any. Contents are generated by atelet on the host on every
   // Run/Restore and never captured into snapshots. The container sees them
   // read-only.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches ateapi.Container.volume_mounts
+  // +k8s:listType=map
+  // +k8s:listMapKey=mount_path
   repeated VolumeMount system_info_volume_mounts = 5;
 
   // image_volume_mounts are the image volumes this container mounts, if any.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches ateapi.Container.volume_mounts
+  // +k8s:listType=map
+  // +k8s:listMapKey=mount_path
   repeated VolumeMount image_volume_mounts = 6;
 
   // container_spec is what the worker builds the container's OCI spec from,
-  // besides its volume mounts. Unset on RPCs that start no process.
+  // besides its volume mounts. Unset on RPCs that start no process. atelet
+  // derives it from template fields it validated (argv resolved against the
+  // image's ENTRYPOINT and CMD, env merged with the image's ENV), so the
+  // template's bounds do not apply to it and it is not validated here.
+  //
+  // +k8s:optional
+  // +k8s:opaqueType # derived by atelet, see above
   ContainerSpec container_spec = 7;
 }
 
@@ -243,24 +365,46 @@ message VolumeMount {
   // name is the name the ActorTemplate gave the volume. For durable-dir and
   // system-info volumes it selects the per-volume directory atelet prepared
   // for the actor on the host.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string name = 1;
   // mount_path is where the container sees the volume.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096
+  // +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
   string mount_path = 2;
 }
 
 // WakeupProbe describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
 message WakeupProbe {
+  // +k8s:required
   HttpGetAction http_get = 1;
+
   // How long to keep polling before giving up and failing the actor start.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3600 # matches ateapi.WakeupProbe.timeout_seconds
   int32 timeout_seconds = 2;
 }
 
 // HttpGetAction performs an HTTP GET against the container.
 message HttpGetAction {
   // Path to access on the HTTP server.
+  //
+  // +k8s:required
+  // +k8s:maxLength=1024 # matches ateapi.HttpGetAction.path
+  // +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
   string path = 1;
+
   // TCP port to connect to (1..65535).
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=65535
   int32 port = 2;
 }
 
@@ -276,43 +420,47 @@ enum SnapshotFidelity {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_FIDELITY_VOLUMES = 1;
-  // Volumes plus the root filesystem changes made since boot. Served by the
-  // micro-VM runtime only; other runtimes reject requests carrying it.
+  // Volumes plus the root filesystem changes made since boot.
   SNAPSHOT_FIDELITY_ROOTFS = 2;
   // Capture process memory plus the full filesystem delta on top of the OCI
   // image (including any attached DurableDir volumes).
   SNAPSHOT_FIDELITY_MEMORY = 3;
+  // Keep this in sync with the maximums on fields of this type.
 }
 
 message CheckpointWorkloadRequest {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 1;
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 2;
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_atespace = 4;
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_name = 5;
 
+  // Empty for runtimes that do not use runsc.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   string runsc_path = 6;
 
+  // +k8s:required
   WorkloadSpec spec = 7;
 
-  // The object storage URI of the snapshot to write. Object names are appended
-  // to it, so it addresses the snapshot as a whole rather than any one object.
-  //
-  // The structure of the checkpoint should generally be treated as opaque. For
-  // gVisor, the checkpoint consists of a checkpoint.img file that contains the
-  // memory, sentry state, and filesystem deltas.
-  //
-  // The control plane sends an ActorSnapshot's snapshot_uri, which sits under
-  // the prefix of the resource that owns the snapshot. For example:
-  // "gs://bucket/root/atespaces/team-a/actors/<actor uid>/snapshots/5678".
-  string snapshot_uri = 8;
-
-  // runtime_asset_paths maps a runtime asset name to the local on-disk path
-  // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
-  map<string, string> runtime_asset_paths = 9;
-
   // Fidelity the checkpoint captures.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
   SnapshotFidelity fidelity = 10;
+  // +k8s:required
   ActorDirs actor_dirs = 11;
 }
 
@@ -328,40 +476,72 @@ message CheckpointWorkloadResponse {
 }
 
 message RestoreWorkloadRequest {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 1;
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 2;
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_atespace = 4;
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string actor_template_name = 5;
 
+  // Empty for runtimes that do not use runsc.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   string runsc_path = 6;
 
+  // +k8s:required
+  // +k8s:subfield(containers)=+k8s:required # a container to start; only Terminate's fallback spec may have none
   WorkloadSpec spec = 7;
-
-  // The object storage URI of the snapshot to restore. Object names are
-  // appended to it; it addresses the snapshot, not any one object.
-  string snapshot_uri = 8;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=16 # matches atelet.ArchAssets.files
+  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet.ArchAssets.files
+  // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   map<string, string> runtime_asset_paths = 9;
 
   // Fidelity to restore from the snapshot.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
   SnapshotFidelity fidelity = 10;
 
   // When absent the actor has no egress: its TCP is captured and refused.
+  //
+  // +k8s:optional
   optional EgressGateway egress_gateway = 12;
 
   // The actor's declared size, from the ActorTemplate's resource limits. Used to
   // (re)size the sandbox on a VOLUMES restore (fresh guest container). On a
   // MEMORY micro-VM restore the size baked into the snapshot is authoritative and
   // these are ignored. Zero means "unset": keep the runtime default.
-  int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=999999 # matches atelet.RestoreRequest.cpu_milli, the control plane caps cpu limits strictly below 1000 cores
+  int64 cpu_milli = 14; // CPU limit in millicores (1000 = one core).
+  // +k8s:optional
+  // +k8s:minimum=1
   int64 memory_bytes = 15; // Memory limit in bytes.
+  // +k8s:required
   ActorDirs actor_dirs = 16;
 
   // actor_dirs.restore_dir is a preserved local snapshot, not a scratch copy:
   // the worker must not delete or modify files in it.
+  //
+  // +k8s:optional
   bool preserve_restore_dir = 17;
 }
 
@@ -373,6 +553,9 @@ message GetWorkloadStatsRequest {
   // between the caller's view of the world and this call, so the worker answers
   // NOT_FOUND on a mismatch rather than reporting a different actor's numbers
   // under the requested actor's identity.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 1;
 }
 

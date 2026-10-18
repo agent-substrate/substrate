@@ -33,8 +33,9 @@ import (
 
 // revertableStates are the states a revert is accepted from. A SUSPENDED
 // actor is also accepted when it is paused, that is, when its latest snapshot
-// is node-local: the revert discards that snapshot and returns the actor to
-// its durable one. See isRevertable.
+// is node-local: the revert discards the node-local copy and returns the actor
+// to its latest durable snapshot, which is that same snapshot once atelet's
+// upload of it is recorded. See isRevertable.
 var revertableStates = []ateapipb.ActorState{
 	ateapipb.ActorState_ACTOR_STATE_RUNNING,
 	ateapipb.ActorState_ACTOR_STATE_CRASHED,
@@ -45,7 +46,7 @@ var revertableStates = []ateapipb.ActorState{
 func isRevertable(actor *ateapipb.Actor) bool {
 	state := actor.GetStatus().GetState()
 	return slices.Contains(revertableStates, state) ||
-		(state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocalOnly(actor.GetStatus()))
+		(state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && latestSnapshotIsLocal(actor.GetStatus()))
 }
 
 // RevertActor executes the workflow to discard an actor's current execution and
@@ -68,7 +69,7 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 	defer func() {
 		attrs := finalAttrs
 		if attrs == nil {
-			attrs = lifecycleOpAttrs(actor, actorTemplate, "", "")
+			attrs = lifecycleOpAttrs(actor, "", "")
 		}
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationRevert, start, err, attrs...)
 	}()
@@ -103,7 +104,7 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 
 	// FinalizeReverted clears the WorkerAssignment the labels read, so snapshot
 	// them here, as suspend and crash.go do.
-	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", "")
+	finalAttrs = lifecycleOpAttrs(actor, "", "")
 	var finalized *ateapipb.Actor
 	if finalized, err = w.ensureRevertedFinalized(leaseCtx, actorRef); err != nil {
 		return nil, err
@@ -205,41 +206,60 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	return w.releaseAssignmentWithoutBacklink(ctx, actor)
 }
 
-// ensureInProgressSnapshotDiscarded deletes the objects a suspend was partway
-// through writing when the actor was reverted.
+// ensureInProgressSnapshotDiscarded deletes the objects of every PENDING
+// durable snapshot on the actor: the one a suspend was partway through writing
+// when the actor was reverted, and any earlier pause's whose upload was never
+// recorded. The revert keeps none of them. atelet's upload of them has already
+// been canceled when ensureWorkerDiscarded terminated the actor.
 func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, actor *ateapipb.Actor) (err error) {
 	ctx, done := stepSpan(ctx, "DiscardInProgressSnapshot")
 	defer func() { err = done(err) }()
 
-	inProgressSnap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
-	inProgress := inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()
+	var inProgress []string
+	for _, snap := range actor.GetStatus().GetSnapshots() {
+		storage := snap.GetDurableSnapshot()
+		if storage.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING && storage.GetObject().GetSnapshotUri() != "" {
+			inProgress = append(inProgress, storage.GetObject().GetSnapshotUri())
+		}
+	}
 	switch {
 	case w.objectStorePlugin == nil:
 		markSkipped(ctx, "no object store configured")
 		return nil
-	case inProgress == "":
+	case len(inProgress) == 0:
 		markSkipped(ctx, "no in-progress snapshot recorded")
 		return nil
 	}
 
-	uri, err := resources.ParseSnapshotURI(inProgress)
-	if err != nil {
-		return fmt.Errorf("while parsing the in-progress snapshot %q: %w", inProgress, err)
-	}
-	// A suspend records the in-progress URI under the actor's own prefix
-	// before atelet writes the first object, so a URI owned by anything else
-	// is a corrupted record.
+	// Check every URI before deleting any, so a corrupted record deletes nothing.
 	owner := actorSnapshotOwner(actor)
-	if !uri.OwnedBy(owner) {
-		return fmt.Errorf("the in-progress snapshot %q is not owned by actor %s", inProgress, owner)
+	prefixes := make([]resources.StoragePrefix, 0, len(inProgress))
+	for _, raw := range inProgress {
+		uri, err := resources.ParseSnapshotURI(raw)
+		if err != nil {
+			return fmt.Errorf("while parsing the in-progress snapshot %q: %w", raw, err)
+		}
+		// A suspend records the in-progress URI under the actor's own prefix
+		// before atelet writes the first object, so a URI owned by anything
+		// else is a corrupted record.
+		if !uri.OwnedBy(owner) {
+			return fmt.Errorf("the in-progress snapshot %q is not owned by actor %s", raw, owner)
+		}
+		prefixes = append(prefixes, uri.Prefix())
 	}
-	// Only the abandoned snapshot goes, not the actor's whole prefix: the
+	// Only the abandoned snapshots go, not the actor's whole prefix: the
 	// external snapshot the revert returns the actor to lives under it too.
-	return w.cleanupSnapshot(ctx, uri.Prefix())
+	for _, prefix := range prefixes {
+		if err := w.cleanupSnapshot(ctx, prefix); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ensureRevertedFinalized commits SUSPENDED and drops every pointer to the
-// execution that was discarded, in a single update.
+// execution that was discarded, in a single update, then releases the
+// external snapshots the update dropped.
 // It re-reads the actor first so an out-of-band transition is not overwritten,
 // and so the version precondition guards what was actually observed.
 func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
@@ -275,5 +295,6 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		return nil, err
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationRevert)
+	w.releaseDroppedSnapshots(ctx, latestActor, storedActor)
 	return storedActor, nil
 }

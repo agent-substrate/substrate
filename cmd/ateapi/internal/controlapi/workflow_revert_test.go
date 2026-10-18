@@ -18,8 +18,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
+	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -76,7 +79,7 @@ func TestEnsureMarkedReverting_AcceptsPaused(t *testing.T) {
 	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, withPausedShape("node-1"))
+	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, withPausedShape(t, "node-1"))
 	actor, err := st.GetActor(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("get seeded actor: %v", err)
@@ -132,12 +135,17 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			// snapshot is the completed local one; the other origins also carry
 			// the half-written local snapshot an interrupted pause leaves.
 			const keptURI = "gs://snapshots/team-a/actors/keep/snapshot"
+			tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"}}
 			mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
+				local1 := newPausedSnapshot(t, 2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1")
+				local1.DurableSnapshot.Object.SnapshotUri = mustActorSnapshotURI(t, tmpl, actor, "local-1").String()
+				inProgress := newPausedSnapshot(t, 3, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-in-progress", "")
+				inProgress.DurableSnapshot.Object.SnapshotUri = mustActorSnapshotURI(t, tmpl, actor, "local-in-progress").String()
 				s.LastAssignedGeneration = 3
 				s.Snapshots = []*ateapipb.Snapshot{
 					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "kept", keptURI, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-					newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1"),
-					newLocalSnapshot(3, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-in-progress", ""),
+					local1,
+					inProgress,
 				}
 				if tc.paused {
 					s.Snapshots[2].Locality = "node-1"
@@ -194,7 +202,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			})
 			seedWireWorker(t, ctx, st, assignmentOf(running))
 			wire, atelet := newWireCaptureWorkflow(t, st)
-			suspended, err := wire.SuspendActor(ctx, actorRef)
+			suspended, err := wire.SuspendActor(ctx, actorRef, suspendSync)
 			if err != nil {
 				t.Fatalf("SuspendActor after revert: %v", err)
 			}
@@ -209,6 +217,59 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 				t.Errorf("CheckpointRequest.Snapshot.SnapshotUuid = %q, want the generation 4 snapshot %q", got, want)
 			}
 		})
+	}
+}
+
+// TestRevertActor_PausedSnapshotAlreadyUploaded verifies a revert of a paused
+// actor whose snapshot atelet uploaded returns it to that upload, its latest
+// durable snapshot, and collects the durable snapshot the upload replaced. The
+// actor has no assigned node, so there is nothing to terminate, as in
+// TestRevertActor_ReturnsActorToItsSnapshot.
+func TestRevertActor_PausedSnapshotAlreadyUploaded(t *testing.T) {
+	memory := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	completed := ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+	objects := objectstoretest.New()
+	w.objectStorePlugin = objectstoreplugintest.ControlClient(objects)
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	actor, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("get seeded actor: %v", err)
+	}
+	// newTestActorWorkflow's template stores snapshots under gs://snapshots.
+	tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"}}
+	old := mustActorSnapshotURI(t, tmpl, actor, "old")
+	uploaded := mustActorSnapshotURI(t, tmpl, actor, "pause-snap")
+	objects.PutSnapshot(t, old, "manifest.json")
+	objects.PutSnapshot(t, uploaded, "manifest.json")
+	mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
+		paused := newPausedSnapshot(t, 2, memory, "", "pause-snap", "node-1")
+		paused.DurableSnapshot = &ateapipb.SnapshotStorage{Status: completed, Object: &ateapipb.ObjectSnapshot{SnapshotUri: uploaded.String()}}
+		s.LastAssignedGeneration = 2
+		s.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", old.Name(), old.String(), completed),
+			paused,
+		}
+	})
+
+	reverted, err := w.RevertActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("RevertActor: %v", err)
+	}
+	want := []snapshotOutcome{{generation: 2, fidelity: memory, durable: completed}}
+	if diff := cmp.Diff(want, describeSnapshots(reverted.GetStatus()), cmp.AllowUnexported(snapshotOutcome{})); diff != "" {
+		t.Errorf("snapshots mismatch (-want +got):\n%s", diff)
+	}
+	if len(objects.Snapshot(t, old)) != 0 {
+		t.Error("the durable snapshot the upload replaced was not released")
+	}
+	if len(objects.Snapshot(t, uploaded)) == 0 {
+		t.Error("the upload the revert returned the actor to was released")
 	}
 }
 
@@ -307,6 +368,7 @@ func TestRevertActor_NoSnapshotToRevertTo(t *testing.T) {
 // actor to lives under that same prefix.
 func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 	const inFlightSnapshotName = "2026-01-01t00-00-00z-abandoned"
+	const earlierPauseSnapshotName = "2025-12-31t00-00-00z-earlier-pause"
 
 	tests := []struct {
 		name string
@@ -317,9 +379,13 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 		inFlight string
 		// foreignInFlight records the in-progress snapshot under another
 		// owner's prefix, which no suspend can produce.
-		foreignInFlight       bool
-		wantInFlightDiscarded bool
-		wantErr               bool
+		foreignInFlight bool
+		// earlierPause records an older PENDING snapshot: a pause whose upload
+		// atelet never reported before the actor resumed.
+		earlierPause              bool
+		wantInFlightDiscarded     bool
+		wantEarlierPauseDiscarded bool
+		wantErr                   bool
 	}{
 		{
 			name:                  "discards the snapshot an interrupted suspend was writing",
@@ -340,6 +406,25 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 			name:            "refuses an in-progress snapshot the actor does not own",
 			inFlight:        inFlightSnapshotName,
 			foreignInFlight: true,
+			wantErr:         true,
+		},
+		{
+			name:                      "discards an earlier pause's unrecorded upload along with the in-flight snapshot",
+			inFlight:                  inFlightSnapshotName,
+			earlierPause:              true,
+			wantInFlightDiscarded:     true,
+			wantEarlierPauseDiscarded: true,
+		},
+		{
+			name:                      "discards an earlier pause's unrecorded upload with no suspend in flight",
+			earlierPause:              true,
+			wantEarlierPauseDiscarded: true,
+		},
+		{
+			name:            "discards nothing when any in-progress snapshot is not the actor's",
+			inFlight:        inFlightSnapshotName,
+			foreignInFlight: true,
+			earlierPause:    true,
 			wantErr:         true,
 		},
 	}
@@ -373,14 +458,22 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 			if tt.inFlight != "" {
 				objects.PutSnapshot(t, inFlight, "manifest.json")
 			}
+			earlierPause := mustActorSnapshotURI(t, template, actor, earlierPauseSnapshotName)
+			if tt.earlierPause {
+				objects.PutSnapshot(t, earlierPause, "manifest.json")
+			}
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 				s.LastAssignedGeneration = 1
 				s.Snapshots = []*ateapipb.Snapshot{
 					newDurableSnapshot(1, currentType, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 				}
+				if tt.earlierPause {
+					s.LastAssignedGeneration++
+					s.Snapshots = append(s.Snapshots, newDurableSnapshot(s.LastAssignedGeneration, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", earlierPause.Name(), earlierPause.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING))
+				}
 				if tt.inFlight != "" {
-					s.LastAssignedGeneration = 2
-					s.Snapshots = append(s.Snapshots, newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING))
+					s.LastAssignedGeneration++
+					s.Snapshots = append(s.Snapshots, newDurableSnapshot(s.LastAssignedGeneration, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING))
 				}
 			})
 
@@ -391,6 +484,9 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 				}
 				if len(objects.Snapshot(t, inFlight)) == 0 {
 					t.Errorf("snapshot %v was discarded, but it belongs to another owner", inFlight)
+				}
+				if tt.earlierPause && len(objects.Snapshot(t, earlierPause)) == 0 {
+					t.Errorf("snapshot %v was discarded, but a corrupted record must discard nothing", earlierPause)
 				}
 				return
 			}
@@ -407,6 +503,12 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 				discarded := len(objects.Snapshot(t, inFlight)) == 0
 				if discarded != tt.wantInFlightDiscarded {
 					t.Errorf("in-flight snapshot discarded = %v, want %v", discarded, tt.wantInFlightDiscarded)
+				}
+			}
+			if tt.earlierPause {
+				discarded := len(objects.Snapshot(t, earlierPause)) == 0
+				if discarded != tt.wantEarlierPauseDiscarded {
+					t.Errorf("earlier pause snapshot discarded = %v, want %v", discarded, tt.wantEarlierPauseDiscarded)
 				}
 			}
 		})

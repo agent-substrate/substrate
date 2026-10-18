@@ -37,6 +37,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/pflag"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/atelet"
@@ -76,6 +77,87 @@ func TestPortFlagDefault(t *testing.T) {
 	}
 	if want := strconv.Itoa(atelet.DefaultPort); f.DefValue != want {
 		t.Errorf("--port default = %q, want %q", f.DefValue, want)
+	}
+}
+
+// The snapshot delay flags must be positive, and the upload delay must not
+// exceed the detach delay, which the defaults satisfy too.
+func TestValidateSnapshotDelayFlags(t *testing.T) {
+	setFlags := func(upload, detach, giveUp time.Duration) {
+		*snapshotUploadDelay, *snapshotDetachDelay, *snapshotReportGiveUpAfter = upload, detach, giveUp
+	}
+	t.Cleanup(func() {
+		setFlags(snapshottracker.DefaultUploadDelay, snapshottracker.DefaultDetachDelay, snapshottracker.DefaultReportGiveUpAfter)
+	})
+
+	for _, tc := range []struct {
+		name                   string
+		upload, detach, giveUp time.Duration
+		wantErr                bool
+	}{
+		{"defaults", snapshottracker.DefaultUploadDelay, snapshottracker.DefaultDetachDelay, snapshottracker.DefaultReportGiveUpAfter, false},
+		{"upload sooner than detach", time.Minute, time.Hour, time.Minute, false},
+		{"upload as late as detach", time.Hour, time.Hour, time.Minute, false},
+		{"upload later than detach", time.Hour, time.Minute, time.Minute, true},
+		{"zero upload delay", 0, time.Hour, time.Minute, true},
+		{"negative detach delay", time.Minute, -time.Minute, time.Minute, true},
+		{"zero report give-up delay", time.Minute, time.Hour, 0, true},
+		{"negative report give-up delay", time.Minute, time.Hour, -time.Minute, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setFlags(tc.upload, tc.detach, tc.giveUp)
+			if err := validateSnapshotDelayFlags(); (err != nil) != tc.wantErr {
+				t.Errorf("upload=%v detach=%v giveUp=%v: err = %v, wantErr %v", tc.upload, tc.detach, tc.giveUp, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// Upload and detach worker flags must be at least 1, report workers must be at
+// least 0, and each flag defaults to the tracker's default count.
+func TestValidateSnapshotWorkerFlags(t *testing.T) {
+	setFlags := func(upload, detach, report int) {
+		*snapshotUploadWorkers, *snapshotDetachWorkers, *snapshotReportWorkers = upload, detach, report
+	}
+	t.Cleanup(func() {
+		setFlags(snapshottracker.DefaultUploadWorkers, snapshottracker.DefaultDetachWorkers, snapshottracker.DefaultReportWorkers)
+	})
+
+	for _, tc := range []struct {
+		name                   string
+		upload, detach, report int
+		wantErr                bool
+	}{
+		{"defaults", snapshottracker.DefaultUploadWorkers, snapshottracker.DefaultDetachWorkers, snapshottracker.DefaultReportWorkers, false},
+		{"single worker each", 1, 1, 1, false},
+		{"zero report workers", 2, 2, 0, false},
+		{"zero upload workers", 0, 2, 1, true},
+		{"negative upload workers", -1, 2, 1, true},
+		{"zero detach workers", 2, 0, 1, true},
+		{"negative detach workers", 2, -1, 1, true},
+		{"negative report workers", 2, 2, -1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setFlags(tc.upload, tc.detach, tc.report)
+			if err := validateSnapshotWorkerFlags(); (err != nil) != tc.wantErr {
+				t.Errorf("upload=%d detach=%d report=%d: err = %v, wantErr %v", tc.upload, tc.detach, tc.report, err, tc.wantErr)
+			}
+		})
+	}
+
+	for name, want := range map[string]int{
+		"snapshot-upload-workers": snapshottracker.DefaultUploadWorkers,
+		"snapshot-detach-workers": snapshottracker.DefaultDetachWorkers,
+		"snapshot-report-workers": snapshottracker.DefaultReportWorkers,
+	} {
+		f := pflag.Lookup(name)
+		if f == nil {
+			t.Errorf("no --%s flag registered", name)
+			continue
+		}
+		if f.DefValue != strconv.Itoa(want) {
+			t.Errorf("--%s default = %q, want %d", name, f.DefValue, want)
+		}
 	}
 }
 
@@ -391,7 +473,7 @@ func TestUploadSnapshotRejectsSymlinkOutsideRoot(t *testing.T) {
 	}
 	store := &recordingObjectStorage{}
 	err = newPluginHerder(t, store).uploadSnapshot(context.Background(), uri, checkpointDir,
-		&sandboxAssetsRecord{SnapshotFiles: []string{"checkpoint.img"}}, "test", "test")
+		&sandboxAssetsRecord{SnapshotFiles: []string{"checkpoint.img"}})
 	if err == nil {
 		t.Fatal("uploadSnapshot() followed a symlink outside the checkpoint directory")
 	}
@@ -1371,7 +1453,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			"config.json": "cfg", "memory-ranges": "mem", "data.tar": "data",
 		})
 
-		if _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri); err != nil {
+		if _, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri); err != nil {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
 		want := []string{
@@ -1402,7 +1484,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 
 		req := validPromoteSnapshotRequest()
 		req.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
-		if _, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri); err != nil {
+		if _, _, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri); err != nil {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
 		want := []string{
@@ -1442,7 +1524,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 
 			req := validPromoteSnapshotRequest()
 			req.Snapshot.Fidelity = tc.desired
-			_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
+			_, _, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
 			if got := apierror.Code(err); got != codes.FailedPrecondition {
 				t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
 			}
@@ -1464,7 +1546,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 
 		req := validPromoteSnapshotRequest()
 		req.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
-		_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
+		_, _, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
 		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition for a scope-less manifest", got, err)
 		}
@@ -1479,7 +1561,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}}
 		s := newPluginHerder(t, store)
 
-		if _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), filepath.Join(t.TempDir(), "never-created"), uri); err != nil {
+		if _, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), filepath.Join(t.TempDir(), "never-created"), uri); err != nil {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
 	})
@@ -1487,7 +1569,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	t.Run("gone locally and remotely crashes the actor", func(t *testing.T) {
 		s := newPluginHerder(t, &recordingObjectStorage{})
 
-		_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), filepath.Join(t.TempDir(), "never-created"), uri)
+		_, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), filepath.Join(t.TempDir(), "never-created"), uri)
 		if err == nil {
 			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
 		}
@@ -1503,7 +1585,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			"config.json": "cfg", "memory-ranges": "mem", "data.tar": "data",
 		})
 
-		_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+		_, _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
 		if err == nil {
 			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
 		}
@@ -1583,5 +1665,19 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				t.Errorf("shouldHaveSnapshots() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestServingCheck pins the readiness contract at startup: /readyz holds
+// 503 until main has opened the gRPC port, whatever else is already up.
+func TestServingCheck(t *testing.T) {
+	served := make(chan struct{})
+	check := servingCheck(served)
+	if err := check(context.Background()); err == nil {
+		t.Error("servingCheck passed before the port was opened")
+	}
+	close(served)
+	if err := check(context.Background()); err != nil {
+		t.Errorf("servingCheck after the port opened = %v, want nil", err)
 	}
 }

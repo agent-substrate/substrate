@@ -17,7 +17,6 @@ package controlapi
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -27,12 +26,9 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"go.ate.dev/substrate/internal/resources"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // validActorTemplate returns the smallest template that passes create
@@ -47,8 +43,7 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 			StorageLocation:   "gs://my-bucket/snapshots",
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
-		Resources:     resources.CPUMemory(1000, 512<<20),
+		Resources: resources.CPUMemory(1000, 512<<20),
 	}
 	for _, m := range mutations {
 		m(template)
@@ -56,76 +51,11 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 	return template
 }
 
-// gvisorDefaultLister returns a SandboxConfig lister seeded with the
-// "gvisor-default" config that validActorTemplate names.
-func gvisorDefaultLister(t *testing.T) listersv1alpha1.SandboxConfigLister {
-	t.Helper()
-	return sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
-		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-default"},
-		Spec: atev1alpha1.SandboxConfigSpec{
-			SandboxClass:   atev1alpha1.SandboxClassGvisor,
-			DefaultVersion: "v1",
-			Versions: []atev1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				PauseImage: "registry.k8s.io/pause@sha256:x",
-				Assets:     testAssets(),
-			}},
-		},
-	}})
-}
-
-// TestCreateActorTemplate_SandboxConfigChecks pins the create-time checks on
-// the template's named SandboxConfig: it must exist and match the template's
-// class, both FailedPrecondition — they depend on cluster state, and the
-// lister may briefly lag a just-created config, so the error is retryable.
-func TestCreateActorTemplate_SandboxConfigChecks(t *testing.T) {
-	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
-	ctx := context.Background()
-	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
-		t.Fatalf("CreateAtespace failed: %v", err)
-	}
-
-	tests := []struct {
-		name     string
-		sandbox  *ateapipb.SandboxConfig
-		wantCode codes.Code
-	}{{
-		name:     "named config exists and matches",
-		sandbox:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "gvisor-default"},
-		wantCode: codes.OK,
-	}, {
-		name:     "empty config_name is rejected",
-		sandbox:  &ateapipb.SandboxConfig{SandboxClass: "microvm"},
-		wantCode: codes.InvalidArgument,
-	}, {
-		name:     "named config missing",
-		sandbox:  &ateapipb.SandboxConfig{SandboxClass: "gvisor", ConfigName: "does-not-exist"},
-		wantCode: codes.FailedPrecondition,
-	}, {
-		name:     "named config class mismatch",
-		sandbox:  &ateapipb.SandboxConfig{SandboxClass: "microvm", ConfigName: "gvisor-default"},
-		wantCode: codes.FailedPrecondition,
-	}}
-	for i, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-				tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: "ns1", Name: fmt.Sprintf("tmpl-%d", i)}
-				tmpl.SandboxConfig = tt.sandbox
-			})}
-			_, err := s.CreateActorTemplate(ctx, req)
-			if apierror.Code(err) != tt.wantCode {
-				t.Errorf("CreateActorTemplate error = %v, want code %v", err, tt.wantCode)
-			}
-		})
-	}
-}
-
 // TestCreateActorTemplate covers the atespace precondition: creation fails
 // while the atespace is missing, and succeeds once the atespace exists.
 func TestCreateActorTemplate(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
+	s := &RPCService{impl: newServiceImpl(persistence, nil)}
 	ctx := context.Background()
 	req := func(atespace, name string) *ateapipb.CreateActorTemplateRequest {
 		return &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -155,7 +85,7 @@ func TestCreateActorTemplate(t *testing.T) {
 // the only guard.
 func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
+	s := &RPCService{impl: newServiceImpl(persistence, nil)}
 	ctx := context.Background()
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
@@ -171,7 +101,7 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 		// Server-owned status a client must not be able to set.
 		tmpl.Status = &ateapipb.ActorTemplateStatus{
 			GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-				GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
+				GoldenTag: &ateapipb.ObjectRef{Atespace: "ns1", Name: "golden-tag"},
 			},
 		}
 	})
@@ -222,7 +152,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 			persistence := newTestPersistence(t)
 			tmpl := seedSubstrateTemplate(t, ctx, persistence, "tmpl")
 			templateRef := resources.ActorTemplateRefFromActorTemplate(tmpl)
-			goldenRef := resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()}
+			goldenRef := resources.ActorRef{Atespace: "team-a", Name: tmpl.GetMetadata().GetUid()}
 			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: goldenRef.Atespace, Name: goldenRef.Name},
 				ActorTemplate: templateRef.ToObjectRef(),
@@ -343,10 +273,6 @@ func seedSubstrateTemplate(t *testing.T, ctx context.Context, persistence store.
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: "gs://ate-snapshots/team-a/",
 		},
-		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: "gvisor",
-			ConfigName:   "gvisor",
-		},
 	})
 	if err != nil {
 		t.Fatalf("CreateActorTemplate: %v", err)
@@ -440,7 +366,7 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 	// A server-owned status write passes validation and bumps the version.
 	updated, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(created), func(tmpl *ateapipb.ActorTemplate) error {
 		tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-			GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
+			GoldenTag: &ateapipb.ObjectRef{Atespace: "ns1", Name: "golden-tag"},
 		}}
 		return nil
 	})

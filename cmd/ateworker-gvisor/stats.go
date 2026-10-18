@@ -27,6 +27,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -94,8 +95,8 @@ const sandboxCgroupContainer = ocispec.PauseContainer
 // boots and checkpoints: polls would stall behind runsc, and a checkpoint
 // would wait on telemetry. The cgroup files are read with no lock held.
 func (s *AteWorkerService) GetWorkloadStats(ctx context.Context, req *ateworkerpb.GetWorkloadStatsRequest) (*ateworkerpb.GetWorkloadStatsResponse, error) {
-	if req.GetActorUid() == "" {
-		return nil, apierror.InvalidArgument("actor_uid is required")
+	if err := ateworkervalidation.ValidateGetWorkloadStatsRequest(ctx, req); err != nil {
+		return nil, err
 	}
 
 	// NOT_FOUND rather than FAILED_PRECONDITION: the requested actor is not

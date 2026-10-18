@@ -104,38 +104,55 @@ func TestRestoreTimingPhases(t *testing.T) {
 	}
 }
 
-// TestCheckpointTimingPhases: a Data checkpoint runs the durable capture and
-// never runs the full runsc checkpoint, and the record says so.
+// TestCheckpointTimingPhases: VOLUMES and ROOTFS checkpoints both record their
+// runsc fscheckpoint under fs_checkpoint, the fidelity attribute tells them
+// apart, and phases that did not run stay off the record.
 func TestCheckpointTimingPhases(t *testing.T) {
 	t.Parallel()
 
-	timing := checkpointTiming{
-		prep:       20 * time.Millisecond,
-		durableDir: 300 * time.Millisecond,
-		teardown:   150 * time.Millisecond,
-		total:      500 * time.Millisecond,
-	}
-	rec := renderPhaseRecord(t, phaselog.SnapshotPhaseAttrs(resources.ActorAttribution{UID: "uid-abc"},
-		ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, phaselog.CheckpointDurationKey, nil, timing.phases()))
-
-	for k, want := range map[string]float64{
-		"ateworker.actor.checkpoint.duration.prep":        0.02,
-		"ateworker.actor.checkpoint.duration.durable_dir": 0.3,
-		"ateworker.actor.checkpoint.duration.teardown":    0.15,
-		"ateworker.actor.checkpoint.duration.total":       0.5,
+	for _, tc := range []struct {
+		fidelity ateworkerpb.SnapshotFidelity
+		want     string
+	}{
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, "volumes"},
+		{ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, "rootfs"},
 	} {
-		got, ok := rec[k].(float64)
-		if !ok {
-			t.Errorf("%s = %v (%T), want a number", k, rec[k], rec[k])
-		} else if got != want {
-			t.Errorf("%s = %v, want %v", k, got, want)
-		}
-	}
-	if v, ok := rec["ateworker.actor.checkpoint.duration.checkpoint"]; ok {
-		t.Errorf("checkpoint present with %v, want absent", v)
-	}
-	if rec["ate.snapshot.fidelity"] != "volumes" {
-		t.Errorf("ate.snapshot.fidelity = %v, want volumes", rec["ate.snapshot.fidelity"])
+		t.Run(tc.want, func(t *testing.T) {
+			t.Parallel()
+			timing := checkpointTiming{
+				prep:         20 * time.Millisecond,
+				fsCheckpoint: 300 * time.Millisecond,
+				teardown:     150 * time.Millisecond,
+				total:        500 * time.Millisecond,
+			}
+			rec := renderPhaseRecord(t, phaselog.SnapshotPhaseAttrs(resources.ActorAttribution{UID: "uid-abc"},
+				tc.fidelity, phaselog.CheckpointDurationKey, nil, timing.phases()))
+
+			for k, want := range map[string]float64{
+				"ateworker.actor.checkpoint.duration.prep":          0.02,
+				"ateworker.actor.checkpoint.duration.fs_checkpoint": 0.3,
+				"ateworker.actor.checkpoint.duration.teardown":      0.15,
+				"ateworker.actor.checkpoint.duration.total":         0.5,
+			} {
+				got, ok := rec[k].(float64)
+				if !ok {
+					t.Errorf("%s = %v (%T), want a number", k, rec[k], rec[k])
+				} else if got != want {
+					t.Errorf("%s = %v, want %v", k, got, want)
+				}
+			}
+			for _, absent := range []string{
+				"ateworker.actor.checkpoint.duration.checkpoint",
+				"ateworker.actor.checkpoint.duration.durable_dir",
+			} {
+				if v, ok := rec[absent]; ok {
+					t.Errorf("%s present with %v, want absent", absent, v)
+				}
+			}
+			if rec["ate.snapshot.fidelity"] != tc.want {
+				t.Errorf("ate.snapshot.fidelity = %v, want %s", rec["ate.snapshot.fidelity"], tc.want)
+			}
+		})
 	}
 }
 

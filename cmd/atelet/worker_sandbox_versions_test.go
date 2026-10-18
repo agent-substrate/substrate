@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -74,22 +75,22 @@ func multiVersionConfig() *v1alpha1.SandboxConfig {
 }
 
 func TestRecordForArch(t *testing.T) {
-	sha := fmt.Sprintf("%x", sha256.Sum256([]byte("runsc")))
+	sha := fmt.Sprintf("%x", sha256.Sum256([]byte("gvisor release")))
 	tests := []struct {
 		name   string
 		assets map[string]map[string]v1alpha1.AssetFile
 		want   *sandboxAssetsRecord
 	}{{
 		name:   "assets for this architecture",
-		assets: map[string]map[string]v1alpha1.AssetFile{runtime.GOARCH: {runscAssetName: {URL: "gs://bucket/runsc", SHA256: sha}}},
+		assets: map[string]map[string]v1alpha1.AssetFile{runtime.GOARCH: {gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: sha}}},
 		want: &sandboxAssetsRecord{
 			SandboxClass: string(v1alpha1.SandboxClassGvisor),
 			PauseImage:   "registry.k8s.io/pause@sha256:abc",
-			Assets:       map[string]assetEntry{runscAssetName: {URL: "gs://bucket/runsc", SHA256: sha}},
+			Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: sha}},
 		},
 	}, {
 		name:   "assets for another architecture only",
-		assets: map[string]map[string]v1alpha1.AssetFile{"other-arch": {runscAssetName: {URL: "gs://bucket/runsc", SHA256: sha}}},
+		assets: map[string]map[string]v1alpha1.AssetFile{"other-arch": {gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: sha}}},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -106,7 +107,7 @@ func TestRecordForArch(t *testing.T) {
 	}
 }
 
-func TestRuntimeHash(t *testing.T) {
+func TestBundleHash(t *testing.T) {
 	gvisor := map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"}}
 	pause := "sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
 
@@ -134,9 +135,9 @@ func TestRuntimeHash(t *testing.T) {
 		want: "sha256:f86e6f2bd8e25ac31a22e51e6e57e0eb6741eb0b0df77082989cc1e40f906fe1",
 	}, {
 		name:        "the asset under another name",
-		rec:         &sandboxAssetsRecord{SandboxClass: "gvisor", Assets: map[string]assetEntry{runscAssetName: gvisor[gvisorAssetName]}},
+		rec:         &sandboxAssetsRecord{SandboxClass: "gvisor", Assets: map[string]assetEntry{"renamed": gvisor[gvisorAssetName]}},
 		pauseDigest: pause,
-		want:        "sha256:91e241c70c94d67b16127f1ba9c239e76ed1e91cb99fd9587b071cb8ccf7d3d8",
+		want:        "sha256:04bf18376ca0c7227ae9fa65675127b1045d7de33f05ea5d2375eb11a1a8e62e",
 	}, {
 		name: "several assets",
 		rec: &sandboxAssetsRecord{SandboxClass: "microvm", Assets: map[string]assetEntry{
@@ -147,8 +148,8 @@ func TestRuntimeHash(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := runtimeHash(tt.rec, tt.pauseDigest); got != tt.want {
-				t.Errorf("runtimeHash() = %q, want %q", got, tt.want)
+			if got := bundleHash(tt.rec, tt.pauseDigest); got != tt.want {
+				t.Errorf("bundleHash() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -191,7 +192,7 @@ func TestPoolConfigName(t *testing.T) {
 }
 
 func TestWorkerSandboxResolverResolve(t *testing.T) {
-	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", "abc")
+	cfg := gvisorConfig("gvisor-default", "gs://bucket/gvisor", "abc")
 
 	tests := []struct {
 		name       string
@@ -280,7 +281,7 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 	}
 }
 
-func TestVersionRuntimeHash(t *testing.T) {
+func TestVersionBundleHash(t *testing.T) {
 	gvisor := map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor", SHA256: "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"}}
 	pause := "sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
 
@@ -292,14 +293,14 @@ func TestVersionRuntimeHash(t *testing.T) {
 	}{{
 		name:       "pause image pinned by digest",
 		pauseImage: "registry.k8s.io/pause:3.10.2@" + pause,
-		want:       runtimeHash(&sandboxAssetsRecord{Assets: gvisor}, pause),
+		want:       bundleHash(&sandboxAssetsRecord{Assets: gvisor}, pause),
 	}, {
 		name:       "pause image pinned by digest only",
 		pauseImage: "gcr.io/gke-release/pause@" + pause,
-		want:       runtimeHash(&sandboxAssetsRecord{Assets: gvisor}, pause),
+		want:       bundleHash(&sandboxAssetsRecord{Assets: gvisor}, pause),
 	}, {
 		name: "no pause image",
-		want: runtimeHash(&sandboxAssetsRecord{Assets: gvisor}, ""),
+		want: bundleHash(&sandboxAssetsRecord{Assets: gvisor}, ""),
 	}, {
 		// The CRD rejects this shape.
 		name:       "pause image by tag",
@@ -308,15 +309,15 @@ func TestVersionRuntimeHash(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := versionRuntimeHash(&sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: tt.pauseImage, Assets: gvisor})
+			got, err := versionBundleHash(&sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: tt.pauseImage, Assets: gvisor})
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("versionRuntimeHash() error = %v, want error %v", err, tt.wantErr)
+				t.Fatalf("versionBundleHash() error = %v, want error %v", err, tt.wantErr)
 			}
 			if err != nil && !errors.Is(err, errPermanent) {
-				t.Errorf("versionRuntimeHash() error = %v, want errPermanent", err)
+				t.Errorf("versionBundleHash() error = %v, want errPermanent", err)
 			}
 			if got != tt.want {
-				t.Errorf("versionRuntimeHash() = %q, want %q", got, tt.want)
+				t.Errorf("versionBundleHash() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -331,9 +332,9 @@ func wantRuntime(name string) sandboxruntimes.Attributes {
 func wantRuntimeWithFeatures(name, cpuFeatures string) sandboxruntimes.Attributes {
 	rec := &sandboxAssetsRecord{Assets: map[string]assetEntry{gvisorAssetName: {SHA256: "sha-" + name}}}
 	return sandboxruntimes.Attributes{
-		hardware.AttrArchitecture:       runtime.GOARCH,
-		hardware.AttrCPUFeatures:        cpuFeatures,
-		hardware.AttrSandboxRuntimeHash: runtimeHash(rec, pauseDigest(name)),
+		hardware.AttrArchitecture:      runtime.GOARCH,
+		hardware.AttrCPUFeatures:       cpuFeatures,
+		hardware.AttrSandboxBundleHash: bundleHash(rec, pauseDigest(name)),
 	}
 }
 
@@ -351,7 +352,11 @@ func planAndBuild(s *workerSandboxSyncer, pod *corev1.Pod) (*sandboxruntimes.Fil
 	if err != nil {
 		return nil, err
 	}
-	return s.buildFile(context.Background(), plan)
+	hashed, err := hashVersions(context.Background(), plan)
+	if err != nil {
+		return nil, err
+	}
+	return s.buildFile(context.Background(), plan, hashed)
 }
 
 func TestPlanAndBuild(t *testing.T) {
@@ -381,8 +386,8 @@ func TestPlanAndBuild(t *testing.T) {
 	unsupportedClass := multiVersionConfig()
 	unsupportedClass.Spec.SandboxClass = "unknown"
 
-	noRunscAsset := multiVersionConfig()
-	noRunscAsset.Spec.Versions[3].Assets = map[string]map[string]v1alpha1.AssetFile{
+	noGVisorAsset := multiVersionConfig()
+	noGVisorAsset.Spec.Versions[3].Assets = map[string]map[string]v1alpha1.AssetFile{
 		runtime.GOARCH: {"other": {URL: "gs://bucket/other", SHA256: "sha-other"}},
 	}
 
@@ -428,8 +433,8 @@ func TestPlanAndBuild(t *testing.T) {
 		wantErr:       true,
 		wantPermanent: true,
 	}, {
-		name:          "gvisor version has no gvisor or runsc asset",
-		cfg:           noRunscAsset,
+		name:          "gvisor version has no gvisor asset",
+		cfg:           noGVisorAsset,
 		wantErr:       true,
 		wantPermanent: true,
 	}, {
@@ -482,10 +487,10 @@ func TestPlanAndBuildMicroVM(t *testing.T) {
 	wantMicroVM := func(sha string) sandboxruntimes.Attributes {
 		rec := &sandboxAssetsRecord{Assets: map[string]assetEntry{"kernel": {SHA256: sha}}}
 		return sandboxruntimes.Attributes{
-			hardware.AttrArchitecture:       runtime.GOARCH,
-			hardware.AttrCPUVendor:          testCPUVendor,
-			hardware.AttrCPUModel:           testCPUModel,
-			hardware.AttrSandboxRuntimeHash: runtimeHash(rec, ""),
+			hardware.AttrArchitecture:      runtime.GOARCH,
+			hardware.AttrCPUVendor:         testCPUVendor,
+			hardware.AttrCPUModel:          testCPUModel,
+			hardware.AttrSandboxBundleHash: bundleHash(rec, ""),
 		}
 	}
 
@@ -536,7 +541,7 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 	feats := testCPUFeatures()
 
 	t.Run("a version with an earlier version's binaries in another bucket is neither fetched nor probed", func(t *testing.T) {
-		// runtimeHash leaves URLs out, so v3 is v1's runtime. The syncer must
+		// bundleHash leaves URLs out, so v3 is v1's runtime. The syncer must
 		// see that from the spec alone, before touching v3's bucket.
 		cfg := multiVersionConfig()
 		v3 := *cfg.Spec.Versions[1].DeepCopy()
@@ -565,7 +570,7 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 	t.Run("memoizes runsc cpu-features by asset digest across versions and syncs", func(t *testing.T) {
 		cfg := multiVersionConfig()
 		// Add a third version "v3" that shares v1's gvisor asset digest ("sha-v1")
-		// but has its own pause image digest, so it has a distinct runtime hash
+		// but has its own pause image digest, so it has a distinct bundle hash
 		// while reusing the same runsc binary.
 		v3 := *cfg.Spec.Versions[1].DeepCopy()
 		v3.Name = "v3"
@@ -597,9 +602,9 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 			RestorableRuntimes: []sandboxruntimes.Attributes{
 				wantRuntimeWithFeatures("v1", "1"),
 				{
-					hardware.AttrArchitecture:       runtime.GOARCH,
-					hardware.AttrCPUFeatures:        "1",
-					hardware.AttrSandboxRuntimeHash: runtimeHash(v3Rec, pauseDigest("v3")),
+					hardware.AttrArchitecture:      runtime.GOARCH,
+					hardware.AttrCPUFeatures:       "1",
+					hardware.AttrSandboxBundleHash: bundleHash(v3Rec, pauseDigest("v3")),
 				},
 			},
 		}
@@ -741,4 +746,70 @@ func TestRunRunscCPUFeatures(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errPermanent) {
 		t.Errorf("runRunscCPUFeatures() on a hanging binary = %v, want context.DeadlineExceeded", err)
 	}
+}
+
+// TestSyncPodAdvertisesWhatItWrote pins when a worker's index entry changes:
+// with its file. A sync that fails before the write leaves the entry of the
+// file still on disk, and one that writes a partial file names only the
+// runtimes in it, while every hashed runtime resolves either way.
+func TestSyncPodAdvertisesWhatItWrote(t *testing.T) {
+	ctx := context.Background()
+	pod := workerPod("pod-a", "pool")
+	hashOf := func(name string) string { return wantRuntime(name)[hardware.AttrSandboxBundleHash] }
+	advertised := func(t *testing.T, s *workerSandboxSyncer) *classRuntime {
+		t.Helper()
+		wr, ok := s.index.worker("pod-a")
+		if !ok {
+			t.Fatal("pod-a has no index entry")
+		}
+		cr, ok := wr.class(v1alpha1.SandboxClassGvisor)
+		if !ok {
+			t.Fatal("pod-a advertises nothing for gvisor")
+		}
+		return cr
+	}
+
+	t.Run("a failed sync keeps the entry of the file on disk", func(t *testing.T) {
+		s := newTestSyncer(t, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+		if err := s.syncPod(ctx, pod); err != nil {
+			t.Fatalf("syncPod: %v", err)
+		}
+		before := advertised(t, s)
+		if before.defaultHash != hashOf("v2") || !slices.Equal(before.hashes, []string{hashOf("v2"), hashOf("v1")}) {
+			t.Fatalf("after a full sync pod-a advertises default %s, hashes %v; want v2 and [v2 v1]", before.defaultHash, before.hashes)
+		}
+
+		// The default's probe now fails permanently: nothing is written.
+		s.mu.Lock()
+		s.cpuFeatures = map[string]string{}
+		s.mu.Unlock()
+		s.runCPUFeatures = func(context.Context, string) ([]string, error) { return []string{"not_a_known_feature"}, nil }
+		if err := s.syncPod(ctx, pod); !errors.Is(err, errPermanent) {
+			t.Fatalf("syncPod with the default's probe failing = %v, want errPermanent", err)
+		}
+		if after := advertised(t, s); after.defaultHash != before.defaultHash || !slices.Equal(after.hashes, before.hashes) {
+			t.Errorf("a sync that wrote nothing changed pod-a's entry: default %s, hashes %v", after.defaultHash, after.hashes)
+		}
+	})
+
+	t.Run("a partial file advertises only its runtimes", func(t *testing.T) {
+		s := newTestSyncer(t, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+		s.assets = &fakeAssetFetcher{
+			fn: func(_ context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+				if sha := rec.Assets[gvisorAssetName].SHA256; sha != "sha-v2" {
+					return nil, fmt.Errorf("temporary download failure for %s", sha)
+				}
+				return map[string]string{gvisorAssetName: "sha-v2"}, nil
+			},
+		}
+		if err := s.syncPod(ctx, pod); !errors.Is(err, errIncomplete) {
+			t.Fatalf("syncPod with a restorable version failing = %v, want errIncomplete", err)
+		}
+		if cr := advertised(t, s); cr.defaultHash != hashOf("v2") || !slices.Equal(cr.hashes, []string{hashOf("v2")}) {
+			t.Errorf("pod-a advertises default %s, hashes %v; want only the written v2", cr.defaultHash, cr.hashes)
+		}
+		if _, ok := s.index.lookup(hashOf("v1")); !ok {
+			t.Error("the runtime left out of the partial file does not resolve; it must, before the retry writes it")
+		}
+	})
 }

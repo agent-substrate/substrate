@@ -56,10 +56,11 @@ func setTestPolicyManager(t *testing.T, p *Persistence) {
 	}
 	t.Cleanup(fgaServer.Close)
 	_, policyManager, err := authz.New(t.Context(), p.pool, fgaServer, nil, authz.SystemPrincipals{
-		ControllerSPIFFEID:    installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
-		EgressGatewaySPIFFEID: installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace),
-		IngressRouterSPIFFEID: installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
-		AteletSPIFFEID:        installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
+		ControllerSPIFFEID:       installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
+		EgressGatewaySPIFFEID:    installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace),
+		IngressRouterSPIFFEID:    installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
+		AteletSPIFFEID:           installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
+		APIServerSidecarSPIFFEID: installdefaults.APIServerSPIFFEID(installdefaults.SystemNamespace),
 	})
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)

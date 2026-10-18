@@ -47,6 +47,14 @@ var (
 	// default version. Wiped at startup. Under BasePath so the links the
 	// cache serves into it are on the cache's mount.
 	SandboxAssetScratchDir = filepath.Join(nodepath.BasePath, "sandbox-asset-scratch")
+
+	// SandboxRuntimeIndexFile holds every sandbox runtime a worker on this
+	// node has advertised, by the runtime's hash, with the asset record the
+	// hash was computed from. atelet rewrites it before a worker's own file
+	// can let the worker register a new hash, and loads it at startup, so a
+	// runtime registered before a restart resolves the moment atelet serves
+	// again.
+	SandboxRuntimeIndexFile = filepath.Join(nodepath.BasePath, "sandbox-runtime-index.json")
 )
 
 func ActorPath(actorUID string) string {

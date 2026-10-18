@@ -177,10 +177,8 @@ func (s *ServiceImpl) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 		// Validate the merged tag against the one it replaces. This is where
 		// the rules the request could not be checked against land: scope, and
 		// the immutability of metadata and source_actor.
-		if errs := apivalidation.ValidateTagUpdate(ctx, field.NewPath("tag"), toUpdate, oldVal); len(errs) > 0 {
-			return resources.ToAPIError(errs)
-		}
-		return nil
+		errs := apivalidation.ValidateTagUpdate(ctx, field.NewPath("tag"), toUpdate, oldVal)
+		return resources.ToAPIError(errs)
 	})
 }
 

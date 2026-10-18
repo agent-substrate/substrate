@@ -100,10 +100,11 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 // initialize authz.New without testing system component roles.
 func DefaultSystemPrincipals() authz.SystemPrincipals {
 	return authz.SystemPrincipals{
-		ControllerSPIFFEID:    installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
-		EgressGatewaySPIFFEID: installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace),
-		IngressRouterSPIFFEID: installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
-		AteletSPIFFEID:        installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
+		ControllerSPIFFEID:       installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
+		EgressGatewaySPIFFEID:    installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace),
+		IngressRouterSPIFFEID:    installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
+		AteletSPIFFEID:           installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
+		APIServerSidecarSPIFFEID: installdefaults.APIServerSPIFFEID(installdefaults.SystemNamespace),
 	}
 }
 

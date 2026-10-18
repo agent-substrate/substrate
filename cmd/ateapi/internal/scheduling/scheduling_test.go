@@ -44,15 +44,15 @@ func TestSchedule(t *testing.T) {
 				worker("w-busy-2", "gvisor", "node-a", tierTwo, assigned("demo", "other-2")),
 				worker("w-free", "gvisor", "node-a", tierTwo),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			wantPod:     "w-free",
 		},
 		{
-			name: "sandbox class is a hard constraint",
+			name: "worker with no sandbox class is never scheduled",
 			fleet: fleet{
-				worker("w-vm", "microvm", "node-a", tierTwo),
+				worker("w-unclassed", "", "node-a", tierTwo),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 		},
 		{
 			name: "template selector filters",
@@ -60,7 +60,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-1", "gvisor", "node-a", tierTwo),
 				worker("w-2", "gvisor", "node-a", tierOne),
 			},
-			constraints: Constraints{SandboxClass: "gvisor",
+			constraints: Constraints{
 				TemplateSelector: labels.SelectorFromSet(labels.Set{"tier": "1"})},
 			wantPod: "w-2",
 		},
@@ -70,7 +70,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-1", "gvisor", "node-a", map[string]string{"tier": "1", "worload": "a"}),
 				worker("w-2", "gvisor", "node-b", map[string]string{"tier": "1", "workload": "b"}),
 			},
-			constraints: Constraints{SandboxClass: "gvisor",
+			constraints: Constraints{
 				TemplateSelector: labels.SelectorFromSet(labels.Set{"tier": "1"}),
 				ActorSelector:    labels.SelectorFromSet(labels.Set{"workload": "b"})},
 			wantPod: "w-2",
@@ -81,7 +81,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-a", "gvisor", "node-a", tierTwo),
 				worker("w-b", "gvisor", "node-b", tierTwo),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", RequiredNodes: []string{"node-b"}},
+			constraints: Constraints{RequiredNodes: []string{"node-b"}},
 			wantPod:     "w-b",
 		},
 		{
@@ -89,7 +89,7 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-1", "gvisor", "node-a", nil),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			wantPod:     "w-1",
 		},
 		{
@@ -97,21 +97,21 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-busy", "gvisor", "node-a", tierTwo, assigned("demo", "a")),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 		},
 		{
 			name: "draining workers never scheduled",
 			fleet: fleet{
 				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapipb.WorkerState_WORKER_STATE_DRAINING)),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 		},
 		{
 			name: "unspecified workers never scheduled",
 			fleet: fleet{
 				worker("w-unspecified", "gvisor", "node-a", tierTwo, withState(ateapipb.WorkerState_WORKER_STATE_UNSPECIFIED)),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 		},
 		{
 			name: "picks active worker over draining one",
@@ -119,7 +119,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapipb.WorkerState_WORKER_STATE_DRAINING)),
 				worker("w-active", "gvisor", "node-a", tierTwo),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			wantPod:     "w-active",
 		},
 		{
@@ -128,7 +128,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 8<<30)),
 				worker("w-big", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30)),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(2000, 0)},
+			constraints: Constraints{Limits: resources.CPUMemory(2000, 0)},
 			wantPod:     "w-big",
 		},
 		{
@@ -137,7 +137,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(4000, 1<<30)),
 				worker("w-big", "gvisor", "node-a", tierTwo, withCapacity(4000, 4<<30)),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(0, 2<<30)},
+			constraints: Constraints{Limits: resources.CPUMemory(0, 2<<30)},
 			wantPod:     "w-big",
 		},
 		{
@@ -145,7 +145,7 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 1<<30)),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(2000, 0)},
+			constraints: Constraints{Limits: resources.CPUMemory(2000, 0)},
 		},
 		{
 			// A Worker reports everything it has, so one that has reported no
@@ -154,7 +154,7 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-unknown", "gvisor", "node-a", tierTwo),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(2000, 2<<30)},
+			constraints: Constraints{Limits: resources.CPUMemory(2000, 2<<30)},
 		},
 		{
 			// An Actor that declares nothing still fits: it asks for no
@@ -163,7 +163,7 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-unknown", "gvisor", "node-a", tierTwo),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			wantPod:     "w-unknown",
 		},
 		{
@@ -171,13 +171,13 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-tiny", "gvisor", "node-a", tierTwo, withCapacity(100, 1<<20)),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			wantPod:     "w-tiny",
 		},
 		{
 			name:        "empty fleet",
 			fleet:       fleet{},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 		},
 		{
 			// A worker that has not said it can hold more admits one, so this is
@@ -186,14 +186,14 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-busy", "gvisor", "node-a", tierTwo, assigned("demo", "other")),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 		},
 		{
 			name: "a worker below its actor ceiling still has room",
 			fleet: fleet{
 				worker("w-two", "gvisor", "node-a", tierTwo, withMaxActors(2), assigned("demo", "other")),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			wantPod:     "w-two",
 		},
 		{
@@ -202,7 +202,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-two", "gvisor", "node-a", tierTwo, withMaxActors(2),
 					assigned("demo", "a"), assigned("demo", "b")),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 		},
 		{
 			// Placement is against what is left, not against the whole capacity:
@@ -212,7 +212,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-half", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
 					assignedFor("demo", "other", resources.CPUMemory(3000, 4<<30))),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(2000, 0)},
+			constraints: Constraints{Limits: resources.CPUMemory(2000, 0)},
 		},
 		{
 			name: "what the residents left over is still placeable",
@@ -220,7 +220,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-half", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
 					assignedFor("demo", "other", resources.CPUMemory(3000, 4<<30))),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(1000, 4<<30)},
+			constraints: Constraints{Limits: resources.CPUMemory(1000, 4<<30)},
 			wantPod:     "w-half",
 		},
 		{
@@ -229,7 +229,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-busy", "gvisor", "node-a", tierTwo, withMaxActors(4), assigned("demo", "a"), assigned("demo", "b")),
 				worker("w-idle", "gvisor", "node-b", tierTwo, withMaxActors(4)),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			wantPod:     "w-idle",
 		},
 		{
@@ -238,7 +238,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-idle", "gvisor", "node-a", tierTwo, withMaxActors(4)),
 				worker("w-busy", "gvisor", "node-b", tierTwo, withMaxActors(4), assigned("demo", "a")),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			wantPod:     "w-idle",
 		},
 		{
@@ -248,7 +248,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-small", "gvisor", "node-a", tierTwo, withMaxActors(2), assigned("demo", "a")),
 				worker("w-large", "gvisor", "node-b", tierTwo, withMaxActors(16), assigned("demo", "b"), assigned("demo", "c")),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			wantPod:     "w-large",
 		},
 		{
@@ -259,7 +259,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-light", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
 					assignedFor("demo", "b", resources.CPUMemory(1000, 1<<30))),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(500, 1<<30)},
+			constraints: Constraints{Limits: resources.CPUMemory(500, 1<<30)},
 			wantPod:     "w-light",
 		},
 		{
@@ -275,7 +275,7 @@ func TestSchedule(t *testing.T) {
 					assigned("demo", "b2"), assigned("demo", "b3"), assigned("demo", "b4"), assigned("demo", "b5"),
 					assigned("demo", "b6")),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(100, 512<<20)},
+			constraints: Constraints{Limits: resources.CPUMemory(100, 512<<20)},
 			wantPod:     "w-cool",
 		},
 		{
@@ -285,7 +285,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-known", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
 					assignedFor("demo", "b", resources.CPUMemory(1000, 2<<30))),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			wantPod:     "w-known",
 		},
 		{
@@ -301,7 +301,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-known", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
 					assignedFor("demo", "b", resources.CPUMemory(1000, 2<<30))),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			wantPod:     "w-known",
 		},
 		{
@@ -313,7 +313,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-large", "gvisor", "node-b", tierTwo, withMaxActors(8),
 					assigned("demo", "b"), assigned("demo", "c"), assigned("demo", "d"), assigned("demo", "e")),
 			},
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			wantPod:     "w-large",
 		},
 		{
@@ -323,7 +323,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-busy-big", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
 					assignedFor("demo", "a", resources.CPUMemory(1000, 2<<30))),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", Limits: resources.CPUMemory(1000, 2<<30)},
+			constraints: Constraints{Limits: resources.CPUMemory(1000, 2<<30)},
 			wantPod:     "w-busy-big",
 		},
 		{
@@ -332,7 +332,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
 				worker("w-amd", "gvisor", "node-b", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64"))),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
+			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
 			wantPod:     "w-amd",
 		},
 		{
@@ -341,7 +341,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-upgraded", "gvisor", "node-a", tierTwo,
 					withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
+			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
 			wantPod:     "w-upgraded",
 		},
 		{
@@ -349,7 +349,7 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
 			},
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
+			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
 		},
 	}
 
@@ -388,44 +388,62 @@ func TestApplies(t *testing.T) {
 		{
 			name:   "satisfies all constraints",
 			worker: worker("w", "gvisor", "node-a", map[string]string{"tier": "1", "workload": "a"}),
-			constraints: Constraints{SandboxClass: "gvisor", TemplateSelector: tierSel, RequiredNodes: []string{"node-a"},
+			constraints: Constraints{TemplateSelector: tierSel, RequiredNodes: []string{"node-a"},
 				ActorSelector: workloadSel},
 			want: true,
 		},
 		{
 			name:        "assignment is ignored",
 			worker:      worker("w", "gvisor", "node-a", nil, assigned("demo", "someone-else")),
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			want:        true,
 		},
 		{
-			name:        "class mismatch",
+			name:        "worker with no sandbox class",
+			worker:      worker("w", "", "node-a", nil),
+			constraints: Constraints{},
+			want:        false,
+		},
+		{
+			name:        "snapshot class pins the worker class",
 			worker:      worker("w", "microvm", "node-a", nil),
 			constraints: Constraints{SandboxClass: "gvisor"},
 			want:        false,
 		},
 		{
+			name:        "snapshot class matches without a runtime requirement",
+			worker:      worker("w", "gvisor", "node-a", nil),
+			constraints: Constraints{SandboxClass: "gvisor"},
+			want:        true,
+		},
+		{
+			name:        "no snapshot class accepts any class",
+			worker:      worker("w", "microvm", "node-a", nil),
+			constraints: Constraints{},
+			want:        true,
+		},
+		{
 			name:        "template selector mismatch",
 			worker:      worker("w", "gvisor", "node-a", map[string]string{"tier": "2"}),
-			constraints: Constraints{SandboxClass: "gvisor", TemplateSelector: tierSel},
+			constraints: Constraints{TemplateSelector: tierSel},
 			want:        false,
 		},
 		{
 			name:        "actor selector mismatch",
 			worker:      worker("w", "gvisor", "node-a", map[string]string{"workload": "b"}),
-			constraints: Constraints{SandboxClass: "gvisor", ActorSelector: workloadSel},
+			constraints: Constraints{ActorSelector: workloadSel},
 			want:        false,
 		},
 		{
 			name:        "node restriction excludes",
 			worker:      worker("w", "gvisor", "node-b", nil),
-			constraints: Constraints{SandboxClass: "gvisor", RequiredNodes: []string{"node-a"}},
+			constraints: Constraints{RequiredNodes: []string{"node-a"}},
 			want:        false,
 		},
 		{
 			name:   "AND of template and actor selectors match",
 			worker: worker("w", "gvisor", "node-a", map[string]string{"tier": "1", "workload": "a"}),
-			constraints: Constraints{SandboxClass: "gvisor",
+			constraints: Constraints{
 				TemplateSelector: tierSel,
 				ActorSelector:    workloadSel},
 			want: true,
@@ -433,7 +451,7 @@ func TestApplies(t *testing.T) {
 		{
 			name:   "AND of two selectors, one fails",
 			worker: worker("w", "gvisor", "node-a", map[string]string{"tier": "1", "workload": "b"}),
-			constraints: Constraints{SandboxClass: "gvisor",
+			constraints: Constraints{
 				TemplateSelector: tierSel,
 				ActorSelector:    workloadSel},
 			want: false,
@@ -441,38 +459,38 @@ func TestApplies(t *testing.T) {
 		{
 			name:        "skips draining worker",
 			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_DRAINING)),
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			want:        false,
 		},
 		{
 			name:        "skips unavailable worker",
 			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)),
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			want:        false,
 		},
 		{
 			name:        "skips unspecified worker",
 			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_UNSPECIFIED)),
-			constraints: Constraints{SandboxClass: "gvisor"},
+			constraints: Constraints{},
 			want:        false,
 		},
 		{
 			name:        "matches required runtime via default runtime",
 			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "amd64", "old"))),
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
+			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
 			want:        true,
 		},
 		{
 			name: "matches required runtime via restorable runtimes",
 			worker: worker("w", "gvisor", "node-a", nil,
 				withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
+			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
 			want:        true,
 		},
 		{
 			name:        "skips worker when required runtime does not match",
 			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
-			constraints: Constraints{SandboxClass: "gvisor", RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
+			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
 			want:        false,
 		},
 	}
@@ -506,10 +524,10 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 	return w
 }
 
-func sandboxRuntime(class, arch string, assetHash ...string) *ateapipb.SandboxRuntime {
+func sandboxRuntime(class, arch string, bundleHash ...string) *ateapipb.SandboxRuntime {
 	attrs := []*ateapipb.AttributeEntry{{Key: "architecture", Value: arch}}
-	if len(assetHash) > 0 && assetHash[0] != "" {
-		attrs = append(attrs, &ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: assetHash[0]})
+	if len(bundleHash) > 0 && bundleHash[0] != "" {
+		attrs = append(attrs, &ateapipb.AttributeEntry{Key: "sandbox_bundle_hash", Value: bundleHash[0]})
 	}
 	return &ateapipb.SandboxRuntime{
 		SandboxClass: class,
@@ -581,7 +599,7 @@ func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
 // because the actor it is asking about filled the worker up.
 func TestAppliesIgnoresRoom(t *testing.T) {
 	full := worker("w-full", "gvisor", "node-a", nil, withMaxActors(1), assigned("demo", "resident"))
-	constraints := Constraints{SandboxClass: "gvisor"}
+	constraints := Constraints{}
 	s := New(fleet{full})
 
 	if !s.Applies(full, constraints) {
@@ -601,7 +619,7 @@ func TestSchedulePowerOfTwoChoicesTieBreaking(t *testing.T) {
 		worker("w-1", "gvisor", "node-b", nil, withMaxActors(4), assigned("demo", "b")),
 		worker("w-2", "gvisor", "node-c", nil, withMaxActors(4), assigned("demo", "c")),
 	}
-	constraints := Constraints{SandboxClass: "gvisor"}
+	constraints := Constraints{}
 
 	// On equal utilization, Schedule must preserve the first sampled candidate so
 	// every tied worker remains reachable via the random source.
@@ -644,7 +662,7 @@ func TestSchedulePowerOfTwoChoicesShiftedSecondSample(t *testing.T) {
 		worker("w-2", "gvisor", "node-c", nil, withMaxActors(4)),
 	}
 	s := New(f, WithIntn(seqIntn(0, 1)))
-	got, err := s.Schedule(context.Background(), Constraints{SandboxClass: "gvisor"})
+	got, err := s.Schedule(context.Background(), Constraints{})
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
 	}
@@ -656,8 +674,7 @@ func TestSchedulePowerOfTwoChoicesShiftedSecondSample(t *testing.T) {
 func TestScheduleMalformedLimitsIsNotNoCapacity(t *testing.T) {
 	f := fleet{worker("w-1", "gvisor", "node-a", nil)}
 	constraints := Constraints{
-		SandboxClass: "gvisor",
-		Limits:       &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: resources.ResourceCPU, Quantity: "not-a-quantity"}}},
+		Limits: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: resources.ResourceCPU, Quantity: "not-a-quantity"}}},
 	}
 	_, err := New(f, WithIntn(firstIntn)).Schedule(context.Background(), constraints)
 	if err == nil {

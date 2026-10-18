@@ -363,7 +363,7 @@ func withSnapshotDeadline(at time.Time) func(*ateapipb.ActorTemplate) {
 
 func withGoldenTag() func(*ateapipb.ActorTemplate) {
 	return func(tmpl *ateapipb.ActorTemplate) {
-		seededGoldenStatus(tmpl).GoldenTag = &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: testTemplateUID}
+		seededGoldenStatus(tmpl).GoldenTag = &ateapipb.ObjectRef{Atespace: testTemplateRef.Atespace, Name: testTemplateUID}
 	}
 }
 
@@ -398,7 +398,7 @@ func TestGoldenSnapshotWarmupFor(t *testing.T) {
 }
 
 func TestReconcileOne(t *testing.T) {
-	goldenSnapshot := "gs://bucket/root/atespaces/ate-golden/actors/" + someActorUID + "/snapshots/snap-1"
+	goldenSnapshot := "gs://bucket/root/atespaces/ns/actors/" + someActorUID + "/snapshots/snap-1"
 	tests := []struct {
 		name     string
 		template *ateapipb.ActorTemplate // nil: template absent from the store
@@ -641,13 +641,12 @@ func TestReconcileOne(t *testing.T) {
 // TestReconcileOne_GoldenActorRequests pins the shape of the control-plane
 // requests the happy path issues: the golden actor is named after the
 // template UID so recreated templates with the same name never collide, and
-// lives in the reserved ate-golden atespace so the suspend workflow commits
-// it Full regardless of the template's preferredFidelity scope.
+// lives in the template's atespace under ordinary tenant policies.
 func TestReconcileOne_GoldenActorRequests(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeTemplateStore(testTemplate())
 
-	goldenSnapshot := "gs://bucket/root/atespaces/ate-golden/actors/" + someActorUID + "/snapshots/snap-1"
+	goldenSnapshot := "gs://bucket/root/atespaces/ns/actors/" + someActorUID + "/snapshots/snap-1"
 	control := &fakeGoldenControl{snapshot: goldenSnapshot}
 	r := newTestTemplateReconciler(st, control)
 
@@ -659,20 +658,23 @@ func TestReconcileOne_GoldenActorRequests(t *testing.T) {
 	if got := created.GetMetadata().GetName(); got != testTemplateUID {
 		t.Errorf("golden actor name = %q, want template UID %q", got, testTemplateUID)
 	}
-	if got := created.GetMetadata().GetAtespace(); got != resources.GoldenActorAtespace {
-		t.Errorf("golden actor atespace = %q, want %q", got, resources.GoldenActorAtespace)
+	if got := created.GetMetadata().GetAtespace(); got != testTemplateRef.Atespace {
+		t.Errorf("golden actor atespace = %q, want %q", got, testTemplateRef.Atespace)
 	}
 	if got := created.GetActorTemplate().GetName(); got != testTemplateName {
 		t.Errorf("golden actor template ref = %q, want %q", got, testTemplateName)
 	}
-	if len(control.atespaceReqs) != 1 || control.atespaceReqs[0].GetAtespace().GetMetadata().GetName() != resources.GoldenActorAtespace {
-		t.Errorf("atespace ensure requests = %v, want one for %q", control.atespaceReqs, resources.GoldenActorAtespace)
+	if len(control.atespaceReqs) != 0 {
+		t.Errorf("unexpected atespace creation requests: %v", control.atespaceReqs)
 	}
 	if got := control.resumeReqs[0].GetActor().GetName(); got != testTemplateUID {
 		t.Errorf("resumed actor = %q, want %q", got, testTemplateUID)
 	}
 	if got := control.suspendReqs[0].GetActor().GetName(); got != testTemplateUID {
 		t.Errorf("suspended actor = %q, want %q", got, testTemplateUID)
+	}
+	if got := control.suspendReqs[0].GetOptions().GetMode(); got != ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS {
+		t.Errorf("golden suspend mode = %v, want %v", got, ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
 	}
 	if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetSnapshotTime() == nil {
 		t.Error("stored snapshot_time is nil, want set")
@@ -888,7 +890,7 @@ func TestResync_FollowsPagination(t *testing.T) {
 }
 
 func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
-	ref := &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: testTemplateUID}
+	ref := &ateapipb.ObjectRef{Atespace: testTemplateRef.Atespace, Name: testTemplateUID}
 	completed := &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: ref.Atespace, Name: ref.Name},
 		SourceActor: ref,
@@ -977,8 +979,8 @@ func TestReconcileOne_GoldenTagConflict(t *testing.T) {
 		templateUID string
 		sourceActor *ateapipb.ObjectRef
 	}{
-		{name: "template", templateUID: "another-template", sourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: testTemplateUID}},
-		{name: "actor name", templateUID: testTemplateUID, sourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: "another-actor"}},
+		{name: "template", templateUID: "another-template", sourceActor: &ateapipb.ObjectRef{Atespace: testTemplateRef.Atespace, Name: testTemplateUID}},
+		{name: "actor name", templateUID: testTemplateUID, sourceActor: &ateapipb.ObjectRef{Atespace: testTemplateRef.Atespace, Name: "another-actor"}},
 		{name: "actor atespace", templateUID: testTemplateUID, sourceActor: &ateapipb.ObjectRef{Atespace: "another-atespace", Name: testTemplateUID}},
 	}
 	for _, tt := range tests {

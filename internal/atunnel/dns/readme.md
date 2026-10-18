@@ -39,7 +39,7 @@ Actor DNS relays DNS requests from the actor to the external world.
   - Two goroutines per accepted TCP connection sharing a per-connection downstream write mutex:
     - **Downstream reader**: loops reading length-prefixed frames from the actor connection and calls `onTCPRequest()`.
       - If forwarded: writes the unmodified frame directly to the dedicated upstream TCP connection.
-      - If rejected with a synthesized reply (`FORMERR`, `NOTIMP`, `REFUSED`): writes the framed error response directly to the actor connection under the write mutex without contacting upstream.
+      - If rejected with a synthesized reply (`FORMERR`, `NOTIMP`, `NXDOMAIN`): writes the framed error response directly to the actor connection under the write mutex without contacting upstream.
       - On client `EOF`: half-closes the upstream write side (`CloseWrite()`) so in-flight pipelined responses can finish draining.
     - **Upstream reader**: loops reading length-prefixed frames from the upstream TCP connection, validates each frame via `onTCPResponse()`, and writes valid responses back to the actor connection under the write mutex.
 
@@ -54,7 +54,7 @@ UDP and TCP call up to the DNS protocol layer (`golang.org/x/net/dns/dnsmessage`
   - **Reply** (synthesized response without upstream round-trip):
     - `FORMERR` (`RCode = 1`): malformed header/question or `QDCOUNT != 1`.
     - `NOTIMP` (`RCode = 4`): `OpCode != 0` (non-standard query) or zone transfer `QTYPE` (`AXFR`, `IXFR`).
-    - `REFUSED` (`RCode = 5`): disallowed by the Actor's egress policy (see [Egress policy](#egress-policy)).
+    - `NXDOMAIN` (`RCode = 3`): disallowed by the Actor's egress policy (see [Egress policy](#egress-policy)). `NXDOMAIN` rather than `REFUSED` so stub resolvers continue to the next `resolv.conf` search suffix; glibc and musl abort the lookup on `REFUSED`. The authority section carries a root `SOA` record with `TTL` and `MINIMUM` of 0, so resolvers do not cache the denial past a policy change (RFC 2308 §5).
 - `onUDPRequest(raw []byte, clientAddr net.Addr, upstreams []string)` -> `action`:
   - Acquires an `inFlight` slot, runs `validateRequest()`, and on `actionForward` records the query in `pendingRequests` with a rewritten `upstreamID`.
 - `onUDPResponse(raw []byte, from net.Addr)` -> `action`:

@@ -119,8 +119,9 @@ func (w *ActorWorkflow) loadReportedActor(ctx context.Context, actorRef resource
 }
 
 // actorOnNode reports whether the Actor is placed on node or has a local
-// snapshot there. Unlike HostingNode, it includes a node that only holds the
-// Actor's snapshots, since that node's atelet reports them.
+// snapshot there. Unlike HostingNode, it includes a node that holds only
+// older snapshots of an Actor placed elsewhere, since that node's atelet
+// reports them.
 func actorOnNode(actor *ateapipb.Actor, node string) bool {
 	if actor.GetStatus().GetAssignedNode() == node {
 		return true
@@ -153,21 +154,23 @@ func applyActorSnapshotState(ctx context.Context, status *ateapipb.ActorStatus, 
 }
 
 // applyCheckpointState records an upload that atelet's state, as returned by
-// Checkpoint or PromoteSnapshot, says finished, with the same rules as a
-// report. atelet echoes the Snapshot it was asked for, so the fidelity recorded
-// is the one requested, not read from the manifest. Unlike a report, a state
-// with no local snapshot is not a detach: the workflow that made the call
-// records where its snapshot lives.
+// Checkpoint, says finished, with the same rules as a report. It records the
+// fidelity atelet reports, which for Checkpoint is the one requested. Unlike a
+// report, a state with no local snapshot is not a detach. The workflow that
+// made the call records where its snapshot lives.
 func applyCheckpointState(ctx context.Context, status *ateapipb.ActorStatus, state *ateletpb.ActorSnapshotState) error {
 	return applyLatestDurable(ctx, status, snapshotReportFromAtelet(state.GetLatestDurable()))
 }
 
-// applyLatestDurable marks the reported durable snapshot COMPLETED and records
-// the fidelity from its manifest. Its uuid and upload URI must match the
-// recorded ones. A generation at or below the latest COMPLETED one changes
-// nothing, and so does one status no longer has, such as one a revert
-// discarded. A late report is expected, so an older generation and a
-// discarded one are logged at Info. A repeat of the latest isn't logged.
+// applyLatestDurable marks the reported durable snapshot COMPLETED, and records
+// its fidelity. Its uuid and upload URI must match the recorded ones, and its
+// fidelity must be set. The snapshot keeps its locality, so a paused Actor
+// stays on its node.
+//
+// A late report changes nothing and is logged at Info. A report is late when
+// its generation is older than the latest COMPLETED one, or is no longer in
+// status.snapshots, for example because a revert removed it. A repeat of the
+// latest COMPLETED generation also changes nothing, and isn't logged.
 func applyLatestDurable(ctx context.Context, status *ateapipb.ActorStatus, reported *ateapipb.SnapshotReport) error {
 	if reported == nil {
 		return nil
@@ -194,12 +197,15 @@ func applyLatestDurable(ctx context.Context, status *ateapipb.ActorStatus, repor
 	if snap.GetUuid() != reported.GetUuid() {
 		return apierror.FailedPrecondition("snapshot generation %d is recorded as %s, not %s", reported.GetGeneration(), snap.GetUuid(), reported.GetUuid())
 	}
-	want := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
-	if want == "" {
-		return apierror.FailedPrecondition("snapshot generation %d has no upload location recorded", reported.GetGeneration())
+	if snap.GetDurableSnapshot() == nil {
+		return apierror.FailedPrecondition("snapshot generation %d records no upload", reported.GetGeneration())
 	}
+	want := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if got := reported.GetObject().GetSnapshotUri(); got != want {
 		return apierror.InvalidArgument("snapshot generation %d was uploaded to %q, want %q", reported.GetGeneration(), got, want)
+	}
+	if reported.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+		return apierror.InvalidArgument("snapshot generation %d reports no fidelity", reported.GetGeneration())
 	}
 	snap.Fidelity = reported.GetFidelity()
 	snap.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
