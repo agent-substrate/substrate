@@ -1247,7 +1247,7 @@ func (s *Atelet) uploadLocalCheckpointDir(ctx context.Context, req *ateletpb.Pro
 			return "", false, nil
 		}
 		if status.Code(fetchErr) == codes.NotFound {
-			return "", false, fmt.Errorf("local snapshot %q is gone and no uploaded copy exists: %w",
+			return "", false, apierror.NotFound("local snapshot %q is gone and no uploaded copy exists: %w",
 				localSnapshotName, fetchErr)
 		}
 		return "", false, fmt.Errorf("while probing for an already-uploaded snapshot manifest: %w", fetchErr)

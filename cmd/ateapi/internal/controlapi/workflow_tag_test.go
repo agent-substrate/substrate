@@ -365,21 +365,27 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 		},
 		{
 			name:        "atelet is unavailable",
-			promoteErr:  status.Error(codes.Unavailable, "atelet restarting"),
+			promoteErr:  apierror.Unavailable("plugin: object store restarting"),
 			wantPromote: true,
 			wantCode:    codes.Unavailable,
 		},
 		{
 			name:        "the paused snapshot is gone and was never uploaded",
-			promoteErr:  fmt.Errorf("local snapshot is gone and no uploaded copy exists: %w", status.Error(codes.NotFound, "manifest not found")),
+			promoteErr:  apierror.NotFound("local snapshot is gone and no uploaded copy exists: %w", status.Error(codes.NotFound, "manifest not found")),
 			wantPromote: true,
 			wantCode:    codes.FailedPrecondition,
 		},
 		{
 			name:        "the paused snapshot's fidelity does not match",
-			promoteErr:  status.Error(codes.FailedPrecondition, "pause snapshot captured full; upload asks for memory"),
+			promoteErr:  apierror.FailedPrecondition("pause snapshot captured full; upload asks for memory"),
 			wantPromote: true,
 			wantCode:    codes.FailedPrecondition,
+		},
+		{
+			name:        "the upload fails with a plugin error atelet does not classify",
+			promoteErr:  fmt.Errorf("while uploading snapshot files: %w", status.Error(codes.NotFound, "bucket not found")),
+			wantPromote: true,
+			wantCode:    codes.Internal,
 		},
 		{
 			name:         "atelet reports no durable snapshot",
