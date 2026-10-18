@@ -77,15 +77,6 @@ func latestSnapshotIsLocal(status *ateapipb.ActorStatus) bool {
 	return snapshotAtLatestGeneration(status).GetLocality() != ""
 }
 
-// latestSnapshotIsLocalOnly reports whether the snapshot at the actor's latest
-// generation is node-local with no COMPLETED durable copy: a pause's snapshot
-// whose upload is not recorded yet.
-func latestSnapshotIsLocalOnly(status *ateapipb.ActorStatus) bool {
-	snap := snapshotAtLatestGeneration(status)
-	return snap.GetLocality() != "" &&
-		snap.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-}
-
 // clearLocalSnapshots clears Locality across all Snapshots in status.Snapshots
 // without dropping PENDING durable snapshots (so DeleteActor can still collect
 // an in-flight durable snapshot after releasing the worker).
