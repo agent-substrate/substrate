@@ -35,6 +35,8 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,10 +101,11 @@ type workerSandboxSyncer struct {
 	// index is told each pod's runtimes before its file is written, and
 	// what the pod advertises once it is.
 	index *runtimeIndex
-	// prewarm, if set, is handed the default runtime hash of every pod
-	// whose file was written, so its assets are fetched before an actor
-	// asks for them.
-	prewarm func(hash string)
+	// prewarm, if set, is handed the default runtime of every pod it
+	// plans, with a directory under the pod's to link the assets into, so
+	// they are fetched before an actor asks for them and stay cached while
+	// none runs them.
+	prewarm runtimePrewarm
 	// pods holds this node's worker pods, indexed by podUIDIndex.
 	pods   cache.Indexer
 	assets sandboxAssetFetcher
@@ -133,7 +136,7 @@ type workerSandboxSyncer struct {
 	cpuFeatures map[string]string
 }
 
-func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm func(hash string)) *workerSandboxSyncer {
+func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm) *workerSandboxSyncer {
 	return &workerSandboxSyncer{
 		resolver:   resolver,
 		pods:       pods,
@@ -155,6 +158,56 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 	}
 }
 
+// runtimePrewarm is what the syncer asks of the runtime prewarmer: fetch
+// the default runtimes of one sync and link their assets into the given
+// directory, each under its own subdirectory.
+type runtimePrewarm interface {
+	enqueue(dir string, hashes []string)
+}
+
+// defaultRuntimeDirsName is the directory under a worker's own that holds
+// one directory per sync of the worker, with a subdirectory per default
+// runtime of that sync, one per sandbox class, which the prewarmer links
+// the runtime's assets into. The links are what keeps the assets cached
+// while no actor runs them: the cache never evicts a linked entry. The
+// directories go with the worker's; the prewarm that fills a new one
+// removes the older ones.
+const defaultRuntimeDirsName = "default-runtime"
+
+// newDefaultRuntimeDir makes the directory for the default runtimes of one
+// sync of the pod, creating the pod's directory if it is not there yet.
+// The directories are numbered in sync order, as fixed-width hex so the
+// names sort as strings, and the number continues from what is on disk, so
+// the order holds across atelet restarts. The queue hands one pod to one
+// worker at a time, so reading and creating here never race.
+func (s *workerSandboxSyncer) newDefaultRuntimeDir(uid string) (string, error) {
+	parent := filepath.Join(s.podDir(uid), defaultRuntimeDirsName)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return "", fmt.Errorf("while creating the worker's default runtime dir: %w", err)
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return "", fmt.Errorf("while listing the worker's default runtime dir: %w", err)
+	}
+	var last uint64
+	for _, e := range entries {
+		if n, err := strconv.ParseUint(e.Name(), 16, 64); err == nil && n > last {
+			last = n
+		}
+	}
+	dir := filepath.Join(parent, fmt.Sprintf("%016x", last+1))
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return "", fmt.Errorf("while creating the sync's default runtime dir: %w", err)
+	}
+	return dir, nil
+}
+
+// defaultRuntimeSubdir is where one default runtime of a sync goes under
+// the sync's directory.
+func defaultRuntimeSubdir(syncDir, hash string) string {
+	return filepath.Join(syncDir, strings.ReplaceAll(hash, ":", "-"))
+}
+
 // startWorkerSandboxSyncer wires a syncer to the given informers, which the
 // caller starts, and runs it until ctx ends. pods must hold only this node's
 // worker pods and must not have started yet. Worker directories live under
@@ -167,7 +220,7 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 // or a list/watch fails (e.g. Forbidden while an RBAC rollout lags the
 // binary), existing files and index entries stay as they are and only
 // changes wait.
-func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm func(hash string)) (*workerSandboxSyncer, error) {
+func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools informersv1alpha1.WorkerPoolInformer, configs informersv1alpha1.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm) (*workerSandboxSyncer, error) {
 	if err := pods.Informer().AddIndexers(cache.Indexers{podUIDIndex: func(obj any) ([]string, error) {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok {

@@ -474,9 +474,9 @@ func bundleHash(rec *sandboxAssetsRecord, pauseDigest string) string {
 //   - plan: resolve the pool's config and its versions for this node
 //   - hash: hash each version's runtime, and make each resolvable by its
 //     hash before the file can let the worker register it
-//   - prewarm: have the default runtime's assets fetched, off this
-//     goroutine, so the probe below is its head start and the file never
-//     waits on a download
+//   - prewarm: have each default runtime's assets fetched and linked into
+//     a fresh directory under the pod's, off this goroutine, so the probe
+//     below is its head start and the file never waits on a download
 //   - build: probe what a snapshot taken on each runtime must find again
 //   - write: replace the file if its content changed, then record what
 //     the worker now advertises in the index
@@ -502,11 +502,17 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 	// file it ends with is what lets the worker take its first actor. The
 	// prewarm gets that whole duration to finish first.
 	if s.prewarm != nil {
+		var defaults []string
 		for _, v := range hashed {
 			if v.isDefault {
-				s.prewarm(v.hash)
+				defaults = append(defaults, v.hash)
 			}
 		}
+		syncDir, err := s.newDefaultRuntimeDir(string(pod.UID))
+		if err != nil {
+			return err
+		}
+		s.prewarm.enqueue(syncDir, defaults)
 	}
 	want, buildErr := s.buildFile(ctx, plan, hashed)
 	if buildErr != nil && !errors.Is(buildErr, errIncomplete) {

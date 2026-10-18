@@ -32,13 +32,8 @@ import (
 )
 
 var (
-	sandboxAssetCacheDir = pflag.String("sandbox-asset-cache-dir", ateletpath.SandboxAssetCacheDir, "Directory for the node-local sandbox asset cache (gVisor releases, micro-VM kernels, VMMs and guest images). Must be on the same filesystem mount as the actor state dirs: an actor's assets are hard links from the cache into its own directory.")
-	// TODO: no eviction pass runs on the asset cache yet, so this value is
-	// handed to the store and not consulted; set or unset, the cache behaves
-	// the same. The flag is declared ahead of the GC pass, which the next
-	// change adds and which will read it, so the operator surface does not
-	// change when it lands.
-	sandboxAssetCacheMinAge  = pflag.Duration("sandbox-asset-cache-min-age", time.Hour, "Cached sandbox assets younger than this are never evicted. No eviction pass runs on this cache yet, so the value is recorded for when one does. A running actor's assets are protected by its links regardless; this covers an asset prewarmed for a SandboxConfig that no actor on the node has used yet.")
+	sandboxAssetCacheDir     = pflag.String("sandbox-asset-cache-dir", ateletpath.SandboxAssetCacheDir, "Directory for the node-local sandbox asset cache (gVisor releases, micro-VM kernels, VMMs and guest images). Must be on the same filesystem mount as the actor state dirs: an actor's assets are hard links from the cache into its own directory.")
+	sandboxAssetCacheMinAge  = pflag.Duration("sandbox-asset-cache-min-age", time.Hour, "Cached sandbox assets younger than this are never evicted. A running actor's assets, and the default runtime of every local worker, are protected by their links regardless; this covers an asset between its fetch and its first link.")
 	sandboxAssetFetchTimeout = pflag.Duration("sandbox-asset-fetch-timeout", 5*time.Minute, "Bound on one sandbox asset download (and, for a gVisor release, its extraction). Downloads run detached from the requests waiting on them, so this is the only bound on how long one can run; a Run arriving while a download hangs waits on it until then. Sized for multi-hundred-MiB micro-VM guest images on a busy node.")
 )
 

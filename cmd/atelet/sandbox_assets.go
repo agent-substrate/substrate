@@ -168,6 +168,14 @@ func (s *Atelet) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsReco
 	if err := os.MkdirAll(dstDir, 0o700); err != nil {
 		return nil, wrapFileSystemErr("while creating sandbox assets dir", err)
 	}
+	return s.stageSandboxAssets(ctx, rec, dstDir)
+}
+
+// stageSandboxAssets is ensureSandboxAssets into a dstDir that exists: it
+// creates nothing above the assets, so a caller whose dstDir may be removed
+// under it, as the prewarmer's is when its worker goes, fails instead of
+// recreating the directory.
+func (s *Atelet) stageSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error) {
 	paths := make(map[string]string, len(rec.Assets))
 	for name, entry := range rec.Assets {
 		if !plainAssetName(name) {
