@@ -214,10 +214,10 @@ directory like `/tmp` at a fabricated 0755. `PrepareEROFSUpper(upper, spec,
 need)` resolves paths through the images with overlayfs lookup rules
 (whiteouts, opaque directories and shadowing non-directories honored) and
 creates those directories in the upper with the merged view's owner, mode,
-mtime and `user.*` / `security.capability` xattrs. `SetupBundleImageVolumes`
-composes only a bundle's image volumes, for a rootfs the consumer assembles
-itself. `SetupBundleRootfs` refuses a bundle on EROFS images: the host does
-not mount them here.
+mtime and `user.*` / `security.capability` xattrs. `SetupBundleRootfs`
+refuses a bundle on EROFS images: the host does not mount them here, and an
+EROFS bundle's image volumes (`ImageVolumeOverlay.EROFS`) are the guest's to
+mount too.
 
 **Teardown**: `UnmountAllUnder(bundleDir)` lazily detaches every mount below
 an actor's bundle directory (via `/proc/self/mountinfo`) before atelet wipes

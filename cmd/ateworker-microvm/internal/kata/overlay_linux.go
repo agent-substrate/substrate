@@ -489,7 +489,11 @@ func sandboxStorages(opts CreateSandboxOpts) []*agentpb.Storage {
 // container runs on the host-merged rootfs at shared/<cid>/rootfs. When ovl is
 // set, the agent mounts the overlay at /run/kata-containers/<cid>/rootfs inside
 // the guest.
-func (a *AgentClient) StartRootfsContainer(ctx context.Context, cid string, spec *specs.Spec, ovl *GuestOverlay) error {
+//
+// volumes are the container's EROFS image volumes (ImageVolumeStorage), which
+// the agent mounts before it creates the container, so the spec's binds of
+// them resolve.
+func (a *AgentClient) StartRootfsContainer(ctx context.Context, cid string, spec *specs.Spec, ovl *GuestOverlay, volumes []*agentpb.Storage) error {
 	pbSpec := SpecToAgentPB(spec)
 	pbSpec.Root = &agentpb.Root{Path: GuestSharedRootfs(cid), Readonly: false}
 	req := &agentpb.CreateContainerRequest{
@@ -501,6 +505,7 @@ func (a *AgentClient) StartRootfsContainer(ctx context.Context, cid string, spec
 		pbSpec.Root.Path = GuestContainerRootfs(cid)
 		req.Storages = []*agentpb.Storage{ovl.storage(cid)}
 	}
+	req.Storages = append(req.Storages, volumes...)
 	// Per-container cgroup under the shared /actor parent, so the guest
 	// kernel accounts an actor's containers hierarchically (see agentstats).
 	if pbSpec.Linux != nil {
@@ -597,6 +602,34 @@ func (o *GuestOverlay) storage(cid string) *agentpb.Storage {
 		Fstype:     "overlay",
 		Options:    o.MountOptions(),
 		MountPoint: GuestContainerRootfs(cid),
+	}
+}
+
+// ImageVolumeStorage is the agent storage that mounts an EROFS image volume
+// for cid at ocispec.GuestEROFSImageVolume: a bind of the layer's mount for
+// a one-layer image, otherwise an overlay of the layer mounts with no upper,
+// which overlayfs mounts read-only. layerMounts are top-most first. Either
+// way a write through it fails with EROFS.
+//
+// The bind goes through virtioFSDriver for the reason sandboxStorages gives:
+// that handler is a plain mount(2) of Source with Fstype and Options.
+func ImageVolumeStorage(cid, volumeName string, layerMounts []string) *agentpb.Storage {
+	mountPoint := ocispec.GuestEROFSImageVolume(cid, volumeName)
+	if len(layerMounts) == 1 {
+		return &agentpb.Storage{
+			Driver:     virtioFSDriver,
+			Source:     layerMounts[0],
+			Fstype:     "bind",
+			Options:    []string{"bind", "ro"},
+			MountPoint: mountPoint,
+		}
+	}
+	return &agentpb.Storage{
+		Driver:     overlayfsDriver,
+		Source:     "overlay",
+		Fstype:     "overlay",
+		Options:    []string{"lowerdir=" + strings.Join(layerMounts, ":")},
+		MountPoint: mountPoint,
 	}
 }
 
