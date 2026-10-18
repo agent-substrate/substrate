@@ -59,7 +59,7 @@ func ateletCrashMessage(rpc string, err error) string {
 
 // ateletErrorCrashesActor reports whether a failed call to atelet's rpc should
 // crash the actor.
-func ateletErrorCrashesActor(ctx context.Context, isTerminateRPC bool, err error) bool {
+func ateletErrorCrashesActor(ctx context.Context, rpc string, isTerminateRPC bool, err error) bool {
 	// atelet.Terminate runs while the actor is being reverted or deleted. Crashing
 	// would clear the worker assignment the retry needs to terminate a sandbox
 	// that may still be running and to detach its volumes.
@@ -72,6 +72,9 @@ func ateletErrorCrashesActor(ctx context.Context, isTerminateRPC bool, err error
 	if ctx.Err() != nil {
 		return false
 	}
+	if snapshotRPCConflict(rpc, err) {
+		return false
+	}
 
 	switch status.Code(err) {
 	// Usually transport errors or atelet retriable errors.
@@ -82,11 +85,17 @@ func ateletErrorCrashesActor(ctx context.Context, isTerminateRPC bool, err error
 	}
 }
 
+// A stale snapshot request conflicts with atelet's newer state, without
+// indicating that the actor failed. Other RPCs keep their existing policy.
+func snapshotRPCConflict(rpc string, err error) bool {
+	return (rpc == "Checkpoint" || rpc == "PromoteSnapshot") && status.Code(err) == codes.Aborted
+}
+
 // handleAteletError handles an error from the atelet call rpc made for opName.
 // It crashes the actor if ateletErrorCrashesActor says so, and otherwise
 // returns the error for the operation to be retried.
 func handleAteletError(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, rpc string, isTerminateRPC bool, err error) error {
-	if ateletErrorCrashesActor(ctx, isTerminateRPC, err) {
+	if ateletErrorCrashesActor(ctx, rpc, isTerminateRPC, err) {
 		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to Atelet error",
 			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
 		if cerr := crashActor(ctx, st, actorRef, opName, ateletCrashMessage(rpc, err)); cerr != nil {
@@ -99,6 +108,9 @@ func handleAteletError(ctx context.Context, st crashActorStore, actorRef resourc
 	// error. The actor keeps its assignment, so a retry can finish the operation.
 	if ctx.Err() != nil {
 		return fmt.Errorf("while calling atelet %s: %w: %w", rpc, err, ctx.Err())
+	}
+	if snapshotRPCConflict(rpc, err) {
+		return apierror.Aborted("while calling atelet %s: %w", rpc, err)
 	}
 	if status.Code(err) == codes.Unavailable {
 		return apierror.Unavailable("while calling atelet %s: %w", rpc, err)

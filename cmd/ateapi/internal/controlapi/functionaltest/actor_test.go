@@ -5052,6 +5052,114 @@ func TestSuspendActor_Mode(t *testing.T) {
 // TestCheckpointFailureCrashes: an atelet Checkpoint error while pausing or
 // suspending a running actor crashes it, records atelet's error text, and
 // releases its worker.
+func TestSuspendActor_SnapshotConflictPreservesState(t *testing.T) {
+	for _, mode := range []ateapipb.DurabilityMode{
+		ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS,
+		ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
+	} {
+		t.Run(mode.String(), func(t *testing.T) {
+			ctx := context.Background()
+			ns := namespaceForTest("ns-suspend-snapshot-conflict")
+			tc := setupTest(t, ns)
+			defer tc.cleanup()
+			createTemplate(t, tc, ns)
+			workerUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+			ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+			if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			}}); err != nil {
+				t.Fatalf("CreateActor: %v", err)
+			}
+			if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+				t.Fatalf("first ResumeActor: %v", err)
+			}
+			saved, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+				Actor: ref, Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			})
+			if err != nil {
+				t.Fatalf("first SuspendActor: %v", err)
+			}
+			waitForWorkerAvailable(t, tc, workerUID)
+			savedURI := durableSnapshotURI(saved.GetActor().GetStatus())
+			assertSnapshotPresent(t, tc, savedURI)
+			running, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref})
+			if err != nil {
+				t.Fatalf("second ResumeActor: %v", err)
+			}
+
+			tc.fakeAtelet.Reset()
+			tc.fakeAtelet.FailCheckpoint = status.Error(codes.Aborted, "stale snapshot generation")
+			req := &ateapipb.SuspendActorRequest{Actor: ref, Options: &ateapipb.SuspendOptions{Mode: mode}}
+			_, err = tc.client.SuspendActor(ctx, req)
+			if got := status.Code(err); got != codes.Aborted {
+				t.Fatalf("SuspendActor error = %v, want Aborted", err)
+			}
+			stored, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			st := stored.GetStatus()
+			if st.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDING || st.GetCrash() != nil {
+				t.Fatalf("status after conflict = %v, want SUSPENDING without a crash", st)
+			}
+			if !proto.Equal(st.GetWorkerAssignment(), running.GetActor().GetStatus().GetWorkerAssignment()) {
+				t.Error("snapshot conflict changed the worker assignment")
+			}
+			if got := durableSnapshotURI(st); got != savedURI {
+				t.Errorf("completed snapshot = %q, want %q", got, savedURI)
+			}
+			assertSnapshotPresent(t, tc, savedURI)
+			worker, err := tc.persistence.GetWorker(ctx, workerUID)
+			if err != nil {
+				t.Fatalf("GetWorker: %v", err)
+			}
+			if got := worker.GetStatus().GetAllocated().GetActors(); got != 1 {
+				t.Errorf("allocated actors = %d, want 1", got)
+			}
+			var pending *ateapipb.Snapshot
+			for _, snap := range st.GetSnapshots() {
+				if snap.GetGeneration() == st.GetLastAssignedGeneration() {
+					pending = snap
+				}
+			}
+			if pending.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING || pending.GetLocality() != "" {
+				t.Fatalf("in-progress snapshot = %v, want PENDING without locality", pending)
+			}
+			assertSnapshotCollected(t, tc, pending.GetDurableSnapshot().GetObject().GetSnapshotUri())
+
+			// A repeated conflict must not finalize or allocate another generation.
+			_, err = tc.client.SuspendActor(ctx, req)
+			if status.Code(err) != codes.Aborted {
+				t.Fatalf("repeated SuspendActor error = %v, want Aborted", err)
+			}
+			repeated, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+			if err != nil {
+				t.Fatalf("GetActor after repeated conflict: %v", err)
+			}
+			if !proto.Equal(repeated.GetStatus(), st) {
+				t.Error("repeated conflict changed the actor's status")
+			}
+
+			// Once atelet accepts the request, retry the same persisted snapshot.
+			tc.fakeAtelet.FailCheckpoint = nil
+			finished, err := tc.client.SuspendActor(ctx, req)
+			if err != nil {
+				t.Fatalf("SuspendActor after conflict cleared: %v", err)
+			}
+			if got := finished.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+				t.Errorf("state after retry = %v, want SUSPENDED", got)
+			}
+			if got := finished.GetActor().GetStatus().GetLastAssignedGeneration(); got != pending.GetGeneration() {
+				t.Errorf("generation after retry = %d, want %d", got, pending.GetGeneration())
+			}
+			if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+				t.Fatalf("ResumeActor after retry: %v", err)
+			}
+		})
+	}
+}
+
 func TestCheckpointFailureCrashes(t *testing.T) {
 	tests := []struct {
 		name        string
