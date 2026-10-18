@@ -191,7 +191,6 @@ func TestRecordFromRequest(t *testing.T) {
 	valid := func() *ateletpb.SandboxAssets {
 		return &ateletpb.SandboxAssets{
 			SandboxClass: "gvisor",
-			PauseImage:   testPauseImage,
 			Assets: map[string]*ateletpb.ArchAssets{
 				runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 					gvisorAssetName: {Url: "gs://bucket/gvisor.tar.zst", Sha256: sha},
@@ -207,24 +206,10 @@ func TestRecordFromRequest(t *testing.T) {
 		}
 		want := &sandboxAssetsRecord{
 			SandboxClass: "gvisor",
-			PauseImage:   testPauseImage,
 			Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor.tar.zst", SHA256: sha}},
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("recordFromRequest mismatch (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("microvm needs no pause image", func(t *testing.T) {
-		sa := valid()
-		sa.SandboxClass = "microvm"
-		sa.PauseImage = ""
-		got, err := recordFromRequest(sa)
-		if err != nil {
-			t.Fatalf("recordFromRequest: %v", err)
-		}
-		if got.PauseImage != "" {
-			t.Errorf("PauseImage = %q, want empty", got.PauseImage)
 		}
 	})
 
@@ -235,10 +220,6 @@ func TestRecordFromRequest(t *testing.T) {
 		{"missing", func(*ateletpb.SandboxAssets) *ateletpb.SandboxAssets { return nil }},
 		{"no assets for this architecture", func(sa *ateletpb.SandboxAssets) *ateletpb.SandboxAssets {
 			sa.Assets = map[string]*ateletpb.ArchAssets{"not-" + runtime.GOARCH: sa.Assets[runtime.GOARCH]}
-			return sa
-		}},
-		{"gvisor without pause image", func(sa *ateletpb.SandboxAssets) *ateletpb.SandboxAssets {
-			sa.PauseImage = ""
 			return sa
 		}},
 	} {

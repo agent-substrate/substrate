@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -231,7 +232,6 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 	}
 	sandboxAssets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
-		PauseImage:   pinnedImage,
 		Assets: map[string]*ateletpb.ArchAssets{
 			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 				gvisorAssetName: release.proto(),
@@ -416,22 +416,24 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	host := imageVolumeTestRegistry(t)
 	image := host + "/actor:v1"
 	pinnedImage := pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
-	checkpointPause := pushTestImage(t, host+"/pause:v1", singleFileLayer(t, "pause", "pause-v1"))
-	restorePause := pushTestImage(t, host+"/pause:v2", singleFileLayer(t, "pause", "pause-v2"))
 
-	release := newGVisorTestRelease(t)
+	// The two releases differ in content, so they have distinct bundle hashes.
+	release := func(runsc string) gvisorTestRelease {
+		tarball := gvisorReleaseTarballWith(t, runsc)
+		return gvisorTestRelease{tarball: tarball, entry: assetEntry{URL: "gs://test-bucket/gvisor.tar", SHA256: fmt.Sprintf("%x", sha256.Sum256(tarball))}}
+	}
+	checkpointRelease, restoreRelease := release("runsc v1"), release("runsc v2")
 	s := &Atelet{
 		workerDialer:      newWorkerDialer(1),
 		imageCache:        newImageVolumeStore(t),
 		sandboxAssetCache: newTestAssetCache(t),
-		anonGCSClient:     fakeObjectStorage{data: release.tarball},
+		anonGCSClient:     fakeObjectStorage{data: checkpointRelease.tarball},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 	}
-	assetsWithPause := func(pause string) *ateletpb.SandboxAssets {
+	assetsFor := func(release gvisorTestRelease) *ateletpb.SandboxAssets {
 		return &ateletpb.SandboxAssets{
 			SandboxClass: "gvisor",
-			PauseImage:   pause,
 			Assets: map[string]*ateletpb.ArchAssets{
 				runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 					gvisorAssetName: release.proto(),
@@ -443,7 +445,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
 
-	advertiseRuntime(t, s, assetsWithPause(checkpointPause))
+	advertiseRuntime(t, s, assetsFor(checkpointRelease))
 	if _, err := s.Run(ctx, &ateletpb.RunRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
@@ -451,7 +453,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          workerPodUID,
-		SandboxAssets:         assetsWithPause(checkpointPause), SandboxRuntime: runtimeFor(t, assetsWithPause(checkpointPause)),
+		SandboxAssets:         assetsFor(checkpointRelease), SandboxRuntime: runtimeFor(t, assetsFor(checkpointRelease)),
 		Spec: spec,
 	}); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -479,11 +481,12 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unmarshalling snapshot manifest: %v", err)
 	}
-	if manifestRec.PauseImage != checkpointPause {
-		t.Fatalf("manifest pause image = %q, want %q", manifestRec.PauseImage, checkpointPause)
+	if got, want := manifestRec.Assets[gvisorAssetName].SHA256, checkpointRelease.entry.SHA256; got != want {
+		t.Fatalf("manifest gvisor sha256 = %q, want %q", got, want)
 	}
 
-	advertiseRuntime(t, s, assetsWithPause(restorePause))
+	s.anonGCSClient = fakeObjectStorage{data: restoreRelease.tarball}
+	advertiseRuntime(t, s, assetsFor(restoreRelease))
 	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
@@ -491,7 +494,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          workerPodUID,
-		SandboxAssets:         assetsWithPause(restorePause), SandboxRuntime: runtimeFor(t, assetsWithPause(restorePause)),
+		SandboxAssets:         assetsFor(restoreRelease), SandboxRuntime: runtimeFor(t, assetsFor(restoreRelease)),
 		Spec: spec,
 		Snapshot: &ateletpb.Snapshot{
 			SnapshotUuid: snapshotName,
@@ -506,8 +509,8 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading on-node sandbox record: %v", err)
 	}
-	if got.PauseImage != restorePause {
-		t.Errorf("restored actor pause image = %q, want the request's %q", got.PauseImage, restorePause)
+	if sha, want := got.Assets[gvisorAssetName].SHA256, restoreRelease.entry.SHA256; sha != want {
+		t.Errorf("restored actor gvisor sha256 = %q, want the request's %q", sha, want)
 	}
 }
 
@@ -552,7 +555,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			release := newGVisorTestRelease(t)
 			if tc.restore && tc.failure != "manifest" {
 				writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
-					SandboxClass: "gvisor", PauseImage: testPauseImage,
+					SandboxClass:  "gvisor",
 					Assets:        map[string]assetEntry{gvisorAssetName: release.entry},
 					SnapshotFiles: []string{"checkpoint.img"},
 				}, map[string]string{"checkpoint.img": "guest-memory"})
@@ -589,7 +592,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			}
 			s := &Atelet{anonGCSClient: storage, systemInfoVolumes: refresher, snapshots: snapshottracker.New(t.Context(), nil, clock.RealClock{}), sandboxAssetCache: newTestAssetCache(t)}
 			assets := &ateletpb.SandboxAssets{
-				SandboxClass: "gvisor", PauseImage: testPauseImage,
+				SandboxClass: "gvisor",
 				Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 					gvisorAssetName: release.proto(),
 				}}},
@@ -685,6 +688,7 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 	}
 	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: missingImage(t)}},
 		Volumes: []*ateletpb.Volume{{
 			Name:       "trust",
 			SystemInfo: trustVolumeSpec("ca.pem"),
@@ -692,7 +696,6 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	}
 	assets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
-		PauseImage:   missingPauseImage(t),
 		Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 			gvisorAssetName: release.proto(),
 		}}},
@@ -706,7 +709,7 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		SandboxAssets: assets, SandboxRuntime: runtimeFor(t, assets),
 		Spec: spec,
 	})
-	if err == nil || !strings.Contains(err.Error(), "while creating pause OCI bundle") {
+	if err == nil || !strings.Contains(err.Error(), `while creating "app" OCI bundle`) {
 		t.Fatalf("Run error = %v, want the post-registration OCI preparation failure", err)
 	}
 	if _, err := os.ReadFile(filepath.Join(ateletpath.SystemInfoVolumeRoot(actorUID, "trust"), "ca.pem")); err != nil {
@@ -717,12 +720,12 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	}
 }
 
-// missingPauseImage returns a digest-pinned reference that passes request
+// missingImage returns a digest-pinned reference that passes request
 // validation but names a manifest the local test registry does not serve, so
 // the pull fails only once OCI bundle preparation starts.
-func missingPauseImage(t *testing.T) string {
+func missingImage(t *testing.T) string {
 	t.Helper()
-	return imageVolumeTestRegistry(t) + "/pause@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	return imageVolumeTestRegistry(t) + "/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 }
 
 func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
@@ -731,22 +734,24 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		actorUID     = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a63"
 		snapshotName = "pause-snap-after"
 	)
-	pauseImage := missingPauseImage(t)
+	image := missingImage(t)
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
 	refresher := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	release := newGVisorTestRelease(t)
 	writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    pauseImage,
 		Assets:        map[string]assetEntry{gvisorAssetName: release.entry},
 		SnapshotFiles: []string{"checkpoint.img"},
 	}, map[string]string{"checkpoint.img": "guest-memory"})
 
-	spec := &ateletpb.WorkloadSpec{Volumes: []*ateletpb.Volume{{
-		Name:       "trust",
-		SystemInfo: trustVolumeSpec("ca.pem"),
-	}}}
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: image}},
+		Volumes: []*ateletpb.Volume{{
+			Name:       "trust",
+			SystemInfo: trustVolumeSpec("ca.pem"),
+		}},
+	}
 	s := &Atelet{
 		sandboxAssetCache: newTestAssetCache(t),
 		anonGCSClient:     fakeObjectStorage{data: release.tarball},
@@ -756,7 +761,6 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	}
 	assets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
-		PauseImage:   pauseImage,
 		Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 			gvisorAssetName: release.proto(),
 		}}},
@@ -775,7 +779,7 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "while creating pause OCI bundle") {
+	if err == nil || !strings.Contains(err.Error(), `while creating "app" OCI bundle`) {
 		t.Fatalf("Restore error = %v, want the post-registration OCI preparation failure", err)
 	}
 	if _, err := os.ReadFile(filepath.Join(ateletpath.SystemInfoVolumeRoot(actorUID, "trust"), "ca.pem")); err != nil {
@@ -809,7 +813,6 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 	release := newGVisorTestRelease(t)
 	sandboxAssets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
-		PauseImage:   pinnedImage,
 		Assets: map[string]*ateletpb.ArchAssets{
 			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 				gvisorAssetName: release.proto(),
@@ -821,7 +824,6 @@ func TestRestorePrefersLocalAndFallsBackToObjectStorage(t *testing.T) {
 	}
 	manifestRec := sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    pinnedImage,
 		Assets:        map[string]assetEntry{gvisorAssetName: release.entry},
 		SnapshotFiles: []string{"checkpoint.img"},
 	}
@@ -950,7 +952,7 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 	)
 	release := newGVisorTestRelease(t)
 	assets := &ateletpb.SandboxAssets{
-		SandboxClass: "gvisor", PauseImage: testPauseImage,
+		SandboxClass: "gvisor",
 		Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 			gvisorAssetName: release.proto(),
 		}}},
@@ -982,7 +984,7 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 			useTempNodeDirs(t)
 			if tc.unusableLocal {
 				writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
-					SandboxClass: "gvisor", PauseImage: testPauseImage, SnapshotFiles: []string{"checkpoint.img"},
+					SandboxClass: "gvisor", SnapshotFiles: []string{"checkpoint.img"},
 				}, nil)
 			}
 			// The object store is empty: nothing was ever uploaded.
@@ -1116,7 +1118,6 @@ func runPluginActor(t *testing.T) *pluginActor {
 	a.s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
 	a.assets = &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
-		PauseImage:   pinnedImage,
 		Assets: map[string]*ateletpb.ArchAssets{
 			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 				gvisorAssetName: release.proto(),
@@ -1386,7 +1387,6 @@ func TestConcurrentRunsShareOneAssetDownload(t *testing.T) {
 	}
 	sandboxAssets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
-		PauseImage:   pinnedImage,
 		Assets: map[string]*ateletpb.ArchAssets{
 			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 				gvisorAssetName: release.proto(),
@@ -1732,10 +1732,7 @@ func advertiseRuntime(t *testing.T, s *Atelet, sa *ateletpb.SandboxAssets) {
 	if err != nil {
 		t.Fatalf("recordFromRequest: %v", err)
 	}
-	hash, err := versionBundleHash(rec)
-	if err != nil {
-		t.Fatalf("versionBundleHash: %v", err)
-	}
+	hash := bundleHash(rec)
 	s.runtimes.register("test-worker-pod", advertisedClass{
 		class:  v1alpha1.SandboxClass(rec.SandboxClass),
 		config: "test-config",
@@ -1759,7 +1756,6 @@ func TestRunRejectsUnadvertisedRuntime(t *testing.T) {
 	}
 	assets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
-		PauseImage:   testPauseImage,
 		Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 			gvisorAssetName: release.proto(),
 		}}},
@@ -1803,10 +1799,7 @@ func runtimeFor(t *testing.T, sa *ateletpb.SandboxAssets) *ateletpb.SandboxRunti
 	if err != nil {
 		t.Fatalf("recordFromRequest: %v", err)
 	}
-	hash, err := versionBundleHash(rec)
-	if err != nil {
-		t.Fatalf("versionBundleHash: %v", err)
-	}
+	hash := bundleHash(rec)
 	return &ateletpb.SandboxRuntime{
 		SandboxClass: sa.GetSandboxClass(),
 		Version: &ateletpb.VersionedSandboxCompat{
@@ -2028,7 +2021,6 @@ func TestPromoteSnapshotRejectsStaleGeneration(t *testing.T) {
 	} {
 		writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(pluginActorUID, stale.GetSnapshotUuid()), sandboxAssetsRecord{
 			SandboxClass:  "gvisor",
-			PauseImage:    a.assets.GetPauseImage(),
 			SnapshotFiles: []string{"checkpoint.img"},
 			Fidelity:      "MEMORY",
 		}, map[string]string{"checkpoint.img": "stale-memory"})
@@ -2141,7 +2133,6 @@ func TestCheckpointSkipsStaleCommitAndKeepsNewerLocal(t *testing.T) {
 	snap3Dir := ateletpath.LocalSnapshotDir(pluginActorUID, snap3.GetSnapshotUuid())
 	writeLocalSnapshot(t, snap3Dir, sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    a.assets.GetPauseImage(),
 		SnapshotFiles: []string{"checkpoint.img"},
 		Fidelity:      "MEMORY",
 	}, map[string]string{"checkpoint.img": "newer-memory"})

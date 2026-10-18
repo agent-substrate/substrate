@@ -823,8 +823,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		return tele, err
 	}
 
-	// The sandbox binaries and pause image come from the assigned worker's
-	// pool SandboxConfig on every path, restores included.
+	// The sandbox binaries come from the assigned worker's pool SandboxConfig
+	// on every path, restores included.
 	sandboxAssets, err := resolveSandboxAssets(w.workerPoolLister, w.sandboxConfigLister, assignment)
 	if err != nil {
 		return tele, fmt.Errorf("while resolving sandbox assets: %w", err)

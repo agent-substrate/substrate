@@ -22,7 +22,8 @@ import (
 	"go.ate.dev/substrate/internal/sizing"
 )
 
-// PauseContainer is the name of the sandbox root container. The underscore
+// PauseContainer is the runsc ID of the sandbox. runsc creates it with
+// -no-root-container, so it has no process and no rootfs. The underscore
 // keeps it outside the k8s-short-name an ActorTemplate container
 // name is drawn from, so no actor container can collide with it.
 const PauseContainer = "_pause"
@@ -45,13 +46,17 @@ func GVisorCgroupLeaf(actorUID, containerName string) string {
 }
 
 // ShapeGVisor adds runsc CRI annotations, durable-dir mount hints, and
-// per-container cgroups to the spec. It is idempotent.
+// per-container cgroups to the spec. It removes the process, rootfs, and
+// mounts from the sandbox spec. It is idempotent.
 func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 	if spec.Annotations == nil {
 		spec.Annotations = make(map[string]string)
 	}
 	spec.Annotations["io.kubernetes.cri.container-name"] = o.ContainerName
 	if o.ContainerName == PauseContainer {
+		spec.Process = nil
+		spec.Root = nil
+		spec.Mounts = nil
 		spec.Annotations["io.kubernetes.cri.container-type"] = "sandbox"
 		for _, v := range o.DurableVolumes {
 			spec.Annotations["dev.gvisor.spec.mount."+v+".type"] = "tmpfs"

@@ -121,9 +121,9 @@ The rewritten reference then keeps that tag and adds the digest it names, as
 tagged release. Resolving the digest is one HEAD request per image, cached for
 the install, so `--image-repo` needs read access to the registry from wherever
 `ate-setup` runs rather than only from the cluster. It is not optional: an
-ActorTemplate's container image, an image volume's reference, and a
-SandboxConfig's `pauseImage` each carry the CEL rule `self.contains('@')`, so an
-unpinned reference is rejected by admission and every demo fails to deploy.
+ActorTemplate's container image and an image volume's reference each carry the
+CEL rule `self.contains('@')`, so an unpinned reference is rejected by admission
+and every demo fails to deploy.
 Pinning also gives a pre-built install the property a `ko` install had for free,
 that a tag moving afterwards cannot change what is running.
 

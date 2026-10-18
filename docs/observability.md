@@ -12,7 +12,7 @@ To make underlying infrastructure transitions transparent, Agent Substrate estab
 * `ate.actor.uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
 * `ate.template.name`: The name of the actor's ActorTemplate (e.g., `counter`).
 * `ate.template.atespace`: The atespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
-* `ate.actor.container.name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container. Absent on the synthetic lifecycle records (`Actor starting`, `Actor restored`, …): those are about the actor, so no container produced them. The `runsc create`, `start`, and `restore` CLI output and the pause container's stdio are wrapped under `_pause`. This does not capture sentry or gofer output, which runsc directs to `/dev/null` when debug logging is disabled.
+* `ate.actor.container.name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container. Absent on the synthetic lifecycle records (`Actor starting`, `Actor restored`, …): those are about the actor, so no container produced them. The `runsc create`, `start`, and `restore` CLI output for the sandbox is wrapped under `_pause`. This does not capture sentry or gofer output, which runsc directs to `/dev/null` when debug logging is disabled.
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and on-demand request tracing, with roadmap plans to fully integrate actor-level correlation.
 
@@ -74,7 +74,7 @@ An actor can run several containers. By default application container logs and s
 kubectl ate logs actor <actor-name> -a <atespace> -c <container-name>
 ```
 
-To view the pause container's runsc diagnostics explicitly:
+To view the sandbox's runsc diagnostics explicitly:
 
 ```bash
 kubectl ate logs actors <actor-name> -a <atespace> -c _pause
