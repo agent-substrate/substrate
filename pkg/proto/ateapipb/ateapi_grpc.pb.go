@@ -96,8 +96,9 @@ type ControlClient interface {
 	// Resume an actor from its latest snapshot.
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
 	// Revert an actor to SUSPENDED state at its durable snapshot.
-	// Only crashed or running actors, or suspended actors whose snapshot has
-	// not reached storage yet, can be reverted.
+	// Only crashed or running actors, or suspended actors with a node-local
+	// snapshot, can be reverted. A suspended actor without a node-local snapshot
+	// is already at its durable snapshot, so there is nothing to revert.
 	RevertActor(ctx context.Context, in *RevertActorRequest, opts ...grpc.CallOption) (*RevertActorResponse, error)
 	// Delete an actor. Only suspended or crashed actors can be deleted unless
 	// any_state is set.
@@ -659,8 +660,9 @@ type ControlServer interface {
 	// Resume an actor from its latest snapshot.
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
 	// Revert an actor to SUSPENDED state at its durable snapshot.
-	// Only crashed or running actors, or suspended actors whose snapshot has
-	// not reached storage yet, can be reverted.
+	// Only crashed or running actors, or suspended actors with a node-local
+	// snapshot, can be reverted. A suspended actor without a node-local snapshot
+	// is already at its durable snapshot, so there is nothing to revert.
 	RevertActor(context.Context, *RevertActorRequest) (*RevertActorResponse, error)
 	// Delete an actor. Only suspended or crashed actors can be deleted unless
 	// any_state is set.
