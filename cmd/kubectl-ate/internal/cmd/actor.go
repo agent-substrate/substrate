@@ -747,7 +747,7 @@ func (f logLineFilter) matches(emitter resources.ActorRef, containerName string)
 		}
 	}
 	if f.container == "" {
-		return containerName != ocispec.PauseContainer
+		return containerName != ocispec.SandboxID
 	}
 	return containerName == f.container
 }
@@ -869,7 +869,7 @@ func init() {
 
 	logsActorsCmd.Flags().BoolVarP(&logsActorFollowFlag, "follow", "f", false, "stream logs continuously")
 	logsActorsCmd.Flags().StringVarP(&logsActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
-	logsActorsCmd.Flags().StringVarP(&logsActorContainerFlag, "container", "c", "", "show only logs from a named container; use _pause for runsc diagnostics")
+	logsActorsCmd.Flags().StringVarP(&logsActorContainerFlag, "container", "c", "", "show only logs from a named container; use _sandbox for runsc diagnostics")
 	logsActorsCmd.Flags().StringVar(&logsActorSourceFlag, "source", string(logSourceAll), "which lines to show: all, containers (container output, no lifecycle events), or lifecycle (only the actor's lifecycle events)")
 	logsCmd.AddCommand(logsActorsCmd)
 }

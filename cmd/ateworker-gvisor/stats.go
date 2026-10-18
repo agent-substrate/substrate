@@ -72,10 +72,10 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 //
 // What the leaf holds besides the actor's own work: the sentry's own overhead
 // (its Go heap, page tables, netstack) and the gofers. Process listings taken
-// on a live node in #161 put runsc-sandbox and the gofers in the _pause
-// cgroup. Those runs predate #496, so they establish the leaf name and the
-// fact that everything lands in one leaf, not the absolute path, which #496's
-// delegation moved under the pod scope.
+// on a live node in #161 put runsc-sandbox and the gofers in the sandbox's
+// cgroup leaf. Those runs predate #496, so they establish that everything
+// lands in one leaf, not its name or absolute path, which #496's delegation
+// moved under the pod scope.
 //
 // So this measures the sandbox, not the actor's processes in isolation, which
 // is what the proto means by "the unit of measurement is the SANDBOX". Sizing
@@ -86,7 +86,7 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // accounting, which the proto already says is not reported here.
 //
 // ocispec.GVisorCgroupLeaf supplies the leaf name for both shaping and stats.
-const sandboxCgroupContainer = ocispec.PauseContainer
+const sandboxCgroupContainer = ocispec.SandboxID
 
 // GetWorkloadStats implements ateworkerpb.Worker/GetWorkloadStats.
 //

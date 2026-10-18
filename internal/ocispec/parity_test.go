@@ -154,7 +154,7 @@ func TestShapeGVisor_Idempotent(t *testing.T) {
 // durable-dir mount hints.
 func TestShapeGVisor_Sandbox(t *testing.T) {
 	spec := Build(parityOptions)
-	ShapeGVisor(spec, GVisorOptions{ActorUID: testActorUID, ActorDirs: parityActorDirs, ContainerName: PauseContainer, DurableVolumes: []string{"data"}, Size: paritySize})
+	ShapeGVisor(spec, GVisorOptions{ActorUID: testActorUID, ActorDirs: parityActorDirs, ContainerName: SandboxID, DurableVolumes: []string{"data"}, Size: paritySize})
 	if spec.Process != nil || spec.Root != nil || spec.Mounts != nil {
 		t.Errorf("sandbox spec has process %v, root %v, mounts %v; want none", spec.Process, spec.Root, spec.Mounts)
 	}
@@ -176,7 +176,7 @@ func TestShapeGVisor_Sandbox(t *testing.T) {
 // sentry backs every container, so the sandbox cgroup is the only one that
 // binds. The sandbox spec keeps its limits, cgroup, and namespaces.
 func TestShapeGVisor_AppliesTheActorSize(t *testing.T) {
-	for _, name := range []string{"app", PauseContainer} {
+	for _, name := range []string{"app", SandboxID} {
 		spec := Build(parityOptions)
 		ShapeGVisor(spec, GVisorOptions{ActorUID: testActorUID, ContainerName: name, Size: paritySize})
 		if got := *spec.Linux.Resources.Memory.Limit; got != paritySize.MemoryBytes {

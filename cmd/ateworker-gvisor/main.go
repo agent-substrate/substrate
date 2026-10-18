@@ -671,18 +671,18 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			}
 		}
 	}()
-	containersToDelete = append(containersToDelete, ocispec.PauseContainer)
+	containersToDelete = append(containersToDelete, ocispec.SandboxID)
 	// Attribute the sandbox's runsc CLI output to the actor.
-	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
+	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.SandboxID)
 	if err != nil {
 		return nil, fmt.Errorf("while starting sandbox log pipe: %w", err)
 	}
 	defer pw.Close()
-	if err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, nil); err != nil {
+	if err := rcmd.cmdCreate(ctx, pw, ocispec.SandboxID, nil); err != nil {
 		return nil, fmt.Errorf("while creating the sandbox: %w", err)
 	}
 	s.pinSandbox(ctx, hosted, req.GetActorDirs())
-	if err := rcmd.cmdStart(ctx, pw, ocispec.PauseContainer); err != nil {
+	if err := rcmd.cmdStart(ctx, pw, ocispec.SandboxID); err != nil {
 		return nil, fmt.Errorf("while starting the sandbox: %w", err)
 	}
 
@@ -823,7 +823,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 			return nil, fmt.Errorf("no durable-dir volumes found for VOLUMES snapshot")
 		}
 		checkpointFn = func(ctx context.Context) error {
-			err := rcmd.cmdFsCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
+			err := rcmd.cmdFsCheckpoint(ctx, ocispec.SandboxID, checkpointPath, durablePaths)
 			timing.fsCheckpoint = lap(&tLast)
 			if err != nil {
 				return fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
@@ -832,7 +832,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 		checkpointFn = func(ctx context.Context) error {
-			err := rcmd.cmdFsCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, fsPaths)
+			err := rcmd.cmdFsCheckpoint(ctx, ocispec.SandboxID, checkpointPath, fsPaths)
 			timing.fsCheckpoint = lap(&tLast)
 			if err != nil {
 				return fmt.Errorf("while checkpointing container filesystems: %w", err)
@@ -859,7 +859,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 					defer sandbox.Close()
 				}
 			}
-			err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, fsPaths)
+			err := rcmd.cmdCheckpoint(ctx, ocispec.SandboxID, checkpointPath, fsPaths)
 			if err != nil {
 				// the actor may stay RUNNING, so its sandbox dying is a crash
 				// again, including if this checkpoint stopped it
@@ -944,7 +944,7 @@ func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []
 	for _, ctr := range containers {
 		names = append(names, ctr.GetName())
 	}
-	names = append(names, ocispec.PauseContainer)
+	names = append(names, ocispec.SandboxID)
 
 	// Check state of all containers to mimic containerd.
 	// Without this, `runsc delete` occasionally throws an error.
@@ -1087,7 +1087,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	// Attribute the sandbox's runsc CLI output to the actor.
-	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
+	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.SandboxID)
 	if err != nil {
 		return nil, fmt.Errorf("while starting sandbox log pipe: %w", err)
 	}
@@ -1095,29 +1095,29 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	switch fidelity {
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 		// Create and start the sandbox (cold boot with filesystem checkpoint bundles restored)
-		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-		err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, restoreArgs)
-		timing.pauseCreate = lap(&tLast)
+		containersToDelete = append(containersToDelete, ocispec.SandboxID)
+		err := rcmd.cmdCreate(ctx, pw, ocispec.SandboxID, restoreArgs)
+		timing.sandboxCreate = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while creating the sandbox: %w", err)
 		}
 		s.pinSandbox(ctx, hosted, req.GetActorDirs())
-		err = rcmd.cmdStart(ctx, pw, ocispec.PauseContainer)
-		timing.pauseRestore = lap(&tLast)
+		err = rcmd.cmdStart(ctx, pw, ocispec.SandboxID)
+		timing.sandboxRestore = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while starting the sandbox: %w", err)
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Create and restore the sandbox (restores process state and filesystem checkpoint bundles)
-		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-		err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, restoreArgs)
-		timing.pauseCreate = lap(&tLast)
+		containersToDelete = append(containersToDelete, ocispec.SandboxID)
+		err := rcmd.cmdCreate(ctx, pw, ocispec.SandboxID, restoreArgs)
+		timing.sandboxCreate = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while creating the sandbox: %w", err)
 		}
 		s.pinSandbox(ctx, hosted, req.GetActorDirs())
-		err = rcmd.cmdRestore(ctx, pw, ocispec.PauseContainer, checkpointDir)
-		timing.pauseRestore = lap(&tLast)
+		err = rcmd.cmdRestore(ctx, pw, ocispec.SandboxID, checkpointDir)
+		timing.sandboxRestore = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while restoring the sandbox: %w", err)
 		}
@@ -1173,7 +1173,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 	dropActorCheckpointCacheAsync(hosted.ctx, req.GetActorUid(), checkpointDir, req.GetPreserveRestoreDir(), func(waitCtx context.Context) error {
 		if fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
-			if err := rcmd.cmdWaitRestore(waitCtx, ocispec.PauseContainer); err != nil {
+			if err := rcmd.cmdWaitRestore(waitCtx, ocispec.SandboxID); err != nil {
 				return err
 			}
 		}

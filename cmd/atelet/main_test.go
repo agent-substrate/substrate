@@ -343,7 +343,7 @@ func TestPrepareOCIBundlesNoSandboxBundle(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(ateletpath.OCIBundlePath(actorUID, "app"), imagecache.OverlaySpecFileName)); err != nil {
 		t.Errorf("app bundle: %v", err)
 	}
-	if _, err := os.Stat(ateletpath.OCIBundlePath(actorUID, ocispec.PauseContainer)); !os.IsNotExist(err) {
+	if _, err := os.Stat(ateletpath.OCIBundlePath(actorUID, ocispec.SandboxID)); !os.IsNotExist(err) {
 		t.Errorf("sandbox bundle stat = %v, want it absent", err)
 	}
 }

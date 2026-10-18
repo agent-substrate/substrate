@@ -85,7 +85,7 @@ func durableVolumeNames(spec *ateworkerpb.WorkloadSpec) []string {
 // noRootContainerArgs returns the flag that tells runsc the sandbox has no
 // root container. runsc refuses the flag for any other container.
 func noRootContainerArgs(containerName string) []string {
-	if containerName == ocispec.PauseContainer {
+	if containerName == ocispec.SandboxID {
 		return []string{"-no-root-container"}
 	}
 	return nil
@@ -94,8 +94,8 @@ func noRootContainerArgs(containerName string) []string {
 // writeSpec builds the container's OCI spec, shapes it for gVisor, and saves it
 // into the container's bundle.
 func (r *runsc) writeSpec(containerName string) error {
-	container := &ateworkerpb.Container{Name: ocispec.PauseContainer}
-	if containerName != ocispec.PauseContainer {
+	container := &ateworkerpb.Container{Name: ocispec.SandboxID}
+	if containerName != ocispec.SandboxID {
 		i := slices.IndexFunc(r.containers, func(c *ateworkerpb.Container) bool { return c.GetName() == containerName })
 		if i < 0 {
 			return fmt.Errorf("container %q is not in the workload spec", containerName)

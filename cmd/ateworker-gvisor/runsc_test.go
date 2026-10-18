@@ -50,7 +50,7 @@ func TestWriteSpec(t *testing.T) {
 		actorDirs:  actorDirs,
 		containers: []*ateworkerpb.Container{{Name: "app", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app", "serve"}}}},
 	}
-	for _, name := range []string{"app", ocispec.PauseContainer} {
+	for _, name := range []string{"app", ocispec.SandboxID} {
 		if err := r.writeSpec(name); err != nil {
 			t.Fatalf("writeSpec(%q) = %v", name, err)
 		}
@@ -65,7 +65,7 @@ func TestWriteSpec(t *testing.T) {
 		if got := spec.Annotations["io.kubernetes.cri.container-name"]; got != name {
 			t.Errorf("%s container-name annotation = %q, want the spec shaped for gVisor", name, got)
 		}
-		if name == ocispec.PauseContainer {
+		if name == ocispec.SandboxID {
 			if spec.Process != nil || spec.Root != nil || spec.Mounts != nil {
 				t.Errorf("sandbox spec has process %v, root %v, mounts %v; want none", spec.Process, spec.Root, spec.Mounts)
 			}
@@ -211,7 +211,7 @@ func TestCheckpointArgs(t *testing.T) {
 	}
 	checkpointDir := "/node/actors/test-actor-123/checkpoints/snap-1"
 
-	got := r.checkpointArgs(ocispec.PauseContainer, checkpointDir, []string{"rootfs/=app:/", "fs/=app:/var/data"})
+	got := r.checkpointArgs(ocispec.SandboxID, checkpointDir, []string{"rootfs/=app:/", "fs/=app:/var/data"})
 	want := []string{
 		"-global1",
 		"-global2",
@@ -220,7 +220,7 @@ func TestCheckpointArgs(t *testing.T) {
 		"-image-path", checkpointDir,
 		"-fs-checkpoint-paths", "rootfs/=app:/",
 		"-fs-checkpoint-paths", "fs/=app:/var/data",
-		ocispec.PauseContainer,
+		ocispec.SandboxID,
 	}
 
 	if !reflect.DeepEqual(got, want) {
@@ -237,7 +237,7 @@ func TestFsCheckpointArgs(t *testing.T) {
 	}
 	checkpointDir := "/node/actors/test-actor-123/checkpoints/snap-1"
 
-	got := r.fsCheckpointArgs(ocispec.PauseContainer, checkpointDir, []string{"rootfs/=app:/", "fs/=app:/var/data"})
+	got := r.fsCheckpointArgs(ocispec.SandboxID, checkpointDir, []string{"rootfs/=app:/", "fs/=app:/var/data"})
 	want := []string{
 		"-global1",
 		"-global2",
@@ -246,7 +246,7 @@ func TestFsCheckpointArgs(t *testing.T) {
 		"-image-path", checkpointDir,
 		"-path", "rootfs/=app:/",
 		"-path", "fs/=app:/var/data",
-		ocispec.PauseContainer,
+		ocispec.SandboxID,
 	}
 
 	if !reflect.DeepEqual(got, want) {
@@ -268,7 +268,7 @@ func TestCreateArgs(t *testing.T) {
 		extra     []string
 		want      []string
 	}{{
-		container: ocispec.PauseContainer,
+		container: ocispec.SandboxID,
 		extra:     []string{"-fs-restore-image-path", "/snap/fs"},
 		want: []string{
 			"-global1",
@@ -276,10 +276,10 @@ func TestCreateArgs(t *testing.T) {
 			"-root", "/node/actors/test-actor-123/runsc-state",
 			"create",
 			"-no-root-container",
-			"-bundle", "/node/actors/test-actor-123/bundle/" + ocispec.PauseContainer,
-			"-pid-file", "/node/actors/test-actor-123/pidfiles/" + ocispec.PauseContainer + ".pid",
+			"-bundle", "/node/actors/test-actor-123/bundle/" + ocispec.SandboxID,
+			"-pid-file", "/node/actors/test-actor-123/pidfiles/" + ocispec.SandboxID + ".pid",
 			"-fs-restore-image-path", "/snap/fs",
-			ocispec.PauseContainer,
+			ocispec.SandboxID,
 		},
 	}, {
 		container: "app",
@@ -312,7 +312,7 @@ func TestRestoreArgs(t *testing.T) {
 		container string
 		want      []string
 	}{{
-		container: ocispec.PauseContainer,
+		container: ocispec.SandboxID,
 		want: []string{
 			"-global1",
 			"-global2",
@@ -322,10 +322,10 @@ func TestRestoreArgs(t *testing.T) {
 			"-restore-sub1",
 			"-restore-sub2",
 			"-no-root-container",
-			"-bundle", "/node/actors/test-actor-123/bundle/" + ocispec.PauseContainer,
+			"-bundle", "/node/actors/test-actor-123/bundle/" + ocispec.SandboxID,
 			"-image-path", checkpointDir,
-			"-pid-file", "/node/actors/test-actor-123/pidfiles/" + ocispec.PauseContainer + ".pid",
-			ocispec.PauseContainer,
+			"-pid-file", "/node/actors/test-actor-123/pidfiles/" + ocispec.SandboxID + ".pid",
+			ocispec.SandboxID,
 		},
 	}, {
 		container: "app",

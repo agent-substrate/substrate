@@ -721,8 +721,8 @@ func (x *WorkloadSpec) GetContainers() []*Container {
 // +k8s:customValidation # mount paths are unique and do not nest across the four lists
 type Container struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The sandbox's own container, ocispec.PauseContainer, is not a short
-	// name, so the format keeps a workload container from taking its bundle.
+	// The sandbox ID, ocispec.SandboxID, is not a short name, so the format
+	// keeps a workload container from taking its bundle.
 	//
 	// +k8s:required
 	// +k8s:format=k8s-short-name
